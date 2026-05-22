@@ -1,0 +1,235 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"sort"
+
+	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// CommandRunner executes the user task process, writing its stdout and stderr to
+// the supplied writers and returning the process exit code.
+type CommandRunner interface {
+	Run(ctx context.Context, argv, env []string, stdout, stderr io.Writer) (exitCode int, err error)
+}
+
+// LogSink receives log lines produced by the user task. Sends are best-effort.
+type LogSink interface {
+	Send(line *agentv1.LogLine) error
+	Close() error
+}
+
+// Runner orchestrates a single task execution inside the worker container: it
+// registers with the control plane, fetches the task spec and XCom inputs, runs
+// the user process while streaming logs, pushes the return value, and reports the
+// terminal state.
+type Runner struct {
+	Client     agentv1.AgentServiceClient
+	Cmd        CommandRunner
+	Sink       LogSink
+	Hostname   string
+	Version    string
+	Env        []string // base process environment (typically os.Environ())
+	ReturnPath string   // file the task writes its return value to; empty disables push
+}
+
+// Run executes the task lifecycle and returns an error if the task failed.
+func (r *Runner) Run(ctx context.Context) error {
+	if err := r.register(ctx); err != nil {
+		return err
+	}
+	spec, err := r.Client.GetTaskSpec(ctx, &agentv1.GetTaskSpecRequest{})
+	if err != nil {
+		return fmt.Errorf("fetching task spec: %w", err)
+	}
+	if spec.GetOperator() == "http_api" {
+		return errors.New("agent received an http_api task, which is executed by the control plane")
+	}
+	argv, err := BuildCommand(spec.GetOperator(), spec.GetEntrypoint())
+	if err != nil {
+		return err
+	}
+	env, err := r.buildEnv(ctx, spec)
+	if err != nil {
+		return err
+	}
+	return r.execute(ctx, argv, env)
+}
+
+func (r *Runner) register(ctx context.Context) error {
+	if _, err := r.Client.Register(ctx, &agentv1.RegisterRequest{
+		AgentVersion: r.Version,
+		Hostname:     r.Hostname,
+	}); err != nil {
+		return fmt.Errorf("registering agent: %w", err)
+	}
+	return nil
+}
+
+func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string, error) {
+	var xcom []string
+	for param, upstream := range spec.GetXcomInputMapping() {
+		resp, err := r.Client.FetchXCom(ctx, &agentv1.FetchXComRequest{
+			UpstreamTaskId: upstream,
+			Key:            "return_value",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("fetching xcom %q from %q: %w", param, upstream, err)
+		}
+		xcom = append(xcom, XComEnvVar(param, resp.GetValue()))
+	}
+	return mergeEnv(r.Env, spec.GetEnvironment(), xcom), nil
+}
+
+func (r *Runner) execute(ctx context.Context, argv, env []string) error {
+	if err := r.report(ctx, agentv1.TaskState_TASK_STATE_RUNNING, 0, ""); err != nil {
+		return err
+	}
+	stdout := &logWriter{sink: r.Sink, stream: "stdout", level: agentv1.LogLevel_LOG_LEVEL_INFO}
+	stderr := &logWriter{sink: r.Sink, stream: "stderr", level: agentv1.LogLevel_LOG_LEVEL_ERROR}
+
+	exitCode, runErr := r.Cmd.Run(ctx, argv, env, stdout, stderr)
+	stdout.flush()
+	stderr.flush()
+	if cerr := r.Sink.Close(); cerr != nil {
+		slog.Warn("closing log stream", "error", cerr)
+	}
+
+	if runErr != nil || exitCode != 0 {
+		return r.fail(ctx, exitCode, runErr)
+	}
+	if err := r.pushReturnValue(ctx); err != nil {
+		return r.fail(ctx, 0, err)
+	}
+	return r.report(ctx, agentv1.TaskState_TASK_STATE_SUCCESS, 0, "")
+}
+
+func (r *Runner) fail(ctx context.Context, exitCode int, cause error) error {
+	msg := "task exited non-zero"
+	if cause != nil {
+		msg = cause.Error()
+	}
+	if rerr := r.report(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg); rerr != nil {
+		slog.Warn("reporting failed state", "error", rerr)
+	}
+	if cause != nil {
+		return fmt.Errorf("task failed (exit %d): %w", exitCode, cause)
+	}
+	return fmt.Errorf("task failed with exit code %d", exitCode)
+}
+
+func (r *Runner) pushReturnValue(ctx context.Context) error {
+	if r.ReturnPath == "" {
+		return nil
+	}
+	value, ok, err := ReadReturnValue(r.ReturnPath)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	resp, err := r.Client.PushXCom(ctx, &agentv1.PushXComRequest{
+		Key:         "return_value",
+		Value:       value,
+		ContentType: "application/json",
+	})
+	if err != nil {
+		return fmt.Errorf("pushing return value: %w", err)
+	}
+	if !resp.GetAccepted() {
+		return fmt.Errorf("control plane rejected return value: %s", resp.GetRejectionReason())
+	}
+	return nil
+}
+
+func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode int32, msg string) error {
+	resp, err := r.Client.ReportState(ctx, &agentv1.ReportStateRequest{
+		State:        state,
+		ExitCode:     exitCode,
+		ErrorMessage: msg,
+		OccurredAt:   timestamppb.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("reporting state %v: %w", state, err)
+	}
+	if resp.GetShouldTerminate() {
+		return errors.New("control plane requested task termination")
+	}
+	return nil
+}
+
+// mergeEnv combines the base environment with the task spec variables (sorted for
+// determinism) and the fetched XCom input variables.
+func mergeEnv(base []string, spec map[string]string, xcom []string) []string {
+	out := make([]string, 0, len(base)+len(spec)+len(xcom))
+	out = append(out, base...)
+	keys := make([]string, 0, len(spec))
+	for k := range spec {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out = append(out, k+"="+spec[k])
+	}
+	return append(out, xcom...)
+}
+
+// clampExit narrows an OS exit code to the byte range a process can return.
+func clampExit(code int) int32 {
+	if code < 0 || code > 255 {
+		return 255
+	}
+	return int32(code)
+}
+
+// logWriter splits written bytes into newline-delimited log lines and forwards
+// each one to the sink, tagging it with its stream name and level.
+type logWriter struct {
+	sink   LogSink
+	stream string
+	level  agentv1.LogLevel
+	buf    []byte
+	line   int64
+}
+
+// Write buffers p and emits every complete line it contains.
+func (w *logWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		w.emit(w.buf[:i])
+		w.buf = w.buf[i+1:]
+	}
+	return len(p), nil
+}
+
+// flush emits any buffered line that lacked a trailing newline.
+func (w *logWriter) flush() {
+	if len(w.buf) > 0 {
+		w.emit(w.buf)
+		w.buf = nil
+	}
+}
+
+func (w *logWriter) emit(b []byte) {
+	w.line++
+	if err := w.sink.Send(&agentv1.LogLine{
+		Time:       timestamppb.Now(),
+		Level:      w.level,
+		Message:    string(b),
+		Stream:     w.stream,
+		LineNumber: w.line,
+	}); err != nil {
+		slog.Warn("streaming log line", "stream", w.stream, "error", err)
+	}
+}

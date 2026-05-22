@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -65,8 +67,11 @@ type recordingSink struct {
 	closed bool
 }
 
-func (s *recordingSink) Send(line *agentv1.LogLine) error { s.lines = append(s.lines, line.GetMessage()); return nil }
-func (s *recordingSink) Close() error                     { s.closed = true; return nil }
+func (s *recordingSink) Send(line *agentv1.LogLine) error {
+	s.lines = append(s.lines, line.GetMessage())
+	return nil
+}
+func (s *recordingSink) Close() error { s.closed = true; return nil }
 
 // fakeCmd is a CommandRunner double that records its inputs and emits output.
 type fakeCmd struct {
@@ -87,21 +92,20 @@ func (c *fakeCmd) Run(_ context.Context, argv, env []string, stdout, _ io.Writer
 
 func newRunner(client *fakeClient, cmd *fakeCmd, sink *recordingSink) *Runner {
 	return &Runner{
-		Client:     client,
-		Cmd:        cmd,
-		Sink:       sink,
-		Hostname:   "pod-1",
-		Version:    "test",
-		ReturnValue: nil, // no return-value file in tests by default
+		Client:   client,
+		Cmd:      cmd,
+		Sink:     sink,
+		Hostname: "pod-1",
+		Version:  "test",
 	}
 }
 
 func TestRunnerHappyPath(t *testing.T) {
 	client := &fakeClient{
 		spec: &agentv1.TaskSpec{
-			Operator:   "python",
-			Entrypoint: "dag:hello",
-			Environment: map[string]string{"FOO": "bar"},
+			Operator:         "python",
+			Entrypoint:       "dag:hello",
+			Environment:      map[string]string{"FOO": "bar"},
 			XcomInputMapping: map[string]string{"upstream_val": "extract"},
 		},
 		xcom: map[string]*agentv1.FetchXComResponse{
@@ -157,9 +161,13 @@ func TestRunnerReportsFailureOnNonZeroExit(t *testing.T) {
 }
 
 func TestRunnerPushesReturnValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "return_value.json")
+	if err := os.WriteFile(path, []byte(`{"result":42}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:f"}}
 	r := newRunner(client, &fakeCmd{}, &recordingSink{})
-	r.ReturnValue = []byte(`{"result":42}`)
+	r.ReturnPath = path
 
 	if err := r.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)

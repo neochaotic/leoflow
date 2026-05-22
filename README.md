@@ -10,7 +10,7 @@
 </p>
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/neochaotic/leoflow)](https://goreportcard.com/report/github.com/neochaotic/leoflow)
+[![Go Report Card](https://goreportcard.com/badge/github.com/neochaotic/leoflow?v=2)](https://goreportcard.com/report/github.com/neochaotic/leoflow)
 [![CI](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml)
 [![Security](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/neochaotic/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/neochaotic/leoflow)

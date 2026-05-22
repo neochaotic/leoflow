@@ -1,0 +1,45 @@
+{
+  "_chunk-zsgVPwQN.js": {
+    "file": "assets/chunk-zsgVPwQN.js",
+    "name": "chunk"
+  },
+  "index.html": {
+    "file": "assets/index-DHyr8oiy.js",
+    "name": "index",
+    "src": "index.html",
+    "isEntry": true,
+    "imports": [
+      "_chunk-zsgVPwQN.js"
+    ],
+    "dynamicImports": [
+      "node_modules/.pnpm/cross-fetch@4.0.0/node_modules/cross-fetch/dist/browser-ponyfill.js",
+      "src/pages/Dag/Overview/FailedLogs.tsx"
+    ],
+    "assets": [
+      "assets/sqlparser_rs_wasm_bg-CLYUWfXF.wasm"
+    ]
+  },
+  "node_modules/.pnpm/@guanmingchiu+sqlparser-ts@0.61.1/node_modules/@guanmingchiu/sqlparser-ts/wasm/sqlparser_rs_wasm_bg.wasm": {
+    "file": "assets/sqlparser_rs_wasm_bg-CLYUWfXF.wasm",
+    "src": "node_modules/.pnpm/@guanmingchiu+sqlparser-ts@0.61.1/node_modules/@guanmingchiu/sqlparser-ts/wasm/sqlparser_rs_wasm_bg.wasm"
+  },
+  "node_modules/.pnpm/cross-fetch@4.0.0/node_modules/cross-fetch/dist/browser-ponyfill.js": {
+    "file": "assets/browser-ponyfill-BqCQyHSc.js",
+    "name": "browser-ponyfill",
+    "src": "node_modules/.pnpm/cross-fetch@4.0.0/node_modules/cross-fetch/dist/browser-ponyfill.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-zsgVPwQN.js"
+    ]
+  },
+  "src/pages/Dag/Overview/FailedLogs.tsx": {
+    "file": "assets/FailedLogs-CcoU1U4W.js",
+    "name": "FailedLogs",
+    "src": "src/pages/Dag/Overview/FailedLogs.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chunk-zsgVPwQN.js",
+      "index.html"
+    ]
+  }
+}

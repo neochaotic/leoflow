@@ -419,6 +419,37 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 	return items, nil
 }
 
+const reportTaskResult = `-- name: ReportTaskResult :exec
+UPDATE task_instances
+SET state = $3,
+    exit_code = $4,
+    error_message = $5,
+    started_at = CASE WHEN $3 = 'running' AND started_at IS NULL THEN now() ELSE started_at END,
+    ended_at = CASE WHEN $3 IN ('success', 'failed', 'skipped', 'upstream_failed') THEN now() ELSE ended_at END,
+    duration_seconds = CASE WHEN $3 IN ('success', 'failed') AND started_at IS NOT NULL
+        THEN EXTRACT(EPOCH FROM (now() - started_at)) ELSE duration_seconds END
+WHERE dag_run_id = $1 AND task_id = $2
+`
+
+type ReportTaskResultParams struct {
+	DagRunID     pgtype.UUID `json:"dag_run_id"`
+	TaskID       string      `json:"task_id"`
+	State        TaskState   `json:"state"`
+	ExitCode     *int32      `json:"exit_code"`
+	ErrorMessage *string     `json:"error_message"`
+}
+
+func (q *Queries) ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error {
+	_, err := q.db.Exec(ctx, reportTaskResult,
+		arg.DagRunID,
+		arg.TaskID,
+		arg.State,
+		arg.ExitCode,
+		arg.ErrorMessage,
+	)
+	return err
+}
+
 const resetTaskInstanceToNone = `-- name: ResetTaskInstanceToNone :exec
 UPDATE task_instances
 SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1

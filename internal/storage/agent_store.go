@@ -44,18 +44,24 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 	}, nil
 }
 
-// ReportState records a state transition reported by the agent. Exit code and
-// error message are not yet persisted (see Phase 4).
-func (s *ExecutionStore) ReportState(ctx context.Context, id auth.AgentIdentity, state domain.TaskState, _ int, _ string) error {
+// ReportState records a state transition reported by the agent, persisting the
+// exit code and error message and stamping started/ended/duration timestamps.
+func (s *ExecutionStore) ReportState(ctx context.Context, id auth.AgentIdentity, state domain.TaskState, exitCode int, errMsg string) error {
 	rid, err := parseUUID(id.RunID)
 	if err != nil {
 		return err
 	}
-	return s.q.UpdateTaskInstanceStateByRunTask(ctx, queries.UpdateTaskInstanceStateByRunTaskParams{
+	code := toInt32(exitCode)
+	params := queries.ReportTaskResultParams{
 		DagRunID: rid,
 		TaskID:   id.TaskID,
 		State:    queries.TaskState(state),
-	})
+		ExitCode: &code,
+	}
+	if errMsg != "" {
+		params.ErrorMessage = &errMsg
+	}
+	return s.q.ReportTaskResult(ctx, params)
 }
 
 // FailTask marks a task instance failed by its ID, but only while it is still

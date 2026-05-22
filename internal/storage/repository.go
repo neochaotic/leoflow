@@ -292,6 +292,14 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 	if err := r.q.SetCurrentDagVersion(ctx, queries.SetCurrentDagVersionParams{ID: dag.ID, CurrentVersionID: version.ID}); err != nil {
 		return false, fmt.Errorf("setting current version: %w", err)
 	}
+	if err := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
+		TenantID:     tid,
+		Action:       "dag.version.register",
+		ResourceType: strPtr("dag"),
+		ResourceID:   strPtr(spec.DagID),
+	}); err != nil {
+		return false, fmt.Errorf("writing audit log: %w", err)
+	}
 	return true, nil
 }
 

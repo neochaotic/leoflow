@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -46,6 +48,25 @@ func pagination(c *gin.Context) (limit, offset int) {
 	return limit, offset
 }
 
+// setPaginationLinks sets an RFC 5988 Link header with next/prev relations.
+func setPaginationLinks(c *gin.Context, total, limit, offset int) {
+	links := make([]string, 0, 2)
+	path := c.Request.URL.Path
+	if offset+limit < total {
+		links = append(links, fmt.Sprintf(`<%s?limit=%d&offset=%d>; rel="next"`, path, limit, offset+limit))
+	}
+	if offset > 0 {
+		prev := offset - limit
+		if prev < 0 {
+			prev = 0
+		}
+		links = append(links, fmt.Sprintf(`<%s?limit=%d&offset=%d>; rel="prev"`, path, limit, prev))
+	}
+	if len(links) > 0 {
+		c.Header("Link", strings.Join(links, ", "))
+	}
+}
+
 func tenantOf(c *gin.Context) string {
 	if u, ok := UserFromContext(c); ok && u.TenantID != "" {
 		return u.TenantID
@@ -73,6 +94,7 @@ func listDagsHandler(repo DagRepository) gin.HandlerFunc {
 		for _, d := range dags {
 			out.Dags = append(out.Dags, toDagDTO(d))
 		}
+		setPaginationLinks(c, total, limit, offset)
 		c.JSON(http.StatusOK, out)
 	}
 }
@@ -118,6 +140,7 @@ func listDagRunsHandler(repo DagRunRepository) gin.HandlerFunc {
 		for _, r := range runs {
 			out.DagRuns = append(out.DagRuns, toDagRunDTO(r))
 		}
+		setPaginationLinks(c, total, limit, offset)
 		c.JSON(http.StatusOK, out)
 	}
 }
@@ -177,6 +200,7 @@ func listTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
 		for _, ti := range tis {
 			out.TaskInstances = append(out.TaskInstances, toTaskInstanceDTO(ti))
 		}
+		setPaginationLinks(c, total, limit, offset)
 		c.JSON(http.StatusOK, out)
 	}
 }

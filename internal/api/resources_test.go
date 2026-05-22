@@ -174,3 +174,18 @@ func TestXComStub(t *testing.T) {
 		t.Errorf("xcom stub = %d, want 501", rec.Code)
 	}
 }
+
+func TestListDagsLinkHeader(t *testing.T) {
+	admin := &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}
+	srv := NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: admin},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		Dags:          &fakeDagRepo{dags: []domain.DAG{{DagID: "a"}, {DagID: "b"}}},
+	})
+	rec := authGet(srv, http.MethodGet, "/api/v2/dags?limit=1&offset=0", "")
+	if link := rec.Header().Get("Link"); !strings.Contains(link, `rel="next"`) {
+		t.Errorf("Link = %q, want a next relation", link)
+	}
+}

@@ -15,6 +15,7 @@ type Querier interface {
 	CountDagRunsByDag(ctx context.Context, dagID pgtype.UUID) (int64, error)
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountUsers(ctx context.Context, tenantID pgtype.UUID) (int64, error)
+	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) error
 	CreateDagRun(ctx context.Context, arg CreateDagRunParams) (DagRun, error)
 	CreateScheduledRunByDagID(ctx context.Context, arg CreateScheduledRunByDagIDParams) error
 	CreateTaskInstance(ctx context.Context, arg CreateTaskInstanceParams) (TaskInstance, error)

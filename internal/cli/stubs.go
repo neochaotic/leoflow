@@ -13,22 +13,6 @@ func announceNotImplemented(cmd *cobra.Command, feature string) error {
 	return err
 }
 
-func newAuthCommand() *cobra.Command {
-	auth := &cobra.Command{
-		Use:   "auth",
-		Short: "Manage authentication tokens and users (Phase 2).",
-	}
-	auth.AddCommand(&cobra.Command{
-		Use:   "create-token",
-		Short: "Issue a JWT for the configured user (Phase 2).",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return announceNotImplemented(cmd, "auth create-token")
-		},
-	})
-	return auth
-}
-
 func newServerCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "server",

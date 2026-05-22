@@ -84,3 +84,16 @@ func TestKubernetesExecutorCreatesPod(t *testing.T) {
 		t.Fatalf("want 1 pod created, got %d", len(pods.Items))
 	}
 }
+
+func TestKubernetesExecutorRejectsHTTPAPIPod(t *testing.T) {
+	e := NewKubernetesExecutor(fake.NewClientset(), "leoflow")
+	req := sampleReq()
+	req.Operator = "http_api"
+	err := e.Execute(context.Background(), req)
+	if err == nil {
+		t.Fatal("pod-mode http_api should not be implemented yet")
+	}
+	if !strings.Contains(err.Error(), "not yet implemented") {
+		t.Errorf("error = %q, want a 'not yet implemented' message", err)
+	}
+}

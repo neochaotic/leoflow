@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -19,19 +18,16 @@ dependencies: []
 const dagTemplate = `"""%s — example Leoflow DAG."""
 from __future__ import annotations
 
-from airflow.sdk import dag, task
+from airflow.sdk import DAG, task
 
 
-@dag(schedule="@daily", catchup=False, tags=["example"])
-def %s():
-    @task
-    def hello() -> str:
-        return "hello from leoflow"
+@task
+def hello() -> str:
+    return "hello from leoflow"
 
+
+with DAG("%s", schedule="@daily", catchup=False, tags=["example"]):
     hello()
-
-
-%s()
 `
 
 func newInitCommand() *cobra.Command {
@@ -42,14 +38,13 @@ func newInitCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := args[0]
 			dagID := filepath.Base(filepath.Clean(dir))
-			funcName := strings.NewReplacer("-", "_", ".", "_").Replace(dagID)
 
 			if err := os.MkdirAll(dir, 0o750); err != nil {
 				return fmt.Errorf("creating project directory: %w", err)
 			}
 			files := map[string]string{
 				"leoflow.yaml": fmt.Sprintf(leoflowTemplate, dagID),
-				"dag.py":       fmt.Sprintf(dagTemplate, dagID, funcName, funcName),
+				"dag.py":       fmt.Sprintf(dagTemplate, dagID, dagID),
 			}
 			for name, content := range files {
 				p := filepath.Join(dir, name)

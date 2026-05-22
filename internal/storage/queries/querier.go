@@ -11,8 +11,12 @@ import (
 )
 
 type Querier interface {
+	CountDagRunsByDag(ctx context.Context, dagID pgtype.UUID) (int64, error)
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
+	CreateDagRun(ctx context.Context, arg CreateDagRunParams) (DagRun, error)
+	CreateTaskInstance(ctx context.Context, arg CreateTaskInstanceParams) (TaskInstance, error)
 	GetDagByDagID(ctx context.Context, arg GetDagByDagIDParams) (Dag, error)
+	GetDagRun(ctx context.Context, arg GetDagRunParams) (DagRun, error)
 	GetDagVersionByHash(ctx context.Context, arg GetDagVersionByHashParams) (DagVersion, error)
 	GetDefaultTenant(ctx context.Context) (GetDefaultTenantRow, error)
 	GetTenantByName(ctx context.Context, name string) (GetTenantByNameRow, error)
@@ -20,9 +24,15 @@ type Querier interface {
 	GetUserPermissions(ctx context.Context, userID pgtype.UUID) ([]GetUserPermissionsRow, error)
 	GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]string, error)
 	InsertDagVersion(ctx context.Context, arg InsertDagVersionParams) (DagVersion, error)
+	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
+	ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagParams) ([]DagRun, error)
 	ListDags(ctx context.Context, arg ListDagsParams) ([]Dag, error)
+	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
+	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
 	SetCurrentDagVersion(ctx context.Context, arg SetCurrentDagVersionParams) error
 	SetDagPaused(ctx context.Context, arg SetDagPausedParams) (Dag, error)
+	UpdateDagRunState(ctx context.Context, arg UpdateDagRunStateParams) (DagRun, error)
+	UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskInstanceStateParams) (TaskInstance, error)
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
 }
 

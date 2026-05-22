@@ -23,8 +23,11 @@ echo "[pre-commit] test + coverage gate"
 profile=$(mktemp)
 filtered=$(mktemp)
 go test -coverprofile="$profile" ./... >/dev/null
-# Exclude generated code, main packages, and version per ADR 0011.
-grep -vE '(/internal/storage/queries/|\.pb\.go:|/internal/version/|/cmd/)' "$profile" >"$filtered"
+# Exclude from the unit-coverage floor (ADR 0011): generated code, main
+# packages, version, and the thin DB/lock-binding files that are exercised by
+# integration tests (//go:build integration) rather than unit tests.
+exclude='(/internal/storage/queries/|/internal/storage/repository\.go:|/internal/storage/postgres\.go:|/internal/storage/redis\.go:|/internal/scheduler/leader\.go:|\.pb\.go:|/internal/version/|/cmd/)'
+grep -vE "$exclude" "$profile" >"$filtered"
 current=$(go tool cover -func="$filtered" | tail -1 | awk '{print $3}' | tr -d '%')
 rm -f "$profile" "$filtered"
 

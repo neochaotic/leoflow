@@ -13,7 +13,7 @@ import (
 )
 
 // ErrNotFound is returned by repositories when a resource does not exist.
-var ErrNotFound = errors.New("not found")
+var ErrNotFound = domain.ErrNotFound
 
 // DagRepository reads and updates registered DAGs.
 type DagRepository interface {

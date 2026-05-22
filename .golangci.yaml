@@ -1,0 +1,178 @@
+# .golangci.yaml
+# Lint configuration for Leoflow.
+# Enforces Go Report Card A+ (ADR 0012) plus security and correctness checks (ADR 0014).
+
+run:
+  timeout: 5m
+  go: "1.22"
+  tests: true
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+
+linters:
+  disable-all: true
+  enable:
+    # ─── Go Report Card A+ baseline ───
+    - gofmt              # Canonical formatting
+    - govet              # Suspicious constructs
+    - gocyclo            # Cyclomatic complexity
+    - ineffassign        # Ineffectual assignments
+    - misspell           # Spelling errors
+    # Note: golint is deprecated; revive replaces it (see below)
+
+    # ─── Modern replacements / supersets ───
+    - revive             # Modern golint replacement; enforces GoDoc on exports
+    - staticcheck        # Comprehensive static analysis (replaces megacheck)
+    - unused             # Unused identifiers
+    - errcheck           # Every returned error must be handled
+
+    # ─── Security (ADR 0014) ───
+    - gosec              # Security-oriented antipatterns
+
+    # ─── Correctness / quality ───
+    - gocritic           # Opinionated style and performance hints
+    - bodyclose          # HTTP body must be closed
+    - contextcheck       # Context propagation correctness
+    - durationcheck      # Suspicious time.Duration math
+    - errorlint          # Proper error wrapping (errors.Is/As, %w)
+    - exhaustive         # Exhaustive switch statements on enums
+    - gocheckcompilerdirectives  # //go: directives parse correctly
+    - gosimple           # Simplify code
+    - nilerr             # No `return nil` when err is non-nil
+    - nilnil             # No `return nil, nil`
+    - noctx              # HTTP requests must use context
+    - prealloc           # Preallocate slices when length is known
+    - predeclared        # Don't shadow predeclared identifiers
+    - reassign           # Don't reassign package-level vars
+    - sqlclosecheck      # sql.Rows / sql.Stmt must be closed
+    - unconvert          # Unnecessary type conversions
+    - wastedassign       # Wasted assignments
+
+    # ─── Style consistency ───
+    - whitespace         # Trailing whitespace
+    - tagliatelle        # Struct tag naming consistency
+
+linters-settings:
+  gocyclo:
+    # ADR 0012: hard cap at 15. Critical paths target <=10 but that is not enforced here.
+    min-complexity: 15
+
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment   # Pedantic; we accept the cost for readability
+
+  misspell:
+    locale: US
+
+  revive:
+    severity: warning
+    enable-all-rules: false
+    rules:
+      # Exports must have GoDoc starting with the identifier name (ADR 0012)
+      - name: exported
+        severity: error
+        disabled: false
+        arguments:
+          - "checkPrivateReceivers"
+          - "sayRepetitiveInsteadOfStutters"
+      - name: package-comments
+        severity: error
+      - name: var-naming
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: if-return
+      - name: increment-decrement
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+        disabled: true   # Often a false positive on interface implementations
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+  staticcheck:
+    checks: ["all"]
+
+  gosec:
+    severity: medium
+    confidence: medium
+    excludes:
+      - G104  # Audited via errcheck instead
+      - G304  # File path from variable — common in CLI tools, audited case by case
+    config:
+      G306: "0644"      # Required file permissions for written files
+      G302: "0644"
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      - hugeParam        # Premature optimization; profile first
+      - rangeValCopy     # Same as above
+      - paramTypeCombine # Stylistic preference, not enforced
+
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  exhaustive:
+    default-signifies-exhaustive: true
+
+  tagliatelle:
+    case:
+      use-field-name: false
+      rules:
+        json: snake
+        yaml: snake
+        xml: camel
+
+issues:
+  exclude-rules:
+    # Generated code (sqlc, protobuf) is not subject to lint
+    - path: "internal/storage/queries/.*\\.go"
+      linters:
+        - revive
+        - staticcheck
+        - errcheck
+        - gosec
+    - path: "proto/.*\\.go"
+      linters:
+        - revive
+        - staticcheck
+        - errcheck
+        - gosec
+    - path: ".*\\.pb\\.go"
+      linters:
+        - revive
+        - staticcheck
+        - errcheck
+        - gosec
+    # Test files have relaxed rules
+    - path: "_test\\.go"
+      linters:
+        - errcheck
+        - gosec
+        - gocyclo
+    # Examples in /examples may use _ for clarity
+    - path: "examples/.*"
+      linters:
+        - errcheck
+
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false
+
+output:
+  formats:
+    - format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+  sort-results: true

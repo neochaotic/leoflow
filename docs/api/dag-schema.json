@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://leoflow.io/schemas/dag.json/v1.0",
+  "title": "Leoflow DAG Specification",
+  "description": "Canonical serialized representation of a DAG, consumed by the Leoflow Control Plane.",
+  "type": "object",
+  "required": ["schema_version", "dag_id", "dag_version", "image", "tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Semver of this DAG specification format."
+    },
+    "dag_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,199}$",
+      "description": "User-facing DAG identifier. Unique within a tenant."
+    },
+    "dag_version": {
+      "type": "string",
+      "description": "Version of this DAG snapshot. Typically a Git tag or build identifier."
+    },
+    "image": {
+      "type": "string",
+      "description": "Fully qualified container image reference (e.g., 'myrepo/etl:v1.2.3')."
+    },
+    "description": { "type": "string" },
+    "owner": { "type": "string" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "schedule": {
+      "type": ["string", "null"],
+      "description": "Cron expression, preset ('@daily', '@hourly'), or null for manual-only."
+    },
+    "schedule_timezone": {
+      "type": "string",
+      "default": "UTC"
+    },
+    "start_date": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "end_date": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "max_active_runs": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 16
+    },
+    "catchup": {
+      "type": "boolean",
+      "default": false
+    },
+    "default_args": {
+      "type": "object",
+      "properties": {
+        "retries": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0 },
+        "retry_delay_seconds": { "type": "integer", "minimum": 0, "default": 300 },
+        "execution_timeout_seconds": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "required": ["task_id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,199}$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["python", "bash", "http_api"]
+        },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "default": []
+        },
+        "trigger_rule": {
+          "type": "string",
+          "enum": ["all_success", "all_failed", "all_done", "one_success", "one_failed"],
+          "default": "all_success"
+        },
+        "retries": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "retry_delay_seconds": { "type": "integer", "minimum": 0 },
+        "execution_timeout_seconds": { "type": "integer", "minimum": 1 },
+
+        "entrypoint": {
+          "type": "string",
+          "description": "For type=python: 'module.path:callable'. For type=bash: shell command."
+        },
+
+        "http_request": {
+          "type": "object",
+          "description": "Required when type=http_api. The Control Plane executes this directly.",
+          "required": ["method", "url"],
+          "properties": {
+            "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+            "url": { "type": "string", "format": "uri" },
+            "headers": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "body": {},
+            "timeout_seconds": { "type": "integer", "minimum": 1, "default": 60 },
+            "success_status_codes": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "default": [200, 201, 202, 204]
+            }
+          },
+          "additionalProperties": false
+        },
+
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Environment variables for the worker pod / process."
+        },
+
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "source"],
+            "properties": {
+              "name": { "type": "string" },
+              "source": { "type": "string", "enum": ["env", "vault", "k8s_secret"] },
+              "reference": { "type": "string" }
+            }
+          }
+        },
+
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": { "$ref": "#/$defs/resource_quantity" },
+            "limits": { "$ref": "#/$defs/resource_quantity" }
+          },
+          "additionalProperties": false
+        },
+
+        "execution": {
+          "type": "object",
+          "description": "Executor-specific hints. Ignored if the chosen executor does not support them.",
+          "properties": {
+            "node_selector": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "tolerations": {
+              "type": "array",
+              "items": { "type": "object" }
+            },
+            "service_account": { "type": "string" },
+            "image_pull_policy": {
+              "type": "string",
+              "enum": ["Always", "IfNotPresent", "Never"],
+              "default": "IfNotPresent"
+            }
+          }
+        },
+
+        "xcom_input": {
+          "type": "object",
+          "description": "Map of parameter name to upstream task_id whose return value to inject.",
+          "additionalProperties": { "type": "string" }
+        },
+        "xcom_schema": {
+          "type": "object",
+          "description": "Optional JSON Schema for XCom output validation."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "python" } } },
+          "then": { "required": ["entrypoint"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "bash" } } },
+          "then": { "required": ["entrypoint"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "http_api" } } },
+          "then": { "required": ["http_request"] }
+        }
+      ]
+    },
+    "resource_quantity": {
+      "type": "object",
+      "properties": {
+        "cpu": { "type": "string", "description": "Kubernetes-style: '500m', '2', '1.5'." },
+        "memory": { "type": "string", "description": "Kubernetes-style: '512Mi', '2Gi'." }
+      },
+      "additionalProperties": false
+    }
+  }
+}

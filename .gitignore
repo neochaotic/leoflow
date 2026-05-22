@@ -1,0 +1,153 @@
+# ─────────────────────────────────────────────────────────────────────────
+# AI Agent context files
+# These files contain agent-specific guidance and may include personal,
+# experimental, or evolving instructions. They are not part of the public
+# repository contract.
+# ─────────────────────────────────────────────────────────────────────────
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+COPILOT.md
+.cursorrules
+.cursor/
+.aider*
+.claude/
+.windsurf/
+.continue/
+
+# ─────────────────────────────────────────────────────────────────────────
+# Go
+# ─────────────────────────────────────────────────────────────────────────
+# Compiled binaries
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage output
+*.test
+*.out
+coverage.*
+*.coverprofile
+cover.html
+
+# Go module cache (should not be in repo, but just in case)
+go.work
+go.work.sum
+
+# Air / live reload
+.air.toml
+tmp/
+
+# Delve debugger
+__debug_bin
+
+# ─────────────────────────────────────────────────────────────────────────
+# Python (parser/)
+# ─────────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.venv/
+venv/
+env/
+.python-version
+htmlcov/
+.coverage
+.coverage.*
+nosetests.xml
+
+# Distribution
+build/
+develop-eggs/
+downloads/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+
+# ─────────────────────────────────────────────────────────────────────────
+# Container / build artifacts
+# ─────────────────────────────────────────────────────────────────────────
+*.tar
+*.tar.gz
+.dockerignore.local
+
+# ─────────────────────────────────────────────────────────────────────────
+# Local development state
+# ─────────────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.local.yaml
+*.local.yml
+.leoflow/
+logs/
+*.log
+
+# Local data directories for docker-compose dev
+.data/
+.postgres-data/
+.redis-data/
+.minio-data/
+
+# Local helm overrides
+helm/leoflow/values.local.yaml
+
+# ─────────────────────────────────────────────────────────────────────────
+# Editor / IDE
+# ─────────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+!.vscode/settings.json.sample
+!.vscode/launch.json.sample
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.iml
+.project
+.classpath
+.settings/
+
+# ─────────────────────────────────────────────────────────────────────────
+# Generated code that should NOT be committed
+# (Note: protobuf-generated Go code IS committed by policy — see ADR/Phase 3)
+# ─────────────────────────────────────────────────────────────────────────
+# sqlc generates Go code that IS committed under internal/storage/queries/
+# Reserved here in case future generated artifacts are excluded.
+
+# ─────────────────────────────────────────────────────────────────────────
+# Secrets and credentials (defensive — never commit secrets)
+# ─────────────────────────────────────────────────────────────────────────
+*.pem
+*.key
+*.crt
+*.p12
+*-jwt-secret
+secrets.yaml
+credentials.json
+service-account.json
+kubeconfig
+.kube/
+
+# ─────────────────────────────────────────────────────────────────────────
+# Load test artifacts
+# ─────────────────────────────────────────────────────────────────────────
+tests/load/results/
+tests/load/*.csv
+tests/load/*.json

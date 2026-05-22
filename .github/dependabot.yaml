@@ -1,0 +1,47 @@
+version: 2
+updates:
+  # Go modules
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    labels: ["dependencies", "go"]
+    open-pull-requests-limit: 10
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    labels: ["dependencies", "ci"]
+
+  # Docker base images
+  - package-ecosystem: docker
+    directory: "/runtime/python-3.10"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "docker"]
+  - package-ecosystem: docker
+    directory: "/runtime/python-3.11"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "docker"]
+  - package-ecosystem: docker
+    directory: "/runtime/python-3.12"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "docker"]
+
+  # Python parser dependencies
+  - package-ecosystem: pip
+    directory: "/parser"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "python"]

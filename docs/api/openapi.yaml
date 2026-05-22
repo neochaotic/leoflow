@@ -1,0 +1,460 @@
+openapi: 3.0.3
+info:
+  title: Leoflow Public API
+  description: |
+    Airflow-3.2.x-compatible subset of the public API.
+    This is the surface consumed by the Airflow UI when configured to talk to a Leoflow Control Plane.
+  version: "1.0.0"
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/token:
+    post:
+      summary: Issue a JWT for username/password credentials
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v2/dags:
+    get:
+      summary: List DAGs
+      tags: [DAGs]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: tags
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+        - name: only_active
+          in: query
+          schema: { type: boolean, default: true }
+        - name: paused
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: A page of DAGs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DAGCollection"
+
+  /api/v2/dags/{dag_id}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: Get a DAG
+      tags: [DAGs]
+      responses:
+        "200":
+          description: DAG detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DAG"
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Update DAG (typically pause/unpause)
+      tags: [DAGs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DAGUpdate"
+      responses:
+        "200":
+          description: Updated DAG
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DAG" }
+
+  /api/v2/dags/{dag_id}/dagRuns:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: List DAG runs
+      tags: [DAG Runs]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: state
+          in: query
+          schema:
+            type: array
+            items: { type: string, enum: [queued, running, success, failed] }
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: A page of DAG runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DAGRunCollection"
+    post:
+      summary: Trigger a DAG run
+      tags: [DAG Runs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DAGRunCreate"
+      responses:
+        "200":
+          description: Created DAG run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DAGRun" }
+
+  /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+    get:
+      summary: Get a DAG run
+      tags: [DAG Runs]
+      responses:
+        "200":
+          description: DAG run detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DAGRun" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+    get:
+      summary: List task instances of a DAG run
+      tags: [Task Instances]
+      responses:
+        "200":
+          description: A page of task instances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskInstanceCollection"
+
+  /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+      - $ref: "#/components/parameters/TaskID"
+    get:
+      summary: Get a task instance
+      tags: [Task Instances]
+      responses:
+        "200":
+          description: Task instance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskInstance" }
+
+  /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/logs/{try_number}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+      - $ref: "#/components/parameters/TaskID"
+      - name: try_number
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      summary: Get task logs
+      tags: [Task Instances]
+      responses:
+        "200":
+          description: Log content
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /api/v2/dags/{dag_id}/clearTaskInstances:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    post:
+      summary: Clear task instances (queue them for re-run)
+      tags: [Task Instances]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClearTaskInstancesRequest"
+      responses:
+        "200":
+          description: List of cleared task instances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskInstanceCollection"
+
+  /api/v2/xcoms/{dag_id}/{dag_run_id}/{task_id}/{key}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+      - $ref: "#/components/parameters/TaskID"
+      - name: key
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Read XCom value (read-only proxy for the Redis backend)
+      tags: [XCom]
+      responses:
+        "200":
+          description: XCom value
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/XComEntry" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /healthz:
+    get:
+      summary: Liveness probe
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: OK
+          content: { text/plain: { schema: { type: string } } }
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: OK
+        "503":
+          description: Not ready
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      tags: [Observability]
+      security: []
+      responses:
+        "200":
+          description: Prometheus exposition format
+          content: { text/plain: { schema: { type: string } } }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    DagID:
+      name: dag_id
+      in: path
+      required: true
+      schema: { type: string }
+    DagRunID:
+      name: dag_run_id
+      in: path
+      required: true
+      schema: { type: string }
+    TaskID:
+      name: task_id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        detail: { type: string }
+        status: { type: integer }
+        instance: { type: string }
+
+    TokenRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string }
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, example: "bearer" }
+        expires_in: { type: integer, example: 3600 }
+
+    DAG:
+      type: object
+      properties:
+        dag_id: { type: string }
+        dag_display_name: { type: string }
+        description: { type: string }
+        is_paused: { type: boolean }
+        is_active: { type: boolean }
+        owners: { type: array, items: { type: string } }
+        tags:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+        schedule_interval:
+          type: object
+          nullable: true
+        timetable_description: { type: string }
+        next_dagrun: { type: string, format: date-time, nullable: true }
+        last_parsed_time: { type: string, format: date-time, nullable: true }
+        max_active_runs: { type: integer }
+        catchup: { type: boolean }
+        has_task_concurrency_limits: { type: boolean }
+
+    DAGCollection:
+      type: object
+      properties:
+        dags:
+          type: array
+          items: { $ref: "#/components/schemas/DAG" }
+        total_entries: { type: integer }
+
+    DAGUpdate:
+      type: object
+      properties:
+        is_paused: { type: boolean }
+
+    DAGRun:
+      type: object
+      properties:
+        dag_id: { type: string }
+        dag_run_id: { type: string }
+        logical_date: { type: string, format: date-time }
+        data_interval_start: { type: string, format: date-time, nullable: true }
+        data_interval_end: { type: string, format: date-time, nullable: true }
+        queued_at: { type: string, format: date-time }
+        start_date: { type: string, format: date-time, nullable: true }
+        end_date: { type: string, format: date-time, nullable: true }
+        state:
+          type: string
+          enum: [queued, running, success, failed]
+        run_type:
+          type: string
+          enum: [scheduled, manual, backfill, dataset_triggered]
+        conf: { type: object, additionalProperties: true }
+        note: { type: string, nullable: true }
+
+    DAGRunCollection:
+      type: object
+      properties:
+        dag_runs:
+          type: array
+          items: { $ref: "#/components/schemas/DAGRun" }
+        total_entries: { type: integer }
+
+    DAGRunCreate:
+      type: object
+      properties:
+        dag_run_id: { type: string }
+        logical_date: { type: string, format: date-time }
+        conf: { type: object, additionalProperties: true }
+        note: { type: string }
+
+    TaskInstance:
+      type: object
+      properties:
+        dag_id: { type: string }
+        dag_run_id: { type: string }
+        task_id: { type: string }
+        map_index: { type: integer, default: -1 }
+        try_number: { type: integer }
+        state:
+          type: string
+          nullable: true
+          enum: [scheduled, queued, running, success, failed, skipped, upstream_failed, up_for_retry, none]
+        operator: { type: string }
+        start_date: { type: string, format: date-time, nullable: true }
+        end_date: { type: string, format: date-time, nullable: true }
+        duration: { type: number, nullable: true }
+        hostname: { type: string }
+        pool: { type: string }
+        max_tries: { type: integer }
+
+    TaskInstanceCollection:
+      type: object
+      properties:
+        task_instances:
+          type: array
+          items: { $ref: "#/components/schemas/TaskInstance" }
+        total_entries: { type: integer }
+
+    ClearTaskInstancesRequest:
+      type: object
+      properties:
+        task_ids:
+          type: array
+          items: { type: string }
+        dag_run_id: { type: string }
+        only_failed: { type: boolean, default: false }
+        only_running: { type: boolean, default: false }
+        reset_dag_runs: { type: boolean, default: true }
+
+    XComEntry:
+      type: object
+      properties:
+        key: { type: string }
+        value: {}
+        timestamp: { type: string, format: date-time }
+        dag_id: { type: string }
+        task_id: { type: string }
+        dag_run_id: { type: string }

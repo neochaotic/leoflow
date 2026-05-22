@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write       # For creating releases
+  packages: write       # For pushing images to GHCR
+  id-token: write       # For cosign keyless signing
+
+env:
+  GO_VERSION: "1.22"
+  REGISTRY: ghcr.io
+
+jobs:
+  release:
+    name: Build, sign, publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # ── Sigstore cosign for keyless signing ──
+      - uses: sigstore/cosign-installer@v3
+
+      # ── syft for SBOM generation ──
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── GoReleaser handles the build, packaging, signing, and release ──
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

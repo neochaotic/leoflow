@@ -1,0 +1,151 @@
+// proto/agent.proto
+// Communication protocol between the Leoflow Control Plane and the worker Agent.
+// The Agent runs as PID 1 inside every task pod and connects back to the Control Plane on startup.
+
+syntax = "proto3";
+
+package leoflow.agent.v1;
+
+option go_package = "github.com/leoflow/leoflow/proto/agent/v1;agentv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// ─────────────────────────────────────────────────────────────────────────
+// Service
+// ─────────────────────────────────────────────────────────────────────────
+service AgentService {
+    // Agent registers with the Control Plane on container startup.
+    // The JWT in metadata identifies the task instance.
+    rpc Register (RegisterRequest) returns (RegisterResponse);
+
+    // Agent fetches the task specification.
+    rpc GetTaskSpec (GetTaskSpecRequest) returns (TaskSpec);
+
+    // Agent pulls XCom values declared as inputs.
+    rpc FetchXCom (FetchXComRequest) returns (FetchXComResponse);
+
+    // Agent pushes an XCom value (typically the task return value).
+    rpc PushXCom (PushXComRequest) returns (PushXComResponse);
+
+    // Agent streams log lines back to the Control Plane.
+    // Bidirectional: server sends acks; client streams logs.
+    rpc StreamLogs (stream LogLine) returns (stream LogAck);
+
+    // Agent reports task state transitions (running, success, failed).
+    rpc ReportState (ReportStateRequest) returns (ReportStateResponse);
+
+    // Agent sends periodic heartbeats during long-running tasks.
+    rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Messages
+// ─────────────────────────────────────────────────────────────────────────
+
+message RegisterRequest {
+    string agent_version = 1;
+    string hostname = 2;
+    map<string, string> environment = 3;          // selected env vars for diagnostics
+}
+
+message RegisterResponse {
+    // Server-assigned correlation token for subsequent calls.
+    string session_id = 1;
+    // Server clock for skew detection.
+    google.protobuf.Timestamp server_time = 2;
+}
+
+message GetTaskSpecRequest {
+    // The JWT in metadata already identifies the task; no payload needed.
+}
+
+message TaskSpec {
+    string tenant_id = 1;
+    string dag_id = 2;
+    string dag_version = 3;
+    string run_id = 4;
+    string task_id = 5;
+    int32 try_number = 6;
+    string operator = 7;                          // 'python', 'bash', 'http_api'
+    string entrypoint = 8;
+    map<string, string> environment = 9;
+    map<string, string> xcom_input_mapping = 10;  // param_name -> upstream_task_id
+    int32 execution_timeout_seconds = 11;
+    google.protobuf.Struct extra = 12;            // operator-specific fields
+}
+
+message FetchXComRequest {
+    string upstream_task_id = 1;
+    string key = 2;                               // defaults to 'return_value'
+}
+
+message FetchXComResponse {
+    bytes value = 1;                              // JSON-encoded payload
+    string content_type = 2;                      // 'application/json' by default
+    int32 size_bytes = 3;
+    google.protobuf.Timestamp created_at = 4;
+}
+
+message PushXComRequest {
+    string key = 1;                               // defaults to 'return_value'
+    bytes value = 2;                              // JSON-encoded payload, max 256KB
+    string content_type = 3;
+}
+
+message PushXComResponse {
+    bool accepted = 1;
+    string rejection_reason = 2;                  // empty if accepted
+    int32 ttl_seconds = 3;                        // server-set TTL
+}
+
+message LogLine {
+    google.protobuf.Timestamp time = 1;
+    LogLevel level = 2;
+    string message = 3;
+    string stream = 4;                            // 'stdout' or 'stderr'
+    int64 line_number = 5;
+}
+
+enum LogLevel {
+    LOG_LEVEL_UNSPECIFIED = 0;
+    LOG_LEVEL_DEBUG = 1;
+    LOG_LEVEL_INFO = 2;
+    LOG_LEVEL_WARN = 3;
+    LOG_LEVEL_ERROR = 4;
+}
+
+message LogAck {
+    int64 acknowledged_through_line = 1;
+}
+
+message ReportStateRequest {
+    TaskState state = 1;
+    int32 exit_code = 2;                          // for terminal states
+    string error_message = 3;                     // for failed state
+    google.protobuf.Timestamp occurred_at = 4;
+}
+
+enum TaskState {
+    TASK_STATE_UNSPECIFIED = 0;
+    TASK_STATE_RUNNING = 1;
+    TASK_STATE_SUCCESS = 2;
+    TASK_STATE_FAILED = 3;
+    TASK_STATE_SKIPPED = 4;
+}
+
+message ReportStateResponse {
+    bool acknowledged = 1;
+    // If the Control Plane wants the task to stop (cancellation), it signals here.
+    bool should_terminate = 2;
+}
+
+message HeartbeatRequest {
+    google.protobuf.Timestamp sent_at = 1;
+    map<string, double> custom_metrics = 2;       // optional task-reported metrics
+}
+
+message HeartbeatResponse {
+    bool should_terminate = 1;
+    google.protobuf.Timestamp server_time = 2;
+}

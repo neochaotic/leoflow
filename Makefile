@@ -5,7 +5,7 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 # ─── Tool versions (pinned; see ADR 0012 / 0014) ───
-GOLANGCI_LINT_VERSION ?= v2.5.0
+GOLANGCI_LINT_VERSION ?= v2.12.2
 GOREPORTCARD_VERSION  ?= latest
 GOVULNCHECK_VERSION   ?= latest
 MIGRATE_VERSION       ?= latest

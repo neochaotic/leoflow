@@ -118,6 +118,35 @@ func TestEffectiveExecutionModeDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateInlineExecutionRejectsLongInlineHTTP(t *testing.T) {
+	spec := validDAGSpec()
+	spec.Tasks[1].ExecutionTimeoutSeconds = ptr(600) // http_api, inline by default
+	if err := spec.ValidateInlineExecution(300); err == nil {
+		t.Error("inline http_api with timeout above the cap must be rejected")
+	}
+}
+
+func TestValidateInlineExecutionAllows(t *testing.T) {
+	cases := map[string]func(*DAGSpec){
+		"inline under cap": func(d *DAGSpec) { d.Tasks[1].ExecutionTimeoutSeconds = ptr(200) },
+		"pod over cap": func(d *DAGSpec) {
+			d.Tasks[1].ExecutionMode = ExecutionModePod
+			d.Tasks[1].ExecutionTimeoutSeconds = ptr(3600)
+		},
+		"python over cap (pod)": func(d *DAGSpec) { d.Tasks[0].ExecutionTimeoutSeconds = ptr(3600) },
+		"no explicit timeout":   func(d *DAGSpec) {},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			spec := validDAGSpec()
+			mutate(spec)
+			if err := spec.ValidateInlineExecution(300); err != nil {
+				t.Errorf("ValidateInlineExecution() = %v, want nil for %q", err, name)
+			}
+		})
+	}
+}
+
 func TestLeoflowConfigValidateAcceptsValidConfig(t *testing.T) {
 	if err := validLeoflowConfig().Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil", err)

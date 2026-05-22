@@ -101,6 +101,13 @@
         "retry_delay_seconds": { "type": "integer", "minimum": 0 },
         "execution_timeout_seconds": { "type": "integer", "minimum": 1 },
 
+        "execution_mode": {
+          "type": "string",
+          "enum": ["inline", "pod"],
+          "default": "inline",
+          "description": "For type=http_api only. 'inline' runs the call as a goroutine in the Control Plane (low overhead, capped at LEOFLOW_INLINE_HTTP_MAX_DURATION seconds, default 300s). 'pod' runs the call inside a worker pod via the agent (no duration cap beyond execution_timeout_seconds, full isolation, survives Control Plane restarts). Ignored for type=python and type=bash, which always use pod."
+        },
+
         "entrypoint": {
           "type": "string",
           "description": "For type=python: 'module.path:callable'. For type=bash: shell command."
@@ -190,11 +197,11 @@
       "allOf": [
         {
           "if": { "properties": { "type": { "const": "python" } } },
-          "then": { "required": ["entrypoint"] }
+          "then": { "required": ["entrypoint"], "properties": { "execution_mode": { "const": "pod" } } }
         },
         {
           "if": { "properties": { "type": { "const": "bash" } } },
-          "then": { "required": ["entrypoint"] }
+          "then": { "required": ["entrypoint"], "properties": { "execution_mode": { "const": "pod" } } }
         },
         {
           "if": { "properties": { "type": { "const": "http_api" } } },

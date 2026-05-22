@@ -15,6 +15,19 @@ const (
 	TaskTypeHTTPAPI TaskType = "http_api"
 )
 
+// ExecutionMode selects how a task runs. It is only meaningful for http_api
+// tasks; python and bash tasks always run in a pod.
+type ExecutionMode string
+
+// Supported execution modes. See docs/api/dag-schema.json and ADR 0002.
+const (
+	// ExecutionModeInline runs an http_api task as a goroutine in the control
+	// plane, capped at the server's inline duration limit.
+	ExecutionModeInline ExecutionMode = "inline"
+	// ExecutionModePod runs a task inside a worker pod via the agent.
+	ExecutionModePod ExecutionMode = "pod"
+)
+
 // TriggerRule decides whether a task runs based on its upstreams' states.
 type TriggerRule string
 
@@ -68,6 +81,7 @@ type TaskSpec struct {
 	Retries                 *int              `json:"retries,omitempty"`
 	RetryDelaySeconds       *int              `json:"retry_delay_seconds,omitempty"`
 	ExecutionTimeoutSeconds *int              `json:"execution_timeout_seconds,omitempty"`
+	ExecutionMode           ExecutionMode     `json:"execution_mode,omitempty"`
 	Entrypoint              string            `json:"entrypoint,omitempty"`
 	HTTPRequest             *HTTPRequest      `json:"http_request,omitempty"`
 	Env                     map[string]string `json:"env,omitempty"`
@@ -114,6 +128,18 @@ type Execution struct {
 	Tolerations     []map[string]any  `json:"tolerations,omitempty"`
 	ServiceAccount  string            `json:"service_account,omitempty"`
 	ImagePullPolicy string            `json:"image_pull_policy,omitempty"`
+}
+
+// EffectiveExecutionMode returns the task's execution mode, applying the
+// defaults: http_api tasks default to inline, every other type runs in a pod.
+func (t TaskSpec) EffectiveExecutionMode() ExecutionMode {
+	if t.ExecutionMode != "" {
+		return t.ExecutionMode
+	}
+	if t.Type == TaskTypeHTTPAPI {
+		return ExecutionModeInline
+	}
+	return ExecutionModePod
 }
 
 // Validate checks the DAGSpec against the canonical dag.json schema and

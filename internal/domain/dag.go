@@ -2,6 +2,8 @@
 // and validates them against the canonical JSON Schemas in docs/api.
 package domain
 
+import "fmt"
+
 // TaskType enumerates the kinds of work a task can perform.
 type TaskType string
 
@@ -140,6 +142,23 @@ func (t TaskSpec) EffectiveExecutionMode() ExecutionMode {
 		return ExecutionModeInline
 	}
 	return ExecutionModePod
+}
+
+// ValidateInlineExecution rejects inline http_api tasks whose
+// execution_timeout_seconds exceeds the server's inline duration cap. Such a
+// task must declare execution_mode: pod. maxInlineSeconds is the server limit.
+func (d *DAGSpec) ValidateInlineExecution(maxInlineSeconds int) error {
+	for _, t := range d.Tasks {
+		if t.Type != TaskTypeHTTPAPI || t.EffectiveExecutionMode() != ExecutionModeInline {
+			continue
+		}
+		if t.ExecutionTimeoutSeconds != nil && *t.ExecutionTimeoutSeconds > maxInlineSeconds {
+			return fmt.Errorf(
+				"task %q declares execution_timeout_seconds=%d but inline http_api tasks are capped at %d seconds on this server; set execution_mode: pod to use a worker pod, which has no such cap",
+				t.TaskID, *t.ExecutionTimeoutSeconds, maxInlineSeconds)
+		}
+	}
+	return nil
 }
 
 // Validate checks the DAGSpec against the canonical dag.json schema and

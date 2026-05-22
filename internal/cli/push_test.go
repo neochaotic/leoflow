@@ -60,6 +60,28 @@ func TestPushCommandEndToEnd(t *testing.T) {
 	}
 }
 
+func TestPushCommandUsesConfigServerURL(t *testing.T) {
+	var hit bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	t.Setenv("LEOFLOW_SERVER_URL", srv.URL)
+	f := filepath.Join(t.TempDir(), "dag.json")
+	if err := os.WriteFile(f, []byte(pushSpec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// No --server flag: the server URL must come from config (env).
+	if _, _, err := run(t, "push", f); err != nil {
+		t.Fatalf("push without --server: %v", err)
+	}
+	if !hit {
+		t.Error("server URL from config was not used")
+	}
+}
+
 func TestPushCommandRejectsInvalidSpec(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "dag.json")
 	if err := os.WriteFile(f, []byte(`{"dag_id":"etl","tasks":[]}`), 0o644); err != nil {

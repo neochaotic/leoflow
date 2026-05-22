@@ -16,7 +16,7 @@ import (
 )
 
 func newCompileCommand() *cobra.Command {
-	var output, image, parserCmd string
+	var output, image, parserCmd, dagVersion string
 	cmd := &cobra.Command{
 		Use:   "compile [path]",
 		Short: "Compile a DAG project into dag.json via the Python parser.",
@@ -38,18 +38,28 @@ func newCompileCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if dagVersion == "" {
+				dagVersion = gitVersion(cmdContext(cmd))
+			}
+			// The DAG-as-Image build (ADR 0003) is not implemented yet; the
+			// image reference is recorded as-is. Warn so this is not silent.
+			if _, werr := fmt.Fprintf(cmd.ErrOrStderr(), "note: image build is not yet implemented; recording image %q as-is\n", image); werr != nil {
+				return werr
+			}
+
 			if rerr := runParser(cmd, command, parserArgs{
-				source: dagSourcePath(dir, cfg),
-				config: projectConfigPath(dir),
-				output: output,
-				image:  image,
+				source:     dagSourcePath(dir, cfg),
+				config:     projectConfigPath(dir),
+				output:     output,
+				image:      image,
+				dagVersion: dagVersion,
 			}); rerr != nil {
 				return rerr
 			}
 			if verr := validateDAGFile(output); verr != nil {
 				return verr
 			}
-			if _, werr := fmt.Fprintf(cmd.OutOrStdout(), "Compiled %s -> %s (image %s)\n", dagSourcePath(dir, cfg), output, image); werr != nil {
+			if _, werr := fmt.Fprintf(cmd.OutOrStdout(), "Compiled %s -> %s (image %s, version %s)\n", dagSourcePath(dir, cfg), output, image, dagVersion); werr != nil {
 				return werr
 			}
 			return nil
@@ -58,15 +68,26 @@ func newCompileCommand() *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "dag.json", "path to write the compiled dag.json")
 	cmd.Flags().StringVar(&image, "image", "", "container image reference for the DAG")
 	cmd.Flags().StringVar(&parserCmd, "parser-cmd", "", "override the parser command (default from config)")
+	cmd.Flags().StringVar(&dagVersion, "dag-version", "", "DAG version label (default: git describe, else dev)")
 	return cmd
 }
 
 // parserArgs collects the inputs passed to the Python parser subprocess.
 type parserArgs struct {
-	source string
-	config string
-	output string
-	image  string
+	source     string
+	config     string
+	output     string
+	image      string
+	dagVersion string
+}
+
+// gitVersion derives a version label from git, falling back to "dev".
+func gitVersion(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--always", "--dirty").Output()
+	if err != nil {
+		return "dev"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // resolveParserCommand returns the explicit --parser-cmd value when set,
@@ -95,7 +116,8 @@ func runParser(cmd *cobra.Command, command string, a parserArgs) error {
 		"--source", a.source,
 		"--config", a.config,
 		"--output", a.output,
-		"--image", a.image)
+		"--image", a.image,
+		"--dag-version", a.dagVersion)
 	//nolint:gosec // G204: the parser command is operator-configured by design (ADR 0005).
 	pc := exec.CommandContext(cmdContext(cmd), fields[0], argv...)
 	pc.Stdout = cmd.OutOrStdout()

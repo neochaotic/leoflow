@@ -125,14 +125,12 @@ func TestCompileProducesValidDAGJSON(t *testing.T) {
 	}
 }
 
-func TestStubCommandsAnnounceNotImplemented(t *testing.T) {
-	for _, args := range [][]string{{"server"}} {
-		out, _, err := run(t, args...)
-		if err != nil {
-			t.Fatalf("%v: %v", args, err)
-		}
-		if !strings.Contains(strings.ToLower(out), "not yet implemented") {
-			t.Errorf("%v output = %q, want 'not yet implemented'", args, out)
-		}
+func TestServerCommandPointsToBinary(t *testing.T) {
+	out, _, err := run(t, "server")
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	if !strings.Contains(out, "leoflow-server") {
+		t.Errorf("server output = %q, want mention of leoflow-server", out)
 	}
 }

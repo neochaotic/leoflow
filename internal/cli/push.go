@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
@@ -34,6 +35,13 @@ func newPushCommand() *cobra.Command {
 			if verr := spec.Validate(); verr != nil {
 				return fmt.Errorf("invalid dag.json: %w", verr)
 			}
+			if serverURL == "" {
+				cfg, cerr := config.Load(configFilePath(cmd), cmd.Flags())
+				if cerr != nil {
+					return cerr
+				}
+				serverURL = cfg.ServerURL
+			}
 			status, body, err := pushVersion(cmdContext(cmd), serverURL, token, spec.DagID, data)
 			if err != nil {
 				return err
@@ -45,7 +53,7 @@ func newPushCommand() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&serverURL, "server", "http://localhost:8080", "control plane base URL")
+	cmd.Flags().StringVar(&serverURL, "server", "", "control plane base URL (default: config server_url)")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token")
 	return cmd
 }

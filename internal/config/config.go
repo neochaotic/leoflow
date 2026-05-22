@@ -28,11 +28,15 @@ var flagToKey = map[string]string{
 	"parser-cmd": "parser_cmd",
 }
 
-// Config holds runtime configuration shared by the Leoflow binaries.
+// Config holds the developer CLI configuration.
 type Config struct {
+	// ServerURL is the control plane base URL used by push and auth create-token.
 	ServerURL string `mapstructure:"server_url"`
-	LogLevel  string `mapstructure:"log_level"`
-	Registry  string `mapstructure:"registry"`
+	// LogLevel is reserved for CLI log verbosity (not yet wired).
+	LogLevel string `mapstructure:"log_level"`
+	// Registry is reserved for the image registry used by image build (ADR 0003).
+	Registry string `mapstructure:"registry"`
+	// ParserCmd is the command used to invoke the Python parser from compile.
 	ParserCmd string `mapstructure:"parser_cmd"`
 }
 

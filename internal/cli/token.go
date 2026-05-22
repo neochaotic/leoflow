@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/neochaotic/leoflow/internal/config"
 )
 
 func newAuthCommand() *cobra.Command {
@@ -30,6 +32,13 @@ func newCreateTokenCommand() *cobra.Command {
 		Short: "Obtain a JWT from the control plane.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if serverURL == "" {
+				cfg, cerr := config.Load(configFilePath(cmd), cmd.Flags())
+				if cerr != nil {
+					return cerr
+				}
+				serverURL = cfg.ServerURL
+			}
 			token, err := requestToken(cmdContext(cmd), serverURL, username, password)
 			if err != nil {
 				return err
@@ -38,7 +47,7 @@ func newCreateTokenCommand() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&serverURL, "server", "http://localhost:8080", "control plane base URL")
+	cmd.Flags().StringVar(&serverURL, "server", "", "control plane base URL (default: config server_url)")
 	cmd.Flags().StringVar(&username, "username", os.Getenv("LEOFLOW_USERNAME"), "username")
 	cmd.Flags().StringVar(&password, "password", os.Getenv("LEOFLOW_PASSWORD"), "password")
 	return cmd

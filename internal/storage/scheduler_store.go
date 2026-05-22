@@ -39,6 +39,7 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		if uerr := json.Unmarshal(version.Spec, &spec); uerr != nil {
 			return nil, fmt.Errorf("decoding spec: %w", uerr)
 		}
+		applyDefaultRetries(&spec)
 		tis, err := s.q.ListTaskInstancesByRun(ctx, run.ID)
 		if err != nil {
 			return nil, fmt.Errorf("listing task instances: %w", err)
@@ -70,6 +71,9 @@ func (s *SchedulerStore) MaterializeTasks(ctx context.Context, runID string, tas
 	}
 	for _, t := range tasks {
 		maxTries := int32(1)
+		if t.Retries != nil {
+			maxTries = toInt32(*t.Retries + 1)
+		}
 		if _, err := s.q.CreateTaskInstance(ctx, queries.CreateTaskInstanceParams{
 			TenantID: run.TenantID,
 			DagRunID: rid,
@@ -139,6 +143,20 @@ func (s *SchedulerStore) CreateScheduledRun(ctx context.Context, dagID string, l
 		Tenant:      "default",
 		DagID:       dagID,
 	})
+}
+
+// applyDefaultRetries fills each task's retries from the DAG default_args when
+// the task has no explicit value, so materialization can derive max_tries.
+func applyDefaultRetries(spec *domain.DAGSpec) {
+	if spec.DefaultArgs == nil {
+		return
+	}
+	for i := range spec.Tasks {
+		if spec.Tasks[i].Retries == nil {
+			r := spec.DefaultArgs.Retries
+			spec.Tasks[i].Retries = &r
+		}
+	}
 }
 
 var _ scheduler.Store = (*SchedulerStore)(nil)

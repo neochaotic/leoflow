@@ -6,20 +6,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// announceNotImplemented prints a stable message for commands whose behavior
-// arrives in a later phase, returning any write error.
-func announceNotImplemented(cmd *cobra.Command, feature string) error {
-	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s is not yet implemented (arriving in a later phase).\n", feature)
-	return err
-}
-
 func newServerCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "server",
-		Short: "Run the Leoflow control plane (Phase 2).",
+		Short: "Information about running the control plane.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return announceNotImplemented(cmd, "server")
+			_, err := fmt.Fprintln(cmd.OutOrStdout(),
+				"The Leoflow control plane runs as the 'leoflow-server' binary, not via this CLI.\n"+
+					"Run it directly (e.g. ./bin/leoflow-server) with LEOFLOW_* configuration.")
+			return err
 		},
 	}
 }

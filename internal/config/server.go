@@ -37,10 +37,11 @@ type HTTPExecutorSection struct {
 	UserAgent string `mapstructure:"user_agent"`
 }
 
-// ServerSection configures the HTTP and metrics listeners.
+// ServerSection configures the HTTP, metrics, and agent gRPC listeners.
 type ServerSection struct {
 	HTTPAddr    string      `mapstructure:"http_addr"`
 	MetricsAddr string      `mapstructure:"metrics_addr"`
+	GRPCAddr    string      `mapstructure:"grpc_addr"`
 	CORS        CORSSection `mapstructure:"cors"`
 }
 
@@ -97,6 +98,7 @@ type OTelSection struct {
 var serverDefaults = map[string]any{
 	"server.http_addr":                          "0.0.0.0:8080",
 	"server.metrics_addr":                       "0.0.0.0:9090",
+	"server.grpc_addr":                          "0.0.0.0:9091",
 	"server.cors.allowed_origins":               []string{"http://localhost:8080"},
 	"database.url":                              "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
 	"database.max_open_conns":                   25,

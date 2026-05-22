@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // touchAll exercises every metric once so the collectors produce a metric
@@ -35,12 +34,25 @@ func touchAll(m *Metrics) {
 }
 
 func TestRecordTaskDurationObserves(t *testing.T) {
-	m := NewMetrics(prometheus.NewRegistry())
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
 	m.RecordTaskTransition("running", "success", "etl")
 	m.RecordTaskDuration("etl", "hook", "http_api", 1.5)
-	if got := testutil.CollectAndCount(m.TaskDuration); got != 1 {
-		t.Errorf("TaskDuration series = %d, want 1", got)
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
 	}
+	for _, fam := range families {
+		if fam.GetName() != "leoflow_task_duration_seconds" {
+			continue
+		}
+		if n := fam.GetMetric()[0].GetHistogram().GetSampleCount(); n != 1 {
+			t.Errorf("task duration sample count = %d, want 1", n)
+		}
+		return
+	}
+	t.Error("leoflow_task_duration_seconds not recorded")
 }
 
 func TestNewMetricsRegistersAllADR0010Metrics(t *testing.T) {

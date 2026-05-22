@@ -93,8 +93,8 @@ sqlc: ## Regenerate sqlc code
 	sqlc generate
 
 .PHONY: proto
-proto: ## Regenerate protobuf code (Phase 3)
-	@echo "proto generation wired in Phase 3 (see prompts/phase-3-executor-agent.md)"
+proto: ## Regenerate protobuf/gRPC code from proto/ via buf
+	buf generate
 
 .PHONY: clean
 clean: ## Remove build artifacts

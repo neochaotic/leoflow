@@ -29,7 +29,12 @@ const (
 // IsTerminal reports whether the task state is final (no further automatic
 // transitions occur from it).
 func (s TaskState) IsTerminal() bool {
-	return false
+	switch s {
+	case TaskStateSuccess, TaskStateFailed, TaskStateSkipped, TaskStateUpstreamFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 // DagRunState is the lifecycle state of a DagRun. The values mirror the
@@ -50,5 +55,5 @@ const (
 
 // IsTerminal reports whether the dag run state is final.
 func (s DagRunState) IsTerminal() bool {
-	return false
+	return s == DagRunStateSuccess || s == DagRunStateFailed
 }

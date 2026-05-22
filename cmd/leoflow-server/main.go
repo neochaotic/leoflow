@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,15 +15,22 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/neochaotic/leoflow/internal/agentrpc"
 	"github.com/neochaotic/leoflow/internal/api"
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
+	"github.com/neochaotic/leoflow/internal/dispatch"
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/observability"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
+	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
 
 func main() {
@@ -74,12 +82,20 @@ func run() error {
 
 	repo := storage.NewRepository(pg)
 	authn := auth.NewJWTAuthenticator(repo, cfg.Auth.JWT.Secret, time.Duration(cfg.Auth.JWT.TokenTTLSeconds)*time.Second)
+	execStore := storage.NewExecutionStore(pg)
 
 	if err := bootstrapAdmin(ctx, repo, tel.Logger); err != nil {
 		return err
 	}
+
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, tel.Logger)
+	if gerr != nil {
+		return gerr
+	}
+	defer grpcSrv.GracefulStop()
+
 	if cfg.Scheduler.Enabled {
-		if serr := startScheduler(ctx, cfg, pg, tel.Logger, tel.Metrics); serr != nil {
+		if serr := startScheduler(ctx, cfg, pg, execStore, authn, tel.Logger, tel.Metrics); serr != nil {
 			return serr
 		}
 	}
@@ -142,6 +158,12 @@ func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.
 	return nil
 }
 
+// podNamespace is the Kubernetes namespace task pods are created in.
+const podNamespace = "leoflow"
+
+// agentTokenTTL is how long a dispatched task's agent identity token stays valid.
+const agentTokenTTL = 24 * time.Hour
+
 // inlineStateSink adapts the scheduler store to the inline runner's StateSink,
 // recording inline http_api task transitions.
 type inlineStateSink struct{ store *storage.SchedulerStore }
@@ -150,7 +172,46 @@ func (s inlineStateSink) Transition(ctx context.Context, runID, taskID string, s
 	return s.store.ApplyTransition(ctx, runID, taskID, state)
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger, metrics *observability.Metrics) error {
+// startAgentGRPC starts the AgentService gRPC server (insecure transport; the
+// per-task bearer token in metadata authenticates each call) and returns it for
+// graceful shutdown.
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, logger *slog.Logger) (*grpc.Server, error) {
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listening for agent grpc on %s: %w", addr, err)
+	}
+	srv := grpc.NewServer()
+	agentv1.RegisterAgentServiceServer(srv, agentrpc.NewServer(authn, store))
+	go func() {
+		if serr := srv.Serve(lis); serr != nil && !errors.Is(serr, grpc.ErrServerStopped) {
+			logger.Error("agent grpc server", "error", serr)
+		}
+	}()
+	logger.Info("agent grpc server started", "grpc_addr", addr)
+	return srv, nil
+}
+
+// buildPodExecutor constructs a Kubernetes executor from the in-cluster config
+// or the local kubeconfig. It returns an error when neither is available, in
+// which case pod dispatch is disabled and only inline http_api tasks run.
+func buildPodExecutor() (executor.Executor, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
+		if err != nil {
+			return nil, fmt.Errorf("no in-cluster config or kubeconfig: %w", err)
+		}
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("building kubernetes client: %w", err)
+	}
+	return executor.NewKubernetesExecutor(cs, podNamespace), nil
+}
+
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger, metrics *observability.Metrics) error {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("leader pool: %w", err)
@@ -165,6 +226,12 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		cfg.Executor.HTTP.InlineMaxDurationSeconds,
 		cfg.Executor.HTTP.UserAgent,
 	))
+	if podExec, perr := buildPodExecutor(); perr == nil {
+		sched.SetDispatcher(dispatch.NewDispatcher(podExec, execStore, authn, cfg.Server.GRPCAddr, agentTokenTTL))
+		logger.Info("pod dispatch enabled", "namespace", podNamespace)
+	} else {
+		logger.Warn("pod dispatch disabled; only inline http_api tasks will run", "error", perr)
+	}
 	leader := scheduler.NewLeader(leaderPool)
 	go func() {
 		defer leaderPool.Close()

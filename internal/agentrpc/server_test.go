@@ -7,6 +7,7 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -55,9 +56,36 @@ func ctxWithToken(t *testing.T, a *auth.JWTAuthenticator) context.Context {
 	return metadata.NewIncomingContext(context.Background(), md)
 }
 
+type fakeXCom struct {
+	entries map[string]xcom.Entry
+	pushErr error
+}
+
+func (x *fakeXCom) Push(_ context.Context, key xcom.Key, value []byte, ct string, _ map[string]any) error {
+	if x.pushErr != nil {
+		return x.pushErr
+	}
+	if x.entries == nil {
+		x.entries = map[string]xcom.Entry{}
+	}
+	x.entries[key.String()] = xcom.Entry{Value: value, ContentType: ct}
+	return nil
+}
+
+func (x *fakeXCom) Fetch(_ context.Context, key xcom.Key) (xcom.Entry, error) {
+	if e, ok := x.entries[key.String()]; ok {
+		return e, nil
+	}
+	return xcom.Entry{}, xcom.ErrNotFound
+}
+
 func newServer(store Store) (*Server, *auth.JWTAuthenticator) {
+	return newServerX(store, &fakeXCom{})
+}
+
+func newServerX(store Store, x XComService) (*Server, *auth.JWTAuthenticator) {
 	a := auth.NewJWTAuthenticator(nil, "secret", time.Hour)
-	return NewServer(a, store), a
+	return NewServer(a, store, x), a
 }
 
 func TestGetTaskSpecMapsStoreData(t *testing.T) {
@@ -135,6 +163,79 @@ func TestReportStateRejectsUnknownState(t *testing.T) {
 		State: agentv1.TaskState_TASK_STATE_UNSPECIFIED,
 	}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("unspecified state: code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+func TestPushXComStoresUnderIdentityKey(t *testing.T) {
+	x := &fakeXCom{}
+	srv, a := newServerX(&fakeStore{spec: TaskSpec{Operator: "python"}}, x)
+
+	resp, err := srv.PushXCom(ctxWithToken(t, a), &agentv1.PushXComRequest{Value: []byte(`{"rows":1}`)})
+	if err != nil {
+		t.Fatalf("PushXCom: %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("push not accepted: %s", resp.GetRejectionReason())
+	}
+	// identity = ti-1 / acme / etl / run-1 / extract; default key return_value.
+	if _, ok := x.entries["xcom:acme:etl:run-1:extract:return_value"]; !ok {
+		t.Errorf("stored keys = %v, want the identity-derived key", x.entries)
+	}
+}
+
+func TestPushXComRejectsOversizeAndSchema(t *testing.T) {
+	cases := map[string]struct {
+		err    error
+		reason string
+	}{
+		"too large":       {xcom.ErrTooLarge, "payload_too_large"},
+		"schema mismatch": {xcom.ErrSchemaMismatch, "schema_mismatch"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, a := newServerX(&fakeStore{spec: TaskSpec{Operator: "python"}}, &fakeXCom{pushErr: c.err})
+			resp, err := srv.PushXCom(ctxWithToken(t, a), &agentv1.PushXComRequest{Value: []byte(`x`)})
+			if err != nil {
+				t.Fatalf("PushXCom returned a transport error: %v", err)
+			}
+			if resp.GetAccepted() || resp.GetRejectionReason() != c.reason {
+				t.Errorf("rejection = (%v, %q), want (false, %q)", resp.GetAccepted(), resp.GetRejectionReason(), c.reason)
+			}
+		})
+	}
+}
+
+func TestFetchXComReturnsDeclaredUpstream(t *testing.T) {
+	x := &fakeXCom{entries: map[string]xcom.Entry{
+		"xcom:acme:etl:run-1:upstream:return_value": {Value: []byte(`{"n":9}`), ContentType: "application/json"},
+	}}
+	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string]string{"val": "upstream"}}}
+	srv, a := newServerX(store, x)
+
+	resp, err := srv.FetchXCom(ctxWithToken(t, a), &agentv1.FetchXComRequest{UpstreamTaskId: "upstream"})
+	if err != nil {
+		t.Fatalf("FetchXCom: %v", err)
+	}
+	if string(resp.GetValue()) != `{"n":9}` {
+		t.Errorf("value = %s", resp.GetValue())
+	}
+}
+
+func TestFetchXComDeniesUndeclaredUpstream(t *testing.T) {
+	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string]string{"val": "other"}}}
+	srv, a := newServerX(store, &fakeXCom{})
+	_, err := srv.FetchXCom(ctxWithToken(t, a), &agentv1.FetchXComRequest{UpstreamTaskId: "secret"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("fetching an undeclared upstream: code = %v, want PermissionDenied", status.Code(err))
+	}
+}
+
+func TestFetchXComNotFound(t *testing.T) {
+	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string]string{"val": "upstream"}}}
+	srv, a := newServerX(store, &fakeXCom{})
+	_, err := srv.FetchXCom(ctxWithToken(t, a), &agentv1.FetchXComRequest{UpstreamTaskId: "upstream"})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("missing xcom: code = %v, want NotFound", status.Code(err))
 	}
 }
 

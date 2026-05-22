@@ -64,6 +64,26 @@ func TestRegisterVersionRejectsMismatchedDagID(t *testing.T) {
 	}
 }
 
+func TestRegisterVersionRejectsLongInlineHTTP(t *testing.T) {
+	spec := `{"schema_version":"1.0","dag_id":"etl","dag_version":"v1","image":"img:v1","tasks":[` +
+		`{"task_id":"hook","type":"http_api","execution_timeout_seconds":600,` +
+		`"http_request":{"method":"POST","url":"https://example.com/h"}}]}`
+	rec := authGet(versionServer(&fakeVersionRepo{}), http.MethodPost, "/api/v2/dags/etl/versions", spec)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("long inline http_api = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRegisterVersionAllowsLongPodHTTP(t *testing.T) {
+	spec := `{"schema_version":"1.0","dag_id":"etl","dag_version":"v1","image":"img:v1","tasks":[` +
+		`{"task_id":"hook","type":"http_api","execution_mode":"pod","execution_timeout_seconds":3600,` +
+		`"http_request":{"method":"POST","url":"https://example.com/h"}}]}`
+	rec := authGet(versionServer(&fakeVersionRepo{created: true}), http.MethodPost, "/api/v2/dags/etl/versions", spec)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("long pod http_api = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRegisterVersionRejectsInvalidSpec(t *testing.T) {
 	bad := `{"schema_version":"1.0","dag_id":"etl","dag_version":"v1","image":"img","tasks":[]}`
 	rec := authGet(versionServer(&fakeVersionRepo{}), http.MethodPost, "/api/v2/dags/etl/versions", bad)

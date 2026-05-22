@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -84,5 +85,39 @@ func TestReconcileReportsOnlyFailedPods(t *testing.T) {
 	}
 	if len(reporter.failed) != 1 {
 		t.Errorf("only the failed pod should be reported, got %v", reporter.failed)
+	}
+}
+
+func agedPod(name string, phase corev1.PodPhase, created time.Time) *corev1.Pod {
+	p := managedPod(name, "ti-"+name, phase)
+	p.CreationTimestamp = metav1.NewTime(created)
+	return p
+}
+
+func TestReconcileGarbageCollectsOldTerminalPods(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	cs := fake.NewClientset(
+		agedPod("old-success", corev1.PodSucceeded, now.Add(-30*time.Minute)),
+		agedPod("old-failed", corev1.PodFailed, now.Add(-30*time.Minute)),
+		agedPod("recent-success", corev1.PodSucceeded, now.Add(-1*time.Minute)),
+		agedPod("running", corev1.PodRunning, now.Add(-30*time.Minute)),
+	)
+	r := NewReconciler(cs, "leoflow", &fakeReporter{})
+	r.now = func() time.Time { return now }
+	r.ttl = 10 * time.Minute
+
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	remaining := map[string]bool{}
+	pods, _ := cs.CoreV1().Pods("leoflow").List(context.Background(), metav1.ListOptions{})
+	for _, p := range pods.Items {
+		remaining[p.Name] = true
+	}
+	if remaining["old-success"] || remaining["old-failed"] {
+		t.Errorf("old terminal pods should be GC'd, remaining: %v", remaining)
+	}
+	if !remaining["recent-success"] || !remaining["running"] {
+		t.Errorf("recent and running pods must be kept, remaining: %v", remaining)
 	}
 }

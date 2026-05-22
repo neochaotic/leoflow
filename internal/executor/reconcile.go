@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -67,21 +68,29 @@ type FailureReporter interface {
 	FailTask(ctx context.Context, taskInstanceID, reason string) error
 }
 
+// podGCGracePeriod is how long a finished pod is kept before garbage collection,
+// leaving a window to inspect a failed pod with kubectl.
+const podGCGracePeriod = 10 * time.Minute
+
 // Reconciler detects task pods that failed without the agent reporting state and
 // marks the corresponding task instance failed, so retries and run finalization
-// can proceed instead of stranding the task.
+// can proceed instead of stranding the task. It also garbage-collects finished
+// pods once they age out.
 type Reconciler struct {
 	clientset kubernetes.Interface
 	namespace string
 	reporter  FailureReporter
+	now       func() time.Time
+	ttl       time.Duration
 }
 
 // NewReconciler builds a Reconciler over the given cluster and failure reporter.
 func NewReconciler(clientset kubernetes.Interface, namespace string, reporter FailureReporter) *Reconciler {
-	return &Reconciler{clientset: clientset, namespace: namespace, reporter: reporter}
+	return &Reconciler{clientset: clientset, namespace: namespace, reporter: reporter, now: time.Now, ttl: podGCGracePeriod}
 }
 
-// Reconcile lists managed task pods and reports each failed one's task instance.
+// Reconcile lists managed task pods, reports each failed one's task instance,
+// and garbage-collects finished pods older than the grace period.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	pods, err := r.clientset.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "leoflow.io/run-id",
@@ -92,16 +101,28 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		outcome, reason := classifyPod(pod)
-		if outcome != podFailed {
-			continue
+		if outcome == podFailed {
+			r.reportFailure(ctx, pod, reason)
 		}
-		tiID := pod.Annotations["leoflow.io/task-instance-id"]
-		if tiID == "" {
-			continue
-		}
-		if rerr := r.reporter.FailTask(ctx, tiID, reason); rerr != nil {
-			slog.Error("reporting failed pod", "pod", pod.Name, "task_instance", tiID, "error", rerr)
+		if outcome != podPending && r.now().Sub(pod.CreationTimestamp.Time) > r.ttl {
+			r.collect(ctx, pod)
 		}
 	}
 	return nil
+}
+
+func (r *Reconciler) reportFailure(ctx context.Context, pod *corev1.Pod, reason string) {
+	tiID := pod.Annotations["leoflow.io/task-instance-id"]
+	if tiID == "" {
+		return
+	}
+	if err := r.reporter.FailTask(ctx, tiID, reason); err != nil {
+		slog.Error("reporting failed pod", "pod", pod.Name, "task_instance", tiID, "error", err)
+	}
+}
+
+func (r *Reconciler) collect(ctx context.Context, pod *corev1.Pod) {
+	if err := r.clientset.CoreV1().Pods(r.namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
+		slog.Error("garbage-collecting finished pod", "pod", pod.Name, "error", err)
+	}
 }

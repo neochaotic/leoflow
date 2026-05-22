@@ -29,10 +29,27 @@ func TestUIConfigIsPublicAndShaped(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"instance_name", "auto_refresh_interval", "hide_paused_dags_by_default"} {
+	// Every field the spec marks required must be present, or the SPA may
+	// silently misrender. See uiConfigRequiredFields (mirrored from the spec).
+	for _, field := range uiConfigRequiredFields {
 		if _, ok := cfg[field]; !ok {
-			t.Errorf("config missing %q", field)
+			t.Errorf("config missing required field %q", field)
 		}
+	}
+	if cfg["instance_name"] != "Leoflow" {
+		t.Errorf("instance_name = %v, want Leoflow", cfg["instance_name"])
+	}
+	if cfg["auto_refresh_interval"].(float64) != 30 {
+		t.Errorf("auto_refresh_interval = %v, want 30", cfg["auto_refresh_interval"])
+	}
+	// theme is required AND nullable in the spec (Theme object | null); null
+	// means "no custom Chakra theme". It is NOT the string "default".
+	if v, ok := cfg["theme"]; ok && v != nil {
+		t.Errorf("theme = %v, want null", v)
+	}
+	// is_db_isolation_mode is not part of the 3.2.1 ConfigResponse.
+	if _, ok := cfg["is_db_isolation_mode"]; ok {
+		t.Errorf("config carries is_db_isolation_mode, not in spec")
 	}
 }
 
@@ -55,11 +72,35 @@ func TestUIMenusHidesUnsupportedSections(t *testing.T) {
 		}
 		return false
 	}
-	if !has("Dags") {
-		t.Errorf("menus should authorize Dags, got %v", body.Authorized)
+	if !has("Dags") || !has("Docs") {
+		t.Errorf("menus should authorize Dags and Docs, got %v", body.Authorized)
 	}
-	if has("Connections") || has("Variables") || has("Pools") {
+	if has("Connections") || has("Variables") || has("Pools") || has("XComs") || has("Required Actions") {
 		t.Errorf("menus must hide unsupported sections, got %v", body.Authorized)
+	}
+	// Every advertised item must be a real 3.2.1 MenuItem enum value.
+	for _, m := range body.Authorized {
+		if !validMenuItems[m] {
+			t.Errorf("menu item %q is not a 3.2.1 MenuItem enum value", m)
+		}
+	}
+}
+
+func TestUIAuthTokenReMintsForAuthenticatedPrincipal(t *testing.T) {
+	srv := uiServer()
+	// Authenticated principal: re-mint succeeds with the spec response shape.
+	rec := authGet(srv, http.MethodPost, "/ui/auth/token", `{"token_type":"api"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/ui/auth/token = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var tok map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"access_token", "token_type", "expires_in_seconds"} {
+		if _, ok := tok[f]; !ok {
+			t.Errorf("token response missing %q (got %v)", f, tok)
+		}
 	}
 }
 

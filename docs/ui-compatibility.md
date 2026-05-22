@@ -150,9 +150,21 @@ browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
 
 - A reverse proxy (or a static-file route in leoflow-server) serves the pinned
   3.2.1 SPA bundle and routes `/ui/*` and `/api/v2/*` to the control plane.
-- **Auth:** the UI logs in via `POST /ui/auth/token` (username/password →
-  JWT); the JWT is sent as `Authorization: Bearer` on subsequent calls. Leoflow's
-  existing JWT issuance backs this; the secret is shared via configuration.
+- **Auth (dual-path — corrected 2026-05-22).** The earlier assumption that the UI
+  logs in via `POST /ui/auth/token` was **wrong**: the spec's `GenerateTokenBody`
+  carries **no credentials** (only an optional `token_type`), so `/ui/auth/token`
+  re-mints a token for an **already-authenticated** principal — it is not the
+  login endpoint. Credential login (username/password) is the **simple-auth-manager
+  `POST /auth/token`**. Leoflow therefore implements **both**:
+  - `POST /auth/token` — credential login → JWT (the real login; already existed).
+  - `POST /ui/auth/token` — re-mint for an authed bearer → `{access_token,
+    token_type, expires_in_seconds}`; 401 without a bearer.
+  - **OPEN — verify in browser (Phase 5.2/5.3):** open DevTools → Network and
+    capture which endpoint the 3.2.1 login form actually POSTs on submit. Record
+    the finding here before closing the PR. The unused path stays as a graceful
+    fallback (do not remove until 5.3 or Phase 6). The JWT is sent as
+    `Authorization: Bearer` on subsequent calls; Leoflow's existing JWT issuance
+    backs both, secret shared via configuration.
 
 ## Learnings log
 
@@ -162,6 +174,22 @@ browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
   (principle #8) reflected Airflow 2.x. Authoritative `/ui` shapes live in
   `_private_ui.yaml` per tag. The UI is backend-shaped via `/ui/auth/menus` and
   `/ui/config`, which is how we hide uncovered features without touching the SPA.
+- **2026-05-22 (spec corrections during 5.1).** Reconciling the implementation
+  against the authoritative `_private_ui.yaml`:
+  - `AuthenticatedMeResponse` is `{id, username}` only (not `name`/`is_active`/
+    `is_authenticated`).
+  - `MenuItem` is a fixed string enum (`Required Actions, Assets, Audit Log,
+    Config, Connections, Dags, Docs, Jobs, Plugins, Pools, Providers, Variables,
+    XComs`) — there is **no** "Browse > DAG Runs / Task Instances" (that was
+    Airflow 2.x). Curated set starts at `[Dags, Docs]`; widen only if a browser
+    test proves a missing section breaks the UI.
+  - `ConfigResponse` has 12 **required** fields and **no** `assets_enabled`/
+    `plugins_enabled`/`is_db_isolation_mode`. `theme` is required-but-nullable (a
+    Chakra-theme object or `null`), not the string `"default"`. Menus, not config
+    flags, are the lever that hides sections.
+  - `/ui/auth/token` is a re-mint, not login (see Serving & auth above).
+- **Strategic note:** the pinned `/ui/*` is tactical for MVP velocity; a custom
+  Leoflow UI on the stable `/api/v2/` is the long-term destination. See ADR 0018.
 
 ## Sources
 

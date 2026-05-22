@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -49,7 +50,7 @@ func TestUserAuthRejectsAgentToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueAgentToken: %v", err)
 	}
-	if _, err := a.Authenticate(nil, agentToken); err == nil {
+	if _, err := a.Authenticate(context.Background(), agentToken); err == nil {
 		t.Error("an agent token must not authenticate as a user")
 	}
 }

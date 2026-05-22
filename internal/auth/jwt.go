@@ -11,6 +11,10 @@ import (
 
 const tokenIssuer = "leoflow"
 
+// audienceUser scopes tokens minted for human and API users, distinguishing them
+// from agent identity tokens (see audienceAgent).
+const audienceUser = "leoflow-user"
+
 // jwtClaims is the Leoflow JWT payload.
 type jwtClaims struct {
 	TenantID string   `json:"tenant_id"`
@@ -48,7 +52,7 @@ func (a *JWTAuthenticator) Authenticate(_ context.Context, token string) (*User,
 	var c jwtClaims
 	parsed, err := jwt.ParseWithClaims(token, &c, func(t *jwt.Token) (any, error) {
 		return a.secret, nil
-	}, jwt.WithIssuer(tokenIssuer), jwt.WithValidMethods([]string{"HS256"}))
+	}, jwt.WithIssuer(tokenIssuer), jwt.WithAudience(audienceUser), jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil || !parsed.Valid {
 		return nil, errors.Join(ErrInvalidToken, err)
 	}
@@ -63,6 +67,7 @@ func (a *JWTAuthenticator) sign(user *User) (string, error) {
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.ID,
 			Issuer:    tokenIssuer,
+			Audience:  jwt.ClaimStrings{audienceUser},
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(a.ttl)),
 		},

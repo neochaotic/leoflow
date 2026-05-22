@@ -208,6 +208,26 @@ func TestRunsStatusLatest(t *testing.T) {
 	}
 }
 
+func TestRunsStatusByRunID(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"dag_run_id":"run-7","state":"running"}`))
+	}))
+	defer srv.Close()
+
+	out, _, err := run(t, "runs", "status", "etl", "--run", "run-7", "--server", srv.URL, "--token", "t")
+	if err != nil {
+		t.Fatalf("runs status --run: %v", err)
+	}
+	if gotPath != "/api/v2/dags/etl/dagRuns/run-7" {
+		t.Errorf("hit %s, want the specific run endpoint", gotPath)
+	}
+	if !strings.Contains(out, "run-7") || !strings.Contains(out, "running") {
+		t.Errorf("output = %q, want the run id and state", out)
+	}
+}
+
 func TestRunsStatusError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

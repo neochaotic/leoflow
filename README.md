@@ -159,9 +159,8 @@ cd leoflow
 make setup            # Go tools, Python parser, pre-commit hook
 make build            # builds bin/leoflow, bin/leoflow-server, bin/leoflow-agent
 
-# Start Postgres + Redis and apply migrations
-docker compose -f docker-compose.dev.yaml up -d
-make migrate-up
+# Start Postgres + Redis (Docker) and apply migrations
+make dev-up           # docker compose up --wait + migrate-up; `make dev-down` to stop
 
 # Run the control plane (bootstraps a default admin user)
 LEOFLOW_AUTH_JWT_SECRET=dev LEOFLOW_BOOTSTRAP_PASSWORD=admin123 ./bin/leoflow-server &
@@ -173,6 +172,8 @@ LEOFLOW_AUTH_JWT_SECRET=dev LEOFLOW_BOOTSTRAP_PASSWORD=admin123 ./bin/leoflow-se
 TOKEN=$(./bin/leoflow auth create-token --username admin@leoflow.local --password admin123)
 ./bin/leoflow push my-dag/dag.json --token "$TOKEN"
 ```
+
+> **Two dev environments.** `make dev-up` runs Postgres + Redis as plain Docker containers on the host for a fast inner loop (control plane on the host). Full in-cluster execution — control plane and dependencies on a local Kubernetes cluster (k3d/kind) via the Helm chart, mirroring production and exercising real task pods — arrives with the e2e work in a later phase. Task execution is on Kubernetes only (ADR 0015); the host containers are dev dependencies, not the execution path.
 
 > The Airflow 3.2.x UI integration (pointing the UI at `/api/v2`) arrives in Phase 5; until then, use the Scalar API reference at `/docs`. Container-image build, task execution, and the Helm chart are also upcoming phases.
 

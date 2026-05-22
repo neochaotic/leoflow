@@ -49,6 +49,24 @@ func TestLoadServerExecutorHTTPDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadServerAgentControlPlaneAddr(t *testing.T) {
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Executor.AgentControlPlaneAddr != "" {
+		t.Errorf("default agent_control_plane_addr = %q, want empty (falls back to grpc_addr)", c.Executor.AgentControlPlaneAddr)
+	}
+	t.Setenv("LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR", "host.k3d.internal:9091")
+	c, err = LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Executor.AgentControlPlaneAddr != "host.k3d.internal:9091" {
+		t.Errorf("agent_control_plane_addr = %q, want host.k3d.internal:9091", c.Executor.AgentControlPlaneAddr)
+	}
+}
+
 func TestLoadServerExecutorHTTPEnvOverride(t *testing.T) {
 	t.Setenv("LEOFLOW_EXECUTOR_HTTP_INLINE_MAX_DURATION_SECONDS", "60")
 	t.Setenv("LEOFLOW_EXECUTOR_HTTP_INLINE_CONCURRENCY_LIMIT", "16")

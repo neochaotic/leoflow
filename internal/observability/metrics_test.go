@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // touchAll exercises every metric once so the collectors produce a metric
@@ -31,6 +32,15 @@ func touchAll(m *Metrics) {
 	m.PodsRunning.Set(3)
 	m.PodPendingDuration.Observe(1)
 	m.KubernetesAPICalls.WithLabelValues("create_pod", "success").Inc()
+}
+
+func TestRecordTaskDurationObserves(t *testing.T) {
+	m := NewMetrics(prometheus.NewRegistry())
+	m.RecordTaskTransition("running", "success", "etl")
+	m.RecordTaskDuration("etl", "hook", "http_api", 1.5)
+	if got := testutil.CollectAndCount(m.TaskDuration); got != 1 {
+		t.Errorf("TaskDuration series = %d, want 1", got)
+	}
 }
 
 func TestNewMetricsRegistersAllADR0010Metrics(t *testing.T) {

@@ -24,6 +24,10 @@ type ServerConfig struct {
 // ExecutorSection configures how tasks are executed.
 type ExecutorSection struct {
 	HTTP HTTPExecutorSection `mapstructure:"http"`
+	// AgentControlPlaneAddr is the gRPC address task pods dial back to. Empty
+	// falls back to server.grpc_addr; in a local k3d/kind cluster set it to a
+	// host-reachable address such as host.k3d.internal:9091.
+	AgentControlPlaneAddr string `mapstructure:"agent_control_plane_addr"`
 }
 
 // HTTPExecutorSection configures the inline http_api execution path (ADR 0002).
@@ -112,6 +116,7 @@ var serverDefaults = map[string]any{
 	"executor.http.inline_max_duration_seconds": 300,
 	"executor.http.inline_concurrency_limit":    256,
 	"executor.http.user_agent":                  "leoflow/0.1",
+	"executor.agent_control_plane_addr":         "",
 	"observability.otel.enabled":                true,
 	"observability.otel.endpoint":               "localhost:4317",
 	"observability.log_level":                   "info",

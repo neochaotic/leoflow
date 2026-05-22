@@ -227,8 +227,12 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		cfg.Executor.HTTP.UserAgent,
 	))
 	if podExec, perr := buildPodExecutor(); perr == nil {
-		sched.SetDispatcher(dispatch.NewDispatcher(podExec, execStore, authn, cfg.Server.GRPCAddr, agentTokenTTL))
-		logger.Info("pod dispatch enabled", "namespace", podNamespace)
+		controlAddr := cfg.Executor.AgentControlPlaneAddr
+		if controlAddr == "" {
+			controlAddr = cfg.Server.GRPCAddr
+		}
+		sched.SetDispatcher(dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL))
+		logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
 	} else {
 		logger.Warn("pod dispatch disabled; only inline http_api tasks will run", "error", perr)
 	}

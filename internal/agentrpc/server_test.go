@@ -9,8 +9,10 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/logs"
 	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -279,6 +281,80 @@ func TestWriteLinesPropagatesRecvError(t *testing.T) {
 		t.Error("a non-EOF receive error should propagate")
 	}
 }
+
+// fakeStreamLogsServer is a minimal bidi server stream for StreamLogs tests.
+type fakeStreamLogsServer struct {
+	grpc.ServerStream
+	ctx  context.Context
+	msgs []*agentv1.LogLine
+	i    int
+}
+
+func (s *fakeStreamLogsServer) Context() context.Context   { return s.ctx }
+func (s *fakeStreamLogsServer) Send(*agentv1.LogAck) error { return nil }
+func (s *fakeStreamLogsServer) Recv() (*agentv1.LogLine, error) {
+	if s.i >= len(s.msgs) {
+		return nil, io.EOF
+	}
+	m := s.msgs[s.i]
+	s.i++
+	return m, nil
+}
+
+func TestStreamLogsWritesToSink(t *testing.T) {
+	srv, a := newServer(&fakeStore{})
+	sink := &fakeLogSink{}
+	srv.SetLogSink(sink)
+
+	stream := &fakeStreamLogsServer{
+		ctx:  ctxWithToken(t, a),
+		msgs: []*agentv1.LogLine{{Message: "hello"}, {Message: "world"}},
+	}
+	if err := srv.StreamLogs(stream); err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+	if len(sink.lines) != 2 || sink.lines[0] != "hello" {
+		t.Errorf("sink lines = %v, want the two messages", sink.lines)
+	}
+}
+
+func TestStreamLogsUnimplementedWithoutSink(t *testing.T) {
+	srv, a := newServer(&fakeStore{})
+	stream := &fakeStreamLogsServer{ctx: ctxWithToken(t, a)}
+	if err := srv.StreamLogs(stream); status.Code(err) != codes.Unimplemented {
+		t.Errorf("StreamLogs without a sink: code = %v, want Unimplemented", status.Code(err))
+	}
+}
+
+func TestRPCsReportStoreErrors(t *testing.T) {
+	errStore := &fakeStore{specErr: errors.New("db down")}
+	srv, a := newServer(errStore)
+	ctx := ctxWithToken(t, a)
+	if _, err := srv.GetTaskSpec(ctx, &agentv1.GetTaskSpecRequest{}); status.Code(err) != codes.Internal {
+		t.Errorf("GetTaskSpec store error: code = %v, want Internal", status.Code(err))
+	}
+	if _, err := srv.FetchXCom(ctx, &agentv1.FetchXComRequest{UpstreamTaskId: "x"}); status.Code(err) != codes.Internal {
+		t.Errorf("FetchXCom store error: code = %v, want Internal", status.Code(err))
+	}
+
+	repErr := &fakeStore{reportErr: errors.New("write failed")}
+	srv2, a2 := newServer(repErr)
+	if _, err := srv2.ReportState(ctxWithToken(t, a2), &agentv1.ReportStateRequest{State: agentv1.TaskState_TASK_STATE_SUCCESS}); status.Code(err) != codes.Internal {
+		t.Errorf("ReportState store error: code = %v, want Internal", status.Code(err))
+	}
+}
+
+type fakeLogSink struct{ lines []string }
+
+func (s *fakeLogSink) Open(logs.Ref) (logs.LogWriter, error) { return &fakeSinkWriter{s: s}, nil }
+
+type fakeSinkWriter struct{ s *fakeLogSink }
+
+func (w *fakeSinkWriter) WriteLine(line string) error {
+	w.s.lines = append(w.s.lines, line)
+	return nil
+}
+func (w *fakeSinkWriter) Close() error { return nil }
 
 func TestRegisterAndHeartbeatReturnServerTime(t *testing.T) {
 	srv, a := newServer(&fakeStore{})

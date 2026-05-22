@@ -25,8 +25,9 @@ func BuildCommand(operator, entrypoint string) ([]string, error) {
 		if !ok || module == "" || fn == "" {
 			return nil, fmt.Errorf("python entrypoint must be module:callable, got %q", entrypoint)
 		}
-		script := fmt.Sprintf("import importlib; getattr(importlib.import_module(%q), %q)()", module, fn)
-		return []string{"python", "-c", script}, nil
+		// Delegate to the leoflow_runtime helper, which runs the callable and
+		// writes its return value for the agent to push as an XCom.
+		return []string{"python", "-m", "leoflow_runtime", entrypoint}, nil
 	case "bash":
 		if entrypoint == "" {
 			return nil, errors.New("bash operator requires a command")

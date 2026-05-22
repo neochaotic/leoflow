@@ -3,7 +3,6 @@ package agent
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -13,11 +12,14 @@ func TestBuildCommandPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(argv) != 3 || argv[0] != "python" || argv[1] != "-c" {
+	want := []string{"python", "-m", "leoflow_runtime", "tasks.extract:run"}
+	if len(argv) != len(want) {
 		t.Fatalf("unexpected argv: %v", argv)
 	}
-	if !strings.Contains(argv[2], `import_module("tasks.extract")`) || !strings.Contains(argv[2], `"run"`) {
-		t.Errorf("script does not import the entrypoint: %q", argv[2])
+	for i, w := range want {
+		if argv[i] != w {
+			t.Errorf("argv[%d] = %q, want %q", i, argv[i], w)
+		}
 	}
 }
 

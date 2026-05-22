@@ -96,6 +96,12 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 			UpstreamTaskId: upstream,
 			Key:            "return_value",
 		})
+		if status.Code(err) == codes.NotFound {
+			// Airflow semantics: a missing XCom resolves to None, so skip the
+			// input rather than failing the task.
+			slog.Debug("declared xcom input is absent; leaving it unset", "param", param, "upstream", upstream)
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("fetching xcom %q from %q: %w", param, upstream, err)
 		}

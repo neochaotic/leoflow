@@ -45,7 +45,7 @@ func (f *fakeClient) FetchXCom(_ context.Context, in *agentv1.FetchXComRequest, 
 	if resp, ok := f.xcom[in.GetUpstreamTaskId()]; ok {
 		return resp, nil
 	}
-	return nil, errors.New("no xcom for " + in.GetUpstreamTaskId())
+	return nil, status.Error(codes.NotFound, "no xcom for "+in.GetUpstreamTaskId())
 }
 
 func (f *fakeClient) PushXCom(_ context.Context, in *agentv1.PushXComRequest, _ ...grpc.CallOption) (*agentv1.PushXComResponse, error) {
@@ -244,6 +244,22 @@ func TestRunnerHeartbeatCancelsOnTerminate(t *testing.T) {
 	}
 	if last := client.states[len(client.states)-1]; last != agentv1.TaskState_TASK_STATE_FAILED {
 		t.Errorf("final state = %v, want failed after termination", last)
+	}
+}
+
+func TestRunnerSkipsAbsentXComInput(t *testing.T) {
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "python", Entrypoint: "dag:f",
+		XcomInputMapping: map[string]string{"maybe": "upstream"}, // upstream pushed nothing
+	}}
+	cmd := &fakeCmd{}
+	r := newRunner(client, cmd, &recordingSink{})
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("an absent declared xcom input must not fail the task: %v", err)
+	}
+	if strings.Contains(strings.Join(cmd.env, "\n"), "LEOFLOW_XCOM_MAYBE") {
+		t.Errorf("absent xcom input should be skipped (None), not set: %v", cmd.env)
 	}
 }
 

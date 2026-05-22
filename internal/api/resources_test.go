@@ -157,6 +157,20 @@ func TestDagRunsListAndCreate(t *testing.T) {
 	}
 }
 
+func TestDagRunCreateGeneratesRunID(t *testing.T) {
+	rec := authGet(authedServer(), http.MethodPost, "/api/v2/dags/etl/dagRuns", `{}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create run with empty body = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	var run dagRunDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(run.DagRunID, "manual__") {
+		t.Errorf("an unspecified dag_run_id should be auto-generated, got %q", run.DagRunID)
+	}
+}
+
 func TestTaskInstancesAndClear(t *testing.T) {
 	srv := authedServer()
 	if rec := authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagRuns/r1/taskInstances", ""); rec.Code != http.StatusOK {

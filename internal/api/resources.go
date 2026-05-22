@@ -171,8 +171,14 @@ func createDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
 		if body.LogicalDate != nil {
 			logical = *body.LogicalDate
 		}
+		runID := body.DagRunID
+		if runID == "" {
+			// Airflow-style identifier; also avoids an empty/duplicate run_id,
+			// which dag_runs forbids via UNIQUE (dag_id, run_id).
+			runID = "manual__" + logical.Format(time.RFC3339)
+		}
 		run := domain.DagRun{
-			RunID:       body.DagRunID,
+			RunID:       runID,
 			LogicalDate: logical,
 			State:       domain.DagRunStateQueued,
 			RunType:     "manual",

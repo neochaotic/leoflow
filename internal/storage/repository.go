@@ -295,5 +295,38 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 	return true, nil
 }
 
+// BootstrapAdmin creates a default admin user with the given password when the
+// tenant has no users yet, assigning the seeded admin role. It returns whether
+// a user was created (false when users already exist).
+func (r *Repository) BootstrapAdmin(ctx context.Context, tenant, email, password string) (bool, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.q.CountUsers(ctx, tid)
+	if err != nil {
+		return false, fmt.Errorf("counting users: %w", err)
+	}
+	if n > 0 {
+		return false, nil
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return false, err
+	}
+	uid, err := r.q.CreateUser(ctx, queries.CreateUserParams{TenantID: tid, Email: email, PasswordHash: strPtr(hash)})
+	if err != nil {
+		return false, fmt.Errorf("creating admin user: %w", err)
+	}
+	roleID, err := r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: "admin"})
+	if err != nil {
+		return false, fmt.Errorf("loading admin role: %w", err)
+	}
+	if err := r.q.AssignUserRole(ctx, queries.AssignUserRoleParams{UserID: uid, RoleID: roleID}); err != nil {
+		return false, fmt.Errorf("assigning admin role: %w", err)
+	}
+	return true, nil
+}
+
 // compile-time assurance that Repository satisfies the auth user store.
 var _ auth.UserStore = (*Repository)(nil)

@@ -155,6 +155,54 @@ func (q *Queries) GetDagRun(ctx context.Context, arg GetDagRunParams) (DagRun, e
 	return i, err
 }
 
+const getDagRunByID = `-- name: GetDagRunByID :one
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs WHERE id = $1
+`
+
+func (q *Queries) GetDagRunByID(ctx context.Context, id pgtype.UUID) (DagRun, error) {
+	row := q.db.QueryRow(ctx, getDagRunByID, id)
+	var i DagRun
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.DagID,
+		&i.DagVersionID,
+		&i.RunID,
+		&i.LogicalDate,
+		&i.DataIntervalStart,
+		&i.DataIntervalEnd,
+		&i.State,
+		&i.Trigger,
+		&i.Conf,
+		&i.TriggeredBy,
+		&i.QueuedAt,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.Note,
+	)
+	return i, err
+}
+
+const getDagVersionByID = `-- name: GetDagVersionByID :one
+SELECT id, dag_id, version, image_reference, spec, spec_hash, created_by, created_at FROM dag_versions WHERE id = $1
+`
+
+func (q *Queries) GetDagVersionByID(ctx context.Context, id pgtype.UUID) (DagVersion, error) {
+	row := q.db.QueryRow(ctx, getDagVersionByID, id)
+	var i DagVersion
+	err := row.Scan(
+		&i.ID,
+		&i.DagID,
+		&i.Version,
+		&i.ImageReference,
+		&i.Spec,
+		&i.SpecHash,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listActiveDagRuns = `-- name: ListActiveDagRuns :many
 SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs
 WHERE state IN ('queued', 'running')
@@ -399,4 +447,20 @@ func (q *Queries) UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskIns
 		&i.Hostname,
 	)
 	return i, err
+}
+
+const updateTaskInstanceStateByRunTask = `-- name: UpdateTaskInstanceStateByRunTask :exec
+UPDATE task_instances SET state = $3
+WHERE dag_run_id = $1 AND task_id = $2
+`
+
+type UpdateTaskInstanceStateByRunTaskParams struct {
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskID   string      `json:"task_id"`
+	State    TaskState   `json:"state"`
+}
+
+func (q *Queries) UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error {
+	_, err := q.db.Exec(ctx, updateTaskInstanceStateByRunTask, arg.DagRunID, arg.TaskID, arg.State)
+	return err
 }

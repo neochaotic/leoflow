@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/observability"
+	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
@@ -71,6 +73,13 @@ func run() error {
 	repo := storage.NewRepository(pg)
 	authn := auth.NewJWTAuthenticator(repo, cfg.Auth.JWT.Secret, time.Duration(cfg.Auth.JWT.TokenTTLSeconds)*time.Second)
 
+	if err := bootstrapAdmin(ctx, repo, tel.Logger); err != nil {
+		return err
+	}
+	if cfg.Scheduler.Enabled {
+		startScheduler(ctx, cfg, pg, tel.Logger)
+	}
+
 	handler := api.NewServer(api.Dependencies{
 		Logger:        tel.Logger,
 		Authenticator: authn,
@@ -108,6 +117,31 @@ func run() error {
 		}
 		return nil
 	}
+}
+
+func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.Logger) error {
+	pw := os.Getenv("LEOFLOW_BOOTSTRAP_PASSWORD")
+	if pw == "" {
+		return nil
+	}
+	created, err := repo.BootstrapAdmin(ctx, "default", "admin@leoflow.local", pw)
+	if err != nil {
+		return fmt.Errorf("bootstrap admin: %w", err)
+	}
+	if created {
+		logger.Info("bootstrapped admin user", "email", "admin@leoflow.local")
+	}
+	return nil
+}
+
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger) {
+	sched := scheduler.NewScheduler(storage.NewSchedulerStore(pg), logger,
+		time.Duration(cfg.Scheduler.LoopIntervalMS)*time.Millisecond)
+	go func() {
+		if err := sched.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("scheduler stopped", "error", err)
+		}
+	}()
 }
 
 func serve(s *http.Server, errCh chan<- error) {

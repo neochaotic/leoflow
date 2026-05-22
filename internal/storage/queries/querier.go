@@ -11,14 +11,20 @@ import (
 )
 
 type Querier interface {
+	AssignUserRole(ctx context.Context, arg AssignUserRoleParams) error
 	CountDagRunsByDag(ctx context.Context, dagID pgtype.UUID) (int64, error)
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
+	CountUsers(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CreateDagRun(ctx context.Context, arg CreateDagRunParams) (DagRun, error)
 	CreateTaskInstance(ctx context.Context, arg CreateTaskInstanceParams) (TaskInstance, error)
+	CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.UUID, error)
 	GetDagByDagID(ctx context.Context, arg GetDagByDagIDParams) (Dag, error)
 	GetDagRun(ctx context.Context, arg GetDagRunParams) (DagRun, error)
+	GetDagRunByID(ctx context.Context, id pgtype.UUID) (DagRun, error)
 	GetDagVersionByHash(ctx context.Context, arg GetDagVersionByHashParams) (DagVersion, error)
+	GetDagVersionByID(ctx context.Context, id pgtype.UUID) (DagVersion, error)
 	GetDefaultTenant(ctx context.Context) (GetDefaultTenantRow, error)
+	GetRoleByName(ctx context.Context, arg GetRoleByNameParams) (pgtype.UUID, error)
 	GetTenantByName(ctx context.Context, name string) (GetTenantByNameRow, error)
 	GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) (GetUserByEmailRow, error)
 	GetUserPermissions(ctx context.Context, userID pgtype.UUID) ([]GetUserPermissionsRow, error)
@@ -33,6 +39,7 @@ type Querier interface {
 	SetDagPaused(ctx context.Context, arg SetDagPausedParams) (Dag, error)
 	UpdateDagRunState(ctx context.Context, arg UpdateDagRunStateParams) (DagRun, error)
 	UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskInstanceStateParams) (TaskInstance, error)
+	UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
 }
 

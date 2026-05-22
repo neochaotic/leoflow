@@ -42,6 +42,16 @@ SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
 RETURNING *;
 
+-- name: GetDagVersionByID :one
+SELECT * FROM dag_versions WHERE id = $1;
+
+-- name: GetDagRunByID :one
+SELECT * FROM dag_runs WHERE id = $1;
+
+-- name: UpdateTaskInstanceStateByRunTask :exec
+UPDATE task_instances SET state = $3
+WHERE dag_run_id = $1 AND task_id = $2;
+
 -- name: ResetTaskInstanceToNone :exec
 UPDATE task_instances
 SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1

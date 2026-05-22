@@ -133,7 +133,7 @@ Read [the ADRs](docs/adr/) for the full reasoning behind every decision.
 - Apache Airflow 3.2.x UI compatibility (no fork required)
 - JWT authentication, RBAC, multi-tenant schema (OIDC-ready)
 - Kubernetes-native execution (no worker pool to manage)
-- Standalone mode for local development (Docker socket or subprocess)
+- Local development on Kubernetes (k3d/kind) or a dev-only subprocess executor (ADR 0015)
 - Trigger rules: `all_success`, `all_failed`, `all_done`, `one_success`, `one_failed`
 - Clear task instance to re-run failed tasks
 - Leader election via Postgres advisory locks

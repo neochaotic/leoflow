@@ -58,6 +58,7 @@ build: ## Build all binaries into ./bin
 test: ## Run Go and Python tests with coverage
 	go test -race -coverprofile=coverage.out -covermode=atomic ./...
 	command -v pytest >/dev/null && (cd parser && pytest -v --cov=leoflow_parser) || echo "skip pytest (not installed)"
+	command -v pytest >/dev/null && (cd runtime/python && pytest -v --cov=leoflow_runtime) || echo "skip runtime pytest (not installed)"
 
 .PHONY: cover
 cover: test ## Show total Go coverage
@@ -67,6 +68,7 @@ cover: test ## Show total Go coverage
 lint: ## Run golangci-lint and ruff
 	golangci-lint run ./...
 	command -v ruff >/dev/null && (cd parser && ruff check .) || echo "skip ruff (not installed)"
+	command -v ruff >/dev/null && (cd runtime/python && ruff check .) || echo "skip runtime ruff (not installed)"
 
 .PHONY: fmt
 fmt: ## Format Go code

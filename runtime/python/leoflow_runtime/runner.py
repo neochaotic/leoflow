@@ -1,0 +1,36 @@
+"""Run a user task callable and capture its return value."""
+
+from __future__ import annotations
+
+import importlib
+import json
+import os
+
+DEFAULT_RETURN_VALUE_PATH = "/tmp/leoflow_return_value.json"  # noqa: S108
+
+
+def return_value_path() -> str:
+    """Return the path the task's return value is written to.
+
+    Overridable via ``LEOFLOW_RETURN_VALUE_PATH`` (primarily for tests).
+    """
+    return os.environ.get("LEOFLOW_RETURN_VALUE_PATH", DEFAULT_RETURN_VALUE_PATH)
+
+
+def run(entrypoint: str) -> None:
+    """Import and call ``module:callable``, writing a non-None return as JSON.
+
+    The agent reads the file and pushes it as the task's ``return_value`` XCom.
+    A None return writes nothing, so downstream tasks see no XCom.
+    """
+    module_name, sep, fn_name = entrypoint.partition(":")
+    if not sep or not module_name or not fn_name:
+        raise ValueError(f"entrypoint must be 'module:callable', got {entrypoint!r}")
+
+    module = importlib.import_module(module_name)
+    fn = getattr(module, fn_name)
+    result = fn()
+
+    if result is not None:
+        with open(return_value_path(), "w", encoding="utf-8") as f:
+            json.dump(result, f)

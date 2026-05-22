@@ -18,6 +18,8 @@ import (
 	"github.com/neochaotic/leoflow/internal/api"
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
+	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/observability"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
@@ -140,14 +142,29 @@ func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.
 	return nil
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger, recorder scheduler.Recorder) error {
+// inlineStateSink adapts the scheduler store to the inline runner's StateSink,
+// recording inline http_api task transitions.
+type inlineStateSink struct{ store *storage.SchedulerStore }
+
+func (s inlineStateSink) Transition(ctx context.Context, runID, taskID string, state domain.TaskState) error {
+	return s.store.ApplyTransition(ctx, runID, taskID, state)
+}
+
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger, metrics *observability.Metrics) error {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("leader pool: %w", err)
 	}
-	sched := scheduler.NewScheduler(storage.NewSchedulerStore(pg), logger,
+	store := storage.NewSchedulerStore(pg)
+	sched := scheduler.NewScheduler(store, logger,
 		time.Duration(cfg.Scheduler.LoopIntervalMS)*time.Millisecond)
-	sched.SetRecorder(recorder)
+	sched.SetRecorder(metrics)
+	sched.SetInlineRunner(executor.NewInlineRunner(
+		inlineStateSink{store}, metrics,
+		cfg.Executor.HTTP.InlineConcurrencyLimit,
+		cfg.Executor.HTTP.InlineMaxDurationSeconds,
+		cfg.Executor.HTTP.UserAgent,
+	))
 	leader := scheduler.NewLeader(leaderPool)
 	go func() {
 		defer leaderPool.Close()

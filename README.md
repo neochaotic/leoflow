@@ -14,9 +14,8 @@
 [![CI](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml)
 [![Security](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/neochaotic/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/neochaotic/leoflow)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/0000/badge)](https://www.bestpractices.dev/projects/0000)
 
-> Badge URLs point at `github.com/neochaotic/leoflow`. The OpenSSF Best Practices badge uses a placeholder project id (`0000`); update it after registering the project.
+> The OpenSSF Best Practices badge will be added once the project is registered at [bestpractices.dev](https://www.bestpractices.dev) (post-v0.1.0 target, per ADR 0014).
 
 ---
 

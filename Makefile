@@ -80,6 +80,20 @@ reportcard: ## Verify Go Report Card grade is A+ (ADR 0012)
 vuln: ## Run govulncheck (ADR 0014)
 	govulncheck ./...
 
+.PHONY: dev-up
+dev-up: ## Start local Postgres + Redis (wait healthy) and apply migrations
+	docker compose up -d --wait
+	$(MAKE) migrate-up
+
+.PHONY: dev-down
+dev-down: ## Stop local Postgres + Redis, keeping data
+	docker compose down
+
+.PHONY: dev-reset
+dev-reset: ## Wipe local Postgres + Redis data and restart fresh
+	docker compose down -v
+	$(MAKE) dev-up
+
 .PHONY: migrate-up
 migrate-up: ## Apply all up migrations
 	migrate -path migrations -database "$(DATABASE_URL)" up

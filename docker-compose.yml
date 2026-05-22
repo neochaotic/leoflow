@@ -1,0 +1,44 @@
+# Local development dependencies for the Leoflow control plane.
+#
+# Brings up Postgres and Redis matching the server's default configuration:
+#   database.url = postgres://leoflow:leoflow@localhost:5432/leoflow
+#   redis.url    = redis://localhost:6379/0
+#
+# Usage:
+#   make dev-up      # start Postgres + Redis (wait healthy) and apply migrations
+#   make dev-down    # stop, keeping data
+#   make dev-reset   # wipe data and restart fresh
+#
+# This is for local development only; production runs managed Postgres/Redis.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: leoflow
+      POSTGRES_PASSWORD: leoflow
+      POSTGRES_DB: leoflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - leoflow-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leoflow -d leoflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - leoflow-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  leoflow-pgdata:
+  leoflow-redisdata:

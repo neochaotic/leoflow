@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,6 +169,52 @@ func TestCompileBuildRequiresImage(t *testing.T) {
 	}
 	if _, _, err := run(t, "compile", dir, "--build", "--parser-cmd", "true"); err == nil {
 		t.Error("--build without --image should error")
+	}
+}
+
+func TestRunsTrigger(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"dag_run_id":"run-123","state":"queued"}`))
+	}))
+	defer srv.Close()
+
+	out, _, err := run(t, "runs", "trigger", "etl", "--server", srv.URL, "--token", "t")
+	if err != nil {
+		t.Fatalf("runs trigger: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/v2/dags/etl/dagRuns" {
+		t.Errorf("hit %s %s, want POST /api/v2/dags/etl/dagRuns", gotMethod, gotPath)
+	}
+	if !strings.Contains(out, "run-123") || !strings.Contains(out, "queued") {
+		t.Errorf("output = %q, want run id and state", out)
+	}
+}
+
+func TestRunsStatusLatest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"dag_runs":[{"dag_run_id":"run-9","state":"success"}],"total_entries":1}`))
+	}))
+	defer srv.Close()
+
+	out, _, err := run(t, "runs", "status", "etl", "--server", srv.URL, "--token", "t")
+	if err != nil {
+		t.Fatalf("runs status: %v", err)
+	}
+	if !strings.Contains(out, "run-9") || !strings.Contains(out, "success") {
+		t.Errorf("output = %q, want latest run id and state", out)
+	}
+}
+
+func TestRunsStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	if _, _, err := run(t, "runs", "status", "etl", "--server", srv.URL); err == nil {
+		t.Error("a non-2xx status should error")
 	}
 }
 

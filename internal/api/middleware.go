@@ -76,7 +76,7 @@ func CORS(allowed []string) gin.HandlerFunc {
 	}
 }
 
-var publicPrefixes = []string{"/auth/", "/healthz", "/readyz", "/metrics", "/docs", "/openapi"}
+var publicPrefixes = []string{"/auth/", "/healthz", "/readyz", "/metrics", "/docs", "/openapi", "/ui/config"}
 
 func isPublic(path string) bool {
 	for _, p := range publicPrefixes {

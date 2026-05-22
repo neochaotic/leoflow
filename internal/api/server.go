@@ -58,6 +58,8 @@ func NewServer(deps Dependencies) *gin.Engine {
 	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs))
 
 	registerResources(r, deps)
+	registerUI(r)
+	r.NoRoute(uiNoRoute())
 
 	return r
 }

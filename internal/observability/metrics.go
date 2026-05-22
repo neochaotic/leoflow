@@ -133,3 +133,8 @@ func (m *Metrics) RecordSchedulerDecision(decisionType string) {
 func (m *Metrics) RecordTaskTransition(from, to, dagID string) {
 	m.TaskStateTransitions.WithLabelValues(from, to, dagID).Inc()
 }
+
+// RecordTaskDuration records how long a task took to execute, in seconds.
+func (m *Metrics) RecordTaskDuration(dagID, taskID, taskType string, seconds float64) {
+	m.TaskDuration.WithLabelValues(dagID, taskID, taskType).Observe(seconds)
+}

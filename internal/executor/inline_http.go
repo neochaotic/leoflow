@@ -34,9 +34,16 @@ func NewInlineHTTPExecutor(client *http.Client, maxRetries int) *InlineHTTPExecu
 // Execute performs the request and returns nil on a success status, retrying
 // transient failures with exponential backoff.
 func (e *InlineHTTPExecutor) Execute(ctx context.Context, req Request) error {
+	_, err := e.Run(ctx, req)
+	return err
+}
+
+// Run performs the request like Execute but also returns the response body of
+// the successful attempt, so callers can capture it as an XCom value.
+func (e *InlineHTTPExecutor) Run(ctx context.Context, req Request) ([]byte, error) {
 	hr := req.HTTPRequest
 	if hr == nil {
-		return errors.New("http_api task has no http_request")
+		return nil, errors.New("http_api task has no http_request")
 	}
 	success := successCodes(hr.SuccessStatusCodes)
 
@@ -44,23 +51,23 @@ func (e *InlineHTTPExecutor) Execute(ctx context.Context, req Request) error {
 	for attempt := 0; attempt <= e.maxRetries; attempt++ {
 		if attempt > 0 {
 			if err := sleep(ctx, backoff(attempt)); err != nil {
-				return err
+				return nil, err
 			}
 		}
-		status, err := e.do(ctx, hr)
+		status, body, err := e.do(ctx, hr)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 		if success[status] {
-			return nil
+			return body, nil
 		}
 		lastErr = fmt.Errorf("http %s %s returned status %d", hr.Method, hr.URL, status)
 	}
-	return fmt.Errorf("http_api task failed after %d attempts: %w", e.maxRetries+1, lastErr)
+	return nil, fmt.Errorf("http_api task failed after %d attempts: %w", e.maxRetries+1, lastErr)
 }
 
-func (e *InlineHTTPExecutor) do(ctx context.Context, hr *domain.HTTPRequest) (int, error) {
+func (e *InlineHTTPExecutor) do(ctx context.Context, hr *domain.HTTPRequest) (status int, body []byte, err error) {
 	timeout := time.Duration(hr.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -70,28 +77,39 @@ func (e *InlineHTTPExecutor) do(ctx context.Context, hr *domain.HTTPRequest) (in
 
 	var bodyReader io.Reader
 	if hr.Body != nil {
-		encoded, err := json.Marshal(hr.Body)
-		if err != nil {
-			return 0, fmt.Errorf("encoding request body: %w", err)
+		encoded, merr := json.Marshal(hr.Body)
+		if merr != nil {
+			return 0, nil, fmt.Errorf("encoding request body: %w", merr)
 		}
 		bodyReader = bytes.NewReader(encoded)
 	}
 	httpReq, err := http.NewRequestWithContext(rctx, hr.Method, hr.URL, bodyReader)
 	if err != nil {
-		return 0, fmt.Errorf("building request: %w", err)
+		return 0, nil, fmt.Errorf("building request: %w", err)
 	}
 	for k, v := range hr.Headers {
 		httpReq.Header.Set(k, v)
 	}
 	resp, err := e.client.Do(httpReq)
 	if err != nil {
-		return 0, fmt.Errorf("performing request: %w", err)
+		return 0, nil, fmt.Errorf("performing request: %w", err)
 	}
-	if cerr := resp.Body.Close(); cerr != nil {
-		return resp.StatusCode, cerr
+	// Cap the read so a huge response cannot exhaust memory; oversize XComs are
+	// rejected downstream by the 256KB limit.
+	data, rerr := io.ReadAll(io.LimitReader(resp.Body, responseReadLimit))
+	cerr := resp.Body.Close()
+	if rerr != nil {
+		return resp.StatusCode, nil, fmt.Errorf("reading response body: %w", rerr)
 	}
-	return resp.StatusCode, nil
+	if cerr != nil {
+		return resp.StatusCode, nil, fmt.Errorf("closing response body: %w", cerr)
+	}
+	return resp.StatusCode, data, nil
 }
+
+// responseReadLimit caps how much of an http_api response body is read; values
+// beyond the XCom size limit are rejected when pushed.
+const responseReadLimit = 1 << 20 // 1 MB
 
 func successCodes(codes []int) map[int]bool {
 	if len(codes) == 0 {

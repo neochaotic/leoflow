@@ -71,10 +71,12 @@ jobs:
 
       - name: Enforce coverage floor
         run: |
-          # The floor adapts per phase. Phase 1: 70%. Update when entering new phase.
-          FLOOR=70
-          TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | sed 's/%//')
-          echo "Total coverage: ${TOTAL}% (floor: ${FLOOR}%)"
+          # Phase 2 floor: 75%. Exclude generated code, main packages, and
+          # version from the total per ADR 0011.
+          FLOOR=75
+          grep -vE '(/internal/storage/queries/|\.pb\.go:|/internal/version/|/cmd/)' coverage.out > coverage.filtered.out
+          TOTAL=$(go tool cover -func=coverage.filtered.out | tail -1 | awk '{print $3}' | sed 's/%//')
+          echo "Total coverage (filtered): ${TOTAL}% (floor: ${FLOOR}%)"
           AWK_RESULT=$(awk -v t="$TOTAL" -v f="$FLOOR" 'BEGIN { print (t < f) }')
           if [ "$AWK_RESULT" = "1" ]; then
             echo "::error::Coverage ${TOTAL}% is below floor ${FLOOR}% (see ADR 0011)"

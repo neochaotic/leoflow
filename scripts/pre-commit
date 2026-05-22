@@ -21,9 +21,12 @@ golangci-lint run ./...
 
 echo "[pre-commit] test + coverage gate"
 profile=$(mktemp)
+filtered=$(mktemp)
 go test -coverprofile="$profile" ./... >/dev/null
-current=$(go tool cover -func="$profile" | tail -1 | awk '{print $3}' | tr -d '%')
-rm -f "$profile"
+# Exclude generated code, main packages, and version per ADR 0011.
+grep -vE '(/internal/storage/queries/|\.pb\.go:|/internal/version/|/cmd/)' "$profile" >"$filtered"
+current=$(go tool cover -func="$filtered" | tail -1 | awk '{print $3}' | tr -d '%')
+rm -f "$profile" "$filtered"
 
 baseline_file=".git/coverage-baseline"
 baseline=$(cat "$baseline_file" 2>/dev/null || echo "0")

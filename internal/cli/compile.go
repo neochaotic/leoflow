@@ -141,6 +141,9 @@ func validateDAGFile(path string) error {
 	if err := spec.Validate(); err != nil {
 		return fmt.Errorf("produced %s is invalid: %w", path, err)
 	}
+	if err := spec.ValidateInlineExecution(domain.DefaultInlineMaxDurationSeconds); err != nil {
+		return fmt.Errorf("produced %s is invalid: %w", path, err)
+	}
 	return nil
 }
 

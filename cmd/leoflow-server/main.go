@@ -92,10 +92,12 @@ func run() error {
 		HealthChecks:  map[string]api.HealthChecker{"postgres": pg, "redis": rd},
 		CORSOrigins:   cfg.Server.CORS.AllowedOrigins,
 		TokenTTLSecs:  cfg.Auth.JWT.TokenTTLSeconds,
-		Dags:          repo,
-		DagRuns:       repo,
-		Tasks:         repo,
-		Versions:      repo,
+
+		InlineHTTPMaxDurationSeconds: cfg.Executor.HTTP.InlineMaxDurationSeconds,
+		Dags:                         repo,
+		DagRuns:                      repo,
+		Tasks:                        repo,
+		Versions:                     repo,
 	})
 
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

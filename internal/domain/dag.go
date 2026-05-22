@@ -4,6 +4,10 @@ package domain
 
 import "fmt"
 
+// DefaultInlineMaxDurationSeconds is the fallback cap on inline http_api task
+// duration when the server does not configure one. See ADR 0002.
+const DefaultInlineMaxDurationSeconds = 300
+
 // TaskType enumerates the kinds of work a task can perform.
 type TaskType string
 

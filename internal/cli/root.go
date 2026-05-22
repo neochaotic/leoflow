@@ -20,6 +20,16 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().String("config", "", "config file path (default ~/.leoflow/config.yaml)")
 	root.PersistentFlags().String("log-level", "", "log level: debug, info, warn, error")
 	root.PersistentFlags().String("server-url", "", "control plane API base URL")
+
+	root.AddCommand(
+		newVersionCommand(),
+		newInitCommand(),
+		newValidateCommand(),
+		newCompileCommand(),
+		newPushCommand(),
+		newAuthCommand(),
+		newServerCommand(),
+	)
 	return root
 }
 

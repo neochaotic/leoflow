@@ -1,16 +1,22 @@
-# Leoflow
+<p align="center">
+  <img src="docs/assets/icon-256.png" alt="Leoflow" width="140">
+</p>
 
-> The workflow orchestrator that ate Apache Airflow's lunch.
-> Same UI. Same vocabulary. Ten times the speed. Zero of the pain.
+<h1 align="center">Leoflow</h1>
+
+<p align="center">
+  <em>The workflow orchestrator that ate Apache Airflow's lunch.<br>
+  Same UI. Same vocabulary. Ten times the speed. Zero of the pain.</em>
+</p>
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/leoflow/leoflow)](https://goreportcard.com/report/github.com/leoflow/leoflow)
-[![CI](https://github.com/leoflow/leoflow/actions/workflows/ci.yaml/badge.svg)](https://github.com/leoflow/leoflow/actions/workflows/ci.yaml)
-[![Security](https://github.com/leoflow/leoflow/actions/workflows/security.yaml/badge.svg)](https://github.com/leoflow/leoflow/actions/workflows/security.yaml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/leoflow/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/leoflow/leoflow)
+[![Go Report Card](https://goreportcard.com/badge/github.com/neochaotic/leoflow)](https://goreportcard.com/report/github.com/neochaotic/leoflow)
+[![CI](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml)
+[![Security](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/neochaotic/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/neochaotic/leoflow)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/0000/badge)](https://www.bestpractices.dev/projects/0000)
 
-> Badge URLs use placeholder org `leoflow`. Update them after creating the repository.
+> Badge URLs point at `github.com/neochaotic/leoflow`. The OpenSSF Best Practices badge uses a placeholder project id (`0000`); update it after registering the project.
 
 ---
 
@@ -111,7 +117,7 @@ Read [the ADRs](docs/adr/) for the full reasoning behind every decision.
 
 ## Status
 
-🚧 **Pre-alpha.** The MVP is under active development. Do not use in production yet. Star the repo and watch the [Phase 1 milestone](https://github.com/leoflow/leoflow/milestones) if you want to follow along.
+🚧 **Pre-alpha.** The MVP is under active development. Do not use in production yet. Star the repo and watch the [Phase 1 milestone](https://github.com/neochaotic/leoflow/milestones) if you want to follow along.
 
 ## Features in the MVP
 
@@ -144,7 +150,7 @@ Read [the ADRs](docs/adr/) for the full reasoning behind every decision.
 ### Standalone (local development)
 
 ```bash
-git clone https://github.com/leoflow/leoflow
+git clone https://github.com/neochaotic/leoflow
 cd leoflow
 docker compose up
 # Airflow UI at http://localhost:8080

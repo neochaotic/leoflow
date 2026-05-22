@@ -19,6 +19,7 @@ type fakeStore struct {
 	runs        []RunState
 	materialize []string
 	transitions []transition
+	retried     []transition
 	runStates   map[string]domain.DagRunState
 	scheduled   []ScheduledDAG
 	createdRuns []string
@@ -44,6 +45,10 @@ func (f *fakeStore) ApplyTransition(_ context.Context, runID, taskID string, to 
 	f.transitions = append(f.transitions, transition{runID, taskID, to})
 	return nil
 }
+func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) error {
+	f.retried = append(f.retried, transition{runID, taskID, domain.TaskStateNone})
+	return nil
+}
 func (f *fakeStore) SetRunState(_ context.Context, runID string, state domain.DagRunState) error {
 	f.runStates[runID] = state
 	return nil
@@ -51,6 +56,53 @@ func (f *fakeStore) SetRunState(_ context.Context, runID string, state domain.Da
 
 func newScheduler(store Store) *Scheduler {
 	return NewScheduler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+}
+
+func retriableRun(aState domain.TaskState, aTry int) *fakeStore {
+	return newFakeStore(RunState{
+		RunID: "r1", DagID: "etl", State: domain.DagRunStateRunning, Tasks: linearTasks(),
+		States:   map[string]domain.TaskState{"a": aState, "b": domain.TaskStateNone},
+		Tries:    map[string]int{"a": aTry, "b": 1},
+		MaxTries: map[string]int{"a": 3, "b": 3},
+	})
+}
+
+func TestStepMovesRetriableFailureToUpForRetry(t *testing.T) {
+	store := retriableRun(domain.TaskStateFailed, 1)
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !hasTransition(store.transitions, "a", domain.TaskStateUpForRetry) {
+		t.Errorf("retriable failed a should move to up_for_retry, got %v", store.transitions)
+	}
+	if _, finalized := store.runStates["r1"]; finalized {
+		t.Error("run must not finalize while a can still retry")
+	}
+}
+
+func TestStepResetsUpForRetryTask(t *testing.T) {
+	store := retriableRun(domain.TaskStateUpForRetry, 1)
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.retried) != 1 || store.retried[0].taskID != "a" {
+		t.Errorf("up_for_retry a should be reset for retry, got %v", store.retried)
+	}
+}
+
+func TestStepFinalizesFailedWhenRetriesExhausted(t *testing.T) {
+	store := newFakeStore(RunState{
+		RunID: "r1", DagID: "etl", State: domain.DagRunStateRunning, Tasks: linearTasks(),
+		States:   map[string]domain.TaskState{"a": domain.TaskStateFailed, "b": domain.TaskStateUpstreamFailed},
+		Tries:    map[string]int{"a": 3, "b": 1},
+		MaxTries: map[string]int{"a": 3, "b": 3},
+	})
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.runStates["r1"] != domain.DagRunStateFailed {
+		t.Errorf("exhausted failure should finalize the run failed, got %q", store.runStates["r1"])
+	}
 }
 
 func linearTasks() []domain.TaskSpec {

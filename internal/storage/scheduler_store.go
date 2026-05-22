@@ -45,15 +45,21 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			return nil, fmt.Errorf("listing task instances: %w", err)
 		}
 		states := make(map[string]domain.TaskState, len(tis))
+		tries := make(map[string]int, len(tis))
+		maxTries := make(map[string]int, len(tis))
 		for _, ti := range tis {
 			states[ti.TaskID] = domain.TaskState(ti.State)
+			tries[ti.TaskID] = int(ti.TryNumber)
+			maxTries[ti.TaskID] = int(ti.MaxTries)
 		}
 		out = append(out, scheduler.RunState{
-			RunID:  uuidToString(run.ID),
-			DagID:  spec.DagID,
-			State:  domain.DagRunState(run.State),
-			Tasks:  spec.Tasks,
-			States: states,
+			RunID:    uuidToString(run.ID),
+			DagID:    spec.DagID,
+			State:    domain.DagRunState(run.State),
+			Tasks:    spec.Tasks,
+			States:   states,
+			Tries:    tries,
+			MaxTries: maxTries,
 		})
 	}
 	return out, nil
@@ -98,6 +104,19 @@ func (s *SchedulerStore) ApplyTransition(ctx context.Context, runID, taskID stri
 		DagRunID: rid,
 		TaskID:   taskID,
 		State:    queries.TaskState(to),
+	})
+}
+
+// ResetForRetry returns a task instance to 'none', clears its timestamps, and
+// increments its try number so the scheduler re-evaluates and re-runs it.
+func (s *SchedulerStore) ResetForRetry(ctx context.Context, runID, taskID string) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.ResetTaskInstanceToNone(ctx, queries.ResetTaskInstanceToNoneParams{
+		DagRunID: rid,
+		TaskID:   taskID,
 	})
 }
 

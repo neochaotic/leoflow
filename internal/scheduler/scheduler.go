@@ -17,6 +17,10 @@ type RunState struct {
 	State  domain.DagRunState
 	Tasks  []domain.TaskSpec
 	States map[string]domain.TaskState
+	// Tries and MaxTries hold the current and maximum attempt counts per task,
+	// driving retry decisions. Absent entries mean no retry budget.
+	Tries    map[string]int
+	MaxTries map[string]int
 }
 
 // ScheduledDAG is a cron-scheduled DAG and the logical date of its latest run.
@@ -32,6 +36,9 @@ type Store interface {
 	ActiveRuns(ctx context.Context) ([]RunState, error)
 	MaterializeTasks(ctx context.Context, runID string, tasks []domain.TaskSpec) error
 	ApplyTransition(ctx context.Context, runID, taskID string, to domain.TaskState) error
+	// ResetForRetry returns a task to 'none' and increments its try number so a
+	// retry re-evaluates and re-runs it.
+	ResetForRetry(ctx context.Context, runID, taskID string) error
 	SetRunState(ctx context.Context, runID string, state domain.DagRunState) error
 	ScheduledDAGs(ctx context.Context) ([]ScheduledDAG, error)
 	CreateScheduledRun(ctx context.Context, dagID string, logical time.Time) error
@@ -148,12 +155,12 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 		}
 		return nil
 	}
-	for _, t := range PlanRun(run.Tasks, run.States) {
+	for _, t := range PlanRun(run) {
 		if err := s.applyPlanned(ctx, run, t); err != nil {
 			return err
 		}
 	}
-	if state, done := FinalizeRun(run.Tasks, run.States); done {
+	if state, done := FinalizeRun(run); done {
 		if err := s.store.SetRunState(ctx, run.RunID, state); err != nil {
 			return fmt.Errorf("finalizing run: %w", err)
 		}
@@ -164,10 +171,27 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 // applyPlanned launches a task as it becomes queued and records the resulting
 // transition. Non-queued transitions are recorded directly.
 func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTransition) error {
-	if t.To == domain.TaskStateQueued {
+	switch t.To {
+	case domain.TaskStateQueued:
 		return s.launchQueued(ctx, run, t)
+	case domain.TaskStateNone:
+		return s.resetForRetry(ctx, run, t.TaskID)
+	default:
+		return s.recordTransition(ctx, run, t.TaskID, t.To)
 	}
-	return s.recordTransition(ctx, run, t.TaskID, t.To)
+}
+
+// resetForRetry returns a task to 'none' with an incremented try number so the
+// next tick re-evaluates and re-runs it.
+func (s *Scheduler) resetForRetry(ctx context.Context, run RunState, taskID string) error {
+	if err := s.store.ResetForRetry(ctx, run.RunID, taskID); err != nil {
+		return fmt.Errorf("resetting %s for retry: %w", taskID, err)
+	}
+	if s.recorder != nil {
+		s.recorder.RecordSchedulerDecision("retry")
+		s.recorder.RecordTaskTransition(string(run.States[taskID]), string(domain.TaskStateNone), run.DagID)
+	}
+	return nil
 }
 
 // launchQueued routes a queued task to the inline runner (inline http_api) or

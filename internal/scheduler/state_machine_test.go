@@ -25,7 +25,7 @@ var allowedTaskTransitions = map[domain.TaskState][]domain.TaskState{
 	domain.TaskStateScheduled:      {domain.TaskStateQueued},
 	domain.TaskStateQueued:         {domain.TaskStateRunning, domain.TaskStateFailed, domain.TaskStateUpForRetry},
 	domain.TaskStateRunning:        {domain.TaskStateSuccess, domain.TaskStateFailed, domain.TaskStateUpForRetry},
-	domain.TaskStateUpForRetry:     {domain.TaskStateScheduled, domain.TaskStateQueued},
+	domain.TaskStateUpForRetry:     {domain.TaskStateScheduled, domain.TaskStateQueued, domain.TaskStateNone},
 	domain.TaskStateSuccess:        {domain.TaskStateNone},
 	domain.TaskStateFailed:         {domain.TaskStateNone},
 	domain.TaskStateSkipped:        {domain.TaskStateNone},

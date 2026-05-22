@@ -71,12 +71,97 @@ Leoflow exposes today aligns well on shape:
 - ⚠️ `/dags/{id}/versions` is **Leoflow-specific** (DAG-as-image versioning), not
   an Airflow endpoint.
 
-## Recommendation
+## Decision: path 2 — serve the unmodified 3.2.1 UI, implement a pinned `/ui/*`
 
-Treat "unmodified Airflow UI on `/api/v2/`" as **not viable** and pivot the UI
-goal to **path 1 (custom minimal UI on the stable `/api/v2/`)**, with the public
-API breadth gaps closed incrementally for external-client compatibility. This
-warrants a short ADR recording the course-correction on the UI premise.
+We pursue **path 2**: serve the **unmodified** Apache Airflow **3.2.1** React UI
+assets and implement, in the Leoflow control plane, the `/ui/*` (and the few
+extra `/api/v2/*`) endpoints that exact version calls — **pinned to 3.2.1**. We
+accept the version-lock and the re-chase-on-upgrade cost; in return we get the
+familiar Airflow UI without forking it.
+
+**Risk mitigation (non-negotiable):**
+
+1. **Authoritative shapes, never guessed.** Every endpoint we implement is
+   matched against the version-pinned spec
+   `airflow-core/src/airflow/api_fastapi/core_api/openapi/_private_ui.yaml`
+   at tag `3.2.1` (the `/ui` API) and `v2-rest-api-generated.yaml` (public).
+   That file is the single source of truth for field names and types.
+2. **Do not fork or strip the SPA.** The UI is a compiled Vite bundle; surgically
+   removing components is impractical and forking + rebuilding it is the brittle
+   path we are avoiding. Instead we **shape the UI from the backend** (below).
+3. **Pin everything.** The Airflow image tag, the spec, and the asset bundle are
+   all pinned to 3.2.1. Upgrades are a deliberate, tested event.
+
+## Graceful degradation — hide the uncovered, never break
+
+Rather than leave dead buttons, we minimize the uncovered surface from the
+backend, in three tiers:
+
+1. **`/ui/auth/menus` (curated)** — the UI renders only the menu sections this
+   endpoint authorizes. By returning only Leoflow-backed capabilities we make the
+   UI **hide** unsupported sections (Assets, Connections, Variables, Pools,
+   Backfills, Admin, …) entirely. No dead button, no SPA change.
+2. **`/ui/config` (feature flags)** — disables UI features we do not back.
+3. **Graceful stubs for the rest** — any `/ui/*` we do not implement returns a
+   schema-valid **empty** payload (empty list / zeroed stats) so advanced views
+   render an empty state instead of erroring; unsupported **write** actions
+   return `501` with a `detail` hint the UI surfaces as a toast
+   ("Not available in Leoflow yet").
+
+## The `/ui/*` surface (Airflow 3.2.1, from `_private_ui.yaml`)
+
+22 operations. Tiers map to the degradation strategy above.
+
+| Tier | Endpoint | Response schema (authoritative) |
+|---|---|---|
+| **Auth** | `POST /ui/auth/token` | `GenerateTokenBody` → token |
+| **Auth** | `GET /ui/auth/me` | `AuthenticatedMeResponse` |
+| **Auth** | `GET /ui/auth/menus` | `MenuItemCollectionResponse` (`authorized_menu_items`, `extra_menu_items`) |
+| **Core** | `GET /ui/config` | `ConfigResponse` (`instance_name`, `auto_refresh_interval`, `hide_paused_dags_by_default`, `theme`, …) |
+| **Core** | `GET /ui/dags` | inline DAG collection (UI-shaped) |
+| **Core** | `GET /ui/dags/{dag_id}/latest_run` | `DAGRunLightResponse` |
+| **Core** | `GET /ui/structure/structure_data` | `StructureDataResponse` (`nodes`, `edges`) — graph view |
+| **Core** | `GET /ui/grid/structure/{dag_id}` | grid topology |
+| **Core** | `GET /ui/grid/runs/{dag_id}` | `GridRunsResponse[]` (`dag_id`, `run_id`, `state`, `run_type`, `start_date`, `end_date`, `duration`, …) |
+| **Core** | `GET /ui/grid/ti_summaries/{dag_id}` | per-run task-instance summaries |
+| Degrade | `GET /ui/dashboard/historical_metrics_data` | empty stats |
+| Degrade | `GET /ui/dashboard/dag_stats` | empty stats |
+| Degrade | `GET /ui/calendar/{dag_id}` | empty |
+| Degrade | `GET /ui/gantt/{dag_id}/{run_id}` | empty |
+| Degrade | `GET /ui/dependencies` | empty graph |
+| Degrade | `GET /ui/backfills` | empty list |
+| Degrade | `GET /ui/next_run_assets/{dag_id}` | empty |
+| Degrade | `GET /ui/partitioned_dag_runs` · `GET /ui/pending_partitioned_dag_run/{dag_id}/{partition_key}` | empty |
+| Degrade | `GET /ui/dags/{dag_id}/dagRuns/{dag_run_id}/deadlines` | empty |
+| Degrade | `GET /ui/teams` | empty |
+| Degrade | `GET /ui/connections/hook_meta` | empty |
+
+Logs, trigger, clear, and pause are served by the public `/api/v2/*` Leoflow
+already exposes; the UI calls those directly.
+
+## Serving & auth architecture
+
+```
+browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
+        ──▶ /ui/*    ─┐
+        ──▶ /api/v2/* ─┼─▶ leoflow-server   (reverse proxy serves assets + routes API)
+                       ─┘
+```
+
+- A reverse proxy (or a static-file route in leoflow-server) serves the pinned
+  3.2.1 SPA bundle and routes `/ui/*` and `/api/v2/*` to the control plane.
+- **Auth:** the UI logs in via `POST /ui/auth/token` (username/password →
+  JWT); the JWT is sent as `Authorization: Bearer` on subsequent calls. Leoflow's
+  existing JWT issuance backs this; the secret is shared via configuration.
+
+## Learnings log
+
+- **2026-05-22:** Airflow 3.x split the backend into a stable public `/api/v2/`
+  and an internal, non-backward-compatible `/ui/*` (AIP-84). The React UI targets
+  `/ui/*`, so `/api/v2/` parity alone never renders the UI — the original premise
+  (principle #8) reflected Airflow 2.x. Authoritative `/ui` shapes live in
+  `_private_ui.yaml` per tag. The UI is backend-shaped via `/ui/auth/menus` and
+  `/ui/config`, which is how we hide uncovered features without touching the SPA.
 
 ## Sources
 

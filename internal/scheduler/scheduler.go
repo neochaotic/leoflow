@@ -12,11 +12,12 @@ import (
 // RunState is the scheduler's snapshot of a dag run: its topology and the
 // current state of each task.
 type RunState struct {
-	RunID  string
-	DagID  string
-	State  domain.DagRunState
-	Tasks  []domain.TaskSpec
-	States map[string]domain.TaskState
+	RunID    string
+	DagID    string
+	TenantID string
+	State    domain.DagRunState
+	Tasks    []domain.TaskSpec
+	States   map[string]domain.TaskState
 	// Tries and MaxTries hold the current and maximum attempt counts per task,
 	// driving retry decisions. Absent entries mean no retry budget.
 	Tries    map[string]int
@@ -62,7 +63,7 @@ type Dispatcher interface {
 // it should be retried on the next tick); the runner owns the task's state once
 // started, so the scheduler does not record a queued transition for it.
 type InlineRunner interface {
-	Start(ctx context.Context, runID, dagID string, task domain.TaskSpec) (started bool, err error)
+	Start(ctx context.Context, runID, dagID, tenantID string, tryNumber int, task domain.TaskSpec) (started bool, err error)
 }
 
 // Scheduler advances dag runs by applying the planning rules each tick.
@@ -218,7 +219,7 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 // once started, so no queued transition is recorded; a start error marks the
 // task failed, and an at-capacity result leaves it scheduled for retry.
 func (s *Scheduler) runInline(ctx context.Context, run RunState, task domain.TaskSpec) error {
-	started, err := s.inline.Start(ctx, run.RunID, run.DagID, task)
+	started, err := s.inline.Start(ctx, run.RunID, run.DagID, run.TenantID, run.Tries[task.TaskID], task)
 	if err != nil {
 		s.logger.Error("starting inline task", "run", run.RunID, "task", task.TaskID, "error", err)
 		return s.recordTransition(ctx, run, task.TaskID, domain.TaskStateFailed)

@@ -55,6 +55,7 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		out = append(out, scheduler.RunState{
 			RunID:    uuidToString(run.ID),
 			DagID:    spec.DagID,
+			TenantID: uuidToString(run.TenantID),
 			State:    domain.DagRunState(run.State),
 			Tasks:    spec.Tasks,
 			States:   states,

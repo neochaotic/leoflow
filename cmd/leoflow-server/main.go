@@ -103,7 +103,7 @@ func run() error {
 	startCleanup(ctx, storage.NewXComIndex(pg), logSink, tel.Logger)
 
 	if cfg.Scheduler.Enabled {
-		if serr := startScheduler(ctx, cfg, pg, execStore, authn, tel.Logger, tel.Metrics); serr != nil {
+		if serr := startScheduler(ctx, cfg, pg, execStore, authn, xcomSvc, logSink, tel.Logger, tel.Metrics); serr != nil {
 			return serr
 		}
 	}
@@ -275,7 +275,7 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter exec
 	}()
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger, metrics *observability.Metrics) error {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) error {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("leader pool: %w", err)
@@ -284,12 +284,15 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 	sched := scheduler.NewScheduler(store, logger,
 		time.Duration(cfg.Scheduler.LoopIntervalMS)*time.Millisecond)
 	sched.SetRecorder(metrics)
-	sched.SetInlineRunner(executor.NewInlineRunner(
-		inlineStateSink{store}, metrics,
-		cfg.Executor.HTTP.InlineConcurrencyLimit,
-		cfg.Executor.HTTP.InlineMaxDurationSeconds,
-		cfg.Executor.HTTP.UserAgent,
-	))
+	sched.SetInlineRunner(executor.NewInlineRunner(executor.InlineConfig{
+		Sink:        inlineStateSink{store},
+		Metrics:     metrics,
+		XCom:        xcomSvc,
+		Logs:        logSink,
+		Concurrency: cfg.Executor.HTTP.InlineConcurrencyLimit,
+		MaxSeconds:  cfg.Executor.HTTP.InlineMaxDurationSeconds,
+		UserAgent:   cfg.Executor.HTTP.UserAgent,
+	}))
 	if cs, perr := buildK8sClient(); perr == nil {
 		controlAddr := cfg.Executor.AgentControlPlaneAddr
 		if controlAddr == "" {

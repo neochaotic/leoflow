@@ -24,7 +24,7 @@ type fakeInline struct {
 	err     error
 }
 
-func (f *fakeInline) Start(_ context.Context, _, _ string, task domain.TaskSpec) (bool, error) {
+func (f *fakeInline) Start(_ context.Context, _, _, _ string, _ int, task domain.TaskSpec) (bool, error) {
 	f.started = append(f.started, task.TaskID)
 	return f.start, f.err
 }

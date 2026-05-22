@@ -116,7 +116,11 @@ Read [the ADRs](docs/adr/) for the full reasoning behind every decision.
 
 ## Status
 
-🚧 **Pre-alpha.** The MVP is under active development. Do not use in production yet. Star the repo and watch the [Phase 1 milestone](https://github.com/neochaotic/leoflow/milestones) if you want to follow along.
+🚧 **Pre-alpha, under active development. Not production-ready.**
+
+**Implemented today (Phases 1–2):** the `leoflow` CLI (`init` / `validate` / `compile` / `push` / `auth create-token`), the Python DAG parser, and the `leoflow-server` control plane — Airflow-compatible `/api/v2` API, JWT auth + RBAC, the scheduler state machine with cron scheduling and Postgres advisory-lock leader election, embedded Scalar API docs, and Prometheus + OpenTelemetry observability. Triggering a DAG run drives its task instances through the state machine to `queued`.
+
+**Not yet implemented:** real task execution — the executor + gRPC agent (Phase 3), so tasks currently stop at `queued`; XCom and log retrieval (Phase 4); the Airflow UI integration (Phase 5); and the automatic container-image build behind `leoflow compile` (the image reference is recorded as-is for now).
 
 ## Features in the MVP
 
@@ -146,24 +150,30 @@ Read [the ADRs](docs/adr/) for the full reasoning behind every decision.
 
 ## Getting Started
 
-### Standalone (local development)
+### Local development
 
 ```bash
 git clone https://github.com/neochaotic/leoflow
 cd leoflow
-docker compose up
-# Airflow UI at http://localhost:8080
-# API docs at http://localhost:8080/docs (Scalar)
+make setup            # Go tools, Python parser, pre-commit hook
+make build            # builds bin/leoflow, bin/leoflow-server, bin/leoflow-agent
+
+# Start Postgres + Redis and apply migrations
+docker compose -f docker-compose.dev.yaml up -d
+make migrate-up
+
+# Run the control plane (bootstraps a default admin user)
+LEOFLOW_AUTH_JWT_SECRET=dev LEOFLOW_BOOTSTRAP_PASSWORD=admin123 ./bin/leoflow-server &
+# API docs (Scalar) at http://localhost:8080/docs ; metrics at http://localhost:9090/metrics
+
+# Author, compile, and register a DAG
+./bin/leoflow init my-dag
+./bin/leoflow compile my-dag --image my-dag:dev -o my-dag/dag.json
+TOKEN=$(./bin/leoflow auth create-token --username admin@leoflow.local --password admin123)
+./bin/leoflow push my-dag/dag.json --token "$TOKEN"
 ```
 
-### Kubernetes (production)
-
-```bash
-helm repo add leoflow https://charts.leoflow.io
-helm install leoflow leoflow/leoflow
-```
-
-See the [operator guide](docs/operator-guide.md) for production-grade configuration.
+> The Airflow 3.2.x UI integration (pointing the UI at `/api/v2`) arrives in Phase 5; until then, use the Scalar API reference at `/docs`. Container-image build, task execution, and the Helm chart are also upcoming phases.
 
 ## Honest Comparison
 

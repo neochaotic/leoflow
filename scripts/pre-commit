@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Leoflow pre-commit hook (ADR 0011 + 0012).
+# Blocks the commit when formatting, vetting, linting, or short tests fail.
+set -euo pipefail
+
+echo "[pre-commit] gofmt"
+unformatted=$(gofmt -l $(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true) 2>/dev/null || true)
+if [ -n "$unformatted" ]; then
+	echo "::error:: the following files are not gofmt-clean:"
+	echo "$unformatted"
+	echo "run 'make fmt'"
+	exit 1
+fi
+
+echo "[pre-commit] go vet"
+go vet ./...
+
+echo "[pre-commit] golangci-lint"
+golangci-lint run ./...
+
+echo "[pre-commit] go test -short"
+go test -short ./...
+
+echo "[pre-commit] ok"

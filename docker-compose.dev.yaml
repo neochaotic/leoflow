@@ -1,0 +1,35 @@
+# Local development dependencies for Leoflow.
+# Usage: docker compose -f docker-compose.dev.yaml up -d && make migrate-up
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: leoflow
+      POSTGRES_PASSWORD: leoflow
+      POSTGRES_DB: leoflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - leoflow_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leoflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - leoflow_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  leoflow_pgdata:
+  leoflow_redisdata:

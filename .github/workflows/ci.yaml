@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.22"
+  GO_VERSION: "1.26"
   PYTHON_VERSION: "3.11"
-  GOLANGCI_LINT_VERSION: "v1.62.0"
+  GOLANGCI_LINT_VERSION: "v2.5.0"
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────
@@ -30,10 +30,9 @@ jobs:
           cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --timeout=5m
 
   # ─────────────────────────────────────────────────────────────────────
   # Go Report Card grade check (separate from golangci-lint)

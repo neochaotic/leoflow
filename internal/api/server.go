@@ -32,6 +32,7 @@ type Dependencies struct {
 	DagRuns  DagRunRepository
 	Tasks    TaskInstanceRepository
 	Versions DagVersionRepository
+	Xcoms    XComReader
 }
 
 // NewServer builds the gin engine with the full middleware chain, health and

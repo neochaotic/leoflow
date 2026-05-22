@@ -20,6 +20,49 @@ func (q *Queries) DeleteExpiredXComIndex(ctx context.Context) error {
 	return err
 }
 
+const getXComByNames = `-- name: GetXComByNames :one
+SELECT x.redis_key, x.content_type, x.size_bytes, x.created_at
+FROM xcom_index x
+JOIN dag_runs dr ON dr.id = x.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+JOIN tenants t ON t.id = d.tenant_id
+WHERE t.name = $1 AND d.dag_id = $2 AND dr.run_id = $3 AND x.task_id = $4 AND x.key = $5
+  AND x.expires_at > now()
+`
+
+type GetXComByNamesParams struct {
+	Name   string `json:"name"`
+	DagID  string `json:"dag_id"`
+	RunID  string `json:"run_id"`
+	TaskID string `json:"task_id"`
+	Key    string `json:"key"`
+}
+
+type GetXComByNamesRow struct {
+	RedisKey    string             `json:"redis_key"`
+	ContentType string             `json:"content_type"`
+	SizeBytes   int32              `json:"size_bytes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetXComByNames(ctx context.Context, arg GetXComByNamesParams) (GetXComByNamesRow, error) {
+	row := q.db.QueryRow(ctx, getXComByNames,
+		arg.Name,
+		arg.DagID,
+		arg.RunID,
+		arg.TaskID,
+		arg.Key,
+	)
+	var i GetXComByNamesRow
+	err := row.Scan(
+		&i.RedisKey,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getXComEntry = `-- name: GetXComEntry :one
 SELECT redis_key, content_type, size_bytes, created_at
 FROM xcom_index

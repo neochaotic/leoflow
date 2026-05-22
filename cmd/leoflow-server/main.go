@@ -84,7 +84,9 @@ func run() error {
 	repo := storage.NewRepository(pg)
 	authn := auth.NewJWTAuthenticator(repo, cfg.Auth.JWT.Secret, time.Duration(cfg.Auth.JWT.TokenTTLSeconds)*time.Second)
 	execStore := storage.NewExecutionStore(pg)
-	xcomSvc := xcom.NewService(xcom.NewRedisBackend(rd.Client), storage.NewXComIndex(pg), xcom.DefaultTTL)
+	xcomBackend := xcom.NewRedisBackend(rd.Client)
+	xcomSvc := xcom.NewService(xcomBackend, storage.NewXComIndex(pg), xcom.DefaultTTL)
+	xcomReader := storage.NewXComReader(pg, xcomBackend)
 
 	if err := bootstrapAdmin(ctx, repo, tel.Logger); err != nil {
 		return err
@@ -118,6 +120,7 @@ func run() error {
 		DagRuns:                      repo,
 		Tasks:                        repo,
 		Versions:                     repo,
+		Xcoms:                        xcomReader,
 	})
 
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

@@ -19,6 +19,11 @@ type Dependencies struct {
 	HealthChecks  map[string]HealthChecker
 	CORSOrigins   []string
 	TokenTTLSecs  int
+
+	// Resource repositories. Routes for nil repositories are not registered.
+	Dags    DagRepository
+	DagRuns DagRunRepository
+	Tasks   TaskInstanceRepository
 }
 
 // NewServer builds the gin engine with the full middleware chain, health and
@@ -40,6 +45,8 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerDocs(r)
 
 	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs))
+
+	registerResources(r, deps)
 
 	return r
 }

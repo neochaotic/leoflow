@@ -64,6 +64,60 @@ func TestDAGSpecValidateRejectsInvalidSpecs(t *testing.T) {
 	}
 }
 
+func TestExecutionModeAcceptedForHTTPAPI(t *testing.T) {
+	for _, mode := range []ExecutionMode{ExecutionModeInline, ExecutionModePod} {
+		spec := validDAGSpec()
+		spec.Tasks[1].ExecutionMode = mode
+		if err := spec.Validate(); err != nil {
+			t.Errorf("http_api with execution_mode %q should be valid: %v", mode, err)
+		}
+	}
+}
+
+func TestExecutionModeRejectedForNonHTTPTasks(t *testing.T) {
+	cases := map[string]func(*DAGSpec){
+		"python inline": func(d *DAGSpec) { d.Tasks[0].ExecutionMode = ExecutionModeInline },
+		"bash inline": func(d *DAGSpec) {
+			d.Tasks[0].Type = TaskTypeBash
+			d.Tasks[0].Entrypoint = "echo hi"
+			d.Tasks[0].ExecutionMode = ExecutionModeInline
+		},
+		"unknown mode": func(d *DAGSpec) { d.Tasks[1].ExecutionMode = "turbo" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			spec := validDAGSpec()
+			mutate(spec)
+			if err := spec.Validate(); err == nil {
+				t.Errorf("Validate() = nil, want error for %q", name)
+			}
+		})
+	}
+}
+
+func TestPythonMayDeclarePodMode(t *testing.T) {
+	spec := validDAGSpec()
+	spec.Tasks[0].ExecutionMode = ExecutionModePod
+	if err := spec.Validate(); err != nil {
+		t.Errorf("python with execution_mode pod should be valid: %v", err)
+	}
+}
+
+func TestEffectiveExecutionModeDefaults(t *testing.T) {
+	http := TaskSpec{Type: TaskTypeHTTPAPI}
+	if http.EffectiveExecutionMode() != ExecutionModeInline {
+		t.Errorf("http_api default = %q, want inline", http.EffectiveExecutionMode())
+	}
+	pod := TaskSpec{Type: TaskTypeHTTPAPI, ExecutionMode: ExecutionModePod}
+	if pod.EffectiveExecutionMode() != ExecutionModePod {
+		t.Errorf("explicit mode = %q, want pod", pod.EffectiveExecutionMode())
+	}
+	py := TaskSpec{Type: TaskTypePython}
+	if py.EffectiveExecutionMode() != ExecutionModePod {
+		t.Errorf("python default = %q, want pod", py.EffectiveExecutionMode())
+	}
+}
+
 func TestLeoflowConfigValidateAcceptsValidConfig(t *testing.T) {
 	if err := validLeoflowConfig().Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil", err)

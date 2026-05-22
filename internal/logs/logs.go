@@ -1,0 +1,90 @@
+// Package logs ships task logs from the agent to durable storage and serves
+// them back via the API, so logs remain available after the task pod is gone.
+package logs
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+)
+
+// flushThreshold is the buffered-writer size; a full buffer flushes to storage,
+// bounding how much is lost on a crash and how stale a live reader can be.
+const flushThreshold = 1 << 20 // 1 MB
+
+// Ref identifies a task instance's log stream and maps to its storage location.
+type Ref struct {
+	TenantID  string
+	DagID     string
+	RunID     string
+	TaskID    string
+	TryNumber int
+}
+
+// LogWriter appends log lines for one task attempt and flushes on Close.
+type LogWriter interface {
+	WriteLine(line string) error
+	Close() error
+}
+
+// Sink stores and retrieves task logs.
+type Sink interface {
+	Open(ref Ref) (LogWriter, error)
+	Read(ref Ref) (io.ReadCloser, error)
+}
+
+// DiskSink writes logs to ${root}/{tenant}/{dag}/{run}/{task}/{try}.log.
+type DiskSink struct {
+	root string
+}
+
+// NewDiskSink builds a DiskSink rooted at dir.
+func NewDiskSink(dir string) *DiskSink { return &DiskSink{root: dir} }
+
+func (d *DiskSink) path(ref Ref) string {
+	return filepath.Join(d.root, ref.TenantID, ref.DagID, ref.RunID, ref.TaskID, fmt.Sprintf("%d.log", ref.TryNumber))
+}
+
+// Open creates the log file (appending if it exists) and returns a buffered writer.
+func (d *DiskSink) Open(ref Ref) (LogWriter, error) {
+	p := d.path(ref)
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		return nil, fmt.Errorf("creating log directory: %w", err)
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640) //nolint:gosec // path is built from validated identity fields
+	if err != nil {
+		return nil, fmt.Errorf("opening log file: %w", err)
+	}
+	return &diskWriter{f: f, buf: bufio.NewWriterSize(f, flushThreshold)}, nil
+}
+
+// Read opens the log file for reading.
+func (d *DiskSink) Read(ref Ref) (io.ReadCloser, error) {
+	f, err := os.Open(d.path(ref)) //nolint:gosec // path is built from validated identity fields
+	if err != nil {
+		return nil, fmt.Errorf("opening log file: %w", err)
+	}
+	return f, nil
+}
+
+// diskWriter buffers line writes and flushes them to the file.
+type diskWriter struct {
+	f   *os.File
+	buf *bufio.Writer
+}
+
+// WriteLine appends a line; the buffer flushes automatically at flushThreshold.
+func (w *diskWriter) WriteLine(line string) error {
+	if _, err := w.buf.WriteString(line + "\n"); err != nil {
+		return fmt.Errorf("writing log line: %w", err)
+	}
+	return nil
+}
+
+// Close flushes any buffered lines and closes the file.
+func (w *diskWriter) Close() error {
+	return errors.Join(w.buf.Flush(), w.f.Close())
+}

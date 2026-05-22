@@ -95,7 +95,7 @@ share/python-wheels/
 *.local.yaml
 *.local.yml
 .leoflow/
-logs/
+/logs/
 *.log
 
 # Local data directories for docker-compose dev

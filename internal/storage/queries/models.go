@@ -107,6 +107,7 @@ const (
 	TaskStateScheduled      TaskState = "scheduled"
 	TaskStateQueued         TaskState = "queued"
 	TaskStateRunning        TaskState = "running"
+	TaskStateDeferred       TaskState = "deferred"
 	TaskStateSuccess        TaskState = "success"
 	TaskStateFailed         TaskState = "failed"
 	TaskStateSkipped        TaskState = "skipped"

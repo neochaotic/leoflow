@@ -54,6 +54,12 @@ build: ## Build all binaries into ./bin
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SERVER_BINARY) ./cmd/leoflow-server
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(AGENT_BINARY) ./cmd/leoflow-agent
 
+.PHONY: runtime-images
+runtime-images: ## Build the task base images for each supported Python version
+	for v in 3.10 3.11 3.12; do \
+		docker build -f runtime/Dockerfile --build-arg PYTHON_VERSION=$$v -t leoflow-base:py$$v . ; \
+	done
+
 .PHONY: test
 test: ## Run Go and Python tests with coverage
 	go test -race -coverprofile=coverage.out -covermode=atomic ./...

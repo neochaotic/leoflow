@@ -1,0 +1,15 @@
+# Keep the build context small and reproducible.
+.git
+.github
+bin
+dist
+coverage.out
+coverage.filtered.out
+*.test
+docs
+helm
+prompts
+**/__pycache__
+**/*.pyc
+.venv
+node_modules

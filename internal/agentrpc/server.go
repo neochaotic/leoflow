@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -56,6 +57,11 @@ type LogSink interface {
 	Open(ref logs.Ref) (logs.LogWriter, error)
 }
 
+// LogPublisher fans a log line out for live tailing (optional).
+type LogPublisher interface {
+	Publish(ctx context.Context, ref logs.Ref, line string) error
+}
+
 // Server implements agentv1.AgentServiceServer over a Store and Authenticator.
 type Server struct {
 	agentv1.UnimplementedAgentServiceServer
@@ -63,6 +69,7 @@ type Server struct {
 	store Store
 	xcom  XComService
 	logs  LogSink
+	tail  LogPublisher
 	now   func() time.Time
 }
 
@@ -75,6 +82,10 @@ func NewServer(authn Authenticator, store Store, xcomSvc XComService) *Server {
 // SetLogSink attaches the log sink that StreamLogs writes to. Without it,
 // StreamLogs reports Unimplemented.
 func (s *Server) SetLogSink(sink LogSink) { s.logs = sink }
+
+// SetLogPublisher attaches the live-tail publisher (optional). When set,
+// StreamLogs publishes each line for the UI's live tail.
+func (s *Server) SetLogPublisher(p LogPublisher) { s.tail = p }
 
 // Register acknowledges an agent's startup and returns the server clock.
 func (s *Server) Register(ctx context.Context, _ *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
@@ -213,11 +224,22 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 			err = status.Errorf(codes.Internal, "flushing logs: %v", cerr)
 		}
 	}()
-	return writeLines(w, stream.Recv)
+
+	ref := logs.Ref{TenantID: id.TenantID, DagID: id.DagID, RunID: id.RunID, TaskID: id.TaskID, TryNumber: id.TryNumber}
+	publish := func(string) {}
+	if s.tail != nil {
+		publish = func(line string) {
+			if perr := s.tail.Publish(stream.Context(), ref, line); perr != nil {
+				slog.Warn("publishing log tail", "task", id.TaskID, "error", perr)
+			}
+		}
+	}
+	return writeLines(w, stream.Recv, publish)
 }
 
-// writeLines drains log lines from recv into the writer until the stream ends.
-func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error)) error {
+// writeLines drains log lines from recv into the writer until the stream ends,
+// also publishing each line for live tailing.
+func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish func(string)) error {
 	for {
 		line, err := recv()
 		if errors.Is(err, io.EOF) {
@@ -226,9 +248,11 @@ func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error)) error {
 		if err != nil {
 			return status.Errorf(codes.Internal, "receiving log line: %v", err)
 		}
-		if werr := w.WriteLine(line.GetMessage()); werr != nil {
+		msg := line.GetMessage()
+		if werr := w.WriteLine(msg); werr != nil {
 			return status.Errorf(codes.Internal, "writing log line: %v", werr)
 		}
+		publish(msg)
 	}
 }
 

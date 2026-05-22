@@ -12,6 +12,12 @@ func ref() Ref {
 	return Ref{TenantID: "acme", DagID: "etl", RunID: "run-1", TaskID: "extract", TryNumber: 1}
 }
 
+func TestRefChannel(t *testing.T) {
+	if got := ref().Channel(); got != "log_tail:acme:etl:run-1:extract:1" {
+		t.Errorf("Channel() = %q", got)
+	}
+}
+
 func TestDiskSinkWriteThenReadBack(t *testing.T) {
 	dir := t.TempDir()
 	sink := NewDiskSink(dir)

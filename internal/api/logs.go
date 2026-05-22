@@ -10,9 +10,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// LogReader streams a task attempt's logs for the read API.
+// LogReader streams a task attempt's stored logs and, for running tasks, tails
+// new lines live.
 type LogReader interface {
 	ReadLogs(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int) (io.ReadCloser, error)
+	Tail(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int) (<-chan string, func(), error)
 }
 
 func logsHandler(reader LogReader) gin.HandlerFunc {
@@ -37,6 +39,39 @@ func logsHandler(reader LogReader) gin.HandlerFunc {
 		c.Status(http.StatusOK)
 		if _, cerr := io.Copy(c.Writer, rc); cerr != nil {
 			slog.Warn("streaming logs to client", "error", cerr)
+		}
+		if c.Query("follow") == "true" {
+			tailLogs(c, reader, try)
+		}
+	}
+}
+
+// tailLogs streams live log lines to the client until the task stops producing
+// them or the client disconnects. It is best-effort: if tailing is unavailable
+// the already-sent stored logs stand on their own.
+func tailLogs(c *gin.Context, reader LogReader, try int) {
+	ctx := c.Request.Context()
+	lines, cancel, err := reader.Tail(ctx, tenantOf(c),
+		c.Param("dag_id"), c.Param("dag_run_id"), c.Param("task_id"), try)
+	if err != nil {
+		return
+	}
+	defer cancel()
+	flusher, canFlush := c.Writer.(http.Flusher)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line, open := <-lines:
+			if !open {
+				return
+			}
+			if _, werr := c.Writer.WriteString(line + "\n"); werr != nil {
+				return
+			}
+			if canFlush {
+				flusher.Flush()
+			}
 		}
 	}
 }

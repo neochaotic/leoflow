@@ -1,0 +1,101 @@
+package dispatch
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/neochaotic/leoflow/internal/auth"
+	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
+)
+
+type fakeResolver struct {
+	resolved Resolved
+	err      error
+}
+
+func (f *fakeResolver) ResolveTask(context.Context, string, string) (Resolved, error) {
+	return f.resolved, f.err
+}
+
+type fakeIssuer struct {
+	id    auth.AgentIdentity
+	token string
+	err   error
+}
+
+func (f *fakeIssuer) IssueAgentToken(id auth.AgentIdentity, _ time.Duration) (string, error) {
+	f.id = id
+	return f.token, f.err
+}
+
+type fakeExecutor struct {
+	req executor.Request
+	err error
+}
+
+func (f *fakeExecutor) Execute(_ context.Context, req executor.Request) error {
+	f.req = req
+	return f.err
+}
+
+func pythonTask() domain.TaskSpec {
+	return domain.TaskSpec{
+		TaskID:     "extract",
+		Type:       domain.TaskTypePython,
+		Entrypoint: "dag:extract",
+		Env:        map[string]string{"FOO": "bar"},
+		Resources:  &domain.Resources{Requests: &domain.ResourceQuantity{CPU: "500m"}},
+	}
+}
+
+func newDispatcher(res Resolver, iss TokenIssuer, exec executor.Executor) *Dispatcher {
+	return NewDispatcher(exec, res, iss, "cp:9091", time.Hour)
+}
+
+func TestDispatchBuildsRequest(t *testing.T) {
+	res := &fakeResolver{resolved: Resolved{
+		TaskInstanceID: "ti-1", TenantID: "acme", Image: "etl:v1",
+		ImagePullPolicy: "IfNotPresent", TryNumber: 2,
+	}}
+	iss := &fakeIssuer{token: "agent-token"}
+	exec := &fakeExecutor{}
+
+	if err := newDispatcher(res, iss, exec).Dispatch(context.Background(), "run-uuid", "etl", pythonTask()); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	req := exec.req
+	if req.Image != "etl:v1" || req.Operator != "python" || req.Entrypoint != "dag:extract" {
+		t.Errorf("request core fields wrong: %+v", req)
+	}
+	if req.TaskInstanceID != "ti-1" || req.TryNumber != 2 || req.TenantID != "acme" {
+		t.Errorf("identity not propagated: %+v", req)
+	}
+	if req.AgentToken != "agent-token" || req.ControlPlaneAddr != "cp:9091" {
+		t.Errorf("agent connection not set: token=%q addr=%q", req.AgentToken, req.ControlPlaneAddr)
+	}
+	if req.Env["FOO"] != "bar" || req.Resources.Requests == nil {
+		t.Errorf("task fields not mapped: %+v", req)
+	}
+	if iss.id.TaskInstanceID != "ti-1" || iss.id.RunID != "run-uuid" || iss.id.DagID != "etl" {
+		t.Errorf("token identity wrong: %+v", iss.id)
+	}
+}
+
+func TestDispatchPropagatesErrors(t *testing.T) {
+	cases := map[string]*Dispatcher{
+		"resolver": newDispatcher(&fakeResolver{err: errors.New("x")}, &fakeIssuer{token: "t"}, &fakeExecutor{}),
+		"issuer":   newDispatcher(&fakeResolver{}, &fakeIssuer{err: errors.New("x")}, &fakeExecutor{}),
+		"executor": newDispatcher(&fakeResolver{}, &fakeIssuer{token: "t"}, &fakeExecutor{err: errors.New("x")}),
+	}
+	for name, d := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := d.Dispatch(context.Background(), "run", "etl", pythonTask()); err == nil {
+				t.Errorf("%s failure should abort dispatch", name)
+			}
+		})
+	}
+}

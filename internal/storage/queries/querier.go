@@ -44,6 +44,7 @@ type Querier interface {
 	RecordXCom(ctx context.Context, arg RecordXComParams) error
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
 	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
+	ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (ResolveRunRefRow, error)
 	SetCurrentDagVersion(ctx context.Context, arg SetCurrentDagVersionParams) error
 	SetDagPaused(ctx context.Context, arg SetDagPausedParams) (Dag, error)
 	UpdateDagRunState(ctx context.Context, arg UpdateDagRunStateParams) (DagRun, error)

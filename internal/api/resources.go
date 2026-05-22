@@ -260,6 +260,10 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 	if deps.Tasks != nil {
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances",
 			RequirePermission("read", "task_instance"), listTaskInstancesHandler(deps.Tasks))
+		if deps.Logs != nil {
+			r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/logs/:try_number",
+				RequirePermission("read", "task_instance"), logsHandler(deps.Logs))
+		}
 		r.POST("/api/v2/dags/:dag_id/clearTaskInstances",
 			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks))
 	}

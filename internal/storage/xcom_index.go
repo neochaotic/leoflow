@@ -45,6 +45,12 @@ func (x *XComIndex) RecordXCom(ctx context.Context, e xcom.IndexEntry) error {
 	})
 }
 
+// PurgeExpired deletes xcom_index rows past their expiry. Redis expires the
+// values natively; this reclaims the metadata rows.
+func (x *XComIndex) PurgeExpired(ctx context.Context) error {
+	return x.q.DeleteExpiredXComIndex(ctx)
+}
+
 // XComReader reads XCom values for the API: it resolves the Redis key from the
 // Postgres index by name and fetches the value from the backend.
 type XComReader struct {

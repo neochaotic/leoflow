@@ -466,6 +466,32 @@ func (q *Queries) ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInst
 	return err
 }
 
+const resolveRunRef = `-- name: ResolveRunRef :one
+SELECT t.id AS tenant_id, dr.id AS dag_run_id
+FROM dag_runs dr
+JOIN dags d ON d.id = dr.dag_id
+JOIN tenants t ON t.id = d.tenant_id
+WHERE t.name = $1 AND d.dag_id = $2 AND dr.run_id = $3
+`
+
+type ResolveRunRefParams struct {
+	Name  string `json:"name"`
+	DagID string `json:"dag_id"`
+	RunID string `json:"run_id"`
+}
+
+type ResolveRunRefRow struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+}
+
+func (q *Queries) ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (ResolveRunRefRow, error) {
+	row := q.db.QueryRow(ctx, resolveRunRef, arg.Name, arg.DagID, arg.RunID)
+	var i ResolveRunRefRow
+	err := row.Scan(&i.TenantID, &i.DagRunID)
+	return i, err
+}
+
 const updateDagRunState = `-- name: UpdateDagRunState :one
 UPDATE dag_runs
 SET state = $2, started_at = $3, ended_at = $4

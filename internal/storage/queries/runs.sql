@@ -87,3 +87,10 @@ SET state = $3,
     duration_seconds = CASE WHEN $3 IN ('success', 'failed') AND started_at IS NOT NULL
         THEN EXTRACT(EPOCH FROM (now() - started_at)) ELSE duration_seconds END
 WHERE dag_run_id = $1 AND task_id = $2;
+
+-- name: ResolveRunRef :one
+SELECT t.id AS tenant_id, dr.id AS dag_run_id
+FROM dag_runs dr
+JOIN dags d ON d.id = dr.dag_id
+JOIN tenants t ON t.id = d.tenant_id
+WHERE t.name = $1 AND d.dag_id = $2 AND dr.run_id = $3;

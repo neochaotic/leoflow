@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func ref() Ref {
@@ -57,5 +58,47 @@ func TestDiskSinkPathLayout(t *testing.T) {
 func TestDiskSinkReadMissing(t *testing.T) {
 	if _, err := NewDiskSink(t.TempDir()).Read(ref()); err == nil {
 		t.Error("reading a non-existent log should error")
+	}
+}
+
+func TestDiskSinkPruneDeletesOldLogs(t *testing.T) {
+	dir := t.TempDir()
+	sink := NewDiskSink(dir)
+	w, err := sink.Open(ref())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = w.WriteLine("x")
+	_ = w.Close()
+
+	now := time.Now()
+	logPath := filepath.Join(dir, "acme", "etl", "run-1", "extract", "1.log")
+	old := now.Add(-40 * 24 * time.Hour)
+	if cerr := os.Chtimes(logPath, old, old); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	if perr := sink.Prune(now, 30*24*time.Hour); perr != nil {
+		t.Fatalf("Prune: %v", perr)
+	}
+	if _, serr := os.Stat(logPath); !os.IsNotExist(serr) {
+		t.Errorf("log older than retention should be pruned (stat err = %v)", serr)
+	}
+}
+
+func TestDiskSinkPruneKeepsRecentAndMissingRoot(t *testing.T) {
+	dir := t.TempDir()
+	sink := NewDiskSink(dir)
+	w, _ := sink.Open(ref())
+	_ = w.Close()
+	if err := sink.Prune(time.Now(), 30*24*time.Hour); err != nil {
+		t.Fatalf("Prune recent: %v", err)
+	}
+	if _, err := sink.Read(ref()); err != nil {
+		t.Errorf("recent log should be kept: %v", err)
+	}
+	// A never-written root must not error.
+	if err := NewDiskSink(filepath.Join(dir, "nope")).Prune(time.Now(), time.Hour); err != nil {
+		t.Errorf("pruning a missing root should be a no-op, got %v", err)
 	}
 }

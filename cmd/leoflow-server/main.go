@@ -100,6 +100,8 @@ func run() error {
 	}
 	defer grpcSrv.GracefulStop()
 
+	startCleanup(ctx, storage.NewXComIndex(pg), logSink, tel.Logger)
+
 	if cfg.Scheduler.Enabled {
 		if serr := startScheduler(ctx, cfg, pg, execStore, authn, tel.Logger, tel.Metrics); serr != nil {
 			return serr
@@ -123,6 +125,7 @@ func run() error {
 		Tasks:                        repo,
 		Versions:                     repo,
 		Xcoms:                        xcomReader,
+		Logs:                         storage.NewLogReader(pg, logSink),
 	})
 
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -222,6 +225,35 @@ func buildK8sClient() (kubernetes.Interface, error) {
 
 // reconcileInterval is how often the pod reconciler sweeps for failed pods.
 const reconcileInterval = 30 * time.Second
+
+// cleanupInterval is how often expired XCom index rows and old logs are purged.
+const cleanupInterval = time.Hour
+
+// logRetention is how long task logs are kept before garbage collection.
+const logRetention = 30 * 24 * time.Hour
+
+// startCleanup runs a periodic janitor that purges expired XCom index rows and
+// prunes old log files. The operations are idempotent, so it is safe on every
+// replica.
+func startCleanup(ctx context.Context, idx *storage.XComIndex, sink *logs.DiskSink, logger *slog.Logger) {
+	go func() {
+		t := time.NewTicker(cleanupInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := idx.PurgeExpired(ctx); err != nil {
+					logger.Error("purging expired xcom index", "error", err)
+				}
+				if err := sink.Prune(time.Now(), logRetention); err != nil {
+					logger.Error("pruning old logs", "error", err)
+				}
+			}
+		}
+	}()
+}
 
 // startReconciler runs a periodic pod reconciler that marks task instances
 // failed when their pod failed without the agent reporting (feeding retries).

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // flushThreshold is the buffered-writer size; a full buffer flushes to storage,
@@ -59,6 +60,35 @@ func (d *DiskSink) Open(ref Ref) (LogWriter, error) {
 		return nil, fmt.Errorf("opening log file: %w", err)
 	}
 	return &diskWriter{f: f, buf: bufio.NewWriterSize(f, flushThreshold)}, nil
+}
+
+// Prune deletes log files whose last modification is older than retention,
+// reclaiming space for completed runs. A missing root is not an error.
+func (d *DiskSink) Prune(now time.Time, retention time.Duration) error {
+	cutoff := now.Add(-retention)
+	err := filepath.WalkDir(d.root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".log" {
+			return nil
+		}
+		info, ierr := entry.Info()
+		if ierr != nil {
+			return ierr
+		}
+		if info.ModTime().Before(cutoff) {
+			//nolint:gosec // G122: the log root is server-owned, not an untrusted symlink tree.
+			if rerr := os.Remove(path); rerr != nil {
+				return rerr
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // Read opens the log file for reading.

@@ -15,10 +15,10 @@ import (
 
 // fakeStore records ReportState calls and serves a fixed task spec.
 type fakeStore struct {
-	spec       TaskSpec
-	specErr    error
-	reported   []reportedState
-	reportErr  error
+	spec      TaskSpec
+	specErr   error
+	reported  []reportedState
+	reportErr error
 }
 
 type reportedState struct {

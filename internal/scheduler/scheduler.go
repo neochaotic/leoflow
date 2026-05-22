@@ -43,12 +43,20 @@ type Recorder interface {
 	RecordTaskTransition(from, to, dagID string)
 }
 
+// Dispatcher launches a task instance for execution. The scheduler dispatches a
+// task as it becomes queued; the concrete implementation builds the executor
+// request and routes it to the right executor.
+type Dispatcher interface {
+	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error
+}
+
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
-	store    Store
-	logger   *slog.Logger
-	interval time.Duration
-	recorder Recorder
+	store      Store
+	logger     *slog.Logger
+	interval   time.Duration
+	recorder   Recorder
+	dispatcher Dispatcher
 }
 
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
@@ -58,6 +66,10 @@ func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Sch
 
 // SetRecorder attaches a metrics recorder (optional).
 func (s *Scheduler) SetRecorder(r Recorder) { s.recorder = r }
+
+// SetDispatcher attaches the executor dispatcher (optional; without it the
+// scheduler advances state only and launches nothing).
+func (s *Scheduler) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 
 // Run drives the scheduling loop until ctx is canceled.
 func (s *Scheduler) Run(ctx context.Context) error {
@@ -124,13 +136,8 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 		return nil
 	}
 	for _, t := range PlanRun(run.Tasks, run.States) {
-		from := run.States[t.TaskID]
-		if err := s.store.ApplyTransition(ctx, run.RunID, t.TaskID, t.To); err != nil {
-			return fmt.Errorf("applying transition for %s: %w", t.TaskID, err)
-		}
-		if s.recorder != nil {
-			s.recorder.RecordSchedulerDecision(string(t.To))
-			s.recorder.RecordTaskTransition(string(from), string(t.To), run.DagID)
+		if err := s.applyPlanned(ctx, run, t); err != nil {
+			return err
 		}
 	}
 	if state, done := FinalizeRun(run.Tasks, run.States); done {
@@ -139,4 +146,35 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 		}
 	}
 	return nil
+}
+
+// applyPlanned dispatches a task as it becomes queued, then records the
+// transition. A dispatch failure leaves the task in its current state so the
+// next tick retries; it never aborts the step.
+func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTransition) error {
+	if t.To == domain.TaskStateQueued && s.dispatcher != nil {
+		if err := s.dispatchTask(ctx, run, t.TaskID); err != nil {
+			s.logger.Error("dispatching task", "run", run.RunID, "task", t.TaskID, "error", err)
+			return nil
+		}
+	}
+	from := run.States[t.TaskID]
+	if err := s.store.ApplyTransition(ctx, run.RunID, t.TaskID, t.To); err != nil {
+		return fmt.Errorf("applying transition for %s: %w", t.TaskID, err)
+	}
+	if s.recorder != nil {
+		s.recorder.RecordSchedulerDecision(string(t.To))
+		s.recorder.RecordTaskTransition(string(from), string(t.To), run.DagID)
+	}
+	return nil
+}
+
+// dispatchTask hands the named task's spec to the dispatcher.
+func (s *Scheduler) dispatchTask(ctx context.Context, run RunState, taskID string) error {
+	for _, task := range run.Tasks {
+		if task.TaskID == taskID {
+			return s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task)
+		}
+	}
+	return fmt.Errorf("task %s not found in run %s", taskID, run.RunID)
 }

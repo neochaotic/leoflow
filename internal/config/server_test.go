@@ -32,6 +32,37 @@ func TestLoadServerAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadServerExecutorHTTPDefaults(t *testing.T) {
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Executor.HTTP.InlineMaxDurationSeconds != 300 {
+		t.Errorf("inline_max_duration_seconds = %d, want 300", c.Executor.HTTP.InlineMaxDurationSeconds)
+	}
+	if c.Executor.HTTP.InlineConcurrencyLimit != 256 {
+		t.Errorf("inline_concurrency_limit = %d, want 256", c.Executor.HTTP.InlineConcurrencyLimit)
+	}
+	if c.Executor.HTTP.UserAgent != "leoflow/0.1" {
+		t.Errorf("user_agent = %q, want leoflow/0.1", c.Executor.HTTP.UserAgent)
+	}
+}
+
+func TestLoadServerExecutorHTTPEnvOverride(t *testing.T) {
+	t.Setenv("LEOFLOW_EXECUTOR_HTTP_INLINE_MAX_DURATION_SECONDS", "60")
+	t.Setenv("LEOFLOW_EXECUTOR_HTTP_INLINE_CONCURRENCY_LIMIT", "16")
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Executor.HTTP.InlineMaxDurationSeconds != 60 {
+		t.Errorf("inline_max_duration_seconds = %d, want 60", c.Executor.HTTP.InlineMaxDurationSeconds)
+	}
+	if c.Executor.HTTP.InlineConcurrencyLimit != 16 {
+		t.Errorf("inline_concurrency_limit = %d, want 16", c.Executor.HTTP.InlineConcurrencyLimit)
+	}
+}
+
 func TestLoadServerEnvOverridesNestedKey(t *testing.T) {
 	t.Setenv("LEOFLOW_SERVER_HTTP_ADDR", "127.0.0.1:9999")
 	t.Setenv("LEOFLOW_AUTH_JWT_SECRET", "s3cr3t")

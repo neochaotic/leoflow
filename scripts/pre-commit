@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Leoflow pre-commit hook (ADR 0011 + 0012).
-# Blocks the commit when formatting, vetting, linting, or short tests fail.
+# Blocks the commit when formatting, vetting, or linting fail, or when total
+# test coverage drops by more than 1% from the recorded baseline.
 set -euo pipefail
 
 echo "[pre-commit] gofmt"
@@ -18,7 +19,19 @@ go vet ./...
 echo "[pre-commit] golangci-lint"
 golangci-lint run ./...
 
-echo "[pre-commit] go test -short"
-go test -short ./...
+echo "[pre-commit] test + coverage gate"
+profile=$(mktemp)
+go test -coverprofile="$profile" ./... >/dev/null
+current=$(go tool cover -func="$profile" | tail -1 | awk '{print $3}' | tr -d '%')
+rm -f "$profile"
+
+baseline_file=".git/coverage-baseline"
+baseline=$(cat "$baseline_file" 2>/dev/null || echo "0")
+echo "  total coverage: ${current}% (baseline ${baseline}%)"
+if awk -v c="$current" -v b="$baseline" 'BEGIN { exit !(b - c > 1.0) }'; then
+	echo "::error:: coverage dropped from ${baseline}% to ${current}% (>1%); add tests (ADR 0011)"
+	exit 1
+fi
+echo "$current" >"$baseline_file"
 
 echo "[pre-commit] ok"

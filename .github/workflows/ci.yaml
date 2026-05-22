@@ -29,14 +29,10 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      # install-mode goinstall compiles golangci-lint with the runner's Go
-      # toolchain, so its build version always matches the module's go
-      # directive (a prebuilt binary built with an older Go is rejected).
       - name: golangci-lint
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          install-mode: goinstall
 
   # ─────────────────────────────────────────────────────────────────────
   # Tests (ADR 0011: TDD with coverage floor per phase)

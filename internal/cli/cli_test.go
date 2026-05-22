@@ -126,7 +126,7 @@ func TestCompileProducesValidDAGJSON(t *testing.T) {
 }
 
 func TestStubCommandsAnnounceNotImplemented(t *testing.T) {
-	for _, args := range [][]string{{"push", "dag.json"}, {"auth", "create-token"}, {"server"}} {
+	for _, args := range [][]string{{"auth", "create-token"}, {"server"}} {
 		out, _, err := run(t, args...)
 		if err != nil {
 			t.Fatalf("%v: %v", args, err)

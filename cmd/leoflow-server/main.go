@@ -82,6 +82,7 @@ func run() error {
 		Dags:          repo,
 		DagRuns:       repo,
 		Tasks:         repo,
+		Versions:      repo,
 	})
 
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

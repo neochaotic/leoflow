@@ -13,17 +13,6 @@ func announceNotImplemented(cmd *cobra.Command, feature string) error {
 	return err
 }
 
-func newPushCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "push <dag.json>",
-		Short: "Register a compiled dag.json with the control plane (Phase 2).",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return announceNotImplemented(cmd, "push")
-		},
-	}
-}
-
 func newAuthCommand() *cobra.Command {
 	auth := &cobra.Command{
 		Use:   "auth",

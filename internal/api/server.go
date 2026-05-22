@@ -21,9 +21,10 @@ type Dependencies struct {
 	TokenTTLSecs  int
 
 	// Resource repositories. Routes for nil repositories are not registered.
-	Dags    DagRepository
-	DagRuns DagRunRepository
-	Tasks   TaskInstanceRepository
+	Dags     DagRepository
+	DagRuns  DagRunRepository
+	Tasks    TaskInstanceRepository
+	Versions DagVersionRepository
 }
 
 // NewServer builds the gin engine with the full middleware chain, health and

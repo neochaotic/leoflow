@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -13,6 +14,8 @@ import (
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/storage/queries"
 )
+
+const defaultMaxActiveRuns = 16
 
 // Repository implements the API resource and auth user-store interfaces over
 // Postgres using the sqlc-generated query set.
@@ -240,6 +243,56 @@ func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runI
 		}
 	}
 	return cleared, nil
+}
+
+// RegisterDagVersion upserts the DAG and inserts a version keyed by specHash,
+// setting it as current. It is idempotent: an existing hash yields created=false.
+func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec domain.DAGSpec, specHash string) (bool, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return false, err
+	}
+	maxRuns := spec.MaxActiveRuns
+	if maxRuns == 0 {
+		maxRuns = defaultMaxActiveRuns
+	}
+	dag, err := r.q.UpsertDag(ctx, queries.UpsertDagParams{
+		TenantID:         tid,
+		DagID:            spec.DagID,
+		Description:      strPtr(spec.Description),
+		Owner:            strPtr(spec.Owner),
+		Schedule:         spec.Schedule,
+		ScheduleTimezone: strPtr(spec.ScheduleTZ),
+		MaxActiveRuns:    toInt32(maxRuns),
+		Catchup:          spec.Catchup,
+	})
+	if err != nil {
+		return false, fmt.Errorf("upserting dag: %w", err)
+	}
+	if _, verr := r.q.GetDagVersionByHash(ctx, queries.GetDagVersionByHashParams{DagID: dag.ID, SpecHash: specHash}); verr == nil {
+		return false, nil
+	} else if !errors.Is(verr, pgx.ErrNoRows) {
+		return false, fmt.Errorf("checking existing version: %w", verr)
+	}
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return false, fmt.Errorf("encoding spec: %w", err)
+	}
+	version, err := r.q.InsertDagVersion(ctx, queries.InsertDagVersionParams{
+		DagID:          dag.ID,
+		Version:        spec.DagVersion,
+		ImageReference: spec.Image,
+		Spec:           specJSON,
+		SpecHash:       specHash,
+		CreatedBy:      pgtype.UUID{},
+	})
+	if err != nil {
+		return false, fmt.Errorf("inserting version: %w", err)
+	}
+	if err := r.q.SetCurrentDagVersion(ctx, queries.SetCurrentDagVersionParams{ID: dag.ID, CurrentVersionID: version.ID}); err != nil {
+		return false, fmt.Errorf("setting current version: %w", err)
+	}
+	return true, nil
 }
 
 // compile-time assurance that Repository satisfies the auth user store.

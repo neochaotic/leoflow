@@ -233,6 +233,9 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		r.POST("/api/v2/dags/:dag_id/clearTaskInstances",
 			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks))
 	}
+	if deps.Versions != nil {
+		r.POST("/api/v2/dags/:dag_id/versions", RequirePermission("write", "dag"), registerVersionHandler(deps.Versions))
+	}
 	// XCom and log retrieval land in Phase 4.
 	r.GET("/api/v2/xcoms/:dag_id/:dag_run_id/:task_id/:key", RequirePermission("read", "xcom"), stubHandler("XCom retrieval"))
 }

@@ -2,6 +2,8 @@ package agentrpc
 
 import (
 	"context"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -236,6 +238,41 @@ func TestFetchXComNotFound(t *testing.T) {
 	_, err := srv.FetchXCom(ctxWithToken(t, a), &agentv1.FetchXComRequest{UpstreamTaskId: "upstream"})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("missing xcom: code = %v, want NotFound", status.Code(err))
+	}
+}
+
+type fakeLogWriter struct {
+	lines  []string
+	closed bool
+}
+
+func (w *fakeLogWriter) WriteLine(line string) error { w.lines = append(w.lines, line); return nil }
+func (w *fakeLogWriter) Close() error                { w.closed = true; return nil }
+
+func TestWriteLinesDrainsStreamToSink(t *testing.T) {
+	msgs := []string{"line one", "line two", "line three"}
+	i := 0
+	recv := func() (*agentv1.LogLine, error) {
+		if i >= len(msgs) {
+			return nil, io.EOF
+		}
+		m := msgs[i]
+		i++
+		return &agentv1.LogLine{Message: m}, nil
+	}
+	w := &fakeLogWriter{}
+	if err := writeLines(w, recv); err != nil {
+		t.Fatalf("writeLines: %v", err)
+	}
+	if len(w.lines) != 3 || w.lines[2] != "line three" {
+		t.Errorf("written lines = %v, want the three messages", w.lines)
+	}
+}
+
+func TestWriteLinesPropagatesRecvError(t *testing.T) {
+	recv := func() (*agentv1.LogLine, error) { return nil, errors.New("stream broke") }
+	if err := writeLines(&fakeLogWriter{}, recv); err == nil {
+		t.Error("a non-EOF receive error should propagate")
 	}
 }
 

@@ -15,6 +15,7 @@ func TestLoadServerAppliesDefaults(t *testing.T) {
 		"http_addr":         {c.Server.HTTPAddr, "0.0.0.0:8080"},
 		"metrics_addr":      {c.Server.MetricsAddr, "0.0.0.0:9090"},
 		"grpc_addr":         {c.Server.GRPCAddr, "0.0.0.0:9091"},
+		"logs.dir":          {c.Logs.Dir, "/var/log/leoflow"},
 		"database.url":      {c.Database.URL, "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable"},
 		"max_open_conns":    {c.Database.MaxOpenConns, 25},
 		"redis.url":         {c.Redis.URL, "redis://localhost:6379/0"},

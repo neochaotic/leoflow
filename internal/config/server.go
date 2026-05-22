@@ -18,7 +18,14 @@ type ServerConfig struct {
 	Auth          AuthSection          `mapstructure:"auth"`
 	Scheduler     SchedulerSection     `mapstructure:"scheduler"`
 	Executor      ExecutorSection      `mapstructure:"executor"`
+	Logs          LogsSection          `mapstructure:"logs"`
 	Observability ObservabilitySection `mapstructure:"observability"`
+}
+
+// LogsSection configures task log shipping.
+type LogsSection struct {
+	// Dir is the root directory for the disk log sink.
+	Dir string `mapstructure:"dir"`
 }
 
 // ExecutorSection configures how tasks are executed.
@@ -117,6 +124,7 @@ var serverDefaults = map[string]any{
 	"executor.http.inline_concurrency_limit":    256,
 	"executor.http.user_agent":                  "leoflow/0.1",
 	"executor.agent_control_plane_addr":         "",
+	"logs.dir":                                  "/var/log/leoflow",
 	"observability.otel.enabled":                true,
 	"observability.otel.endpoint":               "localhost:4317",
 	"observability.log_level":                   "info",

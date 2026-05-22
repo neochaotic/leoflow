@@ -6,11 +6,13 @@ package agentrpc
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/logs"
 	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc/codes"
@@ -49,12 +51,18 @@ type XComService interface {
 	Fetch(ctx context.Context, key xcom.Key) (xcom.Entry, error)
 }
 
+// LogSink opens a writer for a task attempt's streamed logs.
+type LogSink interface {
+	Open(ref logs.Ref) (logs.LogWriter, error)
+}
+
 // Server implements agentv1.AgentServiceServer over a Store and Authenticator.
 type Server struct {
 	agentv1.UnimplementedAgentServiceServer
 	auth  Authenticator
 	store Store
 	xcom  XComService
+	logs  LogSink
 	now   func() time.Time
 }
 
@@ -63,6 +71,10 @@ type Server struct {
 func NewServer(authn Authenticator, store Store, xcomSvc XComService) *Server {
 	return &Server{auth: authn, store: store, xcom: xcomSvc, now: time.Now}
 }
+
+// SetLogSink attaches the log sink that StreamLogs writes to. Without it,
+// StreamLogs reports Unimplemented.
+func (s *Server) SetLogSink(sink LogSink) { s.logs = sink }
 
 // Register acknowledges an agent's startup and returns the server clock.
 func (s *Server) Register(ctx context.Context, _ *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
@@ -178,6 +190,46 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 		SizeBytes:   clampInt32(entry.SizeBytes),
 		CreatedAt:   timestamppb.New(entry.CreatedAt),
 	}, nil
+}
+
+// StreamLogs receives the task's log lines and writes them through the sink,
+// flushing on stream end so the logs survive the pod.
+func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err error) {
+	id, ierr := s.identify(stream.Context())
+	if ierr != nil {
+		return ierr
+	}
+	if s.logs == nil {
+		return status.Error(codes.Unimplemented, "log shipping is not configured")
+	}
+	w, oerr := s.logs.Open(logs.Ref{
+		TenantID: id.TenantID, DagID: id.DagID, RunID: id.RunID, TaskID: id.TaskID, TryNumber: id.TryNumber,
+	})
+	if oerr != nil {
+		return status.Errorf(codes.Internal, "opening log sink: %v", oerr)
+	}
+	defer func() {
+		if cerr := w.Close(); cerr != nil && err == nil {
+			err = status.Errorf(codes.Internal, "flushing logs: %v", cerr)
+		}
+	}()
+	return writeLines(w, stream.Recv)
+}
+
+// writeLines drains log lines from recv into the writer until the stream ends.
+func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error)) error {
+	for {
+		line, err := recv()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return status.Errorf(codes.Internal, "receiving log line: %v", err)
+		}
+		if werr := w.WriteLine(line.GetMessage()); werr != nil {
+			return status.Errorf(codes.Internal, "writing log line: %v", werr)
+		}
+	}
 }
 
 // xcomKey builds the XCom key for a task within the caller's tenant/dag/run.

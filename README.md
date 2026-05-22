@@ -147,6 +147,7 @@ Read [the ADRs](docs/adr/) for the full reasoning behind every decision.
 - OIDC authentication (Google, Azure AD, Keycloak, Okta)
 - Mark success/failed manually
 - Custom UI (replacing the Airflow UI)
+- Deferrable tasks (efficient dispatch + long-poll pattern, native Go implementation without a separate Triggerer process — see [ADR 0016](docs/adr/0016-deferrable-tasks.md))
 
 ## Getting Started
 

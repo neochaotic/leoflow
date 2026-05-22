@@ -1,0 +1,7 @@
+-- 006_reserve_deferred_state.down.sql
+-- PostgreSQL cannot remove a value from an ENUM type without rebuilding the
+-- type and rewriting every column that uses it. Because 'deferred' is a
+-- reserved, unused value (see ADR 0016) that no row references in v0.1,
+-- rolling back this migration is intentionally a no-op: the reserved value is
+-- left in place. Re-applying the up migration is idempotent
+-- (ADD VALUE IF NOT EXISTS), so this is safe across down/up cycles.

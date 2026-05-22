@@ -17,7 +17,24 @@ type ServerConfig struct {
 	Redis         RedisSection         `mapstructure:"redis"`
 	Auth          AuthSection          `mapstructure:"auth"`
 	Scheduler     SchedulerSection     `mapstructure:"scheduler"`
+	Executor      ExecutorSection      `mapstructure:"executor"`
 	Observability ObservabilitySection `mapstructure:"observability"`
+}
+
+// ExecutorSection configures how tasks are executed.
+type ExecutorSection struct {
+	HTTP HTTPExecutorSection `mapstructure:"http"`
+}
+
+// HTTPExecutorSection configures the inline http_api execution path (ADR 0002).
+type HTTPExecutorSection struct {
+	// InlineMaxDurationSeconds caps how long an inline http_api task may run; a
+	// task declaring a longer execution_timeout_seconds must use execution_mode: pod.
+	InlineMaxDurationSeconds int `mapstructure:"inline_max_duration_seconds"`
+	// InlineConcurrencyLimit bounds the number of in-flight inline goroutines.
+	InlineConcurrencyLimit int `mapstructure:"inline_concurrency_limit"`
+	// UserAgent is the User-Agent header sent on inline http_api requests.
+	UserAgent string `mapstructure:"user_agent"`
 }
 
 // ServerSection configures the HTTP and metrics listeners.
@@ -78,22 +95,25 @@ type OTelSection struct {
 // serverDefaults lists every leaf key with its default so that AutomaticEnv and
 // Unmarshal resolve nested keys correctly.
 var serverDefaults = map[string]any{
-	"server.http_addr":            "0.0.0.0:8080",
-	"server.metrics_addr":         "0.0.0.0:9090",
-	"server.cors.allowed_origins": []string{"http://localhost:8080"},
-	"database.url":                "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
-	"database.max_open_conns":     25,
-	"database.max_idle_conns":     5,
-	"redis.url":                   "redis://localhost:6379/0",
-	"auth.provider":               "jwt",
-	"auth.jwt.secret":             "",
-	"auth.jwt.token_ttl_seconds":  3600,
-	"scheduler.loop_interval_ms":  1000,
-	"scheduler.enabled":           true,
-	"observability.otel.enabled":  true,
-	"observability.otel.endpoint": "localhost:4317",
-	"observability.log_level":     "info",
-	"observability.log_format":    "json",
+	"server.http_addr":                          "0.0.0.0:8080",
+	"server.metrics_addr":                       "0.0.0.0:9090",
+	"server.cors.allowed_origins":               []string{"http://localhost:8080"},
+	"database.url":                              "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
+	"database.max_open_conns":                   25,
+	"database.max_idle_conns":                   5,
+	"redis.url":                                 "redis://localhost:6379/0",
+	"auth.provider":                             "jwt",
+	"auth.jwt.secret":                           "",
+	"auth.jwt.token_ttl_seconds":                3600,
+	"scheduler.loop_interval_ms":                1000,
+	"scheduler.enabled":                         true,
+	"executor.http.inline_max_duration_seconds": 300,
+	"executor.http.inline_concurrency_limit":    256,
+	"executor.http.user_agent":                  "leoflow/0.1",
+	"observability.otel.enabled":                true,
+	"observability.otel.endpoint":               "localhost:4317",
+	"observability.log_level":                   "info",
+	"observability.log_format":                  "json",
 }
 
 // LoadServer assembles the server configuration from defaults, the given file,

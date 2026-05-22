@@ -50,6 +50,14 @@ type Dispatcher interface {
 	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error
 }
 
+// InlineRunner executes an inline http_api task out of band in the control
+// plane. Start reports whether the task was launched (false without error means
+// it should be retried on the next tick); the runner owns the task's state once
+// started, so the scheduler does not record a queued transition for it.
+type InlineRunner interface {
+	Start(ctx context.Context, runID, dagID string, task domain.TaskSpec) (started bool, err error)
+}
+
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
 	store      Store
@@ -57,6 +65,7 @@ type Scheduler struct {
 	interval   time.Duration
 	recorder   Recorder
 	dispatcher Dispatcher
+	inline     InlineRunner
 }
 
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
@@ -70,6 +79,10 @@ func (s *Scheduler) SetRecorder(r Recorder) { s.recorder = r }
 // SetDispatcher attaches the executor dispatcher (optional; without it the
 // scheduler advances state only and launches nothing).
 func (s *Scheduler) SetDispatcher(d Dispatcher) { s.dispatcher = d }
+
+// SetInlineRunner attaches the inline http_api runner (optional; without it
+// inline http_api tasks fall back to the standard queued dispatch path).
+func (s *Scheduler) SetInlineRunner(r InlineRunner) { s.inline = r }
 
 // Run drives the scheduling loop until ctx is canceled.
 func (s *Scheduler) Run(ctx context.Context) error {
@@ -148,33 +161,69 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 	return nil
 }
 
-// applyPlanned dispatches a task as it becomes queued, then records the
-// transition. A dispatch failure leaves the task in its current state so the
-// next tick retries; it never aborts the step.
+// applyPlanned launches a task as it becomes queued and records the resulting
+// transition. Non-queued transitions are recorded directly.
 func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTransition) error {
-	if t.To == domain.TaskStateQueued && s.dispatcher != nil {
-		if err := s.dispatchTask(ctx, run, t.TaskID); err != nil {
+	if t.To == domain.TaskStateQueued {
+		return s.launchQueued(ctx, run, t)
+	}
+	return s.recordTransition(ctx, run, t.TaskID, t.To)
+}
+
+// launchQueued routes a queued task to the inline runner (inline http_api) or
+// the dispatcher (pod path), recording the appropriate transition. A transient
+// failure leaves the task scheduled so the next tick retries.
+func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTransition) error {
+	task, ok := findTask(run.Tasks, t.TaskID)
+	if !ok {
+		return fmt.Errorf("task %s not found in run %s", t.TaskID, run.RunID)
+	}
+	if s.inline != nil && task.Type == domain.TaskTypeHTTPAPI && task.EffectiveExecutionMode() == domain.ExecutionModeInline {
+		return s.runInline(ctx, run, task)
+	}
+	if s.dispatcher != nil {
+		if err := s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task); err != nil {
 			s.logger.Error("dispatching task", "run", run.RunID, "task", t.TaskID, "error", err)
 			return nil
 		}
 	}
-	from := run.States[t.TaskID]
-	if err := s.store.ApplyTransition(ctx, run.RunID, t.TaskID, t.To); err != nil {
-		return fmt.Errorf("applying transition for %s: %w", t.TaskID, err)
+	return s.recordTransition(ctx, run, t.TaskID, domain.TaskStateQueued)
+}
+
+// runInline starts an inline http_api task. The runner owns the task's state
+// once started, so no queued transition is recorded; a start error marks the
+// task failed, and an at-capacity result leaves it scheduled for retry.
+func (s *Scheduler) runInline(ctx context.Context, run RunState, task domain.TaskSpec) error {
+	started, err := s.inline.Start(ctx, run.RunID, run.DagID, task)
+	if err != nil {
+		s.logger.Error("starting inline task", "run", run.RunID, "task", task.TaskID, "error", err)
+		return s.recordTransition(ctx, run, task.TaskID, domain.TaskStateFailed)
 	}
-	if s.recorder != nil {
-		s.recorder.RecordSchedulerDecision(string(t.To))
-		s.recorder.RecordTaskTransition(string(from), string(t.To), run.DagID)
+	if !started {
+		s.logger.Debug("inline runner at capacity; will retry", "run", run.RunID, "task", task.TaskID)
 	}
 	return nil
 }
 
-// dispatchTask hands the named task's spec to the dispatcher.
-func (s *Scheduler) dispatchTask(ctx context.Context, run RunState, taskID string) error {
-	for _, task := range run.Tasks {
+// recordTransition persists a task transition and records its metrics.
+func (s *Scheduler) recordTransition(ctx context.Context, run RunState, taskID string, to domain.TaskState) error {
+	from := run.States[taskID]
+	if err := s.store.ApplyTransition(ctx, run.RunID, taskID, to); err != nil {
+		return fmt.Errorf("applying transition for %s: %w", taskID, err)
+	}
+	if s.recorder != nil {
+		s.recorder.RecordSchedulerDecision(string(to))
+		s.recorder.RecordTaskTransition(string(from), string(to), run.DagID)
+	}
+	return nil
+}
+
+// findTask returns the task with the given ID from the run topology.
+func findTask(tasks []domain.TaskSpec, taskID string) (domain.TaskSpec, bool) {
+	for _, task := range tasks {
 		if task.TaskID == taskID {
-			return s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task)
+			return task, true
 		}
 	}
-	return fmt.Errorf("task %s not found in run %s", taskID, run.RunID)
+	return domain.TaskSpec{}, false
 }

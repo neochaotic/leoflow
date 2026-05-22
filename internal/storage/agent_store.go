@@ -58,6 +58,21 @@ func (s *ExecutionStore) ReportState(ctx context.Context, id auth.AgentIdentity,
 	})
 }
 
+// FailTask marks a task instance failed by its ID, but only while it is still
+// active (scheduled/queued/running), so it never clobbers a terminal state. It
+// implements executor.FailureReporter for the pod reconciler.
+func (s *ExecutionStore) FailTask(ctx context.Context, taskInstanceID, reason string) error {
+	tid, err := parseUUID(taskInstanceID)
+	if err != nil {
+		return err
+	}
+	msg := reason
+	return s.q.FailTaskInstanceIfActive(ctx, queries.FailTaskInstanceIfActiveParams{
+		ID:           tid,
+		ErrorMessage: &msg,
+	})
+}
+
 // ResolveTask returns the dispatcher's execution context for a run's task.
 func (s *ExecutionStore) ResolveTask(ctx context.Context, runID, taskID string) (dispatch.Resolved, error) {
 	task, spec, ver, err := s.resolve(ctx, runID, taskID)

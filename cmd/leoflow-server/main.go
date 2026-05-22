@@ -195,7 +195,7 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 // buildPodExecutor constructs a Kubernetes executor from the in-cluster config
 // or the local kubeconfig. It returns an error when neither is available, in
 // which case pod dispatch is disabled and only inline http_api tasks run.
-func buildPodExecutor() (executor.Executor, error) {
+func buildK8sClient() (kubernetes.Interface, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
@@ -208,7 +208,30 @@ func buildPodExecutor() (executor.Executor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building kubernetes client: %w", err)
 	}
-	return executor.NewKubernetesExecutor(cs, podNamespace), nil
+	return cs, nil
+}
+
+// reconcileInterval is how often the pod reconciler sweeps for failed pods.
+const reconcileInterval = 30 * time.Second
+
+// startReconciler runs a periodic pod reconciler that marks task instances
+// failed when their pod failed without the agent reporting (feeding retries).
+func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter executor.FailureReporter, logger *slog.Logger) {
+	rec := executor.NewReconciler(cs, podNamespace, reporter)
+	go func() {
+		t := time.NewTicker(reconcileInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := rec.Reconcile(ctx); err != nil {
+					logger.Error("pod reconcile", "error", err)
+				}
+			}
+		}
+	}()
 }
 
 func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger, metrics *observability.Metrics) error {
@@ -226,12 +249,14 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		cfg.Executor.HTTP.InlineMaxDurationSeconds,
 		cfg.Executor.HTTP.UserAgent,
 	))
-	if podExec, perr := buildPodExecutor(); perr == nil {
+	if cs, perr := buildK8sClient(); perr == nil {
 		controlAddr := cfg.Executor.AgentControlPlaneAddr
 		if controlAddr == "" {
 			controlAddr = cfg.Server.GRPCAddr
 		}
+		podExec := executor.NewKubernetesExecutor(cs, podNamespace)
 		sched.SetDispatcher(dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL))
+		startReconciler(ctx, cs, execStore, logger)
 		logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
 	} else {
 		logger.Warn("pod dispatch disabled; only inline http_api tasks will run", "error", perr)

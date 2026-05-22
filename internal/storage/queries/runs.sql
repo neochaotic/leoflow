@@ -71,3 +71,8 @@ WHERE dag_run_id = $1 AND task_id = $2;
 UPDATE task_instances
 SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
 WHERE dag_run_id = $1 AND task_id = $2;
+
+-- name: FailTaskInstanceIfActive :exec
+UPDATE task_instances
+SET state = 'failed', ended_at = now(), error_message = $2
+WHERE id = $1 AND state IN ('scheduled', 'queued', 'running');

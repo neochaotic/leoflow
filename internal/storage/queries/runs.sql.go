@@ -148,6 +148,22 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 	return i, err
 }
 
+const failTaskInstanceIfActive = `-- name: FailTaskInstanceIfActive :exec
+UPDATE task_instances
+SET state = 'failed', ended_at = now(), error_message = $2
+WHERE id = $1 AND state IN ('scheduled', 'queued', 'running')
+`
+
+type FailTaskInstanceIfActiveParams struct {
+	ID           pgtype.UUID `json:"id"`
+	ErrorMessage *string     `json:"error_message"`
+}
+
+func (q *Queries) FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInstanceIfActiveParams) error {
+	_, err := q.db.Exec(ctx, failTaskInstanceIfActive, arg.ID, arg.ErrorMessage)
+	return err
+}
+
 const getDagRun = `-- name: GetDagRun :one
 SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs WHERE dag_id = $1 AND run_id = $2
 `

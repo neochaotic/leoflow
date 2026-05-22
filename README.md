@@ -95,32 +95,58 @@ leoflow push ./dag.json        # registers with the control plane
 
 That is the entire developer surface. The CLI builds the image against an official base (`leoflow/python-runtime:3.11`), pushes to your registry, and registers a versioned DAG. The Airflow UI shows it at the next refresh.
 
-## Architecture in Thirty Seconds
+## Architecture
 
-```
-Developer / CI                  Leoflow Control Plane (Go)         Worker Pod
-─────────────                   ────────────────────────────       ─────────────
-leoflow.yaml ┐                                                     ┌─ leoflow-agent (Go, 15 MB)
-dag.py       ├─► leoflow compile ─► dag.json ─► API ─► Scheduler ─►│   ↕ gRPC
-Dockerfile?  ┘                                                     └─ Your Python code
-                                            │
-                                            ├─ JWT auth, RBAC, multi-tenant
-                                            ├─ State machine (deterministic)
-                                            ├─ Leader election (Postgres lock)
-                                            └─ Prometheus + OTel + structured logs
-                                            
-                          Postgres (metadata)    Redis (XCom, TTL)
+A DAG is compiled into an **immutable artifact** (a `dag.json` spec plus a
+container image) and pushed to the control plane. A Go **control plane**
+schedules it and, for each task, dispatches an ephemeral **worker pod** whose
+`leoflow-agent` runs the user code and reports back over gRPC. Postgres holds
+metadata; Redis holds XCom values and live-log fan-out.
+
+```mermaid
+flowchart LR
+    subgraph dev["Author / CI"]
+        src["leoflow.yaml · dag.py · Dockerfile"]
+    end
+
+    subgraph cp["Control plane — Go"]
+        direction TB
+        api["HTTP API /api/v2<br/>JWT · RBAC · multi-tenant"]
+        sched["Scheduler<br/>state machine · cron<br/>leader election · retries"]
+        asvc["Agent gRPC service<br/>task spec · state · XCom · logs"]
+        api --- sched --- asvc
+    end
+
+    src -->|"leoflow compile / push"| api
+    sched --- pg[("Postgres<br/>metadata")]
+    asvc --- redis[("Redis<br/>XCom · log tail")]
+
+    sched -->|"dispatch: one pod per task"| pod
+    subgraph k8s["Kubernetes"]
+        pod["Worker pod = your DAG image<br/>leoflow-agent ⇄ your Python / Bash"]
+    end
+    pod -->|"gRPC: register · fetch spec · push XCom · stream logs · report state"| asvc
+
+    classDef store fill:#1f2937,stroke:#4b5563,color:#e5e7eb;
+    class pg,redis store;
 ```
 
-Read [the ADRs](docs/adr/) for the full reasoning behind every decision.
+Short-lived `http_api` tasks skip the pod and run inline as goroutines in the
+control plane (capped); everything else runs pod-per-task. Read
+[the ADRs](docs/adr/) for the reasoning behind every decision.
 
 ## Status
 
 🚧 **Pre-alpha, under active development. Not production-ready.**
 
-**Implemented today (Phases 1–2):** the `leoflow` CLI (`init` / `validate` / `compile` / `push` / `auth create-token`), the Python DAG parser, and the `leoflow-server` control plane — Airflow-compatible `/api/v2` API, JWT auth + RBAC, the scheduler state machine with cron scheduling and Postgres advisory-lock leader election, embedded Scalar API docs, and Prometheus + OpenTelemetry observability. Triggering a DAG run drives its task instances through the state machine to `queued`.
+**Implemented today (Phases 1–4):**
 
-**Not yet implemented:** real task execution — the executor + gRPC agent (Phase 3), so tasks currently stop at `queued`; XCom and log retrieval (Phase 4); the Airflow UI integration (Phase 5); and the automatic container-image build behind `leoflow compile` (the image reference is recorded as-is for now).
+- **CLI + parser** — `leoflow init / validate / compile / push / runs trigger / runs status / auth create-token`; the Python DAG parser; `compile --build / --push` builds and pushes the DAG image (out-of-process).
+- **Control plane** — Airflow-compatible `/api/v2` API, JWT auth + RBAC + multi-tenant, the scheduler state machine with cron scheduling, Postgres advisory-lock leader election, **task retries**, embedded Scalar API docs, and Prometheus + OpenTelemetry observability.
+- **Execution** — real pod-per-task execution via the `leoflow-agent` over gRPC (Kubernetes, ADR 0015), plus inline `http_api` goroutines for short calls; orphaned-pod reconciliation and completed-pod garbage collection.
+- **Data flow** — XCom on Redis (256 KB limit, TTL, optional schema validation) passed between tasks; log shipping to disk with a read API and live tailing over Redis pub/sub.
+
+**Not yet implemented:** the Airflow 3.2.x UI integration (Phase 5); the Helm chart, load tests, and S3/GCS log sinks (Phase 6). Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).
 
 ## Features in the MVP
 
@@ -175,7 +201,7 @@ TOKEN=$(./bin/leoflow auth create-token --username admin@leoflow.local --passwor
 
 > **Two dev environments.** `make dev-up` runs Postgres + Redis as plain Docker containers on the host for a fast inner loop (control plane on the host). Full in-cluster execution — control plane and dependencies on a local Kubernetes cluster (k3d/kind) via the Helm chart, mirroring production and exercising real task pods — arrives with the e2e work in a later phase. Task execution is on Kubernetes only (ADR 0015); the host containers are dev dependencies, not the execution path.
 
-> The Airflow 3.2.x UI integration (pointing the UI at `/api/v2`) arrives in Phase 5; until then, use the Scalar API reference at `/docs`. Container-image build, task execution, and the Helm chart are also upcoming phases.
+> The Airflow 3.2.x UI integration (pointing the UI at `/api/v2`) arrives in Phase 5; until then, use the Scalar API reference at `/docs`. The Helm chart and load tests are the remaining Phase 6 work.
 
 ## Honest Comparison
 

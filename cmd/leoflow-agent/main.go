@@ -41,8 +41,8 @@ func run() int {
 
 	sink, err := agent.OpenLogSink(ctx, client)
 	if err != nil {
-		slog.Error("opening log stream", "error", err)
-		return 1
+		slog.Warn("log streaming unavailable; logs will not be shipped this run", "error", err)
+		sink = agent.NoopLogSink{}
 	}
 
 	hostname, herr := os.Hostname()

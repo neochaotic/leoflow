@@ -11,6 +11,8 @@ import (
 
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // fakeClient is a test double for the generated AgentServiceClient.
@@ -22,6 +24,7 @@ type fakeClient struct {
 	registered  bool
 	terminateAt agentv1.TaskState // state for which ReportState returns should_terminate
 	getSpecErr  error
+	pushErr     error
 }
 
 func (f *fakeClient) Register(context.Context, *agentv1.RegisterRequest, ...grpc.CallOption) (*agentv1.RegisterResponse, error) {
@@ -45,6 +48,9 @@ func (f *fakeClient) FetchXCom(_ context.Context, in *agentv1.FetchXComRequest, 
 
 func (f *fakeClient) PushXCom(_ context.Context, in *agentv1.PushXComRequest, _ ...grpc.CallOption) (*agentv1.PushXComResponse, error) {
 	f.pushed = append(f.pushed, in)
+	if f.pushErr != nil {
+		return nil, f.pushErr
+	}
 	return &agentv1.PushXComResponse{Accepted: true}, nil
 }
 
@@ -177,6 +183,43 @@ func TestRunnerPushesReturnValue(t *testing.T) {
 	}
 	if string(client.pushed[0].GetValue()) != `{"result":42}` {
 		t.Errorf("pushed value = %s", client.pushed[0].GetValue())
+	}
+}
+
+func TestRunnerToleratesUnimplementedPush(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "return_value.json")
+	if err := os.WriteFile(path, []byte(`{"v":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{
+		spec:    &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:f"},
+		pushErr: status.Error(codes.Unimplemented, "xcom not implemented yet"),
+	}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.ReturnPath = path
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("an Unimplemented push must not fail the task: %v", err)
+	}
+	if last := client.states[len(client.states)-1]; last != agentv1.TaskState_TASK_STATE_SUCCESS {
+		t.Errorf("final state = %v, want success", last)
+	}
+}
+
+func TestRunnerFailsOnRealPushError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "return_value.json")
+	if err := os.WriteFile(path, []byte(`{"v":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{
+		spec:    &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:f"},
+		pushErr: status.Error(codes.Internal, "boom"),
+	}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.ReturnPath = path
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Error("a non-Unimplemented push error should fail the task")
 	}
 }
 

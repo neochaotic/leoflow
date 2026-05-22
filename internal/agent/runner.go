@@ -10,6 +10,8 @@ import (
 	"sort"
 
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -24,6 +26,17 @@ type LogSink interface {
 	Send(line *agentv1.LogLine) error
 	Close() error
 }
+
+// NoopLogSink discards log lines. The agent falls back to it when the control
+// plane log stream is unavailable (e.g. StreamLogs not yet implemented), so a
+// task still runs even though its logs are not shipped this run.
+type NoopLogSink struct{}
+
+// Send discards the line.
+func (NoopLogSink) Send(*agentv1.LogLine) error { return nil }
+
+// Close is a no-op.
+func (NoopLogSink) Close() error { return nil }
 
 // Runner orchestrates a single task execution inside the worker container: it
 // registers with the control plane, fetches the task spec and XCom inputs, runs
@@ -140,6 +153,12 @@ func (r *Runner) pushReturnValue(ctx context.Context) error {
 		Value:       value,
 		ContentType: "application/json",
 	})
+	if status.Code(err) == codes.Unimplemented {
+		// XCom persistence lands in Phase 4; until then a return value is not
+		// stored, but that must not fail an otherwise-successful task.
+		slog.Warn("control plane does not implement XCom yet; dropping return value")
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("pushing return value: %w", err)
 	}

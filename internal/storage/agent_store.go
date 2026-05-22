@@ -40,6 +40,7 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		DagVersion:       spec.DagVersion,
 		Environment:      task.Env,
 		XComInputMapping: task.XComInput,
+		XComSchema:       task.XComSchema,
 		TimeoutSeconds:   timeout,
 	}, nil
 }

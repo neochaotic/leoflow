@@ -30,6 +30,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/observability"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
+	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
 
@@ -83,12 +84,13 @@ func run() error {
 	repo := storage.NewRepository(pg)
 	authn := auth.NewJWTAuthenticator(repo, cfg.Auth.JWT.Secret, time.Duration(cfg.Auth.JWT.TokenTTLSeconds)*time.Second)
 	execStore := storage.NewExecutionStore(pg)
+	xcomSvc := xcom.NewService(xcom.NewRedisBackend(rd.Client), storage.NewXComIndex(pg), xcom.DefaultTTL)
 
 	if err := bootstrapAdmin(ctx, repo, tel.Logger); err != nil {
 		return err
 	}
 
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, tel.Logger)
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, xcomSvc, tel.Logger)
 	if gerr != nil {
 		return gerr
 	}
@@ -175,14 +177,14 @@ func (s inlineStateSink) Transition(ctx context.Context, runID, taskID string, s
 // startAgentGRPC starts the AgentService gRPC server (insecure transport; the
 // per-task bearer token in metadata authenticates each call) and returns it for
 // graceful shutdown.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, logger *slog.Logger) (*grpc.Server, error) {
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, xcomSvc agentrpc.XComService, logger *slog.Logger) (*grpc.Server, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listening for agent grpc on %s: %w", addr, err)
 	}
 	srv := grpc.NewServer()
-	agentv1.RegisterAgentServiceServer(srv, agentrpc.NewServer(authn, store))
+	agentv1.RegisterAgentServiceServer(srv, agentrpc.NewServer(authn, store, xcomSvc))
 	go func() {
 		if serr := srv.Serve(lis); serr != nil && !errors.Is(serr, grpc.ErrServerStopped) {
 			logger.Error("agent grpc server", "error", serr)

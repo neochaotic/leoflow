@@ -5,11 +5,13 @@ package agentrpc
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -24,6 +26,7 @@ type TaskSpec struct {
 	DagVersion       string
 	Environment      map[string]string
 	XComInputMapping map[string]string
+	XComSchema       map[string]any
 	TimeoutSeconds   int
 }
 
@@ -40,17 +43,25 @@ type Store interface {
 	ReportState(ctx context.Context, id auth.AgentIdentity, state domain.TaskState, exitCode int, errMsg string) error
 }
 
+// XComService stores and retrieves XCom values for the agent.
+type XComService interface {
+	Push(ctx context.Context, key xcom.Key, value []byte, contentType string, schema map[string]any) error
+	Fetch(ctx context.Context, key xcom.Key) (xcom.Entry, error)
+}
+
 // Server implements agentv1.AgentServiceServer over a Store and Authenticator.
 type Server struct {
 	agentv1.UnimplementedAgentServiceServer
 	auth  Authenticator
 	store Store
+	xcom  XComService
 	now   func() time.Time
 }
 
-// NewServer builds an AgentService server backed by the given authenticator and store.
-func NewServer(authn Authenticator, store Store) *Server {
-	return &Server{auth: authn, store: store, now: time.Now}
+// NewServer builds an AgentService server backed by the given authenticator,
+// store, and XCom service.
+func NewServer(authn Authenticator, store Store, xcomSvc XComService) *Server {
+	return &Server{auth: authn, store: store, xcom: xcomSvc, now: time.Now}
 }
 
 // Register acknowledges an agent's startup and returns the server clock.
@@ -112,6 +123,79 @@ func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*a
 		return nil, err
 	}
 	return &agentv1.HeartbeatResponse{ServerTime: timestamppb.New(s.now())}, nil
+}
+
+// PushXCom stores a value the task produced, keyed by the caller's identity.
+// Size/schema violations are returned as a rejection, not a transport error, so
+// the agent can fail the task with a clear reason.
+func (s *Server) PushXCom(ctx context.Context, req *agentv1.PushXComRequest) (*agentv1.PushXComResponse, error) {
+	id, err := s.identify(ctx)
+	if err != nil {
+		return nil, err
+	}
+	spec, err := s.store.TaskSpec(ctx, *id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
+	}
+	key := xcomKey(*id, id.TaskID, req.GetKey())
+	perr := s.xcom.Push(ctx, key, req.GetValue(), req.GetContentType(), spec.XComSchema)
+	switch {
+	case errors.Is(perr, xcom.ErrTooLarge):
+		return &agentv1.PushXComResponse{Accepted: false, RejectionReason: "payload_too_large"}, nil
+	case errors.Is(perr, xcom.ErrSchemaMismatch):
+		return &agentv1.PushXComResponse{Accepted: false, RejectionReason: "schema_mismatch"}, nil
+	case perr != nil:
+		return nil, status.Errorf(codes.Internal, "storing xcom: %v", perr)
+	}
+	return &agentv1.PushXComResponse{Accepted: true}, nil
+}
+
+// FetchXCom returns an upstream task's value, but only from a task the caller
+// declared as an XCom input within the same run (and, by construction, the same
+// tenant), enforcing cross-tenant and cross-run isolation.
+func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (*agentv1.FetchXComResponse, error) {
+	id, err := s.identify(ctx)
+	if err != nil {
+		return nil, err
+	}
+	spec, err := s.store.TaskSpec(ctx, *id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
+	}
+	if !declaresUpstream(spec.XComInputMapping, req.GetUpstreamTaskId()) {
+		return nil, status.Errorf(codes.PermissionDenied, "task %q did not declare %q as an xcom input", id.TaskID, req.GetUpstreamTaskId())
+	}
+	entry, err := s.xcom.Fetch(ctx, xcomKey(*id, req.GetUpstreamTaskId(), req.GetKey()))
+	if errors.Is(err, xcom.ErrNotFound) {
+		return nil, status.Errorf(codes.NotFound, "no xcom for task %q", req.GetUpstreamTaskId())
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "reading xcom: %v", err)
+	}
+	return &agentv1.FetchXComResponse{
+		Value:       entry.Value,
+		ContentType: entry.ContentType,
+		SizeBytes:   clampInt32(entry.SizeBytes),
+		CreatedAt:   timestamppb.New(entry.CreatedAt),
+	}, nil
+}
+
+// xcomKey builds the XCom key for a task within the caller's tenant/dag/run.
+func xcomKey(id auth.AgentIdentity, taskID, name string) xcom.Key {
+	if name == "" {
+		name = "return_value"
+	}
+	return xcom.Key{TenantID: id.TenantID, DagID: id.DagID, RunID: id.RunID, TaskID: taskID, Name: name}
+}
+
+// declaresUpstream reports whether the task declared upstreamTaskID as an input.
+func declaresUpstream(mapping map[string]string, upstreamTaskID string) bool {
+	for _, declared := range mapping {
+		if declared == upstreamTaskID {
+			return true
+		}
+	}
+	return false
 }
 
 // identify extracts and verifies the agent token from the request metadata.

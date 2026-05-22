@@ -125,6 +125,51 @@ func TestCompileProducesValidDAGJSON(t *testing.T) {
 	}
 }
 
+func TestCompileBuildsImageWhenRequested(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "proj")
+	if _, _, err := run(t, "init", dir); err != nil {
+		t.Fatal(err)
+	}
+	parser := filepath.Join(t.TempDir(), "fake-parser.sh")
+	pscript := "#!/usr/bin/env bash\n" +
+		"out=\"\"\n" +
+		"while [ $# -gt 0 ]; do case \"$1\" in --output) out=\"$2\"; shift 2;; *) shift;; esac; done\n" +
+		"cat > \"$out\" <<'JSON'\n" +
+		"{\"schema_version\":\"1.0\",\"dag_id\":\"proj\",\"dag_version\":\"dev\",\"image\":\"test:v1\",\"tasks\":[{\"task_id\":\"hello\",\"type\":\"python\",\"entrypoint\":\"dag:hello\"}]}\n" +
+		"JSON\n"
+	if err := os.WriteFile(parser, []byte(pscript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Fake builder records its argv so we can assert the docker build invocation.
+	marker := filepath.Join(t.TempDir(), "built.txt")
+	builder := filepath.Join(t.TempDir(), "fake-docker.sh")
+	if err := os.WriteFile(builder, []byte("#!/usr/bin/env bash\necho \"$@\" > "+marker+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "dag.json")
+	if _, _, err := run(t, "compile", dir, "--output", out, "--image", "test:v1",
+		"--parser-cmd", parser, "--build", "--builder", builder); err != nil {
+		t.Fatalf("compile --build: %v", err)
+	}
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("builder was not invoked: %v", err)
+	}
+	if !strings.Contains(string(got), "build") || !strings.Contains(string(got), "-t test:v1") {
+		t.Errorf("builder argv = %q, want a 'build -t test:v1' invocation", got)
+	}
+}
+
+func TestCompileBuildRequiresImage(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "proj")
+	if _, _, err := run(t, "init", dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "compile", dir, "--build", "--parser-cmd", "true"); err == nil {
+		t.Error("--build without --image should error")
+	}
+}
+
 func TestServerCommandPointsToBinary(t *testing.T) {
 	out, _, err := run(t, "server")
 	if err != nil {

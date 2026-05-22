@@ -12,8 +12,10 @@ MIGRATE_VERSION       ?= latest
 SQLC_VERSION          ?= latest
 
 # ─── Paths ───
-BIN_DIR    := bin
-CLI_BINARY := $(BIN_DIR)/leoflow
+BIN_DIR       := bin
+CLI_BINARY    := $(BIN_DIR)/leoflow
+SERVER_BINARY := $(BIN_DIR)/leoflow-server
+AGENT_BINARY  := $(BIN_DIR)/leoflow-agent
 
 # ─── Build metadata (embedded via internal/version) ───
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -46,9 +48,11 @@ setup: ## Install Go tools, Python parser, and the pre-commit hook
 	@echo "setup complete"
 
 .PHONY: build
-build: ## Build the leoflow CLI into ./bin
+build: ## Build all binaries into ./bin
 	mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLI_BINARY) ./cmd/leoflow
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SERVER_BINARY) ./cmd/leoflow-server
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(AGENT_BINARY) ./cmd/leoflow-agent
 
 .PHONY: test
 test: ## Run Go and Python tests with coverage

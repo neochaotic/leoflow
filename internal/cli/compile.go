@@ -25,6 +25,7 @@ type compileOptions struct {
 	builder    string
 	dockerfile string
 	build      bool
+	push       bool
 }
 
 func newCompileCommand() *cobra.Command {
@@ -46,6 +47,7 @@ func newCompileCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.parserCmd, "parser-cmd", "", "override the parser command (default from config)")
 	cmd.Flags().StringVar(&o.dagVersion, "dag-version", "", "DAG version label (default: git describe, else dev)")
 	cmd.Flags().BoolVar(&o.build, "build", false, "build the DAG container image (requires --image)")
+	cmd.Flags().BoolVar(&o.push, "push", false, "push the built image to its registry (requires --build)")
 	cmd.Flags().StringVar(&o.builder, "builder", "docker", "image build tool to shell out to (e.g. docker, podman, nerdctl)")
 	cmd.Flags().StringVar(&o.dockerfile, "dockerfile", "Dockerfile", "Dockerfile path relative to the DAG directory")
 	return cmd
@@ -68,7 +70,7 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if o.dagVersion == "" {
 		o.dagVersion = gitVersion(cmdContext(cmd))
 	}
-	if ierr := checkImageFlags(cmd, o.build, o.image); ierr != nil {
+	if ierr := checkImageFlags(cmd, o.build, o.push, o.image); ierr != nil {
 		return ierr
 	}
 	if rerr := runParser(cmd, command, parserArgs{
@@ -88,13 +90,21 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 			return berr
 		}
 	}
+	if o.push {
+		if perr := pushImage(cmd, o.builder, o.image); perr != nil {
+			return perr
+		}
+	}
 	_, werr := fmt.Fprintf(cmd.OutOrStdout(), "Compiled %s -> %s (image %s, version %s)\n", dagSourcePath(dir, cfg), o.output, o.image, o.dagVersion)
 	return werr
 }
 
 // checkImageFlags enforces the --build/--image relationship and notes when an
 // image is recorded without being built.
-func checkImageFlags(cmd *cobra.Command, build bool, image string) error {
+func checkImageFlags(cmd *cobra.Command, build, push bool, image string) error {
+	if push && !build {
+		return errors.New("--push requires --build")
+	}
 	if build && image == "" {
 		return errors.New("--build requires --image")
 	}
@@ -115,6 +125,19 @@ func buildImage(cmd *cobra.Command, builder, image, dockerfile, contextDir strin
 	bc.Stderr = cmd.ErrOrStderr()
 	if err := bc.Run(); err != nil {
 		return fmt.Errorf("building image %q with %q: %w", image, builder, err)
+	}
+	return nil
+}
+
+// pushImage shells out to the configured builder to push the image to its
+// registry (out-of-process; ADR 0015).
+func pushImage(cmd *cobra.Command, builder, image string) error {
+	//nolint:gosec // G204: builder is operator-configured by design (ADR 0015).
+	pc := exec.CommandContext(cmdContext(cmd), builder, "push", image)
+	pc.Stdout = cmd.OutOrStdout()
+	pc.Stderr = cmd.ErrOrStderr()
+	if err := pc.Run(); err != nil {
+		return fmt.Errorf("pushing image %q with %q: %w", image, builder, err)
 	}
 	return nil
 }

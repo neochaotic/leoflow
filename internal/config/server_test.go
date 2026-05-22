@@ -12,18 +12,18 @@ func TestLoadServerAppliesDefaults(t *testing.T) {
 		t.Fatalf("LoadServer() error = %v", err)
 	}
 	checks := map[string]struct{ got, want any }{
-		"http_addr":        {c.Server.HTTPAddr, "0.0.0.0:8080"},
-		"metrics_addr":     {c.Server.MetricsAddr, "0.0.0.0:9090"},
-		"database.url":     {c.Database.URL, "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable"},
-		"max_open_conns":   {c.Database.MaxOpenConns, 25},
-		"redis.url":        {c.Redis.URL, "redis://localhost:6379/0"},
-		"auth.provider":    {c.Auth.Provider, "jwt"},
-		"token_ttl":        {c.Auth.JWT.TokenTTLSeconds, 3600},
-		"loop_interval_ms": {c.Scheduler.LoopIntervalMS, 1000},
+		"http_addr":         {c.Server.HTTPAddr, "0.0.0.0:8080"},
+		"metrics_addr":      {c.Server.MetricsAddr, "0.0.0.0:9090"},
+		"database.url":      {c.Database.URL, "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable"},
+		"max_open_conns":    {c.Database.MaxOpenConns, 25},
+		"redis.url":         {c.Redis.URL, "redis://localhost:6379/0"},
+		"auth.provider":     {c.Auth.Provider, "jwt"},
+		"token_ttl":         {c.Auth.JWT.TokenTTLSeconds, 3600},
+		"loop_interval_ms":  {c.Scheduler.LoopIntervalMS, 1000},
 		"scheduler.enabled": {c.Scheduler.Enabled, true},
-		"otel.enabled":     {c.Observability.OTel.Enabled, true},
-		"log_level":        {c.Observability.LogLevel, "info"},
-		"log_format":       {c.Observability.LogFormat, "json"},
+		"otel.enabled":      {c.Observability.OTel.Enabled, true},
+		"log_level":         {c.Observability.LogLevel, "info"},
+		"log_format":        {c.Observability.LogFormat, "json"},
 	}
 	for name, c := range checks {
 		if c.got != c.want {

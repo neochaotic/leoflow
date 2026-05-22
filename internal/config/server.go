@@ -1,6 +1,13 @@
 package config
 
-import "github.com/spf13/pflag"
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+)
 
 // ServerConfig is the full configuration for the leoflow-server control plane.
 // It mirrors the nested YAML described in the Phase 2 prompt.
@@ -68,13 +75,61 @@ type OTelSection struct {
 	Endpoint string `mapstructure:"endpoint"`
 }
 
+// serverDefaults lists every leaf key with its default so that AutomaticEnv and
+// Unmarshal resolve nested keys correctly.
+var serverDefaults = map[string]any{
+	"server.http_addr":            "0.0.0.0:8080",
+	"server.metrics_addr":         "0.0.0.0:9090",
+	"server.cors.allowed_origins": []string{"http://localhost:8080"},
+	"database.url":                "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
+	"database.max_open_conns":     25,
+	"database.max_idle_conns":     5,
+	"redis.url":                   "redis://localhost:6379/0",
+	"auth.provider":               "jwt",
+	"auth.jwt.secret":             "",
+	"auth.jwt.token_ttl_seconds":  3600,
+	"scheduler.loop_interval_ms":  1000,
+	"scheduler.enabled":           true,
+	"observability.otel.enabled":  true,
+	"observability.otel.endpoint": "localhost:4317",
+	"observability.log_level":     "info",
+	"observability.log_format":    "json",
+}
+
 // LoadServer assembles the server configuration from defaults, the given file,
 // LEOFLOW_* environment variables, and flags, in increasing precedence.
-func LoadServer(_ string, _ *pflag.FlagSet) (*ServerConfig, error) {
-	return &ServerConfig{}, nil
+func LoadServer(configFile string, flags *pflag.FlagSet) (*ServerConfig, error) {
+	v := viper.New()
+	for key, val := range serverDefaults {
+		v.SetDefault(key, val)
+	}
+	v.SetEnvPrefix("LEOFLOW")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	v.AutomaticEnv()
+
+	if configFile != "" {
+		v.SetConfigFile(configFile)
+		if err := v.ReadInConfig(); err != nil {
+			return nil, fmt.Errorf("reading config file %q: %w", configFile, err)
+		}
+	}
+	if flags != nil {
+		if err := v.BindPFlags(flags); err != nil {
+			return nil, fmt.Errorf("binding flags: %w", err)
+		}
+	}
+
+	var c ServerConfig
+	if err := v.Unmarshal(&c); err != nil {
+		return nil, fmt.Errorf("unmarshaling server config: %w", err)
+	}
+	return &c, nil
 }
 
 // Validate reports configuration errors that must abort startup.
 func (c *ServerConfig) Validate() error {
+	if c.Auth.Provider == "jwt" && c.Auth.JWT.Secret == "" {
+		return errors.New("auth.jwt.secret is required (set LEOFLOW_AUTH_JWT_SECRET)")
+	}
 	return nil
 }

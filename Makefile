@@ -11,6 +11,10 @@ GOVULNCHECK_VERSION   ?= latest
 MIGRATE_VERSION       ?= latest
 SQLC_VERSION          ?= latest
 
+# ─── Pinned Airflow UI (see ADR 0017 / docs/ui-compatibility.md) ───
+AIRFLOW_UI_VERSION ?= 3.2.1
+UI_ASSETS_DIR      := internal/ui/assets
+
 # ─── Paths ───
 BIN_DIR       := bin
 CLI_BINARY    := $(BIN_DIR)/leoflow
@@ -53,6 +57,23 @@ build: ## Build all binaries into ./bin
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLI_BINARY) ./cmd/leoflow
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SERVER_BINARY) ./cmd/leoflow-server
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(AGENT_BINARY) ./cmd/leoflow-agent
+
+.PHONY: fetch-airflow-ui
+fetch-airflow-ui: ## Extract the pinned Airflow UI SPA into internal/ui/assets (needs docker)
+	@command -v docker >/dev/null || { echo "docker is required"; exit 1; }
+	@echo "fetching Airflow $(AIRFLOW_UI_VERSION) UI bundle..."
+	docker pull apache/airflow:$(AIRFLOW_UI_VERSION)
+	@cid=$$(docker create apache/airflow:$(AIRFLOW_UI_VERSION)) ; \
+	dist=$$(docker run --rm --entrypoint sh apache/airflow:$(AIRFLOW_UI_VERSION) -c \
+		'find / -type d -path "*/airflow/ui/dist" 2>/dev/null | head -1') ; \
+	if [ -z "$$dist" ]; then echo "could not locate airflow/ui/dist in image"; docker rm $$cid >/dev/null; exit 1; fi ; \
+	echo "found dist at $$dist" ; \
+	rm -rf $(UI_ASSETS_DIR) && mkdir -p $(UI_ASSETS_DIR) ; \
+	docker cp "$$cid":"$$dist/." $(UI_ASSETS_DIR)/ ; \
+	docker rm $$cid >/dev/null ; \
+	echo "$(AIRFLOW_UI_VERSION)" > $(UI_ASSETS_DIR)/VERSION ; \
+	echo "extracted $$(find $(UI_ASSETS_DIR) -type f | wc -l | tr -d ' ') files to $(UI_ASSETS_DIR) (VERSION=$(AIRFLOW_UI_VERSION))"
+	@echo "NOTE: the bundle is unverified until walked in a real browser (see docs/ui-compatibility.md)."
 
 .PHONY: runtime-images
 runtime-images: ## Build the task base images for each supported Python version

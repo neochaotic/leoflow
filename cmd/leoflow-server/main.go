@@ -31,6 +31,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/observability"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
+	"github.com/neochaotic/leoflow/internal/ui"
 	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
@@ -127,6 +128,7 @@ func run() error {
 		Versions:                     repo,
 		Xcoms:                        xcomReader,
 		Logs:                         storage.NewLogReader(pg, logSink, logTailer),
+		UI:                           ui.New(),
 	})
 
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

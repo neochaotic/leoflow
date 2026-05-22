@@ -2,6 +2,7 @@ package api
 
 import (
 	"log/slog"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -10,6 +11,15 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/auth"
 )
+
+// UIServer serves the embedded single-page app: static assets and an
+// index.html shell that the SPA's client-side router falls back to. It is
+// satisfied by internal/ui.Server. When nil, the server runs API-only and
+// unknown paths return 404 instead of the SPA shell.
+type UIServer interface {
+	StaticHandler() http.Handler
+	Index(w http.ResponseWriter, basePath string)
+}
 
 // Dependencies bundles everything the HTTP server needs.
 type Dependencies struct {
@@ -34,6 +44,9 @@ type Dependencies struct {
 	Versions DagVersionRepository
 	Xcoms    XComReader
 	Logs     LogReader
+
+	// UI serves the embedded SPA. When nil the server is API-only.
+	UI UIServer
 }
 
 // NewServer builds the gin engine with the full middleware chain, health and
@@ -59,7 +72,12 @@ func NewServer(deps Dependencies) *gin.Engine {
 
 	registerResources(r, deps)
 	registerUI(r, deps.TokenTTLSecs)
-	r.NoRoute(uiNoRoute())
+	if deps.UI != nil {
+		static := gin.WrapH(http.StripPrefix("/static", deps.UI.StaticHandler()))
+		r.GET("/static/*filepath", static)
+		r.HEAD("/static/*filepath", static)
+	}
+	r.NoRoute(uiNoRoute(deps.UI))
 
 	return r
 }

@@ -119,20 +119,31 @@ func uiMenusHandler() gin.HandlerFunc {
 	}
 }
 
-// uiNoRoute is the engine's NoRoute handler. For an unimplemented /ui path it
-// degrades gracefully — an empty body for reads, a 501 hint for writes — so the
-// UI shows an empty state or a toast instead of breaking. Other paths 404.
-func uiNoRoute() gin.HandlerFunc {
+// uiNoRoute is the engine's NoRoute handler, mirroring Airflow's catch-all. An
+// unimplemented /ui path degrades gracefully (empty body for reads, 501 hint for
+// writes). An unmatched /api path is a 404. Any other GET falls back to the SPA
+// shell so the React router can handle client-side routes; without a UI server,
+// or for non-GET, it is a 404.
+func uiNoRoute(uiSrv UIServer) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !strings.HasPrefix(c.Request.URL.Path, "/ui/") {
-			AbortProblem(c, http.StatusNotFound, "not found", "no such resource")
+		path := c.Request.URL.Path
+		switch {
+		case strings.HasPrefix(path, "/ui/"):
+			if c.Request.Method == http.MethodGet {
+				c.JSON(http.StatusOK, gin.H{})
+				return
+			}
+			AbortProblem(c, http.StatusNotImplemented, "not implemented",
+				"this action is not available in Leoflow yet")
+			return
+		case strings.HasPrefix(path, "/api/"):
+			AbortProblem(c, http.StatusNotFound, "not found", "API route not found")
 			return
 		}
-		if c.Request.Method == http.MethodGet {
-			c.JSON(http.StatusOK, gin.H{})
+		if uiSrv != nil && c.Request.Method == http.MethodGet {
+			uiSrv.Index(c.Writer, "/")
 			return
 		}
-		AbortProblem(c, http.StatusNotImplemented, "not implemented",
-			"this action is not available in Leoflow yet")
+		AbortProblem(c, http.StatusNotFound, "not found", "no such resource")
 	}
 }

@@ -3,12 +3,14 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/neochaotic/leoflow/internal/auth"
+	"github.com/neochaotic/leoflow/internal/ui"
 )
 
 func uiServer() *gin.Engine {
@@ -17,6 +19,7 @@ func uiServer() *gin.Engine {
 		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", Email: "admin@leoflow.local", TenantID: "default", Roles: []string{"admin"}}},
 		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
 		CORSOrigins:   []string{"*"},
+		UI:            ui.New(),
 	})
 }
 
@@ -130,8 +133,36 @@ func TestUINoRouteDegradesGracefully(t *testing.T) {
 	if rec := authGet(srv, http.MethodPost, "/ui/backfills", "{}"); rec.Code != http.StatusNotImplemented {
 		t.Errorf("unimplemented /ui write = %d, want 501", rec.Code)
 	}
-	// Non-/ui unknown path -> 404.
-	if rec := authGet(srv, http.MethodGet, "/nope", ""); rec.Code != http.StatusNotFound {
-		t.Errorf("unknown path = %d, want 404", rec.Code)
+	// Unmatched /api path -> 404 (never the SPA shell).
+	if rec := authGet(srv, http.MethodGet, "/api/v2/bogus", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("unmatched /api GET = %d, want 404", rec.Code)
+	}
+	// Non-/ui, non-/api GET -> SPA shell (client-side route), Airflow-style.
+	rec := authGet(srv, http.MethodGet, "/dags/etl/grid", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<div id=\"root\"") {
+		t.Errorf("client-side route = %d, want 200 SPA shell, got %q", rec.Code, rec.Body.String())
+	}
+	// Non-GET unknown -> 404.
+	if rec := authGet(srv, http.MethodDelete, "/whatever", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("non-GET unknown = %d, want 404", rec.Code)
+	}
+}
+
+func TestUIServesStaticAndIndexShell(t *testing.T) {
+	srv := uiServer()
+	// Root serves the SPA shell with the templated base href.
+	rec := authGet(srv, http.MethodGet, "/", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<base href=\"/\"") {
+		t.Errorf("root shell = %d, body=%q", rec.Code, rec.Body.String())
+	}
+	// The embedded bundle (placeholder or fetched) serves files under /static.
+	// (index.html itself is 301-canonicalized to ./ by http.FileServer, so we
+	// probe the VERSION marker, which every bundle carries.)
+	rec = authGet(srv, http.MethodGet, "/static/VERSION", "")
+	if rec.Code != http.StatusOK {
+		t.Errorf("/static/VERSION = %d, want 200", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc == "" {
+		t.Errorf("/static response missing Cache-Control")
 	}
 }

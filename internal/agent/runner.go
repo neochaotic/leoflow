@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"time"
 
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc/codes"
@@ -50,6 +51,9 @@ type Runner struct {
 	Version    string
 	Env        []string // base process environment (typically os.Environ())
 	ReturnPath string   // file the task writes its return value to; empty disables push
+	// HeartbeatInterval is how often to ping the control plane while the task
+	// runs; zero disables heartbeats.
+	HeartbeatInterval time.Duration
 }
 
 // Run executes the task lifecycle and returns an error if the task failed.
@@ -107,7 +111,13 @@ func (r *Runner) execute(ctx context.Context, argv, env []string) error {
 	stdout := &logWriter{sink: r.Sink, stream: "stdout", level: agentv1.LogLevel_LOG_LEVEL_INFO}
 	stderr := &logWriter{sink: r.Sink, stream: "stderr", level: agentv1.LogLevel_LOG_LEVEL_ERROR}
 
-	exitCode, runErr := r.Cmd.Run(ctx, argv, env, stdout, stderr)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if r.HeartbeatInterval > 0 {
+		go r.heartbeat(runCtx, cancel)
+	}
+
+	exitCode, runErr := r.Cmd.Run(runCtx, argv, env, stdout, stderr)
 	stdout.flush()
 	stderr.flush()
 	if cerr := r.Sink.Close(); cerr != nil {
@@ -166,6 +176,30 @@ func (r *Runner) pushReturnValue(ctx context.Context) error {
 		return fmt.Errorf("control plane rejected return value: %s", resp.GetRejectionReason())
 	}
 	return nil
+}
+
+// heartbeat pings the control plane on an interval while the task runs and
+// cancels it when the control plane signals termination.
+func (r *Runner) heartbeat(ctx context.Context, cancel context.CancelFunc) {
+	ticker := time.NewTicker(r.HeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			resp, err := r.Client.Heartbeat(ctx, &agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
+			if err != nil {
+				slog.Warn("heartbeat failed", "error", err)
+				continue
+			}
+			if resp.GetShouldTerminate() {
+				slog.Warn("control plane requested task termination")
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode int32, msg string) error {

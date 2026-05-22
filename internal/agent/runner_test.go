@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc"
@@ -17,14 +18,15 @@ import (
 
 // fakeClient is a test double for the generated AgentServiceClient.
 type fakeClient struct {
-	spec        *agentv1.TaskSpec
-	xcom        map[string]*agentv1.FetchXComResponse
-	states      []agentv1.TaskState
-	pushed      []*agentv1.PushXComRequest
-	registered  bool
-	terminateAt agentv1.TaskState // state for which ReportState returns should_terminate
-	getSpecErr  error
-	pushErr     error
+	spec               *agentv1.TaskSpec
+	xcom               map[string]*agentv1.FetchXComResponse
+	states             []agentv1.TaskState
+	pushed             []*agentv1.PushXComRequest
+	registered         bool
+	terminateAt        agentv1.TaskState // state for which ReportState returns should_terminate
+	getSpecErr         error
+	pushErr            error
+	heartbeatTerminate bool
 }
 
 func (f *fakeClient) Register(context.Context, *agentv1.RegisterRequest, ...grpc.CallOption) (*agentv1.RegisterResponse, error) {
@@ -64,7 +66,7 @@ func (f *fakeClient) ReportState(_ context.Context, in *agentv1.ReportStateReque
 }
 
 func (f *fakeClient) Heartbeat(context.Context, *agentv1.HeartbeatRequest, ...grpc.CallOption) (*agentv1.HeartbeatResponse, error) {
-	return &agentv1.HeartbeatResponse{}, nil
+	return &agentv1.HeartbeatResponse{ShouldTerminate: f.heartbeatTerminate}, nil
 }
 
 // recordingSink captures log lines instead of streaming them.
@@ -81,17 +83,22 @@ func (s *recordingSink) Close() error { s.closed = true; return nil }
 
 // fakeCmd is a CommandRunner double that records its inputs and emits output.
 type fakeCmd struct {
-	argv     []string
-	env      []string
-	stdout   string
-	exitCode int
-	err      error
+	argv             []string
+	env              []string
+	stdout           string
+	exitCode         int
+	err              error
+	blockUntilCancel bool
 }
 
-func (c *fakeCmd) Run(_ context.Context, argv, env []string, stdout, _ io.Writer) (int, error) {
+func (c *fakeCmd) Run(ctx context.Context, argv, env []string, stdout, _ io.Writer) (int, error) {
 	c.argv, c.env = argv, env
 	if c.stdout != "" {
 		_, _ = io.WriteString(stdout, c.stdout)
+	}
+	if c.blockUntilCancel {
+		<-ctx.Done()
+		return 137, ctx.Err()
 	}
 	return c.exitCode, c.err
 }
@@ -220,6 +227,23 @@ func TestRunnerFailsOnRealPushError(t *testing.T) {
 
 	if err := r.Run(context.Background()); err == nil {
 		t.Error("a non-Unimplemented push error should fail the task")
+	}
+}
+
+func TestRunnerHeartbeatCancelsOnTerminate(t *testing.T) {
+	client := &fakeClient{
+		spec:               &agentv1.TaskSpec{Operator: "bash", Entrypoint: "sleep 1000"},
+		heartbeatTerminate: true,
+	}
+	cmd := &fakeCmd{blockUntilCancel: true}
+	r := newRunner(client, cmd, &recordingSink{})
+	r.HeartbeatInterval = 5 * time.Millisecond
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a terminated task should fail")
+	}
+	if last := client.states[len(client.states)-1]; last != agentv1.TaskState_TASK_STATE_FAILED {
+		t.Errorf("final state = %v, want failed after termination", last)
 	}
 }
 

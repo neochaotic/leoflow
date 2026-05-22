@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/neochaotic/leoflow/internal/agent"
 )
@@ -51,13 +52,14 @@ func run() int {
 	}
 
 	runner := &agent.Runner{
-		Client:     client,
-		Cmd:        agent.NewExecRunner(),
-		Sink:       sink,
-		Hostname:   hostname,
-		Version:    version,
-		Env:        os.Environ(),
-		ReturnPath: agent.ReturnValuePath,
+		Client:            client,
+		Cmd:               agent.NewExecRunner(),
+		Sink:              sink,
+		Hostname:          hostname,
+		Version:           version,
+		Env:               os.Environ(),
+		ReturnPath:        agent.ReturnValuePath,
+		HeartbeatInterval: 15 * time.Second,
 	}
 	if rerr := runner.Run(ctx); rerr != nil {
 		slog.Error("task failed", "error", rerr)

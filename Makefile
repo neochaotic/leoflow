@@ -60,6 +60,10 @@ runtime-images: ## Build the task base images for each supported Python version
 		docker build -f runtime/Dockerfile --build-arg PYTHON_VERSION=$$v -t leoflow-base:py$$v . ; \
 	done
 
+.PHONY: e2e
+e2e: ## Run the k3d end-to-end smoke test (needs k3d, kubectl, docker, jq; run make dev-up + make build first)
+	bash test/e2e/e2e.sh
+
 .PHONY: test
 test: ## Run Go and Python tests with coverage
 	go test -race -coverprofile=coverage.out -covermode=atomic ./...

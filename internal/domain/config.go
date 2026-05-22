@@ -54,4 +54,10 @@ type DefaultResources struct {
 
 // Validate checks the LeoflowConfig against the canonical leoflow.yaml schema
 // and returns a joined error describing every violation, or nil when valid.
-func (c *LeoflowConfig) Validate() error { return nil }
+func (c *LeoflowConfig) Validate() error {
+	s, err := schemas()
+	if err != nil {
+		return err
+	}
+	return validateAgainst(s.leoflow, c)
+}

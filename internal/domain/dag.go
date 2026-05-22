@@ -118,4 +118,10 @@ type Execution struct {
 
 // Validate checks the DAGSpec against the canonical dag.json schema and
 // returns a joined error describing every schema violation, or nil when valid.
-func (d *DAGSpec) Validate() error { return nil }
+func (d *DAGSpec) Validate() error {
+	s, err := schemas()
+	if err != nil {
+		return err
+	}
+	return validateAgainst(s.dag, d)
+}

@@ -77,7 +77,7 @@ func run() error {
 		return err
 	}
 	if cfg.Scheduler.Enabled {
-		startScheduler(ctx, cfg, pg, tel.Logger)
+		startScheduler(ctx, cfg, pg, tel.Logger, tel.Metrics)
 	}
 
 	handler := api.NewServer(api.Dependencies{
@@ -85,6 +85,8 @@ func run() error {
 		Authenticator: authn,
 		RateLimiter:   auth.NewRateLimiter(5, time.Minute),
 		Registry:      tel.Registry,
+		Metrics:       tel.Metrics,
+		Tracer:        tel.Tracer,
 		HealthChecks:  map[string]api.HealthChecker{"postgres": pg, "redis": rd},
 		CORSOrigins:   cfg.Server.CORS.AllowedOrigins,
 		TokenTTLSecs:  cfg.Auth.JWT.TokenTTLSeconds,
@@ -134,9 +136,10 @@ func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.
 	return nil
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger) {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger, recorder scheduler.Recorder) {
 	sched := scheduler.NewScheduler(storage.NewSchedulerStore(pg), logger,
 		time.Duration(cfg.Scheduler.LoopIntervalMS)*time.Millisecond)
+	sched.SetRecorder(recorder)
 	go func() {
 		if err := sched.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Error("scheduler stopped", "error", err)

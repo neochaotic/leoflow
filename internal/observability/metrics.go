@@ -1,6 +1,9 @@
 package observability
 
 import (
+	"strconv"
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -113,4 +116,20 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "leoflow_kubernetes_api_calls_total", Help: "Kubernetes API calls.",
 		}, []string{"operation", "result"}),
 	}
+}
+
+// RecordHTTPRequest records a completed HTTP request (count + duration).
+func (m *Metrics) RecordHTTPRequest(method, path string, status int, dur time.Duration) {
+	m.HTTPRequests.WithLabelValues(method, path, strconv.Itoa(status)).Inc()
+	m.HTTPRequestDuration.WithLabelValues(method, path).Observe(dur.Seconds())
+}
+
+// RecordSchedulerDecision records one scheduler decision by type.
+func (m *Metrics) RecordSchedulerDecision(decisionType string) {
+	m.SchedulerDecisions.WithLabelValues(decisionType).Inc()
+}
+
+// RecordTaskTransition records a task instance state transition.
+func (m *Metrics) RecordTaskTransition(from, to, dagID string) {
+	m.TaskStateTransitions.WithLabelValues(from, to, dagID).Inc()
 }

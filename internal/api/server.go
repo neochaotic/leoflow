@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/neochaotic/leoflow/internal/auth"
 )
@@ -16,6 +17,8 @@ type Dependencies struct {
 	Authenticator auth.Authenticator
 	RateLimiter   *auth.RateLimiter
 	Registry      *prometheus.Registry
+	Metrics       Metrics
+	Tracer        trace.Tracer
 	HealthChecks  map[string]HealthChecker
 	CORSOrigins   []string
 	TokenTTLSecs  int
@@ -34,6 +37,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(RequestID())
+	r.Use(Observe(deps.Metrics, deps.Tracer))
 	r.Use(StructuredLogger(deps.Logger))
 	r.Use(CORS(deps.CORSOrigins))
 	r.Use(JWTAuth(deps.Authenticator))

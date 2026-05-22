@@ -13,6 +13,7 @@ import (
 // current state of each task.
 type RunState struct {
 	RunID  string
+	DagID  string
 	State  domain.DagRunState
 	Tasks  []domain.TaskSpec
 	States map[string]domain.TaskState
@@ -27,17 +28,27 @@ type Store interface {
 	SetRunState(ctx context.Context, runID string, state domain.DagRunState) error
 }
 
+// Recorder records scheduler metrics. observability.Metrics implements it.
+type Recorder interface {
+	RecordSchedulerDecision(decisionType string)
+	RecordTaskTransition(from, to, dagID string)
+}
+
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
 	store    Store
 	logger   *slog.Logger
 	interval time.Duration
+	recorder Recorder
 }
 
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
 func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Scheduler {
 	return &Scheduler{store: store, logger: logger, interval: interval}
 }
+
+// SetRecorder attaches a metrics recorder (optional).
+func (s *Scheduler) SetRecorder(r Recorder) { s.recorder = r }
 
 // Run drives the scheduling loop until ctx is canceled.
 func (s *Scheduler) Run(ctx context.Context) error {
@@ -81,8 +92,13 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 		return nil
 	}
 	for _, t := range PlanRun(run.Tasks, run.States) {
+		from := run.States[t.TaskID]
 		if err := s.store.ApplyTransition(ctx, run.RunID, t.TaskID, t.To); err != nil {
 			return fmt.Errorf("applying transition for %s: %w", t.TaskID, err)
+		}
+		if s.recorder != nil {
+			s.recorder.RecordSchedulerDecision(string(t.To))
+			s.recorder.RecordTaskTransition(string(from), string(t.To), run.DagID)
 		}
 	}
 	if state, done := FinalizeRun(run.Tasks, run.States); done {

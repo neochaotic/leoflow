@@ -62,6 +62,15 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// timeFromAny extracts a *time.Time from a scanned interface{} column (used for
+// aggregate columns whose type sqlc cannot infer), returning nil when absent.
+func timeFromAny(v any) *time.Time {
+	if t, ok := v.(time.Time); ok {
+		return &t
+	}
+	return nil
+}
+
 func mapDag(d queries.Dag) domain.DAG {
 	return domain.DAG{
 		DagID:         d.DagID,

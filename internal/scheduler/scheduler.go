@@ -19,6 +19,13 @@ type RunState struct {
 	States map[string]domain.TaskState
 }
 
+// ScheduledDAG is a cron-scheduled DAG and the logical date of its latest run.
+type ScheduledDAG struct {
+	DagID       string
+	Schedule    string
+	LastLogical *time.Time
+}
+
 // Store is the scheduler's view of persistent state. The concrete
 // implementation is sqlc-backed; tests use a fake.
 type Store interface {
@@ -26,6 +33,8 @@ type Store interface {
 	MaterializeTasks(ctx context.Context, runID string, tasks []domain.TaskSpec) error
 	ApplyTransition(ctx context.Context, runID, taskID string, to domain.TaskState) error
 	SetRunState(ctx context.Context, runID string, state domain.DagRunState) error
+	ScheduledDAGs(ctx context.Context) ([]ScheduledDAG, error)
+	CreateScheduledRun(ctx context.Context, dagID string, logical time.Time) error
 }
 
 // Recorder records scheduler metrics. observability.Metrics implements it.
@@ -75,6 +84,29 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	for _, run := range runs {
 		if err := s.advance(ctx, run); err != nil {
 			return err
+		}
+	}
+	return s.createDueRuns(ctx)
+}
+
+// createDueRuns creates a new run for each scheduled DAG whose next cron slot
+// after its latest run has arrived.
+func (s *Scheduler) createDueRuns(ctx context.Context) error {
+	dags, err := s.store.ScheduledDAGs(ctx)
+	if err != nil {
+		return fmt.Errorf("listing scheduled dags: %w", err)
+	}
+	now := time.Now().UTC()
+	for _, d := range dags {
+		logical, due := nextScheduledRun(d.Schedule, d.LastLogical, now)
+		if !due {
+			continue
+		}
+		if err := s.store.CreateScheduledRun(ctx, d.DagID, logical); err != nil {
+			return fmt.Errorf("creating scheduled run for %s: %w", d.DagID, err)
+		}
+		if s.recorder != nil {
+			s.recorder.RecordSchedulerDecision("create_run")
 		}
 	}
 	return nil

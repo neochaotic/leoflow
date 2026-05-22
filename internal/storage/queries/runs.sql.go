@@ -72,6 +72,32 @@ func (q *Queries) CreateDagRun(ctx context.Context, arg CreateDagRunParams) (Dag
 	return i, err
 }
 
+const createScheduledRunByDagID = `-- name: CreateScheduledRunByDagID :exec
+INSERT INTO dag_runs (tenant_id, dag_id, dag_version_id, run_id, logical_date, state, trigger)
+SELECT d.tenant_id, d.id, d.current_version_id, $1, $2, 'queued', 'scheduled'
+FROM dags d
+JOIN tenants t ON t.id = d.tenant_id
+WHERE t.name = $3 AND d.dag_id = $4 AND d.current_version_id IS NOT NULL
+ON CONFLICT (dag_id, run_id) DO NOTHING
+`
+
+type CreateScheduledRunByDagIDParams struct {
+	RunID       string             `json:"run_id"`
+	LogicalDate pgtype.Timestamptz `json:"logical_date"`
+	Tenant      string             `json:"tenant"`
+	DagID       string             `json:"dag_id"`
+}
+
+func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateScheduledRunByDagIDParams) error {
+	_, err := q.db.Exec(ctx, createScheduledRunByDagID,
+		arg.RunID,
+		arg.LogicalDate,
+		arg.Tenant,
+		arg.DagID,
+	)
+	return err
+}
+
 const createTaskInstance = `-- name: CreateTaskInstance :one
 INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -286,6 +312,40 @@ func (q *Queries) ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagPara
 			&i.EndedAt,
 			&i.Note,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listScheduledDags = `-- name: ListScheduledDags :many
+SELECT d.dag_id, d.schedule,
+  (SELECT max(dr.logical_date) FROM dag_runs dr WHERE dr.dag_id = d.id) AS last_logical
+FROM dags d
+WHERE d.is_active = true AND d.is_paused = false
+  AND d.schedule IS NOT NULL AND d.current_version_id IS NOT NULL
+`
+
+type ListScheduledDagsRow struct {
+	DagID       string      `json:"dag_id"`
+	Schedule    *string     `json:"schedule"`
+	LastLogical interface{} `json:"last_logical"`
+}
+
+func (q *Queries) ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error) {
+	rows, err := q.db.Query(ctx, listScheduledDags)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListScheduledDagsRow{}
+	for rows.Next() {
+		var i ListScheduledDagsRow
+		if err := rows.Scan(&i.DagID, &i.Schedule, &i.LastLogical); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

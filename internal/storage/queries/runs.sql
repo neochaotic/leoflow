@@ -42,6 +42,21 @@ SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
 RETURNING *;
 
+-- name: ListScheduledDags :many
+SELECT d.dag_id, d.schedule,
+  (SELECT max(dr.logical_date) FROM dag_runs dr WHERE dr.dag_id = d.id) AS last_logical
+FROM dags d
+WHERE d.is_active = true AND d.is_paused = false
+  AND d.schedule IS NOT NULL AND d.current_version_id IS NOT NULL;
+
+-- name: CreateScheduledRunByDagID :exec
+INSERT INTO dag_runs (tenant_id, dag_id, dag_version_id, run_id, logical_date, state, trigger)
+SELECT d.tenant_id, d.id, d.current_version_id, sqlc.arg(run_id), sqlc.arg(logical_date), 'queued', 'scheduled'
+FROM dags d
+JOIN tenants t ON t.id = d.tenant_id
+WHERE t.name = sqlc.arg(tenant) AND d.dag_id = sqlc.arg(dag_id) AND d.current_version_id IS NOT NULL
+ON CONFLICT (dag_id, run_id) DO NOTHING;
+
 -- name: GetDagVersionByID :one
 SELECT * FROM dag_versions WHERE id = $1;
 

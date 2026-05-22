@@ -20,6 +20,8 @@ type fakeStore struct {
 	materialize []string
 	transitions []transition
 	runStates   map[string]domain.DagRunState
+	scheduled   []ScheduledDAG
+	createdRuns []string
 }
 
 func newFakeStore(runs ...RunState) *fakeStore {
@@ -27,6 +29,13 @@ func newFakeStore(runs ...RunState) *fakeStore {
 }
 
 func (f *fakeStore) ActiveRuns(context.Context) ([]RunState, error) { return f.runs, nil }
+func (f *fakeStore) ScheduledDAGs(context.Context) ([]ScheduledDAG, error) {
+	return f.scheduled, nil
+}
+func (f *fakeStore) CreateScheduledRun(_ context.Context, dagID string, _ time.Time) error {
+	f.createdRuns = append(f.createdRuns, dagID)
+	return nil
+}
 func (f *fakeStore) MaterializeTasks(_ context.Context, runID string, _ []domain.TaskSpec) error {
 	f.materialize = append(f.materialize, runID)
 	return nil
@@ -87,6 +96,30 @@ func TestStepFinalizesCompletedRun(t *testing.T) {
 	}
 	if store.runStates["r1"] != domain.DagRunStateSuccess {
 		t.Errorf("completed run should be success, got %q", store.runStates["r1"])
+	}
+}
+
+func TestStepCreatesDueScheduledRun(t *testing.T) {
+	last := time.Now().UTC().Add(-2 * time.Hour)
+	store := newFakeStore()
+	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "@hourly", LastLogical: &last}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) != 1 || store.createdRuns[0] != "etl" {
+		t.Errorf("expected one scheduled run for etl, got %v", store.createdRuns)
+	}
+}
+
+func TestStepNoScheduledRunWhenNotDue(t *testing.T) {
+	recent := time.Now().UTC().Add(-1 * time.Minute)
+	store := newFakeStore()
+	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "@hourly", LastLogical: &recent}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) != 0 {
+		t.Errorf("no run should be created when not due, got %v", store.createdRuns)
 	}
 }
 

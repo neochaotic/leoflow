@@ -16,6 +16,7 @@ type Querier interface {
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountUsers(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CreateDagRun(ctx context.Context, arg CreateDagRunParams) (DagRun, error)
+	CreateScheduledRunByDagID(ctx context.Context, arg CreateScheduledRunByDagIDParams) error
 	CreateTaskInstance(ctx context.Context, arg CreateTaskInstanceParams) (TaskInstance, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.UUID, error)
 	GetDagByDagID(ctx context.Context, arg GetDagByDagIDParams) (Dag, error)
@@ -33,6 +34,7 @@ type Querier interface {
 	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
 	ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagParams) ([]DagRun, error)
 	ListDags(ctx context.Context, arg ListDagsParams) ([]Dag, error)
+	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
 	SetCurrentDagVersion(ctx context.Context, arg SetCurrentDagVersionParams) error

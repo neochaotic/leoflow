@@ -77,7 +77,9 @@ func run() error {
 		return err
 	}
 	if cfg.Scheduler.Enabled {
-		startScheduler(ctx, cfg, pg, tel.Logger, tel.Metrics)
+		if serr := startScheduler(ctx, cfg, pg, tel.Logger, tel.Metrics); serr != nil {
+			return serr
+		}
 	}
 
 	handler := api.NewServer(api.Dependencies{
@@ -136,15 +138,56 @@ func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.
 	return nil
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger, recorder scheduler.Recorder) {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger, recorder scheduler.Recorder) error {
+	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
+	if err != nil {
+		return fmt.Errorf("leader pool: %w", err)
+	}
 	sched := scheduler.NewScheduler(storage.NewSchedulerStore(pg), logger,
 		time.Duration(cfg.Scheduler.LoopIntervalMS)*time.Millisecond)
 	sched.SetRecorder(recorder)
+	leader := scheduler.NewLeader(leaderPool)
 	go func() {
-		if err := sched.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			logger.Error("scheduler stopped", "error", err)
-		}
+		defer leaderPool.Close()
+		campaignAndRun(ctx, leader, sched, logger)
 	}()
+	return nil
+}
+
+// campaignAndRun acquires scheduler leadership (polling every 5s) and runs the
+// loop only while leader, so a single replica schedules at a time (ADR 0009).
+func campaignAndRun(ctx context.Context, leader *scheduler.Leader, sched *scheduler.Scheduler, logger *slog.Logger) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		acquired, err := leader.TryAcquire(ctx)
+		switch {
+		case err != nil:
+			logger.Error("acquiring leadership", "error", err)
+		case acquired:
+			logger.Info("became scheduler leader")
+			if runErr := sched.Run(ctx); runErr != nil && !errors.Is(runErr, context.Canceled) {
+				logger.Error("scheduler stopped", "error", runErr)
+			}
+			releaseLeader(leader, logger) //nolint:contextcheck // release uses a fresh bounded context after shutdown
+			return
+		default:
+			logger.Info("scheduler follower; retrying for leadership")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func releaseLeader(leader *scheduler.Leader, logger *slog.Logger) {
+	rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := leader.Release(rctx); err != nil { //nolint:contextcheck // fresh context to release after shutdown
+		logger.Error("releasing leadership", "error", err)
+	}
 }
 
 func serve(s *http.Server, errCh chan<- error) {

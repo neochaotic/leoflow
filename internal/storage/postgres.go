@@ -51,6 +51,21 @@ func NewPostgres(ctx context.Context, cfg config.DatabaseSection) (*Postgres, er
 	return &Postgres{Pool: pool, Queries: queries.New(pool)}, nil
 }
 
+// NewLeaderPool opens a dedicated single-connection pool for the scheduler
+// advisory lock, so the session holding the lock is stable (ADR 0009).
+func NewLeaderPool(ctx context.Context, cfg config.DatabaseSection) (*pgxpool.Pool, error) {
+	pc, err := poolConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	pc.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, pc)
+	if err != nil {
+		return nil, fmt.Errorf("creating leader pool: %w", err)
+	}
+	return pool, nil
+}
+
 // Ping checks database connectivity (used by /readyz).
 func (p *Postgres) Ping(ctx context.Context) error {
 	return p.Pool.Ping(ctx)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -109,6 +110,35 @@ func (s *SchedulerStore) SetRunState(ctx context.Context, runID string, state do
 		EndedAt:   pgtype.Timestamptz{},
 	})
 	return err
+}
+
+// ScheduledDAGs returns active, unpaused, cron-scheduled DAGs with the logical
+// date of their most recent run.
+func (s *SchedulerStore) ScheduledDAGs(ctx context.Context) ([]scheduler.ScheduledDAG, error) {
+	rows, err := s.q.ListScheduledDags(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing scheduled dags: %w", err)
+	}
+	out := make([]scheduler.ScheduledDAG, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, scheduler.ScheduledDAG{
+			DagID:       r.DagID,
+			Schedule:    strOrEmpty(r.Schedule),
+			LastLogical: timeFromAny(r.LastLogical),
+		})
+	}
+	return out, nil
+}
+
+// CreateScheduledRun inserts a scheduled run for a DAG (idempotent on run_id).
+func (s *SchedulerStore) CreateScheduledRun(ctx context.Context, dagID string, logical time.Time) error {
+	runID := "scheduled__" + logical.UTC().Format(time.RFC3339)
+	return s.q.CreateScheduledRunByDagID(ctx, queries.CreateScheduledRunByDagIDParams{
+		RunID:       runID,
+		LogicalDate: pgtype.Timestamptz{Time: logical, Valid: true},
+		Tenant:      "default",
+		DagID:       dagID,
+	})
 }
 
 var _ scheduler.Store = (*SchedulerStore)(nil)

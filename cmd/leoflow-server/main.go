@@ -109,12 +109,24 @@ func run() error {
 	startCleanup(ctx, storage.NewXComIndex(pg), logSink, tel.Logger)
 
 	var schedulerHealth api.Heartbeater
+	podDispatch := false
 	if cfg.Scheduler.Enabled {
-		sched, serr := startScheduler(ctx, cfg, pg, execStore, authn, xcomSvc, logSink, tel.Logger, tel.Metrics)
+		sched, dispatchOn, serr := startScheduler(ctx, cfg, pg, execStore, authn, xcomSvc, logSink, tel.Logger, tel.Metrics)
 		if serr != nil {
 			return serr
 		}
 		schedulerHealth = sched
+		podDispatch = dispatchOn
+	}
+	agentAddr := cfg.Executor.AgentControlPlaneAddr
+	if agentAddr == "" {
+		agentAddr = cfg.Server.GRPCAddr
+	}
+	executorInfo := api.ExecutorInfo{
+		PodDispatchEnabled:    podDispatch,
+		TaskNamespace:         podNamespace,
+		AgentControlPlaneAddr: agentAddr,
+		InlineConcurrency:     cfg.Executor.HTTP.InlineConcurrencyLimit,
 	}
 
 	handler := api.NewServer(api.Dependencies{
@@ -143,6 +155,7 @@ func run() error {
 		AuditLog:                     repo,
 		Variables:                    repo,
 		Connections:                  repo,
+		ExecutorInfo:                 executorInfo,
 		SchedulerHealth:              schedulerHealth,
 		UI:                           ui.New(),
 	})
@@ -319,10 +332,10 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter exec
 	}()
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, error) {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, error) {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
-		return nil, fmt.Errorf("leader pool: %w", err)
+		return nil, false, fmt.Errorf("leader pool: %w", err)
 	}
 	store := storage.NewSchedulerStore(pg)
 	sched := scheduler.NewScheduler(store, logger,
@@ -337,6 +350,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		MaxSeconds:  cfg.Executor.HTTP.InlineMaxDurationSeconds,
 		UserAgent:   cfg.Executor.HTTP.UserAgent,
 	}))
+	podDispatch := false
 	if cs, perr := buildK8sClient(); perr == nil {
 		controlAddr := cfg.Executor.AgentControlPlaneAddr
 		if controlAddr == "" {
@@ -346,6 +360,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		sched.SetDispatcher(dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL))
 		startReconciler(ctx, cs, execStore, logger)
 		logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
+		podDispatch = true
 	} else {
 		logger.Warn("pod dispatch disabled; only inline http_api tasks will run", "error", perr)
 	}
@@ -354,7 +369,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		defer leaderPool.Close()
 		campaignAndRun(ctx, leader, sched, logger)
 	}()
-	return sched, nil
+	return sched, podDispatch, nil
 }
 
 // campaignAndRun acquires scheduler leadership (polling every 5s) and runs the

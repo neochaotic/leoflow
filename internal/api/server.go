@@ -52,6 +52,7 @@ type Dependencies struct {
 	AuditLog       AuditLogReader
 	Variables      VariableStore
 	Connections    ConnectionStore
+	ExecutorInfo   ExecutorInfo
 
 	// SchedulerHealth reports the scheduler's heartbeat for /monitor/health.
 	// When nil the component reports healthy (single-process role assumption).
@@ -85,6 +86,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	r.GET("/api/v2/auth/login", loginPageHandler())
 	r.GET("/api/v2/auth/logout", logoutHandler())
 	r.GET("/api/v2/monitor/health", monitorHealthHandler(deps.HealthChecks, deps.SchedulerHealth))
+	r.GET("/api/v2/monitor/executor", monitorExecutorHandler(deps.ExecutorInfo))
 
 	registerResources(r, deps)
 	registerUI(r, deps.TokenTTLSecs)

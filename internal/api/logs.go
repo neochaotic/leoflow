@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,13 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 	}
 	rc, err := reader.ReadLogs(c.Request.Context(), tenantOf(c),
 		c.Param("dag_id"), c.Param("dag_run_id"), c.Param("task_id"), try)
+	if errors.Is(err, ErrNotFound) {
+		// No stored logs for this attempt (e.g. it never ran, or the logs aged
+		// out / predate a backend change). Serve a graceful "no logs" rather than
+		// a 404 the UI renders as a broken page.
+		serveNoLogs(c)
+		return
+	}
 	if err != nil {
 		handleRepoError(c, err)
 		return
@@ -57,6 +65,21 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 	if c.Query("follow") == "true" {
 		tailLogs(c, reader, try)
 	}
+}
+
+// serveNoLogs renders an empty-but-valid log response (200) when no logs exist
+// for an attempt, so the UI shows "no logs" instead of erroring.
+func serveNoLogs(c *gin.Context) {
+	const msg = "No logs available for this attempt."
+	if wantsStructuredLogs(c) {
+		c.JSON(http.StatusOK, structuredLogResponse{
+			Content:           []structuredLogEvent{{Event: msg, Level: "info"}},
+			ContinuationToken: nil,
+		})
+		return
+	}
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.String(http.StatusOK, msg+"\n")
 }
 
 // tailLogs streams live log lines to the client until the task stops producing

@@ -120,11 +120,40 @@ func TestLogsStructuredJSON(t *testing.T) {
 	}
 }
 
-func TestLogsReadNotFound(t *testing.T) {
+func TestLogsReadMissingIsGraceful(t *testing.T) {
+	// Missing logs (e.g. an attempt that never ran, or aged-out logs) render as
+	// a graceful "no logs" 200, not a 404 the UI shows as a broken page (#52).
 	rec := authGet(logsServer(&fakeLogReader{err: domain.ErrNotFound}), http.MethodGet,
 		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/logs/1", "")
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("missing logs = %d, want 404", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("missing logs = %d, want graceful 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "No logs available") {
+		t.Errorf("expected a 'no logs' message, got %q", rec.Body.String())
+	}
+}
+
+func TestLogsReadMissingStructuredIsGraceful(t *testing.T) {
+	srv := logsServer(&fakeLogReader{err: domain.ErrNotFound})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/logs/1", http.NoBody)
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("missing structured logs = %d, want 200", rec.Code)
+	}
+	var got struct {
+		Content []struct {
+			Event string `json:"event"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Content) == 0 || !strings.Contains(got.Content[0].Event, "No logs available") {
+		t.Errorf("structured missing logs should carry a 'no logs' event, got %+v", got.Content)
 	}
 }
 

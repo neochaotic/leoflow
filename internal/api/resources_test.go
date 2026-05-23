@@ -19,6 +19,7 @@ type fakeDagRepo struct {
 	dags        []domain.DAG
 	gotRunState string
 	gotPaused   *bool
+	cleared     []string
 }
 
 func (f *fakeDagRepo) ListDags(context.Context, string, int, int) ([]domain.DAG, int, error) {
@@ -67,6 +68,16 @@ func (f *fakeDagRepo) DeleteDag(_ context.Context, _, dagID string) error {
 	return ErrNotFound
 }
 
+func (f *fakeDagRepo) ClearDagHistory(_ context.Context, _, dagID string) error {
+	for _, d := range f.dags {
+		if d.DagID == dagID {
+			f.cleared = append(f.cleared, dagID) // keeps the DAG, records the clear
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 type fakeRunRepo struct{ runs []domain.DagRun }
 
 func (f *fakeRunRepo) ListDagRuns(context.Context, string, string, int, int) ([]domain.DagRun, int, error) {
@@ -98,6 +109,16 @@ func (f *fakeTaskRepo) ClearTaskInstances(_ context.Context, _, _, _ string, _ [
 	return len(f.tis), nil
 }
 
+func dagOnlyServer(repo DagRepository) *gin.Engine {
+	return NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		Dags:          repo,
+	})
+}
+
 func authedServer() *gin.Engine {
 	admin := &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}
 	sched := "0 5 * * *"
@@ -127,16 +148,40 @@ func authGet(srv *gin.Engine, method, path, body string) *httptest.ResponseRecor
 	return rec
 }
 
-func TestDeleteDag(t *testing.T) {
-	srv := authedServer()
+func TestDeleteDagClearsHistoryByDefault(t *testing.T) {
+	// The trash button (plain DELETE) clears history but KEEPS the DAG (ADR 0020),
+	// because a GitOps DAG would not reload after a destructive delete.
+	repo := &fakeDagRepo{dags: []domain.DAG{{DagID: "etl"}}}
+	srv := dagOnlyServer(repo)
 	rec := authGet(srv, http.MethodDelete, "/api/v2/dags/etl", "")
 	if rec.Code != http.StatusNoContent {
-		t.Fatalf("delete existing dag = %d (%s)", rec.Code, rec.Body.String())
+		t.Fatalf("clear = %d (%s)", rec.Code, rec.Body.String())
 	}
-	// Second delete now misses -> 404.
-	rec = authGet(srv, http.MethodDelete, "/api/v2/dags/etl", "")
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("delete missing dag = %d, want 404", rec.Code)
+	if len(repo.cleared) != 1 || repo.cleared[0] != "etl" {
+		t.Errorf("expected a clear of etl, got %v", repo.cleared)
+	}
+	// The DAG still exists, so a second clear also succeeds (not 404).
+	if rec := authGet(srv, http.MethodDelete, "/api/v2/dags/etl", ""); rec.Code != http.StatusNoContent {
+		t.Errorf("second clear = %d, want 204 (dag still registered)", rec.Code)
+	}
+	if len(repo.dags) != 1 {
+		t.Errorf("clear must keep the DAG registered, got %d dags", len(repo.dags))
+	}
+}
+
+func TestDeleteDagDeregisterRemoves(t *testing.T) {
+	repo := &fakeDagRepo{dags: []domain.DAG{{DagID: "etl"}}}
+	srv := dagOnlyServer(repo)
+	rec := authGet(srv, http.MethodDelete, "/api/v2/dags/etl?deregister=true", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("deregister = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(repo.dags) != 0 {
+		t.Errorf("deregister must remove the DAG, got %d dags", len(repo.dags))
+	}
+	// Now it is gone -> 404.
+	if rec := authGet(srv, http.MethodDelete, "/api/v2/dags/etl?deregister=true", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("deregister missing dag = %d, want 404", rec.Code)
 	}
 }
 

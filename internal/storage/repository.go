@@ -757,3 +757,17 @@ func int32PtrToInt(p *int32) *int {
 	v := int(*p)
 	return &v
 }
+
+// ClearDagHistory deletes a DAG's runs (cascading task instances and XCom index
+// rows) while keeping the DAG and its versions registered — the safe "clear"
+// the UI trash maps to (ADR 0020). Returns ErrNotFound when the DAG is absent.
+func (r *Repository) ClearDagHistory(ctx context.Context, tenant, dagID string) error {
+	dag, err := r.resolveDag(ctx, tenant, dagID)
+	if err != nil {
+		return err
+	}
+	if _, err := r.q.ClearDagRuns(ctx, dag.ID); err != nil {
+		return fmt.Errorf("clearing dag history: %w", err)
+	}
+	return nil
+}

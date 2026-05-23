@@ -588,6 +588,39 @@ func TestConnectionWriteRequiresCipherIntegration(t *testing.T) {
 	}
 }
 
+// TestClearDagHistoryIntegration guards the clear (ADR 0020): runs are wiped but
+// the DAG and its versions stay registered.
+func TestClearDagHistoryIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_clearh_%d", time.Now().UnixNano())
+	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}})
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateSuccess, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	if err := repo.ClearDagHistory(ctx, "default", dagID); err != nil {
+		t.Fatalf("ClearDagHistory: %v", err)
+	}
+	// The DAG still exists.
+	if _, err := repo.GetDag(ctx, "default", dagID); err != nil {
+		t.Errorf("clear must keep the DAG registered: %v", err)
+	}
+	// Its runs are gone.
+	runs, _, err := repo.ListDagRuns(ctx, "default", dagID, 10, 0)
+	if err != nil {
+		t.Fatalf("ListDagRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Errorf("clear should wipe runs, got %d", len(runs))
+	}
+	// Clearing a missing DAG is ErrNotFound.
+	if err := repo.ClearDagHistory(ctx, "default", "no-such-"+dagID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("clear missing dag = %v, want ErrNotFound", err)
+	}
+}
+
 // TestDeleteDagIntegration guards DELETE-DAG: the row is removed (subsequent
 // reads miss), the cascade clears its runs, and deleting a missing DAG returns
 // ErrNotFound.

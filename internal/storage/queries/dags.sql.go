@@ -11,6 +11,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearDagRuns = `-- name: ClearDagRuns :execrows
+DELETE FROM dag_runs WHERE dag_id = $1
+`
+
+func (q *Queries) ClearDagRuns(ctx context.Context, dagID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, clearDagRuns, dagID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countDags = `-- name: CountDags :one
 SELECT count(*) FROM dags WHERE tenant_id = $1 AND is_active = true
 `

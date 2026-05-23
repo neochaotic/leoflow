@@ -84,3 +84,6 @@ LEFT JOIN latest l ON l.dag_id = d.id
 WHERE d.tenant_id = $1 AND d.is_active = true
   AND (sqlc.narg('paused')::bool IS NULL OR d.is_paused = sqlc.narg('paused'))
   AND (sqlc.narg('run_state')::dag_run_state IS NULL OR l.state = sqlc.narg('run_state'));
+
+-- name: ClearDagRuns :execrows
+DELETE FROM dag_runs WHERE dag_id = $1;

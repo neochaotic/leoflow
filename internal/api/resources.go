@@ -23,6 +23,7 @@ type DagRepository interface {
 	GetDag(ctx context.Context, tenant, dagID string) (domain.DAG, error)
 	SetPaused(ctx context.Context, tenant, dagID string, paused bool) (domain.DAG, error)
 	DeleteDag(ctx context.Context, tenant, dagID string) error
+	ClearDagHistory(ctx context.Context, tenant, dagID string) error
 	ListDagsFiltered(ctx context.Context, tenant, runState string, paused *bool, limit, offset int) ([]domain.DAG, int, error)
 }
 
@@ -130,12 +131,21 @@ func patchDagHandler(repo DagRepository) gin.HandlerFunc {
 	}
 }
 
-// deleteDagHandler implements DELETE /api/v2/dags/{dag_id}. Deleting a DAG
-// cascades to its versions, runs, task instances, and XCom index rows. Returns
-// 204 No Content on success, matching Airflow 3.2.1.
+// deleteDagHandler implements DELETE /api/v2/dags/{dag_id}. By default (the UI
+// trash) it CLEARS the DAG's run history — deletes its runs, task instances, and
+// XCom while keeping the DAG registered — because a GitOps DAG does not reload on
+// its own, so destroying it would be surprising and lossy (ADR 0020). With
+// ?deregister=true it removes the DAG artifact entirely (cascade). Returns 204.
 func deleteDagHandler(repo DagRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := repo.DeleteDag(c.Request.Context(), tenantOf(c), c.Param("dag_id")); err != nil {
+		dagID := c.Param("dag_id")
+		var err error
+		if c.Query("deregister") == "true" {
+			err = repo.DeleteDag(c.Request.Context(), tenantOf(c), dagID)
+		} else {
+			err = repo.ClearDagHistory(c.Request.Context(), tenantOf(c), dagID)
+		}
+		if err != nil {
 			handleRepoError(c, err)
 			return
 		}

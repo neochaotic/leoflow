@@ -99,7 +99,7 @@ func TestEventLogsPromotesRunIDFromMetadata(t *testing.T) {
 	reader := &fakeAuditReader{
 		total: 2,
 		entries: []domain.AuditLogEntry{
-			{ID: 1, Action: "dagrun.manual.trigger", ResourceType: "dag", ResourceID: "etl", Extra: `{"run_id":"r1"}`},
+			{ID: 1, Action: "taskinstance.mark.success", ResourceType: "dag", ResourceID: "etl", Extra: `{"run_id":"r1","task_id":"extract","try_number":2}`},
 			{ID: 2, Action: "dag.version.register", ResourceType: "dag", ResourceID: "etl", Extra: "{}"},
 		},
 	}
@@ -115,6 +115,13 @@ func TestEventLogsPromotesRunIDFromMetadata(t *testing.T) {
 	}
 	if got.EventLogs[0]["extra"] != nil {
 		t.Errorf("extra should be null once run_id is promoted, got %v", got.EventLogs[0]["extra"])
+	}
+	// Task-level fields are promoted out of metadata too.
+	if got.EventLogs[0]["task_id"] != "extract" {
+		t.Errorf("task_id = %v, want extract", got.EventLogs[0]["task_id"])
+	}
+	if got.EventLogs[0]["try_number"] != float64(2) {
+		t.Errorf("try_number = %v, want 2", got.EventLogs[0]["try_number"])
 	}
 	if got.EventLogs[1]["extra"] != nil {
 		t.Errorf("empty {} metadata should render as null extra, got %v", got.EventLogs[1]["extra"])

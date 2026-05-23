@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,6 +41,28 @@ type TaskInstanceRepository interface {
 	ListTaskInstances(ctx context.Context, tenant, dagID, runID string, limit, offset int) ([]domain.TaskInstance, int, error)
 	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed, resetDagRun bool) (int, error)
 	SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error
+}
+
+// AuditWriter records task-level actions (clear, mark state) for the Audit Log
+// view, with the acting user and the run/task in the entry.
+type AuditWriter interface {
+	RecordTaskActionAudit(ctx context.Context, tenant, userID, action, dagID, runID, taskID string, tryNumber int) error
+}
+
+// recordTaskAudit writes a best-effort audit entry for a task action; an audit
+// failure must not fail the action the user requested.
+func recordTaskAudit(c *gin.Context, audit AuditWriter, action, runID, taskID string, tryNumber int) {
+	if audit == nil {
+		return
+	}
+	userID := ""
+	if u, ok := UserFromContext(c); ok {
+		userID = u.ID
+	}
+	if err := audit.RecordTaskActionAudit(c.Request.Context(), tenantOf(c), userID, action,
+		c.Param("dag_id"), runID, taskID, tryNumber); err != nil {
+		slog.Warn("recording task audit", "action", action, "task", taskID, "error", err)
+	}
 }
 
 func pagination(c *gin.Context) (limit, offset int) {
@@ -230,7 +253,7 @@ func getDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
 	}
 }
 
-func createDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
+func createDagRunHandler(repo DagRunRepository, audit AuditWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			DagRunID    string     `json:"dag_run_id"`
@@ -264,6 +287,8 @@ func createDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
 			handleRepoError(c, err)
 			return
 		}
+		// Audit the trigger (run-level: no task) with the acting user as owner.
+		recordTaskAudit(c, audit, "dagrun."+run.RunType+".trigger", created.RunID, "", 0)
 		c.JSON(http.StatusCreated, toDagRunDTO(created))
 	}
 }
@@ -298,7 +323,7 @@ func listTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository
 	}
 }
 
-func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister) gin.HandlerFunc {
+func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, audit AuditWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			TaskIDs      []string `json:"task_ids"`
@@ -326,6 +351,9 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 		if _, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), body.DagRunID, body.TaskIDs, onlyFailed, reset); err != nil {
 			handleRepoError(c, err)
 			return
+		}
+		for _, ti := range affected {
+			recordTaskAudit(c, audit, "taskinstance.clear", body.DagRunID, ti.TaskID, ti.TryNumber)
 		}
 		c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 	}
@@ -368,7 +396,7 @@ type markStateRequest struct {
 // .../taskInstances/{task_id}[/{map_index}][/dry_run]. The catch-all action is
 // the trailing path after the task_id; a "dry_run" segment previews without
 // changing state. It returns the (would-be) updated task instance.
-func patchTaskInstanceHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister) gin.HandlerFunc {
+func patchTaskInstanceHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, audit AuditWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		action := strings.Trim(c.Param("action"), "/")
 		dryRun := action == "dry_run" || strings.HasSuffix(action, "/dry_run")
@@ -396,6 +424,8 @@ func patchTaskInstanceHandler(repo TaskInstanceRepository, runs DagRunRepository
 		if dryRun {
 			s := body.NewState
 			dto.State = &s // preview the state the confirm would apply
+		} else {
+			recordTaskAudit(c, audit, "taskinstance.mark."+body.NewState, runID, taskID, dto.TryNumber)
 		}
 		c.JSON(http.StatusOK, dto)
 	}
@@ -585,7 +615,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 	if deps.DagRuns != nil {
 		g := r.Group("/api/v2/dags/:dag_id/dagRuns")
 		g.GET("", RequirePermission("read", "dag_run"), listDagRunsHandler(deps.DagRuns))
-		g.POST("", RequirePermission("execute", "dag"), createDagRunHandler(deps.DagRuns))
+		g.POST("", RequirePermission("execute", "dag"), createDagRunHandler(deps.DagRuns, deps.Audit))
 		g.GET("/:dag_run_id", RequirePermission("read", "dag_run"), getDagRunHandler(deps.DagRuns))
 	}
 	if deps.Tasks != nil {
@@ -598,11 +628,11 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms, deps.DagRuns, deps.DagVersions))
 		// Mark-success/failed: PATCH the task instance. The UI hits both the bare
 		// path and one carrying optional /{map_index} and /dry_run segments.
-		patchTI := patchTaskInstanceHandler(deps.Tasks, deps.DagRuns, deps.DagVersions)
+		patchTI := patchTaskInstanceHandler(deps.Tasks, deps.DagRuns, deps.DagVersions, deps.Audit)
 		r.PATCH("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id", RequirePermission("write", "task_instance"), patchTI)
 		r.PATCH("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action", RequirePermission("write", "task_instance"), patchTI)
 		r.POST("/api/v2/dags/:dag_id/clearTaskInstances",
-			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks, deps.DagRuns, deps.DagVersions))
+			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks, deps.DagRuns, deps.DagVersions, deps.Audit))
 	}
 	if deps.Versions != nil {
 		r.POST("/api/v2/dags/:dag_id/versions", RequirePermission("write", "dag"), registerVersionHandler(deps.Versions, deps.InlineHTTPMaxDurationSeconds))

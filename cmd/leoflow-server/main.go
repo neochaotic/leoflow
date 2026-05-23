@@ -156,6 +156,7 @@ func run() error {
 		Variables:                    repo,
 		Connections:                  repo,
 		Favorites:                    repo,
+		Audit:                        repo,
 		ExecutorInfo:                 executorInfo,
 		SchedulerHealth:              schedulerHealth,
 		UI:                           ui.New(),

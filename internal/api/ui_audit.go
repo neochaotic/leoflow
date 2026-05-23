@@ -62,7 +62,23 @@ func toEventLogDTO(e domain.AuditLogEntry) eventLogDTO {
 		if rid, ok := meta["run_id"].(string); ok && rid != "" {
 			dto.RunID = &rid
 		}
-		delete(meta, "run_id")
+		if tid, ok := meta["task_id"].(string); ok && tid != "" {
+			dto.TaskID = &tid
+			dto.TaskDisplayName = &tid
+		}
+		if tn, ok := meta["try_number"].(float64); ok { // JSON numbers decode as float64
+			n := int(tn)
+			dto.TryNumber = &n
+		}
+		if mi, ok := meta["map_index"].(float64); ok {
+			n := int(mi)
+			dto.MapIndex = &n
+		}
+		// Whatever remains beyond the promoted keys stays as `extra`; an empty
+		// object renders as null rather than literal braces.
+		for _, k := range []string{"run_id", "task_id", "try_number", "map_index"} {
+			delete(meta, k)
+		}
 		if len(meta) > 0 {
 			if rest, err := json.Marshal(meta); err == nil {
 				s := string(rest)

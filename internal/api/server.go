@@ -53,6 +53,7 @@ type Dependencies struct {
 	Variables      VariableStore
 	Connections    ConnectionStore
 	Favorites      FavoriteStore
+	Audit          AuditWriter
 	ExecutorInfo   ExecutorInfo
 
 	// SchedulerHealth reports the scheduler's heartbeat for /monitor/health.

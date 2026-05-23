@@ -119,21 +119,28 @@ func toDagRunDTO(r domain.DagRun) dagRunDTO {
 		d := end.Sub(*r.StartedAt).Seconds()
 		dur = &d
 	}
+	// Airflow sets the data interval to the window the run covers; for a manual /
+	// unscheduled run that is a zero-width interval at the logical date. We model
+	// runs this way (precise per-cron windows for scheduled DAGs are a follow-up),
+	// so the field is never null.
+	logical := r.LogicalDate
 	return dagRunDTO{
-		DagID:          r.DagID,
-		DagRunID:       r.RunID,
-		DagDisplayName: r.DagID,
-		LogicalDate:    r.LogicalDate,
-		QueuedAt:       r.QueuedAt,
-		StartDate:      r.StartedAt,
-		EndDate:        r.EndedAt,
-		RunAfter:       r.LogicalDate,
-		State:          string(r.State),
-		RunType:        r.RunType,
-		Conf:           json.RawMessage("{}"),
-		Note:           strPtrOrNil(r.Note),
-		DagVersions:    []any{},
-		Duration:       dur,
+		DagID:             r.DagID,
+		DagRunID:          r.RunID,
+		DagDisplayName:    r.DagID,
+		LogicalDate:       logical,
+		QueuedAt:          r.QueuedAt,
+		StartDate:         r.StartedAt,
+		EndDate:           r.EndedAt,
+		RunAfter:          logical,
+		DataIntervalStart: &logical,
+		DataIntervalEnd:   &logical,
+		State:             string(r.State),
+		RunType:           r.RunType,
+		Conf:              json.RawMessage("{}"),
+		Note:              strPtrOrNil(r.Note),
+		DagVersions:       []any{},
+		Duration:          dur,
 	}
 }
 

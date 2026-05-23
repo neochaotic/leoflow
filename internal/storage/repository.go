@@ -196,22 +196,8 @@ func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run
 	if err != nil {
 		return domain.DagRun{}, fmt.Errorf("creating dag run: %w", err)
 	}
-	// Record the trigger in the audit log so the Audit Log view shows run
-	// activity. Scope it to the DAG (resource_type "dag", resource_id = dag_id)
-	// so it appears on the DAG's Audit Log tab, which filters by dag_id.
-	meta, merr := json.Marshal(map[string]string{"run_id": run.RunID})
-	if merr != nil {
-		return domain.DagRun{}, fmt.Errorf("encoding trigger audit metadata: %w", merr)
-	}
-	if aerr := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
-		TenantID:     dag.TenantID,
-		Action:       "dagrun." + run.RunType + ".trigger",
-		ResourceType: strPtr("dag"),
-		ResourceID:   strPtr(dagID),
-		Metadata:     meta,
-	}); aerr != nil {
-		return domain.DagRun{}, fmt.Errorf("writing trigger audit: %w", aerr)
-	}
+	// The trigger's audit entry is written by the API handler, where the acting
+	// user is known (so the Audit Log shows the owner).
 	return mapDagRun(created, dagID), nil
 }
 
@@ -296,6 +282,37 @@ func (r *Repository) resetTaskInstances(ctx context.Context, runID pgtype.UUID, 
 		cleared++
 	}
 	return cleared, nil
+}
+
+// RecordTaskActionAudit logs a task-level action (clear, mark state) with the
+// acting user and the run/task/try in metadata, so the Audit Log view shows the
+// owner and the task columns. Scoped to the DAG (resource_id = dag_id) so it
+// appears on the DAG's Audit Log tab.
+func (r *Repository) RecordTaskActionAudit(ctx context.Context, tenant, userID, action, dagID, runID, taskID string, tryNumber int) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	var uid pgtype.UUID
+	if u, perr := parseUUID(userID); perr == nil {
+		uid = u
+	}
+	fields := map[string]any{"run_id": runID}
+	if taskID != "" { // run-level events (e.g. trigger) carry no task columns
+		fields["task_id"] = taskID
+		fields["try_number"] = tryNumber
+	}
+	meta, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("encoding audit metadata: %w", err)
+	}
+	if err := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
+		TenantID: tid, UserID: uid, Action: action,
+		ResourceType: strPtr("dag"), ResourceID: strPtr(dagID), Metadata: meta,
+	}); err != nil {
+		return fmt.Errorf("writing task action audit: %w", err)
+	}
+	return nil
 }
 
 // SetTaskInstanceState sets a task instance's state directly, backing the UI's

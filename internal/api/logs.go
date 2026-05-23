@@ -35,6 +35,10 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 			slog.Warn("closing log stream", "error", cerr)
 		}
 	}()
+	if wantsStructuredLogs(c) {
+		serveStructuredLogs(c, rc, try)
+		return
+	}
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Status(http.StatusOK)
 	if _, cerr := io.Copy(c.Writer, rc); cerr != nil {

@@ -228,7 +228,7 @@ func createDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
 	}
 }
 
-func listTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
+func listTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// "~" wildcards "all runs"; the UI overview polls
 		// dagRuns/~/taskInstances?state=failed for its Failed-Tasks widget. We
@@ -244,9 +244,14 @@ func listTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
 			handleRepoError(c, err)
 			return
 		}
+		// All instances in a run share the run-derived fields and DAG version, so
+		// resolve them once rather than per task instance.
+		logical, version := resolveRunContext(c, runs, versions)
 		out := taskInstanceCollectionDTO{TaskInstances: make([]taskInstanceDTO, 0, len(tis)), TotalEntries: total}
 		for _, ti := range tis {
-			out.TaskInstances = append(out.TaskInstances, toTaskInstanceDTO(ti))
+			dto := toTaskInstanceDTO(ti)
+			dto.LogicalDate, dto.RunAfter, dto.DagVersion = logical, logical, version
+			out.TaskInstances = append(out.TaskInstances, dto)
 		}
 		setPaginationLinks(c, total, limit, offset)
 		c.JSON(http.StatusOK, out)
@@ -282,7 +287,7 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
 // taskInstanceActionHandler dispatches the catch-all under
 // /taskInstances/{task_id}/* : "logs/{try}" streams the attempt's logs, while a
 // bare "{map_index}" returns the single task instance (TaskInstanceResponse).
-func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xcoms XComReader) gin.HandlerFunc {
+func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xcoms XComReader, runs DagRunRepository, versions DagVersionLister) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		action := strings.Trim(c.Param("action"), "/")
 		if rest, ok := strings.CutPrefix(action, "logs/"); ok {
@@ -317,12 +322,44 @@ func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xco
 		}
 		for _, ti := range tis {
 			if ti.TaskID == c.Param("task_id") && ti.MapIndex == mapIndex {
-				c.JSON(http.StatusOK, toTaskInstanceDTO(ti))
+				dto := toTaskInstanceDTO(ti)
+				enrichTaskInstance(c, &dto, runs, versions)
+				c.JSON(http.StatusOK, dto)
 				return
 			}
 		}
 		AbortProblem(c, http.StatusNotFound, "not found", "task instance not found")
 	}
+}
+
+// enrichTaskInstance fills the run-derived fields (logical_date, run_after) and
+// the DAG version object, so the task panel shows them rather than null.
+func enrichTaskInstance(c *gin.Context, dto *taskInstanceDTO, runs DagRunRepository, versions DagVersionLister) {
+	logical, version := resolveRunContext(c, runs, versions)
+	dto.LogicalDate, dto.RunAfter, dto.DagVersion = logical, logical, version
+}
+
+// resolveRunContext looks up a run's logical date and the DAG's latest version
+// once, for sharing across the task instances of a single run. Either result is
+// nil when the source repository is absent or the lookup fails.
+func resolveRunContext(c *gin.Context, runs DagRunRepository, versions DagVersionLister) (*time.Time, *dagVersionDTO) {
+	dagID, runID := c.Param("dag_id"), c.Param("dag_run_id")
+	var logical *time.Time
+	if runs != nil {
+		if run, err := runs.GetDagRun(c.Request.Context(), tenantOf(c), dagID, runID); err == nil {
+			logical = &run.LogicalDate
+		}
+	}
+	var version *dagVersionDTO
+	if versions != nil {
+		if vs, err := versions.ListDagVersions(c.Request.Context(), tenantOf(c), dagID); err == nil && len(vs) > 0 {
+			version = &dagVersionDTO{
+				ID: vs[0].ID, VersionNumber: vs[0].VersionNumber, DagID: dagID,
+				BundleName: "leoflow", CreatedAt: vs[0].CreatedAt, DagDisplayName: dagID,
+			}
+		}
+	}
+	return logical, version
 }
 
 // stubHandler reports a feature that arrives in a later phase.
@@ -351,12 +388,12 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 	}
 	if deps.Tasks != nil {
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances",
-			RequirePermission("read", "task_instance"), listTaskInstancesHandler(deps.Tasks))
+			RequirePermission("read", "task_instance"), listTaskInstancesHandler(deps.Tasks, deps.DagRuns, deps.DagVersions))
 		// The "logs/:try_number" and ":map_index" routes share the :task_id
 		// parent; gin cannot mix a static and a wildcard child there, so one
 		// catch-all dispatches both (single task instance vs its logs).
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action",
-			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms))
+			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms, deps.DagRuns, deps.DagVersions))
 		r.POST("/api/v2/dags/:dag_id/clearTaskInstances",
 			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks))
 	}

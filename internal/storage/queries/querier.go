@@ -81,6 +81,10 @@ type Querier interface {
 	SetCurrentDagVersion(ctx context.Context, arg SetCurrentDagVersionParams) error
 	SetDagPaused(ctx context.Context, arg SetDagPausedParams) (Dag, error)
 	SetTaskInstanceNote(ctx context.Context, arg SetTaskInstanceNoteParams) error
+	// Transitions a run's state and stamps the run's own timestamps so the UI can
+	// show its duration: started_at on first entry into 'running', ended_at on a
+	// terminal state. Other timestamps are preserved (the scheduler may re-run).
+	StampDagRunState(ctx context.Context, arg StampDagRunStateParams) error
 	TaskInstancesForDagRuns(ctx context.Context, arg TaskInstancesForDagRunsParams) ([]TaskInstancesForDagRunsRow, error)
 	UpdateDagRunState(ctx context.Context, arg UpdateDagRunStateParams) (DagRun, error)
 	UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskInstanceStateParams) (TaskInstance, error)

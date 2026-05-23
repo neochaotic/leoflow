@@ -26,6 +26,16 @@ SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
 RETURNING *;
 
+-- name: StampDagRunState :exec
+-- Transitions a run's state and stamps the run's own timestamps so the UI can
+-- show its duration: started_at on first entry into 'running', ended_at on a
+-- terminal state. Other timestamps are preserved (the scheduler may re-run).
+UPDATE dag_runs
+SET state = sqlc.arg(state)::dag_run_state,
+    started_at = CASE WHEN sqlc.arg(state)::dag_run_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END,
+    ended_at = CASE WHEN sqlc.arg(state)::dag_run_state IN ('success', 'failed') THEN now() ELSE ended_at END
+WHERE id = sqlc.arg(id);
+
 -- name: CreateTaskInstance :one
 -- try_number starts at 1 to match Airflow (1-based attempts): the first run's
 -- logs live at .../1.log, which is where the UI's log view looks. Retries bump

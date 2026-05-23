@@ -140,13 +140,10 @@ func (s *SchedulerStore) SetRunState(ctx context.Context, runID string, state do
 	if err != nil {
 		return err
 	}
-	_, err = s.q.UpdateDagRunState(ctx, queries.UpdateDagRunStateParams{
-		ID:        rid,
-		State:     queries.DagRunState(state),
-		StartedAt: pgtype.Timestamptz{},
-		EndedAt:   pgtype.Timestamptz{},
+	return s.q.StampDagRunState(ctx, queries.StampDagRunStateParams{
+		ID:    rid,
+		State: queries.DagRunState(state),
 	})
-	return err
 }
 
 // ScheduledDAGs returns active, unpaused, cron-scheduled DAGs with the logical

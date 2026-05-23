@@ -133,16 +133,28 @@ func renderedFieldsFor(spec domain.DAGSpec, taskID string) json.RawMessage {
 		if t.TaskID != taskID {
 			continue
 		}
-		fields := map[string]any{}
-		if t.Entrypoint != "" {
-			fields["entrypoint"] = t.Entrypoint
+		// The task's resolved parameters, shown as the rendered fields. Only
+		// non-empty values are included so the panel stays clean.
+		fields := map[string]any{
+			"task_id":  t.TaskID,
+			"operator": operatorName(t.Type),
 		}
-		if len(t.Env) > 0 {
-			fields["env"] = t.Env
+		putIf := func(k string, v any, ok bool) {
+			if ok {
+				fields[k] = v
+			}
 		}
-		if len(t.XComInput) > 0 {
-			fields["xcom_input"] = t.XComInput
-		}
+		putIf("entrypoint", t.Entrypoint, t.Entrypoint != "")
+		putIf("env", t.Env, len(t.Env) > 0)
+		putIf("xcom_input", t.XComInput, len(t.XComInput) > 0)
+		putIf("depends_on", t.DependsOn, len(t.DependsOn) > 0)
+		putIf("trigger_rule", string(t.TriggerRule), t.TriggerRule != "")
+		putIf("retries", t.Retries, t.Retries != nil)
+		putIf("retry_delay_seconds", t.RetryDelaySeconds, t.RetryDelaySeconds != nil)
+		putIf("execution_timeout_seconds", t.ExecutionTimeoutSeconds, t.ExecutionTimeoutSeconds != nil)
+		putIf("execution_mode", string(t.ExecutionMode), t.ExecutionMode != "")
+		putIf("resources", t.Resources, t.Resources != nil)
+		putIf("execution", t.Execution, t.Execution != nil)
 		if t.HTTPRequest != nil {
 			fields["http_request"] = map[string]any{
 				"method": t.HTTPRequest.Method, "url": t.HTTPRequest.URL,

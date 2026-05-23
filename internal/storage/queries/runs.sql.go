@@ -732,6 +732,27 @@ func (q *Queries) SetTaskInstanceNote(ctx context.Context, arg SetTaskInstanceNo
 	return err
 }
 
+const stampDagRunState = `-- name: StampDagRunState :exec
+UPDATE dag_runs
+SET state = $1::dag_run_state,
+    started_at = CASE WHEN $1::dag_run_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END,
+    ended_at = CASE WHEN $1::dag_run_state IN ('success', 'failed') THEN now() ELSE ended_at END
+WHERE id = $2
+`
+
+type StampDagRunStateParams struct {
+	State DagRunState `json:"state"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+// Transitions a run's state and stamps the run's own timestamps so the UI can
+// show its duration: started_at on first entry into 'running', ended_at on a
+// terminal state. Other timestamps are preserved (the scheduler may re-run).
+func (q *Queries) StampDagRunState(ctx context.Context, arg StampDagRunStateParams) error {
+	_, err := q.db.Exec(ctx, stampDagRunState, arg.State, arg.ID)
+	return err
+}
+
 const taskInstancesForDagRuns = `-- name: TaskInstancesForDagRuns :many
 SELECT dr.run_id, ti.task_id, ti.try_number, ti.state,
        ti.started_at, ti.ended_at

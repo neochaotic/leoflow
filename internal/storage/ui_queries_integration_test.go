@@ -335,6 +335,84 @@ func TestListAuditLogsIntegration(t *testing.T) {
 	}
 }
 
+// TestListDagsFilteredIntegration guards the DAG list filters: by latest-run
+// state and by paused flag, with correct totals.
+func TestListDagsFilteredIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+	base := time.Now().UnixNano()
+	now := time.Now().UTC()
+	failDag := fmt.Sprintf("uiq_filt_fail_%d", base)
+	okDag := fmt.Sprintf("uiq_filt_ok_%d", base)
+
+	for _, tc := range []struct {
+		id    string
+		state domain.DagRunState
+	}{{failDag, domain.DagRunStateFailed}, {okDag, domain.DagRunStateSuccess}} {
+		registerSpec(t, repo, ctx, tc.id, []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}})
+		if _, err := repo.CreateDagRun(ctx, "default", tc.id, domain.DagRun{
+			RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: now,
+		}); err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+		runs, err := sched.ActiveRuns(ctx)
+		if err != nil {
+			t.Fatalf("ActiveRuns: %v", err)
+		}
+		for _, r := range runs {
+			if r.DagID == tc.id {
+				if serr := sched.SetRunState(ctx, r.RunID, tc.state); serr != nil {
+					t.Fatal(serr)
+				}
+			}
+		}
+	}
+
+	// Filter by latest-run state = failed: the failed dag is present, the
+	// successful one is not.
+	failed, total, err := repo.ListDagsFiltered(ctx, "default", "failed", nil, 1000, 0)
+	if err != nil {
+		t.Fatalf("ListDagsFiltered(failed): %v", err)
+	}
+	ids := map[string]bool{}
+	for _, d := range failed {
+		ids[d.DagID] = true
+	}
+	if !ids[failDag] || ids[okDag] {
+		t.Errorf("failed filter wrong: failDag=%v okDag=%v (total=%d)", ids[failDag], ids[okDag], total)
+	}
+
+	// No filter returns at least both.
+	all, allTotal, err := repo.ListDagsFiltered(ctx, "default", "", nil, 1000, 0)
+	if err != nil {
+		t.Fatalf("ListDagsFiltered(none): %v", err)
+	}
+	if allTotal < 2 || len(all) < 2 {
+		t.Errorf("unfiltered should include both dags, got total=%d", allTotal)
+	}
+
+	// Pause one dag, then paused=true returns it and paused=false excludes it.
+	if _, err := repo.SetPaused(ctx, "default", failDag, true); err != nil {
+		t.Fatal(err)
+	}
+	pausedTrue := true
+	pausedList, _, err := repo.ListDagsFiltered(ctx, "default", "", &pausedTrue, 1000, 0)
+	if err != nil {
+		t.Fatalf("ListDagsFiltered(paused): %v", err)
+	}
+	foundPaused := false
+	for _, d := range pausedList {
+		if d.DagID == failDag {
+			foundPaused = true
+		}
+		if d.DagID == okDag {
+			t.Errorf("paused=true leaked unpaused dag %s", okDag)
+		}
+	}
+	if !foundPaused {
+		t.Errorf("paused=true missing paused dag %s", failDag)
+	}
+}
+
 // TestDeleteDagIntegration guards DELETE-DAG: the row is removed (subsequent
 // reads miss), the cascade clears its runs, and deleting a missing DAG returns
 // ErrNotFound.

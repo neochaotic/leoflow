@@ -22,6 +22,33 @@ func (q *Queries) CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, e
 	return count, err
 }
 
+const countDagsFiltered = `-- name: CountDagsFiltered :one
+WITH latest AS (
+    SELECT DISTINCT ON (r.dag_id) r.dag_id, r.state
+    FROM dag_runs r
+    ORDER BY r.dag_id, r.logical_date DESC
+)
+SELECT count(*)
+FROM dags d
+LEFT JOIN latest l ON l.dag_id = d.id
+WHERE d.tenant_id = $1 AND d.is_active = true
+  AND ($2::bool IS NULL OR d.is_paused = $2)
+  AND ($3::dag_run_state IS NULL OR l.state = $3)
+`
+
+type CountDagsFilteredParams struct {
+	TenantID pgtype.UUID  `json:"tenant_id"`
+	Paused   *bool        `json:"paused"`
+	RunState *DagRunState `json:"run_state"`
+}
+
+func (q *Queries) CountDagsFiltered(ctx context.Context, arg CountDagsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countDagsFiltered, arg.TenantID, arg.Paused, arg.RunState)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteDag = `-- name: DeleteDag :execrows
 DELETE FROM dags
 WHERE tenant_id = $1 AND dag_id = $2
@@ -217,6 +244,74 @@ type ListDagsParams struct {
 
 func (q *Queries) ListDags(ctx context.Context, arg ListDagsParams) ([]Dag, error) {
 	rows, err := q.db.Query(ctx, listDags, arg.TenantID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Dag{}
+	for rows.Next() {
+		var i Dag
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.DagID,
+			&i.Description,
+			&i.IsPaused,
+			&i.IsActive,
+			&i.Owner,
+			&i.Tags,
+			&i.Schedule,
+			&i.ScheduleTimezone,
+			&i.StartDate,
+			&i.EndDate,
+			&i.MaxActiveRuns,
+			&i.Catchup,
+			&i.CurrentVersionID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDagsFiltered = `-- name: ListDagsFiltered :many
+WITH latest AS (
+    SELECT DISTINCT ON (r.dag_id) r.dag_id, r.state
+    FROM dag_runs r
+    ORDER BY r.dag_id, r.logical_date DESC
+)
+SELECT d.id, d.tenant_id, d.dag_id, d.description, d.is_paused, d.is_active, d.owner, d.tags, d.schedule, d.schedule_timezone, d.start_date, d.end_date, d.max_active_runs, d.catchup, d.current_version_id, d.created_at, d.updated_at
+FROM dags d
+LEFT JOIN latest l ON l.dag_id = d.id
+WHERE d.tenant_id = $1 AND d.is_active = true
+  AND ($4::bool IS NULL OR d.is_paused = $4)
+  AND ($5::dag_run_state IS NULL OR l.state = $5)
+ORDER BY d.dag_id
+LIMIT $2 OFFSET $3
+`
+
+type ListDagsFilteredParams struct {
+	TenantID pgtype.UUID  `json:"tenant_id"`
+	Limit    int32        `json:"limit"`
+	Offset   int32        `json:"offset"`
+	Paused   *bool        `json:"paused"`
+	RunState *DagRunState `json:"run_state"`
+}
+
+func (q *Queries) ListDagsFiltered(ctx context.Context, arg ListDagsFilteredParams) ([]Dag, error) {
+	rows, err := q.db.Query(ctx, listDagsFiltered,
+		arg.TenantID,
+		arg.Limit,
+		arg.Offset,
+		arg.Paused,
+		arg.RunState,
+	)
 	if err != nil {
 		return nil, err
 	}

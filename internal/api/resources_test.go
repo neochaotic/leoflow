@@ -16,7 +16,9 @@ import (
 )
 
 type fakeDagRepo struct {
-	dags []domain.DAG
+	dags        []domain.DAG
+	gotRunState string
+	gotPaused   *bool
 }
 
 func (f *fakeDagRepo) ListDags(context.Context, string, int, int) ([]domain.DAG, int, error) {
@@ -40,6 +42,19 @@ func (f *fakeDagRepo) SetPaused(_ context.Context, _, dagID string, paused bool)
 		}
 	}
 	return domain.DAG{}, ErrNotFound
+}
+
+func (f *fakeDagRepo) ListDagsFiltered(_ context.Context, _, runState string, paused *bool, _, _ int) ([]domain.DAG, int, error) {
+	f.gotRunState = runState
+	f.gotPaused = paused
+	out := []domain.DAG{}
+	for _, d := range f.dags {
+		if paused != nil && d.IsPaused != *paused {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out, len(out), nil
 }
 
 func (f *fakeDagRepo) DeleteDag(_ context.Context, _, dagID string) error {

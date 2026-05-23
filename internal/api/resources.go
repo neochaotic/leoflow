@@ -23,6 +23,7 @@ type DagRepository interface {
 	GetDag(ctx context.Context, tenant, dagID string) (domain.DAG, error)
 	SetPaused(ctx context.Context, tenant, dagID string, paused bool) (domain.DAG, error)
 	DeleteDag(ctx context.Context, tenant, dagID string) error
+	ListDagsFiltered(ctx context.Context, tenant, runState string, paused *bool, limit, offset int) ([]domain.DAG, int, error)
 }
 
 // DagRunRepository reads and creates DAG runs.

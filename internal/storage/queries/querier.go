@@ -17,6 +17,7 @@ type Querier interface {
 	CountDagRunsByDag(ctx context.Context, dagID pgtype.UUID) (int64, error)
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountDagsByLatestRunState(ctx context.Context, tenantID pgtype.UUID) ([]CountDagsByLatestRunStateRow, error)
+	CountDagsFiltered(ctx context.Context, arg CountDagsFilteredParams) (int64, error)
 	CountTaskInstanceStatesInWindow(ctx context.Context, arg CountTaskInstanceStatesInWindowParams) ([]CountTaskInstanceStatesInWindowRow, error)
 	CountUsers(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) error
@@ -48,6 +49,7 @@ type Querier interface {
 	ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagParams) ([]DagRun, error)
 	ListDagVersions(ctx context.Context, arg ListDagVersionsParams) ([]ListDagVersionsRow, error)
 	ListDags(ctx context.Context, arg ListDagsParams) ([]Dag, error)
+	ListDagsFiltered(ctx context.Context, arg ListDagsFilteredParams) ([]Dag, error)
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)

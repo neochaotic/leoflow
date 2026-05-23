@@ -37,6 +37,58 @@ func uiDagsServer(dags []domain.DAG, latest *fakeLatestRuns) *gin.Engine {
 	})
 }
 
+func TestUIDagsForwardsFilters(t *testing.T) {
+	repo := &fakeDagRepo{dags: []domain.DAG{
+		{DagID: "active_dag", IsPaused: false},
+		{DagID: "paused_dag", IsPaused: true},
+	}}
+	srv := NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		Dags:          repo,
+		LatestRuns:    &fakeLatestRuns{},
+	})
+
+	rec := authGet(srv, http.MethodGet, "/ui/dags?last_dag_run_state=failed&paused=false", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/ui/dags = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if repo.gotRunState != "failed" {
+		t.Errorf("last_dag_run_state not forwarded: got %q", repo.gotRunState)
+	}
+	if repo.gotPaused == nil || *repo.gotPaused != false {
+		t.Errorf("paused filter not forwarded: got %v", repo.gotPaused)
+	}
+	// paused=false drops the paused dag.
+	var col dagWithRunsCollectionDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &col); err != nil {
+		t.Fatal(err)
+	}
+	if len(col.Dags) != 1 || col.Dags[0].DagID != "active_dag" {
+		t.Errorf("paused=false should leave only active_dag, got %+v", col.Dags)
+	}
+}
+
+func TestUIDagsNoFiltersByDefault(t *testing.T) {
+	repo := &fakeDagRepo{dags: []domain.DAG{{DagID: "etl"}}}
+	srv := NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		Dags:          repo,
+		LatestRuns:    &fakeLatestRuns{},
+	})
+	if rec := authGet(srv, http.MethodGet, "/ui/dags", ""); rec.Code != http.StatusOK {
+		t.Fatalf("/ui/dags = %d", rec.Code)
+	}
+	if repo.gotRunState != "" || repo.gotPaused != nil {
+		t.Errorf("absent filters should be empty/nil, got state=%q paused=%v", repo.gotRunState, repo.gotPaused)
+	}
+}
+
 // uiConfigRequiredFields-style coverage: assert every spec-required field is present.
 var dagWithRunsRequired = []string{
 	"dag_id", "dag_display_name", "is_paused", "is_stale", "last_parsed_time",

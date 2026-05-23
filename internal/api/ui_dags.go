@@ -110,6 +110,20 @@ func toDagWithRunsDTO(d domain.DAG, runs []domain.DagRun) dagWithRunsDTO {
 	}
 }
 
+// pausedFilter reads the optional ?paused= query param. Absent or unparseable
+// returns nil (no filter); "true"/"false" returns a pointer to the bool.
+func pausedFilter(c *gin.Context) *bool {
+	raw, ok := c.GetQuery("paused")
+	if !ok {
+		return nil
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil
+	}
+	return &b
+}
+
 // strPtrOrNil returns nil for an empty string so the JSON field renders null.
 func strPtrOrNil(s string) *string {
 	if s == "" {
@@ -125,7 +139,8 @@ func uiDagsHandler(dags DagRepository, latest DagLatestRunsReader) gin.HandlerFu
 	return func(c *gin.Context) {
 		limit, offset := pagination(c)
 		tenant := tenantOf(c)
-		ds, total, err := dags.ListDags(c.Request.Context(), tenant, limit, offset)
+		ds, total, err := dags.ListDagsFiltered(c.Request.Context(), tenant,
+			c.Query("last_dag_run_state"), pausedFilter(c), limit, offset)
 		if err != nil {
 			handleRepoError(c, err)
 			return

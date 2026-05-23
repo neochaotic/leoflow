@@ -494,3 +494,33 @@ func (r *Repository) DeleteDag(ctx context.Context, tenant, dagID string) error 
 	}
 	return nil
 }
+
+// ListDagsFiltered returns a page of active DAGs for the tenant, optionally
+// filtered by paused state and/or latest-run state, with the matching total.
+// An empty runState or nil paused disables that filter.
+func (r *Repository) ListDagsFiltered(ctx context.Context, tenant, runState string, paused *bool, limit, offset int) ([]domain.DAG, int, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, 0, err
+	}
+	var rs *queries.DagRunState
+	if runState != "" {
+		s := queries.DagRunState(runState)
+		rs = &s
+	}
+	rows, err := r.q.ListDagsFiltered(ctx, queries.ListDagsFilteredParams{
+		TenantID: tid, Limit: toInt32(limit), Offset: toInt32(offset), Paused: paused, RunState: rs,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing filtered dags: %w", err)
+	}
+	total, err := r.q.CountDagsFiltered(ctx, queries.CountDagsFilteredParams{TenantID: tid, Paused: paused, RunState: rs})
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting filtered dags: %w", err)
+	}
+	out := make([]domain.DAG, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, mapDag(d))
+	}
+	return out, int(total), nil
+}

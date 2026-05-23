@@ -4,17 +4,64 @@ package logs
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // flushThreshold is the buffered-writer size; a full buffer flushes to storage,
 // bounding how much is lost on a crash and how stale a live reader can be.
 const flushThreshold = 1 << 20 // 1 MB
+
+// Event is one structured log line: when it was emitted, its severity level and
+// source stream (stdout/stderr), and the message text. Logs are stored as JSONL
+// (one Event per line) so the UI's drill-down viewer can color by real level
+// instead of guessing.
+type Event struct {
+	Time    time.Time `json:"ts"`
+	Level   string    `json:"level"`
+	Stream  string    `json:"stream"`
+	Message string    `json:"msg"`
+}
+
+// DecodeLine parses a stored log line into an Event. Lines that are not JSON
+// (legacy plain-text logs written before structured storage) decode as a
+// stdout message with a level inferred from the text, so the reader serves both
+// formats with sensible coloring.
+func DecodeLine(line string) Event {
+	if strings.HasPrefix(line, "{") {
+		var ev Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil {
+			if ev.Level == "" {
+				ev.Level = "info"
+			}
+			if ev.Stream == "" {
+				ev.Stream = "stdout"
+			}
+			return ev
+		}
+	}
+	return Event{Level: inferLevel(line), Stream: "stdout", Message: line}
+}
+
+// inferLevel guesses a level from a legacy plain line's text.
+func inferLevel(line string) string {
+	switch {
+	case strings.Contains(line, "ERROR") || strings.Contains(line, "Traceback") || strings.Contains(line, "Exception"):
+		return "error"
+	case strings.Contains(line, "WARN"):
+		return "warning"
+	case strings.Contains(line, "DEBUG"):
+		return "debug"
+	default:
+		return "info"
+	}
+}
 
 // Ref identifies a task instance's log stream and maps to its storage location.
 type Ref struct {
@@ -25,9 +72,10 @@ type Ref struct {
 	TryNumber int
 }
 
-// LogWriter appends log lines for one task attempt and flushes on Close.
+// LogWriter appends structured log events for one task attempt and flushes on
+// Close.
 type LogWriter interface {
-	WriteLine(line string) error
+	WriteEvent(ev Event) error
 	Close() error
 }
 
@@ -106,9 +154,17 @@ type diskWriter struct {
 	buf *bufio.Writer
 }
 
-// WriteLine appends a line; the buffer flushes automatically at flushThreshold.
-func (w *diskWriter) WriteLine(line string) error {
-	if _, err := w.buf.WriteString(line + "\n"); err != nil {
+// WriteEvent appends an event as a JSON line; the buffer flushes automatically
+// at flushThreshold.
+func (w *diskWriter) WriteEvent(ev Event) error {
+	if ev.Time.IsZero() {
+		ev.Time = time.Now().UTC()
+	}
+	encoded, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("encoding log event: %w", err)
+	}
+	if _, err := w.buf.Write(append(encoded, '\n')); err != nil {
 		return fmt.Errorf("writing log line: %w", err)
 	}
 	return nil

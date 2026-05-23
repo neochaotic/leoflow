@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,23 +28,58 @@ func TestDiskSinkWriteThenReadBack(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	for _, line := range []string{"first", "second"} {
-		if werr := w.WriteLine(line); werr != nil {
-			t.Fatalf("WriteLine: %v", werr)
+		if werr := w.WriteEvent(Event{Level: "info", Stream: "stdout", Message: line}); werr != nil {
+			t.Fatalf("WriteEvent: %v", werr)
 		}
 	}
 	if cerr := w.Close(); cerr != nil {
 		t.Fatalf("Close: %v", cerr)
 	}
 
-	// The file persists after the writer is closed (i.e. past pod termination).
+	// The file persists after the writer is closed (i.e. past pod termination)
+	// and is stored as JSONL; decoding each line recovers the messages.
 	rc, err := sink.Read(ref())
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 	defer rc.Close()
 	data, _ := io.ReadAll(rc)
-	if string(data) != "first\nsecond\n" {
-		t.Errorf("read back %q, want \"first\\nsecond\\n\"", data)
+	rawLines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	msgs := make([]string, 0, len(rawLines))
+	for _, raw := range rawLines {
+		msgs = append(msgs, DecodeLine(raw).Message)
+	}
+	if len(msgs) != 2 || msgs[0] != "first" || msgs[1] != "second" {
+		t.Errorf("read back %q -> messages %v, want [first second]", data, msgs)
+	}
+}
+
+func TestDecodeLineRoundTripAndLegacy(t *testing.T) {
+	// JSONL round-trip preserves the real level/stream.
+	dir := t.TempDir()
+	w, err := NewDiskSink(dir).Open(ref())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if werr := w.WriteEvent(Event{Level: "error", Stream: "stderr", Message: "boom"}); werr != nil {
+		t.Fatal(werr)
+	}
+	_ = w.Close()
+	rc, _ := NewDiskSink(dir).Read(ref())
+	defer rc.Close()
+	data, _ := io.ReadAll(rc)
+	ev := DecodeLine(strings.TrimSpace(string(data)))
+	if ev.Level != "error" || ev.Stream != "stderr" || ev.Message != "boom" {
+		t.Errorf("round-trip lost fields: %+v", ev)
+	}
+
+	// Legacy plain lines decode as stdout with an inferred level.
+	legacy := DecodeLine("ERROR something failed")
+	if legacy.Level != "error" || legacy.Message != "ERROR something failed" {
+		t.Errorf("legacy decode = %+v", legacy)
+	}
+	if DecodeLine("just a line").Level != "info" {
+		t.Errorf("plain line should infer info")
 	}
 }
 
@@ -74,7 +110,7 @@ func TestDiskSinkPruneDeletesOldLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = w.WriteLine("x")
+	_ = w.WriteEvent(Event{Message: "x"})
 	_ = w.Close()
 
 	now := time.Now()

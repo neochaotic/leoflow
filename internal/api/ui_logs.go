@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/logs"
 )
 
 // structuredLogEvent is one item in Airflow 3.2.1's structured log content: a
@@ -32,22 +34,6 @@ func wantsStructuredLogs(c *gin.Context) bool {
 	return strings.Contains(c.GetHeader("Accept"), "application/json")
 }
 
-// inferLogLevel guesses a line's level from its text. Leoflow stores raw log
-// lines (the stream/level the agent tagged is not persisted yet), so the viewer
-// colors lines heuristically until structured storage lands.
-func inferLogLevel(line string) string {
-	switch {
-	case strings.Contains(line, "ERROR") || strings.Contains(line, "Traceback") || strings.Contains(line, "Exception"):
-		return "error"
-	case strings.Contains(line, "WARN"):
-		return "warning"
-	case strings.Contains(line, "DEBUG"):
-		return "debug"
-	default:
-		return "info"
-	}
-}
-
 // serveStructuredLogs reads the stored log lines and emits Airflow's structured
 // content: a leading collapsible source group, then one event per line with an
 // inferred level. continuation_token is null (logs are served whole, not paged).
@@ -61,8 +47,10 @@ func serveStructuredLogs(c *gin.Context, rc io.Reader, try int) {
 	scanner := bufio.NewScanner(rc)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		line := scanner.Text()
-		content = append(content, structuredLogEvent{Event: line, Level: inferLogLevel(line)})
+		// Logs are stored as JSONL with the real level the producer tagged;
+		// DecodeLine infers a level for legacy plain lines.
+		ev := logs.DecodeLine(scanner.Text())
+		content = append(content, structuredLogEvent{Event: ev.Message, Level: ev.Level})
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Warn("reading logs for structured response", "error", err)

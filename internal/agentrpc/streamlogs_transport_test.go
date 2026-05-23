@@ -22,10 +22,10 @@ type captureSink struct {
 
 func (c *captureSink) Open(logs.Ref) (logs.LogWriter, error) { return c, nil }
 
-func (c *captureSink) WriteLine(line string) error {
+func (c *captureSink) WriteEvent(ev logs.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.lines = append(c.lines, line)
+	c.lines = append(c.lines, ev.Message)
 	return nil
 }
 

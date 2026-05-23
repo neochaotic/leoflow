@@ -241,6 +241,21 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 	return writeLines(w, stream.Recv, publish)
 }
 
+// logLevelString maps the protobuf log level onto the lowercase level name the
+// UI's log viewer colors by. Unspecified defaults to info.
+func logLevelString(level agentv1.LogLevel) string {
+	switch level {
+	case agentv1.LogLevel_LOG_LEVEL_DEBUG:
+		return "debug"
+	case agentv1.LogLevel_LOG_LEVEL_WARN:
+		return "warning"
+	case agentv1.LogLevel_LOG_LEVEL_ERROR:
+		return "error"
+	default:
+		return "info"
+	}
+}
+
 // writeLines drains log lines from recv into the writer until the stream ends,
 // also publishing each line for live tailing.
 func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish func(string)) error {
@@ -253,7 +268,13 @@ func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish
 			return status.Errorf(codes.Internal, "receiving log line: %v", err)
 		}
 		msg := line.GetMessage()
-		if werr := w.WriteLine(msg); werr != nil {
+		ev := logs.Event{
+			Time:    line.GetTime().AsTime(),
+			Level:   logLevelString(line.GetLevel()),
+			Stream:  line.GetStream(),
+			Message: msg,
+		}
+		if werr := w.WriteEvent(ev); werr != nil {
 			return status.Errorf(codes.Internal, "writing log line: %v", werr)
 		}
 		publish(msg)

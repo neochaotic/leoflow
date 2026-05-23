@@ -248,8 +248,11 @@ type fakeLogWriter struct {
 	closed bool
 }
 
-func (w *fakeLogWriter) WriteLine(line string) error { w.lines = append(w.lines, line); return nil }
-func (w *fakeLogWriter) Close() error                { w.closed = true; return nil }
+func (w *fakeLogWriter) WriteEvent(ev logs.Event) error {
+	w.lines = append(w.lines, ev.Message)
+	return nil
+}
+func (w *fakeLogWriter) Close() error { w.closed = true; return nil }
 
 func TestWriteLinesDrainsStreamToSink(t *testing.T) {
 	msgs := []string{"line one", "line two", "line three"}
@@ -350,8 +353,8 @@ func (s *fakeLogSink) Open(logs.Ref) (logs.LogWriter, error) { return &fakeSinkW
 
 type fakeSinkWriter struct{ s *fakeLogSink }
 
-func (w *fakeSinkWriter) WriteLine(line string) error {
-	w.s.lines = append(w.s.lines, line)
+func (w *fakeSinkWriter) WriteEvent(ev logs.Event) error {
+	w.s.lines = append(w.s.lines, ev.Message)
 	return nil
 }
 func (w *fakeSinkWriter) Close() error { return nil }

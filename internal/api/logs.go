@@ -1,12 +1,15 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/logs"
 )
 
 // LogReader streams a task attempt's stored logs and, for running tasks, tails
@@ -41,8 +44,15 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 	}
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Status(http.StatusOK)
-	if _, cerr := io.Copy(c.Writer, rc); cerr != nil {
-		slog.Warn("streaming logs to client", "error", cerr)
+	// Logs are stored as JSONL; the plain-text view emits just each message
+	// (DecodeLine tolerates legacy plain lines too).
+	scanner := bufio.NewScanner(rc)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if _, werr := c.Writer.WriteString(logs.DecodeLine(scanner.Text()).Message + "\n"); werr != nil {
+			slog.Warn("streaming logs to client", "error", werr)
+			break
+		}
 	}
 	if c.Query("follow") == "true" {
 		tailLogs(c, reader, try)

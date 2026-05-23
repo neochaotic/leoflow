@@ -201,7 +201,11 @@ func (r *InlineRunner) shipLog(ctx context.Context, it inlineTask, state domain.
 		return
 	}
 	line := fmt.Sprintf("inline http_api %s %s -> %s (%.2fs)", it.spec.HTTPRequest.Method, it.spec.HTTPRequest.URL, state, dur.Seconds())
-	if werr := w.WriteLine(line); werr != nil {
+	level := "info"
+	if state == domain.TaskStateFailed {
+		level = "error"
+	}
+	if werr := w.WriteEvent(logs.Event{Level: level, Stream: "stdout", Message: line}); werr != nil {
 		slog.Warn("writing inline log", "task", it.spec.TaskID, "error", werr)
 	}
 	if cerr := w.Close(); cerr != nil {

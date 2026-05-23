@@ -72,10 +72,10 @@ func (s *fakeLogSink) Read(logs.Ref) (io.ReadCloser, error)  { return nil, io.EO
 
 type fakeLogWriter struct{ s *fakeLogSink }
 
-func (w *fakeLogWriter) WriteLine(line string) error {
+func (w *fakeLogWriter) WriteEvent(ev logs.Event) error {
 	w.s.mu.Lock()
 	defer w.s.mu.Unlock()
-	w.s.lines = append(w.s.lines, line)
+	w.s.lines = append(w.s.lines, ev.Message)
 	return nil
 }
 func (w *fakeLogWriter) Close() error { return nil }

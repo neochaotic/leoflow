@@ -51,6 +51,10 @@ type Dependencies struct {
 	DashboardStats DashboardStatsReader
 	AuditLog       AuditLogReader
 
+	// SchedulerHealth reports the scheduler's heartbeat for /monitor/health.
+	// When nil the component reports healthy (single-process role assumption).
+	SchedulerHealth Heartbeater
+
 	// UI serves the embedded SPA. When nil the server is API-only.
 	UI UIServer
 }
@@ -78,7 +82,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	// The Airflow UI redirects unauthenticated users to GET /api/v2/auth/login.
 	r.GET("/api/v2/auth/login", loginPageHandler())
 	r.GET("/api/v2/auth/logout", logoutHandler())
-	r.GET("/api/v2/monitor/health", monitorHealthHandler(deps.HealthChecks))
+	r.GET("/api/v2/monitor/health", monitorHealthHandler(deps.HealthChecks, deps.SchedulerHealth))
 
 	registerResources(r, deps)
 	registerUI(r, deps.TokenTTLSecs)

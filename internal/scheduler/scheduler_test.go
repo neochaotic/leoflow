@@ -183,3 +183,23 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 		t.Error("Run should return ctx error after cancel")
 	}
 }
+
+func TestHeartbeatTracksTicks(t *testing.T) {
+	s := NewScheduler(&fakeStore{}, slog.New(slog.NewTextHandler(io.Discard, nil)), 10*time.Millisecond)
+
+	// Before any tick: healthy by startup grace.
+	if ok, _ := s.Heartbeat(); !ok {
+		t.Error("fresh scheduler should be healthy (startup grace)")
+	}
+	// After a Step: healthy with a recent heartbeat.
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	ok, last := s.Heartbeat()
+	if !ok {
+		t.Error("scheduler should be healthy right after a tick")
+	}
+	if time.Since(last) > time.Second {
+		t.Errorf("heartbeat %v is not recent", last)
+	}
+}

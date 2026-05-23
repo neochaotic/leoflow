@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
@@ -74,6 +75,7 @@ type Scheduler struct {
 	recorder   Recorder
 	dispatcher Dispatcher
 	inline     InlineRunner
+	lastTick   atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
 }
 
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
@@ -108,8 +110,22 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 }
 
+// Heartbeat reports whether the scheduling loop is live and when it last ticked.
+// It is healthy before the first tick (startup grace) and while ticks stay
+// within a small multiple of the loop interval; a stalled leader goes unhealthy.
+// A non-leader process never ticks (lastTick stays 0) and stays in grace.
+func (s *Scheduler) Heartbeat() (bool, time.Time) {
+	nanos := s.lastTick.Load()
+	if nanos == 0 {
+		return true, time.Now().UTC()
+	}
+	last := time.Unix(0, nanos).UTC()
+	return time.Since(last) <= 3*s.interval+time.Second, last
+}
+
 // Step runs one deterministic scheduling iteration over every active run.
 func (s *Scheduler) Step(ctx context.Context) error {
+	s.lastTick.Store(time.Now().UnixNano())
 	runs, err := s.store.ActiveRuns(ctx)
 	if err != nil {
 		return fmt.Errorf("listing active runs: %w", err)

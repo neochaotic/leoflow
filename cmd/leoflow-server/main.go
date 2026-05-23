@@ -104,10 +104,13 @@ func run() error {
 
 	startCleanup(ctx, storage.NewXComIndex(pg), logSink, tel.Logger)
 
+	var schedulerHealth api.Heartbeater
 	if cfg.Scheduler.Enabled {
-		if serr := startScheduler(ctx, cfg, pg, execStore, authn, xcomSvc, logSink, tel.Logger, tel.Metrics); serr != nil {
+		sched, serr := startScheduler(ctx, cfg, pg, execStore, authn, xcomSvc, logSink, tel.Logger, tel.Metrics)
+		if serr != nil {
 			return serr
 		}
+		schedulerHealth = sched
 	}
 
 	handler := api.NewServer(api.Dependencies{
@@ -134,6 +137,7 @@ func run() error {
 		DagVersions:                  repo,
 		DashboardStats:               repo,
 		AuditLog:                     repo,
+		SchedulerHealth:              schedulerHealth,
 		UI:                           ui.New(),
 	})
 
@@ -285,10 +289,10 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter exec
 	}()
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) error {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, error) {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
-		return fmt.Errorf("leader pool: %w", err)
+		return nil, fmt.Errorf("leader pool: %w", err)
 	}
 	store := storage.NewSchedulerStore(pg)
 	sched := scheduler.NewScheduler(store, logger,
@@ -320,7 +324,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		defer leaderPool.Close()
 		campaignAndRun(ctx, leader, sched, logger)
 	}()
-	return nil
+	return sched, nil
 }
 
 // campaignAndRun acquires scheduler leadership (polling every 5s) and runs the

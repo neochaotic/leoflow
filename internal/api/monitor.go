@@ -13,37 +13,59 @@ const (
 	healthStatusUnhealthy = "unhealthy"
 )
 
+// Heartbeater reports a long-running component's liveness and last heartbeat for
+// the monitor health endpoint. The scheduler implements it.
+type Heartbeater interface {
+	Heartbeat() (healthy bool, last time.Time)
+}
+
+// componentHealth resolves a component's status string and heartbeat timestamp.
+// Without a heartbeater (component not wired) it reports healthy with now, since
+// in Leoflow's single process its role is served by this very request.
+func componentHealth(hb Heartbeater) (status, heartbeat string) {
+	if hb == nil {
+		return healthStatusHealthy, time.Now().UTC().Format(time.RFC3339)
+	}
+	healthy, last := hb.Heartbeat()
+	status = healthStatusHealthy
+	if !healthy {
+		status = healthStatusUnhealthy
+	}
+	return status, last.UTC().Format(time.RFC3339)
+}
+
 // monitorHealthHandler implements GET /api/v2/monitor/health (Airflow
 // HealthInfoResponse). The Airflow UI's home dashboard polls it to color the
 // component health widgets (metadatabase, scheduler, triggerer, dag processor).
 //
-// The metadatabase status is a real probe — it pings the "postgres" health
-// checker. Leoflow's single Go control plane subsumes the scheduler, triggerer,
-// and DAG processor roles (there are no separate Python daemons); since this
-// process serves the request, those report healthy with a current heartbeat.
-// See docs/ui-compatibility.md.
-func monitorHealthHandler(checks map[string]HealthChecker) gin.HandlerFunc {
+// The metadatabase status is a real probe (pings the "postgres" checker) and the
+// scheduler status is a real heartbeat (sched, when wired, reports its last loop
+// tick — a stalled leader goes unhealthy). Leoflow's single Go control plane
+// subsumes the triggerer and DAG-processor roles (no separate Python daemons):
+// triggering is folded into the scheduler and DAG "processing" is GitOps
+// compile-time, so those mirror the scheduler heartbeat. See docs/ui-compatibility.md.
+func monitorHealthHandler(checks map[string]HealthChecker, sched Heartbeater) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		now := time.Now().UTC().Format(time.RFC3339)
 		dbStatus := healthStatusHealthy
 		if hc, ok := checks["postgres"]; ok {
 			if err := hc.Ping(c.Request.Context()); err != nil {
 				dbStatus = healthStatusUnhealthy
 			}
 		}
+		schedStatus, schedBeat := componentHealth(sched)
 		c.JSON(http.StatusOK, gin.H{
 			"metadatabase": gin.H{"status": dbStatus},
 			"scheduler": gin.H{
-				"status":                     healthStatusHealthy,
-				"latest_scheduler_heartbeat": now,
+				"status":                     schedStatus,
+				"latest_scheduler_heartbeat": schedBeat,
 			},
 			"triggerer": gin.H{
-				"status":                     healthStatusHealthy,
-				"latest_triggerer_heartbeat": now,
+				"status":                     schedStatus,
+				"latest_triggerer_heartbeat": schedBeat,
 			},
 			"dag_processor": gin.H{
-				"status":                         healthStatusHealthy,
-				"latest_dag_processor_heartbeat": now,
+				"status":                         schedStatus,
+				"latest_dag_processor_heartbeat": schedBeat,
 			},
 		})
 	}

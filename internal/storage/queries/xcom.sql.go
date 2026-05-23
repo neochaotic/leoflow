@@ -94,6 +94,54 @@ func (q *Queries) GetXComEntry(ctx context.Context, arg GetXComEntryParams) (Get
 	return i, err
 }
 
+const listXComEntries = `-- name: ListXComEntries :many
+SELECT x.key AS key, x.created_at AS created_at
+FROM xcom_index x
+JOIN dag_runs dr ON dr.id = x.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+JOIN tenants t ON t.id = d.tenant_id
+WHERE t.name = $1 AND d.dag_id = $2 AND dr.run_id = $3 AND x.task_id = $4
+  AND x.expires_at > now()
+ORDER BY x.key
+`
+
+type ListXComEntriesParams struct {
+	Name   string `json:"name"`
+	DagID  string `json:"dag_id"`
+	RunID  string `json:"run_id"`
+	TaskID string `json:"task_id"`
+}
+
+type ListXComEntriesRow struct {
+	Key       string             `json:"key"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listXComEntries,
+		arg.Name,
+		arg.DagID,
+		arg.RunID,
+		arg.TaskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListXComEntriesRow{}
+	for rows.Next() {
+		var i ListXComEntriesRow
+		if err := rows.Scan(&i.Key, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recordXCom = `-- name: RecordXCom :exec
 INSERT INTO xcom_index (tenant_id, dag_run_id, task_id, key, redis_key, size_bytes, content_type, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

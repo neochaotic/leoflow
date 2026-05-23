@@ -85,3 +85,23 @@ func (r *XComReader) GetXCom(ctx context.Context, tenant, dagID, runID, taskID, 
 	}
 	return entry, nil
 }
+
+// ListXComEntries returns the metadata of every non-expired XCom pushed by a
+// task instance (keys and timestamps, no values), for the XCom list view.
+func (r *XComReader) ListXComEntries(ctx context.Context, tenant, dagID, runID, taskID string) ([]domain.XComEntryMeta, error) {
+	rows, err := r.q.ListXComEntries(ctx, queries.ListXComEntriesParams{
+		Name: tenant, DagID: dagID, RunID: runID, TaskID: taskID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing xcom entries: %w", err)
+	}
+	out := make([]domain.XComEntryMeta, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.XComEntryMeta{
+			Key:       row.Key,
+			Timestamp: timeVal(row.CreatedAt),
+			MapIndex:  -1,
+		})
+	}
+	return out, nil
+}

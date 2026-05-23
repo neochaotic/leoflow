@@ -24,3 +24,13 @@ JOIN dags d ON d.id = dr.dag_id
 JOIN tenants t ON t.id = d.tenant_id
 WHERE t.name = $1 AND d.dag_id = $2 AND dr.run_id = $3 AND x.task_id = $4 AND x.key = $5
   AND x.expires_at > now();
+
+-- name: ListXComEntries :many
+SELECT x.key AS key, x.created_at AS created_at
+FROM xcom_index x
+JOIN dag_runs dr ON dr.id = x.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+JOIN tenants t ON t.id = d.tenant_id
+WHERE t.name = $1 AND d.dag_id = $2 AND dr.run_id = $3 AND x.task_id = $4
+  AND x.expires_at > now()
+ORDER BY x.key;

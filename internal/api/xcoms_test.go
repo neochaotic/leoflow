@@ -15,12 +15,17 @@ import (
 )
 
 type fakeXComReader struct {
-	entry xcom.Entry
-	err   error
+	entry   xcom.Entry
+	err     error
+	entries []domain.XComEntryMeta
 }
 
 func (f *fakeXComReader) GetXCom(context.Context, string, string, string, string, string) (xcom.Entry, error) {
 	return f.entry, f.err
+}
+
+func (f *fakeXComReader) ListXComEntries(context.Context, string, string, string, string) ([]domain.XComEntryMeta, error) {
+	return f.entries, f.err
 }
 
 func xcomServer(reader XComReader) *gin.Engine {
@@ -29,6 +34,7 @@ func xcomServer(reader XComReader) *gin.Engine {
 		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
 		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
 		CORSOrigins:   []string{"*"},
+		Tasks:         &fakeTaskRepo{},
 		Xcoms:         reader,
 	})
 }
@@ -53,5 +59,47 @@ func TestXComReadNotFound(t *testing.T) {
 	rec := authGet(xcomServer(reader), http.MethodGet, "/api/v2/xcoms/etl/run-1/extract/missing", "")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("missing xcom = %d, want 404", rec.Code)
+	}
+}
+
+func TestXComEntriesList(t *testing.T) {
+	reader := &fakeXComReader{entries: []domain.XComEntryMeta{
+		{Key: "return_value", Timestamp: time.Now().UTC(), MapIndex: -1},
+		{Key: "summary", Timestamp: time.Now().UTC(), MapIndex: -1},
+	}}
+	rec := authGet(xcomServer(reader), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/xcomEntries", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("xcomEntries = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var col xcomEntryCollectionDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &col); err != nil {
+		t.Fatal(err)
+	}
+	if col.TotalEntries != 2 || len(col.XComEntries) != 2 {
+		t.Fatalf("want 2 entries, got %+v", col)
+	}
+	e := col.XComEntries[0]
+	if e.Key != "return_value" || e.TaskID != "extract" || e.DagID != "etl" || e.RunID != "run-1" || e.MapIndex != -1 {
+		t.Errorf("entry metadata wrong: %+v", e)
+	}
+	if e.DagDisplayName != "etl" || e.TaskDisplayName != "extract" {
+		t.Errorf("display names wrong: %+v", e)
+	}
+}
+
+func TestXComEntryValueByKey(t *testing.T) {
+	reader := &fakeXComReader{entry: xcom.Entry{Value: []byte(`42`), CreatedAt: time.Now().UTC()}}
+	rec := authGet(xcomServer(reader), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/xcomEntries/return_value", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("xcomEntries/{key} = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var dto xComEntryDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if string(dto.Value) != `42` || dto.Key != "return_value" || dto.TaskID != "extract" {
+		t.Errorf("unexpected value dto: %+v", dto)
 	}
 }

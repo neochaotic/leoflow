@@ -269,7 +269,7 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
 // taskInstanceActionHandler dispatches the catch-all under
 // /taskInstances/{task_id}/* : "logs/{try}" streams the attempt's logs, while a
 // bare "{map_index}" returns the single task instance (TaskInstanceResponse).
-func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader) gin.HandlerFunc {
+func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xcoms XComReader) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		action := strings.Trim(c.Param("action"), "/")
 		if rest, ok := strings.CutPrefix(action, "logs/"); ok {
@@ -280,6 +280,16 @@ func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader) gin
 			}
 			serveLogs(c, logs, try)
 			return
+		}
+		if xcoms != nil {
+			if action == "xcomEntries" {
+				serveXComEntries(c, xcoms)
+				return
+			}
+			if key, ok := strings.CutPrefix(action, "xcomEntries/"); ok {
+				serveXComValue(c, xcoms, key)
+				return
+			}
 		}
 		mapIndex, err := strconv.Atoi(action)
 		if err != nil {
@@ -333,7 +343,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		// parent; gin cannot mix a static and a wildcard child there, so one
 		// catch-all dispatches both (single task instance vs its logs).
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action",
-			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs))
+			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms))
 		r.POST("/api/v2/dags/:dag_id/clearTaskInstances",
 			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks))
 	}

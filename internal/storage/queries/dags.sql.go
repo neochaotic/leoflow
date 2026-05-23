@@ -138,6 +138,52 @@ func (q *Queries) InsertDagVersion(ctx context.Context, arg InsertDagVersionPara
 	return i, err
 }
 
+const listDagVersions = `-- name: ListDagVersions :many
+SELECT v.id, v.version, v.created_at,
+       row_number() OVER (ORDER BY v.created_at, v.version) AS version_number
+FROM dag_versions v
+JOIN dags d ON d.id = v.dag_id
+WHERE d.tenant_id = $1 AND d.dag_id = $2
+ORDER BY version_number DESC
+`
+
+type ListDagVersionsParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	DagID    string      `json:"dag_id"`
+}
+
+type ListDagVersionsRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	Version       string             `json:"version"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	VersionNumber int64              `json:"version_number"`
+}
+
+func (q *Queries) ListDagVersions(ctx context.Context, arg ListDagVersionsParams) ([]ListDagVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listDagVersions, arg.TenantID, arg.DagID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDagVersionsRow{}
+	for rows.Next() {
+		var i ListDagVersionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Version,
+			&i.CreatedAt,
+			&i.VersionNumber,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDags = `-- name: ListDags :many
 SELECT id, tenant_id, dag_id, description, is_paused, is_active, owner, tags, schedule, schedule_timezone, start_date, end_date, max_active_runs, catchup, current_version_id, created_at, updated_at FROM dags
 WHERE tenant_id = $1 AND is_active = true

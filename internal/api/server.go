@@ -47,6 +47,7 @@ type Dependencies struct {
 	Specs       DagSpecReader
 	LatestRuns  DagLatestRunsReader
 	TaskSummary TaskSummaryReader
+	DagVersions DagVersionLister
 
 	// UI serves the embedded SPA. When nil the server is API-only.
 	UI UIServer

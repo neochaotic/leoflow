@@ -16,6 +16,14 @@ type DAG struct {
 	Catchup       bool
 }
 
+// DagVersion is a registered version of a DAG. VersionNumber is the 1-based
+// ordinal the UI uses (the stored version label is free-form).
+type DagVersion struct {
+	ID            string
+	VersionNumber int
+	CreatedAt     time.Time
+}
+
 // DagRun is an execution of a DAG, identified by dag_id + run_id.
 type DagRun struct {
 	DagID       string

@@ -157,6 +157,18 @@ func TestDagRunsListAndCreate(t *testing.T) {
 	}
 }
 
+func TestTaskInstancesWildcardRunReturnsEmpty(t *testing.T) {
+	// The overview polls dagRuns/~/taskInstances (all runs); must degrade to an
+	// empty collection (200), not 404.
+	rec := authGet(authedServer(), http.MethodGet, "/api/v2/dags/etl/dagRuns/~/taskInstances", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("~/taskInstances = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"total_entries":0`) {
+		t.Errorf("~/taskInstances should be empty, got %s", rec.Body.String())
+	}
+}
+
 func TestDagRunsWildcardReturnsEmptyCollection(t *testing.T) {
 	// The UI home polls /api/v2/dags/~/dagRuns (all DAGs). It must degrade to an
 	// empty collection (200), not 404 — "~" is not a real DAG.

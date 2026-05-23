@@ -205,6 +205,14 @@ func createDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
 
 func listTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// "~" wildcards "all runs"; the UI overview polls
+		// dagRuns/~/taskInstances?state=failed for its Failed-Tasks widget. We
+		// have no cross-run task-instance query, so degrade to empty (200) rather
+		// than 404 (which resolves "~" as a missing run). Follow-up: real query.
+		if c.Param("dag_run_id") == "~" {
+			c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: []taskInstanceDTO{}, TotalEntries: 0})
+			return
+		}
 		limit, offset := pagination(c)
 		tis, total, err := repo.ListTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), c.Param("dag_run_id"), limit, offset)
 		if err != nil {
@@ -258,7 +266,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		g := r.Group("/api/v2/dags")
 		g.GET("", RequirePermission("read", "dag"), listDagsHandler(deps.Dags))
 		g.GET("/:dag_id", RequirePermission("read", "dag"), getDagHandler(deps.Dags))
-		g.GET("/:dag_id/details", RequirePermission("read", "dag"), dagDetailsHandler(deps.Dags))
+		g.GET("/:dag_id/details", RequirePermission("read", "dag"), dagDetailsHandler(deps.Dags, deps.DagVersions))
 		g.PATCH("/:dag_id", RequirePermission("write", "dag"), patchDagHandler(deps.Dags))
 	}
 	if deps.DagRuns != nil {

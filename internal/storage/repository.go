@@ -308,6 +308,28 @@ func (r *Repository) TaskInstancesForRuns(ctx context.Context, tenant, dagID str
 	return out, nil
 }
 
+// ListDagVersions returns the DAG's versions, newest first, with a 1-based
+// version_number the UI uses to query version-scoped structure.
+func (r *Repository) ListDagVersions(ctx context.Context, tenant, dagID string) ([]domain.DagVersion, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.ListDagVersions(ctx, queries.ListDagVersionsParams{TenantID: tid, DagID: dagID})
+	if err != nil {
+		return nil, fmt.Errorf("listing dag versions: %w", err)
+	}
+	out := make([]domain.DagVersion, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.DagVersion{
+			ID:            uuidToString(row.ID),
+			VersionNumber: int(row.VersionNumber),
+			CreatedAt:     timeVal(row.CreatedAt),
+		})
+	}
+	return out, nil
+}
+
 // GetCurrentSpec returns the parsed spec of the DAG's current version, or
 // domain.ErrNotFound if the DAG or its current version does not exist.
 func (r *Repository) GetCurrentSpec(ctx context.Context, tenant, dagID string) (domain.DAGSpec, error) {

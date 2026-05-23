@@ -116,7 +116,7 @@ type dagDetailsDTO struct {
 	DefaultArgs                 *json.RawMessage `json:"default_args"`
 	FileToken                   string           `json:"file_token"`
 	Concurrency                 int              `json:"concurrency"`
-	LatestDagVersion            *json.RawMessage `json:"latest_dag_version"`
+	LatestDagVersion            *dagVersionDTO   `json:"latest_dag_version"`
 }
 
 func toDagDetailsDTO(d domain.DAG) dagDetailsDTO {
@@ -150,14 +150,28 @@ func toDagDetailsDTO(d domain.DAG) dagDetailsDTO {
 	}
 }
 
-// dagDetailsHandler implements GET /api/v2/dags/{dag_id}/details.
-func dagDetailsHandler(repo DagRepository) gin.HandlerFunc {
+// dagDetailsHandler implements GET /api/v2/dags/{dag_id}/details. It populates
+// latest_dag_version from the version lister — the Graph view reads the
+// version_number from there to fetch version-scoped structure, so a null version
+// leaves the graph blank.
+func dagDetailsHandler(repo DagRepository, versions DagVersionLister) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		d, err := repo.GetDag(c.Request.Context(), tenantOf(c), c.Param("dag_id"))
+		dagID := c.Param("dag_id")
+		d, err := repo.GetDag(c.Request.Context(), tenantOf(c), dagID)
 		if err != nil {
 			handleRepoError(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, toDagDetailsDTO(d))
+		dto := toDagDetailsDTO(d)
+		if versions != nil {
+			if vs, verr := versions.ListDagVersions(c.Request.Context(), tenantOf(c), dagID); verr == nil && len(vs) > 0 {
+				latest := vs[0] // ListDagVersions is newest-first.
+				dto.LatestDagVersion = &dagVersionDTO{
+					ID: latest.ID, VersionNumber: latest.VersionNumber, DagID: dagID,
+					BundleName: "leoflow", CreatedAt: latest.CreatedAt, DagDisplayName: dagID,
+				}
+			}
+		}
+		c.JSON(http.StatusOK, dto)
 	}
 }

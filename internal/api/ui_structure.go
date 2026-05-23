@@ -26,20 +26,31 @@ type gridNodeDTO struct {
 	Children *[]gridNodeDTO `json:"children"`
 }
 
-// structureNodeDTO is the Airflow 3.2.1 NodeResponse for the graph view.
+// structureNodeDTO is the Airflow 3.2.1 NodeResponse for the graph view. The
+// graph's React Flow renderer reads the full node shape, so the optional fields
+// are emitted as null (matching real Airflow) rather than omitted — omitting
+// them leaves the graph canvas blank.
 type structureNodeDTO struct {
-	ID       string              `json:"id"`
-	Label    string              `json:"label"`
-	Type     string              `json:"type"`
-	Operator *string             `json:"operator"`
-	Children *[]structureNodeDTO `json:"children"`
+	ID                 string              `json:"id"`
+	Label              string              `json:"label"`
+	Type               string              `json:"type"`
+	Children           *[]structureNodeDTO `json:"children"`
+	IsMapped           *bool               `json:"is_mapped"`
+	Tooltip            *string             `json:"tooltip"`
+	SetupTeardownType  *string             `json:"setup_teardown_type"`
+	Operator           *string             `json:"operator"`
+	AssetConditionType *string             `json:"asset_condition_type"`
 }
 
 // structureEdgeDTO is the Airflow 3.2.1 EdgeResponse: a dependency from upstream
-// (source_id) to downstream (target_id).
+// (source_id) to downstream (target_id), with the optional graph-render fields
+// present as null.
 type structureEdgeDTO struct {
-	SourceID string `json:"source_id"`
-	TargetID string `json:"target_id"`
+	SourceID        string  `json:"source_id"`
+	TargetID        string  `json:"target_id"`
+	IsSetupTeardown *bool   `json:"is_setup_teardown"`
+	Label           *string `json:"label"`
+	IsSourceAsset   *bool   `json:"is_source_asset"`
 }
 
 // structureDataDTO is the Airflow 3.2.1 StructureDataResponse.

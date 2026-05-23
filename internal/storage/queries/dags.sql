@@ -44,3 +44,11 @@ SELECT v.spec
 FROM dags d
 JOIN dag_versions v ON v.id = d.current_version_id
 WHERE d.tenant_id = $1 AND d.dag_id = $2;
+
+-- name: ListDagVersions :many
+SELECT v.id, v.version, v.created_at,
+       row_number() OVER (ORDER BY v.created_at, v.version) AS version_number
+FROM dag_versions v
+JOIN dags d ON d.id = v.dag_id
+WHERE d.tenant_id = $1 AND d.dag_id = $2
+ORDER BY version_number DESC;

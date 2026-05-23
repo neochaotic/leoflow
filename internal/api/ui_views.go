@@ -164,4 +164,7 @@ func registerUIViews(r gin.IRouter, deps Dependencies) {
 	if deps.Dags != nil && deps.LatestRuns != nil {
 		r.GET("/ui/dags", RequirePermission("read", "dag"), uiDagsHandler(deps.Dags, deps.LatestRuns))
 	}
+	if deps.DagVersions != nil {
+		r.GET("/api/v2/dags/:dag_id/dagVersions", RequirePermission("read", "dag"), dagVersionsHandler(deps.DagVersions))
+	}
 }

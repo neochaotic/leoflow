@@ -131,6 +131,7 @@ func run() error {
 		Specs:                        repo,
 		LatestRuns:                   repo,
 		TaskSummary:                  repo,
+		DagVersions:                  repo,
 		UI:                           ui.New(),
 	})
 

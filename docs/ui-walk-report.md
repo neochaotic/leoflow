@@ -50,26 +50,32 @@ model; for normal DAGs the grid is correct.
 
 `demo_pipeline` (no runs) shows its `extract`/`transform`/`load` task rows.
 
-### Graph view — ❌ EMPTY canvas (top bug)
-![Graph demo_http_chain (empty)](screenshots/03_graph_http_chain.png)
-![Graph demo_pipeline (empty)](screenshots/05_pipeline_graph.png)
+### Graph view — ✅ FIXED (was an empty canvas)
+![Graph demo_pipeline](screenshots/05_pipeline_graph.png)
 
-Toggling to the Graph view shows a **blank React Flow canvas** for both DAGs — no
-nodes, no edges. This is a genuine silent misrender that only the browser surfaces.
+The graph now renders the topology: `extract` (python) → `transform` (bash) →
+`load` (http_api) as connected React Flow nodes, with "Latest Dag Version: v1" in
+the header.
 
-**Key diagnostic (from the server logs during the walk):** the graph view does
-**not** request `/ui/structure/structure_data` at all. The only structure request
-is `GET /ui/grid/structure/{dag_id}` (also used by the grid's left column). So the
-3.2.1 graph builds its React Flow nodes/edges from **`/ui/grid/structure`**, whose
-`GridNodeResponse` we currently return as a **flat list** (`children: null`, no
-nesting). The graph needs the nested/parent-child structure (and likely edge
-derivation from it) that the grid structure is supposed to carry. `structure_data`
-being correct (curl-verified) is therefore a red herring for this bug.
+**Root-cause chain (found by diffing against real Airflow 3.2.1 on a side cluster,
+not from the SPA prose):** the graph fetches
+`GET /ui/structure/structure_data?dag_id=…&version_number=N` — it needs a
+`version_number`. The SPA reads that from **`GET /api/v2/dags/{id}/details` →
+`latest_dag_version.version_number`**, which in turn comes from
+`GET /api/v2/dags/{id}/dagVersions`. Both of those **404'd** for us, so:
+`dagVersions 404` → `details.latest_dag_version: null` → no `version_number` →
+`structure_data` never fetched → blank canvas.
 
-**Next step:** compare real Airflow 3.2.1's `GET /ui/grid/structure/{dag_id}`
-response for a DAG with dependencies against ours, and emit the nesting/edges the
-graph renderer consumes. (This is also why the external audit's `structure_data`
-field advice is moot here — the graph doesn't call that endpoint.)
+**Fix (this PR):**
+- Implement `GET /api/v2/dags/{id}/dagVersions` (real `version_number` from the
+  stored versions via a `row_number()` window — integration-tested against live PG).
+- Populate `details.latest_dag_version` from the version lister.
+- Add the optional node/edge fields to `structure_data` (`is_mapped`, `tooltip`,
+  `setup_teardown_type`, `asset_condition_type`; `is_setup_teardown`, `label`,
+  `is_source_asset`) so the response matches real Airflow exactly.
+
+Verified live in the browser (the screenshot above) and via the captured network
+trace (`structure_data` now returns 200).
 
 ## Non-2xx requests captured (to stub/implement)
 
@@ -92,12 +98,12 @@ field advice is moot here — the graph doesn't call that endpoint.)
 
 ## Recommended next work
 
-1. **Fix the empty Graph view** — the graph builds from `/ui/grid/structure`, not
-   `structure_data`; diff our `GridNodeResponse` against real Airflow's for a DAG
-   with dependencies and emit the nesting/edge data the React Flow graph consumes.
-   (Highest UI value.)
-2. Stub/implement `dagRuns/~/taskInstances` and `dagVersions` (fixes the Overview
-   "Failed Runs" miscount and the version header).
+1. ~~Fix the empty Graph view~~ — **done** (dagVersions + details.latest_dag_version
+   + structure_data fields; see above).
+2. ~~`dagRuns/~/taskInstances` and `dagVersions`~~ — **done**: `dagVersions`
+   implemented; the two `~` wildcards (`dagRuns/~/taskInstances`, `~/dagRuns`)
+   degrade to empty collections (real cross-run/cross-DAG aggregation is a
+   follow-up so the Overview "Failed Runs" widget shows real counts).
 3. Decide whether to hide the Assets nav (it is built-in, not menu-driven).
 
 ## Note on the external (Antigravity) audit

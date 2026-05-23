@@ -181,6 +181,44 @@ func TestTaskInstancesForRunsIntegration(t *testing.T) {
 	}
 }
 
+// TestListDagVersionsIntegration guards the row_number()-based version_number
+// (drives the Graph view's version-scoped structure fetch) against real Postgres.
+func TestListDagVersionsIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_ver_%d", time.Now().UnixNano())
+
+	// Two distinct specs for the same DAG -> two versions (RegisterDagVersion
+	// dedups by spec hash, so the second must differ).
+	for i, ver := range []string{"v1", "v2"} {
+		spec := domain.DAGSpec{
+			SchemaVersion: "1.0", DagID: dagID, DagVersion: ver, Image: "img:" + ver,
+			Tasks: []domain.TaskSpec{{TaskID: fmt.Sprintf("t%d", i), Type: domain.TaskTypePython}},
+		}
+		hash, err := spec.CanonicalHash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if created, rerr := repo.RegisterDagVersion(ctx, "default", spec, hash); rerr != nil || !created {
+			t.Fatalf("register %s: created=%v err=%v", ver, created, rerr)
+		}
+	}
+
+	versions, err := repo.ListDagVersions(ctx, "default", dagID)
+	if err != nil {
+		t.Fatalf("ListDagVersions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("want 2 versions, got %d", len(versions))
+	}
+	// Newest-first: version_number 2 then 1.
+	if versions[0].VersionNumber != 2 || versions[1].VersionNumber != 1 {
+		t.Errorf("version_number ordering wrong: %d, %d", versions[0].VersionNumber, versions[1].VersionNumber)
+	}
+	if versions[0].ID == "" || versions[0].CreatedAt.IsZero() {
+		t.Errorf("version row missing id/created_at: %+v", versions[0])
+	}
+}
+
 // TestReportStateRecordsResultIntegration guards the pod-agent state-report path
 // (ExecutionStore.ReportState -> ReportTaskResult). Before the $3::task_state
 // cast, this query failed with SQLSTATE 42P08 (inconsistent types deduced for

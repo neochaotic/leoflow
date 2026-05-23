@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: lifecycle
+description: A three-task pipeline that passes data between tasks via XCom.
+owner: airflow
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

@@ -45,9 +45,15 @@ func StructuredLogger(logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
+		// FullPath is the matched route template; it is empty for unmatched
+		// routes, so fall back to the raw URL path to keep 404s diagnosable.
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+		}
 		logger.Info("http request",
 			"method", c.Request.Method,
-			"path", c.FullPath(),
+			"path", path,
 			"status", c.Writer.Status(),
 			"duration_ms", time.Since(start).Milliseconds(),
 			"request_id", c.GetString(contextKeyRequestID),

@@ -75,6 +75,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	// The Airflow UI redirects unauthenticated users to GET /api/v2/auth/login.
 	r.GET("/api/v2/auth/login", loginPageHandler())
 	r.GET("/api/v2/auth/logout", logoutHandler())
+	r.GET("/api/v2/monitor/health", monitorHealthHandler())
 
 	registerResources(r, deps)
 	registerUI(r, deps.TokenTTLSecs)

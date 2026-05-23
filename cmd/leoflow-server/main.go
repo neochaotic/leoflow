@@ -133,6 +133,7 @@ func run() error {
 		TaskSummary:                  repo,
 		DagVersions:                  repo,
 		DashboardStats:               repo,
+		AuditLog:                     repo,
 		UI:                           ui.New(),
 	})
 

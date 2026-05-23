@@ -295,6 +295,46 @@ func TestDashboardStatsIntegration(t *testing.T) {
 	}
 }
 
+// TestListAuditLogsIntegration guards the Audit Log query: RegisterDagVersion
+// writes a "dag.version.register" entry, which must come back (and be filterable
+// by dag_id) through ListAuditLogs.
+func TestListAuditLogsIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_audit_%d", time.Now().UnixNano())
+	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}})
+
+	entries, total, err := repo.ListAuditLogs(ctx, "default", dagID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListAuditLogs: %v", err)
+	}
+	if total < 1 || len(entries) < 1 {
+		t.Fatalf("want >= 1 audit entry for %s, got total=%d len=%d", dagID, total, len(entries))
+	}
+	found := false
+	for _, e := range entries {
+		if e.Action == "dag.version.register" && e.ResourceID == dagID {
+			found = true
+			if e.ResourceType != "dag" || e.When.IsZero() {
+				t.Errorf("entry missing fields: %+v", e)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("dag.version.register entry not found for %s", dagID)
+	}
+
+	// Filtering by a different dag yields none of this dag's entries.
+	other, _, err := repo.ListAuditLogs(ctx, "default", "no-such-dag-"+dagID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListAuditLogs(other): %v", err)
+	}
+	for _, e := range other {
+		if e.ResourceID == dagID {
+			t.Errorf("dag filter leaked entry for %s", dagID)
+		}
+	}
+}
+
 // TestReportStateRecordsResultIntegration guards the pod-agent state-report path
 // (ExecutionStore.ReportState -> ReportTaskResult). Before the $3::task_state
 // cast, this query failed with SQLSTATE 42P08 (inconsistent types deduced for

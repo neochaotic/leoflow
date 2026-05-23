@@ -441,3 +441,39 @@ func (r *Repository) BootstrapAdmin(ctx context.Context, tenant, email, password
 
 // compile-time assurance that Repository satisfies the auth user store.
 var _ auth.UserStore = (*Repository)(nil)
+
+// ListAuditLogs returns a page of audit-log entries for the tenant, newest
+// first, optionally filtered to a single DAG (dagID == "" means no filter).
+func (r *Repository) ListAuditLogs(ctx context.Context, tenant, dagID string, limit, offset int) ([]domain.AuditLogEntry, int, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, 0, err
+	}
+	var dagFilter *string
+	if dagID != "" {
+		dagFilter = &dagID
+	}
+	rows, err := r.q.ListAuditLogs(ctx, queries.ListAuditLogsParams{
+		TenantID: tid, Limit: toInt32(limit), Offset: toInt32(offset), DagID: dagFilter,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing audit logs: %w", err)
+	}
+	total, err := r.q.CountAuditLogs(ctx, queries.CountAuditLogsParams{TenantID: tid, DagID: dagFilter})
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting audit logs: %w", err)
+	}
+	out := make([]domain.AuditLogEntry, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.AuditLogEntry{
+			ID:           row.ID,
+			When:         timeVal(row.OccurredAt),
+			Action:       row.Action,
+			ResourceType: strOrEmpty(row.ResourceType),
+			ResourceID:   strOrEmpty(row.ResourceID),
+			Owner:        row.Owner,
+			Extra:        string(row.Metadata),
+		})
+	}
+	return out, int(total), nil
+}

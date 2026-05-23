@@ -11,6 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAuditLogs = `-- name: CountAuditLogs :one
+SELECT count(*)
+FROM audit_log a
+WHERE a.tenant_id = $1
+  AND ($2::text IS NULL OR a.resource_id = $2)
+`
+
+type CountAuditLogsParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	DagID    *string     `json:"dag_id"`
+}
+
+func (q *Queries) CountAuditLogs(ctx context.Context, arg CountAuditLogsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditLogs, arg.TenantID, arg.DagID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAuditLog = `-- name: CreateAuditLog :exec
 INSERT INTO audit_log (tenant_id, user_id, action, resource_type, resource_id)
 VALUES ($1, $2, $3, $4, $5)
@@ -33,4 +52,65 @@ func (q *Queries) CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) 
 		arg.ResourceID,
 	)
 	return err
+}
+
+const listAuditLogs = `-- name: ListAuditLogs :many
+SELECT a.id, a.action, a.resource_type, a.resource_id, a.metadata, a.occurred_at,
+       COALESCE(u.email, '') AS owner
+FROM audit_log a
+LEFT JOIN users u ON u.id = a.user_id
+WHERE a.tenant_id = $1
+  AND ($4::text IS NULL OR a.resource_id = $4)
+ORDER BY a.occurred_at DESC, a.id DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListAuditLogsParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
+	DagID    *string     `json:"dag_id"`
+}
+
+type ListAuditLogsRow struct {
+	ID           int64              `json:"id"`
+	Action       string             `json:"action"`
+	ResourceType *string            `json:"resource_type"`
+	ResourceID   *string            `json:"resource_id"`
+	Metadata     []byte             `json:"metadata"`
+	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
+	Owner        string             `json:"owner"`
+}
+
+func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error) {
+	rows, err := q.db.Query(ctx, listAuditLogs,
+		arg.TenantID,
+		arg.Limit,
+		arg.Offset,
+		arg.DagID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAuditLogsRow{}
+	for rows.Next() {
+		var i ListAuditLogsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Action,
+			&i.ResourceType,
+			&i.ResourceID,
+			&i.Metadata,
+			&i.OccurredAt,
+			&i.Owner,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

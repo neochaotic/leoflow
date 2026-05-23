@@ -49,6 +49,7 @@ type Dependencies struct {
 	TaskSummary    TaskSummaryReader
 	DagVersions    DagVersionLister
 	DashboardStats DashboardStatsReader
+	AuditLog       AuditLogReader
 
 	// UI serves the embedded SPA. When nil the server is API-only.
 	UI UIServer
@@ -86,6 +87,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUISummaries(r, deps.TaskSummary)
 	registerUITasks(r, deps.Specs)
 	registerUIDashboard(r, deps.DashboardStats)
+	registerUIAudit(r, deps.AuditLog)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

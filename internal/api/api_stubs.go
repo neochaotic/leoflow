@@ -31,7 +31,8 @@ func registerAPIStubs(r gin.IRouter) {
 	r.GET("/api/v2/assets/events", apiEmptyCollection("asset_events"))         // #29
 	r.GET("/api/v2/plugins", apiEmptyCollection("plugins"))                    // #30
 	r.GET("/api/v2/pools", apiEmptyCollection("pools"))                        // #31
-	r.GET("/api/v2/eventLogs", apiEmptyCollection("event_logs"))               // audit log (#37)
+	// /api/v2/eventLogs is owned by registerUIAudit (real when an AuditLogReader
+	// is set, empty stub otherwise) — see #37.
 	// Human-in-the-loop details, polled at the DAG-run level (#32).
 	r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/hitlDetails", apiEmptyCollection("hitl_details"))
 }

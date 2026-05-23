@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,32 +16,32 @@ type LogReader interface {
 	Tail(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int) (<-chan string, func(), error)
 }
 
-func logsHandler(reader LogReader) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		try, err := strconv.Atoi(c.Param("try_number"))
-		if err != nil {
-			AbortProblem(c, http.StatusBadRequest, "bad request", "try_number must be an integer")
-			return
+// serveLogs streams the stored logs for a task attempt and, when follow=true,
+// tails live lines. The caller has already parsed the try number (the route is a
+// catch-all shared with the single task-instance endpoint).
+func serveLogs(c *gin.Context, reader LogReader, try int) {
+	if reader == nil {
+		AbortProblem(c, http.StatusNotFound, "not found", "logs are not available")
+		return
+	}
+	rc, err := reader.ReadLogs(c.Request.Context(), tenantOf(c),
+		c.Param("dag_id"), c.Param("dag_run_id"), c.Param("task_id"), try)
+	if err != nil {
+		handleRepoError(c, err)
+		return
+	}
+	defer func() {
+		if cerr := rc.Close(); cerr != nil {
+			slog.Warn("closing log stream", "error", cerr)
 		}
-		rc, err := reader.ReadLogs(c.Request.Context(), tenantOf(c),
-			c.Param("dag_id"), c.Param("dag_run_id"), c.Param("task_id"), try)
-		if err != nil {
-			handleRepoError(c, err)
-			return
-		}
-		defer func() {
-			if cerr := rc.Close(); cerr != nil {
-				slog.Warn("closing log stream", "error", cerr)
-			}
-		}()
-		c.Header("Content-Type", "text/plain; charset=utf-8")
-		c.Status(http.StatusOK)
-		if _, cerr := io.Copy(c.Writer, rc); cerr != nil {
-			slog.Warn("streaming logs to client", "error", cerr)
-		}
-		if c.Query("follow") == "true" {
-			tailLogs(c, reader, try)
-		}
+	}()
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Status(http.StatusOK)
+	if _, cerr := io.Copy(c.Writer, rc); cerr != nil {
+		slog.Warn("streaming logs to client", "error", cerr)
+	}
+	if c.Query("follow") == "true" {
+		tailLogs(c, reader, try)
 	}
 }
 

@@ -43,7 +43,16 @@ func TestToDagRunDTO(t *testing.T) {
 
 func TestToTaskInstanceDTO(t *testing.T) {
 	ti := toTaskInstanceDTO(domain.TaskInstance{DagID: "etl", RunID: "r1", TaskID: "extract", State: domain.TaskStateRunning, Operator: "python", TryNumber: 1})
-	if ti.TaskID != "extract" || ti.State != "running" || ti.Operator != "python" || ti.TryNumber != 1 {
+	if ti.TaskID != "extract" || ti.TryNumber != 1 {
 		t.Errorf("unexpected ti dto: %+v", ti)
+	}
+	if ti.State == nil || *ti.State != "running" {
+		t.Errorf("state = %v, want running", ti.State)
+	}
+	if ti.Operator == nil || *ti.Operator != "python" {
+		t.Errorf("operator = %v, want python", ti.Operator)
+	}
+	if ti.ID == "" || ti.Pool != "default_pool" {
+		t.Errorf("ti missing synthetic id / pool defaults: %+v", ti)
 	}
 }

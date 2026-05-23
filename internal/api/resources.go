@@ -252,6 +252,42 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
 	}
 }
 
+// taskInstanceActionHandler dispatches the catch-all under
+// /taskInstances/{task_id}/* : "logs/{try}" streams the attempt's logs, while a
+// bare "{map_index}" returns the single task instance (TaskInstanceResponse).
+func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		action := strings.Trim(c.Param("action"), "/")
+		if rest, ok := strings.CutPrefix(action, "logs/"); ok {
+			try, err := strconv.Atoi(rest)
+			if err != nil {
+				AbortProblem(c, http.StatusBadRequest, "bad request", "try_number must be an integer")
+				return
+			}
+			serveLogs(c, logs, try)
+			return
+		}
+		mapIndex, err := strconv.Atoi(action)
+		if err != nil {
+			AbortProblem(c, http.StatusBadRequest, "bad request", "map_index must be an integer")
+			return
+		}
+		tis, _, err := tasks.ListTaskInstances(c.Request.Context(), tenantOf(c),
+			c.Param("dag_id"), c.Param("dag_run_id"), 1000, 0)
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		for _, ti := range tis {
+			if ti.TaskID == c.Param("task_id") && ti.MapIndex == mapIndex {
+				c.JSON(http.StatusOK, toTaskInstanceDTO(ti))
+				return
+			}
+		}
+		AbortProblem(c, http.StatusNotFound, "not found", "task instance not found")
+	}
+}
+
 // stubHandler reports a feature that arrives in a later phase.
 func stubHandler(feature string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -278,10 +314,11 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 	if deps.Tasks != nil {
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances",
 			RequirePermission("read", "task_instance"), listTaskInstancesHandler(deps.Tasks))
-		if deps.Logs != nil {
-			r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/logs/:try_number",
-				RequirePermission("read", "task_instance"), logsHandler(deps.Logs))
-		}
+		// The "logs/:try_number" and ":map_index" routes share the :task_id
+		// parent; gin cannot mix a static and a wildcard child there, so one
+		// catch-all dispatches both (single task instance vs its logs).
+		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action",
+			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs))
 		r.POST("/api/v2/dags/:dag_id/clearTaskInstances",
 			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks))
 	}

@@ -2,10 +2,25 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"strconv"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
+
+// synthID derives a stable synthetic identifier from composite key parts, for UI
+// objects (task instances) Leoflow keys by composite rather than a UUID.
+func synthID(parts ...any) string {
+	h := fnv.New64a()
+	for _, p := range parts {
+		if _, err := fmt.Fprintf(h, "%v|", p); err != nil {
+			return "" // hash.Write never errors; satisfy the linter without ignoring it.
+		}
+	}
+	return fmt.Sprintf("%016x", h.Sum64())
+}
 
 type tagDTO struct {
 	Name string `json:"name"`
@@ -122,19 +137,43 @@ func toDagRunDTO(r domain.DagRun) dagRunDTO {
 	}
 }
 
+// taskInstanceDTO is the Airflow 3.2.1 TaskInstanceResponse. Every spec-required
+// field is present; values Leoflow does not track are null/defaults. id is a
+// stable synthetic key (Leoflow keys task instances by composite, not a UUID).
 type taskInstanceDTO struct {
-	DagID     string     `json:"dag_id"`
-	DagRunID  string     `json:"dag_run_id"`
-	TaskID    string     `json:"task_id"`
-	MapIndex  int        `json:"map_index"`
-	TryNumber int        `json:"try_number"`
-	MaxTries  int        `json:"max_tries"`
-	State     string     `json:"state"`
-	Operator  string     `json:"operator"`
-	StartDate *time.Time `json:"start_date"`
-	EndDate   *time.Time `json:"end_date"`
-	Duration  *float64   `json:"duration"`
-	Hostname  string     `json:"hostname"`
+	ID               string     `json:"id"`
+	TaskID           string     `json:"task_id"`
+	DagID            string     `json:"dag_id"`
+	DagRunID         string     `json:"dag_run_id"`
+	MapIndex         int        `json:"map_index"`
+	LogicalDate      *time.Time `json:"logical_date"`
+	RunAfter         *time.Time `json:"run_after"`
+	StartDate        *time.Time `json:"start_date"`
+	EndDate          *time.Time `json:"end_date"`
+	Duration         *float64   `json:"duration"`
+	State            *string    `json:"state"`
+	TryNumber        int        `json:"try_number"`
+	MaxTries         int        `json:"max_tries"`
+	TaskDisplayName  string     `json:"task_display_name"`
+	DagDisplayName   string     `json:"dag_display_name"`
+	Hostname         *string    `json:"hostname"`
+	Unixname         *string    `json:"unixname"`
+	Pool             string     `json:"pool"`
+	PoolSlots        int        `json:"pool_slots"`
+	Queue            *string    `json:"queue"`
+	PriorityWeight   *int       `json:"priority_weight"`
+	Operator         *string    `json:"operator"`
+	OperatorName     *string    `json:"operator_name"`
+	QueuedWhen       *time.Time `json:"queued_when"`
+	ScheduledWhen    *time.Time `json:"scheduled_when"`
+	Pid              *int       `json:"pid"`
+	Executor         *string    `json:"executor"`
+	ExecutorConfig   string     `json:"executor_config"`
+	Note             *string    `json:"note"`
+	RenderedMapIndex *string    `json:"rendered_map_index"`
+	Trigger          *string    `json:"trigger"`
+	TriggererJob     *string    `json:"triggerer_job"`
+	DagVersion       *string    `json:"dag_version"`
 }
 
 type taskInstanceCollectionDTO struct {
@@ -143,18 +182,41 @@ type taskInstanceCollectionDTO struct {
 }
 
 func toTaskInstanceDTO(ti domain.TaskInstance) taskInstanceDTO {
-	return taskInstanceDTO{
-		DagID:     ti.DagID,
-		DagRunID:  ti.RunID,
-		TaskID:    ti.TaskID,
-		MapIndex:  ti.MapIndex,
-		TryNumber: ti.TryNumber,
-		MaxTries:  ti.MaxTries,
-		State:     string(ti.State),
-		Operator:  ti.Operator,
-		StartDate: ti.StartedAt,
-		EndDate:   ti.EndedAt,
-		Duration:  ti.Duration,
-		Hostname:  ti.Hostname,
+	var state *string
+	if ti.State != "" && ti.State != domain.TaskStateNone {
+		s := string(ti.State)
+		state = &s
 	}
+	op := strPtrOrNil(ti.Operator)
+	return taskInstanceDTO{
+		ID:               synthID(ti.RunID, ti.TaskID, ti.MapIndex),
+		TaskID:           ti.TaskID,
+		DagID:            ti.DagID,
+		DagRunID:         ti.RunID,
+		MapIndex:         ti.MapIndex,
+		StartDate:        ti.StartedAt,
+		EndDate:          ti.EndedAt,
+		Duration:         ti.Duration,
+		State:            state,
+		TryNumber:        ti.TryNumber,
+		MaxTries:         ti.MaxTries,
+		TaskDisplayName:  ti.TaskID,
+		DagDisplayName:   ti.DagID,
+		Hostname:         strPtrOrNil(ti.Hostname),
+		Pool:             "default_pool",
+		PoolSlots:        1,
+		Operator:         op,
+		OperatorName:     op,
+		ExecutorConfig:   "{}",
+		RenderedMapIndex: renderedMapIndex(ti.MapIndex),
+	}
+}
+
+// renderedMapIndex returns nil for an unmapped task (-1), else the index string.
+func renderedMapIndex(idx int) *string {
+	if idx < 0 {
+		return nil
+	}
+	s := strconv.Itoa(idx)
+	return &s
 }

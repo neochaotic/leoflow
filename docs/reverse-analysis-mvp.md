@@ -107,3 +107,48 @@ and non-blocking for a first release.
 whether MVP needs Bash/HTTP-operator XCom or Python-only is enough; (c) publish
 the leoflow-migrate image (#48); (d) one more end-to-end run captured as the
 release smoke (the k3d e2e already asserts state + log shipping + XCom #51).
+
+---
+
+## 5. Full endpoint-coverage map (98 endpoints, captured by navigating the real UI)
+
+Driving the entire Airflow 3.2 SPA (Home, Dags list, every DAG tab, a task
+instance's tabs, Assets, Browse, Admin) and capturing every `/ui/` and `/api/v2/`
+call yields 98 unique endpoints. Grouped by Leoflow status:
+
+### Implemented (real data)
+`/api/v2/version`, `/monitor/health`(+`/executor`), `/dags`, `/dags/{id}`,
+`/dags/{id}/details`, `/dags/{id}/tasks`(+`/{task}`), `/dags/{id}/dagRuns`(+`/{run}`),
+`/taskInstances`(+single, `/logs/{try}`, `/xcomEntries`(+`/{key}`)),
+`/dags/{id}/dagVersions`(+`/{n}`), `/dagSources/{id}`, `/ui/dags`,
+`/ui/dags/{id}/latest_run`, `/ui/grid/{runs,structure,ti_summaries}/{id}`,
+`/ui/structure/structure_data`, `/ui/dashboard/{dag_stats,historical_metrics_data}`,
+`/api/v2/eventLogs`, `/api/v2/variables`, `/api/v2/connections`, `/ui/config`.
+
+### Stubbed (empty 200 — render, no data)
+`/api/v2/{dagTags,dagWarnings,importErrors,plugins,plugins/importErrors,pools,
+assets,assets/events}`, `/dags/{id}/dagRuns/~/hitlDetails`, `/ui/{backfills,
+calendar/{id},connections/hook_meta,next_run_assets/{id}}`.
+
+### Missing (404 / not handled) — gaps to fill or stub
+- `GET /api/v2/jobs` — Browse → Jobs (scheduler/triggerer job rows).
+- `GET /api/v2/providers` — Admin → Providers (we have none; stub empty).
+- `GET /api/v2/dags/{id}/assets/queuedEvents` — asset scheduling (post-1.0).
+- `GET /api/v2/dags/~/dagRuns/~/taskInstances/~/xcomEntries` — Admin → XComs
+  (global XCom browse across all dags/runs).
+- Browse global lists hit `/dags/~/dagRuns`, `/dags/~/dagRuns/~/taskInstances`
+  with `~` wildcards — we short-circuit some to empty; verify all wildcard forms.
+
+### Roadmap impact
+- **Pre-release**: ensure no UI 404 (stub `jobs`, `providers`, global `xcomEntries`
+  as empty collections so Browse/Admin render). Add to the pre-release list.
+- **Post-1.0**: assets/datasets (`assets/queuedEvents`, `next_run_assets`) — a
+  whole subsystem; calendar + backfills as real features.
+
+## 6. Property completeness (requirement: no empty DAG/task property)
+
+The DAG details and task-instance panels must have **every field populated** with
+a real value or a sensible non-empty default — see the dedicated pre-release task.
+Source of truth for the field set + expected values: the captured real-Airflow
+bodies in `docs/reference/airflow-real/bodies/` (`dag_details.json`,
+`taskInstance_single.json`, `task.json`).

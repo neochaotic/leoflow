@@ -162,7 +162,7 @@ func registerUIViews(r gin.IRouter, deps Dependencies) {
 		r.GET("/ui/dags/:dag_id/latest_run", RequirePermission("read", "dag_run"), latestRunHandler(deps.DagRuns))
 	}
 	if deps.Dags != nil && deps.LatestRuns != nil {
-		r.GET("/ui/dags", RequirePermission("read", "dag"), uiDagsHandler(deps.Dags, deps.LatestRuns))
+		r.GET("/ui/dags", RequirePermission("read", "dag"), uiDagsHandler(deps.Dags, deps.LatestRuns, deps.Favorites))
 	}
 	if deps.DagVersions != nil {
 		r.GET("/api/v2/dags/:dag_id/dagVersions", RequirePermission("read", "dag"), dagVersionsHandler(deps.DagVersions))

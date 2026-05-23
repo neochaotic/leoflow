@@ -146,7 +146,7 @@ func strPtrOrNil(s string) *string {
 // uiDagsHandler implements GET /ui/dags: the UI DAG list with per-DAG embedded
 // latest runs, fetched in two constant queries (page of DAGs + one windowed
 // runs query), never per-DAG.
-func uiDagsHandler(dags DagRepository, latest DagLatestRunsReader) gin.HandlerFunc {
+func uiDagsHandler(dags DagRepository, latest DagLatestRunsReader, favorites FavoriteStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		limit, offset := pagination(c)
 		tenant := tenantOf(c)
@@ -169,9 +169,19 @@ func uiDagsHandler(dags DagRepository, latest DagLatestRunsReader) gin.HandlerFu
 			handleRepoError(c, err)
 			return
 		}
+		// Resolve the user's favorites once so each DAG can report is_favorite (the
+		// star). Best-effort: a lookup failure just leaves every star unset.
+		var favs map[string]bool
+		if favorites != nil {
+			if got, ferr := favorites.FavoriteDagIDs(c.Request.Context(), tenant, favoriteUserID(c)); ferr == nil {
+				favs = got
+			}
+		}
 		out := dagWithRunsCollectionDTO{Dags: make([]dagWithRunsDTO, 0, len(ds)), TotalEntries: total}
 		for _, d := range ds {
-			out.Dags = append(out.Dags, toDagWithRunsDTO(d, runsByDag[d.DagID]))
+			dto := toDagWithRunsDTO(d, runsByDag[d.DagID])
+			dto.IsFavorite = favs[d.DagID]
+			out.Dags = append(out.Dags, dto)
 		}
 		setPaginationLinks(c, total, limit, offset)
 		c.JSON(http.StatusOK, out)

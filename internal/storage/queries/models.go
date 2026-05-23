@@ -199,6 +199,14 @@ type Dag struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type DagFavorite struct {
+	ID        pgtype.UUID        `json:"id"`
+	TenantID  pgtype.UUID        `json:"tenant_id"`
+	UserID    string             `json:"user_id"`
+	DagID     string             `json:"dag_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type DagRun struct {
 	ID                pgtype.UUID        `json:"id"`
 	TenantID          pgtype.UUID        `json:"tenant_id"`

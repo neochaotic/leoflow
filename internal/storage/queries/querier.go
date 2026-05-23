@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	AddFavorite(ctx context.Context, arg AddFavoriteParams) error
 	AssignUserRole(ctx context.Context, arg AssignUserRoleParams) error
 	ClearDagRuns(ctx context.Context, dagID pgtype.UUID) (int64, error)
 	CountAuditLogs(ctx context.Context, arg CountAuditLogsParams) (int64, error)
@@ -61,11 +62,13 @@ type Querier interface {
 	ListDagVersions(ctx context.Context, arg ListDagVersionsParams) ([]ListDagVersionsRow, error)
 	ListDags(ctx context.Context, arg ListDagsParams) ([]Dag, error)
 	ListDagsFiltered(ctx context.Context, arg ListDagsFilteredParams) ([]Dag, error)
+	ListFavoriteDagIDs(ctx context.Context, arg ListFavoriteDagIDsParams) ([]string, error)
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
 	RecordXCom(ctx context.Context, arg RecordXComParams) error
+	RemoveFavorite(ctx context.Context, arg RemoveFavoriteParams) error
 	// $3 is cast to task_state in every usage: without the cast Postgres deduces an
 	// enum type from `state = $3` but text from the literal comparisons below and
 	// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod

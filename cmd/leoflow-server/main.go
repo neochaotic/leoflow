@@ -155,6 +155,7 @@ func run() error {
 		AuditLog:                     repo,
 		Variables:                    repo,
 		Connections:                  repo,
+		Favorites:                    repo,
 		ExecutorInfo:                 executorInfo,
 		SchedulerHealth:              schedulerHealth,
 		UI:                           ui.New(),

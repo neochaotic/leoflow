@@ -249,6 +249,42 @@ func firstTI(t *testing.T, repo *storage.Repository, ctx context.Context, dagID 
 	return tis[0]
 }
 
+// TestFavoritesIntegration round-trips per-user DAG favorites: add is idempotent,
+// the id set reflects adds/removes, and favorites are scoped per user.
+func TestFavoritesIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagA := fmt.Sprintf("fav_a_%d", time.Now().UnixNano())
+	dagB := fmt.Sprintf("fav_b_%d", time.Now().UnixNano())
+
+	if err := repo.AddFavorite(ctx, "default", "user1", dagA); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := repo.AddFavorite(ctx, "default", "user1", dagA); err != nil {
+		t.Fatalf("add (idempotent): %v", err)
+	}
+	if err := repo.AddFavorite(ctx, "default", "user1", dagB); err != nil {
+		t.Fatalf("add b: %v", err)
+	}
+	favs, err := repo.FavoriteDagIDs(ctx, "default", "user1")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !favs[dagA] || !favs[dagB] {
+		t.Errorf("expected both dags favorited, got %v", favs)
+	}
+	// Scoped per user: user2 sees none of user1's favorites.
+	if other, _ := repo.FavoriteDagIDs(ctx, "default", "user2"); other[dagA] {
+		t.Errorf("favorites leaked across users: %v", other)
+	}
+	if err := repo.RemoveFavorite(ctx, "default", "user1", dagA); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	favs, _ = repo.FavoriteDagIDs(ctx, "default", "user1")
+	if favs[dagA] || !favs[dagB] {
+		t.Errorf("after remove want only %s, got %v", dagB, favs)
+	}
+}
+
 // TestListDagVersionsIntegration guards the row_number()-based version_number
 // (drives the Graph view's version-scoped structure fetch) against real Postgres.
 func TestListDagVersionsIntegration(t *testing.T) {

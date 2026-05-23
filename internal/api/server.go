@@ -52,6 +52,7 @@ type Dependencies struct {
 	AuditLog       AuditLogReader
 	Variables      VariableStore
 	Connections    ConnectionStore
+	Favorites      FavoriteStore
 	ExecutorInfo   ExecutorInfo
 
 	// SchedulerHealth reports the scheduler's heartbeat for /monitor/health.
@@ -98,6 +99,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIAudit(r, deps.AuditLog)
 	registerUIVariables(r, deps.Variables)
 	registerUIConnections(r, deps.Connections)
+	registerUIFavorites(r, deps.Favorites)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

@@ -585,6 +585,35 @@ func (r *Repository) ListVariables(ctx context.Context, tenant string, limit, of
 	return out, int(total), nil
 }
 
+// AddFavorite marks a DAG as a favorite for the user (idempotent).
+func (r *Repository) AddFavorite(ctx context.Context, tenant, userID, dagID string) error {
+	if err := r.q.AddFavorite(ctx, queries.AddFavoriteParams{Tenant: tenant, UserID: userID, DagID: dagID}); err != nil {
+		return fmt.Errorf("adding favorite: %w", err)
+	}
+	return nil
+}
+
+// RemoveFavorite clears a DAG's favorite mark for the user (idempotent).
+func (r *Repository) RemoveFavorite(ctx context.Context, tenant, userID, dagID string) error {
+	if err := r.q.RemoveFavorite(ctx, queries.RemoveFavoriteParams{Tenant: tenant, UserID: userID, DagID: dagID}); err != nil {
+		return fmt.Errorf("removing favorite: %w", err)
+	}
+	return nil
+}
+
+// FavoriteDagIDs returns the set of DAG ids the user has favorited.
+func (r *Repository) FavoriteDagIDs(ctx context.Context, tenant, userID string) (map[string]bool, error) {
+	ids, err := r.q.ListFavoriteDagIDs(ctx, queries.ListFavoriteDagIDsParams{Tenant: tenant, UserID: userID})
+	if err != nil {
+		return nil, fmt.Errorf("listing favorites: %w", err)
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set, nil
+}
+
 // GetVariable returns one variable by key, or ErrNotFound.
 func (r *Repository) GetVariable(ctx context.Context, tenant, key string) (domain.Variable, error) {
 	tid, err := r.tenantID(ctx, tenant)

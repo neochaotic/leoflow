@@ -215,9 +215,9 @@ func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateSched
 }
 
 const createTaskInstance = `-- name: CreateTaskInstance :one
-INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note
+INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
+VALUES ($1, $2, $3, $4, $5, $6, 1)
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at
 `
 
 type CreateTaskInstanceParams struct {
@@ -229,6 +229,9 @@ type CreateTaskInstanceParams struct {
 	State    TaskState   `json:"state"`
 }
 
+// try_number starts at 1 to match Airflow (1-based attempts): the first run's
+// logs live at .../1.log, which is where the UI's log view looks. Retries bump
+// it via ResetForRetry.
 func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstanceParams) (TaskInstance, error) {
 	row := q.db.QueryRow(ctx, createTaskInstance,
 		arg.TenantID,
@@ -261,6 +264,7 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 		&i.LogUrl,
 		&i.Hostname,
 		&i.Note,
+		&i.ScheduledAt,
 	)
 	return i, err
 }
@@ -551,7 +555,7 @@ func (q *Queries) ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow
 }
 
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
-SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note FROM task_instances
+SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at FROM task_instances
 WHERE dag_run_id = $1
 ORDER BY task_id
 `
@@ -587,6 +591,7 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 			&i.LogUrl,
 			&i.Hostname,
 			&i.Note,
+			&i.ScheduledAt,
 		); err != nil {
 			return nil, err
 		}
@@ -826,7 +831,7 @@ const updateTaskInstanceState = `-- name: UpdateTaskInstanceState :one
 UPDATE task_instances
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at
 `
 
 type UpdateTaskInstanceStateParams struct {
@@ -866,22 +871,31 @@ func (q *Queries) UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskIns
 		&i.LogUrl,
 		&i.Hostname,
 		&i.Note,
+		&i.ScheduledAt,
 	)
 	return i, err
 }
 
 const updateTaskInstanceStateByRunTask = `-- name: UpdateTaskInstanceStateByRunTask :exec
-UPDATE task_instances SET state = $3
-WHERE dag_run_id = $1 AND task_id = $2
+UPDATE task_instances
+SET state = $1::task_state,
+    scheduled_at = CASE WHEN $1::task_state = 'scheduled' AND scheduled_at IS NULL THEN now() ELSE scheduled_at END,
+    queued_at = CASE WHEN $1::task_state = 'queued' AND queued_at IS NULL THEN now() ELSE queued_at END,
+    started_at = CASE WHEN $1::task_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END
+WHERE dag_run_id = $2 AND task_id = $3
 `
 
 type UpdateTaskInstanceStateByRunTaskParams struct {
+	State    TaskState   `json:"state"`
 	DagRunID pgtype.UUID `json:"dag_run_id"`
 	TaskID   string      `json:"task_id"`
-	State    TaskState   `json:"state"`
 }
 
+// Stamps the per-state entry timestamps the UI shows (scheduled_when /
+// queued_when / start_date). Each is set on first entry only ("IS NULL"), so a
+// re-emitted transition does not move the recorded time. $3 is cast to
+// task_state (see ReportTaskResult for why the cast is required).
 func (q *Queries) UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error {
-	_, err := q.db.Exec(ctx, updateTaskInstanceStateByRunTask, arg.DagRunID, arg.TaskID, arg.State)
+	_, err := q.db.Exec(ctx, updateTaskInstanceStateByRunTask, arg.State, arg.DagRunID, arg.TaskID)
 	return err
 }

@@ -222,6 +222,8 @@ func toTaskInstanceDTO(ti domain.TaskInstance) taskInstanceDTO {
 		ExecutorConfig:   "{}",
 		RenderedMapIndex: renderedMapIndex(ti.MapIndex),
 		Note:             strPtrOrNil(ti.Note),
+		ScheduledWhen:    ti.ScheduledAt,
+		QueuedWhen:       ti.QueuedAt,
 	}
 }
 

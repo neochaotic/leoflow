@@ -33,6 +33,9 @@ LDFLAGS := -s -w \
 
 # ─── Database (used by migrate targets; override via env) ───
 DATABASE_URL ?= postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable
+# Integration tests run against a SEPARATE database so they never pollute the
+# demo/dev `leoflow` DB (which backs the local control plane and its UI stats).
+TEST_DATABASE_URL ?= postgres://leoflow:leoflow@localhost:5432/leoflow_test?sslmode=disable
 
 .PHONY: help
 help: ## Show this help
@@ -94,6 +97,17 @@ test: ## Run Go and Python tests with coverage
 	go test -race -coverprofile=coverage.out -covermode=atomic ./...
 	command -v pytest >/dev/null && (cd parser && pytest -v --cov=leoflow_parser) || echo "skip pytest (not installed)"
 	command -v pytest >/dev/null && (cd runtime/python && pytest -v --cov=leoflow_runtime) || echo "skip runtime pytest (not installed)"
+
+.PHONY: test-db
+test-db: ## Create (if missing) and migrate the isolated integration-test database
+	@docker compose exec -T postgres psql -U leoflow -d postgres -tc \
+		"SELECT 1 FROM pg_database WHERE datname = 'leoflow_test'" | grep -q 1 || \
+		docker compose exec -T postgres psql -U leoflow -d postgres -c "CREATE DATABASE leoflow_test"
+	migrate -path migrations -database "$(TEST_DATABASE_URL)" up
+
+.PHONY: test-integration
+test-integration: test-db ## Run //go:build integration tests against the isolated test DB
+	DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration -race ./...
 
 .PHONY: cover
 cover: test ## Show total Go coverage

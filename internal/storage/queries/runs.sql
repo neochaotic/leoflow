@@ -27,8 +27,11 @@ WHERE id = $1
 RETURNING *;
 
 -- name: CreateTaskInstance :one
-INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state)
-VALUES ($1, $2, $3, $4, $5, $6)
+-- try_number starts at 1 to match Airflow (1-based attempts): the first run's
+-- logs live at .../1.log, which is where the UI's log view looks. Retries bump
+-- it via ResetForRetry.
+INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
+VALUES ($1, $2, $3, $4, $5, $6, 1)
 RETURNING *;
 
 -- name: ListTaskInstancesByRun :many
@@ -64,8 +67,16 @@ SELECT * FROM dag_versions WHERE id = $1;
 SELECT * FROM dag_runs WHERE id = $1;
 
 -- name: UpdateTaskInstanceStateByRunTask :exec
-UPDATE task_instances SET state = $3
-WHERE dag_run_id = $1 AND task_id = $2;
+-- Stamps the per-state entry timestamps the UI shows (scheduled_when /
+-- queued_when / start_date). Each is set on first entry only ("IS NULL"), so a
+-- re-emitted transition does not move the recorded time. $3 is cast to
+-- task_state (see ReportTaskResult for why the cast is required).
+UPDATE task_instances
+SET state = sqlc.arg(state)::task_state,
+    scheduled_at = CASE WHEN sqlc.arg(state)::task_state = 'scheduled' AND scheduled_at IS NULL THEN now() ELSE scheduled_at END,
+    queued_at = CASE WHEN sqlc.arg(state)::task_state = 'queued' AND queued_at IS NULL THEN now() ELSE queued_at END,
+    started_at = CASE WHEN sqlc.arg(state)::task_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END
+WHERE dag_run_id = sqlc.arg(dag_run_id) AND task_id = sqlc.arg(task_id);
 
 -- name: ResetTaskInstanceToNone :exec
 UPDATE task_instances

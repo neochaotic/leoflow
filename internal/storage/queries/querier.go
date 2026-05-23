@@ -26,6 +26,9 @@ type Querier interface {
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) error
 	CreateDagRun(ctx context.Context, arg CreateDagRunParams) (DagRun, error)
 	CreateScheduledRunByDagID(ctx context.Context, arg CreateScheduledRunByDagIDParams) error
+	// try_number starts at 1 to match Airflow (1-based attempts): the first run's
+	// logs live at .../1.log, which is where the UI's log view looks. Retries bump
+	// it via ResetForRetry.
 	CreateTaskInstance(ctx context.Context, arg CreateTaskInstanceParams) (TaskInstance, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.UUID, error)
 	DeleteConnection(ctx context.Context, arg DeleteConnectionParams) (int64, error)
@@ -78,6 +81,10 @@ type Querier interface {
 	TaskInstancesForDagRuns(ctx context.Context, arg TaskInstancesForDagRunsParams) ([]TaskInstancesForDagRunsRow, error)
 	UpdateDagRunState(ctx context.Context, arg UpdateDagRunStateParams) (DagRun, error)
 	UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskInstanceStateParams) (TaskInstance, error)
+	// Stamps the per-state entry timestamps the UI shows (scheduled_when /
+	// queued_when / start_date). Each is set on first entry only ("IS NULL"), so a
+	// re-emitted transition does not move the recorded time. $3 is cast to
+	// task_state (see ReportTaskResult for why the cast is required).
 	UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error
 	UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)

@@ -297,6 +297,7 @@ type TaskInstance struct {
 	LogUrl          *string            `json:"log_url"`
 	Hostname        *string            `json:"hostname"`
 	Note            *string            `json:"note"`
+	ScheduledAt     pgtype.Timestamptz `json:"scheduled_at"`
 }
 
 type TaskStateHistory struct {

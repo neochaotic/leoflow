@@ -182,6 +182,73 @@ func TestTaskInstancesForRunsIntegration(t *testing.T) {
 	}
 }
 
+// TestTaskInstanceTryNumberAndTimestampsIntegration pins two Airflow-parity
+// behaviors: a freshly materialized task instance is try_number 1 (1-based, so
+// its first attempt's logs live at .../1.log where the UI looks), and entering
+// the scheduled/queued/running states stamps scheduled_at/queued_at/started_at.
+func TestTaskInstanceTryNumberAndTimestampsIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_try_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{{TaskID: "extract", Type: domain.TaskTypePython}}
+	registerSpec(t, repo, ctx, dagID, tasks)
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runUUID := ""
+	runs, raErr := sched.ActiveRuns(ctx)
+	if raErr != nil {
+		t.Fatalf("ActiveRuns: %v", raErr)
+	}
+	for _, r := range runs {
+		if r.DagID == dagID {
+			runUUID = r.RunID
+		}
+	}
+	if runUUID == "" {
+		t.Fatal("could not resolve run UUID")
+	}
+	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
+		t.Fatalf("MaterializeTasks: %v", err)
+	}
+
+	first := firstTI(t, repo, ctx, dagID)
+	if first.TryNumber != 1 {
+		t.Errorf("first attempt try_number = %d, want 1 (Airflow is 1-based)", first.TryNumber)
+	}
+
+	// scheduled -> queued -> running each stamps its own entry timestamp.
+	for _, st := range []domain.TaskState{domain.TaskStateScheduled, domain.TaskStateQueued, domain.TaskStateRunning} {
+		if err := sched.ApplyTransition(ctx, runUUID, "extract", st); err != nil {
+			t.Fatalf("transition to %s: %v", st, err)
+		}
+	}
+	ti := firstTI(t, repo, ctx, dagID)
+	if ti.ScheduledAt == nil {
+		t.Error("scheduled_at not stamped on entering scheduled")
+	}
+	if ti.QueuedAt == nil {
+		t.Error("queued_at not stamped on entering queued")
+	}
+	if ti.StartedAt == nil {
+		t.Error("started_at not stamped on entering running")
+	}
+}
+
+// firstTI returns the single task instance of the test run.
+func firstTI(t *testing.T, repo *storage.Repository, ctx context.Context, dagID string) domain.TaskInstance {
+	t.Helper()
+	tis, _, err := repo.ListTaskInstances(ctx, "default", dagID, "r1", 100, 0)
+	if err != nil {
+		t.Fatalf("ListTaskInstances: %v", err)
+	}
+	if len(tis) != 1 {
+		t.Fatalf("want 1 task instance, got %d", len(tis))
+	}
+	return tis[0]
+}
+
 // TestListDagVersionsIntegration guards the row_number()-based version_number
 // (drives the Graph view's version-scoped structure fetch) against real Postgres.
 func TestListDagVersionsIntegration(t *testing.T) {

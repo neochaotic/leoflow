@@ -50,10 +50,14 @@ type TaskInstance struct {
 	MaxTries  int
 	State     TaskState
 	Operator  string
-	StartedAt *time.Time
-	EndedAt   *time.Time
-	Duration  *float64
-	Hostname  string
+	// ScheduledAt and QueuedAt record when the instance first entered the
+	// scheduled and queued states (Airflow's scheduled_when / queued_when).
+	ScheduledAt *time.Time
+	QueuedAt    *time.Time
+	StartedAt   *time.Time
+	EndedAt     *time.Time
+	Duration    *float64
+	Hostname    string
 	// Note is operational context shown in the UI's task panel — e.g. why a task
 	// is queued but not running (no executor available).
 	Note string

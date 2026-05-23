@@ -21,6 +21,10 @@ services:
       - "5432:5432"
     volumes:
       - leoflow-pgdata:/var/lib/postgresql/data
+      # On a fresh volume, also provision the isolated `leoflow_test` database
+      # so integration tests never pollute the dev `leoflow` DB. For an existing
+      # volume this init hook does not re-run — use `make test-db`.
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U leoflow -d leoflow"]
       interval: 5s

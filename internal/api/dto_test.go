@@ -56,3 +56,18 @@ func TestToTaskInstanceDTO(t *testing.T) {
 		t.Errorf("ti missing synthetic id / pool defaults: %+v", ti)
 	}
 }
+
+func TestToTaskInstanceDTOStateTimestamps(t *testing.T) {
+	scheduled := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
+	queued := time.Date(2026, 5, 23, 10, 0, 5, 0, time.UTC)
+	ti := toTaskInstanceDTO(domain.TaskInstance{
+		DagID: "etl", RunID: "r1", TaskID: "extract", State: domain.TaskStateRunning,
+		ScheduledAt: &scheduled, QueuedAt: &queued,
+	})
+	if ti.ScheduledWhen == nil || !ti.ScheduledWhen.Equal(scheduled) {
+		t.Errorf("scheduled_when = %v, want %v", ti.ScheduledWhen, scheduled)
+	}
+	if ti.QueuedWhen == nil || !ti.QueuedWhen.Equal(queued) {
+		t.Errorf("queued_when = %v, want %v", ti.QueuedWhen, queued)
+	}
+}

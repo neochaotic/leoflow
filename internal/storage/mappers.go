@@ -104,19 +104,21 @@ func mapDagRun(r queries.DagRun, dagID string) domain.DagRun {
 
 func mapTaskInstance(ti queries.TaskInstance, dagID, runID string) domain.TaskInstance {
 	return domain.TaskInstance{
-		DagID:     dagID,
-		RunID:     runID,
-		TaskID:    ti.TaskID,
-		MapIndex:  int(ti.MapIndex),
-		TryNumber: int(ti.TryNumber),
-		MaxTries:  int(ti.MaxTries),
-		State:     domain.TaskState(ti.State),
-		Operator:  ti.Operator,
-		StartedAt: timePtr(ti.StartedAt),
-		EndedAt:   timePtr(ti.EndedAt),
-		Duration:  ti.DurationSeconds,
-		Hostname:  strOrEmpty(ti.Hostname),
-		Note:      strOrEmpty(ti.Note),
+		DagID:       dagID,
+		RunID:       runID,
+		TaskID:      ti.TaskID,
+		MapIndex:    int(ti.MapIndex),
+		TryNumber:   int(ti.TryNumber),
+		MaxTries:    int(ti.MaxTries),
+		State:       domain.TaskState(ti.State),
+		Operator:    ti.Operator,
+		ScheduledAt: timePtr(ti.ScheduledAt),
+		QueuedAt:    timePtr(ti.QueuedAt),
+		StartedAt:   timePtr(ti.StartedAt),
+		EndedAt:     timePtr(ti.EndedAt),
+		Duration:    ti.DurationSeconds,
+		Hostname:    strOrEmpty(ti.Hostname),
+		Note:        strOrEmpty(ti.Note),
 	}
 }
 

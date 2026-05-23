@@ -20,6 +20,7 @@ type Querier interface {
 	CountDagsFiltered(ctx context.Context, arg CountDagsFilteredParams) (int64, error)
 	CountTaskInstanceStatesInWindow(ctx context.Context, arg CountTaskInstanceStatesInWindowParams) ([]CountTaskInstanceStatesInWindowRow, error)
 	CountUsers(ctx context.Context, tenantID pgtype.UUID) (int64, error)
+	CountVariables(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) error
 	CreateDagRun(ctx context.Context, arg CreateDagRunParams) (DagRun, error)
 	CreateScheduledRunByDagID(ctx context.Context, arg CreateScheduledRunByDagIDParams) error
@@ -27,6 +28,7 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.UUID, error)
 	DeleteDag(ctx context.Context, arg DeleteDagParams) (int64, error)
 	DeleteExpiredXComIndex(ctx context.Context) error
+	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInstanceIfActiveParams) error
 	GetCurrentDagSpec(ctx context.Context, arg GetCurrentDagSpecParams) ([]byte, error)
 	GetDagByDagID(ctx context.Context, arg GetDagByDagIDParams) (Dag, error)
@@ -40,6 +42,7 @@ type Querier interface {
 	GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) (GetUserByEmailRow, error)
 	GetUserPermissions(ctx context.Context, userID pgtype.UUID) ([]GetUserPermissionsRow, error)
 	GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]string, error)
+	GetVariable(ctx context.Context, arg GetVariableParams) (GetVariableRow, error)
 	GetXComByNames(ctx context.Context, arg GetXComByNamesParams) (GetXComByNamesRow, error)
 	GetXComEntry(ctx context.Context, arg GetXComEntryParams) (GetXComEntryRow, error)
 	InsertDagVersion(ctx context.Context, arg InsertDagVersionParams) (DagVersion, error)
@@ -52,6 +55,7 @@ type Querier interface {
 	ListDagsFiltered(ctx context.Context, arg ListDagsFilteredParams) ([]Dag, error)
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
+	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
 	RecordXCom(ctx context.Context, arg RecordXComParams) error
 	// $3 is cast to task_state in every usage: without the cast Postgres deduces an
@@ -71,6 +75,7 @@ type Querier interface {
 	UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskInstanceStateParams) (TaskInstance, error)
 	UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
+	UpsertVariable(ctx context.Context, arg UpsertVariableParams) error
 }
 
 var _ Querier = (*Queries)(nil)

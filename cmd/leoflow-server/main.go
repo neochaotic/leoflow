@@ -137,6 +137,7 @@ func run() error {
 		DagVersions:                  repo,
 		DashboardStats:               repo,
 		AuditLog:                     repo,
+		Variables:                    repo,
 		SchedulerHealth:              schedulerHealth,
 		UI:                           ui.New(),
 	})

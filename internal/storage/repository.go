@@ -555,3 +555,67 @@ func (r *Repository) ListDagsFiltered(ctx context.Context, tenant, runState stri
 	}
 	return out, int(total), nil
 }
+
+// ListVariables returns a page of variables for the tenant and the total count.
+func (r *Repository) ListVariables(ctx context.Context, tenant string, limit, offset int) ([]domain.Variable, int, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.q.ListVariables(ctx, queries.ListVariablesParams{TenantID: tid, Limit: toInt32(limit), Offset: toInt32(offset)})
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing variables: %w", err)
+	}
+	total, err := r.q.CountVariables(ctx, tid)
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting variables: %w", err)
+	}
+	out := make([]domain.Variable, 0, len(rows))
+	for _, v := range rows {
+		out = append(out, domain.Variable{Key: v.Key, Value: v.Value, Description: strOrEmpty(v.Description)})
+	}
+	return out, int(total), nil
+}
+
+// GetVariable returns one variable by key, or ErrNotFound.
+func (r *Repository) GetVariable(ctx context.Context, tenant, key string) (domain.Variable, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return domain.Variable{}, err
+	}
+	v, err := r.q.GetVariable(ctx, queries.GetVariableParams{TenantID: tid, Key: key})
+	if err != nil {
+		return domain.Variable{}, mapNotFound(err)
+	}
+	return domain.Variable{Key: v.Key, Value: v.Value, Description: strOrEmpty(v.Description)}, nil
+}
+
+// SetVariable creates or updates a variable.
+func (r *Repository) SetVariable(ctx context.Context, tenant string, v domain.Variable) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	if err := r.q.UpsertVariable(ctx, queries.UpsertVariableParams{
+		TenantID: tid, Key: v.Key, Value: v.Value, Description: strPtr(v.Description),
+	}); err != nil {
+		return fmt.Errorf("upserting variable: %w", err)
+	}
+	return nil
+}
+
+// DeleteVariable removes a variable, returning ErrNotFound when none matched.
+func (r *Repository) DeleteVariable(ctx context.Context, tenant, key string) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	rows, err := r.q.DeleteVariable(ctx, queries.DeleteVariableParams{TenantID: tid, Key: key})
+	if err != nil {
+		return fmt.Errorf("deleting variable: %w", err)
+	}
+	if rows == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}

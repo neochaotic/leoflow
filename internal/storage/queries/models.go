@@ -320,6 +320,16 @@ type UserRole struct {
 	GrantedAt pgtype.Timestamptz `json:"granted_at"`
 }
 
+type Variable struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	Key         string             `json:"key"`
+	Value       string             `json:"value"`
+	Description *string            `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type XcomIndex struct {
 	ID          pgtype.UUID        `json:"id"`
 	TenantID    pgtype.UUID        `json:"tenant_id"`

@@ -473,6 +473,51 @@ func TestClearOnlyFailedIntegration(t *testing.T) {
 	}
 }
 
+// TestVariablesIntegration guards the Admin Variables CRUD against real Postgres.
+func TestVariablesIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := fmt.Sprintf("uiq_var_%d", time.Now().UnixNano())
+
+	if err := repo.SetVariable(ctx, "default", domain.Variable{Key: key, Value: "v1", Description: "first"}); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+	got, err := repo.GetVariable(ctx, "default", key)
+	if err != nil || got.Value != "v1" || got.Description != "first" {
+		t.Fatalf("GetVariable = %+v, err=%v", got, err)
+	}
+	// Upsert updates in place.
+	if err := repo.SetVariable(ctx, "default", domain.Variable{Key: key, Value: "v2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := repo.GetVariable(ctx, "default", key); got.Value != "v2" {
+		t.Errorf("upsert did not update: %q", got.Value)
+	}
+	// List includes it.
+	vars, total, err := repo.ListVariables(ctx, "default", 1000, 0)
+	if err != nil || total < 1 {
+		t.Fatalf("ListVariables: total=%d err=%v", total, err)
+	}
+	found := false
+	for _, v := range vars {
+		if v.Key == key {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("listed variables missing %s", key)
+	}
+	// Delete, then missing.
+	if err := repo.DeleteVariable(ctx, "default", key); err != nil {
+		t.Fatalf("DeleteVariable: %v", err)
+	}
+	if _, err := repo.GetVariable(ctx, "default", key); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("deleted variable still present: %v", err)
+	}
+	if err := repo.DeleteVariable(ctx, "default", key); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("second delete = %v, want ErrNotFound", err)
+	}
+}
+
 // TestDeleteDagIntegration guards DELETE-DAG: the row is removed (subsequent
 // reads miss), the cascade clears its runs, and deleting a missing DAG returns
 // ErrNotFound.

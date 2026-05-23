@@ -9,12 +9,12 @@ import (
 
 // supportedMenuItems are the Airflow 3.2.1 UI menu sections Leoflow backs. The
 // UI renders only the sections /ui/auth/menus authorizes, so omitting the rest
-// (Assets, Connections, Variables, Pools, Providers, Jobs, XComs, ...) hides
-// them without modifying the SPA. Each value must be a real 3.2.1 MenuItem enum
-// member (validMenuItems). The curated set starts minimal — Dags and Docs — and
-// is widened only when a browser test proves a missing section breaks the UI.
-// See docs/ui-compatibility.md.
-var supportedMenuItems = []string{"Dags", "Docs"}
+// (Assets, Pools, Providers, Jobs, XComs, ...) hides them without modifying the
+// SPA. Each value must be a real 3.2.1 MenuItem enum member (validMenuItems).
+// The set is widened as sections gain real backing: Variables and Connections
+// (the Admin panel, #45) and Audit Log (Browse, #37) are implemented, so they
+// are advertised; still-stubbed sections stay hidden. See docs/ui-compatibility.md.
+var supportedMenuItems = []string{"Dags", "Variables", "Connections", "Audit Log", "Docs"}
 
 // validMenuItems is the Airflow 3.2.1 MenuItem string enum. /ui/auth/menus may
 // only advertise values from this set; the SPA ignores unknown items.

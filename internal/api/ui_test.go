@@ -77,10 +77,15 @@ func TestUIMenusHidesUnsupportedSections(t *testing.T) {
 		}
 		return false
 	}
-	if !has("Dags") || !has("Docs") {
-		t.Errorf("menus should authorize Dags and Docs, got %v", body.Authorized)
+	// Backed sections are advertised so the SPA renders them: Dags, Docs, the
+	// Admin panel (Variables, Connections — #45) and Audit Log (#37).
+	for _, want := range []string{"Dags", "Docs", "Variables", "Connections", "Audit Log"} {
+		if !has(want) {
+			t.Errorf("menus should authorize %q, got %v", want, body.Authorized)
+		}
 	}
-	if has("Connections") || has("Variables") || has("Pools") || has("XComs") || has("Required Actions") {
+	// Still-stubbed sections stay hidden.
+	if has("Pools") || has("XComs") || has("Required Actions") || has("Providers") {
 		t.Errorf("menus must hide unsupported sections, got %v", body.Authorized)
 	}
 	// Every advertised item must be a real 3.2.1 MenuItem enum value.

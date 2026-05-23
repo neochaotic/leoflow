@@ -71,3 +71,27 @@ def test_run_unwraps_taskflow_decorator(tmp_path, monkeypatch):
     runner.run(f"{mod}:task")
 
     assert json.loads(out.read_text()) == {"ran": True}
+
+
+def test_run_resolves_xcom_input_arguments(tmp_path, monkeypatch):
+    """A task consuming an upstream output receives it via LEOFLOW_XCOM_<param>."""
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    # the agent injects extract's return_value as the 'n' input
+    monkeypatch.setenv("LEOFLOW_XCOM_N", "21")
+    mod = _write_module(tmp_path, monkeypatch, "def transform(n):\n    return n * 2\n")
+
+    runner.run(f"{mod}:transform")
+
+    assert json.loads(out.read_text()) == 42
+
+
+def test_run_leaves_unbound_params_to_defaults(tmp_path, monkeypatch):
+    """A parameter with no injected XCom falls back to its default (no crash)."""
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    mod = _write_module(tmp_path, monkeypatch, "def task(x=5):\n    return x + 1\n")
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == 6

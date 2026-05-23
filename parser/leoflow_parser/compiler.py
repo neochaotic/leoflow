@@ -6,6 +6,7 @@ task. It supports Python (including TaskFlow ``@task``), Bash, and HTTP tasks.
 """
 from __future__ import annotations
 
+import inspect
 import warnings
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,9 @@ def _map_task(task, source: str) -> dict[str, Any]:
 
     if task_type == "python":
         entry["entrypoint"] = _python_entrypoint(task, source)
+        xcom_input = _xcom_inputs(task)
+        if xcom_input:
+            entry["xcom_input"] = xcom_input
     elif task_type == "bash":
         entry["entrypoint"] = _bash_command(task)
     elif task_type == "http_api":
@@ -125,6 +129,33 @@ def _python_entrypoint(task, source: str) -> str:
     callable_obj = getattr(task, "python_callable", None)
     name = getattr(callable_obj, "__name__", task.task_id)
     return f"{Path(source).stem}:{name}"
+
+
+def _xcom_inputs(task) -> dict[str, str]:
+    """Map each TaskFlow parameter that consumes an upstream output to its task.
+
+    For ``transform(extract())`` the operator stores ``extract``'s XComArg in its
+    op_args/op_kwargs; binding those to the callable's signature yields
+    ``{"n": "extract"}``. XComArg is duck-typed (a value carrying an ``operator``
+    with a ``task_id``) to stay robust across Airflow SDK versions. The agent
+    fetches each upstream's return_value and injects it for the runner.
+    """
+    callable_obj = getattr(task, "python_callable", None)
+    if callable_obj is None:
+        return {}
+    op_args = getattr(task, "op_args", ()) or ()
+    op_kwargs = getattr(task, "op_kwargs", {}) or {}
+    try:
+        bound = inspect.signature(callable_obj).bind_partial(*op_args, **op_kwargs)
+    except (TypeError, ValueError):
+        return {}
+    mapping: dict[str, str] = {}
+    for name, value in bound.arguments.items():
+        operator = getattr(value, "operator", None)
+        upstream = getattr(operator, "task_id", None)
+        if upstream:
+            mapping[name] = upstream
+    return mapping
 
 
 def _bash_command(task) -> str:

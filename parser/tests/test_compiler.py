@@ -39,6 +39,10 @@ def test_simple_linear(tmp_path, dag_schema):
     assert tasks["extract"]["type"] == "python"
     assert tasks["extract"]["entrypoint"] == "simple_linear:extract"
     assert tasks["load"]["depends_on"] == ["extract"]
+    # load(extract()) binds load's 'value' param to extract's output (TaskFlow
+    # value passing) — the parser must record it so the agent injects the XCom.
+    assert tasks["load"]["xcom_input"] == {"value": "extract"}
+    assert "xcom_input" not in tasks["extract"]
 
 
 def test_branching(tmp_path, dag_schema):

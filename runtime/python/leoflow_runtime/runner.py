@@ -3,10 +3,34 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import os
 
+from leoflow_runtime.xcom import xcom_pull
+
 DEFAULT_RETURN_VALUE_PATH = "/tmp/leoflow_return_value.json"  # noqa: S108
+
+_UNSET = object()
+
+
+def _resolve_kwargs(fn) -> dict:
+    """Resolve each of fn's parameters from its injected upstream XCom.
+
+    The agent injects each declared input as ``LEOFLOW_XCOM_<PARAM>``; this binds
+    them to the function's parameters so a TaskFlow task that consumes an
+    upstream's output (``transform(extract())``) receives it. Parameters with no
+    injected XCom are left to their default (Airflow resolves a missing XCom to
+    None / the default).
+    """
+    kwargs: dict = {}
+    for name, param in inspect.signature(fn).parameters.items():
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        value = xcom_pull(name, _UNSET)
+        if value is not _UNSET:
+            kwargs[name] = value
+    return kwargs
 
 
 def return_value_path() -> str:
@@ -35,7 +59,7 @@ def run(entrypoint: str) -> None:
     # and capture its real return value.
     if hasattr(fn, "function"):
         fn = fn.function
-    result = fn()
+    result = fn(**_resolve_kwargs(fn))
 
     if result is not None:
         with open(return_value_path(), "w", encoding="utf-8") as f:

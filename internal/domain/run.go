@@ -51,4 +51,7 @@ type TaskInstance struct {
 	EndedAt   *time.Time
 	Duration  *float64
 	Hostname  string
+	// Note is operational context shown in the UI's task panel — e.g. why a task
+	// is queued but not running (no executor available).
+	Note string
 }

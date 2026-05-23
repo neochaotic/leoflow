@@ -108,6 +108,19 @@ func (s *SchedulerStore) ApplyTransition(ctx context.Context, runID, taskID stri
 	})
 }
 
+// SetTaskNote attaches operational context to a task instance, shown in the UI.
+func (s *SchedulerStore) SetTaskNote(ctx context.Context, runID, taskID, note string) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.SetTaskInstanceNote(ctx, queries.SetTaskInstanceNoteParams{
+		DagRunID: rid,
+		TaskID:   taskID,
+		Note:     strPtr(note),
+	})
+}
+
 // ResetForRetry returns a task instance to 'none', clears its timestamps, and
 // increments its try number so the scheduler re-evaluates and re-runs it.
 func (s *SchedulerStore) ResetForRetry(ctx context.Context, runID, taskID string) error {

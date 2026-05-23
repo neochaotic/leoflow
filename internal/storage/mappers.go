@@ -113,5 +113,6 @@ func mapTaskInstance(ti queries.TaskInstance, dagID, runID string) domain.TaskIn
 		EndedAt:   timePtr(ti.EndedAt),
 		Duration:  ti.DurationSeconds,
 		Hostname:  strOrEmpty(ti.Hostname),
+		Note:      strOrEmpty(ti.Note),
 	}
 }

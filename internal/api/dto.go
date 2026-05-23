@@ -209,6 +209,7 @@ func toTaskInstanceDTO(ti domain.TaskInstance) taskInstanceDTO {
 		OperatorName:     op,
 		ExecutorConfig:   "{}",
 		RenderedMapIndex: renderedMapIndex(ti.MapIndex),
+		Note:             strPtrOrNil(ti.Note),
 	}
 }
 

@@ -159,3 +159,8 @@ UPDATE task_instances
 SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
 WHERE dag_run_id = $1
   AND state IN ('failed', 'upstream_failed', 'up_for_retry');
+
+-- name: SetTaskInstanceNote :exec
+UPDATE task_instances
+SET note = $3
+WHERE dag_run_id = $1 AND task_id = $2;

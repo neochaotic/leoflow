@@ -44,6 +44,9 @@ type Store interface {
 	SetRunState(ctx context.Context, runID string, state domain.DagRunState) error
 	ScheduledDAGs(ctx context.Context) ([]ScheduledDAG, error)
 	CreateScheduledRun(ctx context.Context, dagID string, logical time.Time) error
+	// SetTaskNote attaches operational context to a task instance (shown in the
+	// UI), e.g. why it is queued but not running.
+	SetTaskNote(ctx context.Context, runID, taskID, note string) error
 }
 
 // Recorder records scheduler metrics. observability.Metrics implements it.
@@ -240,6 +243,13 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 			"hint", "pod dispatch disabled (no kubeconfig) or no executor handles this task type")
 		if s.recorder != nil {
 			s.recorder.RecordUndispatchable("no_executor")
+		}
+		// Surface the reason in the UI (the task panel renders the note), so a
+		// stuck-queued task is explained rather than silently green (#46).
+		note := fmt.Sprintf("Queued but not running: no executor available for a %q task. "+
+			"Pod dispatch is disabled (no Kubernetes config); only inline http_api tasks run without it.", task.Type)
+		if nerr := s.store.SetTaskNote(ctx, run.RunID, t.TaskID, note); nerr != nil {
+			s.logger.Warn("setting task note", "run", run.RunID, "task", t.TaskID, "error", nerr)
 		}
 	}
 	return s.recordTransition(ctx, run, t.TaskID, domain.TaskStateQueued)

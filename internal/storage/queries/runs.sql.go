@@ -217,7 +217,7 @@ func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateSched
 const createTaskInstance = `-- name: CreateTaskInstance :one
 INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note
 `
 
 type CreateTaskInstanceParams struct {
@@ -260,6 +260,7 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 		&i.ErrorMessage,
 		&i.LogUrl,
 		&i.Hostname,
+		&i.Note,
 	)
 	return i, err
 }
@@ -550,7 +551,7 @@ func (q *Queries) ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow
 }
 
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
-SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname FROM task_instances
+SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note FROM task_instances
 WHERE dag_run_id = $1
 ORDER BY task_id
 `
@@ -585,6 +586,7 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 			&i.ErrorMessage,
 			&i.LogUrl,
 			&i.Hostname,
+			&i.Note,
 		); err != nil {
 			return nil, err
 		}
@@ -708,6 +710,23 @@ func (q *Queries) ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (R
 	return i, err
 }
 
+const setTaskInstanceNote = `-- name: SetTaskInstanceNote :exec
+UPDATE task_instances
+SET note = $3
+WHERE dag_run_id = $1 AND task_id = $2
+`
+
+type SetTaskInstanceNoteParams struct {
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskID   string      `json:"task_id"`
+	Note     *string     `json:"note"`
+}
+
+func (q *Queries) SetTaskInstanceNote(ctx context.Context, arg SetTaskInstanceNoteParams) error {
+	_, err := q.db.Exec(ctx, setTaskInstanceNote, arg.DagRunID, arg.TaskID, arg.Note)
+	return err
+}
+
 const taskInstancesForDagRuns = `-- name: TaskInstancesForDagRuns :many
 SELECT dr.run_id, ti.task_id, ti.try_number, ti.state,
        ti.started_at, ti.ended_at
@@ -807,7 +826,7 @@ const updateTaskInstanceState = `-- name: UpdateTaskInstanceState :one
 UPDATE task_instances
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note
 `
 
 type UpdateTaskInstanceStateParams struct {
@@ -846,6 +865,7 @@ func (q *Queries) UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskIns
 		&i.ErrorMessage,
 		&i.LogUrl,
 		&i.Hostname,
+		&i.Note,
 	)
 	return i, err
 }

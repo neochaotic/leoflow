@@ -280,6 +280,7 @@ type TaskInstance struct {
 	ErrorMessage    *string            `json:"error_message"`
 	LogUrl          *string            `json:"log_url"`
 	Hostname        *string            `json:"hostname"`
+	Note            *string            `json:"note"`
 }
 
 type TaskStateHistory struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ type fakeStore struct {
 	runStates   map[string]domain.DagRunState
 	scheduled   []ScheduledDAG
 	createdRuns []string
+	notes       map[string]string
 }
 
 func newFakeStore(runs ...RunState) *fakeStore {
@@ -51,6 +53,13 @@ func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) error
 }
 func (f *fakeStore) SetRunState(_ context.Context, runID string, state domain.DagRunState) error {
 	f.runStates[runID] = state
+	return nil
+}
+func (f *fakeStore) SetTaskNote(_ context.Context, _, taskID, note string) error {
+	if f.notes == nil {
+		f.notes = map[string]string{}
+	}
+	f.notes[taskID] = note
 	return nil
 }
 
@@ -239,6 +248,10 @@ func TestStepRecordsUndispatchableWhenNoExecutor(t *testing.T) {
 	// 'a' is still recorded queued so it is not reprocessed every tick.
 	if !hasTransition(store.transitions, "a", domain.TaskStateQueued) {
 		t.Errorf("task a should be recorded queued, got %v", store.transitions)
+	}
+	// The reason is surfaced as a task note for the UI.
+	if note := store.notes["a"]; !strings.Contains(note, "no executor available") {
+		t.Errorf("task a should get an explanatory note, got %q", note)
 	}
 }
 

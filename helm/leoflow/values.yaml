@@ -74,8 +74,11 @@ bootstrap:
 migrations:
   enabled: true
   image:
-    repository: migrate/migrate
-    tag: v4.18.1
+    # leoflow-migrate bundles the Leoflow migrations + golang-migrate
+    # (deploy/Dockerfile.migrate, built by `make migrate-image`). Tag defaults to
+    # the chart appVersion.
+    repository: ghcr.io/neochaotic/leoflow-migrate
+    tag: ""
     pullPolicy: IfNotPresent
   # path of the migrations dir inside the image.
   path: /migrations

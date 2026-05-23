@@ -1,0 +1,4 @@
+# Bundles the Leoflow SQL migrations with golang-migrate, for the Helm chart's
+# migration Job (#34/#48). Run as: migrate -path /migrations -database <url> up
+FROM migrate/migrate:v4.18.1
+COPY migrations/ /migrations/

@@ -46,11 +46,11 @@ its own.
 
 ## Migrations
 
-The pre-install/pre-upgrade Job runs `migrate -path <path> -database <url> up`.
-**The migrations image must bundle the Leoflow `migrations/` at
-`migrations.path`** — the stock `migrate/migrate` image does not. Either build a
-small image that `COPY migrations/ /migrations`, or set `migrations.enabled=false`
-and run migrations out of band.
+The pre-install/pre-upgrade Job runs `migrate -path <path> -database <url> up`
+using the default image **`ghcr.io/neochaotic/leoflow-migrate`** (built from
+`deploy/Dockerfile.migrate` via `make migrate-image`), which bundles the Leoflow
+`migrations/` at `migrations.path`. Override `migrations.image` to use your own,
+or set `migrations.enabled=false` to migrate out of band.
 
 ## Common values
 

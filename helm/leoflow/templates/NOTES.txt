@@ -25,8 +25,8 @@ WARNING: no JWT secret set. Provide .Values.auth.jwtSecret or .Values.auth.exist
 {{- if .Values.migrations.enabled }}
 
 Migrations run as a pre-install/pre-upgrade Job using image
-"{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag }}". That image MUST bundle the
-Leoflow migrations at "{{ .Values.migrations.path }}"; the stock migrate/migrate image does not.
-Build a migrate image (COPY migrations/ into {{ .Values.migrations.path }}) or set migrations.enabled=false
-and run migrations out of band.
+"{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag | default .Chart.AppVersion }}",
+which bundles the Leoflow migrations at "{{ .Values.migrations.path }}"
+(build/publish it with `make migrate-image`). Override migrations.image or set
+migrations.enabled=false to migrate out of band.
 {{- end }}

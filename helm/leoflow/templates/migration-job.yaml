@@ -1,10 +1,12 @@
 {{- if .Values.migrations.enabled -}}
 {{/*
 Runs golang-migrate before the server starts, as a pre-install/pre-upgrade hook.
-The image must bundle the Leoflow migrations at .Values.migrations.path (the
-default migrate/migrate image does not — supply a custom image that COPYs the
-repo's migrations/ in, or disable this Job and migrate out of band).
+The default image (ghcr.io/neochaotic/leoflow-migrate, built from
+deploy/Dockerfile.migrate via `make migrate-image`) bundles the Leoflow
+migrations at .Values.migrations.path. Override migrations.image to use your own,
+or set migrations.enabled=false to migrate out of band.
 */}}
+{{- $migrateTag := .Values.migrations.image.tag | default .Chart.AppVersion -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -26,7 +28,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: "{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag }}"
+          image: "{{ .Values.migrations.image.repository }}:{{ $migrateTag }}"
           imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
           args:
             - "-path={{ .Values.migrations.path }}"

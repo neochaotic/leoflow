@@ -46,9 +46,15 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 			slog.Warn("closing log stream", "error", cerr)
 		}
 	}()
-	if wantsStructuredLogs(c) {
+	switch negotiateLogFormat(c) {
+	case logFormatNDJSON:
+		serveNdjsonLogs(c, rc, try)
+		return
+	case logFormatJSON:
 		serveStructuredLogs(c, rc, try)
 		return
+	case logFormatPlain:
+		// fall through to the plain-text stream below.
 	}
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Status(http.StatusOK)
@@ -71,12 +77,18 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 // for an attempt, so the UI shows "no logs" instead of erroring.
 func serveNoLogs(c *gin.Context) {
 	const msg = "No logs available for this attempt."
-	if wantsStructuredLogs(c) {
-		c.JSON(http.StatusOK, structuredLogResponse{
-			Content:           []structuredLogEvent{{Event: msg, Level: "info"}},
-			ContinuationToken: nil,
-		})
+	event := structuredLogEvent{Event: msg, Level: "info"}
+	switch negotiateLogFormat(c) {
+	case logFormatNDJSON:
+		c.Header("Content-Type", "application/x-ndjson")
+		c.Status(http.StatusOK)
+		writeNdjson(c, []structuredLogEvent{event})
 		return
+	case logFormatJSON:
+		c.JSON(http.StatusOK, structuredLogResponse{Content: []structuredLogEvent{event}, ContinuationToken: nil})
+		return
+	case logFormatPlain:
+		// fall through to the plain-text message below.
 	}
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.String(http.StatusOK, msg+"\n")

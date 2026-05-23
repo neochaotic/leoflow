@@ -120,6 +120,108 @@ func TestLogsStructuredJSON(t *testing.T) {
 	}
 }
 
+func TestLogsStructuredCarriesTimestamp(t *testing.T) {
+	// Stored logs are JSONL with a timestamp; the structured view must surface it
+	// as `timestamp`, otherwise Airflow's log viewer renders an empty panel even
+	// though the response is 200 (the per-line timestamp is required to render).
+	body := `{"ts":"2026-05-23T18:29:18.005688Z","level":"info","stream":"stdout","msg":"extract: starting"}` + "\n"
+	srv := logsServer(&fakeLogReader{body: body})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/logs/1", http.NoBody)
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("structured logs = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Content []struct {
+			Event     string `json:"event"`
+			Level     string `json:"level"`
+			Timestamp string `json:"timestamp"`
+			Logger    string `json:"logger"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// The actual log line (after group/endgroup) must carry its timestamp.
+	var line *struct {
+		Event     string `json:"event"`
+		Level     string `json:"level"`
+		Timestamp string `json:"timestamp"`
+		Logger    string `json:"logger"`
+	}
+	for i := range got.Content {
+		if got.Content[i].Event == "extract: starting" {
+			line = &got.Content[i]
+		}
+	}
+	if line == nil {
+		t.Fatalf("log line not found in content: %+v", got.Content)
+	}
+	if line.Timestamp == "" {
+		t.Errorf("log line missing timestamp (Airflow viewer needs it to render): %+v", *line)
+	}
+	if line.Logger == "" {
+		t.Errorf("log line missing logger: %+v", *line)
+	}
+}
+
+func TestLogsNdjsonContract(t *testing.T) {
+	// The Airflow 3.2 SPA log viewer requests Accept: application/x-ndjson and
+	// parses one JSON object per line (NOT a single {content:[...]} object). If we
+	// serve plain text or the wrong content-type, the viewer renders an empty
+	// panel even on a 200. This pins the contract.
+	body := `{"ts":"2026-05-23T18:29:18.005688Z","level":"info","stream":"stdout","msg":"extract: starting"}` + "\n"
+	srv := logsServer(&fakeLogReader{body: body})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/logs/1", http.NoBody)
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Accept", "application/x-ndjson")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ndjson logs = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/x-ndjson") {
+		t.Errorf("content-type = %q, want application/x-ndjson", ct)
+	}
+	// Each non-empty line must be a standalone JSON object; the source group is
+	// first, then the log line carrying event+timestamp+logger.
+	lines := []string{}
+	for _, ln := range strings.Split(strings.TrimSpace(rec.Body.String()), "\n") {
+		if ln != "" {
+			lines = append(lines, ln)
+		}
+	}
+	if len(lines) < 3 {
+		t.Fatalf("want group + endgroup + >=1 line, got %d: %q", len(lines), rec.Body.String())
+	}
+	var foundLine bool
+	for _, ln := range lines {
+		var item map[string]any
+		if err := json.Unmarshal([]byte(ln), &item); err != nil {
+			t.Fatalf("line is not valid JSON: %q (%v)", ln, err)
+		}
+		if item["event"] == "extract: starting" {
+			foundLine = true
+			if item["timestamp"] == nil || item["timestamp"] == "" {
+				t.Errorf("log line missing timestamp: %v", item)
+			}
+			if item["logger"] == nil || item["logger"] == "" {
+				t.Errorf("log line missing logger: %v", item)
+			}
+		}
+	}
+	if !foundLine {
+		t.Errorf("log line 'extract: starting' not emitted as an ndjson object: %q", rec.Body.String())
+	}
+}
+
 func TestLogsReadMissingIsGraceful(t *testing.T) {
 	// Missing logs (e.g. an attempt that never ran, or aged-out logs) render as
 	// a graceful "no logs" 200, not a 404 the UI shows as a broken page (#52).

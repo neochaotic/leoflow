@@ -17,6 +17,7 @@ type Metrics struct {
 	SchedulerLeader       *prometheus.GaugeVec
 	ActiveDAGRuns         *prometheus.GaugeVec
 	QueuedTasks           *prometheus.GaugeVec
+	TasksUndispatchable   *prometheus.CounterVec
 
 	// Task lifecycle
 	TaskStateTransitions    *prometheus.CounterVec
@@ -54,6 +55,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		SchedulerDecisions: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "leoflow_scheduler_decisions_total", Help: "Scheduler decisions by type.",
 		}, []string{"decision_type"}),
+		TasksUndispatchable: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "leoflow_tasks_undispatchable_total", Help: "Tasks queued with no executor to launch them, by reason.",
+		}, []string{"reason"}),
 		SchedulerLeader: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "leoflow_scheduler_leader", Help: "1 when this replica is the scheduler leader.",
 		}, []string{"replica_id"}),
@@ -132,6 +136,13 @@ func (m *Metrics) RecordSchedulerDecision(decisionType string) {
 // RecordTaskTransition records a task instance state transition.
 func (m *Metrics) RecordTaskTransition(from, to, dagID string) {
 	m.TaskStateTransitions.WithLabelValues(from, to, dagID).Inc()
+}
+
+// RecordUndispatchable records a task that became queued but has no executor to
+// launch it (e.g. pod dispatch disabled), so an operator can distinguish a
+// resource/config gap from an actual bug.
+func (m *Metrics) RecordUndispatchable(reason string) {
+	m.TasksUndispatchable.WithLabelValues(reason).Inc()
 }
 
 // RecordTaskDuration records how long a task took to execute, in seconds.

@@ -50,6 +50,8 @@ type Store interface {
 type Recorder interface {
 	RecordSchedulerDecision(decisionType string)
 	RecordTaskTransition(from, to, dagID string)
+	// RecordUndispatchable counts tasks queued with no executor to launch them.
+	RecordUndispatchable(reason string)
 }
 
 // Dispatcher launches a task instance for execution. The scheduler dispatches a
@@ -226,6 +228,18 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 		if err := s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task); err != nil {
 			s.logger.Error("dispatching task", "run", run.RunID, "task", t.TaskID, "error", err)
 			return nil
+		}
+	} else {
+		// No executor for this task: pod dispatch is disabled (no kubeconfig) and
+		// the task is not an inline http_api task, so nothing will launch it. It
+		// is still recorded queued (below) to avoid re-processing every tick, but
+		// we surface why instead of stalling silently. See #46.
+		s.logger.Warn("task has no available executor; it will stay queued and not run",
+			"run", run.RunID, "dag", run.DagID, "task", t.TaskID, "task_type", task.Type,
+			"reason", "no_executor",
+			"hint", "pod dispatch disabled (no kubeconfig) or no executor handles this task type")
+		if s.recorder != nil {
+			s.recorder.RecordUndispatchable("no_executor")
 		}
 	}
 	return s.recordTransition(ctx, run, t.TaskID, domain.TaskStateQueued)

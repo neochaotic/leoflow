@@ -203,3 +203,59 @@ func TestHeartbeatTracksTicks(t *testing.T) {
 		t.Errorf("heartbeat %v is not recent", last)
 	}
 }
+
+type fakeRecorder struct{ undispatchable []string }
+
+func (r *fakeRecorder) RecordSchedulerDecision(string)      {}
+func (r *fakeRecorder) RecordTaskTransition(_, _, _ string) {}
+func (r *fakeRecorder) RecordUndispatchable(reason string) {
+	r.undispatchable = append(r.undispatchable, reason)
+}
+
+func freshRun() *fakeStore {
+	// 'a' starts scheduled so a single Step plans it none->queued via launchQueued
+	// (the planner moves none->scheduled->queued across ticks).
+	return newFakeStore(RunState{
+		RunID: "r1", DagID: "etl", State: domain.DagRunStateRunning, Tasks: linearTasks(),
+		States:   map[string]domain.TaskState{"a": domain.TaskStateScheduled, "b": domain.TaskStateNone},
+		Tries:    map[string]int{"a": 0, "b": 0},
+		MaxTries: map[string]int{"a": 1, "b": 1},
+	})
+}
+
+func TestStepRecordsUndispatchableWhenNoExecutor(t *testing.T) {
+	store := freshRun()
+	rec := &fakeRecorder{}
+	s := newScheduler(store)
+	s.SetRecorder(rec)
+	// No dispatcher and no inline runner: task 'a' becomes queued with nothing
+	// to launch it -> the undispatchable signal must fire (#46).
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.undispatchable) != 1 || rec.undispatchable[0] != "no_executor" {
+		t.Errorf("expected one no_executor record, got %v", rec.undispatchable)
+	}
+	// 'a' is still recorded queued so it is not reprocessed every tick.
+	if !hasTransition(store.transitions, "a", domain.TaskStateQueued) {
+		t.Errorf("task a should be recorded queued, got %v", store.transitions)
+	}
+}
+
+func TestStepDoesNotRecordUndispatchableWithDispatcher(t *testing.T) {
+	store := freshRun()
+	rec := &fakeRecorder{}
+	disp := &fakeDispatcher{}
+	s := newScheduler(store)
+	s.SetRecorder(rec)
+	s.SetDispatcher(disp)
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.undispatchable) != 0 {
+		t.Errorf("with a dispatcher there should be no undispatchable records, got %v", rec.undispatchable)
+	}
+	if len(disp.dispatched) != 1 || disp.dispatched[0] != "a" {
+		t.Errorf("task a should be dispatched, got %v", disp.dispatched)
+	}
+}

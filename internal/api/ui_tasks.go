@@ -123,6 +123,39 @@ func toTaskResponse(spec domain.DAGSpec, t domain.TaskSpec) taskResponseDTO {
 	}
 }
 
+// renderedFieldsFor builds the rendered_fields object the Task Details / Rendered
+// Templates tab shows: the task's templatable operator fields. Leoflow does not
+// render Jinja (#25), so these are the spec values — for a TaskFlow task that
+// means its entrypoint, env, and the upstream bindings it consumes (xcom_input),
+// or the HTTP request for an http_api task. Returns {} when the task is unknown.
+func renderedFieldsFor(spec domain.DAGSpec, taskID string) json.RawMessage {
+	for _, t := range spec.Tasks {
+		if t.TaskID != taskID {
+			continue
+		}
+		fields := map[string]any{}
+		if t.Entrypoint != "" {
+			fields["entrypoint"] = t.Entrypoint
+		}
+		if len(t.Env) > 0 {
+			fields["env"] = t.Env
+		}
+		if len(t.XComInput) > 0 {
+			fields["xcom_input"] = t.XComInput
+		}
+		if t.HTTPRequest != nil {
+			fields["http_request"] = map[string]any{
+				"method": t.HTTPRequest.Method, "url": t.HTTPRequest.URL,
+				"headers": t.HTTPRequest.Headers, "body": t.HTTPRequest.Body,
+			}
+		}
+		if b, err := json.Marshal(fields); err == nil {
+			return b
+		}
+	}
+	return json.RawMessage("{}")
+}
+
 // strSafe returns s, or the fallback when s is empty.
 func strSafe(s, fallback string) string {
 	if s == "" {

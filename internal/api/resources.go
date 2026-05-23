@@ -522,7 +522,7 @@ func resolveRunContextFor(c *gin.Context, runs DagRunRepository, versions DagVer
 // taskInstanceActionHandler dispatches the catch-all under
 // /taskInstances/{task_id}/* : "logs/{try}" streams the attempt's logs, while a
 // bare "{map_index}" returns the single task instance (TaskInstanceResponse).
-func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xcoms XComReader, runs DagRunRepository, versions DagVersionLister) gin.HandlerFunc {
+func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xcoms XComReader, runs DagRunRepository, versions DagVersionLister, specs DagSpecReader) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		action := strings.Trim(c.Param("action"), "/")
 		if rest, ok := strings.CutPrefix(action, "logs/"); ok {
@@ -560,22 +560,36 @@ func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xco
 			AbortProblem(c, http.StatusBadRequest, "bad request", "map_index must be an integer")
 			return
 		}
-		tis, _, err := tasks.ListTaskInstances(c.Request.Context(), tenantOf(c),
-			c.Param("dag_id"), c.Param("dag_run_id"), 1000, 0)
-		if err != nil {
-			handleRepoError(c, err)
-			return
+		serveSingleTaskInstance(c, tasks, runs, versions, specs, mapIndex)
+	}
+}
+
+// serveSingleTaskInstance returns one task instance (TaskInstanceResponse) by
+// map_index, enriched with run-derived fields and the spec's rendered_fields.
+func serveSingleTaskInstance(c *gin.Context, tasks TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, specs DagSpecReader, mapIndex int) {
+	tis, _, err := tasks.ListTaskInstances(c.Request.Context(), tenantOf(c),
+		c.Param("dag_id"), c.Param("dag_run_id"), 1000, 0)
+	if err != nil {
+		handleRepoError(c, err)
+		return
+	}
+	for _, ti := range tis {
+		if ti.TaskID != c.Param("task_id") || ti.MapIndex != mapIndex {
+			continue
 		}
-		for _, ti := range tis {
-			if ti.TaskID == c.Param("task_id") && ti.MapIndex == mapIndex {
-				dto := toTaskInstanceDTO(ti)
-				enrichTaskInstance(c, &dto, runs, versions)
-				c.JSON(http.StatusOK, dto)
-				return
+		dto := toTaskInstanceDTO(ti)
+		enrichTaskInstance(c, &dto, runs, versions)
+		// Populate rendered_fields from the task spec so the Rendered Templates
+		// tab shows the operator's fields rather than empty.
+		if specs != nil {
+			if spec, serr := specs.GetCurrentSpec(c.Request.Context(), tenantOf(c), c.Param("dag_id")); serr == nil {
+				dto.RenderedFields = renderedFieldsFor(spec, ti.TaskID)
 			}
 		}
-		AbortProblem(c, http.StatusNotFound, "not found", "task instance not found")
+		c.JSON(http.StatusOK, dto)
+		return
 	}
+	AbortProblem(c, http.StatusNotFound, "not found", "task instance not found")
 }
 
 // enrichTaskInstance fills the run-derived fields (logical_date, run_after) and
@@ -671,7 +685,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		// parent; gin cannot mix a static and a wildcard child there, so one
 		// catch-all dispatches both (single task instance vs its logs).
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action",
-			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms, deps.DagRuns, deps.DagVersions))
+			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms, deps.DagRuns, deps.DagVersions, deps.Specs))
 		// Mark-success/failed: PATCH the task instance. The UI hits both the bare
 		// path and one carrying optional /{map_index} and /dry_run segments.
 		patchTI := patchTaskInstanceHandler(deps.Tasks, deps.DagRuns, deps.DagVersions, deps.Audit)

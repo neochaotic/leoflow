@@ -48,8 +48,9 @@ When implemented:
   (or equivalent SDK hook), so `Variable.get` / `BaseHook.get_connection` resolve
   transparently — preserving Airflow API compatibility.
 - Each access is auditable at the control plane (who/what fetched which key).
-- Scope: a task may read any variable/connection in its tenant for the MVP;
-  per-DAG scoping is a later refinement.
+- Scope: Variables and Connections are **global** (tenant-wide) — any task may
+  read any variable/connection in its tenant, matching Airflow. There is no
+  per-DAG scoping.
 
 **Env injection (approach 1) is the explicit fallback** only if a faster MVP is
 required before the gRPC path lands; if used, it must be documented as a known

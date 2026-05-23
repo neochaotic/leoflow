@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,21 @@ func TestToTaskInstanceDTO(t *testing.T) {
 	}
 	if ti.ID == "" || ti.Pool != "default_pool" {
 		t.Errorf("ti missing synthetic id / pool defaults: %+v", ti)
+	}
+}
+
+func TestRenderedFieldsFor(t *testing.T) {
+	spec := domain.DAGSpec{Tasks: []domain.TaskSpec{
+		{TaskID: "transform", Type: domain.TaskTypePython, Entrypoint: "dag:transform",
+			XComInput: map[string]string{"data": "extract"}},
+	}}
+	got := string(renderedFieldsFor(spec, "transform"))
+	if !strings.Contains(got, `"entrypoint":"dag:transform"`) || !strings.Contains(got, `"xcom_input"`) {
+		t.Errorf("rendered_fields = %s, want entrypoint + xcom_input", got)
+	}
+	// Unknown task yields an empty object (never null).
+	if s := string(renderedFieldsFor(spec, "nope")); s != "{}" {
+		t.Errorf("unknown task rendered_fields = %s, want {}", s)
 	}
 }
 

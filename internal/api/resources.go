@@ -130,6 +130,15 @@ func patchDagHandler(repo DagRepository) gin.HandlerFunc {
 
 func listDagRunsHandler(repo DagRunRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// "~" is Airflow's wildcard for "all DAGs"; the UI home polls
+		// GET /api/v2/dags/~/dagRuns for a global run view. Leoflow has no
+		// cross-DAG run query yet, so degrade to an empty collection (200) rather
+		// than 404 (which would resolve "~" as a missing DAG). Real cross-DAG
+		// aggregation is a follow-up.
+		if c.Param("dag_id") == "~" {
+			c.JSON(http.StatusOK, dagRunCollectionDTO{DagRuns: []dagRunDTO{}, TotalEntries: 0})
+			return
+		}
 		limit, offset := pagination(c)
 		runs, total, err := repo.ListDagRuns(c.Request.Context(), tenantOf(c), c.Param("dag_id"), limit, offset)
 		if err != nil {

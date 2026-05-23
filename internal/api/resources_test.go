@@ -157,6 +157,22 @@ func TestDagRunsListAndCreate(t *testing.T) {
 	}
 }
 
+func TestDagRunsWildcardReturnsEmptyCollection(t *testing.T) {
+	// The UI home polls /api/v2/dags/~/dagRuns (all DAGs). It must degrade to an
+	// empty collection (200), not 404 — "~" is not a real DAG.
+	rec := authGet(authedServer(), http.MethodGet, "/api/v2/dags/~/dagRuns", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("~/dagRuns = %d, want 200", rec.Code)
+	}
+	var col dagRunCollectionDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &col); err != nil {
+		t.Fatal(err)
+	}
+	if col.TotalEntries != 0 || len(col.DagRuns) != 0 {
+		t.Errorf("~/dagRuns should be empty, got %+v", col)
+	}
+}
+
 func TestDagRunCreateGeneratesRunID(t *testing.T) {
 	rec := authGet(authedServer(), http.MethodPost, "/api/v2/dags/etl/dagRuns", `{}`)
 	if rec.Code != http.StatusCreated {

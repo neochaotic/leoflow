@@ -249,6 +249,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		g := r.Group("/api/v2/dags")
 		g.GET("", RequirePermission("read", "dag"), listDagsHandler(deps.Dags))
 		g.GET("/:dag_id", RequirePermission("read", "dag"), getDagHandler(deps.Dags))
+		g.GET("/:dag_id/details", RequirePermission("read", "dag"), dagDetailsHandler(deps.Dags))
 		g.PATCH("/:dag_id", RequirePermission("write", "dag"), patchDagHandler(deps.Dags))
 	}
 	if deps.DagRuns != nil {

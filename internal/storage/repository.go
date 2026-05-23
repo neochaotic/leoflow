@@ -245,6 +245,38 @@ func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runI
 	return cleared, nil
 }
 
+// LatestRunsForDags returns up to perDag most-recent runs for each named DAG,
+// keyed by dag_id, in a single windowed query (no per-DAG round trips).
+func (r *Repository) LatestRunsForDags(ctx context.Context, tenant string, dagIDs []string, perDag int) (map[string][]domain.DagRun, error) {
+	if len(dagIDs) == 0 {
+		return map[string][]domain.DagRun{}, nil
+	}
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.LatestRunsForDags(ctx, queries.LatestRunsForDagsParams{
+		TenantID: tid, Column2: dagIDs, Limit: toInt32(perDag),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("latest runs for dags: %w", err)
+	}
+	out := make(map[string][]domain.DagRun, len(dagIDs))
+	for _, row := range rows {
+		out[row.DagIDText] = append(out[row.DagIDText], domain.DagRun{
+			DagID:       row.DagIDText,
+			RunID:       row.RunID,
+			LogicalDate: timeVal(row.LogicalDate),
+			State:       domain.DagRunState(row.State),
+			RunType:     string(row.Trigger),
+			QueuedAt:    timeVal(row.QueuedAt),
+			StartedAt:   timePtr(row.StartedAt),
+			EndedAt:     timePtr(row.EndedAt),
+		})
+	}
+	return out, nil
+}
+
 // GetCurrentSpec returns the parsed spec of the DAG's current version, or
 // domain.ErrNotFound if the DAG or its current version does not exist.
 func (r *Repository) GetCurrentSpec(ctx context.Context, tenant, dagID string) (domain.DAGSpec, error) {

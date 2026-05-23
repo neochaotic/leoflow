@@ -1,0 +1,153 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/domain"
+)
+
+// defaultDagRunsLimit is how many recent runs /ui/dags embeds per DAG when the
+// client does not specify dag_runs_limit (Airflow's UI default).
+const defaultDagRunsLimit = 14
+
+// DagLatestRunsReader fetches the most-recent runs for a set of DAGs in one
+// query, so /ui/dags can embed run history without an N+1.
+type DagLatestRunsReader interface {
+	LatestRunsForDags(ctx context.Context, tenant string, dagIDs []string, perDag int) (map[string][]domain.DagRun, error)
+}
+
+// dagTagDTO is the Airflow 3.2.1 DagTagResponse.
+type dagTagDTO struct {
+	Name  string `json:"name"`
+	DagID string `json:"dag_id"`
+}
+
+// dagWithRunsDTO is the Airflow 3.2.1 DAGWithLatestDagRunsResponse. Every
+// spec-required field is present; values Leoflow does not track yet are null
+// (nullable fields) or sensible defaults (non-nullable), so the DAG list renders
+// without misbehaving. See docs/ui-compatibility.md.
+type dagWithRunsDTO struct {
+	DagID                       string           `json:"dag_id"`
+	DagDisplayName              string           `json:"dag_display_name"`
+	IsPaused                    bool             `json:"is_paused"`
+	IsStale                     bool             `json:"is_stale"`
+	LastParsedTime              *string          `json:"last_parsed_time"`
+	LastParseDuration           *float64         `json:"last_parse_duration"`
+	LastExpired                 *string          `json:"last_expired"`
+	BundleName                  *string          `json:"bundle_name"`
+	BundleVersion               *string          `json:"bundle_version"`
+	RelativeFileloc             *string          `json:"relative_fileloc"`
+	Fileloc                     string           `json:"fileloc"`
+	Description                 *string          `json:"description"`
+	TimetableSummary            *string          `json:"timetable_summary"`
+	TimetableDescription        *string          `json:"timetable_description"`
+	TimetablePartitioned        bool             `json:"timetable_partitioned"`
+	Tags                        []dagTagDTO      `json:"tags"`
+	MaxActiveTasks              int              `json:"max_active_tasks"`
+	MaxActiveRuns               *int             `json:"max_active_runs"`
+	MaxConsecutiveFailedDagRuns int              `json:"max_consecutive_failed_dag_runs"`
+	HasTaskConcurrencyLimits    bool             `json:"has_task_concurrency_limits"`
+	HasImportErrors             bool             `json:"has_import_errors"`
+	NextDagrunLogicalDate       *string          `json:"next_dagrun_logical_date"`
+	NextDagrunDataIntervalStart *string          `json:"next_dagrun_data_interval_start"`
+	NextDagrunDataIntervalEnd   *string          `json:"next_dagrun_data_interval_end"`
+	NextDagrunRunAfter          *string          `json:"next_dagrun_run_after"`
+	AllowedRunTypes             []string         `json:"allowed_run_types"`
+	Owners                      []string         `json:"owners"`
+	AssetExpression             *json.RawMessage `json:"asset_expression"`
+	LatestDagRuns               []dagRunLightDTO `json:"latest_dag_runs"`
+	PendingActions              []any            `json:"pending_actions"`
+	IsFavorite                  bool             `json:"is_favorite"`
+	FileToken                   string           `json:"file_token"`
+}
+
+type dagWithRunsCollectionDTO struct {
+	Dags         []dagWithRunsDTO `json:"dags"`
+	TotalEntries int              `json:"total_entries"`
+}
+
+// defaultMaxActiveTasks mirrors Airflow's per-DAG task concurrency default;
+// Leoflow does not model it yet but the field is required.
+const defaultMaxActiveTasks = 16
+
+func toDagWithRunsDTO(d domain.DAG, runs []domain.DagRun) dagWithRunsDTO {
+	tags := make([]dagTagDTO, 0, len(d.Tags))
+	for _, t := range d.Tags {
+		tags = append(tags, dagTagDTO{Name: t, DagID: d.DagID})
+	}
+	owners := []string{}
+	if d.Owner != "" {
+		owners = append(owners, d.Owner)
+	}
+	latest := make([]dagRunLightDTO, 0, len(runs))
+	for _, r := range runs {
+		latest = append(latest, toDagRunLightDTO(r))
+	}
+	maxRuns := d.MaxActiveRuns
+	return dagWithRunsDTO{
+		DagID:                       d.DagID,
+		DagDisplayName:              d.DagID,
+		IsPaused:                    d.IsPaused,
+		IsStale:                     !d.IsActive,
+		Description:                 strPtrOrNil(d.Description),
+		TimetableSummary:            d.Schedule,
+		TimetablePartitioned:        false,
+		Tags:                        tags,
+		MaxActiveTasks:              defaultMaxActiveTasks,
+		MaxActiveRuns:               &maxRuns,
+		MaxConsecutiveFailedDagRuns: 0,
+		AllowedRunTypes:             []string{"manual", "scheduled"},
+		Owners:                      owners,
+		LatestDagRuns:               latest,
+		PendingActions:              []any{},
+		FileToken:                   "",
+		Fileloc:                     "",
+	}
+}
+
+// strPtrOrNil returns nil for an empty string so the JSON field renders null.
+func strPtrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// uiDagsHandler implements GET /ui/dags: the UI DAG list with per-DAG embedded
+// latest runs, fetched in two constant queries (page of DAGs + one windowed
+// runs query), never per-DAG.
+func uiDagsHandler(dags DagRepository, latest DagLatestRunsReader) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		limit, offset := pagination(c)
+		tenant := tenantOf(c)
+		ds, total, err := dags.ListDags(c.Request.Context(), tenant, limit, offset)
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		runsLimit := defaultDagRunsLimit
+		if n, perr := strconv.Atoi(c.Query("dag_runs_limit")); perr == nil && n > 0 {
+			runsLimit = n
+		}
+		ids := make([]string, len(ds))
+		for i, d := range ds {
+			ids[i] = d.DagID
+		}
+		runsByDag, err := latest.LatestRunsForDags(c.Request.Context(), tenant, ids, runsLimit)
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		out := dagWithRunsCollectionDTO{Dags: make([]dagWithRunsDTO, 0, len(ds)), TotalEntries: total}
+		for _, d := range ds {
+			out.Dags = append(out.Dags, toDagWithRunsDTO(d, runsByDag[d.DagID]))
+		}
+		setPaginationLinks(c, total, limit, offset)
+		c.JSON(http.StatusOK, out)
+	}
+}

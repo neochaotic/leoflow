@@ -94,3 +94,17 @@ FROM dag_runs dr
 JOIN dags d ON d.id = dr.dag_id
 JOIN tenants t ON t.id = d.tenant_id
 WHERE t.name = $1 AND d.dag_id = $2 AND dr.run_id = $3;
+
+-- name: LatestRunsForDags :many
+SELECT d.dag_id AS dag_id_text,
+       r.run_id, r.logical_date, r.state, r.trigger, r.queued_at, r.started_at, r.ended_at
+FROM dags d
+JOIN LATERAL (
+    SELECT dr.run_id, dr.logical_date, dr.state, dr.trigger, dr.queued_at, dr.started_at, dr.ended_at
+    FROM dag_runs dr
+    WHERE dr.dag_id = d.id
+    ORDER BY dr.logical_date DESC
+    LIMIT $3
+) r ON true
+WHERE d.tenant_id = $1 AND d.dag_id = ANY($2::text[])
+ORDER BY d.dag_id, r.logical_date DESC;

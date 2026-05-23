@@ -129,6 +129,7 @@ func run() error {
 		Xcoms:                        xcomReader,
 		Logs:                         storage.NewLogReader(pg, logSink, logTailer),
 		Specs:                        repo,
+		LatestRuns:                   repo,
 		UI:                           ui.New(),
 	})
 

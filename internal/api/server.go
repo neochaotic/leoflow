@@ -38,13 +38,14 @@ type Dependencies struct {
 	InlineHTTPMaxDurationSeconds int
 
 	// Resource repositories. Routes for nil repositories are not registered.
-	Dags     DagRepository
-	DagRuns  DagRunRepository
-	Tasks    TaskInstanceRepository
-	Versions DagVersionRepository
-	Xcoms    XComReader
-	Logs     LogReader
-	Specs    DagSpecReader
+	Dags       DagRepository
+	DagRuns    DagRunRepository
+	Tasks      TaskInstanceRepository
+	Versions   DagVersionRepository
+	Xcoms      XComReader
+	Logs       LogReader
+	Specs      DagSpecReader
+	LatestRuns DagLatestRunsReader
 
 	// UI serves the embedded SPA. When nil the server is API-only.
 	UI UIServer

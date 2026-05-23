@@ -161,4 +161,7 @@ func registerUIViews(r gin.IRouter, deps Dependencies) {
 		r.GET("/ui/grid/runs/:dag_id", RequirePermission("read", "dag_run"), gridRunsHandler(deps.DagRuns))
 		r.GET("/ui/dags/:dag_id/latest_run", RequirePermission("read", "dag_run"), latestRunHandler(deps.DagRuns))
 	}
+	if deps.Dags != nil && deps.LatestRuns != nil {
+		r.GET("/ui/dags", RequirePermission("read", "dag"), uiDagsHandler(deps.Dags, deps.LatestRuns))
+	}
 }

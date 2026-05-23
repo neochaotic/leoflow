@@ -245,6 +245,67 @@ func (q *Queries) GetDagVersionByID(ctx context.Context, id pgtype.UUID) (DagVer
 	return i, err
 }
 
+const latestRunsForDags = `-- name: LatestRunsForDags :many
+SELECT d.dag_id AS dag_id_text,
+       r.run_id, r.logical_date, r.state, r.trigger, r.queued_at, r.started_at, r.ended_at
+FROM dags d
+JOIN LATERAL (
+    SELECT dr.run_id, dr.logical_date, dr.state, dr.trigger, dr.queued_at, dr.started_at, dr.ended_at
+    FROM dag_runs dr
+    WHERE dr.dag_id = d.id
+    ORDER BY dr.logical_date DESC
+    LIMIT $3
+) r ON true
+WHERE d.tenant_id = $1 AND d.dag_id = ANY($2::text[])
+ORDER BY d.dag_id, r.logical_date DESC
+`
+
+type LatestRunsForDagsParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Column2  []string    `json:"column_2"`
+	Limit    int32       `json:"limit"`
+}
+
+type LatestRunsForDagsRow struct {
+	DagIDText   string             `json:"dag_id_text"`
+	RunID       string             `json:"run_id"`
+	LogicalDate pgtype.Timestamptz `json:"logical_date"`
+	State       DagRunState        `json:"state"`
+	Trigger     DagRunTrigger      `json:"trigger"`
+	QueuedAt    pgtype.Timestamptz `json:"queued_at"`
+	StartedAt   pgtype.Timestamptz `json:"started_at"`
+	EndedAt     pgtype.Timestamptz `json:"ended_at"`
+}
+
+func (q *Queries) LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsParams) ([]LatestRunsForDagsRow, error) {
+	rows, err := q.db.Query(ctx, latestRunsForDags, arg.TenantID, arg.Column2, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LatestRunsForDagsRow{}
+	for rows.Next() {
+		var i LatestRunsForDagsRow
+		if err := rows.Scan(
+			&i.DagIDText,
+			&i.RunID,
+			&i.LogicalDate,
+			&i.State,
+			&i.Trigger,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.EndedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listActiveDagRuns = `-- name: ListActiveDagRuns :many
 SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs
 WHERE state IN ('queued', 'running')

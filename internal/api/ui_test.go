@@ -127,8 +127,9 @@ func TestUIMeReturnsUser(t *testing.T) {
 
 func TestUINoRouteDegradesGracefully(t *testing.T) {
 	srv := uiServer()
-	// Unimplemented /ui read -> empty 200, not a 404 white screen.
-	if rec := authGet(srv, http.MethodGet, "/ui/calendar/etl", ""); rec.Code != http.StatusOK || rec.Body.String() != "{}" {
+	// Unimplemented /ui read (no explicit stub) -> empty 200, not a 404 white
+	// screen. /ui/gantt has no stub, so it exercises the NoRoute catch-all.
+	if rec := authGet(srv, http.MethodGet, "/ui/gantt/etl/r1", ""); rec.Code != http.StatusOK || rec.Body.String() != "{}" {
 		t.Errorf("unimplemented /ui GET = %d %q, want 200 {}", rec.Code, rec.Body.String())
 	}
 	// Unimplemented /ui write -> 501 hint.

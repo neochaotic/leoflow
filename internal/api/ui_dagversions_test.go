@@ -59,6 +59,32 @@ func TestDagVersionsEndpoint(t *testing.T) {
 	}
 }
 
+func TestDagVersionByNumber(t *testing.T) {
+	srv := versionsServer([]domain.DAG{{DagID: "etl"}},
+		[]domain.DagVersion{
+			{ID: "v1-uuid", VersionNumber: 1, CreatedAt: time.Now().UTC()},
+			{ID: "v2-uuid", VersionNumber: 2, CreatedAt: time.Now().UTC()},
+		})
+
+	// The Code tab fetches a specific version by number (was a 404).
+	rec := authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagVersions/2", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/dagVersions/2 = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var v map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v["version_number"].(float64) != 2 || v["id"] != "v2-uuid" {
+		t.Errorf("wrong version returned: %+v", v)
+	}
+
+	// A missing version number is a 404, not a panic.
+	if rec := authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagVersions/99", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("missing version = %d, want 404", rec.Code)
+	}
+}
+
 func TestDagDetailsPopulatesLatestDagVersion(t *testing.T) {
 	// The Graph view reads details.latest_dag_version.version_number to fetch
 	// version-scoped structure; a null version leaves the graph blank.

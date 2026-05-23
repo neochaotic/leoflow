@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -35,6 +36,18 @@ type dagVersionCollectionDTO struct {
 	TotalEntries int             `json:"total_entries"`
 }
 
+// toDagVersionDTO maps a domain version onto the Airflow DAGVersionResponse.
+func toDagVersionDTO(dagID string, v domain.DagVersion) dagVersionDTO {
+	return dagVersionDTO{
+		ID:             v.ID,
+		VersionNumber:  v.VersionNumber,
+		DagID:          dagID,
+		BundleName:     "leoflow",
+		CreatedAt:      v.CreatedAt,
+		DagDisplayName: dagID,
+	}
+}
+
 // dagVersionsHandler implements GET /api/v2/dags/{dag_id}/dagVersions.
 func dagVersionsHandler(lister DagVersionLister) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -49,15 +62,34 @@ func dagVersionsHandler(lister DagVersionLister) gin.HandlerFunc {
 			TotalEntries: len(versions),
 		}
 		for _, v := range versions {
-			out.DagVersions = append(out.DagVersions, dagVersionDTO{
-				ID:             v.ID,
-				VersionNumber:  v.VersionNumber,
-				DagID:          dagID,
-				BundleName:     "leoflow",
-				CreatedAt:      v.CreatedAt,
-				DagDisplayName: dagID,
-			})
+			out.DagVersions = append(out.DagVersions, toDagVersionDTO(dagID, v))
 		}
 		c.JSON(http.StatusOK, out)
+	}
+}
+
+// dagVersionHandler implements GET /api/v2/dags/{dag_id}/dagVersions/{version_number}:
+// the single version the Code tab requests. It resolves the number against the
+// version list (404 if absent).
+func dagVersionHandler(lister DagVersionLister) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		dagID := c.Param("dag_id")
+		number, err := strconv.Atoi(c.Param("version_number"))
+		if err != nil {
+			AbortProblem(c, http.StatusBadRequest, "bad request", "version_number must be an integer")
+			return
+		}
+		versions, err := lister.ListDagVersions(c.Request.Context(), tenantOf(c), dagID)
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		for _, v := range versions {
+			if v.VersionNumber == number {
+				c.JSON(http.StatusOK, toDagVersionDTO(dagID, v))
+				return
+			}
+		}
+		AbortProblem(c, http.StatusNotFound, "not found", "dag version not found")
 	}
 }

@@ -298,6 +298,25 @@ func (r *Repository) resetTaskInstances(ctx context.Context, runID pgtype.UUID, 
 	return cleared, nil
 }
 
+// SetTaskInstanceState sets a task instance's state directly, backing the UI's
+// "mark success"/"mark failed" actions. It does not run the task.
+func (r *Repository) SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error {
+	dag, err := r.resolveDag(ctx, tenant, dagID)
+	if err != nil {
+		return err
+	}
+	run, err := r.q.GetDagRun(ctx, queries.GetDagRunParams{DagID: dag.ID, RunID: runID})
+	if err != nil {
+		return mapNotFound(err)
+	}
+	if err := r.q.UpdateTaskInstanceStateByRunTask(ctx, queries.UpdateTaskInstanceStateByRunTaskParams{
+		State: queries.TaskState(state), DagRunID: run.ID, TaskID: taskID,
+	}); err != nil {
+		return fmt.Errorf("setting task %q state: %w", taskID, err)
+	}
+	return nil
+}
+
 // LatestRunsForDags returns up to perDag most-recent runs for each named DAG,
 // keyed by dag_id, in a single windowed query (no per-DAG round trips).
 func (r *Repository) LatestRunsForDags(ctx context.Context, tenant string, dagIDs []string, perDag int) (map[string][]domain.DagRun, error) {

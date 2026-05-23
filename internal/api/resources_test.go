@@ -99,6 +99,8 @@ func (f *fakeRunRepo) CreateDagRun(_ context.Context, _, dagID string, run domai
 type fakeTaskRepo struct {
 	tis           []domain.TaskInstance
 	gotOnlyFailed bool
+	setState      string
+	setTaskID     string
 }
 
 func (f *fakeTaskRepo) ListTaskInstances(context.Context, string, string, string, int, int) ([]domain.TaskInstance, int, error) {
@@ -107,6 +109,10 @@ func (f *fakeTaskRepo) ListTaskInstances(context.Context, string, string, string
 func (f *fakeTaskRepo) ClearTaskInstances(_ context.Context, _, _, _ string, _ []string, onlyFailed, _ bool) (int, error) {
 	f.gotOnlyFailed = onlyFailed
 	return len(f.tis), nil
+}
+func (f *fakeTaskRepo) SetTaskInstanceState(_ context.Context, _, _, _, taskID, state string) error {
+	f.setTaskID, f.setState = taskID, state
+	return nil
 }
 
 func dagOnlyServer(repo DagRepository) *gin.Engine {
@@ -117,6 +123,63 @@ func dagOnlyServer(repo DagRepository) *gin.Engine {
 		CORSOrigins:   []string{"*"},
 		Dags:          repo,
 	})
+}
+
+func TestMarkTaskInstanceState(t *testing.T) {
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{{TaskID: "extract", RunID: "r1", State: domain.TaskStateFailed}}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		Tasks: tasks, DagRuns: &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1"}}},
+	})
+	// Real PATCH applies the state.
+	rec := authGet(srv, http.MethodPatch, "/api/v2/dags/etl/dagRuns/r1/taskInstances/extract/-1", `{"new_state":"success"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if tasks.setTaskID != "extract" || tasks.setState != "success" {
+		t.Errorf("expected set extract->success, got %q->%q", tasks.setTaskID, tasks.setState)
+	}
+	// dry_run must NOT apply (the recorded state stays from the prior call).
+	tasks.setState = ""
+	rec = authGet(srv, http.MethodPatch, "/api/v2/dags/etl/dagRuns/r1/taskInstances/extract/dry_run", `{"new_state":"failed"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dry_run = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if tasks.setState != "" {
+		t.Errorf("dry_run must not change state, but set %q", tasks.setState)
+	}
+	// An invalid state is rejected.
+	if rec := authGet(srv, http.MethodPatch, "/api/v2/dags/etl/dagRuns/r1/taskInstances/extract/-1", `{"new_state":"banana"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid new_state = %d, want 400", rec.Code)
+	}
+}
+
+func TestClearTaskInstancesDryRun(t *testing.T) {
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{
+		{TaskID: "extract", RunID: "r1", State: domain.TaskStateFailed},
+		{TaskID: "load", RunID: "r1", State: domain.TaskStateSuccess},
+	}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		Tasks: tasks, DagRuns: &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1"}}},
+	})
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", `{"dag_run_id":"r1","only_failed":true,"dry_run":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dry_run clear = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		TaskInstances []map[string]any `json:"task_instances"`
+		TotalEntries  int              `json:"total_entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	// Only the failed task is affected, and dry_run did not actually clear.
+	if got.TotalEntries != 1 || got.TaskInstances[0]["task_id"] != "extract" {
+		t.Errorf("dry_run affected = %+v, want [extract]", got.TaskInstances)
+	}
 }
 
 func authedServer() *gin.Engine {

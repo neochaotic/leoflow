@@ -34,10 +34,12 @@ type DagRunRepository interface {
 	CreateDagRun(ctx context.Context, tenant, dagID string, run domain.DagRun) (domain.DagRun, error)
 }
 
-// TaskInstanceRepository reads task instances and clears them for re-run.
+// TaskInstanceRepository reads task instances, clears them for re-run, and sets
+// their state directly (the UI's mark-success/failed actions).
 type TaskInstanceRepository interface {
 	ListTaskInstances(ctx context.Context, tenant, dagID, runID string, limit, offset int) ([]domain.TaskInstance, int, error)
 	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed, resetDagRun bool) (int, error)
+	SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error
 }
 
 func pagination(c *gin.Context) (limit, offset int) {
@@ -296,30 +298,150 @@ func listTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository
 	}
 }
 
-func clearTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
+func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			TaskIDs      []string `json:"task_ids"`
 			DagRunID     string   `json:"dag_run_id"`
 			OnlyFailed   *bool    `json:"only_failed"`
 			ResetDagRuns *bool    `json:"reset_dag_runs"`
+			DryRun       *bool    `json:"dry_run"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
+			return
+		}
+		onlyFailed := body.OnlyFailed != nil && *body.OnlyFailed
+		// The UI previews with dry_run=true before confirming; it expects the set of
+		// affected task instances back (TaskInstanceCollectionResponse), not a count.
+		affected := affectedTaskInstances(c, repo, runs, versions, body.DagRunID, body.TaskIDs, onlyFailed)
+		if body.DryRun != nil && *body.DryRun {
+			c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 			return
 		}
 		reset := true
 		if body.ResetDagRuns != nil {
 			reset = *body.ResetDagRuns
 		}
-		onlyFailed := body.OnlyFailed != nil && *body.OnlyFailed
-		n, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), body.DagRunID, body.TaskIDs, onlyFailed, reset)
-		if err != nil {
+		if _, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), body.DagRunID, body.TaskIDs, onlyFailed, reset); err != nil {
 			handleRepoError(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"cleared": n})
+		c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 	}
+}
+
+// affectedTaskInstances returns the task instances a clear would touch: the named
+// tasks (or all when none named), restricted to failed ones when onlyFailed.
+func affectedTaskInstances(c *gin.Context, repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister,
+	runID string, taskIDs []string, onlyFailed bool) []taskInstanceDTO {
+	tis, _, err := repo.ListTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), runID, 1000, 0)
+	if err != nil {
+		return []taskInstanceDTO{}
+	}
+	want := make(map[string]bool, len(taskIDs))
+	for _, id := range taskIDs {
+		want[id] = true
+	}
+	logical, version := resolveRunContextFor(c, runs, versions, runID)
+	out := make([]taskInstanceDTO, 0, len(tis))
+	for _, ti := range tis {
+		if len(want) > 0 && !want[ti.TaskID] {
+			continue
+		}
+		if onlyFailed && ti.State != domain.TaskStateFailed && ti.State != domain.TaskStateUpstreamFailed {
+			continue
+		}
+		dto := toTaskInstanceDTO(ti)
+		dto.LogicalDate, dto.RunAfter, dto.DagVersion = logical, logical, version
+		out = append(out, dto)
+	}
+	return out
+}
+
+// markStateRequest is the body of the mark-success/failed PATCH.
+type markStateRequest struct {
+	NewState string `json:"new_state"`
+}
+
+// patchTaskInstanceHandler implements the UI's mark-success/failed PATCH on
+// .../taskInstances/{task_id}[/{map_index}][/dry_run]. The catch-all action is
+// the trailing path after the task_id; a "dry_run" segment previews without
+// changing state. It returns the (would-be) updated task instance.
+func patchTaskInstanceHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		action := strings.Trim(c.Param("action"), "/")
+		dryRun := action == "dry_run" || strings.HasSuffix(action, "/dry_run")
+		var body markStateRequest
+		if err := c.ShouldBindJSON(&body); err != nil {
+			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
+			return
+		}
+		if !validMarkState(body.NewState) {
+			AbortProblem(c, http.StatusBadRequest, "bad request", "new_state must be success, failed, or skipped")
+			return
+		}
+		dagID, runID, taskID := c.Param("dag_id"), c.Param("dag_run_id"), c.Param("task_id")
+		if !dryRun {
+			if err := repo.SetTaskInstanceState(c.Request.Context(), tenantOf(c), dagID, runID, taskID, body.NewState); err != nil {
+				handleRepoError(c, err)
+				return
+			}
+		}
+		dto, ok := findTaskInstanceDTO(c, repo, runs, versions, runID, taskID)
+		if !ok {
+			AbortProblem(c, http.StatusNotFound, "not found", "task instance not found")
+			return
+		}
+		if dryRun {
+			s := body.NewState
+			dto.State = &s // preview the state the confirm would apply
+		}
+		c.JSON(http.StatusOK, dto)
+	}
+}
+
+// validMarkState reports whether s is a state the UI may set a task to directly.
+func validMarkState(s string) bool {
+	return s == string(domain.TaskStateSuccess) || s == string(domain.TaskStateFailed) || s == string(domain.TaskStateSkipped)
+}
+
+// findTaskInstanceDTO loads one task instance (map_index -1) for the run, enriched.
+func findTaskInstanceDTO(c *gin.Context, repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, runID, taskID string) (taskInstanceDTO, bool) {
+	tis, _, err := repo.ListTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), runID, 1000, 0)
+	if err != nil {
+		return taskInstanceDTO{}, false
+	}
+	for _, ti := range tis {
+		if ti.TaskID == taskID {
+			dto := toTaskInstanceDTO(ti)
+			enrichTaskInstance(c, &dto, runs, versions)
+			return dto, true
+		}
+	}
+	return taskInstanceDTO{}, false
+}
+
+// resolveRunContextFor is resolveRunContext for an explicit run id (clear posts
+// the run in its body rather than the path).
+func resolveRunContextFor(c *gin.Context, runs DagRunRepository, versions DagVersionLister, runID string) (*time.Time, *dagVersionDTO) {
+	dagID := c.Param("dag_id")
+	var logical *time.Time
+	if runs != nil && runID != "" {
+		if run, err := runs.GetDagRun(c.Request.Context(), tenantOf(c), dagID, runID); err == nil {
+			logical = &run.LogicalDate
+		}
+	}
+	var version *dagVersionDTO
+	if versions != nil {
+		if vs, err := versions.ListDagVersions(c.Request.Context(), tenantOf(c), dagID); err == nil && len(vs) > 0 {
+			version = &dagVersionDTO{
+				ID: vs[0].ID, VersionNumber: vs[0].VersionNumber, DagID: dagID,
+				BundleName: "leoflow", CreatedAt: vs[0].CreatedAt, DagDisplayName: dagID,
+			}
+		}
+	}
+	return logical, version
 }
 
 // taskInstanceActionHandler dispatches the catch-all under
@@ -474,8 +596,13 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		// catch-all dispatches both (single task instance vs its logs).
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action",
 			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms, deps.DagRuns, deps.DagVersions))
+		// Mark-success/failed: PATCH the task instance. The UI hits both the bare
+		// path and one carrying optional /{map_index} and /dry_run segments.
+		patchTI := patchTaskInstanceHandler(deps.Tasks, deps.DagRuns, deps.DagVersions)
+		r.PATCH("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id", RequirePermission("write", "task_instance"), patchTI)
+		r.PATCH("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action", RequirePermission("write", "task_instance"), patchTI)
 		r.POST("/api/v2/dags/:dag_id/clearTaskInstances",
-			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks))
+			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks, deps.DagRuns, deps.DagVersions))
 	}
 	if deps.Versions != nil {
 		r.POST("/api/v2/dags/:dag_id/versions", RequirePermission("write", "dag"), registerVersionHandler(deps.Versions, deps.InlineHTTPMaxDurationSeconds))

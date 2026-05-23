@@ -83,6 +83,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIViews(r, deps)
 	registerUIStructure(r, deps.Specs)
 	registerUISummaries(r, deps.TaskSummary)
+	registerUITasks(r, deps.Specs)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

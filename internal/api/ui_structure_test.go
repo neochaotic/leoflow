@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,5 +128,61 @@ func TestGridStructureNotFound(t *testing.T) {
 	rec := authGet(structureServer(&fakeSpecReader{err: ErrNotFound}), http.MethodGet, "/ui/grid/structure/nope", "")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("unknown dag structure = %d, want 404", rec.Code)
+	}
+}
+
+func TestTasksEndpoint(t *testing.T) {
+	rec := authGet(structureServer(&fakeSpecReader{spec: diamondSpec()}), http.MethodGet, "/api/v2/dags/etl/tasks", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/tasks = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var col struct {
+		Tasks []map[string]any `json:"tasks"`
+		Total int              `json:"total_entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &col); err != nil {
+		t.Fatal(err)
+	}
+	if col.Total != 4 || len(col.Tasks) != 4 {
+		t.Fatalf("want 4 tasks, got total=%d len=%d", col.Total, len(col.Tasks))
+	}
+	// extract is first (topo-sorted) and feeds transform_a + transform_b.
+	if col.Tasks[0]["task_id"] != "extract" {
+		t.Errorf("first task = %v, want extract", col.Tasks[0]["task_id"])
+	}
+	for _, f := range []string{"operator_name", "trigger_rule", "downstream_task_ids", "class_ref", "is_mapped"} {
+		if _, ok := col.Tasks[0][f]; !ok {
+			t.Errorf("task missing required field %q", f)
+		}
+	}
+	dn, _ := json.Marshal(col.Tasks[0]["downstream_task_ids"])
+	if string(dn) != `["transform_a","transform_b"]` {
+		t.Errorf("extract downstream = %s", dn)
+	}
+}
+
+func TestTaskDetailNotFound(t *testing.T) {
+	rec := authGet(structureServer(&fakeSpecReader{spec: diamondSpec()}), http.MethodGet, "/api/v2/dags/etl/tasks/nope", "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown task = %d, want 404", rec.Code)
+	}
+}
+
+func TestDagSourceEndpoint(t *testing.T) {
+	rec := authGet(structureServer(&fakeSpecReader{spec: diamondSpec()}), http.MethodGet, "/api/v2/dagSources/etl", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/dagSources = %d", rec.Code)
+	}
+	var src map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &src); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"content", "dag_id", "version_number", "dag_display_name"} {
+		if _, ok := src[f]; !ok {
+			t.Errorf("dagSource missing %q", f)
+		}
+	}
+	if s, _ := src["content"].(string); !strings.Contains(s, "extract") {
+		t.Errorf("source content should include the spec, got %q", s)
 	}
 }

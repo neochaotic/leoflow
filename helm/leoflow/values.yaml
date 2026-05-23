@@ -1,0 +1,120 @@
+# Default values for the Leoflow control plane chart.
+
+image:
+  repository: ghcr.io/neochaotic/leoflow-server
+  tag: ""              # defaults to .Chart.appVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 1        # the scheduler leader-elects, so >1 is safe (HA API + one active scheduler)
+
+# taskNamespace is where the control plane creates task pods. It MUST match the
+# namespace the server expects (the code currently targets "leoflow"); the chart
+# grants the control plane RBAC to manage pods here.
+taskNamespace: leoflow
+
+serviceAccount:
+  create: true
+  name: ""             # defaults to the fullname when empty
+  annotations: {}
+
+rbac:
+  # create a Role/RoleBinding letting the control plane create/watch/delete task
+  # pods (and read their logs) in taskNamespace — the pod-per-task executor.
+  create: true
+
+# Ports the server listens on (must match server.*Addr below).
+ports:
+  http: 8080
+  metrics: 9090
+  grpc: 9091
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+# config maps to LEOFLOW_* env. Non-secret settings live here; secrets below.
+config:
+  logsDir: /var/log/leoflow
+  scheduler:
+    enabled: true
+    loopIntervalMs: 1000
+  cors:
+    allowedOrigins:
+      - "*"
+  # agentControlPlaneAddr is what task pods dial back for gRPC. Defaults to the
+  # in-cluster Service DNS on the gRPC port when left empty.
+  agentControlPlaneAddr: ""
+
+# Database (Postgres). Provide an external URL, or a pre-existing secret.
+database:
+  url: ""              # postgres://user:pass@host:5432/leoflow?sslmode=disable
+  existingSecret: ""   # name of a Secret with key databaseUrl (overrides url)
+  maxOpenConns: 20
+  maxIdleConns: 5
+
+# Redis (XCom + locks).
+redis:
+  url: ""              # redis://host:6379/0
+  existingSecret: ""   # name of a Secret with key redisUrl (overrides url)
+
+auth:
+  # jwtSecret signs API + agent tokens. Set it, or reference an existing secret.
+  jwtSecret: ""
+  existingSecret: ""   # name of a Secret with key jwtSecret (overrides jwtSecret)
+  tokenTtlSeconds: 3600
+
+# bootstrap creates the initial admin user on first start when set.
+bootstrap:
+  password: ""         # leave empty to skip; or reference existingSecret/key bootstrapPassword
+  existingSecret: ""
+
+# migrations runs golang-migrate as a pre-install/pre-upgrade hook Job before the
+# server starts. The image must contain the migrations and migrate binary.
+migrations:
+  enabled: true
+  image:
+    repository: migrate/migrate
+    tag: v4.18.1
+    pullPolicy: IfNotPresent
+  # path of the migrations dir inside the image.
+  path: /migrations
+
+observability:
+  otel:
+    enabled: false
+    endpoint: ""
+  logFormat: json
+  logLevel: info
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: leoflow.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

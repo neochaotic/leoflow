@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "leoflow.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "leoflow.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.ports.http }}
+      targetPort: http
+      protocol: TCP
+    - name: metrics
+      port: {{ .Values.ports.metrics }}
+      targetPort: metrics
+      protocol: TCP
+    - name: grpc
+      port: {{ .Values.ports.grpc }}
+      targetPort: grpc
+      protocol: TCP

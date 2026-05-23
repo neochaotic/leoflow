@@ -1,0 +1,32 @@
+Leoflow control plane "{{ include "leoflow.fullname" . }}" is installing into namespace "{{ .Release.Namespace }}".
+
+1. Task pods are created in namespace "{{ .Values.taskNamespace }}". Ensure it exists:
+     kubectl create namespace {{ .Values.taskNamespace }} --dry-run=client -o yaml | kubectl apply -f -
+
+2. Agents in task pods dial the control plane gRPC at:
+     {{ include "leoflow.agentControlPlaneAddr" . }}
+
+3. Reach the API:
+{{- if .Values.ingress.enabled }}
+     via the configured Ingress host(s).
+{{- else }}
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "leoflow.fullname" . }} {{ .Values.ports.http }}:{{ .Values.ports.http }}
+     # then open http://localhost:{{ .Values.ports.http }}
+{{- end }}
+
+{{- if not (or .Values.database.existingSecret .Values.database.url) }}
+
+WARNING: no database URL set. Provide .Values.database.url or .Values.database.existingSecret (key databaseUrl).
+{{- end }}
+{{- if not (or .Values.auth.existingSecret .Values.auth.jwtSecret) }}
+
+WARNING: no JWT secret set. Provide .Values.auth.jwtSecret or .Values.auth.existingSecret (key jwtSecret).
+{{- end }}
+{{- if .Values.migrations.enabled }}
+
+Migrations run as a pre-install/pre-upgrade Job using image
+"{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag }}". That image MUST bundle the
+Leoflow migrations at "{{ .Values.migrations.path }}"; the stock migrate/migrate image does not.
+Build a migrate image (COPY migrations/ into {{ .Values.migrations.path }}) or set migrations.enabled=false
+and run migrations out of band.
+{{- end }}

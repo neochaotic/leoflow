@@ -1,0 +1,41 @@
+{{- if .Values.migrations.enabled -}}
+{{/*
+Runs golang-migrate before the server starts, as a pre-install/pre-upgrade hook.
+The image must bundle the Leoflow migrations at .Values.migrations.path (the
+default migrate/migrate image does not — supply a custom image that COPYs the
+repo's migrations/ in, or disable this Job and migrate out of band).
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "leoflow.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "leoflow.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: "{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag }}"
+          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+          args:
+            - "-path={{ .Values.migrations.path }}"
+            - "-database=$(LEOFLOW_DATABASE_URL)"
+            - "up"
+          env:
+            - name: LEOFLOW_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | default (include "leoflow.secretName" .) }}
+                  key: databaseUrl
+{{- end -}}

@@ -1,0 +1,38 @@
+{{- if .Values.rbac.create -}}
+{{/*
+The pod-per-task executor creates, watches, and deletes task pods in
+taskNamespace and reads their logs. The Role lives in taskNamespace (which may
+differ from the release namespace); the RoleBinding grants it to the control
+plane's ServiceAccount.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "leoflow.fullname" . }}-executor
+  namespace: {{ .Values.taskNamespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "leoflow.fullname" . }}-executor
+  namespace: {{ .Values.taskNamespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "leoflow.fullname" . }}-executor
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "leoflow.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end -}}

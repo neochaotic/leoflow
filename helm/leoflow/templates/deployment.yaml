@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "leoflow.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "leoflow.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "leoflow.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "leoflow.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: leoflow-server
+          image: {{ include "leoflow.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.http }}
+            - name: metrics
+              containerPort: {{ .Values.ports.metrics }}
+            - name: grpc
+              containerPort: {{ .Values.ports.grpc }}
+          env:
+            - name: LEOFLOW_SERVER_HTTP_ADDR
+              value: ":{{ .Values.ports.http }}"
+            - name: LEOFLOW_SERVER_METRICS_ADDR
+              value: ":{{ .Values.ports.metrics }}"
+            - name: LEOFLOW_SERVER_GRPC_ADDR
+              value: ":{{ .Values.ports.grpc }}"
+            - name: LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR
+              value: {{ include "leoflow.agentControlPlaneAddr" . | quote }}
+            - name: LEOFLOW_LOGS_DIR
+              value: {{ .Values.config.logsDir | quote }}
+            - name: LEOFLOW_SCHEDULER_ENABLED
+              value: {{ .Values.config.scheduler.enabled | quote }}
+            - name: LEOFLOW_SCHEDULER_LOOP_INTERVAL_MS
+              value: {{ .Values.config.scheduler.loopIntervalMs | quote }}
+            - name: LEOFLOW_DATABASE_MAX_OPEN_CONNS
+              value: {{ .Values.database.maxOpenConns | quote }}
+            - name: LEOFLOW_DATABASE_MAX_IDLE_CONNS
+              value: {{ .Values.database.maxIdleConns | quote }}
+            - name: LEOFLOW_AUTH_JWT_TOKEN_TTL_SECONDS
+              value: {{ .Values.auth.tokenTtlSeconds | quote }}
+            - name: LEOFLOW_OBSERVABILITY_LOG_FORMAT
+              value: {{ .Values.observability.logFormat | quote }}
+            - name: LEOFLOW_OBSERVABILITY_LOG_LEVEL
+              value: {{ .Values.observability.logLevel | quote }}
+            {{- if .Values.observability.otel.enabled }}
+            - name: LEOFLOW_OBSERVABILITY_OTEL_ENABLED
+              value: "true"
+            - name: LEOFLOW_OBSERVABILITY_OTEL_ENDPOINT
+              value: {{ .Values.observability.otel.endpoint | quote }}
+            {{- end }}
+            - name: LEOFLOW_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | default (include "leoflow.secretName" .) }}
+                  key: databaseUrl
+            - name: LEOFLOW_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.existingSecret | default (include "leoflow.secretName" .) }}
+                  key: redisUrl
+            - name: LEOFLOW_AUTH_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret | default (include "leoflow.secretName" .) }}
+                  key: jwtSecret
+            {{- if or .Values.bootstrap.existingSecret .Values.bootstrap.password }}
+            - name: LEOFLOW_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.bootstrap.existingSecret | default (include "leoflow.secretName" .) }}
+                  key: bootstrapPassword
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: logs
+              mountPath: {{ .Values.config.logsDir }}
+      volumes:
+        - name: logs
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

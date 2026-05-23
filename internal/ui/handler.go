@@ -1,8 +1,14 @@
 package ui
 
 import (
+	"bytes"
+	"compress/gzip"
 	"io/fs"
+	"mime"
 	"net/http"
+	"path"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -30,22 +36,94 @@ func NewFromFS(fsys fs.FS, version string) *Server {
 // Version returns the pinned upstream Airflow tag the bundle was built from.
 func (s *Server) Version() string { return s.version }
 
-// StaticHandler serves the bundle as static files. The caller mounts it with
-// the /static prefix already stripped. Content-hashed bundle chunks (under
-// assets/) are marked immutable; index.html is never cached; everything else
-// gets a short cache. Missing files yield 404 (no SPA fallback here).
+// StaticHandler serves the bundle as static files from the embedded FS. The
+// caller mounts it with the /static prefix already stripped. Content-hashed
+// chunks (under assets/) are marked immutable; index.html is never cached;
+// everything else gets a short cache. Compressible assets are gzipped when the
+// client accepts it. Missing files yield 404 (no SPA fallback here); directories
+// are not listed.
 func (s *Server) StaticHandler() http.Handler {
-	fileServer := http.FileServer(http.FS(s.fsys))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", cacheControl(r.URL.Path))
-		// The SPA streams a WebAssembly module (sqlparser); browsers reject it
-		// unless served as application/wasm, which Go's default MIME table omits.
-		// Pre-setting it stops http.ServeContent from sniffing a wrong type.
-		if strings.HasSuffix(r.URL.Path, ".wasm") {
-			w.Header().Set("Content-Type", "application/wasm")
+		name := strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(r.URL.Path, "/")), "/")
+		if name == "" {
+			name = "index.html"
 		}
-		fileServer.ServeHTTP(w, r)
+		data, err := fs.ReadFile(s.fsys, name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", cacheControl(r.URL.Path))
+		w.Header().Set("Content-Type", contentType(name, data))
+		if acceptsGzip(r) && compressible(name) {
+			writeGzip(w, data)
+			return
+		}
+		writeIdentity(w, data)
 	})
+}
+
+// contentType resolves a response Content-Type, forcing application/wasm (which
+// Go's MIME table omits, and browsers require for streaming instantiation) and
+// sniffing only as a last resort.
+func contentType(name string, data []byte) string {
+	if strings.HasSuffix(name, ".wasm") {
+		return "application/wasm"
+	}
+	if ct := mime.TypeByExtension(filepath.Ext(name)); ct != "" {
+		return ct
+	}
+	return http.DetectContentType(data)
+}
+
+// acceptsGzip reports whether the client advertised gzip support.
+func acceptsGzip(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+}
+
+// compressibleExts are asset types worth gzipping; already-compressed binaries
+// (png, woff2) are skipped.
+var compressibleExts = map[string]bool{
+	".js": true, ".css": true, ".json": true, ".html": true, ".svg": true,
+	".wasm": true, ".map": true, ".txt": true, ".ttf": true,
+}
+
+func compressible(name string) bool {
+	return compressibleExts[strings.ToLower(filepath.Ext(name))]
+}
+
+// writeGzip compresses data and writes it with the gzip Content-Encoding and the
+// compressed Content-Length, falling back to identity on a compression error.
+func writeGzip(w http.ResponseWriter, data []byte) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(data); err != nil {
+		writeIdentity(w, data)
+		return
+	}
+	if err := gz.Close(); err != nil {
+		writeIdentity(w, data)
+		return
+	}
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Add("Vary", "Accept-Encoding")
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.WriteHeader(http.StatusOK)
+	// The payload is the pinned, compile-time-embedded SPA bundle served with an
+	// explicit Content-Type — a trusted static asset, not user-controlled input.
+	if _, err := w.Write(buf.Bytes()); err != nil { //nolint:gosec // trusted embedded asset
+		return // client hung up mid-write.
+	}
+}
+
+// writeIdentity writes data uncompressed with its Content-Length.
+func writeIdentity(w http.ResponseWriter, data []byte) {
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	// Trusted compile-time-embedded asset served with an explicit Content-Type.
+	if _, err := w.Write(data); err != nil { //nolint:gosec // trusted embedded asset
+		return // client hung up mid-write.
+	}
 }
 
 // Index writes the SPA shell with <base href> set to basePath, so the bundled
@@ -71,8 +149,8 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 
 // cacheControl picks a Cache-Control value for a static path. Content-hashed
 // chunks may be cached forever; the HTML shell never; other files briefly.
-func cacheControl(path string) string {
-	trimmed := strings.TrimPrefix(path, "/")
+func cacheControl(urlPath string) string {
+	trimmed := strings.TrimPrefix(urlPath, "/")
 	switch {
 	case trimmed == "index.html" || trimmed == "":
 		return "no-cache"

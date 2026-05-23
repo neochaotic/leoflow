@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"compress/gzip"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,6 +67,45 @@ func TestStaticServesWasmWithCorrectMIME(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/wasm") {
 		t.Errorf("wasm content-type = %q, want application/wasm", ct)
+	}
+}
+
+func TestStaticGzipsCompressibleAssetWhenAccepted(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/assets/app-abc123.js", http.NoBody)
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	fixture().StaticHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("gzip asset = %d", rec.Code)
+	}
+	if enc := rec.Header().Get("Content-Encoding"); enc != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", enc)
+	}
+	if !strings.Contains(rec.Header().Get("Vary"), "Accept-Encoding") {
+		t.Errorf("missing Vary: Accept-Encoding")
+	}
+	gz, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "console.log('hi')" {
+		t.Errorf("decompressed body = %q", body)
+	}
+}
+
+func TestStaticNoGzipWhenNotAccepted(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/assets/app-abc123.js", http.NoBody)
+	fixture().StaticHandler().ServeHTTP(rec, req) // no Accept-Encoding
+	if enc := rec.Header().Get("Content-Encoding"); enc != "" {
+		t.Errorf("Content-Encoding = %q, want none", enc)
+	}
+	if rec.Body.String() != "console.log('hi')" {
+		t.Errorf("body = %q", rec.Body.String())
 	}
 }
 

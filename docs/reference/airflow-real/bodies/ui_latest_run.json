@@ -1,0 +1,1 @@
+{"id":5,"dag_id":"example_bash_operator","run_id":"manual__2026-05-23T04:48:14.310347+00:00","logical_date":null,"run_after":"2026-05-23T04:48:14.310347Z","start_date":"2026-05-23T04:48:15.511238Z","end_date":"2026-05-23T04:48:18.983352Z","state":"success","duration":3.472114}

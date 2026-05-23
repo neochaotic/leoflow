@@ -1,0 +1,1 @@
+{"xcom_entries":[{"key":"return_value","timestamp":"2026-05-23T04:48:18.033573Z","logical_date":null,"map_index":-1,"task_id":"run_after_loop","dag_id":"example_bash_operator","run_id":"manual__2026-05-23T04:48:14.310347+00:00","dag_display_name":"example_bash_operator","task_display_name":"run_after_loop","run_after":"2026-05-23T04:48:14.310347Z"}],"total_entries":1}

@@ -38,3 +38,9 @@ RETURNING *;
 
 -- name: SetCurrentDagVersion :exec
 UPDATE dags SET current_version_id = $2, updated_at = now() WHERE id = $1;
+
+-- name: GetCurrentDagSpec :one
+SELECT v.spec
+FROM dags d
+JOIN dag_versions v ON v.id = d.current_version_id
+WHERE d.tenant_id = $1 AND d.dag_id = $2;

@@ -22,6 +22,25 @@ func (q *Queries) CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, e
 	return count, err
 }
 
+const getCurrentDagSpec = `-- name: GetCurrentDagSpec :one
+SELECT v.spec
+FROM dags d
+JOIN dag_versions v ON v.id = d.current_version_id
+WHERE d.tenant_id = $1 AND d.dag_id = $2
+`
+
+type GetCurrentDagSpecParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	DagID    string      `json:"dag_id"`
+}
+
+func (q *Queries) GetCurrentDagSpec(ctx context.Context, arg GetCurrentDagSpecParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getCurrentDagSpec, arg.TenantID, arg.DagID)
+	var spec []byte
+	err := row.Scan(&spec)
+	return spec, err
+}
+
 const getDagByDagID = `-- name: GetDagByDagID :one
 SELECT id, tenant_id, dag_id, description, is_paused, is_active, owner, tags, schedule, schedule_timezone, start_date, end_date, max_active_runs, catchup, current_version_id, created_at, updated_at FROM dags WHERE tenant_id = $1 AND dag_id = $2
 `

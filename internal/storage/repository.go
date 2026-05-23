@@ -245,6 +245,24 @@ func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runI
 	return cleared, nil
 }
 
+// GetCurrentSpec returns the parsed spec of the DAG's current version, or
+// domain.ErrNotFound if the DAG or its current version does not exist.
+func (r *Repository) GetCurrentSpec(ctx context.Context, tenant, dagID string) (domain.DAGSpec, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return domain.DAGSpec{}, err
+	}
+	raw, err := r.q.GetCurrentDagSpec(ctx, queries.GetCurrentDagSpecParams{TenantID: tid, DagID: dagID})
+	if err != nil {
+		return domain.DAGSpec{}, mapNotFound(err)
+	}
+	var spec domain.DAGSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return domain.DAGSpec{}, fmt.Errorf("decoding current spec: %w", err)
+	}
+	return spec, nil
+}
+
 // RegisterDagVersion upserts the DAG and inserts a version keyed by specHash,
 // setting it as current. It is idempotent: an existing hash yields created=false.
 func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec domain.DAGSpec, specHash string) (bool, error) {

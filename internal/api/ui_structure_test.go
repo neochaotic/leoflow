@@ -1,0 +1,131 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/auth"
+	"github.com/neochaotic/leoflow/internal/domain"
+)
+
+type fakeSpecReader struct {
+	spec domain.DAGSpec
+	err  error
+}
+
+func (f *fakeSpecReader) GetCurrentSpec(context.Context, string, string) (domain.DAGSpec, error) {
+	if f.err != nil {
+		return domain.DAGSpec{}, f.err
+	}
+	return f.spec, nil
+}
+
+func structureServer(specs DagSpecReader) *gin.Engine {
+	return NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		Specs:         specs,
+	})
+}
+
+// diamond: extract -> {transform_a, transform_b} -> load
+func diamondSpec() domain.DAGSpec {
+	return domain.DAGSpec{
+		DagID: "etl",
+		Tasks: []domain.TaskSpec{
+			{TaskID: "load", Type: "python", DependsOn: []string{"transform_a", "transform_b"}},
+			{TaskID: "transform_b", Type: "http_api", DependsOn: []string{"extract"}},
+			{TaskID: "transform_a", Type: "python", DependsOn: []string{"extract"}},
+			{TaskID: "extract", Type: "python"},
+		},
+	}
+}
+
+func TestTopoSortRespectsDependencies(t *testing.T) {
+	order := topoSortTasks(diamondSpec().Tasks)
+	pos := map[string]int{}
+	for i, t := range order {
+		pos[t.TaskID] = i
+	}
+	if pos["extract"] != 0 {
+		t.Errorf("extract should be first, order=%v", order)
+	}
+	if pos["load"] != 3 {
+		t.Errorf("load should be last, order=%v", order)
+	}
+	// Ties broken by task_id: transform_a before transform_b.
+	if pos["transform_a"] > pos["transform_b"] {
+		t.Errorf("ties should break by id: %v", order)
+	}
+}
+
+func TestGridStructureShape(t *testing.T) {
+	rec := authGet(structureServer(&fakeSpecReader{spec: diamondSpec()}), http.MethodGet, "/ui/grid/structure/etl", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("grid structure = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var nodes []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &nodes); err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 4 || nodes[0]["id"] != "extract" {
+		t.Fatalf("unexpected grid nodes: %v", nodes)
+	}
+	for _, f := range []string{"id", "label", "is_mapped", "children"} {
+		if _, ok := nodes[0][f]; !ok {
+			t.Errorf("grid node missing required field %q", f)
+		}
+	}
+}
+
+func TestStructureDataNodesAndEdges(t *testing.T) {
+	rec := authGet(structureServer(&fakeSpecReader{spec: diamondSpec()}), http.MethodGet, "/ui/structure/structure_data?dag_id=etl", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("structure_data = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var sd struct {
+		Nodes []map[string]any    `json:"nodes"`
+		Edges []map[string]string `json:"edges"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &sd); err != nil {
+		t.Fatal(err)
+	}
+	if len(sd.Nodes) != 4 {
+		t.Errorf("want 4 nodes, got %d", len(sd.Nodes))
+	}
+	if sd.Nodes[0]["type"] != "task" {
+		t.Errorf("node type = %v, want task", sd.Nodes[0]["type"])
+	}
+	// 4 edges: extract->a, extract->b, a->load, b->load.
+	if len(sd.Edges) != 4 {
+		t.Fatalf("want 4 edges, got %d: %v", len(sd.Edges), sd.Edges)
+	}
+	want := map[string]bool{"extract->transform_a": true, "extract->transform_b": true, "transform_a->load": true, "transform_b->load": true}
+	for _, e := range sd.Edges {
+		k := e["source_id"] + "->" + e["target_id"]
+		if !want[k] {
+			t.Errorf("unexpected edge %q", k)
+		}
+	}
+}
+
+func TestStructureDataRequiresDagID(t *testing.T) {
+	rec := authGet(structureServer(&fakeSpecReader{spec: diamondSpec()}), http.MethodGet, "/ui/structure/structure_data", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("missing dag_id = %d, want 400", rec.Code)
+	}
+}
+
+func TestGridStructureNotFound(t *testing.T) {
+	rec := authGet(structureServer(&fakeSpecReader{err: ErrNotFound}), http.MethodGet, "/ui/grid/structure/nope", "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown dag structure = %d, want 404", rec.Code)
+	}
+}

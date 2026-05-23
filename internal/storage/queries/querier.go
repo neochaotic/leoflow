@@ -22,6 +22,7 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.UUID, error)
 	DeleteExpiredXComIndex(ctx context.Context) error
 	FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInstanceIfActiveParams) error
+	GetCurrentDagSpec(ctx context.Context, arg GetCurrentDagSpecParams) ([]byte, error)
 	GetDagByDagID(ctx context.Context, arg GetDagByDagIDParams) (Dag, error)
 	GetDagRun(ctx context.Context, arg GetDagRunParams) (DagRun, error)
 	GetDagRunByID(ctx context.Context, id pgtype.UUID) (DagRun, error)

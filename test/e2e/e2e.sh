@@ -100,6 +100,10 @@ log "Starting the control plane (agents dial ${HOST_ADDR}:${GRPC_PORT})"
 export LEOFLOW_AUTH_JWT_SECRET="e2e-secret"
 export LEOFLOW_BOOTSTRAP_PASSWORD="admin"
 export LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="${HOST_ADDR}:${GRPC_PORT}"
+# The default logs.dir (/var/log/leoflow) is not writable by a normal user, which
+# made the server's log sink fail to open and surfaced as a bare stream EOF on the
+# agent (#36). Use a writable temp dir so pod logs actually land on disk.
+export LEOFLOW_LOGS_DIR="${WORKDIR}/logs"
 "$ROOT/bin/leoflow-server" &
 SERVER_PID=$!
 sleep 5
@@ -133,5 +137,30 @@ while :; do
   [ "$(date +%s)" -gt "$deadline" ] && fail "timed out; last states: ${states:-<none>}"
   sleep 3
 done
+
+log "Asserting task logs were shipped from the pod (#36)"
+read -r FIRST_TASK FIRST_TRY < <(curl -fsS -H "Authorization: Bearer $TOKEN" \
+  "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances" \
+  | jq -r '.task_instances[0] | "\(.task_id) \(.try_number)"')
+LOG_PATH="$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances/$FIRST_TASK/logs"
+log_body=""
+for try in "$FIRST_TRY" 0 1 2; do
+  body="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$LOG_PATH/$try" 2>/dev/null || true)"
+  if [ -n "$body" ] && ! echo "$body" | grep -q '"status":404'; then
+    log_body="$body"
+    log "logs for $FIRST_TASK (try=$try): $(echo "$body" | head -1 | cut -c1-100)"
+    break
+  fi
+done
+[ -n "$log_body" ] || fail "no logs shipped from pod for task '$FIRST_TASK' — agent log streaming broke (#36)"
+
+# And the structured JSON view (the UI drill-down) must parse with content.
+struct="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" "$LOG_PATH/$FIRST_TRY" 2>/dev/null \
+  || curl -fsS -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" "$LOG_PATH/0" 2>/dev/null || true)"
+if echo "$struct" | jq -e '.content | length > 0' >/dev/null 2>&1; then
+  log "structured logs OK: $(echo "$struct" | jq -r '.content | length') content items (#43)"
+else
+  fail "structured JSON logs missing content (#43)"
+fi
 
 log "E2E passed"

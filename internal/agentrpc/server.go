@@ -217,6 +217,10 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 		TenantID: id.TenantID, DagID: id.DagID, RunID: id.RunID, TaskID: id.TaskID, TryNumber: id.TryNumber,
 	})
 	if oerr != nil {
+		// Surface the cause: without this, a non-writable logs.dir makes the
+		// agent see only a bare stream EOF, with no server-side explanation (#36).
+		slog.Error("opening log sink for task; logs will not be shipped",
+			"dag", id.DagID, "run", id.RunID, "task", id.TaskID, "error", oerr)
 		return status.Errorf(codes.Internal, "opening log sink: %v", oerr)
 	}
 	defer func() {

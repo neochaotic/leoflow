@@ -236,6 +236,24 @@ browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
     clears the cookie. So the prior dual-path question (`/auth/token` vs
     `/ui/auth/token`) is settled: the credential endpoint is `/auth/token`;
     `/ui/auth/token` remains the authed re-mint.
+  - **Browser walk findings (live, against the demo stack).** Logging in and
+    opening the DAG views surfaced several gaps, now fixed:
+    - Login is `GET /api/v2/auth/login` → `_token` cookie (resolved above).
+    - The home dashboard polls **`GET /api/v2/monitor/health`** to color the
+      Scheduler/Metadatabase/Triggerer/DagProcessor widgets — implemented;
+      `metadatabase` is a real Postgres ping, the rest report healthy (the single
+      control plane subsumes those roles).
+    - Opening DAG properties fans out to public `/api/v2` list endpoints we don't
+      implement (`dagTags`, `dagWarnings`, `importErrors`, `assets`,
+      `assets/events`, `plugins`, `pools`, dag-run `hitlDetails`). They 404'd and
+      broke the detail view; now stubbed as schema-valid empty collections, with
+      real implementations tracked in issues **#26–#32**.
+    - Inline http_api tasks succeeded but their logs 404'd: the distroless
+      container's nonroot user could not create `/var/log/leoflow`. Fixed by
+      pointing `LEOFLOW_LOGS_DIR` at a writable path in the demo compose. Logs now
+      persist and render (e.g. `inline http_api GET … -> success`).
+    - Note: only **http_api** runs inline (ADR 0015); python/bash tasks need a
+      Kubernetes worker pod, which the compose demo does not provide.
   - **Write flows.** trigger / clear / pause are implemented on the public API
     (`POST /api/v2/dags/{id}/dagRuns`, `POST /api/v2/dags/{id}/clearTaskInstances`,
     `PATCH /api/v2/dags/{id}`). **OPEN — confirm in the browser** which paths the

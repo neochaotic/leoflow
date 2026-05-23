@@ -78,6 +78,9 @@ services:
       LEOFLOW_AUTH_JWT_SECRET: dev-secret-change-me
       # Seeds admin@leoflow.local with this password on first boot (dev only).
       LEOFLOW_BOOTSTRAP_PASSWORD: admin
+      # The distroless image runs as nonroot, which cannot create /var/log;
+      # write task logs under a world-writable path instead.
+      LEOFLOW_LOGS_DIR: /tmp/leoflow-logs
     ports:
       - "8080:8080"
       - "9090:9090"

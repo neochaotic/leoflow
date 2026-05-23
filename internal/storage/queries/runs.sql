@@ -108,3 +108,12 @@ JOIN LATERAL (
 ) r ON true
 WHERE d.tenant_id = $1 AND d.dag_id = ANY($2::text[])
 ORDER BY d.dag_id, r.logical_date DESC;
+
+-- name: TaskInstancesForDagRuns :many
+SELECT dr.run_id, ti.task_id, ti.try_number, ti.state,
+       ti.started_at, ti.ended_at
+FROM task_instances ti
+JOIN dag_runs dr ON dr.id = ti.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+WHERE d.tenant_id = $1 AND d.dag_id = $2 AND dr.run_id = ANY($3::text[])
+ORDER BY dr.run_id, ti.task_id, ti.try_number;

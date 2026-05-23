@@ -553,6 +553,58 @@ func (q *Queries) ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (R
 	return i, err
 }
 
+const taskInstancesForDagRuns = `-- name: TaskInstancesForDagRuns :many
+SELECT dr.run_id, ti.task_id, ti.try_number, ti.state,
+       ti.started_at, ti.ended_at
+FROM task_instances ti
+JOIN dag_runs dr ON dr.id = ti.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+WHERE d.tenant_id = $1 AND d.dag_id = $2 AND dr.run_id = ANY($3::text[])
+ORDER BY dr.run_id, ti.task_id, ti.try_number
+`
+
+type TaskInstancesForDagRunsParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	DagID    string      `json:"dag_id"`
+	Column3  []string    `json:"column_3"`
+}
+
+type TaskInstancesForDagRunsRow struct {
+	RunID     string             `json:"run_id"`
+	TaskID    string             `json:"task_id"`
+	TryNumber int32              `json:"try_number"`
+	State     TaskState          `json:"state"`
+	StartedAt pgtype.Timestamptz `json:"started_at"`
+	EndedAt   pgtype.Timestamptz `json:"ended_at"`
+}
+
+func (q *Queries) TaskInstancesForDagRuns(ctx context.Context, arg TaskInstancesForDagRunsParams) ([]TaskInstancesForDagRunsRow, error) {
+	rows, err := q.db.Query(ctx, taskInstancesForDagRuns, arg.TenantID, arg.DagID, arg.Column3)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskInstancesForDagRunsRow{}
+	for rows.Next() {
+		var i TaskInstancesForDagRunsRow
+		if err := rows.Scan(
+			&i.RunID,
+			&i.TaskID,
+			&i.TryNumber,
+			&i.State,
+			&i.StartedAt,
+			&i.EndedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateDagRunState = `-- name: UpdateDagRunState :one
 UPDATE dag_runs
 SET state = $2, started_at = $3, ended_at = $4

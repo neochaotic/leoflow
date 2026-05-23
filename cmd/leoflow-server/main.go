@@ -130,6 +130,7 @@ func run() error {
 		Logs:                         storage.NewLogReader(pg, logSink, logTailer),
 		Specs:                        repo,
 		LatestRuns:                   repo,
+		TaskSummary:                  repo,
 		UI:                           ui.New(),
 	})
 

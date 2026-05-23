@@ -277,6 +277,37 @@ func (r *Repository) LatestRunsForDags(ctx context.Context, tenant string, dagID
 	return out, nil
 }
 
+// TaskInstancesForRuns returns the task instances of the given runs of a DAG in
+// one query, ordered by run_id, task_id, try_number, for the grid summaries.
+func (r *Repository) TaskInstancesForRuns(ctx context.Context, tenant, dagID string, runIDs []string) ([]domain.TaskInstance, error) {
+	if len(runIDs) == 0 {
+		return nil, nil
+	}
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.TaskInstancesForDagRuns(ctx, queries.TaskInstancesForDagRunsParams{
+		TenantID: tid, DagID: dagID, Column3: runIDs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("task instances for runs: %w", err)
+	}
+	out := make([]domain.TaskInstance, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.TaskInstance{
+			DagID:     dagID,
+			RunID:     row.RunID,
+			TaskID:    row.TaskID,
+			TryNumber: int(row.TryNumber),
+			State:     domain.TaskState(row.State),
+			StartedAt: timePtr(row.StartedAt),
+			EndedAt:   timePtr(row.EndedAt),
+		})
+	}
+	return out, nil
+}
+
 // GetCurrentSpec returns the parsed spec of the DAG's current version, or
 // domain.ErrNotFound if the DAG or its current version does not exist.
 func (r *Repository) GetCurrentSpec(ctx context.Context, tenant, dagID string) (domain.DAGSpec, error) {

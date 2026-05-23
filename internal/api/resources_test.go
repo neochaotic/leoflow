@@ -133,6 +133,77 @@ func dagOnlyServer(repo DagRepository) *gin.Engine {
 	})
 }
 
+func TestClearIncludePastFutureFansAcrossRuns(t *testing.T) {
+	now := time.Now().UTC()
+	runs := &fakeRunRepo{runs: []domain.DagRun{
+		{DagID: "etl", RunID: "past", LogicalDate: now.Add(-2 * time.Hour)},
+		{DagID: "etl", RunID: "cur", LogicalDate: now},
+		{DagID: "etl", RunID: "future", LogicalDate: now.Add(2 * time.Hour)},
+	}}
+	// fakeTaskRepo returns its single TI for any run, so the affected count equals
+	// the number of target runs the clear fans out to.
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{{TaskID: "extract", State: domain.TaskStateFailed}}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		Tasks: tasks, DagRuns: runs,
+	})
+	count := func(extra string) int {
+		body := `{"dag_run_id":"cur","task_ids":["extract"],"dry_run":true` + extra + `}`
+		rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", body)
+		var got struct {
+			TotalEntries int `json:"total_entries"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &got)
+		return got.TotalEntries
+	}
+	if n := count(""); n != 1 {
+		t.Errorf("no flags: %d target runs, want 1 (cur only)", n)
+	}
+	if n := count(`,"include_past":true`); n != 2 {
+		t.Errorf("include_past: %d, want 2 (cur+past)", n)
+	}
+	if n := count(`,"include_future":true`); n != 2 {
+		t.Errorf("include_future: %d, want 2 (cur+future)", n)
+	}
+	if n := count(`,"include_past":true,"include_future":true`); n != 3 {
+		t.Errorf("past+future: %d, want 3 (all runs)", n)
+	}
+}
+
+func TestExpandTaskIDs(t *testing.T) {
+	// a -> b -> c (c depends on b, b depends on a), plus a sibling d off a.
+	tasks := []domain.TaskSpec{
+		{TaskID: "a"},
+		{TaskID: "b", DependsOn: []string{"a"}},
+		{TaskID: "c", DependsOn: []string{"b"}},
+		{TaskID: "d", DependsOn: []string{"a"}},
+	}
+	set := func(ids []string) map[string]bool {
+		m := map[string]bool{}
+		for _, id := range ids {
+			m[id] = true
+		}
+		return m
+	}
+	// seeds only.
+	if got := set(expandTaskIDs(tasks, []string{"b"}, false, false)); len(got) != 1 || !got["b"] {
+		t.Errorf("seeds-only = %v, want {b}", got)
+	}
+	// downstream of a = a,b,c,d (transitive).
+	got := set(expandTaskIDs(tasks, []string{"a"}, false, true))
+	for _, id := range []string{"a", "b", "c", "d"} {
+		if !got[id] {
+			t.Errorf("downstream(a) missing %s: %v", id, got)
+		}
+	}
+	// upstream of c = c,b,a (transitive), not d.
+	got = set(expandTaskIDs(tasks, []string{"c"}, true, false))
+	if !got["a"] || !got["b"] || !got["c"] || got["d"] {
+		t.Errorf("upstream(c) = %v, want {a,b,c}", got)
+	}
+}
+
 func TestMarkDagRunState(t *testing.T) {
 	runs := &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1", State: domain.DagRunStateRunning}}}
 	srv := NewServer(Dependencies{

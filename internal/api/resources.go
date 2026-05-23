@@ -368,23 +368,36 @@ func listTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository
 	}
 }
 
-func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, audit AuditWriter) gin.HandlerFunc {
+type clearRequest struct {
+	TaskIDs           []string `json:"task_ids"`
+	DagRunID          string   `json:"dag_run_id"`
+	OnlyFailed        *bool    `json:"only_failed"`
+	ResetDagRuns      *bool    `json:"reset_dag_runs"`
+	DryRun            *bool    `json:"dry_run"`
+	IncludeUpstream   bool     `json:"include_upstream"`
+	IncludeDownstream bool     `json:"include_downstream"`
+	IncludePast       bool     `json:"include_past"`
+	IncludeFuture     bool     `json:"include_future"`
+}
+
+func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, specs DagSpecReader, audit AuditWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var body struct {
-			TaskIDs      []string `json:"task_ids"`
-			DagRunID     string   `json:"dag_run_id"`
-			OnlyFailed   *bool    `json:"only_failed"`
-			ResetDagRuns *bool    `json:"reset_dag_runs"`
-			DryRun       *bool    `json:"dry_run"`
-		}
+		var body clearRequest
 		if err := c.ShouldBindJSON(&body); err != nil {
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
 			return
 		}
 		onlyFailed := body.OnlyFailed != nil && *body.OnlyFailed
+		// Expand the task set by the DAG topology when up/downstream is requested,
+		// then fan the same set across the target runs (current + past/future).
+		taskIDs := expandClearTasks(c, specs, body)
+		targets := clearTargetRuns(c, runs, body.DagRunID, body.IncludePast, body.IncludeFuture)
+		affected := make([]taskInstanceDTO, 0)
+		for _, rid := range targets {
+			affected = append(affected, affectedTaskInstances(c, repo, runs, versions, rid, taskIDs, onlyFailed)...)
+		}
 		// The UI previews with dry_run=true before confirming; it expects the set of
 		// affected task instances back (TaskInstanceCollectionResponse), not a count.
-		affected := affectedTaskInstances(c, repo, runs, versions, body.DagRunID, body.TaskIDs, onlyFailed)
 		if body.DryRun != nil && *body.DryRun {
 			c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 			return
@@ -393,15 +406,98 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 		if body.ResetDagRuns != nil {
 			reset = *body.ResetDagRuns
 		}
-		if _, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), body.DagRunID, body.TaskIDs, onlyFailed, reset); err != nil {
-			handleRepoError(c, err)
-			return
+		for _, rid := range targets {
+			if _, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), rid, taskIDs, onlyFailed, reset); err != nil {
+				handleRepoError(c, err)
+				return
+			}
 		}
 		for _, ti := range affected {
-			recordTaskAudit(c, audit, "taskinstance.clear", body.DagRunID, ti.TaskID, ti.TryNumber)
+			recordTaskAudit(c, audit, "taskinstance.clear", ti.DagRunID, ti.TaskID, ti.TryNumber)
 		}
 		c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 	}
+}
+
+// expandClearTasks expands the requested task_ids along the DAG topology when
+// include_upstream/downstream is set (needs the spec); otherwise returns them
+// unchanged. An empty task list (clear-the-whole-run) is left empty.
+func expandClearTasks(c *gin.Context, specs DagSpecReader, body clearRequest) []string {
+	if specs == nil || len(body.TaskIDs) == 0 || (!body.IncludeUpstream && !body.IncludeDownstream) {
+		return body.TaskIDs
+	}
+	spec, err := specs.GetCurrentSpec(c.Request.Context(), tenantOf(c), c.Param("dag_id"))
+	if err != nil {
+		return body.TaskIDs
+	}
+	return expandTaskIDs(spec.Tasks, body.TaskIDs, body.IncludeUpstream, body.IncludeDownstream)
+}
+
+// clearTargetRuns resolves which runs a clear applies to: just the named run, or
+// also the DAG's past/future runs (by logical_date) when include_past/future is
+// set. Falls back to the single run if the run set cannot be listed.
+func clearTargetRuns(c *gin.Context, runs DagRunRepository, currentRunID string, includePast, includeFuture bool) []string {
+	if (!includePast && !includeFuture) || runs == nil {
+		return []string{currentRunID}
+	}
+	dagID := c.Param("dag_id")
+	cur, err := runs.GetDagRun(c.Request.Context(), tenantOf(c), dagID, currentRunID)
+	if err != nil {
+		return []string{currentRunID}
+	}
+	all, _, err := runs.ListDagRuns(c.Request.Context(), tenantOf(c), dagID, maxRunScan, 0)
+	if err != nil {
+		return []string{currentRunID}
+	}
+	out := []string{currentRunID}
+	for _, r := range all {
+		if r.RunID == currentRunID {
+			continue
+		}
+		if (includePast && r.LogicalDate.Before(cur.LogicalDate)) || (includeFuture && r.LogicalDate.After(cur.LogicalDate)) {
+			out = append(out, r.RunID)
+		}
+	}
+	return out
+}
+
+// expandTaskIDs grows a seed set of task ids along the DAG topology:
+// includeDownstream adds transitive descendants (tasks depending on a seed),
+// includeUpstream adds transitive ancestors (tasks a seed depends on). Seeds are
+// always included; with neither flag the seeds are returned unchanged.
+func expandTaskIDs(tasks []domain.TaskSpec, seeds []string, includeUpstream, includeDownstream bool) []string {
+	deps := make(map[string][]string, len(tasks))     // task -> its upstreams
+	children := make(map[string][]string, len(tasks)) // task -> its downstreams
+	for _, t := range tasks {
+		deps[t.TaskID] = t.DependsOn
+		for _, d := range t.DependsOn {
+			children[d] = append(children[d], t.TaskID)
+		}
+	}
+	result := map[string]bool{}
+	var walk func(id string, adj map[string][]string)
+	walk = func(id string, adj map[string][]string) {
+		for _, next := range adj[id] {
+			if !result[next] {
+				result[next] = true
+				walk(next, adj)
+			}
+		}
+	}
+	for _, s := range seeds {
+		result[s] = true
+		if includeUpstream {
+			walk(s, deps)
+		}
+		if includeDownstream {
+			walk(s, children)
+		}
+	}
+	out := make([]string, 0, len(result))
+	for id := range result {
+		out = append(out, id)
+	}
+	return out
 }
 
 // affectedTaskInstances returns the task instances a clear would touch: the named
@@ -692,7 +788,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		r.PATCH("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id", RequirePermission("write", "task_instance"), patchTI)
 		r.PATCH("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action", RequirePermission("write", "task_instance"), patchTI)
 		r.POST("/api/v2/dags/:dag_id/clearTaskInstances",
-			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks, deps.DagRuns, deps.DagVersions, deps.Audit))
+			RequirePermission("write", "task_instance"), clearTaskInstancesHandler(deps.Tasks, deps.DagRuns, deps.DagVersions, deps.Specs, deps.Audit))
 	}
 	if deps.Versions != nil {
 		r.POST("/api/v2/dags/:dag_id/versions", RequirePermission("write", "dag"), registerVersionHandler(deps.Versions, deps.InlineHTTPMaxDurationSeconds))

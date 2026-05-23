@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -145,6 +147,29 @@ func TestUINoRouteDegradesGracefully(t *testing.T) {
 	// Non-GET unknown -> 404.
 	if rec := authGet(srv, http.MethodDelete, "/whatever", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("non-GET unknown = %d, want 404", rec.Code)
+	}
+}
+
+func TestUnauthenticatedCanLoadSPAButNotData(t *testing.T) {
+	srv := uiServer()
+	anon := func(path string) int {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
+		rec := httptest.NewRecorder() // no Authorization header
+		srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	// The static SPA (shell + assets + pre-login config) must load anonymously,
+	// or the browser can never reach the login screen.
+	for _, p := range []string{"/", "/dags/etl/grid", "/static/VERSION", "/ui/config"} {
+		if code := anon(p); code != http.StatusOK {
+			t.Errorf("anonymous GET %s = %d, want 200 (public SPA)", p, code)
+		}
+	}
+	// The data planes stay gated.
+	for _, p := range []string{"/api/v2/version", "/ui/auth/me"} {
+		if code := anon(p); code != http.StatusUnauthorized {
+			t.Errorf("anonymous GET %s = %d, want 401 (gated data)", p, code)
+		}
 	}
 }
 

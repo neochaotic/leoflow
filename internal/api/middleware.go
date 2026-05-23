@@ -76,15 +76,29 @@ func CORS(allowed []string) gin.HandlerFunc {
 	}
 }
 
-var publicPrefixes = []string{"/auth/", "/healthz", "/readyz", "/metrics", "/docs", "/openapi", "/ui/config"}
+// alwaysPublic are non-data paths reachable without a token: the login endpoint,
+// health/metrics/docs, and the pre-login UI config (read before authentication).
+var alwaysPublic = []string{"/auth/", "/healthz", "/readyz", "/metrics", "/docs", "/openapi", "/ui/config"}
+
+// dataPlanePrefixes require a bearer token. Everything outside them — the static
+// SPA bundle (/static/*) and the index.html shell served on client-side routes
+// — is public: it carries no data, and the APIs it calls enforce auth. Without
+// this, an unauthenticated first visit to "/" or "/static/*.js" would 401 and
+// the browser could never load the app to reach the login screen.
+var dataPlanePrefixes = []string{"/api/", "/ui/"}
 
 func isPublic(path string) bool {
-	for _, p := range publicPrefixes {
+	for _, p := range alwaysPublic {
 		if strings.HasPrefix(path, p) {
 			return true
 		}
 	}
-	return false
+	for _, p := range dataPlanePrefixes {
+		if strings.HasPrefix(path, p) {
+			return false
+		}
+	}
+	return true
 }
 
 // JWTAuth validates the bearer token on protected routes and stores the user.

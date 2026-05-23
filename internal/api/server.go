@@ -72,6 +72,9 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerDocs(r)
 
 	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs))
+	// The Airflow UI redirects unauthenticated users to GET /api/v2/auth/login.
+	r.GET("/api/v2/auth/login", loginPageHandler())
+	r.GET("/api/v2/auth/logout", logoutHandler())
 
 	registerResources(r, deps)
 	registerUI(r, deps.TokenTTLSecs)

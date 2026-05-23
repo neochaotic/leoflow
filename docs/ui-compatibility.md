@@ -224,6 +224,18 @@ browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
     stay gated (401) without a token. It also caught two bugs now fixed: the
     static SPA was auth-gated (couldn't reach login), and `/ui/auth/me` returned a
     blank username (JWT lacked the email claim).
+  - **RESOLVED — the login flow (browser DevTools).** The 3.2.1 UI sends an
+    unauthenticated user to **`GET /api/v2/auth/login`** (not `/auth/token` or
+    `/ui/auth/token`). Upstream that 307-redirects into the simple-auth-manager
+    login SPA, which POSTs `{username,password}` to **`POST /auth/token`** and
+    stores the returned JWT in a cookie named **`_token`** (path `/`) that the
+    rest of the UI reads. Leoflow now: serves a minimal login page at
+    `/api/v2/auth/login` honoring that contract (no second SPA embedded), makes
+    `/api/v2/auth/` public, and **accepts the `_token` cookie** as a fallback to
+    the `Authorization` header across `/api/v2` and `/ui`. `/api/v2/auth/logout`
+    clears the cookie. So the prior dual-path question (`/auth/token` vs
+    `/ui/auth/token`) is settled: the credential endpoint is `/auth/token`;
+    `/ui/auth/token` remains the authed re-mint.
   - **Write flows.** trigger / clear / pause are implemented on the public API
     (`POST /api/v2/dags/{id}/dagRuns`, `POST /api/v2/dags/{id}/clearTaskInstances`,
     `PATCH /api/v2/dags/{id}`). **OPEN — confirm in the browser** which paths the

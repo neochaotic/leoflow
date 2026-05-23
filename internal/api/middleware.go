@@ -76,9 +76,15 @@ func CORS(allowed []string) gin.HandlerFunc {
 	}
 }
 
-// alwaysPublic are non-data paths reachable without a token: the login endpoint,
-// health/metrics/docs, and the pre-login UI config (read before authentication).
-var alwaysPublic = []string{"/auth/", "/healthz", "/readyz", "/metrics", "/docs", "/openapi", "/ui/config"}
+// alwaysPublic are non-data paths reachable without a token: the login/logout
+// endpoints, health/metrics/docs, and the pre-login UI config (read before
+// authentication). "/api/v2/auth/" covers the Airflow UI's login + logout, which
+// must be reachable precisely when the user has no token yet.
+var alwaysPublic = []string{"/auth/", "/api/v2/auth/", "/healthz", "/readyz", "/metrics", "/docs", "/openapi", "/ui/config"}
+
+// authTokenCookie is the cookie the Airflow 3.2.1 UI carries the JWT in (set by
+// the login flow). JWTAuth accepts it as a fallback to the Authorization header.
+const authTokenCookie = "_token"
 
 // dataPlanePrefixes require a bearer token. Everything outside them — the static
 // SPA bundle (/static/*) and the index.html shell served on client-side routes
@@ -108,7 +114,7 @@ func JWTAuth(authn auth.Authenticator) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		token := bearerToken(c.GetHeader("Authorization"))
+		token := tokenFromRequest(c)
 		if token == "" {
 			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "missing bearer token")
 			return
@@ -127,6 +133,18 @@ func bearerToken(header string) string {
 	const prefix = "Bearer "
 	if strings.HasPrefix(header, prefix) {
 		return strings.TrimPrefix(header, prefix)
+	}
+	return ""
+}
+
+// tokenFromRequest extracts the JWT from the Authorization header, falling back
+// to the Airflow UI's _token cookie so cookie-only requests authenticate too.
+func tokenFromRequest(c *gin.Context) string {
+	if t := bearerToken(c.GetHeader("Authorization")); t != "" {
+		return t
+	}
+	if cookie, err := c.Request.Cookie(authTokenCookie); err == nil {
+		return cookie.Value
 	}
 	return ""
 }

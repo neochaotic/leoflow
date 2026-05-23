@@ -1,0 +1,89 @@
+package api
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/auth"
+)
+
+func loginServer() *gin.Engine {
+	return NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Email: "admin@leoflow.local", Roles: []string{"admin"}}},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		TokenTTLSecs:  3600,
+	})
+}
+
+func anonGet(srv *gin.Engine, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestLoginPageIsPublicHTML(t *testing.T) {
+	rec := anonGet(loginServer(), "/api/v2/auth/login") // no token
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/api/v2/auth/login = %d, want 200 (must be public)", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("content-type = %q, want text/html", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "/auth/token") || !strings.Contains(body, "_token=") {
+		t.Errorf("login page should post /auth/token and set _token cookie")
+	}
+}
+
+func TestLoginPageSanitizesNext(t *testing.T) {
+	// Open-redirect targets collapse to "/".
+	for _, bad := range []string{"//evil.com", "https://evil.com", "javascript:alert(1)"} {
+		rec := anonGet(loginServer(), "/api/v2/auth/login?next="+bad)
+		if strings.Contains(rec.Body.String(), "evil.com") || strings.Contains(rec.Body.String(), "alert(1)") {
+			t.Errorf("next=%q leaked into the page", bad)
+		}
+	}
+	// A safe same-origin path is preserved.
+	rec := anonGet(loginServer(), "/api/v2/auth/login?next=/dags/etl/grid")
+	if !strings.Contains(rec.Body.String(), "/dags/etl/grid") {
+		t.Errorf("safe next path was not preserved")
+	}
+}
+
+func TestTokenCookieAuthenticatesDataPlane(t *testing.T) {
+	srv := viewsServer(nil, nil) // has DagRuns + /api/v2/version
+	// Bearer header path still works.
+	if rec := authGet(srv, http.MethodGet, "/api/v2/version", ""); rec.Code != http.StatusOK {
+		t.Fatalf("bearer header = %d, want 200", rec.Code)
+	}
+	// _token cookie alone authenticates (no Authorization header).
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/version", http.NoBody)
+	req.AddCookie(&http.Cookie{Name: "_token", Value: "cookie-jwt"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("_token cookie auth = %d, want 200", rec.Code)
+	}
+}
+
+func TestLogoutClearsCookieAndRedirects(t *testing.T) {
+	rec := anonGet(loginServer(), "/api/v2/auth/logout")
+	if rec.Code != http.StatusFound {
+		t.Fatalf("logout = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/api/v2/auth/login" {
+		t.Errorf("logout redirect = %q", loc)
+	}
+	if sc := rec.Header().Get("Set-Cookie"); !strings.Contains(sc, "_token=") || !strings.Contains(sc, "Max-Age=0") {
+		t.Errorf("logout should expire _token cookie, got %q", sc)
+	}
+}

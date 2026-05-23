@@ -85,6 +85,9 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if verr := validateDAGFile(o.output); verr != nil {
 		return verr
 	}
+	if eerr := embedSource(o.output, dagSourcePath(dir, cfg)); eerr != nil {
+		return eerr
+	}
 	if o.build {
 		if berr := buildImage(cmd, o.builder, o.image, filepath.Join(dir, o.dockerfile), dir); berr != nil {
 			return berr
@@ -213,6 +216,33 @@ func validateDAGFile(path string) error {
 	}
 	if err := spec.ValidateInlineExecution(domain.DefaultInlineMaxDurationSeconds); err != nil {
 		return fmt.Errorf("produced %s is invalid: %w", path, err)
+	}
+	return nil
+}
+
+// embedSource reads the produced dag.json and the original dag.py and stores the
+// Python text in the spec's source field, so the control plane can serve it to
+// the UI's Code tab. Re-marshaled with indentation to keep dag.json readable.
+func embedSource(dagJSONPath, sourcePath string) error {
+	specData, err := os.ReadFile(dagJSONPath) //nolint:gosec // G304: output path is operator-supplied on the CLI.
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", dagJSONPath, err)
+	}
+	var spec domain.DAGSpec
+	if uerr := json.Unmarshal(specData, &spec); uerr != nil {
+		return fmt.Errorf("parsing %s: %w", dagJSONPath, uerr)
+	}
+	src, err := os.ReadFile(sourcePath) //nolint:gosec // G304: source path is operator-supplied on the CLI.
+	if err != nil {
+		return fmt.Errorf("reading dag source %s: %w", sourcePath, err)
+	}
+	spec.Source = string(src)
+	out, err := json.MarshalIndent(&spec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding %s: %w", dagJSONPath, err)
+	}
+	if werr := os.WriteFile(dagJSONPath, append(out, '\n'), 0o600); werr != nil {
+		return fmt.Errorf("writing %s: %w", dagJSONPath, werr)
 	}
 	return nil
 }

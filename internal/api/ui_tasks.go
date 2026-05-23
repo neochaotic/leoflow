@@ -156,8 +156,9 @@ func taskDetailHandler(specs DagSpecReader) gin.HandlerFunc {
 }
 
 // dagSourceHandler implements GET /api/v2/dagSources/{dag_id} — the Code view.
-// Leoflow stores the compiled dag.json (not the original dag.py), so it returns
-// the formatted spec as the source content.
+// It returns the original dag.py Python (captured at compile time), matching
+// Airflow. Versions compiled before source capture fall back to the compiled
+// spec JSON so the tab still renders.
 func dagSourceHandler(specs DagSpecReader) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		dagID := c.Param("dag_id")
@@ -166,13 +167,17 @@ func dagSourceHandler(specs DagSpecReader) gin.HandlerFunc {
 			handleRepoError(c, err)
 			return
 		}
-		content, merr := json.MarshalIndent(spec, "", "  ")
-		if merr != nil {
-			AbortProblem(c, http.StatusInternalServerError, "internal error", "encoding spec")
-			return
+		content := spec.Source
+		if content == "" {
+			marshaled, merr := json.MarshalIndent(spec, "", "  ")
+			if merr != nil {
+				AbortProblem(c, http.StatusInternalServerError, "internal error", "encoding spec")
+				return
+			}
+			content = string(marshaled)
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"content":          string(content),
+			"content":          content,
 			"dag_id":           dagID,
 			"version_number":   1,
 			"dag_display_name": dagID,

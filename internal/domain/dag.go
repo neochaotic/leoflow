@@ -69,6 +69,10 @@ type DAGSpec struct {
 	Catchup       bool         `json:"catchup,omitempty"`
 	DefaultArgs   *DefaultArgs `json:"default_args,omitempty"`
 	Tasks         []TaskSpec   `json:"tasks"`
+	// Source is the original dag.py text, captured at compile time so the UI's
+	// Code tab can show the Python a human wrote (not the compiled spec). It is
+	// part of the artifact: changing it produces a new version.
+	Source string `json:"source,omitempty"`
 }
 
 // DefaultArgs holds retry and timeout defaults applied to every task in a DAG.

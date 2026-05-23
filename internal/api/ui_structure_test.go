@@ -186,3 +186,24 @@ func TestDagSourceEndpoint(t *testing.T) {
 		t.Errorf("source content should include the spec, got %q", s)
 	}
 }
+
+func TestDagSourceReturnsPythonWhenCaptured(t *testing.T) {
+	spec := diamondSpec()
+	spec.Source = "from airflow.sdk import dag\n\n@dag\ndef etl():\n    pass\n"
+	rec := authGet(structureServer(&fakeSpecReader{spec: spec}), http.MethodGet, "/api/v2/dagSources/etl", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/dagSources = %d", rec.Code)
+	}
+	var src map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &src); err != nil {
+		t.Fatal(err)
+	}
+	content, _ := src["content"].(string)
+	// The Code tab must show the Python, not the compiled spec JSON.
+	if !strings.Contains(content, "@dag") || !strings.Contains(content, "from airflow.sdk") {
+		t.Errorf("expected Python source, got %q", content)
+	}
+	if strings.Contains(content, "\"schema_version\"") {
+		t.Errorf("content leaked the compiled spec JSON instead of the Python source")
+	}
+}

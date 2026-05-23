@@ -4,7 +4,13 @@
   "title": "Leoflow DAG Specification",
   "description": "Canonical serialized representation of a DAG, consumed by the Leoflow Control Plane.",
   "type": "object",
-  "required": ["schema_version", "dag_id", "dag_version", "image", "tasks"],
+  "required": [
+    "schema_version",
+    "dag_id",
+    "dag_version",
+    "image",
+    "tasks"
+  ],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
@@ -25,15 +31,24 @@
       "type": "string",
       "description": "Fully qualified container image reference (e.g., 'myrepo/etl:v1.2.3')."
     },
-    "description": { "type": "string" },
-    "owner": { "type": "string" },
+    "description": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
     "tags": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true
     },
     "schedule": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Cron expression, preset ('@daily', '@hourly'), or null for manual-only."
     },
     "schedule_timezone": {
@@ -45,7 +60,10 @@
       "format": "date-time"
     },
     "end_date": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
     },
     "max_active_runs": {
@@ -60,22 +78,43 @@
     "default_args": {
       "type": "object",
       "properties": {
-        "retries": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0 },
-        "retry_delay_seconds": { "type": "integer", "minimum": 0, "default": 300 },
-        "execution_timeout_seconds": { "type": "integer", "minimum": 1 }
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 0
+        },
+        "retry_delay_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300
+        },
+        "execution_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
       },
       "additionalProperties": false
     },
     "tasks": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/task" }
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    },
+    "source": {
+      "type": "string",
+      "description": "Original dag.py source, captured at compile time for the UI Code view."
     }
   },
   "$defs": {
     "task": {
       "type": "object",
-      "required": ["task_id", "type"],
+      "required": [
+        "task_id",
+        "type"
+      ],
       "additionalProperties": false,
       "properties": {
         "task_id": {
@@ -84,110 +123,187 @@
         },
         "type": {
           "type": "string",
-          "enum": ["python", "bash", "http_api"]
+          "enum": [
+            "python",
+            "bash",
+            "http_api"
+          ]
         },
         "depends_on": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "uniqueItems": true,
           "default": []
         },
         "trigger_rule": {
           "type": "string",
-          "enum": ["all_success", "all_failed", "all_done", "one_success", "one_failed"],
+          "enum": [
+            "all_success",
+            "all_failed",
+            "all_done",
+            "one_success",
+            "one_failed"
+          ],
           "default": "all_success"
         },
-        "retries": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "retry_delay_seconds": { "type": "integer", "minimum": 0 },
-        "execution_timeout_seconds": { "type": "integer", "minimum": 1 },
-
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "retry_delay_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "execution_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
         "execution_mode": {
           "type": "string",
-          "enum": ["inline", "pod"],
+          "enum": [
+            "inline",
+            "pod"
+          ],
           "default": "inline",
           "description": "For type=http_api only. 'inline' runs the call as a goroutine in the Control Plane (low overhead, capped at LEOFLOW_INLINE_HTTP_MAX_DURATION seconds, default 300s). 'pod' runs the call inside a worker pod via the agent (no duration cap beyond execution_timeout_seconds, full isolation, survives Control Plane restarts). Ignored for type=python and type=bash, which always use pod."
         },
-
         "entrypoint": {
           "type": "string",
           "description": "For type=python: 'module.path:callable'. For type=bash: shell command."
         },
-
         "http_request": {
           "type": "object",
           "description": "Required when type=http_api. The Control Plane executes this directly.",
-          "required": ["method", "url"],
+          "required": [
+            "method",
+            "url"
+          ],
           "properties": {
-            "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
-            "url": { "type": "string", "format": "uri" },
+            "method": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
             "headers": {
               "type": "object",
-              "additionalProperties": { "type": "string" }
+              "additionalProperties": {
+                "type": "string"
+              }
             },
             "body": {},
-            "timeout_seconds": { "type": "integer", "minimum": 1, "default": 60 },
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 60
+            },
             "success_status_codes": {
               "type": "array",
-              "items": { "type": "integer" },
-              "default": [200, 201, 202, 204]
+              "items": {
+                "type": "integer"
+              },
+              "default": [
+                200,
+                201,
+                202,
+                204
+              ]
             }
           },
           "additionalProperties": false
         },
-
         "env": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "description": "Environment variables for the worker pod / process."
         },
-
         "secrets": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["name", "source"],
+            "required": [
+              "name",
+              "source"
+            ],
             "properties": {
-              "name": { "type": "string" },
-              "source": { "type": "string", "enum": ["env", "vault", "k8s_secret"] },
-              "reference": { "type": "string" }
+              "name": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "env",
+                  "vault",
+                  "k8s_secret"
+                ]
+              },
+              "reference": {
+                "type": "string"
+              }
             }
           }
         },
-
         "resources": {
           "type": "object",
           "properties": {
-            "requests": { "$ref": "#/$defs/resource_quantity" },
-            "limits": { "$ref": "#/$defs/resource_quantity" }
+            "requests": {
+              "$ref": "#/$defs/resource_quantity"
+            },
+            "limits": {
+              "$ref": "#/$defs/resource_quantity"
+            }
           },
           "additionalProperties": false
         },
-
         "execution": {
           "type": "object",
           "description": "Executor-specific hints. Ignored if the chosen executor does not support them.",
           "properties": {
             "node_selector": {
               "type": "object",
-              "additionalProperties": { "type": "string" }
+              "additionalProperties": {
+                "type": "string"
+              }
             },
             "tolerations": {
               "type": "array",
-              "items": { "type": "object" }
+              "items": {
+                "type": "object"
+              }
             },
-            "service_account": { "type": "string" },
+            "service_account": {
+              "type": "string"
+            },
             "image_pull_policy": {
               "type": "string",
-              "enum": ["Always", "IfNotPresent", "Never"],
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
               "default": "IfNotPresent"
             }
           }
         },
-
         "xcom_input": {
           "type": "object",
           "description": "Map of parameter name to upstream task_id whose return value to inject.",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "xcom_schema": {
           "type": "object",
@@ -196,24 +312,70 @@
       },
       "allOf": [
         {
-          "if": { "properties": { "type": { "const": "python" } } },
-          "then": { "required": ["entrypoint"], "properties": { "execution_mode": { "const": "pod" } } }
+          "if": {
+            "properties": {
+              "type": {
+                "const": "python"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "entrypoint"
+            ],
+            "properties": {
+              "execution_mode": {
+                "const": "pod"
+              }
+            }
+          }
         },
         {
-          "if": { "properties": { "type": { "const": "bash" } } },
-          "then": { "required": ["entrypoint"], "properties": { "execution_mode": { "const": "pod" } } }
+          "if": {
+            "properties": {
+              "type": {
+                "const": "bash"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "entrypoint"
+            ],
+            "properties": {
+              "execution_mode": {
+                "const": "pod"
+              }
+            }
+          }
         },
         {
-          "if": { "properties": { "type": { "const": "http_api" } } },
-          "then": { "required": ["http_request"] }
+          "if": {
+            "properties": {
+              "type": {
+                "const": "http_api"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "http_request"
+            ]
+          }
         }
       ]
     },
     "resource_quantity": {
       "type": "object",
       "properties": {
-        "cpu": { "type": "string", "description": "Kubernetes-style: '500m', '2', '1.5'." },
-        "memory": { "type": "string", "description": "Kubernetes-style: '512Mi', '2Gi'." }
+        "cpu": {
+          "type": "string",
+          "description": "Kubernetes-style: '500m', '2', '1.5'."
+        },
+        "memory": {
+          "type": "string",
+          "description": "Kubernetes-style: '512Mi', '2Gi'."
+        }
       },
       "additionalProperties": false
     }

@@ -18,6 +18,7 @@ const audienceUser = "leoflow-user"
 // jwtClaims is the Leoflow JWT payload.
 type jwtClaims struct {
 	TenantID string   `json:"tenant_id"`
+	Email    string   `json:"email,omitempty"`
 	Roles    []string `json:"roles"`
 	jwt.RegisteredClaims
 }
@@ -56,13 +57,14 @@ func (a *JWTAuthenticator) Authenticate(_ context.Context, token string) (*User,
 	if err != nil || !parsed.Valid {
 		return nil, errors.Join(ErrInvalidToken, err)
 	}
-	return &User{ID: c.Subject, TenantID: c.TenantID, Roles: c.Roles}, nil
+	return &User{ID: c.Subject, TenantID: c.TenantID, Email: c.Email, Roles: c.Roles}, nil
 }
 
 func (a *JWTAuthenticator) sign(user *User) (string, error) {
 	now := time.Now()
 	c := jwtClaims{
 		TenantID: user.TenantID,
+		Email:    user.Email,
 		Roles:    user.Roles,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.ID,

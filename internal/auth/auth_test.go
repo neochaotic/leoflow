@@ -54,7 +54,7 @@ func TestPasswordHashVerify(t *testing.T) {
 }
 
 func TestJWTIssueAndAuthenticate(t *testing.T) {
-	store := &fakeStore{user: &User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}, hash: must(HashPassword("pw"))}
+	store := &fakeStore{user: &User{ID: "u1", TenantID: "default", Email: "a@b.c", Roles: []string{"admin"}}, hash: must(HashPassword("pw"))}
 	a := NewJWTAuthenticator(store, "secret", time.Hour)
 	tok, err := a.IssueToken(context.Background(), Credentials{Tenant: "default", Username: "a@b.c", Password: "pw"})
 	if err != nil {
@@ -66,6 +66,10 @@ func TestJWTIssueAndAuthenticate(t *testing.T) {
 	}
 	if u.ID != "u1" || u.TenantID != "default" || len(u.Roles) != 1 || u.Roles[0] != "admin" {
 		t.Errorf("unexpected user: %+v", u)
+	}
+	// Email must survive the round-trip, or /ui/auth/me shows a blank username.
+	if u.Email != "a@b.c" {
+		t.Errorf("email not preserved through token: %q", u.Email)
 	}
 }
 

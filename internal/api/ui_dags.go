@@ -80,9 +80,19 @@ func toDagWithRunsDTO(d domain.DAG, runs []domain.DagRun) dagWithRunsDTO {
 	for _, t := range d.Tags {
 		tags = append(tags, dagTagDTO{Name: t, DagID: d.DagID})
 	}
-	owners := []string{}
-	if d.Owner != "" {
-		owners = append(owners, d.Owner)
+	// A DAG always has an owner in the UI; default to "airflow" (as the detail
+	// view does) so the list never shows a blank owner.
+	owner := d.Owner
+	if owner == "" {
+		owner = "airflow"
+	}
+	owners := []string{owner}
+	// Match the detail view's schedule summary: the raw schedule, or the explicit
+	// "external triggers only" phrasing when the DAG is unscheduled.
+	summary := d.Schedule
+	if summary == nil {
+		s := "Never, external triggers only"
+		summary = &s
 	}
 	latest := make([]dagRunLightDTO, 0, len(runs))
 	for _, r := range runs {
@@ -95,7 +105,8 @@ func toDagWithRunsDTO(d domain.DAG, runs []domain.DagRun) dagWithRunsDTO {
 		IsPaused:                    d.IsPaused,
 		IsStale:                     !d.IsActive,
 		Description:                 strPtrOrNil(d.Description),
-		TimetableSummary:            d.Schedule,
+		TimetableSummary:            summary,
+		TimetableDescription:        timetableDescription(d.Schedule),
 		TimetablePartitioned:        false,
 		Tags:                        tags,
 		MaxActiveTasks:              defaultMaxActiveTasks,

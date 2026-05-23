@@ -153,6 +153,43 @@ func deleteDagHandler(repo DagRepository) gin.HandlerFunc {
 	}
 }
 
+// listRunsFiltered returns a page of a DAG's runs, optionally restricted to the
+// given states (the UI's "failed runs" widget filters with ?state=failed). With
+// no state filter it pages directly; with one, it filters the full set first so
+// the page and total reflect the filter (run counts are small — a SQL-level
+// filter is a follow-up for scale).
+func listRunsFiltered(c *gin.Context, repo DagRunRepository, states []string, limit, offset int) ([]domain.DagRun, int, error) {
+	if len(states) == 0 {
+		return repo.ListDagRuns(c.Request.Context(), tenantOf(c), c.Param("dag_id"), limit, offset)
+	}
+	want := make(map[string]bool, len(states))
+	for _, s := range states {
+		want[s] = true
+	}
+	all, _, err := repo.ListDagRuns(c.Request.Context(), tenantOf(c), c.Param("dag_id"), maxRunScan, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	filtered := make([]domain.DagRun, 0, len(all))
+	for _, r := range all {
+		if want[string(r.State)] {
+			filtered = append(filtered, r)
+		}
+	}
+	total := len(filtered)
+	if offset >= total {
+		return []domain.DagRun{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return filtered[offset:end], total, nil
+}
+
+// maxRunScan caps the in-memory state-filter scan of a DAG's runs.
+const maxRunScan = 10000
+
 func listDagRunsHandler(repo DagRunRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// "~" is Airflow's wildcard for "all DAGs"; the UI home polls
@@ -165,7 +202,8 @@ func listDagRunsHandler(repo DagRunRepository) gin.HandlerFunc {
 			return
 		}
 		limit, offset := pagination(c)
-		runs, total, err := repo.ListDagRuns(c.Request.Context(), tenantOf(c), c.Param("dag_id"), limit, offset)
+		states := c.QueryArray("state")
+		runs, total, err := listRunsFiltered(c, repo, states, limit, offset)
 		if err != nil {
 			handleRepoError(c, err)
 			return

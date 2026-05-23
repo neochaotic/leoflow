@@ -148,6 +148,39 @@ func authGet(srv *gin.Engine, method, path, body string) *httptest.ResponseRecor
 	return rec
 }
 
+func TestListDagRunsStateFilter(t *testing.T) {
+	// The "failed runs" widget filters with ?state=failed; the handler must honor
+	// it (it previously ignored the filter and returned every run).
+	admin := &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: admin},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		DagRuns: &fakeRunRepo{runs: []domain.DagRun{
+			{DagID: "etl", RunID: "r1", State: domain.DagRunStateSuccess},
+			{DagID: "etl", RunID: "r2", State: domain.DagRunStateFailed},
+			{DagID: "etl", RunID: "r3", State: domain.DagRunStateSuccess},
+		}},
+	})
+	decode := func(rec *httptest.ResponseRecorder) int {
+		var got struct {
+			TotalEntries int `json:"total_entries"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got.TotalEntries
+	}
+	if n := decode(authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagRuns?state=failed", "")); n != 1 {
+		t.Errorf("state=failed total = %d, want 1", n)
+	}
+	if n := decode(authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagRuns?state=success", "")); n != 2 {
+		t.Errorf("state=success total = %d, want 2", n)
+	}
+	if n := decode(authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagRuns", "")); n != 3 {
+		t.Errorf("no filter total = %d, want 3", n)
+	}
+}
+
 func TestDeleteDagClearsHistoryByDefault(t *testing.T) {
 	// The trash button (plain DELETE) clears history but KEEPS the DAG (ADR 0020),
 	// because a GitOps DAG would not reload after a destructive delete.

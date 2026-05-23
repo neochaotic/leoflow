@@ -213,6 +213,22 @@ browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
   - **OPEN (needs live PG / browser):** integration fixtures (3×10×5), the 20k-TI
     perf budget + EXPLAIN ANALYZE, and the browser walk of grid/graph rendering
     are verification steps to run with `make dev-up` and a real browser.
+- **2026-05-23 (Phase 5.3 — degradation, demo stack, live smoke).**
+  - Graceful stubs for unimplemented `/ui` screens return schema-valid empties
+    (zeroed counts, `[]` collections, `{edges,nodes}`); writes degrade to 501.
+  - `docker compose --profile demo up --build` runs the full stack with the
+    embedded UI; `deploy/Dockerfile.server` builds the single image.
+  - **Live container smoke** (curl, not yet a browser) confirmed: anonymous `/`
+    serves the SPA shell with `<base href="/">`, `/ui/config` is public, static
+    assets are gzipped, login via `POST /auth/token` works, and `/api/v2` + `/ui`
+    stay gated (401) without a token. It also caught two bugs now fixed: the
+    static SPA was auth-gated (couldn't reach login), and `/ui/auth/me` returned a
+    blank username (JWT lacked the email claim).
+  - **Write flows.** trigger / clear / pause are implemented on the public API
+    (`POST /api/v2/dags/{id}/dagRuns`, `POST /api/v2/dags/{id}/clearTaskInstances`,
+    `PATCH /api/v2/dags/{id}`). **OPEN — confirm in the browser** which paths the
+    3.2.1 UI actually calls for these actions; add `/ui/*` aliases only if it uses
+    them. The browser walk + screenshots remain the final acceptance step.
 
 ## Sources
 

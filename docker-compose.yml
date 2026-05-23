@@ -39,6 +39,49 @@ services:
       timeout: 3s
       retries: 10
 
+  # The two services below form the full single-host demo stack and are gated
+  # behind the "demo" profile, so `make dev-up` still brings up only Postgres +
+  # Redis. Run the whole stack (UI included) with:
+  #   docker compose --profile demo up --build
+  # then open http://localhost:8080 and log in as admin@leoflow.local / admin.
+
+  # One-shot migration runner: applies all up migrations, then exits.
+  migrate:
+    profiles: ["demo"]
+    image: migrate/migrate:v4.18.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://leoflow:leoflow@postgres:5432/leoflow?sslmode=disable"
+      - "up"
+
+  # The control plane: serves /api/v2, /ui, and the embedded Airflow 3.2.1 UI.
+  leoflow-server:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      LEOFLOW_DATABASE_URL: postgres://leoflow:leoflow@postgres:5432/leoflow?sslmode=disable
+      LEOFLOW_REDIS_URL: redis://redis:6379/0
+      LEOFLOW_AUTH_JWT_SECRET: dev-secret-change-me
+      # Seeds admin@leoflow.local with this password on first boot (dev only).
+      LEOFLOW_BOOTSTRAP_PASSWORD: admin
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+
 volumes:
   leoflow-pgdata:
   leoflow-redisdata:

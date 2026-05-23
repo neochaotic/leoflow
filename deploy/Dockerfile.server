@@ -1,0 +1,30 @@
+# Multi-stage build for the Leoflow control plane.
+#
+# The binary embeds the pinned Airflow 3.2.1 SPA (ADR 0017), so this single image
+# serves both the /api/v2 + /ui APIs and the UI. Build from the repository root:
+#   docker build -f deploy/Dockerfile.server -t leoflow-server .
+# Migrations are applied separately (see the migrate service in docker-compose).
+
+FROM golang:1.26-bookworm AS build
+WORKDIR /src
+
+# Cache module downloads.
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Build the static binary with version metadata stamped in.
+COPY . .
+ARG VERSION=dev
+ARG GIT_COMMIT=none
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w \
+      -X 'github.com/neochaotic/leoflow/internal/version.version=${VERSION}' \
+      -X 'github.com/neochaotic/leoflow/internal/version.gitCommit=${GIT_COMMIT}'" \
+    -o /out/leoflow-server ./cmd/leoflow-server
+
+# Minimal, non-root runtime.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/leoflow-server /leoflow-server
+EXPOSE 8080 9090
+USER nonroot:nonroot
+ENTRYPOINT ["/leoflow-server"]

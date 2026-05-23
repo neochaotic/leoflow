@@ -177,6 +177,25 @@ control plane (capped); everything else runs pod-per-task. Read
 
 ## Getting Started
 
+### Try it with the UI (one command)
+
+The full stack — Postgres, Redis, and the control plane with the **embedded
+Airflow 3.2.1 UI** — runs from a single Compose profile:
+
+```bash
+git clone https://github.com/neochaotic/leoflow
+cd leoflow
+docker compose --profile demo up --build
+```
+
+Then open **http://localhost:8080** and log in as **`admin@leoflow.local` / `admin`**.
+The server applies migrations, seeds the admin user, and serves the API (`/api/v2`),
+the internal UI API (`/ui/*`), and the React UI from one process (ADR 0017). Stop
+with `docker compose --profile demo down` (add `-v` to wipe data).
+
+> The pinned Airflow UI is a tactical MVP choice; a purpose-built Leoflow UI is
+> the long-term direction (ADR 0018). See `docs/ui-compatibility.md`.
+
 ### Local development
 
 ```bash
@@ -201,7 +220,7 @@ TOKEN=$(./bin/leoflow auth create-token --username admin@leoflow.local --passwor
 
 > **Two dev environments.** `make dev-up` runs Postgres + Redis as plain Docker containers on the host for a fast inner loop (control plane on the host). Full in-cluster execution — control plane and dependencies on a local Kubernetes cluster (k3d/kind) via the Helm chart, mirroring production and exercising real task pods — arrives with the e2e work in a later phase. Task execution is on Kubernetes only (ADR 0015); the host containers are dev dependencies, not the execution path.
 
-> The Airflow 3.2.x UI integration (pointing the UI at `/api/v2`) arrives in Phase 5; until then, use the Scalar API reference at `/docs`. The Helm chart and load tests are the remaining Phase 6 work.
+> The Airflow 3.2.1 UI ships embedded in the server and is served at `/` (Phase 5; see the one-command demo above and `docs/ui-compatibility.md`). The Scalar API reference is at `/docs`. The Helm chart and load tests are the remaining Phase 6 work.
 
 ## Honest Comparison
 

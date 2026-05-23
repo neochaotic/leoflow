@@ -74,3 +74,17 @@ In a later version (v2.x), Leoflow may ship its own UI optimized for the richer 
 - **Fork the Airflow UI.** Rejected for the MVP due to maintenance burden. Open option for v2.
 - **Build a new UI from scratch.** Rejected for the MVP due to time cost.
 - **Use a third-party UI (Argo UI, etc.).** Rejected because they do not match Airflow's mental model and would surprise users.
+
+## Revision History
+
+- **2026-05-23 (Phase 5).** The premise was refined during implementation. This
+  ADR assumed the Airflow 2.x model: a *separate* Airflow webserver pointed at the
+  Leoflow API via `AIRFLOW__API__BACKEND`, with `/api/v2` parity sufficient to
+  render the UI. Airflow 3.x invalidated that — the React SPA targets an internal,
+  non-public `/ui/*` API (AIP-84), not just `/api/v2`. Leoflow therefore **embeds
+  the pinned Airflow 3.2.1 SPA in `leoflow-server`** (single binary, no second
+  container) and **implements `/ui/*` pinned to 3.2.1**. The two-container
+  deployment and CORS notes above are superseded by the single-origin embed. See
+  ADR 0017 (asset serving), ADR 0018 (custom UI as the strategic north star), and
+  `docs/ui-compatibility.md` for the full learnings. The original decision —
+  reuse Airflow's UI rather than build one for the MVP — still holds.

@@ -91,6 +91,14 @@ func (f *fakeRunRepo) GetDagRun(_ context.Context, _, _, runID string) (domain.D
 	}
 	return domain.DagRun{}, ErrNotFound
 }
+func (f *fakeRunRepo) SetDagRunState(_ context.Context, _, _, runID, state string) error {
+	for i := range f.runs {
+		if f.runs[i].RunID == runID {
+			f.runs[i].State = domain.DagRunState(state)
+		}
+	}
+	return nil
+}
 func (f *fakeRunRepo) CreateDagRun(_ context.Context, _, dagID string, run domain.DagRun) (domain.DagRun, error) {
 	run.DagID = dagID
 	return run, nil
@@ -123,6 +131,25 @@ func dagOnlyServer(repo DagRepository) *gin.Engine {
 		CORSOrigins:   []string{"*"},
 		Dags:          repo,
 	})
+}
+
+func TestMarkDagRunState(t *testing.T) {
+	runs := &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1", State: domain.DagRunStateRunning}}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		DagRuns: runs,
+	})
+	rec := authGet(srv, http.MethodPatch, "/api/v2/dags/etl/dagRuns/r1", `{"state":"failed"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark run = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if runs.runs[0].State != domain.DagRunStateFailed {
+		t.Errorf("run state = %q, want failed", runs.runs[0].State)
+	}
+	if rec := authGet(srv, http.MethodPatch, "/api/v2/dags/etl/dagRuns/r1", `{"state":"banana"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid run state = %d, want 400", rec.Code)
+	}
 }
 
 func TestMarkTaskInstanceState(t *testing.T) {

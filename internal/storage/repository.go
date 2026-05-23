@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -282,6 +283,30 @@ func (r *Repository) resetTaskInstances(ctx context.Context, runID pgtype.UUID, 
 		cleared++
 	}
 	return cleared, nil
+}
+
+// SetDagRunState sets a DAG run's state directly, backing the UI's mark run
+// success/failed actions. Terminal states stamp ended_at; re-opening to a
+// non-terminal state clears it. started_at is preserved.
+func (r *Repository) SetDagRunState(ctx context.Context, tenant, dagID, runID, state string) error {
+	dag, err := r.resolveDag(ctx, tenant, dagID)
+	if err != nil {
+		return err
+	}
+	run, err := r.q.GetDagRun(ctx, queries.GetDagRunParams{DagID: dag.ID, RunID: runID})
+	if err != nil {
+		return mapNotFound(err)
+	}
+	ended := pgtype.Timestamptz{}
+	if domain.DagRunState(state).IsTerminal() {
+		ended = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+	}
+	if _, err := r.q.UpdateDagRunState(ctx, queries.UpdateDagRunStateParams{
+		ID: run.ID, State: queries.DagRunState(state), StartedAt: run.StartedAt, EndedAt: ended,
+	}); err != nil {
+		return fmt.Errorf("setting dag run state: %w", err)
+	}
+	return nil
 }
 
 // RecordTaskActionAudit logs a task-level action (clear, mark state) with the

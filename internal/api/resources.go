@@ -33,6 +33,7 @@ type DagRunRepository interface {
 	ListDagRuns(ctx context.Context, tenant, dagID string, limit, offset int) ([]domain.DagRun, int, error)
 	GetDagRun(ctx context.Context, tenant, dagID, runID string) (domain.DagRun, error)
 	CreateDagRun(ctx context.Context, tenant, dagID string, run domain.DagRun) (domain.DagRun, error)
+	SetDagRunState(ctx context.Context, tenant, dagID, runID, state string) error
 }
 
 // TaskInstanceRepository reads task instances, clears them for re-run, and sets
@@ -214,6 +215,50 @@ func listRunsFiltered(c *gin.Context, repo DagRunRepository, states []string, li
 
 // maxRunScan caps the in-memory state-filter scan of a DAG's runs.
 const maxRunScan = 10000
+
+// patchDagRunHandler implements PATCH /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}:
+// the UI's mark-run-success/failed action. It sets the run state (and audits the
+// action with the acting user); note updates are a follow-up.
+func patchDagRunHandler(repo DagRunRepository, audit AuditWriter) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body struct {
+			State string `json:"state"`
+			Note  string `json:"note"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
+			return
+		}
+		runID := c.Param("dag_run_id")
+		if body.State != "" {
+			if !validRunState(body.State) {
+				AbortProblem(c, http.StatusBadRequest, "bad request", "state must be queued, running, success, or failed")
+				return
+			}
+			if err := repo.SetDagRunState(c.Request.Context(), tenantOf(c), c.Param("dag_id"), runID, body.State); err != nil {
+				handleRepoError(c, err)
+				return
+			}
+			recordTaskAudit(c, audit, "dagrun.mark."+body.State, runID, "", 0)
+		}
+		run, err := repo.GetDagRun(c.Request.Context(), tenantOf(c), c.Param("dag_id"), runID)
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, toDagRunDTO(run))
+	}
+}
+
+// validRunState reports whether s is a state the UI may set a run to directly.
+func validRunState(s string) bool {
+	switch domain.DagRunState(s) {
+	case domain.DagRunStateQueued, domain.DagRunStateRunning, domain.DagRunStateSuccess, domain.DagRunStateFailed:
+		return true
+	default:
+		return false
+	}
+}
 
 func listDagRunsHandler(repo DagRunRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -617,6 +662,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		g.GET("", RequirePermission("read", "dag_run"), listDagRunsHandler(deps.DagRuns))
 		g.POST("", RequirePermission("execute", "dag"), createDagRunHandler(deps.DagRuns, deps.Audit))
 		g.GET("/:dag_run_id", RequirePermission("read", "dag_run"), getDagRunHandler(deps.DagRuns))
+		g.PATCH("/:dag_run_id", RequirePermission("write", "dag_run"), patchDagRunHandler(deps.DagRuns, deps.Audit))
 	}
 	if deps.Tasks != nil {
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances",

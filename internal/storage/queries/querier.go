@@ -13,6 +13,7 @@ import (
 type Querier interface {
 	AssignUserRole(ctx context.Context, arg AssignUserRoleParams) error
 	CountAuditLogs(ctx context.Context, arg CountAuditLogsParams) (int64, error)
+	CountConnections(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountDagRunStatesInWindow(ctx context.Context, arg CountDagRunStatesInWindowParams) ([]CountDagRunStatesInWindowRow, error)
 	CountDagRunsByDag(ctx context.Context, dagID pgtype.UUID) (int64, error)
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
@@ -26,10 +27,12 @@ type Querier interface {
 	CreateScheduledRunByDagID(ctx context.Context, arg CreateScheduledRunByDagIDParams) error
 	CreateTaskInstance(ctx context.Context, arg CreateTaskInstanceParams) (TaskInstance, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.UUID, error)
+	DeleteConnection(ctx context.Context, arg DeleteConnectionParams) (int64, error)
 	DeleteDag(ctx context.Context, arg DeleteDagParams) (int64, error)
 	DeleteExpiredXComIndex(ctx context.Context) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInstanceIfActiveParams) error
+	GetConnection(ctx context.Context, arg GetConnectionParams) (GetConnectionRow, error)
 	GetCurrentDagSpec(ctx context.Context, arg GetCurrentDagSpecParams) ([]byte, error)
 	GetDagByDagID(ctx context.Context, arg GetDagByDagIDParams) (Dag, error)
 	GetDagRun(ctx context.Context, arg GetDagRunParams) (DagRun, error)
@@ -49,6 +52,7 @@ type Querier interface {
 	LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsParams) ([]LatestRunsForDagsRow, error)
 	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
+	ListConnections(ctx context.Context, arg ListConnectionsParams) ([]ListConnectionsRow, error)
 	ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagParams) ([]DagRun, error)
 	ListDagVersions(ctx context.Context, arg ListDagVersionsParams) ([]ListDagVersionsRow, error)
 	ListDags(ctx context.Context, arg ListDagsParams) ([]Dag, error)
@@ -74,6 +78,7 @@ type Querier interface {
 	UpdateDagRunState(ctx context.Context, arg UpdateDagRunStateParams) (DagRun, error)
 	UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskInstanceStateParams) (TaskInstance, error)
 	UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error
+	UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) error
 }

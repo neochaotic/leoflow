@@ -17,9 +17,16 @@ import (
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
+// noopDispatcher accepts any dispatch, so the root task reaches queued (an
+// executor exists). Without a dispatcher the scheduler now fails undispatchable
+// tasks fast (#50), which is a config gap, not the path this test exercises.
+type noopDispatcher struct{}
+
+func (noopDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) error { return nil }
+
 // TestEndToEndPushTriggerSchedule exercises the Phase 2 vertical slice against a
 // real Postgres: register a version, create a run, and tick the scheduler until
-// the root task reaches queued (no executor, so it stops there).
+// the root task reaches queued (dispatched to an executor).
 func TestEndToEndPushTriggerSchedule(t *testing.T) {
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
@@ -35,6 +42,7 @@ func TestEndToEndPushTriggerSchedule(t *testing.T) {
 	repo := storage.NewRepository(pg)
 	sched := scheduler.NewScheduler(storage.NewSchedulerStore(pg),
 		slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+	sched.SetDispatcher(noopDispatcher{})
 
 	dagID := fmt.Sprintf("e2e_%d", time.Now().UnixNano())
 	spec := domain.DAGSpec{

@@ -20,6 +20,10 @@ type ServerConfig struct {
 	Executor      ExecutorSection      `mapstructure:"executor"`
 	Logs          LogsSection          `mapstructure:"logs"`
 	Observability ObservabilitySection `mapstructure:"observability"`
+	// SecretKey (LEOFLOW_SECRET_KEY) is the 32-byte key encrypting connection
+	// secrets at rest (ADR 0019). Raw 32 chars, 64-char hex, or base64. Empty
+	// disables connection writes.
+	SecretKey string `mapstructure:"secret_key"`
 }
 
 // LogsSection configures task log shipping.

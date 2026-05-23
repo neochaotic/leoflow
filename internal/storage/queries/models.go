@@ -163,6 +163,22 @@ type AuditLog struct {
 	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
 }
 
+type Connection struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	ConnID      string             `json:"conn_id"`
+	ConnType    string             `json:"conn_type"`
+	Host        *string            `json:"host"`
+	ConnSchema  *string            `json:"conn_schema"`
+	Login       *string            `json:"login"`
+	Password    *string            `json:"password"`
+	Port        *int32             `json:"port"`
+	Extra       *string            `json:"extra"`
+	Description *string            `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Dag struct {
 	ID               pgtype.UUID        `json:"id"`
 	TenantID         pgtype.UUID        `json:"tenant_id"`

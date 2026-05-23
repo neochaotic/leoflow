@@ -12,6 +12,7 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/secrets"
 	"github.com/neochaotic/leoflow/internal/storage/queries"
 )
 
@@ -20,13 +21,18 @@ const defaultMaxActiveRuns = 16
 // Repository implements the API resource and auth user-store interfaces over
 // Postgres using the sqlc-generated query set.
 type Repository struct {
-	q *queries.Queries
+	q      *queries.Queries
+	cipher secrets.Cipher
 }
 
 // NewRepository builds a Repository backed by the given Postgres connection.
 func NewRepository(pg *Postgres) *Repository {
 	return &Repository{q: pg.Queries}
 }
+
+// SetCipher attaches the encryption cipher used for connection secrets (ADR
+// 0019). Without it, connection writes fail rather than storing plaintext.
+func (r *Repository) SetCipher(c secrets.Cipher) { r.cipher = c }
 
 func toInt32(n int) int32 {
 	switch {
@@ -618,4 +624,136 @@ func (r *Repository) DeleteVariable(ctx context.Context, tenant, key string) err
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+// encOrEmpty encrypts a non-empty value, returning a nil pointer for empty input.
+func (r *Repository) encOrEmpty(plain string) (*string, error) {
+	if plain == "" {
+		return nil, nil //nolint:nilnil // empty secret maps to a NULL column; no value and no error is correct
+	}
+	enc, err := r.cipher.Encrypt(plain)
+	if err != nil {
+		return nil, err
+	}
+	return &enc, nil
+}
+
+// SetConnection creates or updates a connection, encrypting password and extra
+// at rest. It fails if no encryption cipher is configured (never stores a
+// credential in plaintext — ADR 0019).
+func (r *Repository) SetConnection(ctx context.Context, tenant string, c domain.Connection) error {
+	if r.cipher == nil {
+		return secrets.ErrNoKey
+	}
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	encPass, err := r.encOrEmpty(c.Password)
+	if err != nil {
+		return fmt.Errorf("encrypting password: %w", err)
+	}
+	encExtra, err := r.encOrEmpty(c.Extra)
+	if err != nil {
+		return fmt.Errorf("encrypting extra: %w", err)
+	}
+	var port *int32
+	if c.Port != nil {
+		p := toInt32(*c.Port)
+		port = &p
+	}
+	return r.q.UpsertConnection(ctx, queries.UpsertConnectionParams{
+		TenantID: tid, ConnID: c.ConnID, ConnType: c.ConnType,
+		Host: strPtr(c.Host), ConnSchema: strPtr(c.Schema), Login: strPtr(c.Login),
+		Password: encPass, Port: port, Extra: encExtra, Description: strPtr(c.Description),
+	})
+}
+
+// GetConnection returns a connection with extra decrypted; the password is not
+// returned (write-only). Returns ErrNotFound when absent.
+func (r *Repository) GetConnection(ctx context.Context, tenant, connID string) (domain.Connection, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return domain.Connection{}, err
+	}
+	row, err := r.q.GetConnection(ctx, queries.GetConnectionParams{TenantID: tid, ConnID: connID})
+	if err != nil {
+		return domain.Connection{}, mapNotFound(err)
+	}
+	extra, err := r.decryptExtra(row.Extra)
+	if err != nil {
+		return domain.Connection{}, err
+	}
+	return domain.Connection{
+		ConnID: row.ConnID, ConnType: row.ConnType, Host: strOrEmpty(row.Host),
+		Schema: strOrEmpty(row.ConnSchema), Login: strOrEmpty(row.Login),
+		Port: int32PtrToInt(row.Port), Extra: extra, Description: strOrEmpty(row.Description),
+	}, nil
+}
+
+// ListConnections returns a page of connections (no passwords) and the total.
+func (r *Repository) ListConnections(ctx context.Context, tenant string, limit, offset int) ([]domain.Connection, int, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.q.ListConnections(ctx, queries.ListConnectionsParams{TenantID: tid, Limit: toInt32(limit), Offset: toInt32(offset)})
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing connections: %w", err)
+	}
+	total, err := r.q.CountConnections(ctx, tid)
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting connections: %w", err)
+	}
+	out := make([]domain.Connection, 0, len(rows))
+	for _, row := range rows {
+		extra, derr := r.decryptExtra(row.Extra)
+		if derr != nil {
+			return nil, 0, derr
+		}
+		out = append(out, domain.Connection{
+			ConnID: row.ConnID, ConnType: row.ConnType, Host: strOrEmpty(row.Host),
+			Schema: strOrEmpty(row.ConnSchema), Login: strOrEmpty(row.Login),
+			Port: int32PtrToInt(row.Port), Extra: extra, Description: strOrEmpty(row.Description),
+		})
+	}
+	return out, int(total), nil
+}
+
+// decryptExtra decrypts a stored extra blob, tolerating a nil cipher (returns
+// empty) and an empty value.
+func (r *Repository) decryptExtra(enc *string) (string, error) {
+	if enc == nil || *enc == "" || r.cipher == nil {
+		return "", nil
+	}
+	plain, err := r.cipher.Decrypt(*enc)
+	if err != nil {
+		return "", fmt.Errorf("decrypting extra: %w", err)
+	}
+	return plain, nil
+}
+
+// DeleteConnection removes a connection, returning ErrNotFound when none matched.
+func (r *Repository) DeleteConnection(ctx context.Context, tenant, connID string) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	rows, err := r.q.DeleteConnection(ctx, queries.DeleteConnectionParams{TenantID: tid, ConnID: connID})
+	if err != nil {
+		return fmt.Errorf("deleting connection: %w", err)
+	}
+	if rows == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// int32PtrToInt converts a nullable int32 column to a *int.
+func int32PtrToInt(p *int32) *int {
+	if p == nil {
+		return nil
+	}
+	v := int(*p)
+	return &v
 }

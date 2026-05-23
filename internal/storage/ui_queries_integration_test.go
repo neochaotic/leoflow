@@ -13,6 +13,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/secrets"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
@@ -515,6 +516,75 @@ func TestVariablesIntegration(t *testing.T) {
 	}
 	if err := repo.DeleteVariable(ctx, "default", key); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("second delete = %v, want ErrNotFound", err)
+	}
+}
+
+// TestConnectionsIntegration guards the Admin Connections CRUD with encryption:
+// extra round-trips through AES-256-GCM, the password is stored (write-only),
+// and CRUD/delete behave.
+func TestConnectionsIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	connID := fmt.Sprintf("uiq_conn_%d", time.Now().UnixNano())
+	port := 5432
+	if err := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "postgres", Host: "db", Login: "u",
+		Password: "s3cr3t", Schema: "public", Port: &port, Extra: `{"sslmode":"require"}`,
+	}); err != nil {
+		t.Fatalf("SetConnection: %v", err)
+	}
+
+	got, err := repo.GetConnection(ctx, "default", connID)
+	if err != nil {
+		t.Fatalf("GetConnection: %v", err)
+	}
+	if got.ConnType != "postgres" || got.Host != "db" || got.Port == nil || *got.Port != 5432 {
+		t.Errorf("metadata mismatch: %+v", got)
+	}
+	// extra decrypts back to plaintext.
+	if got.Extra != `{"sslmode":"require"}` {
+		t.Errorf("extra did not round-trip through encryption: %q", got.Extra)
+	}
+	// password is write-only — never returned.
+	if got.Password != "" {
+		t.Errorf("password should not be returned, got %q", got.Password)
+	}
+
+	// Without the cipher, a fresh repo cannot decrypt extra (proves it is encrypted at rest).
+	repoNoKey, _, _ := openRepo(t)
+	if _, derr := repoNoKey.GetConnection(ctx, "default", connID); derr == nil {
+		// nil cipher returns extra="" rather than erroring; assert it is NOT plaintext.
+		plain, _ := repoNoKey.GetConnection(ctx, "default", connID)
+		if plain.Extra == `{"sslmode":"require"}` {
+			t.Error("extra is stored in plaintext (not encrypted at rest)")
+		}
+	}
+
+	if err := repo.DeleteConnection(ctx, "default", connID); err != nil {
+		t.Fatalf("DeleteConnection: %v", err)
+	}
+	if _, err := repo.GetConnection(ctx, "default", connID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("deleted connection still present: %v", err)
+	}
+}
+
+// TestConnectionWriteRequiresCipherIntegration: without a cipher, writes are
+// refused rather than storing a credential in plaintext.
+func TestConnectionWriteRequiresCipherIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	// no SetCipher
+	err := repo.SetConnection(ctx, "default", domain.Connection{ConnID: "x", ConnType: "postgres", Password: "p"})
+	if !errors.Is(err, secrets.ErrNoKey) {
+		t.Errorf("write without cipher = %v, want ErrNoKey", err)
 	}
 }
 

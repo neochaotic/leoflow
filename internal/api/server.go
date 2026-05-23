@@ -51,6 +51,7 @@ type Dependencies struct {
 	DashboardStats DashboardStatsReader
 	AuditLog       AuditLogReader
 	Variables      VariableStore
+	Connections    ConnectionStore
 
 	// SchedulerHealth reports the scheduler's heartbeat for /monitor/health.
 	// When nil the component reports healthy (single-process role assumption).
@@ -94,6 +95,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIDashboard(r, deps.DashboardStats)
 	registerUIAudit(r, deps.AuditLog)
 	registerUIVariables(r, deps.Variables)
+	registerUIConnections(r, deps.Connections)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

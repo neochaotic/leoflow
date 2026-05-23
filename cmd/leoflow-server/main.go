@@ -30,6 +30,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/logs"
 	"github.com/neochaotic/leoflow/internal/observability"
 	"github.com/neochaotic/leoflow/internal/scheduler"
+	"github.com/neochaotic/leoflow/internal/secrets"
 	"github.com/neochaotic/leoflow/internal/storage"
 	"github.com/neochaotic/leoflow/internal/ui"
 	"github.com/neochaotic/leoflow/internal/xcom"
@@ -84,6 +85,9 @@ func run() error {
 	}()
 
 	repo := storage.NewRepository(pg)
+	if cerr := configureSecretCipher(repo, cfg.SecretKey, tel.Logger); cerr != nil {
+		return cerr
+	}
 	authn := auth.NewJWTAuthenticator(repo, cfg.Auth.JWT.Secret, time.Duration(cfg.Auth.JWT.TokenTTLSeconds)*time.Second)
 	execStore := storage.NewExecutionStore(pg)
 	xcomBackend := xcom.NewRedisBackend(rd.Client)
@@ -138,6 +142,7 @@ func run() error {
 		DashboardStats:               repo,
 		AuditLog:                     repo,
 		Variables:                    repo,
+		Connections:                  repo,
 		SchedulerHealth:              schedulerHealth,
 		UI:                           ui.New(),
 	})
@@ -150,21 +155,45 @@ func run() error {
 	go serve(metricsSrv, errCh)
 	tel.Logger.Info("leoflow-server started", "http_addr", cfg.Server.HTTPAddr, "metrics_addr", cfg.Server.MetricsAddr)
 
+	return awaitShutdown(ctx, errCh, tel.Logger, apiSrv, metricsSrv)
+}
+
+// awaitShutdown blocks until a server errors or the context is canceled, then
+// gracefully shuts the HTTP servers down.
+func awaitShutdown(ctx context.Context, errCh <-chan error, logger *slog.Logger, servers ...*http.Server) error {
 	select {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		tel.Logger.Info("shutting down")
+		logger.Info("shutting down")
+		// Shutdown deliberately uses a fresh context; the inherited ctx is already canceled.
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if serr := apiSrv.Shutdown(shutCtx); serr != nil {
-			tel.Logger.Error("api shutdown", "error", serr)
-		}
-		if serr := metricsSrv.Shutdown(shutCtx); serr != nil {
-			tel.Logger.Error("metrics shutdown", "error", serr)
+		for _, srv := range servers {
+			if serr := srv.Shutdown(shutCtx); serr != nil { //nolint:contextcheck // fresh shutdown context by design
+				logger.Error("server shutdown", "addr", srv.Addr, "error", serr)
+			}
 		}
 		return nil
 	}
+}
+
+// configureSecretCipher wires the AES-256-GCM cipher for connection secrets
+// (ADR 0019). Without a key the connection store stays plaintext-incapable:
+// writes are refused, never silently stored in the clear.
+func configureSecretCipher(repo *storage.Repository, secretKey string, logger *slog.Logger) error {
+	key, kerr := secrets.ParseKey(secretKey)
+	if kerr != nil {
+		logger.Warn("no LEOFLOW_SECRET_KEY set; connection management disabled (Variables still work)")
+		return nil //nolint:nilerr // a missing/unusable key is non-fatal: run without connection encryption
+	}
+	cipher, cerr := secrets.NewAESGCM(key)
+	if cerr != nil {
+		return fmt.Errorf("building secret cipher: %w", cerr)
+	}
+	repo.SetCipher(cipher)
+	logger.Info("connection secret encryption enabled (AES-256-GCM)")
+	return nil
 }
 
 func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.Logger) error {

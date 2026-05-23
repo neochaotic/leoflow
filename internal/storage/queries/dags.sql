@@ -1,11 +1,13 @@
 -- name: UpsertDag :one
-INSERT INTO dags (tenant_id, dag_id, description, owner, schedule, schedule_timezone, max_active_runs, catchup)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO dags (tenant_id, dag_id, description, owner, tags, schedule, schedule_timezone, start_date, max_active_runs, catchup)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (tenant_id, dag_id) DO UPDATE
 SET description = EXCLUDED.description,
     owner = EXCLUDED.owner,
+    tags = EXCLUDED.tags,
     schedule = EXCLUDED.schedule,
     schedule_timezone = EXCLUDED.schedule_timezone,
+    start_date = EXCLUDED.start_date,
     max_active_runs = EXCLUDED.max_active_runs,
     catchup = EXCLUDED.catchup,
     updated_at = now()

@@ -5,15 +5,18 @@ import "time"
 // DAG is a registered DAG with its scheduling metadata (distinct from DAGSpec,
 // which is the compiled artifact).
 type DAG struct {
-	DagID         string
-	Description   string
-	Owner         string
-	Tags          []string
-	Schedule      *string
-	IsPaused      bool
-	IsActive      bool
-	MaxActiveRuns int
-	Catchup       bool
+	DagID          string
+	Description    string
+	Owner          string
+	Tags           []string
+	Schedule       *string
+	ScheduleTZ     string
+	StartDate      *time.Time
+	IsPaused       bool
+	IsActive       bool
+	MaxActiveRuns  int
+	Catchup        bool
+	LastParsedTime *time.Time
 }
 
 // DagVersion is a registered version of a DAG. VersionNumber is the 1-based

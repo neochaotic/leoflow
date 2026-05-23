@@ -711,3 +711,33 @@ func TestReportStateRecordsResultIntegration(t *testing.T) {
 		t.Errorf("success report should set ended_at")
 	}
 }
+
+// TestRegisterDagPersistsTagsIntegration guards that push stores the spec's tags
+// and start_date (UpsertDag used to drop them, leaving DAG details blank — #—).
+func TestRegisterDagPersistsTagsIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_tags_%d", time.Now().UnixNano())
+	spec := domain.DAGSpec{
+		SchemaVersion: "1.0", DagID: dagID, DagVersion: "v1", Image: "img:v1",
+		Owner: "data-eng", Tags: []string{"example", "etl"}, StartDate: "2026-01-01T00:00:00Z",
+		Tasks: []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}},
+	}
+	hash, _ := spec.CanonicalHash()
+	if created, rerr := repo.RegisterDagVersion(ctx, "default", spec, hash); rerr != nil || !created {
+		t.Fatalf("register: created=%v err=%v", created, rerr)
+	}
+	got, err := repo.GetDag(ctx, "default", dagID)
+	if err != nil {
+		t.Fatalf("GetDag: %v", err)
+	}
+	if len(got.Tags) != 2 || got.Tags[0] != "example" {
+		t.Errorf("tags not persisted: %v", got.Tags)
+	}
+	if got.Owner != "data-eng" {
+		t.Errorf("owner not persisted: %q", got.Owner)
+	}
+	if got.StartDate == nil {
+		t.Errorf("start_date not persisted")
+	}
+	_ = repo.DeleteDag(ctx, "default", dagID)
+}

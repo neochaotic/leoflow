@@ -188,6 +188,15 @@ func toTaskInstanceDTO(ti domain.TaskInstance) taskInstanceDTO {
 		state = &s
 	}
 	op := strPtrOrNil(ti.Operator)
+	// Defaults so the task panel never shows blank fields for values every task
+	// has (Airflow shows queue "default", priority_weight, the run user).
+	queue := "default"
+	prio := 1
+	unixname := "airflow"
+	hostname := ti.Hostname
+	if hostname == "" {
+		hostname = "unknown"
+	}
 	return taskInstanceDTO{
 		ID:               synthID(ti.RunID, ti.TaskID, ti.MapIndex),
 		TaskID:           ti.TaskID,
@@ -202,9 +211,12 @@ func toTaskInstanceDTO(ti domain.TaskInstance) taskInstanceDTO {
 		MaxTries:         ti.MaxTries,
 		TaskDisplayName:  ti.TaskID,
 		DagDisplayName:   ti.DagID,
-		Hostname:         strPtrOrNil(ti.Hostname),
+		Hostname:         &hostname,
+		Unixname:         &unixname,
 		Pool:             "default_pool",
 		PoolSlots:        1,
+		Queue:            &queue,
+		PriorityWeight:   &prio,
 		Operator:         op,
 		OperatorName:     op,
 		ExecutorConfig:   "{}",

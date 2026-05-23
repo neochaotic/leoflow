@@ -412,13 +412,15 @@ func (q *Queries) SetDagPaused(ctx context.Context, arg SetDagPausedParams) (Dag
 }
 
 const upsertDag = `-- name: UpsertDag :one
-INSERT INTO dags (tenant_id, dag_id, description, owner, schedule, schedule_timezone, max_active_runs, catchup)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO dags (tenant_id, dag_id, description, owner, tags, schedule, schedule_timezone, start_date, max_active_runs, catchup)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (tenant_id, dag_id) DO UPDATE
 SET description = EXCLUDED.description,
     owner = EXCLUDED.owner,
+    tags = EXCLUDED.tags,
     schedule = EXCLUDED.schedule,
     schedule_timezone = EXCLUDED.schedule_timezone,
+    start_date = EXCLUDED.start_date,
     max_active_runs = EXCLUDED.max_active_runs,
     catchup = EXCLUDED.catchup,
     updated_at = now()
@@ -426,14 +428,16 @@ RETURNING id, tenant_id, dag_id, description, is_paused, is_active, owner, tags,
 `
 
 type UpsertDagParams struct {
-	TenantID         pgtype.UUID `json:"tenant_id"`
-	DagID            string      `json:"dag_id"`
-	Description      *string     `json:"description"`
-	Owner            *string     `json:"owner"`
-	Schedule         *string     `json:"schedule"`
-	ScheduleTimezone *string     `json:"schedule_timezone"`
-	MaxActiveRuns    int32       `json:"max_active_runs"`
-	Catchup          bool        `json:"catchup"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	DagID            string             `json:"dag_id"`
+	Description      *string            `json:"description"`
+	Owner            *string            `json:"owner"`
+	Tags             []string           `json:"tags"`
+	Schedule         *string            `json:"schedule"`
+	ScheduleTimezone *string            `json:"schedule_timezone"`
+	StartDate        pgtype.Timestamptz `json:"start_date"`
+	MaxActiveRuns    int32              `json:"max_active_runs"`
+	Catchup          bool               `json:"catchup"`
 }
 
 func (q *Queries) UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error) {
@@ -442,8 +446,10 @@ func (q *Queries) UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, erro
 		arg.DagID,
 		arg.Description,
 		arg.Owner,
+		arg.Tags,
 		arg.Schedule,
 		arg.ScheduleTimezone,
+		arg.StartDate,
 		arg.MaxActiveRuns,
 		arg.Catchup,
 	)

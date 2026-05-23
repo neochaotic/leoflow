@@ -73,15 +73,18 @@ func timeFromAny(v any) *time.Time {
 
 func mapDag(d queries.Dag) domain.DAG {
 	return domain.DAG{
-		DagID:         d.DagID,
-		Description:   strOrEmpty(d.Description),
-		Owner:         strOrEmpty(d.Owner),
-		Tags:          d.Tags,
-		Schedule:      d.Schedule,
-		IsPaused:      d.IsPaused,
-		IsActive:      d.IsActive,
-		MaxActiveRuns: int(d.MaxActiveRuns),
-		Catchup:       d.Catchup,
+		DagID:          d.DagID,
+		Description:    strOrEmpty(d.Description),
+		Owner:          strOrEmpty(d.Owner),
+		Tags:           d.Tags,
+		Schedule:       d.Schedule,
+		ScheduleTZ:     strOrEmpty(d.ScheduleTimezone),
+		StartDate:      timePtr(d.StartDate),
+		IsPaused:       d.IsPaused,
+		IsActive:       d.IsActive,
+		MaxActiveRuns:  int(d.MaxActiveRuns),
+		Catchup:        d.Catchup,
+		LastParsedTime: timePtr(d.UpdatedAt),
 	}
 }
 
@@ -115,4 +118,18 @@ func mapTaskInstance(ti queries.TaskInstance, dagID, runID string) domain.TaskIn
 		Hostname:  strOrEmpty(ti.Hostname),
 		Note:      strOrEmpty(ti.Note),
 	}
+}
+
+// parseTimestamptz parses an RFC3339 or date-only string into a Timestamptz,
+// returning the zero (NULL) value for an empty or unparseable input.
+func parseTimestamptz(s string) pgtype.Timestamptz {
+	if s == "" {
+		return pgtype.Timestamptz{}
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return pgtype.Timestamptz{Time: t, Valid: true}
+		}
+	}
+	return pgtype.Timestamptz{}
 }

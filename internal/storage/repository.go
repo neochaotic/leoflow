@@ -401,8 +401,10 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 		DagID:            spec.DagID,
 		Description:      strPtr(spec.Description),
 		Owner:            strPtr(spec.Owner),
+		Tags:             spec.Tags,
 		Schedule:         spec.Schedule,
 		ScheduleTimezone: strPtr(spec.ScheduleTZ),
+		StartDate:        parseTimestamptz(spec.StartDate),
 		MaxActiveRuns:    toInt32(maxRuns),
 		Catchup:          spec.Catchup,
 	})

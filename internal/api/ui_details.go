@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -124,31 +125,66 @@ func toDagDetailsDTO(d domain.DAG) dagDetailsDTO {
 	for _, t := range d.Tags {
 		tags = append(tags, dagTagDTO{Name: t, DagID: d.DagID})
 	}
-	owners := []string{}
-	if d.Owner != "" {
-		owners = append(owners, d.Owner)
+	// A DAG always has an owner in the UI; default to "airflow" (Airflow's
+	// default) when the spec declares none, so the field is never blank.
+	owner := d.Owner
+	if owner == "" {
+		owner = "airflow"
 	}
 	maxRuns := d.MaxActiveRuns
+	summary := d.Schedule
+	if summary == nil {
+		s := "Never, external triggers only"
+		summary = &s
+	}
+	tz := d.ScheduleTZ
+	if tz == "" {
+		tz = "UTC"
+	}
+	bundle := "leoflow"
+	fileloc := d.DagID + "/dag.py"
+	emptyObj := json.RawMessage("{}")
 	return dagDetailsDTO{
 		DagID:                d.DagID,
 		DagDisplayName:       d.DagID,
 		IsPaused:             d.IsPaused,
 		IsStale:              !d.IsActive,
+		LastParsedTime:       rfc3339Ptr(d.LastParsedTime),
+		LastParsed:           rfc3339Ptr(d.LastParsedTime),
+		BundleName:           &bundle,
+		RelativeFileloc:      &fileloc,
 		Description:          strPtrOrNil(d.Description),
-		TimetableSummary:     d.Schedule,
+		TimetableSummary:     summary,
 		TimetableDescription: timetableDescription(d.Schedule),
 		TimetablePartitioned: false,
 		Tags:                 tags,
 		MaxActiveTasks:       defaultMaxActiveTasks,
 		MaxActiveRuns:        &maxRuns,
 		AllowedRunTypes:      []string{"manual", "scheduled"},
-		Owners:               owners,
+		Owners:               []string{owner},
 		Catchup:              d.Catchup,
+		StartDate:            rfc3339Ptr(d.StartDate),
+		IsPausedUponCreation: boolPtr(false),
+		Params:               &emptyObj,
+		DefaultArgs:          &emptyObj,
+		Timezone:             &tz,
 		Concurrency:          defaultMaxActiveTasks,
-		Fileloc:              "",
-		FileToken:            "",
+		Fileloc:              fileloc,
+		FileToken:            synthID(d.DagID, "fileloc"),
 	}
 }
+
+// rfc3339Ptr formats a time pointer as an RFC3339 string pointer (nil-safe).
+func rfc3339Ptr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.UTC().Format(time.RFC3339)
+	return &s
+}
+
+// boolPtr returns a pointer to b.
+func boolPtr(b bool) *bool { return &b }
 
 // dagDetailsHandler implements GET /api/v2/dags/{dag_id}/details. It populates
 // latest_dag_version from the version lister — the Graph view reads the

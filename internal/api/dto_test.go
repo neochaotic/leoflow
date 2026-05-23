@@ -57,6 +57,15 @@ func TestToTaskInstanceDTO(t *testing.T) {
 	}
 }
 
+func TestToTaskInstanceDTORenderedFieldsNeverNull(t *testing.T) {
+	// The task Details/Rendered-Templates views call Object.keys on rendered_fields,
+	// so it must serialize as an object, never null/absent.
+	ti := toTaskInstanceDTO(domain.TaskInstance{DagID: "etl", RunID: "r1", TaskID: "extract"})
+	if string(ti.RenderedFields) != "{}" {
+		t.Errorf("rendered_fields = %q, want {}", string(ti.RenderedFields))
+	}
+}
+
 func TestToTaskInstanceDTOStateTimestamps(t *testing.T) {
 	scheduled := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
 	queued := time.Date(2026, 5, 23, 10, 0, 5, 0, time.UTC)

@@ -139,6 +139,12 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 		return
 	}
 	body := strings.ReplaceAll(string(data), baseHrefPlaceholder, basePath)
+	// The bundle's main <script src> is rewritten to ./static/assets/, but its
+	// modulepreload hints keep a bare ./assets/ prefix that we do not serve under
+	// (it collides with the SPA's own /assets route). Point those preloads at the
+	// served /static/assets path so they resolve to JS instead of the index.html
+	// SPA fallback (a text/html MIME type that breaks module preloading).
+	body = strings.ReplaceAll(body, `"./assets/`, `"./static/assets/`)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)

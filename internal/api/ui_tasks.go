@@ -16,6 +16,15 @@ type classRefDTO struct {
 	ClassName  string  `json:"class_name"`
 }
 
+// timeDeltaDTO is Airflow's serialized datetime.timedelta. The Tasks Details
+// view calls Object.keys on retry_delay, so it must be an object, never null.
+type timeDeltaDTO struct {
+	Type         string `json:"__type"` //nolint:tagliatelle // Airflow API contract field name
+	Days         int    `json:"days"`
+	Seconds      int    `json:"seconds"`
+	Microseconds int    `json:"microseconds"`
+}
+
 // taskResponseDTO is the Airflow 3.2.1 TaskResponse. Leoflow models a small
 // subset of operator attributes, so the rest are sensible defaults / null — the
 // Tasks tab renders the task_id, operator, trigger rule, retries, and downstream
@@ -30,7 +39,7 @@ type taskResponseDTO struct {
 	DependsOnPast           bool            `json:"depends_on_past"`
 	WaitForDownstream       bool            `json:"wait_for_downstream"`
 	Retries                 int             `json:"retries"`
-	RetryDelay              *string         `json:"retry_delay"`
+	RetryDelay              timeDeltaDTO    `json:"retry_delay"`
 	RetryExponentialBackoff bool            `json:"retry_exponential_backoff"`
 	DownstreamTaskIDs       []string        `json:"downstream_task_ids"`
 	IsMapped                bool            `json:"is_mapped"`
@@ -91,13 +100,16 @@ func toTaskResponse(spec domain.DAGSpec, t domain.TaskSpec) taskResponseDTO {
 		retries = *t.Retries
 	}
 	return taskResponseDTO{
-		TaskID:            t.TaskID,
-		TaskDisplayName:   t.TaskID,
-		Owner:             strPtrOrNil(spec.Owner),
-		OperatorName:      operatorName(t.Type),
-		ClassRef:          classRefDTO{ClassName: operatorName(t.Type)},
-		TriggerRule:       tr,
-		Retries:           retries,
+		TaskID:          t.TaskID,
+		TaskDisplayName: t.TaskID,
+		Owner:           strPtrOrNil(spec.Owner),
+		OperatorName:    operatorName(t.Type),
+		ClassRef:        classRefDTO{ClassName: operatorName(t.Type)},
+		TriggerRule:     tr,
+		Retries:         retries,
+		// Airflow's default retry_delay is 300s; emit it as a TimeDelta object
+		// (the Tasks Details view calls Object.keys on it, so it must not be null).
+		RetryDelay:        timeDeltaDTO{Type: "TimeDelta", Seconds: 300},
 		DownstreamTaskIDs: downstreamIDs(spec.Tasks, t.TaskID),
 		Pool:              "default_pool",
 		PoolSlots:         1,

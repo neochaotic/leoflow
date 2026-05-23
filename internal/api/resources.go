@@ -309,6 +309,17 @@ func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xco
 				return
 			}
 		}
+		if action == "links" {
+			// The task Details view reads g.extra_links and calls Object.keys on it,
+			// so the response must carry an extra_links object (a bare {} or a 400
+			// crashes the view). We expose no operator links, so it is empty.
+			c.JSON(http.StatusOK, gin.H{"extra_links": gin.H{}})
+			return
+		}
+		if action == "tries" || strings.HasPrefix(action, "tries/") {
+			serveTaskTries(c, tasks, runs, versions, strings.TrimPrefix(action, "tries"))
+			return
+		}
 		mapIndex, err := strconv.Atoi(action)
 		if err != nil {
 			AbortProblem(c, http.StatusBadRequest, "bad request", "map_index must be an integer")
@@ -360,6 +371,37 @@ func resolveRunContext(c *gin.Context, runs DagRunRepository, versions DagVersio
 		}
 	}
 	return logical, version
+}
+
+// serveTaskTries answers the task try-history endpoints the UI's task Details
+// tab reads: "tries" returns the collection of attempts for the task, and
+// "tries/{n}" (suffix "/{n}") returns the single attempt. Leoflow keeps one row
+// per task (try_number advances in place), so the collection holds the current
+// attempt and "/{n}" returns it regardless of n.
+func serveTaskTries(c *gin.Context, tasks TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, suffix string) {
+	tis, _, err := tasks.ListTaskInstances(c.Request.Context(), tenantOf(c),
+		c.Param("dag_id"), c.Param("dag_run_id"), 1000, 0)
+	if err != nil {
+		handleRepoError(c, err)
+		return
+	}
+	matches := make([]taskInstanceDTO, 0, 1)
+	for _, ti := range tis {
+		if ti.TaskID == c.Param("task_id") {
+			dto := toTaskInstanceDTO(ti)
+			enrichTaskInstance(c, &dto, runs, versions)
+			matches = append(matches, dto)
+		}
+	}
+	if single := strings.TrimPrefix(suffix, "/"); single != "" {
+		if len(matches) == 0 {
+			AbortProblem(c, http.StatusNotFound, "not found", "task instance not found")
+			return
+		}
+		c.JSON(http.StatusOK, matches[len(matches)-1])
+		return
+	}
+	c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: matches, TotalEntries: len(matches)})
 }
 
 // stubHandler reports a feature that arrives in a later phase.

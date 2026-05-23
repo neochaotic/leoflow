@@ -31,8 +31,8 @@ func (q *Queries) CountAuditLogs(ctx context.Context, arg CountAuditLogsParams) 
 }
 
 const createAuditLog = `-- name: CreateAuditLog :exec
-INSERT INTO audit_log (tenant_id, user_id, action, resource_type, resource_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO audit_log (tenant_id, user_id, action, resource_type, resource_id, metadata)
+VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{}'::jsonb))
 `
 
 type CreateAuditLogParams struct {
@@ -41,6 +41,7 @@ type CreateAuditLogParams struct {
 	Action       string      `json:"action"`
 	ResourceType *string     `json:"resource_type"`
 	ResourceID   *string     `json:"resource_id"`
+	Metadata     []byte      `json:"metadata"`
 }
 
 func (q *Queries) CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) error {
@@ -50,6 +51,7 @@ func (q *Queries) CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) 
 		arg.Action,
 		arg.ResourceType,
 		arg.ResourceID,
+		arg.Metadata,
 	)
 	return err
 }

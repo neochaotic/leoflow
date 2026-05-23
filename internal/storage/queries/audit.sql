@@ -1,6 +1,6 @@
 -- name: CreateAuditLog :exec
-INSERT INTO audit_log (tenant_id, user_id, action, resource_type, resource_id)
-VALUES ($1, $2, $3, $4, $5);
+INSERT INTO audit_log (tenant_id, user_id, action, resource_type, resource_id, metadata)
+VALUES ($1, $2, $3, $4, $5, COALESCE(sqlc.narg('metadata')::jsonb, '{}'::jsonb));
 
 -- name: ListAuditLogs :many
 SELECT a.id, a.action, a.resource_type, a.resource_id, a.metadata, a.occurred_at,

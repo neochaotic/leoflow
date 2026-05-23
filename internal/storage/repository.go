@@ -196,6 +196,22 @@ func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run
 	if err != nil {
 		return domain.DagRun{}, fmt.Errorf("creating dag run: %w", err)
 	}
+	// Record the trigger in the audit log so the Audit Log view shows run
+	// activity. Scope it to the DAG (resource_type "dag", resource_id = dag_id)
+	// so it appears on the DAG's Audit Log tab, which filters by dag_id.
+	meta, merr := json.Marshal(map[string]string{"run_id": run.RunID})
+	if merr != nil {
+		return domain.DagRun{}, fmt.Errorf("encoding trigger audit metadata: %w", merr)
+	}
+	if aerr := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
+		TenantID:     dag.TenantID,
+		Action:       "dagrun." + run.RunType + ".trigger",
+		ResourceType: strPtr("dag"),
+		ResourceID:   strPtr(dagID),
+		Metadata:     meta,
+	}); aerr != nil {
+		return domain.DagRun{}, fmt.Errorf("writing trigger audit: %w", aerr)
+	}
 	return mapDagRun(created, dagID), nil
 }
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -48,12 +49,26 @@ func toEventLogDTO(e domain.AuditLogEntry) eventLogDTO {
 		When:       e.When,
 		Event:      e.Action,
 		Owner:      strPtrOrNil(e.Owner),
-		Extra:      strPtrOrNil(e.Extra),
 	}
 	if e.ResourceType == "dag" && e.ResourceID != "" {
 		dag := e.ResourceID
 		dto.DagID = &dag
 		dto.DagDisplayName = &dag
+	}
+	// metadata is a JSON object; surface run_id into its own column and keep
+	// `extra` only for whatever remains (an empty {} renders as null, not braces).
+	var meta map[string]any
+	if e.Extra != "" && json.Unmarshal([]byte(e.Extra), &meta) == nil {
+		if rid, ok := meta["run_id"].(string); ok && rid != "" {
+			dto.RunID = &rid
+		}
+		delete(meta, "run_id")
+		if len(meta) > 0 {
+			if rest, err := json.Marshal(meta); err == nil {
+				s := string(rest)
+				dto.Extra = &s
+			}
+		}
 	}
 	return dto
 }

@@ -93,6 +93,34 @@ func TestEventLogsNonDagResourceHasNilDagID(t *testing.T) {
 	}
 }
 
+func TestEventLogsPromotesRunIDFromMetadata(t *testing.T) {
+	// A trigger event carries run_id in its metadata; the DTO must surface it as
+	// run_id and not leak it (or an empty {}) into the extra column.
+	reader := &fakeAuditReader{
+		total: 2,
+		entries: []domain.AuditLogEntry{
+			{ID: 1, Action: "dagrun.manual.trigger", ResourceType: "dag", ResourceID: "etl", Extra: `{"run_id":"r1"}`},
+			{ID: 2, Action: "dag.version.register", ResourceType: "dag", ResourceID: "etl", Extra: "{}"},
+		},
+	}
+	rec := authGet(auditServer(reader), http.MethodGet, "/api/v2/eventLogs", "")
+	var got struct {
+		EventLogs []map[string]any `json:"event_logs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.EventLogs[0]["run_id"] != "r1" {
+		t.Errorf("run_id = %v, want r1", got.EventLogs[0]["run_id"])
+	}
+	if got.EventLogs[0]["extra"] != nil {
+		t.Errorf("extra should be null once run_id is promoted, got %v", got.EventLogs[0]["extra"])
+	}
+	if got.EventLogs[1]["extra"] != nil {
+		t.Errorf("empty {} metadata should render as null extra, got %v", got.EventLogs[1]["extra"])
+	}
+}
+
 func TestEventLogsEmptyStubWithoutReader(t *testing.T) {
 	rec := authGet(auditServer(nil), http.MethodGet, "/api/v2/eventLogs", "")
 	if rec.Code != http.StatusOK {

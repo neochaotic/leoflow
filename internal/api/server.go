@@ -72,6 +72,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 
 	registerResources(r, deps)
 	registerUI(r, deps.TokenTTLSecs)
+	registerUIViews(r, deps)
 	if deps.UI != nil {
 		static := gin.WrapH(http.StripPrefix("/static", deps.UI.StaticHandler()))
 		r.GET("/static/*filepath", static)

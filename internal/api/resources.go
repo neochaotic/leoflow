@@ -17,11 +17,12 @@ import (
 // ErrNotFound is returned by repositories when a resource does not exist.
 var ErrNotFound = domain.ErrNotFound
 
-// DagRepository reads and updates registered DAGs.
+// DagRepository reads, updates, and deletes registered DAGs.
 type DagRepository interface {
 	ListDags(ctx context.Context, tenant string, limit, offset int) ([]domain.DAG, int, error)
 	GetDag(ctx context.Context, tenant, dagID string) (domain.DAG, error)
 	SetPaused(ctx context.Context, tenant, dagID string, paused bool) (domain.DAG, error)
+	DeleteDag(ctx context.Context, tenant, dagID string) error
 }
 
 // DagRunRepository reads and creates DAG runs.
@@ -125,6 +126,19 @@ func patchDagHandler(repo DagRepository) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, toDagDTO(d))
+	}
+}
+
+// deleteDagHandler implements DELETE /api/v2/dags/{dag_id}. Deleting a DAG
+// cascades to its versions, runs, task instances, and XCom index rows. Returns
+// 204 No Content on success, matching Airflow 3.2.1.
+func deleteDagHandler(repo DagRepository) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := repo.DeleteDag(c.Request.Context(), tenantOf(c), c.Param("dag_id")); err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		c.Status(http.StatusNoContent)
 	}
 }
 
@@ -304,6 +318,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		g.GET("/:dag_id", RequirePermission("read", "dag"), getDagHandler(deps.Dags))
 		g.GET("/:dag_id/details", RequirePermission("read", "dag"), dagDetailsHandler(deps.Dags, deps.DagVersions))
 		g.PATCH("/:dag_id", RequirePermission("write", "dag"), patchDagHandler(deps.Dags))
+		g.DELETE("/:dag_id", RequirePermission("write", "dag"), deleteDagHandler(deps.Dags))
 	}
 	if deps.DagRuns != nil {
 		g := r.Group("/api/v2/dags/:dag_id/dagRuns")

@@ -335,6 +335,36 @@ func TestListAuditLogsIntegration(t *testing.T) {
 	}
 }
 
+// TestDeleteDagIntegration guards DELETE-DAG: the row is removed (subsequent
+// reads miss), the cascade clears its runs, and deleting a missing DAG returns
+// ErrNotFound.
+func TestDeleteDagIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_del_%d", time.Now().UnixNano())
+	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}})
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateSuccess, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	if err := repo.DeleteDag(ctx, "default", dagID); err != nil {
+		t.Fatalf("DeleteDag: %v", err)
+	}
+	if _, err := repo.GetDag(ctx, "default", dagID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("deleted dag still readable: %v", err)
+	}
+	// Cascade: runs of the deleted dag are gone (ListDagRuns resolves the dag
+	// first, so it returns ErrNotFound).
+	if _, _, err := repo.ListDagRuns(ctx, "default", dagID, 10, 0); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("runs survived dag delete: %v", err)
+	}
+	// Deleting again misses.
+	if err := repo.DeleteDag(ctx, "default", dagID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("second delete = %v, want ErrNotFound", err)
+	}
+}
+
 // TestReportStateRecordsResultIntegration guards the pod-agent state-report path
 // (ExecutionStore.ReportState -> ReportTaskResult). Before the $3::task_state
 // cast, this query failed with SQLSTATE 42P08 (inconsistent types deduced for

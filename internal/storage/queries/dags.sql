@@ -52,3 +52,7 @@ FROM dag_versions v
 JOIN dags d ON d.id = v.dag_id
 WHERE d.tenant_id = $1 AND d.dag_id = $2
 ORDER BY version_number DESC;
+
+-- name: DeleteDag :execrows
+DELETE FROM dags
+WHERE tenant_id = $1 AND dag_id = $2;

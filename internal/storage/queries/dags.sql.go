@@ -22,6 +22,24 @@ func (q *Queries) CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, e
 	return count, err
 }
 
+const deleteDag = `-- name: DeleteDag :execrows
+DELETE FROM dags
+WHERE tenant_id = $1 AND dag_id = $2
+`
+
+type DeleteDagParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	DagID    string      `json:"dag_id"`
+}
+
+func (q *Queries) DeleteDag(ctx context.Context, arg DeleteDagParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteDag, arg.TenantID, arg.DagID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getCurrentDagSpec = `-- name: GetCurrentDagSpec :one
 SELECT v.spec
 FROM dags d

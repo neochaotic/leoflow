@@ -477,3 +477,20 @@ func (r *Repository) ListAuditLogs(ctx context.Context, tenant, dagID string, li
 	}
 	return out, int(total), nil
 }
+
+// DeleteDag removes a DAG and (via ON DELETE CASCADE) its versions, runs, task
+// instances, and XCom index rows. It returns ErrNotFound when no DAG matched.
+func (r *Repository) DeleteDag(ctx context.Context, tenant, dagID string) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	rows, err := r.q.DeleteDag(ctx, queries.DeleteDagParams{TenantID: tid, DagID: dagID})
+	if err != nil {
+		return fmt.Errorf("deleting dag: %w", err)
+	}
+	if rows == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}

@@ -42,6 +42,16 @@ func (f *fakeDagRepo) SetPaused(_ context.Context, _, dagID string, paused bool)
 	return domain.DAG{}, ErrNotFound
 }
 
+func (f *fakeDagRepo) DeleteDag(_ context.Context, _, dagID string) error {
+	for i, d := range f.dags {
+		if d.DagID == dagID {
+			f.dags = append(f.dags[:i], f.dags[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 type fakeRunRepo struct{ runs []domain.DagRun }
 
 func (f *fakeRunRepo) ListDagRuns(context.Context, string, string, int, int) ([]domain.DagRun, int, error) {
@@ -96,6 +106,19 @@ func authGet(srv *gin.Engine, method, path, body string) *httptest.ResponseRecor
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, r)
 	return rec
+}
+
+func TestDeleteDag(t *testing.T) {
+	srv := authedServer()
+	rec := authGet(srv, http.MethodDelete, "/api/v2/dags/etl", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete existing dag = %d (%s)", rec.Code, rec.Body.String())
+	}
+	// Second delete now misses -> 404.
+	rec = authGet(srv, http.MethodDelete, "/api/v2/dags/etl", "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("delete missing dag = %d, want 404", rec.Code)
+	}
 }
 
 func TestListDags(t *testing.T) {

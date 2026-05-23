@@ -155,6 +155,11 @@ func TestDagRunsListAndCreate(t *testing.T) {
 	if run.DagRunID != "manual__1" || run.State != "queued" || run.RunType != "manual" {
 		t.Errorf("unexpected run: %+v", run)
 	}
+	// dag_versions is a required array the run view maps over; a missing/nil one
+	// crashes the UI with "undefined.map".
+	if run.DagVersions == nil {
+		t.Error("dag run response must include dag_versions (array), got nil")
+	}
 }
 
 func TestTaskInstancesWildcardRunReturnsEmpty(t *testing.T) {

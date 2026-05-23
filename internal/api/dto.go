@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
@@ -60,16 +61,32 @@ func toDagDTO(d domain.DAG) dagDTO {
 	}
 }
 
+// dagRunDTO is the Airflow 3.2.1 DAGRunResponse. Every spec-required field is
+// present — notably dag_versions (a required array the UI maps over; omitting it
+// crashes the run view with "undefined.map"). Fields Leoflow does not model are
+// null/defaults.
 type dagRunDTO struct {
-	DagID       string     `json:"dag_id"`
-	DagRunID    string     `json:"dag_run_id"`
-	LogicalDate time.Time  `json:"logical_date"`
-	QueuedAt    time.Time  `json:"queued_at"`
-	StartDate   *time.Time `json:"start_date"`
-	EndDate     *time.Time `json:"end_date"`
-	State       string     `json:"state"`
-	RunType     string     `json:"run_type"`
-	Note        string     `json:"note,omitempty"`
+	DagID              string          `json:"dag_id"`
+	DagRunID           string          `json:"dag_run_id"`
+	DagDisplayName     string          `json:"dag_display_name"`
+	LogicalDate        time.Time       `json:"logical_date"`
+	QueuedAt           time.Time       `json:"queued_at"`
+	StartDate          *time.Time      `json:"start_date"`
+	EndDate            *time.Time      `json:"end_date"`
+	RunAfter           time.Time       `json:"run_after"`
+	DataIntervalStart  *time.Time      `json:"data_interval_start"`
+	DataIntervalEnd    *time.Time      `json:"data_interval_end"`
+	LastSchedulingDec  *time.Time      `json:"last_scheduling_decision"`
+	State              string          `json:"state"`
+	RunType            string          `json:"run_type"`
+	TriggeredBy        *string         `json:"triggered_by"`
+	TriggeringUserName *string         `json:"triggering_user_name"`
+	Conf               json.RawMessage `json:"conf"`
+	Note               *string         `json:"note"`
+	DagVersions        []any           `json:"dag_versions"`
+	BundleVersion      *string         `json:"bundle_version"`
+	Duration           *float64        `json:"duration"`
+	PartitionKey       *string         `json:"partition_key"`
 }
 
 type dagRunCollectionDTO struct {
@@ -78,16 +95,30 @@ type dagRunCollectionDTO struct {
 }
 
 func toDagRunDTO(r domain.DagRun) dagRunDTO {
+	var dur *float64
+	if r.StartedAt != nil {
+		end := time.Now().UTC()
+		if r.EndedAt != nil {
+			end = *r.EndedAt
+		}
+		d := end.Sub(*r.StartedAt).Seconds()
+		dur = &d
+	}
 	return dagRunDTO{
-		DagID:       r.DagID,
-		DagRunID:    r.RunID,
-		LogicalDate: r.LogicalDate,
-		QueuedAt:    r.QueuedAt,
-		StartDate:   r.StartedAt,
-		EndDate:     r.EndedAt,
-		State:       string(r.State),
-		RunType:     r.RunType,
-		Note:        r.Note,
+		DagID:          r.DagID,
+		DagRunID:       r.RunID,
+		DagDisplayName: r.DagID,
+		LogicalDate:    r.LogicalDate,
+		QueuedAt:       r.QueuedAt,
+		StartDate:      r.StartedAt,
+		EndDate:        r.EndedAt,
+		RunAfter:       r.LogicalDate,
+		State:          string(r.State),
+		RunType:        r.RunType,
+		Conf:           json.RawMessage("{}"),
+		Note:           strPtrOrNil(r.Note),
+		DagVersions:    []any{},
+		Duration:       dur,
 	}
 }
 

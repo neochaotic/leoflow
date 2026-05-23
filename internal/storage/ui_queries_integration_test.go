@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/storage"
@@ -177,5 +178,66 @@ func TestTaskInstancesForRunsIntegration(t *testing.T) {
 	}
 	if got, _ := repo.TaskInstancesForRuns(ctx, "default", dagID, nil); got != nil {
 		t.Errorf("empty run_ids returned %v", got)
+	}
+}
+
+// TestReportStateRecordsResultIntegration guards the pod-agent state-report path
+// (ExecutionStore.ReportState -> ReportTaskResult). Before the $3::task_state
+// cast, this query failed with SQLSTATE 42P08 (inconsistent types deduced for
+// the state parameter); the pod path was the first to exercise it.
+func TestReportStateRecordsResultIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+	pg, err := storage.NewPostgres(ctx, config.DatabaseSection{URL: os.Getenv("DATABASE_URL")})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pg.Close)
+	exec := storage.NewExecutionStore(pg)
+
+	dagID := fmt.Sprintf("uiq_report_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}}
+	registerSpec(t, repo, ctx, dagID, tasks)
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	runUUID := ""
+	runs, raErr := sched.ActiveRuns(ctx)
+	if raErr != nil {
+		t.Fatalf("ActiveRuns: %v", raErr)
+	}
+	for _, r := range runs {
+		if r.DagID == dagID {
+			runUUID = r.RunID
+		}
+	}
+	if runUUID == "" {
+		t.Fatal("could not resolve run UUID")
+	}
+	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
+		t.Fatalf("MaterializeTasks: %v", err)
+	}
+
+	id := auth.AgentIdentity{RunID: runUUID, TaskID: "t"}
+	// running then success — exactly the transitions the agent reports; both
+	// must record without a type-deduction error.
+	if err := exec.ReportState(ctx, id, domain.TaskStateRunning, 0, ""); err != nil {
+		t.Fatalf("ReportState(running): %v", err)
+	}
+	if err := exec.ReportState(ctx, id, domain.TaskStateSuccess, 0, ""); err != nil {
+		t.Fatalf("ReportState(success): %v", err)
+	}
+
+	tis, _, err := repo.ListTaskInstances(ctx, "default", dagID, "r1", 10, 0)
+	if err != nil {
+		t.Fatalf("ListTaskInstances: %v", err)
+	}
+	if len(tis) != 1 || tis[0].State != domain.TaskStateSuccess {
+		t.Fatalf("want 1 task instance in success, got %+v", tis)
+	}
+	if tis[0].EndedAt == nil {
+		t.Errorf("success report should set ended_at")
 	}
 }

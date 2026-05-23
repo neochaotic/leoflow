@@ -47,3 +47,27 @@ def test_run_propagates_user_exception(tmp_path, monkeypatch):
     mod = _write_module(tmp_path, monkeypatch, "def task():\n    raise RuntimeError('boom')\n")
     with pytest.raises(RuntimeError, match="boom"):
         runner.run(f"{mod}:task")
+
+
+def test_run_unwraps_taskflow_decorator(tmp_path, monkeypatch):
+    # Airflow TaskFlow @task objects return an XComArg (not the result) when
+    # called bare; the runner must unwrap to .function and run the real code.
+    # Regression guard for the pod-path bug where the task wrote a non-JSON
+    # XComArg and exited 1.
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    body = (
+        "class _XComArg:\n"
+        "    pass\n"
+        "class _TaskDecorator:\n"
+        "    def __call__(self):\n"
+        "        return _XComArg()  # not JSON serializable, mimics TaskFlow\n"
+        "    def function(self):\n"
+        "        return {'ran': True}\n"
+        "task = _TaskDecorator()\n"
+    )
+    mod = _write_module(tmp_path, monkeypatch, body)
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == {"ran": True}

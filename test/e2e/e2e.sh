@@ -24,10 +24,24 @@ DAG_IMAGE="leoflow-e2e-dag:dev"
 DAG_ID="e2edag"
 API="http://localhost:8080"
 GRPC_PORT="9091"
+# Address task pods dial to reach the host control plane's gRPC. On Docker
+# Desktop (macOS/Windows) host.docker.internal resolves to the host; k3d does
+# not inject host.k3d.internal into CoreDNS there. Override for Linux/CI.
+HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
 SERVER_PID=""
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-fail() { printf '\033[1;31mFAIL:\033[0m %s\n' "$*" >&2; exit 1; }
+# dump_pods prints the task pods and their logs — invaluable for diagnosing a
+# failed task before the cleanup trap deletes the cluster.
+dump_pods() {
+  printf '\033[1;33m--- task pods (namespace leoflow) ---\033[0m\n' >&2
+  kubectl get pods -n leoflow -o wide >&2 2>&1 || true
+  for p in $(kubectl get pods -n leoflow -o name 2>/dev/null); do
+    printf '\033[1;33m--- logs %s ---\033[0m\n' "$p" >&2
+    kubectl logs -n leoflow "$p" --all-containers --tail=80 >&2 2>&1 || true
+  done
+}
+fail() { printf '\033[1;31mFAIL:\033[0m %s\n' "$*" >&2; dump_pods; exit 1; }
 
 cleanup() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
@@ -42,10 +56,30 @@ done
 
 log "Scaffolding a minimal DAG project ($DAG_ID)"
 "$ROOT/bin/leoflow" init "$WORKDIR/$DAG_ID"
+# A real Airflow-SDK DAG (the parser requires an actual DAG object, not a bare
+# function). Two tasks in sequence prove pod-per-task AND cross-pod ordering:
+# each runs in its own pod whose agent reports state over gRPC.
 cat > "$WORKDIR/$DAG_ID/dag.py" <<'PY'
-def hello():
-    print("hello from leoflow e2e")
-    return {"ok": True}
+"""e2edag — Leoflow pod-per-task smoke DAG."""
+from __future__ import annotations
+
+from airflow.sdk import DAG, task
+
+
+@task
+def extract() -> str:
+    print("hello from leoflow e2e: extract")
+    return "ok"
+
+
+@task
+def transform() -> str:
+    print("hello from leoflow e2e: transform")
+    return "done"
+
+
+with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
+    extract() >> transform()
 PY
 cat > "$WORKDIR/$DAG_ID/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
@@ -59,10 +93,13 @@ docker build -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERS
 log "Creating k3d cluster '$CLUSTER'"
 k3d cluster create "$CLUSTER" --wait
 
-log "Starting the control plane (agents dial host.k3d.internal:${GRPC_PORT})"
+log "Creating the 'leoflow' namespace (where task pods are created)"
+kubectl create namespace leoflow
+
+log "Starting the control plane (agents dial ${HOST_ADDR}:${GRPC_PORT})"
 export LEOFLOW_AUTH_JWT_SECRET="e2e-secret"
-export LEOFLOW_BOOTSTRAP_PASSWORD="admin123"
-export LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="host.k3d.internal:${GRPC_PORT}"
+export LEOFLOW_BOOTSTRAP_PASSWORD="admin"
+export LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="${HOST_ADDR}:${GRPC_PORT}"
 "$ROOT/bin/leoflow-server" &
 SERVER_PID=$!
 sleep 5
@@ -73,7 +110,7 @@ log "Compiling, building, and importing the DAG image"
 k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER"
 
 log "Pushing the DAG"
-TOKEN="$("$ROOT/bin/leoflow" auth create-token --username admin@leoflow.local --password admin123)"
+TOKEN="$("$ROOT/bin/leoflow" auth create-token --username admin@leoflow.local --password admin)"
 "$ROOT/bin/leoflow" push "$WORKDIR/$DAG_ID/dag.json" --token "$TOKEN"
 
 log "Triggering a run"
@@ -83,10 +120,11 @@ RUN_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: 
 log "run = $RUN_ID"
 
 log "Waiting for all task instances to succeed"
-deadline=$(( $(date +%s) + 180 ))
+deadline=$(( $(date +%s) + 300 ))
 while :; do
   states="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances" | jq -r '.task_instances[].state')"
+  log "task states: [$(echo "$states" | tr '\n' ' ')] pods: [$(kubectl get pods -n leoflow --no-headers 2>/dev/null | awk '{print $1"="$3}' | tr '\n' ' ')]"
   echo "$states" | grep -qE 'failed|upstream_failed' && fail "a task failed: $states"
   if [ -n "$states" ] && ! echo "$states" | grep -qvE 'success|skipped'; then
     log "all tasks terminal-success: $states"

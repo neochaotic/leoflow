@@ -44,6 +44,10 @@ type Querier interface {
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	RecordXCom(ctx context.Context, arg RecordXComParams) error
+	// $3 is cast to task_state in every usage: without the cast Postgres deduces an
+	// enum type from `state = $3` but text from the literal comparisons below and
+	// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
+	// agent path is the first to exercise this query end-to-end.
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
 	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
 	ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (ResolveRunRefRow, error)

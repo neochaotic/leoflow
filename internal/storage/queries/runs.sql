@@ -78,13 +78,17 @@ SET state = 'failed', ended_at = now(), error_message = $2
 WHERE id = $1 AND state IN ('scheduled', 'queued', 'running');
 
 -- name: ReportTaskResult :exec
+-- $3 is cast to task_state in every usage: without the cast Postgres deduces an
+-- enum type from `state = $3` but text from the literal comparisons below and
+-- rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
+-- agent path is the first to exercise this query end-to-end.
 UPDATE task_instances
-SET state = $3,
+SET state = $3::task_state,
     exit_code = $4,
     error_message = $5,
-    started_at = CASE WHEN $3 = 'running' AND started_at IS NULL THEN now() ELSE started_at END,
-    ended_at = CASE WHEN $3 IN ('success', 'failed', 'skipped', 'upstream_failed') THEN now() ELSE ended_at END,
-    duration_seconds = CASE WHEN $3 IN ('success', 'failed') AND started_at IS NOT NULL
+    started_at = CASE WHEN $3::task_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END,
+    ended_at = CASE WHEN $3::task_state IN ('success', 'failed', 'skipped', 'upstream_failed') THEN now() ELSE ended_at END,
+    duration_seconds = CASE WHEN $3::task_state IN ('success', 'failed') AND started_at IS NOT NULL
         THEN EXTRACT(EPOCH FROM (now() - started_at)) ELSE duration_seconds END
 WHERE dag_run_id = $1 AND task_id = $2;
 

@@ -29,6 +29,12 @@ def run(entrypoint: str) -> None:
 
     module = importlib.import_module(module_name)
     fn = getattr(module, fn_name)
+    # Airflow TaskFlow @task decorators are not executed when called directly —
+    # calling them returns an XComArg (a task reference), not the function's
+    # result. Unwrap to the underlying Python function so we run the user's code
+    # and capture its real return value.
+    if hasattr(fn, "function"):
+        fn = fn.function
     result = fn()
 
     if result is not None:

@@ -482,12 +482,12 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 
 const reportTaskResult = `-- name: ReportTaskResult :exec
 UPDATE task_instances
-SET state = $3,
+SET state = $3::task_state,
     exit_code = $4,
     error_message = $5,
-    started_at = CASE WHEN $3 = 'running' AND started_at IS NULL THEN now() ELSE started_at END,
-    ended_at = CASE WHEN $3 IN ('success', 'failed', 'skipped', 'upstream_failed') THEN now() ELSE ended_at END,
-    duration_seconds = CASE WHEN $3 IN ('success', 'failed') AND started_at IS NOT NULL
+    started_at = CASE WHEN $3::task_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END,
+    ended_at = CASE WHEN $3::task_state IN ('success', 'failed', 'skipped', 'upstream_failed') THEN now() ELSE ended_at END,
+    duration_seconds = CASE WHEN $3::task_state IN ('success', 'failed') AND started_at IS NOT NULL
         THEN EXTRACT(EPOCH FROM (now() - started_at)) ELSE duration_seconds END
 WHERE dag_run_id = $1 AND task_id = $2
 `
@@ -495,16 +495,20 @@ WHERE dag_run_id = $1 AND task_id = $2
 type ReportTaskResultParams struct {
 	DagRunID     pgtype.UUID `json:"dag_run_id"`
 	TaskID       string      `json:"task_id"`
-	State        TaskState   `json:"state"`
+	Column3      TaskState   `json:"column_3"`
 	ExitCode     *int32      `json:"exit_code"`
 	ErrorMessage *string     `json:"error_message"`
 }
 
+// $3 is cast to task_state in every usage: without the cast Postgres deduces an
+// enum type from `state = $3` but text from the literal comparisons below and
+// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
+// agent path is the first to exercise this query end-to-end.
 func (q *Queries) ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error {
 	_, err := q.db.Exec(ctx, reportTaskResult,
 		arg.DagRunID,
 		arg.TaskID,
-		arg.State,
+		arg.Column3,
 		arg.ExitCode,
 		arg.ErrorMessage,
 	)

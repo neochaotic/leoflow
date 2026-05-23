@@ -56,7 +56,7 @@ func (s *ExecutionStore) ReportState(ctx context.Context, id auth.AgentIdentity,
 	params := queries.ReportTaskResultParams{
 		DagRunID: rid,
 		TaskID:   id.TaskID,
-		State:    queries.TaskState(state),
+		Column3:  queries.TaskState(state), // sqlc names the $3::task_state cast param Column3.
 		ExitCode: &code,
 	}
 	if errMsg != "" {

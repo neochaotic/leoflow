@@ -190,6 +190,29 @@ browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
   - `/ui/auth/token` is a re-mint, not login (see Serving & auth above).
 - **Strategic note:** the pinned `/ui/*` is tactical for MVP velocity; a custom
   Leoflow UI on the stable `/api/v2/` is the long-term destination. See ADR 0018.
+- **2026-05-22 (Phase 5.2 — DAG list, grid, graph).** Implemented the read views:
+  - `GET /ui/dags` (DAGWithLatestDagRunsResponse, 30+ required fields),
+    `GET /ui/dags/{id}/latest_run` (DAGRunLightResponse|null — 200 null, not 404),
+    `GET /ui/grid/runs/{id}` (GridRunsResponse[]),
+    `GET /ui/grid/structure/{id}` (GridNodeResponse[], topo-sorted),
+    `GET /ui/structure/structure_data?dag_id=` (StructureDataResponse nodes+edges),
+    `GET /api/v2/dags/{id}/details` (DAGDetailsResponse, 43 fields),
+    `GET /api/v2/version`.
+  - **`ti_summaries` is an NDJSON stream**, not a single map: `GET /ui/grid/ti_summaries/{id}?run_ids=`
+    returns `application/x-ndjson`, one `GridTISummaries` per run. (The 5.2 prompt's
+    "run_id→task_id→state map" was wrong; spec wins.)
+  - **Impedance gaps mapped, not faked away:** `DAGRunLightResponse.id` is an
+    integer in the spec but Leoflow keys runs by `(dag_id, run_id)` — `id` is a
+    stable FNV hash of run_id, a display key only; `run_after` maps to logical
+    date (no separate field); `has_missed_deadline`, task groups, dynamic mapping,
+    bundle/fileloc/parse metadata are absent → null/false/defaults. Topology comes
+    from `dag_versions.spec` (the JSON the Python parser emitted); reads are Go.
+  - **Performance posture:** `/ui/dags` latest runs via one LATERAL window query
+    (no N+1); `ti_summaries` one join grouped in Go with a weak ETag over
+    (count, max timestamp) since `task_instances` has no `updated_at`.
+  - **OPEN (needs live PG / browser):** integration fixtures (3×10×5), the 20k-TI
+    perf budget + EXPLAIN ANALYZE, and the browser walk of grid/graph rendering
+    are verification steps to run with `make dev-up` and a real browser.
 
 ## Sources
 

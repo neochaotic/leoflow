@@ -133,6 +133,7 @@ var serverDefaults = map[string]any{
 	"observability.otel.endpoint":               "localhost:4317",
 	"observability.log_level":                   "info",
 	"observability.log_format":                  "json",
+	"secret_key":                                "",
 }
 
 // LoadServer assembles the server configuration from defaults, the given file,

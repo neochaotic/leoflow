@@ -147,3 +147,15 @@ JOIN dag_runs r ON r.id = ti.dag_run_id
 JOIN dags d ON d.id = r.dag_id
 WHERE d.tenant_id = $1 AND r.logical_date >= $2 AND r.logical_date <= $3
 GROUP BY ti.state;
+
+-- name: ResetFailedTaskInstance :execrows
+UPDATE task_instances
+SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+WHERE dag_run_id = $1 AND task_id = $2
+  AND state IN ('failed', 'upstream_failed', 'up_for_retry');
+
+-- name: ResetAllFailedTaskInstances :execrows
+UPDATE task_instances
+SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+WHERE dag_run_id = $1
+  AND state IN ('failed', 'upstream_failed', 'up_for_retry');

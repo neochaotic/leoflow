@@ -214,9 +214,12 @@ func (r *Repository) ListTaskInstances(ctx context.Context, tenant, dagID, runID
 	return out, len(out), nil
 }
 
-// ClearTaskInstances resets the given tasks to none for re-run, optionally
-// resetting the parent run to queued.
-func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, resetDagRun bool) (int, error) {
+// ClearTaskInstances resets tasks to none for re-run, optionally resetting the
+// parent run to queued. When onlyFailed is true, only tasks currently in a
+// failed-ish state (failed, upstream_failed, up_for_retry) are reset; with an
+// empty taskIDs and onlyFailed, every failed task in the run is cleared. It
+// returns the number of task instances actually reset.
+func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed, resetDagRun bool) (int, error) {
 	dag, err := r.resolveDag(ctx, tenant, dagID)
 	if err != nil {
 		return 0, err
@@ -225,12 +228,9 @@ func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runI
 	if err != nil {
 		return 0, mapNotFound(err)
 	}
-	cleared := 0
-	for _, taskID := range taskIDs {
-		if err := r.q.ResetTaskInstanceToNone(ctx, queries.ResetTaskInstanceToNoneParams{DagRunID: run.ID, TaskID: taskID}); err != nil {
-			return cleared, fmt.Errorf("clearing task %q: %w", taskID, err)
-		}
-		cleared++
+	cleared, err := r.resetTaskInstances(ctx, run.ID, taskIDs, onlyFailed)
+	if err != nil {
+		return cleared, err
 	}
 	if resetDagRun {
 		if _, err := r.q.UpdateDagRunState(ctx, queries.UpdateDagRunStateParams{
@@ -241,6 +241,37 @@ func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runI
 		}); err != nil {
 			return cleared, fmt.Errorf("resetting dag run: %w", err)
 		}
+	}
+	return cleared, nil
+}
+
+// resetTaskInstances applies the clear semantics: a specific task list, or (with
+// an empty list and onlyFailed) every failed task in the run.
+func (r *Repository) resetTaskInstances(ctx context.Context, runID pgtype.UUID, taskIDs []string, onlyFailed bool) (int, error) {
+	if len(taskIDs) == 0 {
+		if !onlyFailed {
+			return 0, nil
+		}
+		n, err := r.q.ResetAllFailedTaskInstances(ctx, runID)
+		if err != nil {
+			return 0, fmt.Errorf("clearing failed tasks: %w", err)
+		}
+		return int(n), nil
+	}
+	cleared := 0
+	for _, taskID := range taskIDs {
+		if onlyFailed {
+			n, err := r.q.ResetFailedTaskInstance(ctx, queries.ResetFailedTaskInstanceParams{DagRunID: runID, TaskID: taskID})
+			if err != nil {
+				return cleared, fmt.Errorf("clearing failed task %q: %w", taskID, err)
+			}
+			cleared += int(n)
+			continue
+		}
+		if err := r.q.ResetTaskInstanceToNone(ctx, queries.ResetTaskInstanceToNoneParams{DagRunID: runID, TaskID: taskID}); err != nil {
+			return cleared, fmt.Errorf("clearing task %q: %w", taskID, err)
+		}
+		cleared++
 	}
 	return cleared, nil
 }

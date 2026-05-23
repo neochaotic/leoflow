@@ -85,12 +85,16 @@ func (f *fakeRunRepo) CreateDagRun(_ context.Context, _, dagID string, run domai
 	return run, nil
 }
 
-type fakeTaskRepo struct{ tis []domain.TaskInstance }
+type fakeTaskRepo struct {
+	tis           []domain.TaskInstance
+	gotOnlyFailed bool
+}
 
 func (f *fakeTaskRepo) ListTaskInstances(context.Context, string, string, string, int, int) ([]domain.TaskInstance, int, error) {
 	return f.tis, len(f.tis), nil
 }
-func (f *fakeTaskRepo) ClearTaskInstances(context.Context, string, string, string, []string, bool) (int, error) {
+func (f *fakeTaskRepo) ClearTaskInstances(_ context.Context, _, _, _ string, _ []string, onlyFailed, _ bool) (int, error) {
+	f.gotOnlyFailed = onlyFailed
 	return len(f.tis), nil
 }
 
@@ -250,6 +254,37 @@ func TestTaskInstancesAndClear(t *testing.T) {
 	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", `{"task_ids":["extract"],"dag_run_id":"r1"}`)
 	if rec.Code != http.StatusOK {
 		t.Errorf("clear = %d, want 200", rec.Code)
+	}
+}
+
+func TestClearOnlyFailedForwarded(t *testing.T) {
+	admin := &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}
+	repo := &fakeTaskRepo{tis: []domain.TaskInstance{{TaskID: "extract", RunID: "r1", State: domain.TaskStateFailed}}}
+	srv := NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: admin},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		Tasks:         repo,
+	})
+
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"dag_run_id":"r1","only_failed":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear only_failed = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !repo.gotOnlyFailed {
+		t.Error("only_failed=true not forwarded to repository")
+	}
+
+	repo.gotOnlyFailed = true // ensure the next call actually flips it back
+	rec = authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"task_ids":["extract"],"dag_run_id":"r1"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear default = %d", rec.Code)
+	}
+	if repo.gotOnlyFailed {
+		t.Error("only_failed should default to false when omitted")
 	}
 }
 

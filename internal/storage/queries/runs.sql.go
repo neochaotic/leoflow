@@ -631,6 +631,41 @@ func (q *Queries) ReportTaskResult(ctx context.Context, arg ReportTaskResultPara
 	return err
 }
 
+const resetAllFailedTaskInstances = `-- name: ResetAllFailedTaskInstances :execrows
+UPDATE task_instances
+SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+WHERE dag_run_id = $1
+  AND state IN ('failed', 'upstream_failed', 'up_for_retry')
+`
+
+func (q *Queries) ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, resetAllFailedTaskInstances, dagRunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const resetFailedTaskInstance = `-- name: ResetFailedTaskInstance :execrows
+UPDATE task_instances
+SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+WHERE dag_run_id = $1 AND task_id = $2
+  AND state IN ('failed', 'upstream_failed', 'up_for_retry')
+`
+
+type ResetFailedTaskInstanceParams struct {
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskID   string      `json:"task_id"`
+}
+
+func (q *Queries) ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTaskInstanceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resetFailedTaskInstance, arg.DagRunID, arg.TaskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const resetTaskInstanceToNone = `-- name: ResetTaskInstanceToNone :exec
 UPDATE task_instances
 SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1

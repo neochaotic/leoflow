@@ -36,7 +36,7 @@ type DagRunRepository interface {
 // TaskInstanceRepository reads task instances and clears them for re-run.
 type TaskInstanceRepository interface {
 	ListTaskInstances(ctx context.Context, tenant, dagID, runID string, limit, offset int) ([]domain.TaskInstance, int, error)
-	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, resetDagRun bool) (int, error)
+	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed, resetDagRun bool) (int, error)
 }
 
 func pagination(c *gin.Context) (limit, offset int) {
@@ -248,6 +248,7 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
 		var body struct {
 			TaskIDs      []string `json:"task_ids"`
 			DagRunID     string   `json:"dag_run_id"`
+			OnlyFailed   *bool    `json:"only_failed"`
 			ResetDagRuns *bool    `json:"reset_dag_runs"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
@@ -258,7 +259,8 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository) gin.HandlerFunc {
 		if body.ResetDagRuns != nil {
 			reset = *body.ResetDagRuns
 		}
-		n, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), body.DagRunID, body.TaskIDs, reset)
+		onlyFailed := body.OnlyFailed != nil && *body.OnlyFailed
+		n, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), body.DagRunID, body.TaskIDs, onlyFailed, reset)
 		if err != nil {
 			handleRepoError(c, err)
 			return

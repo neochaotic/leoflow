@@ -413,6 +413,66 @@ func TestListDagsFilteredIntegration(t *testing.T) {
 	}
 }
 
+// TestClearOnlyFailedIntegration guards the only_failed clear semantics: a
+// failed task is reset to none (and its try_number bumped) while a successful
+// sibling is left untouched.
+func TestClearOnlyFailedIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_clear_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{
+		{TaskID: "ok", Type: domain.TaskTypePython},
+		{TaskID: "bad", Type: domain.TaskTypePython},
+	}
+	registerSpec(t, repo, ctx, dagID, tasks)
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runUUID := ""
+	runs, err := sched.ActiveRuns(ctx)
+	if err != nil {
+		t.Fatalf("ActiveRuns: %v", err)
+	}
+	for _, r := range runs {
+		if r.DagID == dagID {
+			runUUID = r.RunID
+		}
+	}
+	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
+		t.Fatalf("MaterializeTasks: %v", err)
+	}
+	if err := sched.ApplyTransition(ctx, runUUID, "ok", domain.TaskStateSuccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.ApplyTransition(ctx, runUUID, "bad", domain.TaskStateFailed); err != nil {
+		t.Fatal(err)
+	}
+
+	// only_failed with empty task list clears just the failed task.
+	cleared, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", nil, true, false)
+	if err != nil {
+		t.Fatalf("ClearTaskInstances(onlyFailed): %v", err)
+	}
+	if cleared != 1 {
+		t.Errorf("cleared = %d, want 1 (only the failed task)", cleared)
+	}
+	tis, _, err := repo.ListTaskInstances(ctx, "default", dagID, "r1", 10, 0)
+	if err != nil {
+		t.Fatalf("ListTaskInstances: %v", err)
+	}
+	states := map[string]domain.TaskState{}
+	for _, ti := range tis {
+		states[ti.TaskID] = ti.State
+	}
+	if states["bad"] != domain.TaskStateNone {
+		t.Errorf("failed task not reset: %v", states["bad"])
+	}
+	if states["ok"] != domain.TaskStateSuccess {
+		t.Errorf("successful task should be untouched: %v", states["ok"])
+	}
+}
+
 // TestDeleteDagIntegration guards DELETE-DAG: the row is removed (subsequent
 // reads miss), the cascade clears its runs, and deleting a missing DAG returns
 // ErrNotFound.

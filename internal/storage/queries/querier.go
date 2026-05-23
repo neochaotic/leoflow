@@ -59,6 +59,8 @@ type Querier interface {
 	// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
 	// agent path is the first to exercise this query end-to-end.
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
+	ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error)
+	ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTaskInstanceParams) (int64, error)
 	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
 	ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (ResolveRunRefRow, error)
 	SetCurrentDagVersion(ctx context.Context, arg SetCurrentDagVersionParams) error

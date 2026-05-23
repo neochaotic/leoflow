@@ -69,17 +69,18 @@ from airflow.sdk import DAG, task
 @task
 def extract() -> str:
     print("hello from leoflow e2e: extract")
-    return "ok"
+    return "payload-42"
 
 
 @task
-def transform() -> str:
-    print("hello from leoflow e2e: transform")
-    return "done"
+def transform(value: str) -> str:
+    # Consuming extract's output proves TaskFlow value passing end-to-end (#51).
+    print(f"transform received: {value}")
+    return value.upper()
 
 
 with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
-    extract() >> transform()
+    transform(extract())
 PY
 cat > "$WORKDIR/$DAG_ID/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
@@ -162,5 +163,15 @@ if echo "$struct" | jq -e '.content | length > 0' >/dev/null 2>&1; then
 else
   fail "structured JSON logs missing content (#43)"
 fi
+
+log "Asserting TaskFlow value passing (#51): transform received extract's output"
+tlog=""
+for try in 0 1 2; do
+  body="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances/transform/logs/$try" 2>/dev/null || true)"
+  if echo "$body" | grep -q "transform received: payload-42"; then tlog="$body"; break; fi
+done
+[ -n "$tlog" ] || fail "transform did not receive extract's output — TaskFlow value passing broken (#51)"
+log "value passing OK: transform received payload-42"
 
 log "E2E passed"

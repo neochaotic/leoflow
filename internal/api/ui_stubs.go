@@ -47,19 +47,6 @@ func zeroTaskInstanceStateCount() gin.H {
 
 // registerUIStubs mounts graceful empty responses for unimplemented /ui screens.
 func registerUIStubs(r gin.IRouter) {
-	r.GET("/ui/dashboard/dag_stats", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"active_dag_count": 0, "failed_dag_count": 0,
-			"running_dag_count": 0, "queued_dag_count": 0,
-		})
-	})
-	r.GET("/ui/dashboard/historical_metrics_data", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"dag_run_states":       gin.H{"queued": 0, "running": 0, "success": 0, "failed": 0},
-			"task_instance_states": zeroTaskInstanceStateCount(),
-			"state_count_limit":    0,
-		})
-	})
 	r.GET("/ui/dependencies", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"edges": []any{}, "nodes": []any{}})
 	})

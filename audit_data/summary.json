@@ -1,0 +1,172 @@
+{
+  "ui_auth_me": {
+    "endpoint": "/ui/auth/me",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_auth_menus": {
+    "endpoint": "/ui/auth/menus",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_config": {
+    "endpoint": "/ui/config",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_dashboard_dag_stats": {
+    "endpoint": "/ui/dashboard/dag_stats",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_dashboard_historical": {
+    "endpoint": "/ui/dashboard/historical_metrics_data?start_date=2026-05-01T00:00:00Z&end_date=2026-05-23T23:59:59Z",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_dags": {
+    "endpoint": "/ui/dags",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_version": {
+    "endpoint": "/api/v2/version",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_health": {
+    "endpoint": "/api/v2/monitor/health",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_dags": {
+    "endpoint": "/api/v2/dags",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_dag_tags": {
+    "endpoint": "/api/v2/dagTags",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_dag_warnings": {
+    "endpoint": "/api/v2/dagWarnings",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_import_errors": {
+    "endpoint": "/api/v2/importErrors",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_event_logs": {
+    "endpoint": "/api/v2/eventLogs",
+    "airflow_status": 200,
+    "leoflow_status": "ERROR"
+  },
+  "api_v2_variables": {
+    "endpoint": "/api/v2/variables",
+    "airflow_status": 200,
+    "leoflow_status": "ERROR"
+  },
+  "api_v2_connections": {
+    "endpoint": "/api/v2/connections",
+    "airflow_status": 200,
+    "leoflow_status": "ERROR"
+  },
+  "api_v2_pools": {
+    "endpoint": "/api/v2/pools",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_providers": {
+    "endpoint": "/api/v2/providers",
+    "airflow_status": 200,
+    "leoflow_status": "ERROR"
+  },
+  "api_v2_plugins": {
+    "endpoint": "/api/v2/plugins",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_config": {
+    "endpoint": "/api/v2/config",
+    "airflow_status": "ERROR",
+    "leoflow_status": "ERROR"
+  },
+  "api_v2_assets": {
+    "endpoint": "/api/v2/assets",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_assets_events": {
+    "endpoint": "/api/v2/assets/events",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_dependencies": {
+    "endpoint": "/ui/dependencies",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_backfills": {
+    "endpoint": "/ui/backfills",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_teams": {
+    "endpoint": "/ui/teams",
+    "airflow_status": "ERROR",
+    "leoflow_status": 200
+  },
+  "ui_connections_hook_meta": {
+    "endpoint": "/ui/connections/hook_meta",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_dag_latest_run": {
+    "endpoint": "/ui/dags/{id}/latest_run",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_grid_structure": {
+    "endpoint": "/ui/grid/structure/{id}",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_grid_runs": {
+    "endpoint": "/ui/grid/runs/{id}",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_grid_ti_summaries": {
+    "endpoint": "/ui/grid/ti_summaries/{id}",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_structure_data": {
+    "endpoint": "/ui/structure/structure_data?dag_id={id}",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "ui_calendar": {
+    "endpoint": "/ui/calendar/{id}",
+    "airflow_status": "ERROR",
+    "leoflow_status": 200
+  },
+  "api_v2_dag_details": {
+    "endpoint": "/api/v2/dags/{id}/details",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_dag_runs": {
+    "endpoint": "/api/v2/dags/{id}/dagRuns",
+    "airflow_status": 200,
+    "leoflow_status": 200
+  },
+  "api_v2_dag_source": {
+    "endpoint": "/api/v2/dagSources/{id}",
+    "airflow_status": 200,
+    "leoflow_status": "ERROR"
+  }
+}

@@ -1,0 +1,1 @@
+{"nodes":[{"id":"step_a","label":"step_a","type":"task","operator":"http_api","children":null},{"id":"step_b","label":"step_b","type":"task","operator":"http_api","children":null},{"id":"step_c","label":"step_c","type":"task","operator":"http_api","children":null}],"edges":[{"source_id":"step_a","target_id":"step_b"},{"source_id":"step_b","target_id":"step_c"}]}

@@ -11,6 +11,45 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countDagRunStatesInWindow = `-- name: CountDagRunStatesInWindow :many
+SELECT r.state AS state, count(*) AS n
+FROM dag_runs r
+JOIN dags d ON d.id = r.dag_id
+WHERE d.tenant_id = $1 AND r.logical_date >= $2 AND r.logical_date <= $3
+GROUP BY r.state
+`
+
+type CountDagRunStatesInWindowParams struct {
+	TenantID      pgtype.UUID        `json:"tenant_id"`
+	LogicalDate   pgtype.Timestamptz `json:"logical_date"`
+	LogicalDate_2 pgtype.Timestamptz `json:"logical_date_2"`
+}
+
+type CountDagRunStatesInWindowRow struct {
+	State DagRunState `json:"state"`
+	N     int64       `json:"n"`
+}
+
+func (q *Queries) CountDagRunStatesInWindow(ctx context.Context, arg CountDagRunStatesInWindowParams) ([]CountDagRunStatesInWindowRow, error) {
+	rows, err := q.db.Query(ctx, countDagRunStatesInWindow, arg.TenantID, arg.LogicalDate, arg.LogicalDate_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountDagRunStatesInWindowRow{}
+	for rows.Next() {
+		var i CountDagRunStatesInWindowRow
+		if err := rows.Scan(&i.State, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countDagRunsByDag = `-- name: CountDagRunsByDag :one
 SELECT count(*) FROM dag_runs WHERE dag_id = $1
 `
@@ -20,6 +59,83 @@ func (q *Queries) CountDagRunsByDag(ctx context.Context, dagID pgtype.UUID) (int
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countDagsByLatestRunState = `-- name: CountDagsByLatestRunState :many
+SELECT lr.state AS state, count(*) AS n
+FROM (
+    SELECT DISTINCT ON (r.dag_id) r.state
+    FROM dag_runs r
+    JOIN dags d ON d.id = r.dag_id
+    WHERE d.tenant_id = $1
+    ORDER BY r.dag_id, r.logical_date DESC
+) lr
+GROUP BY lr.state
+`
+
+type CountDagsByLatestRunStateRow struct {
+	State DagRunState `json:"state"`
+	N     int64       `json:"n"`
+}
+
+func (q *Queries) CountDagsByLatestRunState(ctx context.Context, tenantID pgtype.UUID) ([]CountDagsByLatestRunStateRow, error) {
+	rows, err := q.db.Query(ctx, countDagsByLatestRunState, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountDagsByLatestRunStateRow{}
+	for rows.Next() {
+		var i CountDagsByLatestRunStateRow
+		if err := rows.Scan(&i.State, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countTaskInstanceStatesInWindow = `-- name: CountTaskInstanceStatesInWindow :many
+SELECT ti.state AS state, count(*) AS n
+FROM task_instances ti
+JOIN dag_runs r ON r.id = ti.dag_run_id
+JOIN dags d ON d.id = r.dag_id
+WHERE d.tenant_id = $1 AND r.logical_date >= $2 AND r.logical_date <= $3
+GROUP BY ti.state
+`
+
+type CountTaskInstanceStatesInWindowParams struct {
+	TenantID      pgtype.UUID        `json:"tenant_id"`
+	LogicalDate   pgtype.Timestamptz `json:"logical_date"`
+	LogicalDate_2 pgtype.Timestamptz `json:"logical_date_2"`
+}
+
+type CountTaskInstanceStatesInWindowRow struct {
+	State TaskState `json:"state"`
+	N     int64     `json:"n"`
+}
+
+func (q *Queries) CountTaskInstanceStatesInWindow(ctx context.Context, arg CountTaskInstanceStatesInWindowParams) ([]CountTaskInstanceStatesInWindowRow, error) {
+	rows, err := q.db.Query(ctx, countTaskInstanceStatesInWindow, arg.TenantID, arg.LogicalDate, arg.LogicalDate_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountTaskInstanceStatesInWindowRow{}
+	for rows.Next() {
+		var i CountTaskInstanceStatesInWindowRow
+		if err := rows.Scan(&i.State, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const createDagRun = `-- name: CreateDagRun :one

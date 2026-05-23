@@ -38,16 +38,17 @@ type Dependencies struct {
 	InlineHTTPMaxDurationSeconds int
 
 	// Resource repositories. Routes for nil repositories are not registered.
-	Dags        DagRepository
-	DagRuns     DagRunRepository
-	Tasks       TaskInstanceRepository
-	Versions    DagVersionRepository
-	Xcoms       XComReader
-	Logs        LogReader
-	Specs       DagSpecReader
-	LatestRuns  DagLatestRunsReader
-	TaskSummary TaskSummaryReader
-	DagVersions DagVersionLister
+	Dags           DagRepository
+	DagRuns        DagRunRepository
+	Tasks          TaskInstanceRepository
+	Versions       DagVersionRepository
+	Xcoms          XComReader
+	Logs           LogReader
+	Specs          DagSpecReader
+	LatestRuns     DagLatestRunsReader
+	TaskSummary    TaskSummaryReader
+	DagVersions    DagVersionLister
+	DashboardStats DashboardStatsReader
 
 	// UI serves the embedded SPA. When nil the server is API-only.
 	UI UIServer
@@ -84,6 +85,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIStructure(r, deps.Specs)
 	registerUISummaries(r, deps.TaskSummary)
 	registerUITasks(r, deps.Specs)
+	registerUIDashboard(r, deps.DashboardStats)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

@@ -1,0 +1,233 @@
+{
+  "airflow": [
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8081/ui/config",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8081/ui/config",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    }
+  ],
+  "leoflow": [
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/ui/auth/menus",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/ui/auth/me",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/version",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/plugins",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/dags/~/dagRuns?limit=1&state=running&state=queued",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/dags/~/dagRuns/~/hitlDetails?state=deferred&response_received=false",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/importErrors?limit=1",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/ui/dashboard/dag_stats",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/ui/dags?limit=10&is_favorite=true",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/monitor/health",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/plugins/importErrors",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/ui/dashboard/historical_metrics_data?start_date=2026-05-22T02%3A28%3A39.954Z",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/pools",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/assets/events?limit=6&order_by=-timestamp&timestamp_gte=2026-05-22T02%3A28%3A39.954Z&timestamp_lte=2026-05-23T02%3A28%3A39.954Z",
+      "status": 401
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/dags/~/dagRuns?limit=1&state=running&state=queued",
+      "status": 404
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/variables?limit=30&offset=0&order_by=key",
+      "status": 404
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec."
+    },
+    {
+      "type": "network_error",
+      "url": "http://localhost:8080/api/v2/connections?limit=50&offset=0&order_by=connection_id",
+      "status": 404
+    },
+    {
+      "type": "console.error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+  ]
+}

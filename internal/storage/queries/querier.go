@@ -12,8 +12,11 @@ import (
 
 type Querier interface {
 	AssignUserRole(ctx context.Context, arg AssignUserRoleParams) error
+	CountDagRunStatesInWindow(ctx context.Context, arg CountDagRunStatesInWindowParams) ([]CountDagRunStatesInWindowRow, error)
 	CountDagRunsByDag(ctx context.Context, dagID pgtype.UUID) (int64, error)
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
+	CountDagsByLatestRunState(ctx context.Context, tenantID pgtype.UUID) ([]CountDagsByLatestRunStateRow, error)
+	CountTaskInstanceStatesInWindow(ctx context.Context, arg CountTaskInstanceStatesInWindowParams) ([]CountTaskInstanceStatesInWindowRow, error)
 	CountUsers(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) error
 	CreateDagRun(ctx context.Context, arg CreateDagRunParams) (DagRun, error)

@@ -219,6 +219,82 @@ func TestListDagVersionsIntegration(t *testing.T) {
 	}
 }
 
+// TestDashboardStatsIntegration guards the home-dashboard counters: DAGs by
+// latest-run state and run/task-instance state counts within a time window.
+func TestDashboardStatsIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+	base := time.Now().UnixNano()
+	now := time.Now().UTC()
+	dagFail := fmt.Sprintf("uiq_dash_fail_%d", base)
+	dagRun := fmt.Sprintf("uiq_dash_run_%d", base)
+	tasks := []domain.TaskSpec{
+		{TaskID: "a", Type: domain.TaskTypePython},
+		{TaskID: "b", Type: domain.TaskTypePython, DependsOn: []string{"a"}},
+	}
+
+	// Create every run as running first (so ActiveRuns resolves its UUID and
+	// MaterializeTasks works), then transition the run to its target state.
+	mkRun := func(dagID string) string {
+		registerSpec(t, repo, ctx, dagID, tasks)
+		if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+			RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: now,
+		}); err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+		runs, err := sched.ActiveRuns(ctx)
+		if err != nil {
+			t.Fatalf("ActiveRuns: %v", err)
+		}
+		for _, r := range runs {
+			if r.DagID == dagID {
+				if merr := sched.MaterializeTasks(ctx, r.RunID, tasks); merr != nil {
+					t.Fatalf("MaterializeTasks: %v", merr)
+				}
+				return r.RunID
+			}
+		}
+		t.Fatalf("run UUID not resolved for %s", dagID)
+		return ""
+	}
+
+	failUUID := mkRun(dagFail)
+	if err := sched.ApplyTransition(ctx, failUUID, "a", domain.TaskStateSuccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.ApplyTransition(ctx, failUUID, "b", domain.TaskStateFailed); err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.SetRunState(ctx, failUUID, domain.DagRunStateFailed); err != nil {
+		t.Fatal(err)
+	}
+	runUUID := mkRun(dagRun)
+	if err := sched.ApplyTransition(ctx, runUUID, "a", domain.TaskStateRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := repo.DagStats(ctx, "default")
+	if err != nil {
+		t.Fatalf("DagStats: %v", err)
+	}
+	if stats.Active < 2 {
+		t.Errorf("active dag count = %d, want >= 2", stats.Active)
+	}
+	if stats.Failed < 1 || stats.Running < 1 {
+		t.Errorf("dag-by-latest-state: failed=%d running=%d, want both >= 1", stats.Failed, stats.Running)
+	}
+
+	m, err := repo.HistoricalMetrics(ctx, "default", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("HistoricalMetrics: %v", err)
+	}
+	if m.RunStates["failed"] < 1 || m.RunStates["running"] < 1 {
+		t.Errorf("run states = %v, want failed>=1 running>=1", m.RunStates)
+	}
+	if m.TIStates["success"] < 1 || m.TIStates["failed"] < 1 || m.TIStates["running"] < 1 {
+		t.Errorf("ti states = %v, want success/failed/running >= 1 each", m.TIStates)
+	}
+}
+
 // TestReportStateRecordsResultIntegration guards the pod-agent state-report path
 // (ExecutionStore.ReportState -> ReportTaskResult). Before the $3::task_state
 // cast, this query failed with SQLSTATE 42P08 (inconsistent types deduced for

@@ -121,3 +121,29 @@ JOIN dag_runs dr ON dr.id = ti.dag_run_id
 JOIN dags d ON d.id = dr.dag_id
 WHERE d.tenant_id = $1 AND d.dag_id = $2 AND dr.run_id = ANY($3::text[])
 ORDER BY dr.run_id, ti.task_id, ti.try_number;
+
+-- name: CountDagsByLatestRunState :many
+SELECT lr.state AS state, count(*) AS n
+FROM (
+    SELECT DISTINCT ON (r.dag_id) r.state
+    FROM dag_runs r
+    JOIN dags d ON d.id = r.dag_id
+    WHERE d.tenant_id = $1
+    ORDER BY r.dag_id, r.logical_date DESC
+) lr
+GROUP BY lr.state;
+
+-- name: CountDagRunStatesInWindow :many
+SELECT r.state AS state, count(*) AS n
+FROM dag_runs r
+JOIN dags d ON d.id = r.dag_id
+WHERE d.tenant_id = $1 AND r.logical_date >= $2 AND r.logical_date <= $3
+GROUP BY r.state;
+
+-- name: CountTaskInstanceStatesInWindow :many
+SELECT ti.state AS state, count(*) AS n
+FROM task_instances ti
+JOIN dag_runs r ON r.id = ti.dag_run_id
+JOIN dags d ON d.id = r.dag_id
+WHERE d.tenant_id = $1 AND r.logical_date >= $2 AND r.logical_date <= $3
+GROUP BY ti.state;

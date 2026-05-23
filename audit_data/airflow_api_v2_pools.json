@@ -1,0 +1,1 @@
+{"pools":[{"name":"default_pool","slots":128,"description":"Default pool","include_deferred":false,"occupied_slots":0,"running_slots":0,"queued_slots":0,"scheduled_slots":0,"open_slots":128,"deferred_slots":0,"team_name":null}],"total_entries":1}

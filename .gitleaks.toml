@@ -1,0 +1,10 @@
+title = "Leoflow gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Curated Airflow reference fixtures: captured API responses whose file_token values are JWTs signed by a throwaway local Airflow (not real secrets)."
+paths = [
+  '''docs/reference/airflow-real/.*''',
+]

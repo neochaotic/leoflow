@@ -151,3 +151,14 @@ kubeconfig
 tests/load/results/
 tests/load/*.csv
 tests/load/*.json
+
+# Throwaway UI audit / API-capture artifacts (never commit; use docs/reference/ for curated fixtures)
+/audit_data/
+/airflow__*.json
+/leoflow__*.json
+/capture_ui.py
+/compare_apis.py
+/compare_json.py
+/deep_diff.py
+/full_comparison.py
+/interactive_audit.py

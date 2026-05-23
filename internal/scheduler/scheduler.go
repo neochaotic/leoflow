@@ -232,27 +232,29 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 			s.logger.Error("dispatching task", "run", run.RunID, "task", t.TaskID, "error", err)
 			return nil
 		}
-	} else {
-		// No executor for this task: pod dispatch is disabled (no kubeconfig) and
-		// the task is not an inline http_api task, so nothing will launch it. It
-		// is still recorded queued (below) to avoid re-processing every tick, but
-		// we surface why instead of stalling silently. See #46.
-		s.logger.Warn("task has no available executor; it will stay queued and not run",
-			"run", run.RunID, "dag", run.DagID, "task", t.TaskID, "task_type", task.Type,
-			"reason", "no_executor",
-			"hint", "pod dispatch disabled (no kubeconfig) or no executor handles this task type")
-		if s.recorder != nil {
-			s.recorder.RecordUndispatchable("no_executor")
-		}
-		// Surface the reason in the UI (the task panel renders the note), so a
-		// stuck-queued task is explained rather than silently green (#46).
-		note := fmt.Sprintf("Queued but not running: no executor available for a %q task. "+
-			"Pod dispatch is disabled (no Kubernetes config); only inline http_api tasks run without it.", task.Type)
-		if nerr := s.store.SetTaskNote(ctx, run.RunID, t.TaskID, note); nerr != nil {
-			s.logger.Warn("setting task note", "run", run.RunID, "task", t.TaskID, "error", nerr)
-		}
+		return s.recordTransition(ctx, run, t.TaskID, domain.TaskStateQueued)
 	}
-	return s.recordTransition(ctx, run, t.TaskID, domain.TaskStateQueued)
+	return s.failUndispatchable(ctx, run, t.TaskID, task.Type)
+}
+
+// failUndispatchable fails a task that has no executor to run it (pod dispatch
+// disabled and it is not an inline http_api task). The condition is
+// deterministic for the process lifetime, so failing fast — with the reason on
+// the task note for the UI — beats leaving the run "running" forever (#46, #50).
+func (s *Scheduler) failUndispatchable(ctx context.Context, run RunState, taskID string, taskType domain.TaskType) error {
+	s.logger.Warn("task has no available executor; failing it (it can never run)",
+		"run", run.RunID, "dag", run.DagID, "task", taskID, "task_type", taskType,
+		"reason", "no_executor",
+		"hint", "pod dispatch disabled (no kubeconfig) or no executor handles this task type")
+	if s.recorder != nil {
+		s.recorder.RecordUndispatchable("no_executor")
+	}
+	note := fmt.Sprintf("Failed: no executor available for a %q task. "+
+		"Pod dispatch is disabled (no Kubernetes config); only inline http_api tasks run without it.", taskType)
+	if nerr := s.store.SetTaskNote(ctx, run.RunID, taskID, note); nerr != nil {
+		s.logger.Warn("setting task note", "run", run.RunID, "task", taskID, "error", nerr)
+	}
+	return s.recordTransition(ctx, run, taskID, domain.TaskStateFailed)
 }
 
 // runInline starts an inline http_api task. The runner owns the task's state

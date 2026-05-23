@@ -157,12 +157,14 @@ func TestStepLeavesTaskScheduledWhenDispatchFails(t *testing.T) {
 	}
 }
 
-func TestStepWithoutDispatcherStillQueues(t *testing.T) {
+func TestStepWithoutDispatcherFailsUndispatchable(t *testing.T) {
+	// With no dispatcher and no inline runner the task can never run, so the
+	// scheduler fails it fast (with a note) instead of queuing it forever (#50).
 	store := runWithScheduledRoot()
 	if err := newScheduler(store).Step(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.transitions) != 1 || store.transitions[0].to != domain.TaskStateQueued {
-		t.Errorf("state-only scheduler should still queue, got %v", store.transitions)
+	if len(store.transitions) != 1 || store.transitions[0].to != domain.TaskStateFailed {
+		t.Errorf("state-only scheduler should fail the undispatchable task, got %v", store.transitions)
 	}
 }

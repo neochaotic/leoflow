@@ -245,9 +245,12 @@ func TestStepRecordsUndispatchableWhenNoExecutor(t *testing.T) {
 	if len(rec.undispatchable) != 1 || rec.undispatchable[0] != "no_executor" {
 		t.Errorf("expected one no_executor record, got %v", rec.undispatchable)
 	}
-	// 'a' is still recorded queued so it is not reprocessed every tick.
-	if !hasTransition(store.transitions, "a", domain.TaskStateQueued) {
-		t.Errorf("task a should be recorded queued, got %v", store.transitions)
+	// 'a' is FAILED fast (it can never run) rather than left queued forever (#50).
+	if !hasTransition(store.transitions, "a", domain.TaskStateFailed) {
+		t.Errorf("task a should be failed (no executor), got %v", store.transitions)
+	}
+	if hasTransition(store.transitions, "a", domain.TaskStateQueued) {
+		t.Errorf("task a must NOT be left queued; it can never run, got %v", store.transitions)
 	}
 	// The reason is surfaced as a task note for the UI.
 	if note := store.notes["a"]; !strings.Contains(note, "no executor available") {

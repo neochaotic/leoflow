@@ -662,6 +662,16 @@ func (r *Repository) ListVariables(ctx context.Context, tenant string, limit, of
 	return out, int(total), nil
 }
 
+// TenantUUID resolves a tenant name to its UUID string — the form the agent
+// token carries and that the secret-delivery methods expect.
+func (r *Repository) TenantUUID(ctx context.Context, name string) (string, error) {
+	tid, err := r.tenantID(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	return uuidToString(tid), nil
+}
+
 // SecretVariables returns the tenant's variables as key→value, for delivering to
 // task pods (ADR 0021). The agent exports them as AIRFLOW_VAR_<KEY>. tenantID is
 // the tenant UUID carried by the agent token (not the tenant name).

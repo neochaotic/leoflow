@@ -680,6 +680,61 @@ func TestConnectionsIntegration(t *testing.T) {
 	}
 }
 
+// TestSecretDeliveryByTenantUUIDIntegration covers the agent secret-delivery
+// path (ADR 0021): SecretVariables/SecretConnectionURIs are keyed by the tenant
+// UUID the agent token carries (not the name), and the connection URI carries the
+// decrypted password. This is the bug class that broke delivery in the pod.
+func TestSecretDeliveryByTenantUUIDIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 7)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	varKey := fmt.Sprintf("sd_var_%d", time.Now().UnixNano())
+	connID := fmt.Sprintf("sd_conn_%d", time.Now().UnixNano())
+	if err := repo.SetVariable(ctx, "default", domain.Variable{Key: varKey, Value: "hello"}); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+	port := 5432
+	if err := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "postgres", Host: "db", Login: "u", Password: "s3cr3t", Port: &port, Schema: "app",
+	}); err != nil {
+		t.Fatalf("SetConnection: %v", err)
+	}
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	// The tenant NAME must NOT resolve (it is not a UUID) — guards the original bug.
+	if _, err := repo.SecretVariables(ctx, "default"); err == nil {
+		t.Error("SecretVariables should require a tenant UUID, not the name")
+	}
+
+	vars, err := repo.SecretVariables(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretVariables(uuid): %v", err)
+	}
+	if vars[varKey] != "hello" {
+		t.Errorf("variable %q = %q, want hello", varKey, vars[varKey])
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs(uuid): %v", err)
+	}
+	if uris[connID] != "postgres://u:s3cr3t@db:5432/app" {
+		t.Errorf("connection uri = %q, want decrypted-password URI", uris[connID])
+	}
+	_ = repo.DeleteVariable(ctx, "default", varKey)
+	_ = repo.DeleteConnection(ctx, "default", connID)
+}
+
 // TestConnectionWriteRequiresCipherIntegration: without a cipher, writes are
 // refused rather than storing a credential in plaintext.
 func TestConnectionWriteRequiresCipherIntegration(t *testing.T) {

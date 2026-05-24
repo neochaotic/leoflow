@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
@@ -18,6 +19,9 @@ func newGenDocsCommand() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := os.MkdirAll(dir, 0o750); err != nil {
+				return fmt.Errorf("creating docs dir %s: %w", dir, err)
+			}
 			root := cmd.Root()
 			root.DisableAutoGenTag = true // no churny "auto generated on <date>" footer
 			if err := doc.GenMarkdownTree(root, dir); err != nil {

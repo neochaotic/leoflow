@@ -334,6 +334,49 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter exec
 	}()
 }
 
+// stagingGCInterval is how often the per-run staging-volume GC sweeps; stagingTTL
+// is the grace window after a run is no longer active before its PVC is deleted
+// (ADR 0022 — long enough for a clear+re-run to re-attach the data).
+const (
+	stagingGCInterval = time.Hour
+	stagingTTL        = 24 * time.Hour
+)
+
+// activeRunLister surfaces the currently active (queued/running) runs so staging
+// GC can treat any other run as terminal.
+type activeRunLister interface {
+	ActiveRuns(ctx context.Context) ([]scheduler.RunState, error)
+}
+
+// startStagingGC periodically deletes staging PVCs whose run is no longer active
+// and older than the TTL (ADR 0022).
+func startStagingGC(ctx context.Context, cs kubernetes.Interface, runs activeRunLister, logger *slog.Logger) {
+	exec := executor.NewKubernetesExecutor(cs, podNamespace)
+	go func() {
+		t := time.NewTicker(stagingGCInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				active, err := runs.ActiveRuns(ctx)
+				if err != nil {
+					logger.Error("staging gc: listing active runs", "error", err)
+					continue
+				}
+				live := make(map[string]bool, len(active))
+				for _, r := range active {
+					live[r.RunID] = true
+				}
+				if err := exec.GCStagingClaims(ctx, func(runID string) bool { return !live[runID] }, stagingTTL); err != nil {
+					logger.Error("staging gc", "error", err)
+				}
+			}
+		}
+	}()
+}
+
 func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, error) {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
@@ -361,6 +404,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		podExec := executor.NewKubernetesExecutor(cs, podNamespace)
 		sched.SetDispatcher(dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL))
 		startReconciler(ctx, cs, execStore, logger)
+		startStagingGC(ctx, cs, store, logger)
 		logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
 		podDispatch = true
 	} else {

@@ -82,9 +82,9 @@ type DAGSpec struct {
 // is a Kubernetes quantity (e.g. "5Gi"); StorageClass empty uses the cluster
 // default RWX class.
 type StagingConfig struct {
-	Enabled      bool   `json:"enabled"`
-	Size         string `json:"size,omitempty"`
-	StorageClass string `json:"storage_class,omitempty"`
+	Enabled      bool   `json:"enabled" yaml:"enabled"`
+	Size         string `json:"size,omitempty" yaml:"size,omitempty"`
+	StorageClass string `json:"storage_class,omitempty" yaml:"storage_class,omitempty"`
 }
 
 // DefaultArgs holds retry and timeout defaults applied to every task in a DAG.

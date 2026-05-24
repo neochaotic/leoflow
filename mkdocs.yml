@@ -61,6 +61,9 @@ validation:
   nav: { omitted_files: ignore }
   links: { absolute_links: ignore }
 
+extra_css:
+  - assets/extra.css
+
 markdown_extensions:
   - admonition
   - attr_list
@@ -96,6 +99,7 @@ nav:
       - HTTP API (Scalar): api-reference.md
       - CLI reference: cli/leoflow.md
       - Go packages (GoDocs): go-api.md
+      - Go reference (all packages): go/reference.md
       - Python runtime API: python-api.md
       - Configuration: configuration.md
   - Guides:

@@ -3,6 +3,7 @@
 Leoflow's control plane, agent, and CLI are Go. Every exported identifier carries
 a GoDoc (Go Report Card A+ is the quality floor).
 
+- **Full generated reference (this site):** [Go reference (all packages)](go/reference.md)
 - **Browse online:** <https://pkg.go.dev/github.com/neochaotic/leoflow>
 - **Locally:**
   ```bash

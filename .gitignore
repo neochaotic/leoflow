@@ -174,3 +174,4 @@ dags/**/dag.json
 /site/
 docs/openapi.yaml
 docs/cli/
+docs/go/

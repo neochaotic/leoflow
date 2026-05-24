@@ -7,6 +7,9 @@ that keeps Airflow's pod-per-task model and UI, without the Python control plane
 - **One image per DAG**: no shared `/dags` filesystem, no monolithic worker.
 - **Airflow 3.2.x UI compatibility** at `/api/v2/*` and `/ui/*`.
 
+
+![Leoflow Dev — DAGs view (marked DEV)](assets/screenshots/dev-dags.png)
+
 ## Start here
 - **[Operating modes](operating-modes.md)** — Demo · Dev · Production (coming soon).
 - **[DAG authoring](dag-authoring.md)** — how a data engineer writes and ships a DAG.

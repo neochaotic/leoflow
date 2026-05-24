@@ -1,0 +1,8 @@
+/* Full-bleed Scalar API reference: escape Material's narrow content column so
+   the API explorer uses the full width and fills the viewport height. */
+.md-content:has(#api-reference) .md-content__inner { max-width: none; padding: 0 .4rem; }
+.md-content:has(#api-reference) .md-content__inner > h1:first-child { display: none; }
+#api-reference { display: block; min-height: 88vh; }
+
+/* Tighten the generated Go/CLI reference (dense, code-heavy) for readability. */
+.md-typeset .doc-contents { margin-left: 0; }

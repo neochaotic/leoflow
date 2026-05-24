@@ -89,6 +89,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Why Leoflow: why-leoflow.md
   - Get started:
       - Quickstart: quickstart.md
       - Operating modes: operating-modes.md
@@ -110,4 +111,5 @@ nav:
       - Staging volume: staging-volume.md
   - Project:
       - Roadmap: roadmap-to-release.md
+      - Contributing: contributing.md
       - Architecture decisions (ADRs): adrs.md

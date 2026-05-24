@@ -6,3 +6,6 @@
 
 /* Tighten the generated Go/CLI reference (dense, code-heavy) for readability. */
 .md-typeset .doc-contents { margin-left: 0; }
+
+/* Home hero: the navbar wordmark + tagline carry the brand; drop the redundant H1. */
+.home-hero-title { display: none; }

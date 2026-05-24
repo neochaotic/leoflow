@@ -33,6 +33,83 @@ staging:
 Tasks read/write under `$LEOFLOW_STAGING_DIR` (= `/staging`), shared across the
 run's tasks.
 
+## Example — an ETL on a shared staging volume
+
+Each task runs in **its own pod**; all pods of the **same run** mount **one** RWX
+volume at `/staging`. XCom carries the small *path*; the volume carries the large
+*data* (XCom is capped at 256 KB).
+
+```mermaid
+flowchart TB
+  subgraph RUN["DagRun · etl_staging (one logical_date)"]
+    direction LR
+    subgraph PE["Pod: extract"]
+      E["extract<br/>(python)"]
+    end
+    subgraph PT["Pod: transform"]
+      T["transform<br/>(python)"]
+    end
+    subgraph PL["Pod: load"]
+      L["load<br/>(python)"]
+    end
+    E --> T --> L
+  end
+  DISK[("Staging volume · RWX<br/>/staging — one PVC for the whole run")]
+  PE -. mounts .- DISK
+  PT -. mounts .- DISK
+  PL -. mounts .- DISK
+```
+
+=== "leoflow.yaml"
+
+    ```yaml
+    schema_version: "1.0"
+    dag_id: etl_staging
+    description: ETL that stages large intermediate data on a shared per-run volume.
+    tags: [etl]
+    dependencies: []
+    staging:
+      enabled: true
+      size: 5Gi            # cluster default RWX StorageClass when storage_class is empty
+    ```
+
+=== "dag.py"
+
+    ```python
+    """etl_staging — pass large data via the shared /staging volume, not XCom."""
+    import json, os
+    from airflow.sdk import DAG, task
+
+    STAGING = os.environ.get("LEOFLOW_STAGING_DIR", "/staging")
+
+    @task
+    def extract() -> str:
+        path = f"{STAGING}/raw.json"
+        with open(path, "w") as f:
+            json.dump({"rows": list(range(100_000))}, f)   # too big for XCom (≤256 KB)
+        return path                                         # XCom carries the PATH, not the data
+
+    @task
+    def transform(raw_path: str) -> str:
+        data = json.load(open(raw_path))
+        out = f"{STAGING}/transformed.json"
+        with open(out, "w") as f:
+            json.dump({"count": len(data["rows"]) * 2}, f)
+        return out
+
+    @task
+    def load(out_path: str) -> None:
+        print("loaded:", json.load(open(out_path)))
+
+    with DAG("etl_staging", schedule=None, catchup=False, tags=["etl"]):
+        load(transform(extract()))
+    ```
+
+!!! tip "The pattern"
+    Return the **path** from each task (small → XCom); keep the **bytes** on
+    `/staging` (large → the shared volume). All three pods see the same files
+    because they mount the same per-run PVC.
+
 ## Lifecycle
 
 ```mermaid

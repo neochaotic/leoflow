@@ -4,7 +4,7 @@ hide:
   - toc
 ---
 
-# Leoflow
+# Leoflow { .home-hero-title }
 
 <p style="font-size:1.25rem; opacity:.85; margin-top:-.4rem;">
 The workflow orchestrator that ate Apache Airflow's lunch.<br>

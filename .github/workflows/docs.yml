@@ -27,12 +27,14 @@ jobs:
       # Auto-generate the CLI reference (git-ignored) from Cobra.
       - run: go run ./cmd/leoflow gen-docs --dir docs/cli
       # Auto-generate the Go package reference (git-ignored) from GoDocs.
+      # One file per package ({{.Dir}} -> docs/go/internal/<pkg>.md) so each page
+      # stays a reasonable length instead of one multi-thousand-line scroll.
       - run: |
-          go run github.com/princjef/gomarkdoc/cmd/gomarkdoc@latest --output docs/go/reference.md \
+          go run github.com/princjef/gomarkdoc/cmd/gomarkdoc@latest --output 'docs/go/{{.Dir}}.md' \
             --repository.url https://github.com/neochaotic/leoflow --repository.default-branch main \
             ./internal/domain ./internal/scheduler ./internal/executor ./internal/dispatch \
             ./internal/agent ./internal/agentrpc ./internal/storage ./internal/auth \
-            ./internal/config ./internal/cli
+            ./internal/config ./internal/cli ./internal/api
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       # Imaging libs for the Material social-cards plugin.

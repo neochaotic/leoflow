@@ -63,6 +63,13 @@ validation:
   nav: { omitted_files: ignore }
   links: { absolute_links: ignore }
 
+# Repo-only material that lives under docs/ but is not part of the published site
+# (the agent context template; reverse-engineering reference fixtures). Keeping
+# them here stops them from being built as orphan, unlinked HTML pages.
+exclude_docs: |
+  agent-templates/
+  reference/airflow-real/
+
 extra_css:
   - assets/extra.css
 
@@ -99,12 +106,23 @@ nav:
       - DAG authoring: dag-authoring.md
       - CI/CD & deploy examples: deploy.md
   - Reference:
-      - HTTP API (Scalar): api-reference.html
+      - reference.md
       - CLI reference: cli/leoflow.md
       - Go packages (GoDocs):
-          - go-api.md
-          - All packages (full reference): go/reference.md
+          - Overview: go-api.md
+          - internal/domain: go/internal/domain.md
+          - internal/scheduler: go/internal/scheduler.md
+          - internal/executor: go/internal/executor.md
+          - internal/dispatch: go/internal/dispatch.md
+          - internal/agent: go/internal/agent.md
+          - internal/agentrpc: go/internal/agentrpc.md
+          - internal/storage: go/internal/storage.md
+          - internal/auth: go/internal/auth.md
+          - internal/config: go/internal/config.md
+          - internal/cli: go/internal/cli.md
+          - internal/api: go/internal/api.md
       - Python runtime API: python-api.md
+      - HTTP API (Scalar): api-reference.html
       - Configuration: configuration.md
   - Guides:
       - Variables & Connections: variables-connections.md

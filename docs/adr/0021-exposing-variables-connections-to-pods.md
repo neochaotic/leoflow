@@ -33,39 +33,56 @@ the table:
 ## Decision
 
 Adopt **approach 2: on-demand fetch over `AgentService`**, as the target design.
-**Deferred** — not implemented now; this ADR fixes the direction so the agent
-contract and secret model are not designed into a corner.
+**MVP implementation (now): gRPC fetch + agent env-export.** The agent, before
+running user code, fetches the tenant's variables and connections over the
+authenticated gRPC channel and exports them into its **process environment** as
+`AIRFLOW_VAR_<KEY>` / `AIRFLOW_CONN_<ID>`. Airflow's built-in env-var secrets
+backend then resolves `Variable.get` / `BaseHook.get_connection` natively (and
+they are also readable as plain OS env vars) — no Python secrets-backend shim
+required. Secrets live only in the pod's process env, never in the pod spec / K8s
+API / etcd.
 
-When implemented:
+- Add `GetVariables` / `GetConnections` RPCs to `proto/agent.proto`,
+  authenticated by the same per-task-instance agent token.
+- The control plane **decrypts connection secrets only in-process at fetch time**
+  (ADR 0019); plaintext travels only over the gRPC channel to the authorized
+  agent.
+- **Prerequisite: the agent↔core gRPC must use TLS.** Today the server runs the
+  gRPC plaintext; TLS (ideally mTLS) is enabled first, before any secret flows.
+- Scope: Variables and Connections are **global** (tenant-wide), matching
+  Airflow. No per-DAG scoping in the MVP.
 
-- Add `GetVariable(key) -> {value, found}` and
-  `GetConnection(conn_id) -> {conn fields}` RPCs to `proto/agent.proto`,
-  authenticated by the same per-task-instance agent token as the other calls.
-- The control plane resolves them against the repository, **decrypting connection
-  secrets only in-process at fetch time** (ADR 0019); plaintext is sent only over
-  the gRPC channel to the authorized agent, never persisted to the pod.
-- The agent exposes them to user code via an Airflow **secrets backend** shim
-  (or equivalent SDK hook), so `Variable.get` / `BaseHook.get_connection` resolve
-  transparently — preserving Airflow API compatibility.
-- Each access is auditable at the control plane (who/what fetched which key).
-- Scope: Variables and Connections are **global** (tenant-wide) — any task may
-  read any variable/connection in its tenant, matching Airflow. There is no
-  per-DAG scoping.
+**Design for evolution.** Keep the secret-delivery mechanism behind a seam so we
+can move, without rewriting consumers, to:
+- **K8s Secret projection (Argo/KFP style):** materialize a connection as a
+  Kubernetes Secret and reference it via `secretKeyRef` — leans on etcd
+  encryption + RBAC + audit; value never crosses our gRPC. (Hardening step.)
+- **Cloud workload identity (#56):** for cloud-storage credentials, prefer
+  keyless Workload Identity (GKE) / IRSA (EKS) — no secret at all. This is what
+  Argo Workflows and Kubeflow Pipelines do for cloud.
 
-**Env injection (approach 1) is the explicit fallback** only if a faster MVP is
-required before the gRPC path lands; if used, it must be documented as a known
-secret-exposure tradeoff and limited to non-sensitive variables.
+### Known tradeoffs of the MVP path (accepted)
+
+- Secrets end up in the pod's **process environment**, so any code in the pod
+  (the task and its dependencies) can read all exported values. Expected for the
+  task's own use; the trust model is "do not run untrusted code/images". Do not
+  log the environment.
+- **Fetch-all at boot = no least-privilege**: a task sees every tenant secret,
+  not just what it uses. Tracked as a follow-up (scope to referenced secrets).
+- A connection URI embeds its password (Airflow's `AIRFLOW_CONN_` format) — that
+  is inherent to Airflow compatibility.
 
 ## Consequences
 
-- Secrets stay out of the pod spec and the K8s API; exposure is limited to the
-  task that asked, over an already-authenticated channel, and is auditable.
-- The agent gains a small SDK-integration surface (the secrets-backend shim) and
-  one network round trip per lookup (cacheable within a task run).
-- Until this is built, DAGs cannot rely on Admin Variables/Connections; tasks
-  must carry their own config. This is a known MVP limitation tracked in #54.
-- The agent contract stays minimal and authenticated; no broad "dump all secrets
-  to env" step is introduced.
+- Secrets stay out of the pod spec / K8s API / etcd; they reach the pod only over
+  the authenticated gRPC channel and live in the process env.
+- `Variable.get` / `BaseHook.get_connection` work natively (Airflow env backend),
+  and the values are also plain OS env vars — no Python shim.
+- Requires gRPC TLS (enabled as the first slice) and accepts the process-env and
+  fetch-all tradeoffs above; both have clear evolution paths (K8s Secret
+  projection, Workload Identity, per-secret scoping).
+- The agent contract grows by two read RPCs, authorized by the per-task-instance
+  token.
 
 ## Alternatives considered
 

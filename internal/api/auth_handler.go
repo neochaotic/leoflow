@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -33,13 +34,16 @@ func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSe
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
 			return
 		}
-		tenant := req.Tenant
+		tenant := strings.TrimSpace(req.Tenant)
 		if tenant == "" {
 			tenant = "default"
 		}
+		// Trim the username/tenant (emails carry no meaningful surrounding space and
+		// autofill/paste often add one), but NEVER the password — trailing/leading
+		// spaces are valid password characters, and silently trimming them is unsafe.
 		token, err := authn.IssueToken(c.Request.Context(), auth.Credentials{
 			Tenant:   tenant,
-			Username: req.Username,
+			Username: strings.TrimSpace(req.Username),
 			Password: req.Password,
 		})
 		if err != nil {

@@ -21,9 +21,11 @@ type fakeAuthn struct {
 	user     *auth.User
 	issueErr error
 	authErr  error
+	gotCreds auth.Credentials
 }
 
-func (f *fakeAuthn) IssueToken(context.Context, auth.Credentials) (string, error) {
+func (f *fakeAuthn) IssueToken(_ context.Context, c auth.Credentials) (string, error) {
+	f.gotCreds = c
 	return f.token, f.issueErr
 }
 
@@ -128,5 +130,22 @@ func TestRequirePermissionForbidden(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("viewer write:dag = %d, want 403", rec.Code)
+	}
+}
+
+func TestAuthTokenTrimsUsernameNotPassword(t *testing.T) {
+	f := &fakeAuthn{token: "jwt"}
+	// Username has surrounding whitespace (autofill/paste); password has a
+	// trailing space that MUST be preserved (trimming passwords is unsafe).
+	rec := do(testServer(f), http.MethodPost, "/auth/token",
+		`{"username":"  admin@leoflow.local  ","password":"pw "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auth/token = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if f.gotCreds.Username != "admin@leoflow.local" {
+		t.Errorf("username = %q, want trimmed 'admin@leoflow.local'", f.gotCreds.Username)
+	}
+	if f.gotCreds.Password != "pw " {
+		t.Errorf("password = %q, want preserved 'pw ' (passwords must not be trimmed)", f.gotCreds.Password)
 	}
 }

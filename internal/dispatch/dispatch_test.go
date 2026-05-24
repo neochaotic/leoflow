@@ -85,6 +85,55 @@ func TestDispatchBuildsRequest(t *testing.T) {
 	}
 }
 
+func TestDispatchAppliesPlatformDefaults(t *testing.T) {
+	defaults := PlatformDefaults{
+		StagingSize:         "10Gi",
+		StagingStorageClass: "efs-sc",
+		Resources:           &domain.Resources{Requests: &domain.ResourceQuantity{CPU: "250m", Memory: "256Mi"}},
+	}
+
+	t.Run("fills gaps the artifact left empty", func(t *testing.T) {
+		res := &fakeResolver{resolved: Resolved{
+			TaskInstanceID: "ti", Image: "etl:v1",
+			Staging: &domain.StagingConfig{Enabled: true}, // size/class unset
+		}}
+		exec := &fakeExecutor{}
+		d := newDispatcher(res, &fakeIssuer{token: "t"}, exec)
+		d.SetPlatformDefaults(defaults)
+
+		bare := domain.TaskSpec{TaskID: "t", Type: domain.TaskTypePython, Entrypoint: "dag:t"} // no resources
+		if err := d.Dispatch(context.Background(), "run", "etl", bare); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		if exec.req.StagingSize != "10Gi" || exec.req.StagingStorageClass != "efs-sc" {
+			t.Errorf("staging defaults not filled: size=%q class=%q", exec.req.StagingSize, exec.req.StagingStorageClass)
+		}
+		if exec.req.Resources.Requests == nil || exec.req.Resources.Requests.CPU != "250m" {
+			t.Errorf("resource defaults not filled: %+v", exec.req.Resources)
+		}
+	})
+
+	t.Run("never overrides an explicit baked value", func(t *testing.T) {
+		res := &fakeResolver{resolved: Resolved{
+			TaskInstanceID: "ti", Image: "etl:v1",
+			Staging: &domain.StagingConfig{Enabled: true, Size: "1Gi", StorageClass: "fast"},
+		}}
+		exec := &fakeExecutor{}
+		d := newDispatcher(res, &fakeIssuer{token: "t"}, exec)
+		d.SetPlatformDefaults(defaults)
+
+		if err := d.Dispatch(context.Background(), "run", "etl", pythonTask()); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		if exec.req.StagingSize != "1Gi" || exec.req.StagingStorageClass != "fast" {
+			t.Errorf("platform defaults clobbered explicit staging: %+v", exec.req)
+		}
+		if exec.req.Resources.Requests.CPU != "500m" {
+			t.Errorf("platform defaults clobbered explicit resources: %+v", exec.req.Resources)
+		}
+	})
+}
+
 func TestDispatchPropagatesErrors(t *testing.T) {
 	cases := map[string]*Dispatcher{
 		"resolver": newDispatcher(&fakeResolver{err: errors.New("x")}, &fakeIssuer{token: "t"}, &fakeExecutor{}),

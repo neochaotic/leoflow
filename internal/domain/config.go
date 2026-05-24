@@ -23,6 +23,23 @@ type LeoflowConfig struct {
 	// Leoflow deployment concern (not an Airflow DAG attribute), so it lives in
 	// leoflow.yaml and the compiler overlays it onto the produced dag.json.
 	Staging *StagingConfig `json:"staging,omitempty" yaml:"staging,omitempty"`
+	// Tasks holds per-task overrides bound by task_id (ADR 0023). Each entry's
+	// key must match a task_id in the compiled DAG; the compiler errors on an
+	// unknown id rather than silently dropping it.
+	Tasks map[string]*TaskConfig `json:"tasks,omitempty" yaml:"tasks,omitempty"`
+}
+
+// TaskConfig holds the leoflow.yaml per-task overrides bound by task_id (ADR
+// 0023). Every field is optional; a set field overrides the value compiled from
+// the DAG (most specific wins: task override > DAG default_args). These are
+// Leoflow deployment concerns, not Airflow operator attributes.
+type TaskConfig struct {
+	Retries                 *int              `json:"retries,omitempty" yaml:"retries,omitempty"`
+	RetryDelaySeconds       *int              `json:"retry_delay_seconds,omitempty" yaml:"retry_delay_seconds,omitempty"`
+	ExecutionTimeoutSeconds *int              `json:"execution_timeout_seconds,omitempty" yaml:"execution_timeout_seconds,omitempty"`
+	Env                     map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	Resources               *Resources        `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Execution               *Execution        `json:"execution,omitempty" yaml:"execution,omitempty"`
 }
 
 // BuildConfig controls how the container image is built from the project.

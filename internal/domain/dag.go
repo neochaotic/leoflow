@@ -134,22 +134,22 @@ type Secret struct {
 
 // Resources holds Kubernetes-style resource requests and limits for a task.
 type Resources struct {
-	Requests *ResourceQuantity `json:"requests,omitempty"`
-	Limits   *ResourceQuantity `json:"limits,omitempty"`
+	Requests *ResourceQuantity `json:"requests,omitempty" yaml:"requests,omitempty"`
+	Limits   *ResourceQuantity `json:"limits,omitempty" yaml:"limits,omitempty"`
 }
 
 // ResourceQuantity expresses CPU and memory in Kubernetes notation.
 type ResourceQuantity struct {
-	CPU    string `json:"cpu,omitempty"`
-	Memory string `json:"memory,omitempty"`
+	CPU    string `json:"cpu,omitempty" yaml:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty" yaml:"memory,omitempty"`
 }
 
 // Execution carries executor-specific placement hints for a task.
 type Execution struct {
-	NodeSelector    map[string]string `json:"node_selector,omitempty"`
-	Tolerations     []map[string]any  `json:"tolerations,omitempty"`
-	ServiceAccount  string            `json:"service_account,omitempty"`
-	ImagePullPolicy string            `json:"image_pull_policy,omitempty"`
+	NodeSelector    map[string]string `json:"node_selector,omitempty" yaml:"node_selector,omitempty"`
+	Tolerations     []map[string]any  `json:"tolerations,omitempty" yaml:"tolerations,omitempty"`
+	ServiceAccount  string            `json:"service_account,omitempty" yaml:"service_account,omitempty"`
+	ImagePullPolicy string            `json:"image_pull_policy,omitempty" yaml:"image_pull_policy,omitempty"`
 }
 
 // EffectiveExecutionMode returns the task's execution mode, applying the

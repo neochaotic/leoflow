@@ -35,6 +35,20 @@ type TokenIssuer interface {
 	IssueAgentToken(id auth.AgentIdentity, ttl time.Duration) (string, error)
 }
 
+// PlatformDefaults are per-cluster task defaults applied at dispatch to fill
+// gaps the DAG artifact left empty (ADR 0023, layer L0). They are the lowest
+// precedence (task override > DAG default > platform default) and never replace
+// a value baked into dag.json, so the artifact stays portable across clusters.
+type PlatformDefaults struct {
+	// StagingSize/StagingStorageClass default the per-run staging volume when the
+	// DAG enabled staging but did not pin them (e.g. the cluster's RWX class).
+	StagingSize         string
+	StagingStorageClass string
+	// Resources defaults a task's requests/limits when neither the task override
+	// nor the DAG set any.
+	Resources *domain.Resources
+}
+
 // Dispatcher builds executor requests for queued pod-path tasks and runs them.
 type Dispatcher struct {
 	exec           executor.Executor
@@ -43,6 +57,7 @@ type Dispatcher struct {
 	controlAddr    string
 	tokenTTL       time.Duration
 	tlsCAConfigMap string
+	defaults       PlatformDefaults
 }
 
 // NewDispatcher builds a Dispatcher that launches tasks via exec, resolves their
@@ -56,6 +71,10 @@ func NewDispatcher(exec executor.Executor, resolver Resolver, issuer TokenIssuer
 // agents verify the control plane's gRPC TLS cert (issue #58). Empty = the agent
 // stays on the insecure channel (dev).
 func (d *Dispatcher) SetAgentTLSCAConfigMap(name string) { d.tlsCAConfigMap = name }
+
+// SetPlatformDefaults configures the per-cluster task defaults applied at
+// dispatch to fill gaps the DAG artifact left empty (ADR 0023, layer L0).
+func (d *Dispatcher) SetPlatformDefaults(p PlatformDefaults) { d.defaults = p }
 
 // Dispatch resolves the task, mints its agent token, and executes it.
 func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error {
@@ -94,8 +113,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 	if task.ExecutionTimeoutSeconds != nil {
 		req.TimeoutSeconds = *task.ExecutionTimeoutSeconds
 	}
-	if task.Resources != nil {
+	switch {
+	case task.Resources != nil:
 		req.Resources = *task.Resources
+	case d.defaults.Resources != nil:
+		// L0: no task/DAG resources; fall back to the platform default (ADR 0023).
+		req.Resources = *d.defaults.Resources
 	}
 	if task.Execution != nil {
 		req.Execution = *task.Execution
@@ -104,9 +127,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 		// All of the run's tasks share one PVC, named deterministically so a
 		// clear+re-run re-attaches it (ADR 0022). The executor provisions it.
 		req.StagingClaim = executor.StagingClaimName(dagID, runID)
-		req.StagingSize = r.Staging.Size
-		req.StagingStorageClass = r.Staging.StorageClass
+		// L0: the DAG opted into staging but may not have pinned size/class; fill
+		// from the per-cluster default without overriding an explicit value.
+		req.StagingSize = firstNonEmpty(r.Staging.Size, d.defaults.StagingSize)
+		req.StagingStorageClass = firstNonEmpty(r.Staging.StorageClass, d.defaults.StagingStorageClass)
 	}
 	req.AgentTLSCAConfigMap = d.tlsCAConfigMap
 	return d.exec.Execute(ctx, req)
+}
+
+// firstNonEmpty returns a if it is non-empty, otherwise b.
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

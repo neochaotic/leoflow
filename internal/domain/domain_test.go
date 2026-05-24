@@ -153,11 +153,28 @@ func TestLeoflowConfigValidateAcceptsValidConfig(t *testing.T) {
 	}
 }
 
+func TestLeoflowConfigValidateAcceptsTaskOverrides(t *testing.T) {
+	cfg := validLeoflowConfig()
+	cfg.Tasks = map[string]*TaskConfig{
+		"transform": {
+			Retries:   ptr(5),
+			Env:       map[string]string{"TZ": "UTC"},
+			Resources: &Resources{Requests: &ResourceQuantity{CPU: "2", Memory: "4Gi"}},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with tasks override = %v, want nil", err)
+	}
+}
+
 func TestLeoflowConfigValidateRejectsInvalidConfigs(t *testing.T) {
 	cases := map[string]func(*LeoflowConfig){
 		"missing dag_id":     func(c *LeoflowConfig) { c.DagID = "" },
 		"bad python version": func(c *LeoflowConfig) { c.PythonVersion = "2.7" },
 		"bad dag_id pattern": func(c *LeoflowConfig) { c.DagID = "has spaces" },
+		"negative retries": func(c *LeoflowConfig) {
+			c.Tasks = map[string]*TaskConfig{"t": {Retries: ptr(-1)}}
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

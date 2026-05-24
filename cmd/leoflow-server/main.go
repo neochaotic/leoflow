@@ -421,6 +421,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		podExec := executor.NewKubernetesExecutor(cs, podNamespace)
 		dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
 		dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
+		dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 		sched.SetDispatcher(dispatcher)
 		startReconciler(ctx, cs, execStore, logger)
 		startStagingGC(ctx, cs, store, logger)
@@ -477,4 +478,20 @@ func serve(s *http.Server, errCh chan<- error) {
 	if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errCh <- fmt.Errorf("serving %s: %w", s.Addr, err)
 	}
+}
+
+// platformDefaults maps the executor.defaults config (L0 task defaults, ADR
+// 0023) into the dispatcher's PlatformDefaults. Resources are set only when a
+// quantity is configured, so an unset section leaves req.Resources untouched.
+func platformDefaults(c config.PlatformDefaultsSection) dispatch.PlatformDefaults {
+	d := dispatch.PlatformDefaults{
+		StagingSize:         c.StagingSize,
+		StagingStorageClass: c.StagingStorageClass,
+	}
+	if c.ResourcesCPU != "" || c.ResourcesMemory != "" {
+		d.Resources = &domain.Resources{
+			Requests: &domain.ResourceQuantity{CPU: c.ResourcesCPU, Memory: c.ResourcesMemory},
+		}
+	}
+	return d
 }

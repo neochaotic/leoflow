@@ -127,6 +127,60 @@
         "storage_class": { "type": "string", "description": "RWX StorageClass; empty = cluster default." }
       },
       "additionalProperties": false
+    },
+
+    "tasks": {
+      "type": "object",
+      "description": "Per-task overrides bound by task_id (ADR 0023). Each key MUST match a task_id in the compiled DAG; an unknown id fails the compile. A set field overrides the value compiled from the DAG (task override > DAG defaults).",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "retries": { "type": "integer", "minimum": 0 },
+          "retry_delay_seconds": { "type": "integer", "minimum": 0 },
+          "execution_timeout_seconds": { "type": "integer", "minimum": 1 },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Environment variables merged over the task's compiled env."
+          },
+          "resources": {
+            "type": "object",
+            "properties": {
+              "requests": {
+                "type": "object",
+                "properties": {
+                  "cpu": { "type": "string" },
+                  "memory": { "type": "string" }
+                },
+                "additionalProperties": false
+              },
+              "limits": {
+                "type": "object",
+                "properties": {
+                  "cpu": { "type": "string" },
+                  "memory": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "execution": {
+            "type": "object",
+            "properties": {
+              "node_selector": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "tolerations": { "type": "array" },
+              "service_account": { "type": "string" },
+              "image_pull_policy": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
     }
   }
 }

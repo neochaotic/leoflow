@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -82,7 +83,7 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}); rerr != nil {
 		return rerr
 	}
-	if oerr := overlayStaging(o.output, cfg.Staging); oerr != nil {
+	if oerr := overlayProject(o.output, cfg); oerr != nil {
 		return oerr
 	}
 	if verr := validateDAGFile(o.output); verr != nil {
@@ -204,11 +205,13 @@ func runParser(cmd *cobra.Command, command string, a parserArgs) error {
 	return nil
 }
 
-// overlayStaging writes the leoflow.yaml staging config onto the produced
-// dag.json. Staging is a Leoflow deployment concern, not an Airflow DAG
-// attribute, so it is not emitted by the parser (ADR 0022). No-op when unset.
-func overlayStaging(dagJSONPath string, staging *domain.StagingConfig) error {
-	if staging == nil {
+// overlayProject writes the leoflow.yaml Leoflow-specific config (staging and
+// per-task overrides) onto the produced dag.json. These are deployment concerns,
+// not Airflow DAG attributes, so the parser does not emit them (ADR 0022, 0023).
+// Per-task overrides are bound by task_id; an entry naming a task absent from the
+// DAG is a hard error (no silent drop). No-op when nothing is configured.
+func overlayProject(dagJSONPath string, cfg *domain.LeoflowConfig) error {
+	if cfg.Staging == nil && len(cfg.Tasks) == 0 {
 		return nil
 	}
 	data, err := os.ReadFile(dagJSONPath) //nolint:gosec // G304: output path is operator-supplied on the CLI.
@@ -219,7 +222,17 @@ func overlayStaging(dagJSONPath string, staging *domain.StagingConfig) error {
 	if uerr := json.Unmarshal(data, &spec); uerr != nil {
 		return fmt.Errorf("parsing %s: %w", dagJSONPath, uerr)
 	}
-	spec.Staging = staging
+	if cfg.Staging != nil {
+		spec.Staging = cfg.Staging
+	}
+	if verr := validateTaskBindings(cfg.Tasks, spec.Tasks); verr != nil {
+		return verr
+	}
+	for i := range spec.Tasks {
+		if override := cfg.Tasks[spec.Tasks[i].TaskID]; override != nil {
+			applyTaskOverride(&spec.Tasks[i], override)
+		}
+	}
 	out, err := json.MarshalIndent(&spec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding %s: %w", dagJSONPath, err)
@@ -228,6 +241,56 @@ func overlayStaging(dagJSONPath string, staging *domain.StagingConfig) error {
 		return fmt.Errorf("writing %s: %w", dagJSONPath, werr)
 	}
 	return nil
+}
+
+// validateTaskBindings guards the YAML↔task binding: every key in the leoflow.yaml
+// tasks block must name a task_id present in the compiled DAG, so a typo fails the
+// compile instead of silently overriding nothing (ADR 0023).
+func validateTaskBindings(overrides map[string]*domain.TaskConfig, tasks []domain.TaskSpec) error {
+	if len(overrides) == 0 {
+		return nil
+	}
+	known := make(map[string]struct{}, len(tasks))
+	ids := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		known[t.TaskID] = struct{}{}
+		ids = append(ids, t.TaskID)
+	}
+	for id := range overrides {
+		if _, ok := known[id]; !ok {
+			sort.Strings(ids)
+			return fmt.Errorf("leoflow.yaml tasks: unknown task_id %q; the DAG defines %v", id, ids)
+		}
+	}
+	return nil
+}
+
+// applyTaskOverride sets each override field that is present onto the task,
+// leaving unset fields as compiled. Env entries are merged over any existing env.
+func applyTaskOverride(task *domain.TaskSpec, o *domain.TaskConfig) {
+	if o.Retries != nil {
+		task.Retries = o.Retries
+	}
+	if o.RetryDelaySeconds != nil {
+		task.RetryDelaySeconds = o.RetryDelaySeconds
+	}
+	if o.ExecutionTimeoutSeconds != nil {
+		task.ExecutionTimeoutSeconds = o.ExecutionTimeoutSeconds
+	}
+	if o.Resources != nil {
+		task.Resources = o.Resources
+	}
+	if o.Execution != nil {
+		task.Execution = o.Execution
+	}
+	if len(o.Env) > 0 {
+		if task.Env == nil {
+			task.Env = make(map[string]string, len(o.Env))
+		}
+		for k, v := range o.Env {
+			task.Env[k] = v
+		}
+	}
 }
 
 // validateDAGFile reads a produced dag.json and validates it against the schema.

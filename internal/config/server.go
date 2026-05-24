@@ -43,6 +43,23 @@ type ExecutorSection struct {
 	// the agent verifies the control plane's gRPC TLS cert (issue #58). Empty =
 	// agents use the insecure channel (dev).
 	AgentTLSCAConfigMap string `mapstructure:"agent_tls_ca_configmap"`
+	// Defaults holds per-cluster task defaults applied at dispatch to fill gaps the
+	// DAG artifact left empty (ADR 0023, layer L0). They never override a value
+	// baked into dag.json, keeping the artifact portable across clusters.
+	Defaults PlatformDefaultsSection `mapstructure:"defaults"`
+}
+
+// PlatformDefaultsSection configures the lowest-precedence (L0) task defaults,
+// applied at dispatch to fill gaps the DAG left empty (ADR 0023).
+type PlatformDefaultsSection struct {
+	// StagingSize/StagingStorageClass default the per-run staging volume when the
+	// DAG enabled staging without pinning them (e.g. the cluster's RWX class).
+	StagingSize         string `mapstructure:"staging_size"`
+	StagingStorageClass string `mapstructure:"staging_storage_class"`
+	// ResourcesCPU/ResourcesMemory default a task's request when neither the task
+	// override nor the DAG set any (Kubernetes quantities, e.g. "250m"/"256Mi").
+	ResourcesCPU    string `mapstructure:"resources_cpu"`
+	ResourcesMemory string `mapstructure:"resources_memory"`
 }
 
 // HTTPExecutorSection configures the inline http_api execution path (ADR 0002).

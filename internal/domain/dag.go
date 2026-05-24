@@ -68,11 +68,23 @@ type DAGSpec struct {
 	MaxActiveRuns int          `json:"max_active_runs,omitempty"`
 	Catchup       bool         `json:"catchup,omitempty"`
 	DefaultArgs   *DefaultArgs `json:"default_args,omitempty"`
-	Tasks         []TaskSpec   `json:"tasks"`
+	// Staging, when enabled, requests an ephemeral RWX volume shared by the run's
+	// tasks at /staging (ADR 0022). nil/disabled means no staging volume.
+	Staging *StagingConfig `json:"staging,omitempty"`
+	Tasks   []TaskSpec     `json:"tasks"`
 	// Source is the original dag.py text, captured at compile time so the UI's
 	// Code tab can show the Python a human wrote (not the compiled spec). It is
 	// part of the artifact: changing it produces a new version.
 	Source string `json:"source,omitempty"`
+}
+
+// StagingConfig is the opt-in per-DAG-run shared staging volume (ADR 0022). Size
+// is a Kubernetes quantity (e.g. "5Gi"); StorageClass empty uses the cluster
+// default RWX class.
+type StagingConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Size         string `json:"size,omitempty"`
+	StorageClass string `json:"storage_class,omitempty"`
 }
 
 // DefaultArgs holds retry and timeout defaults applied to every task in a DAG.

@@ -112,6 +112,7 @@ func (s *ExecutionStore) ResolveTask(ctx context.Context, runID, taskID string) 
 		Image:           image,
 		ImagePullPolicy: pullPolicy,
 		TryNumber:       int(ti.TryNumber),
+		Staging:         spec.Staging,
 	}, nil
 }
 

@@ -36,6 +36,13 @@ func (e *KubernetesExecutor) Execute(ctx context.Context, req Request) error {
 		return fmt.Errorf("execution_mode: pod for http_api is not yet implemented; "+
 			"use execution_mode: inline (default) for short-lived calls, or wait for v0.2 (task %s)", req.TaskID)
 	}
+	// Provision the run's shared staging PVC on first use (idempotent), before the
+	// pod that mounts it (ADR 0022).
+	if req.StagingClaim != "" {
+		if err := e.ensureStagingClaim(ctx, req); err != nil {
+			return fmt.Errorf("provisioning staging volume for task %s: %w", req.TaskID, err)
+		}
+	}
 	pod := BuildPod(req)
 	if _, err := e.clientset.CoreV1().Pods(e.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("creating pod for task %s: %w", req.TaskID, err)

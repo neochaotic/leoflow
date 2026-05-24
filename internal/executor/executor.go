@@ -35,8 +35,11 @@ type Request struct {
 
 	// StagingClaim, when set, is the name of the per-DAG-run RWX PVC mounted at
 	// /staging in the task pod for large intermediate data shared across the run
-	// (ADR 0022). Empty means no staging volume.
-	StagingClaim string
+	// (ADR 0022). Empty means no staging volume. StagingSize/StagingStorageClass
+	// are used to provision the claim on first use.
+	StagingClaim        string
+	StagingSize         string
+	StagingStorageClass string
 }
 
 // Executor runs or dispatches a task. For synchronous executors (inline HTTP)

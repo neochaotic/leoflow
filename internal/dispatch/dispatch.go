@@ -20,6 +20,9 @@ type Resolved struct {
 	Image           string
 	ImagePullPolicy string
 	TryNumber       int
+	// Staging carries the DAG's opt-in staging-volume config (ADR 0022); nil or
+	// disabled means no per-run volume.
+	Staging *domain.StagingConfig
 }
 
 // Resolver loads a task instance's execution context from storage.
@@ -90,6 +93,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 	}
 	if task.Execution != nil {
 		req.Execution = *task.Execution
+	}
+	if r.Staging != nil && r.Staging.Enabled {
+		// All of the run's tasks share one PVC, named deterministically so a
+		// clear+re-run re-attaches it (ADR 0022). The executor provisions it.
+		req.StagingClaim = executor.StagingClaimName(dagID, runID)
+		req.StagingSize = r.Staging.Size
+		req.StagingStorageClass = r.Staging.StorageClass
 	}
 	return d.exec.Execute(ctx, req)
 }

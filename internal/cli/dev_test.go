@@ -165,9 +165,8 @@ func TestWaitForReadyHonorsCancel(t *testing.T) {
 func TestNewDevCommandFlagDefaults(t *testing.T) {
 	cmd := newDevCommand()
 	for flag, want := range map[string]string{
-		"compose":    "docker-compose.dev.yaml",
-		"migrations": "migrations",
-		"image":      "leoflow-dev:local",
+		"compose": "docker-compose.dev.yaml",
+		"image":   "leoflow-dev:local",
 	} {
 		if got, _ := cmd.Flags().GetString(flag); got != want {
 			t.Errorf("--%s default = %q, want %q", flag, got, want)

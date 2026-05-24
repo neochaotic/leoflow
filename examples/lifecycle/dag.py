@@ -40,6 +40,10 @@ def load(result: dict) -> None:
     time.sleep(2)
     print("load: done")
 
+@task
+def test() -> None:
+    print("Hello")
+
 
 with DAG("lifecycle", schedule=None, catchup=False, tags=["example"]):
     load(transform(extract()))

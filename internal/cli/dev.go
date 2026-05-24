@@ -16,11 +16,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // registers the "pgx5" migrate scheme
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
 	"github.com/spf13/cobra"
 
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/migrations"
 )
 
 // devEnv is the fixed local-development environment label and its defaults. The
@@ -34,7 +38,10 @@ const (
 	devDBName         = "leoflow_dev"
 	devDatabaseURL    = "postgres://leoflow:leoflow@localhost:5432/leoflow_dev?sslmode=disable"
 	devMaintenanceURL = "postgres://leoflow:leoflow@localhost:5432/postgres?sslmode=disable"
-	devRedisURL       = "redis://localhost:6379/0"
+	// devMigrateURL is the same dev database via golang-migrate's pgx5 scheme, used
+	// to apply the embedded migrations (no source tree / migrate CLI needed).
+	devMigrateURL = "pgx5://leoflow:leoflow@localhost:5432/leoflow_dev?sslmode=disable"
+	devRedisURL   = "redis://localhost:6379/0"
 	// taskSDKVersion matches the task image (runtime/Dockerfile); the dev venv
 	// installs it so dag.py's `from airflow.sdk import ...` resolves.
 	taskSDKVersion  = "apache-airflow-task-sdk==1.2.1"
@@ -70,7 +77,6 @@ type devOptions struct {
 	executor    string
 	port        int
 	composeFile string
-	migrations  string
 	runtimeSrc  string
 	serverBin   string
 	agentBin    string
@@ -106,7 +112,6 @@ func newDevCommand() *cobra.Command {
 	cmd.Flags().IntVar(&o.port, "port", devDefaultPort, "HTTP/UI port (dev default 8088, distinct from the demo's 8080)")
 	cmd.Flags().StringVar(&o.image, "image", "leoflow-dev:local", "placeholder image recorded in dag.json (subprocess mode only)")
 	cmd.Flags().StringVar(&o.composeFile, "compose", "docker-compose.dev.yaml", "compose file for local Postgres + Redis")
-	cmd.Flags().StringVar(&o.migrations, "migrations", "migrations", "path to the SQL migrations directory")
 	cmd.Flags().StringVar(&o.runtimeSrc, "runtime-src", "runtime/python", "source of the leoflow_runtime package installed into the dev venv")
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
@@ -240,7 +245,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if derr := ensureDevDatabase(ctx, cmd); derr != nil {
 		return derr
 	}
-	if merr := devMigrate(ctx, cmd, o); merr != nil {
+	if merr := devMigrate(cmd); merr != nil {
 		return merr
 	}
 	home, herr := devHome()
@@ -359,13 +364,22 @@ func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions) error {
 	return nil
 }
 
-// devMigrate applies the SQL migrations to the isolated dev database.
-func devMigrate(ctx context.Context, cmd *cobra.Command, o devOptions) error {
-	devPrintln(cmd.OutOrStdout(), "▸ migrating "+devDBName+" …")
-	mig := exec.CommandContext(ctx, "migrate", "-path", o.migrations, "-database", devDatabaseURL, "up") //nolint:gosec // operator-supplied migrations path on the dev CLI
-	mig.Stdout, mig.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
-	if err := mig.Run(); err != nil {
-		return fmt.Errorf("applying migrations (is golang-migrate installed?): %w", err)
+// devMigrate applies the embedded SQL migrations to the isolated dev database.
+// The migrations are compiled into the binary (no source tree or migrate CLI),
+// a step toward a binaries-only dev install (#60).
+func devMigrate(cmd *cobra.Command) error {
+	devPrintln(cmd.OutOrStdout(), "▸ migrating "+devDBName+" (embedded) …")
+	src, err := iofs.New(migrations.Files, ".")
+	if err != nil {
+		return fmt.Errorf("loading embedded migrations: %w", err)
+	}
+	m, err := migrate.NewWithSourceInstance("iofs", src, devMigrateURL)
+	if err != nil {
+		return fmt.Errorf("initializing migrator: %w", err)
+	}
+	defer func() { _, _ = m.Close() }() //nolint:errcheck // best-effort close of source + db handles
+	if uerr := m.Up(); uerr != nil && !errors.Is(uerr, migrate.ErrNoChange) {
+		return fmt.Errorf("applying migrations: %w", uerr)
 	}
 	return nil
 }

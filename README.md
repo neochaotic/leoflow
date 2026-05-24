@@ -19,6 +19,20 @@
 
 ---
 
+## 📚 Documentation
+
+**Full docs → <https://neochaotic.github.io/leoflow/>** (DAG authoring, deploy, API reference, architecture).
+
+| | |
+|---|---|
+| [Operating modes](docs/operating-modes.md) | Demo · Dev · Production (coming soon) |
+| [DAG authoring](docs/dag-authoring.md) | write a DAG; the dev → deploy lifecycle |
+| [CI/CD & deploy examples](docs/deploy.md) | GitHub Actions · GitLab · Cloud Build/Run · generic |
+| [HTTP API (Scalar)](docs/api-reference.md) · [Go packages](docs/go-api.md) | API references |
+| [Concepts & glossary](docs/concepts.md) · [Architecture](docs/architecture.md) | the model & the *why* |
+
+---
+
 ## The Five Wounds Apache Airflow Will Not Heal
 
 Airflow is the most widely deployed workflow orchestrator on earth. It is also the one that bleeds the most in production. Every data engineer recognizes these wounds:

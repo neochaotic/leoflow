@@ -3,47 +3,77 @@ site_description: GitOps-first, container-native workflow orchestrator (Airflow-
 site_url: https://neochaotic.github.io/leoflow/
 repo_url: https://github.com/neochaotic/leoflow
 repo_name: neochaotic/leoflow
+edit_uri: edit/main/docs/
 docs_dir: docs
+copyright: Apache-2.0 · Leoflow
 # Flat URLs keep relative asset paths (the Scalar spec) predictable under Pages.
 use_directory_urls: false
 
 theme:
   name: material
+  icon:
+    logo: material/transit-connection-variant
+    repo: fontawesome/brands/github
   palette:
-    - scheme: default
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
       primary: teal
       accent: teal
       toggle: { icon: material/weather-night, name: Dark mode }
-    - scheme: slate
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
       primary: teal
       accent: teal
       toggle: { icon: material/weather-sunny, name: Light mode }
   features:
+    - navigation.tabs
     - navigation.sections
+    - navigation.indexes
     - navigation.top
+    - navigation.tracking
+    - navigation.instant
+    - navigation.instant.progress
+    - toc.follow
     - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
     - search.suggest
+    - search.highlight
 
-# Many docs (ADRs, reports) are intentionally not in the top nav; don't fail
-# --strict on them, but still catch broken links.
 validation:
-  nav:
-    omitted_files: ignore
-  links:
-    absolute_links: ignore
+  nav: { omitted_files: ignore }
+  links: { absolute_links: ignore }
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
+  - def_list
   - tables
+  - footnotes
   - toc: { permalink: true }
-  - pymdownx.highlight
-  - pymdownx.superfences
+  - pymdownx.highlight: { anchor_linenums: true }
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.tabbed: { alternate_style: true }
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 
 nav:
   - Home: index.md
-  - Getting started:
-      - Operating modes (Demo · Dev · Production): operating-modes.md
+  - Get started:
+      - Operating modes: operating-modes.md
+      - Concepts & glossary: concepts.md
+      - Architecture: architecture.md
+  - Authoring & deploy:
       - DAG authoring: dag-authoring.md
+      - CI/CD & deploy examples: deploy.md
   - Reference:
       - HTTP API (Scalar): api-reference.md
       - Go packages (GoDocs): go-api.md
@@ -51,4 +81,10 @@ nav:
       - Staging volume: staging-volume.md
   - Project:
       - Roadmap: roadmap-to-release.md
-      - Architecture decisions (ADRs): adr/0023-dag-authoring-config-binding.md
+      - "ADR 0001 · Why Leoflow": adr/0001-why-leoflow.md
+      - "ADR 0002 · Pod-per-task": adr/0002-pod-per-task.md
+      - "ADR 0003 · DAG-as-image": adr/0003-dag-as-image.md
+      - "ADR 0011 · Strict TDD": adr/0011-tdd-strict.md
+      - "ADR 0021 · Variables/Connections": adr/0021-exposing-variables-connections-to-pods.md
+      - "ADR 0022 · Staging volume": adr/0022-ephemeral-per-run-staging-volume.md
+      - "ADR 0023 · DAG authoring binding": adr/0023-dag-authoring-config-binding.md

@@ -103,23 +103,51 @@ task override (tasks.<id>)  >  DAG default (defaults)  >  platform default (serv
 - A duplicate `task_id` key in the YAML → **parse error**.
 - Across a monorepo, a duplicate `dag_id` is a CI-gate concern (one image per DAG).
 
-## The loop: dev → CI artifact
+## The development → deploy lifecycle
 
-**Dev** (fast iteration, isolated — see [Operating modes](operating-modes.md)):
-
-```bash
-leoflow dev dags/my_pipeline        # hot-reload at http://localhost:8088 (marked DEV)
+```mermaid
+flowchart LR
+  I[leoflow init] --> D[leoflow dev<br/>hot-reload loop]
+  D -->|save & iterate| D
+  D --> G[git push]
+  G --> CI[CI: leoflow compile --build --push]
+  CI --> REG[leoflow push dag.json]
+  REG --> PROD[(control plane<br/>immutable artifact)]
 ```
 
-Edit `dag.py` / `leoflow.yaml`, save, and it recompiles + re-registers; the same
-guardrails fail fast in the terminal.
-
-**CI** (the authoritative path) compiles + builds + pushes the immutable artifact:
+### 1 · Develop (fast, isolated)
 
 ```bash
-leoflow compile dags/my_pipeline --image ghcr.io/org/my_pipeline:$GIT_SHA --build
+leoflow init dags/my_pipeline          # scaffold dag.py + leoflow.yaml
+leoflow dev dags/my_pipeline           # cluster-mode: real pods on an isolated k3d
+# or: leoflow dev --executor=subprocess dags/my_pipeline   (fastest, host venv)
+```
+
+Open <http://localhost:8088> — the UI is marked **DEV** (no login). Edit
+`dag.py`/`leoflow.yaml` and **save**; Leoflow recompiles, re-runs the guardrails,
+and re-registers. A bad binding prints an error in the terminal **immediately**:
+
+```text
+✗ leoflow.yaml tasks: unknown task_id "transfrom"; the DAG defines [extract load transform]
+```
+
+Dev is fully isolated from Demo/Production (own database, cluster, and ports) —
+**no split brain**. See [Operating modes](operating-modes.md).
+
+### 2 · Deploy (authoritative, immutable)
+
+On `git push`, CI compiles + builds + pushes the artifact. The **same** parser,
+overlay, and guardrails run as a gate, so what you tested in Dev is what ships:
+
+```bash
+leoflow compile dags/my_pipeline --image ghcr.io/org/my_pipeline:$GIT_SHA --build --push
 leoflow push dag.json
 ```
 
-The same parser + overlay + guardrails run as a CI gate, so a bad binding never
-reaches production.
+Full, copy-pasteable pipelines for **GitHub Actions, GitLab CI, Google Cloud
+Build/Run, and generic runners** are in **[CI/CD & deploy examples](deploy.md)**.
+
+---
+
+See also: [Concepts & glossary](concepts.md) · [Operating modes](operating-modes.md)
+· [HTTP API](api-reference.md) · [ADR 0023 — binding & overrides](adr/0023-dag-authoring-config-binding.md).

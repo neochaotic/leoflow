@@ -1,0 +1,54 @@
+site_name: Leoflow
+site_description: GitOps-first, container-native workflow orchestrator (Airflow-compatible UI)
+site_url: https://neochaotic.github.io/leoflow/
+repo_url: https://github.com/neochaotic/leoflow
+repo_name: neochaotic/leoflow
+docs_dir: docs
+# Flat URLs keep relative asset paths (the Scalar spec) predictable under Pages.
+use_directory_urls: false
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle: { icon: material/weather-sunny, name: Light mode }
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+
+# Many docs (ADRs, reports) are intentionally not in the top nav; don't fail
+# --strict on them, but still catch broken links.
+validation:
+  nav:
+    omitted_files: ignore
+  links:
+    absolute_links: ignore
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Operating modes (Demo · Dev · Production): operating-modes.md
+      - DAG authoring: dag-authoring.md
+  - Reference:
+      - HTTP API (Scalar): api-reference.md
+      - Go packages (GoDocs): go-api.md
+      - UI compatibility: ui-compatibility.md
+      - Staging volume: staging-volume.md
+  - Project:
+      - Roadmap: roadmap-to-release.md
+      - Architecture decisions (ADRs): adr/0023-dag-authoring-config-binding.md

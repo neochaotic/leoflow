@@ -663,9 +663,10 @@ func (r *Repository) ListVariables(ctx context.Context, tenant string, limit, of
 }
 
 // SecretVariables returns the tenant's variables as key→value, for delivering to
-// task pods (ADR 0021). The agent exports them as AIRFLOW_VAR_<KEY>.
-func (r *Repository) SecretVariables(ctx context.Context, tenant string) (map[string]string, error) {
-	tid, err := r.tenantID(ctx, tenant)
+// task pods (ADR 0021). The agent exports them as AIRFLOW_VAR_<KEY>. tenantID is
+// the tenant UUID carried by the agent token (not the tenant name).
+func (r *Repository) SecretVariables(ctx context.Context, tenantID string) (map[string]string, error) {
+	tid, err := parseUUID(tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -683,9 +684,10 @@ func (r *Repository) SecretVariables(ctx context.Context, tenant string) (map[st
 
 // SecretConnectionURIs returns the tenant's connections as conn_id→Airflow URI
 // (password decrypted), for delivering to task pods (ADR 0021). The agent exports
-// them as AIRFLOW_CONN_<CONN_ID>. Never expose these in UI/API responses.
-func (r *Repository) SecretConnectionURIs(ctx context.Context, tenant string) (map[string]string, error) {
-	tid, err := r.tenantID(ctx, tenant)
+// them as AIRFLOW_CONN_<CONN_ID>. tenantID is the tenant UUID carried by the
+// agent token. Never expose these in UI/API responses.
+func (r *Repository) SecretConnectionURIs(ctx context.Context, tenantID string) (map[string]string, error) {
+	tid, err := parseUUID(tenantID)
 	if err != nil {
 		return nil, err
 	}

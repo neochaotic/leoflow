@@ -15,7 +15,7 @@ The workflow orchestrator that ate Apache Airflow's lunch.<br>
 [DAG authoring](dag-authoring.md){ .md-button }
 [GitHub](https://github.com/neochaotic/leoflow){ .md-button }
 
-![Leoflow Dev — DAGs view, marked DEV](assets/screenshots/dev-dags.png){ width="100%" }
+![Leoflow Dev â the ETL graph (extract → transform → load), marked DEV](assets/screenshots/dev-graph.png){ width="100%" }
 
 A **Go control plane** that keeps Airflow's proven **pod-per-task** model and its
 **UI**, and throws away the Python control plane that makes Airflow slow.

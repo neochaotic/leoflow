@@ -1,8 +1,18 @@
 # Airflow UI Compatibility — Feasibility Investigation
 
-**Status:** Investigation (Phase 5, 2026-05-22). This document records why the
-naive Phase 5 goal — *run the unmodified Apache Airflow 3.2.x web UI against the
-Leoflow API* — is **not viable as stated**, and what the realistic paths are.
+!!! success "Status update — superseded by the implementation"
+    This began as a **Phase 5 investigation (2026-05-22)** arguing the *naive* goal
+    (unmodified Airflow UI on `/api/v2` alone) was not viable. **That realistic path
+    was taken and it works:** Leoflow serves the unmodified Apache Airflow 3.2.1
+    React SPA **and** implements the internal `/ui/*` API (ADR 0017 / ADR 0018). The
+    grid, graph, dashboard, and run views run against Leoflow today (Demo + Dev,
+    browser-verified). The standing risk below is real and accepted: `/ui/*` is
+    internal/unstable (AIP-84), so a new Airflow UI version can break a screen — we
+    pin to 3.2.1 and guard with a browser contract sweep.
+
+**Original investigation (historical):** why the *naive* goal — run the unmodified
+Apache Airflow 3.2.x UI against `/api/v2` only — was not viable as stated, and the
+realistic path (now implemented).
 
 ## Finding: Airflow 3.x decoupled the UI onto an internal API
 

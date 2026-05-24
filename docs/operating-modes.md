@@ -24,7 +24,7 @@ The authoring loop, fully **isolated** from Demo (own DB, own cluster, own ports
 so there is no split brain. Edit `dags/<project>/dag.py` or `leoflow.yaml`, save,
 and it hot-reloads at <http://localhost:8088> (marked DEV, no login).
 
-![Leoflow Dev — home dashboard, marked DEV](assets/screenshots/dev-home.png)
+![Leoflow Dev — home dashboard, marked DEV](assets/screenshots/dev-graph.png)
 
 
 - `leoflow dev setup` — check + provision host deps (Docker/k3d/kubectl/python3),

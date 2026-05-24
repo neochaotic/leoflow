@@ -29,6 +29,7 @@ jobs:
       # Auto-generate the Go package reference (git-ignored) from GoDocs.
       - run: |
           go run github.com/princjef/gomarkdoc/cmd/gomarkdoc@latest --output docs/go/reference.md \
+            --repository.url https://github.com/neochaotic/leoflow --repository.default-branch main \
             ./internal/domain ./internal/scheduler ./internal/executor ./internal/dispatch \
             ./internal/agent ./internal/agentrpc ./internal/storage ./internal/auth \
             ./internal/config ./internal/cli

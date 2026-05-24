@@ -1,25 +1,55 @@
+---
+hide:
+  - navigation
+  - toc
+---
+
 # Leoflow
 
-**GitOps-first, container-native workflow orchestrator** — a Go control plane
-that keeps Airflow's pod-per-task model and UI, without the Python control plane.
+<p style="font-size:1.25rem; opacity:.85; margin-top:-.4rem;">
+The workflow orchestrator that ate Apache Airflow's lunch.<br>
+<strong>Same UI. Same vocabulary. Ten times the speed. Zero of the pain.</strong>
+</p>
 
-- **DAGs are immutable artifacts**: a `dag.json` + a container image, versioned together.
-- **One image per DAG**: no shared `/dags` filesystem, no monolithic worker.
-- **Airflow 3.2.x UI compatibility** at `/api/v2/*` and `/ui/*`.
+[Get started](quickstart.md){ .md-button .md-button--primary }
+[DAG authoring](dag-authoring.md){ .md-button }
+[GitHub](https://github.com/neochaotic/leoflow){ .md-button }
 
+![Leoflow Dev — DAGs view, marked DEV](assets/screenshots/dev-dags.png){ width="100%" }
 
-![Leoflow Dev — DAGs view (marked DEV)](assets/screenshots/dev-dags.png)
+A **Go control plane** that keeps Airflow's proven **pod-per-task** model and its
+**UI**, and throws away the Python control plane that makes Airflow slow.
 
-## Start here
-- **[Operating modes](operating-modes.md)** — Demo · Dev · Production (coming soon).
-- **[DAG authoring](dag-authoring.md)** — how a data engineer writes and ships a DAG.
-- **[HTTP API reference](api-reference.md)** — the live Airflow-compatible API (Scalar).
-- **[Go packages](go-api.md)** — the control-plane/agent/CLI GoDocs.
+<div class="grid cards" markdown>
+
+- :material-cube-outline: **DAGs are immutable artifacts**
+
+    A `dag.json` + a container image, versioned together. No re-parsing `/dags`,
+    no drift. [Concepts →](concepts.md)
+
+- :material-package-variant-closed: **One image per DAG**
+
+    Each DAG carries its own dependencies. No shared filesystem, no dependency
+    hell. [Architecture →](architecture.md)
+
+- :material-rocket-launch-outline: **A real dev loop**
+
+    `leoflow dev` — isolated cluster, hot reload, marked DEV. Edit, save, see it
+    run. [Operating modes →](operating-modes.md)
+
+- :material-api: **Airflow-compatible API & UI**
+
+    `/api/v2/*` and `/ui/*`, pinned to Airflow 3.2.x. [HTTP API →](api-reference.html)
+
+</div>
 
 ## The dev loop
+
 ```bash
 leoflow dev setup            # check + provision host deps (dev-only)
 leoflow init dags/my_dag     # scaffold a project
 leoflow dev dags/my_dag      # hot-reload at http://localhost:8088 (marked DEV)
 ```
-The product proves itself in **Dev** first; **Production** is a near-term goal.
+
+The product **proves itself in Dev first**; **Production** is a near-term goal
+([roadmap](roadmap-to-release.md)).

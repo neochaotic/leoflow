@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Leoflow — HTTP API</title>
+  <style>
+    body { margin: 0; }
+    .leoflow-back {
+      position: fixed; top: 12px; left: 14px; z-index: 50;
+      font: 600 13px system-ui, sans-serif; text-decoration: none;
+      background: #0d9488; color: #fff; padding: 6px 12px; border-radius: 6px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.2);
+    }
+  </style>
+</head>
+<body>
+  <a class="leoflow-back" href="./">← Leoflow docs</a>
+  <!-- Static docs: read-only reference. hideTestRequestButton removes the "Send"
+       button so nobody hits a non-existent live server. The running control plane
+       serves its own Scalar at /docs with the test button enabled. -->
+  <script id="api-reference" data-url="openapi.yaml"
+          data-configuration='{"theme":"default","layout":"modern","hideTestRequestButton":true}'></script>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+</html>

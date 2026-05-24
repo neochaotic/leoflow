@@ -150,4 +150,4 @@ Build/Run, and generic runners** are in **[CI/CD & deploy examples](deploy.md)**
 ---
 
 See also: [Concepts & glossary](concepts.md) · [Operating modes](operating-modes.md)
-· [HTTP API](api-reference.md) · [ADR 0023 — binding & overrides](adr/0023-dag-authoring-config-binding.md).
+· [HTTP API](api-reference.html) · [ADR 0023 — binding & overrides](adr/0023-dag-authoring-config-binding.md).

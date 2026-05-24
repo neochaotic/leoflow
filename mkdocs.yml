@@ -11,9 +11,9 @@ use_directory_urls: false
 
 theme:
   name: material
-  logo: assets/icon-256.png
   favicon: assets/icon-256.png
   icon:
+    logo: material/transit-connection-variant
     repo: fontawesome/brands/github
   palette:
     - media: "(prefers-color-scheme: light)"
@@ -54,7 +54,7 @@ plugins:
           paths: [runtime/python]
           options:
             show_root_heading: true
-            show_source: false
+            show_source: true
             heading_level: 2
 
 validation:
@@ -96,7 +96,7 @@ nav:
       - DAG authoring: dag-authoring.md
       - CI/CD & deploy examples: deploy.md
   - Reference:
-      - HTTP API (Scalar): api-reference.md
+      - HTTP API (Scalar): api-reference.html
       - CLI reference: cli/leoflow.md
       - Go packages (GoDocs): go-api.md
       - Go reference (all packages): go/reference.md

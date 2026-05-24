@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -227,5 +228,25 @@ func (c *ServerConfig) Validate() error {
 	if c.Auth.Provider == "jwt" && c.Auth.JWT.Secret == "" {
 		return errors.New("auth.jwt.secret is required (set LEOFLOW_AUTH_JWT_SECRET)")
 	}
+	// auth.dev_no_auth disables authentication entirely; permit it only when the
+	// HTTP API binds to loopback, so a misconfigured (or accidental) dev bypass can
+	// never expose an unauthenticated API off-host. Fail closed otherwise.
+	if c.Auth.DevNoAuth && !isLoopbackListenAddr(c.Server.HTTPAddr) {
+		return fmt.Errorf("auth.dev_no_auth disables authentication and is only permitted on a loopback http_addr (got %q); never enable it in production", c.Server.HTTPAddr)
+	}
 	return nil
+}
+
+// isLoopbackListenAddr reports whether a listen address binds only to loopback,
+// so a no-auth dev server is unreachable off-host.
+func isLoopbackListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

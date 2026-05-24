@@ -150,3 +150,34 @@ func TestServerConfigValidateRequiresJWTSecret(t *testing.T) {
 		t.Errorf("Validate() = %v with JWT secret set, want nil", err)
 	}
 }
+
+func TestValidateRejectsDevNoAuthOnNonLoopback(t *testing.T) {
+	base := func() *ServerConfig {
+		c := &ServerConfig{}
+		c.Auth.Provider = "none" // skip the jwt-secret requirement
+		c.Auth.DevNoAuth = true
+		return c
+	}
+	// Exposed on all interfaces with auth disabled → must be rejected.
+	for _, addr := range []string{"0.0.0.0:8080", ":8080", "192.168.1.10:8080"} {
+		c := base()
+		c.Server.HTTPAddr = addr
+		if err := c.Validate(); err == nil {
+			t.Errorf("dev_no_auth on %q must be rejected", addr)
+		}
+	}
+	// Loopback is allowed (the no-auth API is not reachable off-host).
+	for _, addr := range []string{"127.0.0.1:8080", "localhost:8080"} {
+		c := base()
+		c.Server.HTTPAddr = addr
+		if err := c.Validate(); err != nil {
+			t.Errorf("dev_no_auth on loopback %q should be allowed, got %v", addr, err)
+		}
+	}
+	// dev_no_auth off → any address is fine.
+	c := &ServerConfig{}
+	c.Server.HTTPAddr = "0.0.0.0:8080"
+	if err := c.Validate(); err != nil {
+		t.Errorf("non-dev config should validate, got %v", err)
+	}
+}

@@ -47,12 +47,11 @@ const (
 	// Cluster-mode (default) runs real pod-per-task on a dedicated k3d cluster,
 	// fully isolated from any product/demo cluster. Pods dial the host control
 	// plane's gRPC; host.docker.internal resolves to the host on Docker Desktop.
-	devClusterName         = "leoflow-dev"
-	devNamespace           = "leoflow"
-	devPyVersion           = "3.11"
-	devBaseImage           = "leoflow-base:py3.11"
-	devHostGRPCAddr        = "host.docker.internal:9091"
-	devReadyTimeoutCluster = 90 * time.Second
+	devClusterName  = "leoflow-dev"
+	devNamespace    = "leoflow"
+	devPyVersion    = "3.11"
+	devBaseImage    = "leoflow-base:py3.11"
+	devHostGRPCAddr = "host.docker.internal:9091"
 )
 
 const (
@@ -550,6 +549,10 @@ func resolveBinary(explicit, name string) (string, error) {
 // a writable logs dir (the prod default /var/log/leoflow is not host-writable).
 func sharedServerEnv() []string {
 	return []string{
+		// Bind the HTTP API to loopback: dev disables auth, so the API must not be
+		// reachable off-host (the server also refuses dev_no_auth on a non-loopback
+		// address). Task pods use gRPC (9091), not this HTTP listener.
+		"LEOFLOW_SERVER_HTTP_ADDR=127.0.0.1:8080",
 		"LEOFLOW_LOGS_DIR=" + filepath.Join(os.TempDir(), "leoflow-dev-logs"),
 		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
 		"LEOFLOW_DATABASE_URL=" + devDatabaseURL,

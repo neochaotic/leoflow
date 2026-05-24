@@ -11,6 +11,7 @@ use_directory_urls: false
 
 theme:
   name: material
+  custom_dir: overrides
   favicon: assets/icon-256.png
   icon:
     logo: material/transit-connection-variant
@@ -31,6 +32,7 @@ theme:
     - navigation.sections
     - navigation.indexes
     - navigation.top
+    - navigation.footer
     - navigation.tracking
     - navigation.instant
     - navigation.instant.progress
@@ -99,7 +101,6 @@ nav:
       - HTTP API (Scalar): api-reference.html
       - CLI reference: cli/leoflow.md
       - Go packages (GoDocs): go-api.md
-      - Go reference (all packages): go/reference.md
       - Python runtime API: python-api.md
       - Configuration: configuration.md
   - Guides:

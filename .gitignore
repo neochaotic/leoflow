@@ -173,3 +173,4 @@ dags/**/dag.json
 # MkDocs build output + generated docs assets
 /site/
 docs/openapi.yaml
+docs/cli/

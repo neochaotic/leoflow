@@ -5,7 +5,7 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ["docs/**", "mkdocs.yml", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "mkdocs.yml", ".github/workflows/docs.yml", "internal/cli/**", "parser/**", "runtime/python/**"]
   workflow_dispatch:
 
 permissions:
@@ -22,11 +22,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      # Auto-generate the CLI reference (git-ignored) from Cobra.
+      - run: go run ./cmd/leoflow gen-docs --dir docs/cli
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install mkdocs-material
+      # Imaging libs for the Material social-cards plugin.
+      - run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libfreetype6-dev libffi-dev libjpeg-dev libpng-dev libz-dev
+      - run: pip install "mkdocs-material[imaging]" "mkdocstrings[python]"
+      # Python docstrings (the task runtime) for the Python API page.
+      - run: pip install -e ./runtime/python
+      # Scalar reads the spec from the site root.
       - run: cp docs/api/openapi.yaml docs/openapi.yaml
-      - run: mkdocs build --strict
+      - run: mkdocs build --strict   # CI=true enables the social plugin
       - uses: actions/upload-pages-artifact@v3
         with: { path: site }
   deploy:

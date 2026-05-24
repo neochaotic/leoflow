@@ -7,6 +7,39 @@ This consolidates the open work after the audit + reverse analysis
 (`docs/reverse-analysis-mvp.md`, which captured and evaluated the real Airflow
 3.2.1 task logs, XCom, lifecycle, and API and mapped each to Leoflow).
 
+## Release phases — Alpha · Beta · GA
+
+The product **proves itself in Dev first**; Production matures behind it.
+
+```mermaid
+flowchart LR
+  A["Alpha — Dev<br/>(now)"] --> B["Beta — Production track"] --> G["GA — hardened"]
+```
+
+### 🟡 Alpha — Developer experience (current focus)
+A data engineer can author, run, and iterate on DAGs locally with confidence.
+
+- `leoflow dev` (isolated k3d/subprocess), `leoflow dev setup`, `leoflow db`, hot reload, DEV marker.
+- DAG authoring + binding/overrides (ADR 0023), guardrails, embedded migrations.
+- Documentation site, examples, the `dags/` convention.
+- **Exit:** the dev loop is reliable end-to-end; the authoring model is documented and tested.
+
+### 🟠 Beta — Production track (next)
+Run real workloads on a real cluster, deployed via CI.
+
+- Publish images + binaries: `leoflow-server`/`-agent`/`-migrate` + per-OS CLI (#48, #61).
+- TLS on the agent channel (#58); keyless cloud auth / workload identity (#56).
+- Real-cluster verification of staging + pod-path on GKE (#57); least-privilege secret scoping (#59).
+- Self-contained dev: migrations via library (#60, done), single binary (#61), "runs liso" embedded deps (#62).
+- **Exit:** Helm install + CI deploy on a real cluster with auth + TLS.
+
+### 🟢 GA — Hardened
+- Load/scale tests, SLOs, upgrade runbooks, doc versioning (`mike`).
+- OpenSSF best-practices badge; supply-chain (ADR 0014) green.
+- **Exit:** production-ready, documented, supported.
+
+> Today we are in **Alpha** — no production testing until it earns its way to Beta.
+
 ## ✅ Done (this cycle) — the MVP happy path works
 
 End-to-end on the local k3d cluster, verified live: a 3-task Python DAG

@@ -1,0 +1,27 @@
+# Architecture Decision Records
+
+The *why* behind Leoflow's design. ADRs are immutable once accepted.
+
+- [ADR 0001: Why Leoflow and Not Apache Airflow's KubernetesExecutor](adr/0001-why-leoflow.md)
+- [ADR 0002: Pod-per-Task Execution Model](adr/0002-pod-per-task.md)
+- [ADR 0003: DAG-as-Image with `leoflow.yaml` Abstraction Layer](adr/0003-dag-as-image.md)
+- [ADR 0004: Thin Static Go Agent in the Worker Container](adr/0004-thin-agent.md)
+- [ADR 0005: Hybrid DAG Authoring with Compile-Time Parsing](adr/0005-hybrid-dag-authoring.md)
+- [ADR 0006: XCom with Redis Backend](adr/0006-xcom-redis.md)
+- [ADR 0007: Airflow UI Compatibility for the MVP](adr/0007-airflow-ui-compatibility.md)
+- [ADR 0008: JWT Authentication with OIDC-Ready Interface](adr/0008-jwt-auth.md)
+- [ADR 0009: Leader Election via Postgres Advisory Locks](adr/0009-leader-election.md)
+- [ADR 0010: Observability Stack from Day One](adr/0010-observability.md)
+- [ADR 0011: Test-Driven Development (Strict)](adr/0011-tdd-strict.md)
+- [ADR 0012: Code Quality Standards (Go Report Card A+ as Floor)](adr/0012-code-quality-standards.md)
+- [ADR 0013: API Documentation via Scalar, Embedded in the Server Binary](adr/0013-scalar-api-docs.md)
+- [ADR 0014: Supply Chain Security Stack](adr/0014-supply-chain-security.md)
+- [ADR 0015: Kubernetes as the Sole Container Execution Path (No Docker SDK)](adr/0015-kubernetes-only-execution.md)
+- [ADR 0016: Deferrable Tasks (Deferred to v0.3)](adr/0016-deferrable-tasks.md)
+- [ADR 0017: UI Static Asset Serving Strategy](adr/0017-ui-asset-serving.md)
+- [ADR 0018: UI Custom as Strategic North Star](adr/0018-ui-custom-north-star.md)
+- [ADR 0019: Secret Encryption at Rest (Connections)](adr/0019-secret-encryption-at-rest.md)
+- [ADR 0020: "Delete DAG" Clears History; Deregister Is Separate](adr/0020-delete-vs-clear-dag.md)
+- [ADR 0021: Exposing Variables and Connections to Task Pods](adr/0021-exposing-variables-connections-to-pods.md)
+- [ADR 0022: Ephemeral Per-DAG-Run Staging Volume](adr/0022-ephemeral-per-run-staging-volume.md)
+- [ADR 0023: DAG Authoring — Config Binding and Override Layers](adr/0023-dag-authoring-config-binding.md)

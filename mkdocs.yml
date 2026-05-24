@@ -11,8 +11,9 @@ use_directory_urls: false
 
 theme:
   name: material
+  logo: assets/icon-256.png
+  favicon: assets/icon-256.png
   icon:
-    logo: material/transit-connection-variant
     repo: fontawesome/brands/github
   palette:
     - media: "(prefers-color-scheme: light)"
@@ -39,6 +40,22 @@ theme:
     - content.tabs.link
     - search.suggest
     - search.highlight
+
+plugins:
+  - search
+  # Social preview cards (Open Graph). Needs imaging deps (cairo); enabled only in
+  # CI where the workflow installs them, so local builds work without cairo.
+  - social:
+      enabled: !ENV [CI, false]
+  # Render Python docstrings (the task runtime) into the API reference.
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [runtime/python]
+          options:
+            show_root_heading: true
+            show_source: false
+            heading_level: 2
 
 validation:
   nav: { omitted_files: ignore }
@@ -68,6 +85,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Get started:
+      - Quickstart: quickstart.md
       - Operating modes: operating-modes.md
       - Concepts & glossary: concepts.md
       - Architecture: architecture.md
@@ -76,15 +94,15 @@ nav:
       - CI/CD & deploy examples: deploy.md
   - Reference:
       - HTTP API (Scalar): api-reference.md
+      - CLI reference: cli/leoflow.md
       - Go packages (GoDocs): go-api.md
+      - Python runtime API: python-api.md
+      - Configuration: configuration.md
+  - Guides:
+      - Variables & Connections: variables-connections.md
+      - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md
   - Project:
       - Roadmap: roadmap-to-release.md
-      - "ADR 0001 · Why Leoflow": adr/0001-why-leoflow.md
-      - "ADR 0002 · Pod-per-task": adr/0002-pod-per-task.md
-      - "ADR 0003 · DAG-as-image": adr/0003-dag-as-image.md
-      - "ADR 0011 · Strict TDD": adr/0011-tdd-strict.md
-      - "ADR 0021 · Variables/Connections": adr/0021-exposing-variables-connections-to-pods.md
-      - "ADR 0022 · Staging volume": adr/0022-ephemeral-per-run-staging-volume.md
-      - "ADR 0023 · DAG authoring binding": adr/0023-dag-authoring-config-binding.md
+      - Architecture decisions (ADRs): adrs.md

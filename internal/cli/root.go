@@ -32,6 +32,7 @@ func NewRootCommand() *cobra.Command {
 		newRunsCommand(),
 		newAuthCommand(),
 		newServerCommand(),
+		newGenDocsCommand(),
 	)
 	return root
 }

@@ -79,8 +79,15 @@ def transform(value: str) -> str:
     return value.upper()
 
 
+@task
+def read_var(_value: str) -> None:
+    # The agent delivers Admin Variables as AIRFLOW_VAR_* env (#54 / ADR 0021).
+    import os
+    print("e2e variable:", os.environ.get("AIRFLOW_VAR_E2E_GREETING"))
+
+
 with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
-    transform(extract())
+    read_var(transform(extract()))
 PY
 cat > "$WORKDIR/$DAG_ID/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
@@ -105,6 +112,9 @@ export LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="${HOST_ADDR}:${GRPC_PORT}"
 # made the server's log sink fail to open and surfaced as a bare stream EOF on the
 # agent (#36). Use a writable temp dir so pod logs actually land on disk.
 export LEOFLOW_LOGS_DIR="${WORKDIR}/logs"
+# Allow secret delivery over the e2e's plaintext gRPC (dev only; prod uses TLS,
+# issue #58) so the agent can fetch Admin Variables/Connections (#54).
+export LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true
 "$ROOT/bin/leoflow-server" &
 SERVER_PID=$!
 sleep 5
@@ -117,6 +127,10 @@ k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER"
 log "Pushing the DAG"
 TOKEN="$("$ROOT/bin/leoflow" auth create-token --username admin@leoflow.local --password admin)"
 "$ROOT/bin/leoflow" push "$WORKDIR/$DAG_ID/dag.json" --token "$TOKEN"
+
+log "Creating an Admin Variable for the runtime-delivery check (#54)"
+curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"key":"e2e_greeting","value":"hi-from-admin"}' "$API/api/v2/variables" >/dev/null
 
 log "Triggering a run"
 RUN_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -173,5 +187,15 @@ for try in 0 1 2; do
 done
 [ -n "$tlog" ] || fail "transform did not receive extract's output — TaskFlow value passing broken (#51)"
 log "value passing OK: transform received payload-42"
+
+log "Asserting Admin Variable delivery to the task (#54): read_var sees AIRFLOW_VAR_*"
+vlog=""
+for try in 0 1 2; do
+  body="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances/read_var/logs/$try" 2>/dev/null || true)"
+  if echo "$body" | grep -q "e2e variable: hi-from-admin"; then vlog="$body"; break; fi
+done
+[ -n "$vlog" ] || fail "read_var did not see the Admin Variable — var/conn runtime delivery broken (#54)"
+log "variable delivery OK: read_var saw hi-from-admin"
 
 log "E2E passed"

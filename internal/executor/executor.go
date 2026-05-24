@@ -32,6 +32,11 @@ type Request struct {
 	// Agent connection details injected into the worker environment.
 	ControlPlaneAddr string
 	AgentToken       string
+
+	// StagingClaim, when set, is the name of the per-DAG-run RWX PVC mounted at
+	// /staging in the task pod for large intermediate data shared across the run
+	// (ADR 0022). Empty means no staging volume.
+	StagingClaim string
 }
 
 // Executor runs or dispatches a task. For synchronous executors (inline HTTP)

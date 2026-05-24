@@ -81,7 +81,31 @@ func BuildPod(req Request) *corev1.Pod {
 	if req.Execution.ServiceAccount != "" {
 		pod.Spec.ServiceAccountName = req.Execution.ServiceAccount
 	}
+	mountStagingVolume(pod, req)
 	return pod
+}
+
+// stagingVolumeName is the pod volume name for the per-run staging PVC.
+const stagingVolumeName = "leoflow-staging"
+
+// stagingMountPath is where the per-run staging volume is mounted in task pods,
+// exposed to user code as LEOFLOW_STAGING_DIR. See ADR 0022.
+const stagingMountPath = "/staging"
+
+// mountStagingVolume attaches the run's shared staging PVC (when set) to the task
+// container at stagingMountPath, so a run's tasks share large intermediate data.
+func mountStagingVolume(pod *corev1.Pod, req Request) {
+	if req.StagingClaim == "" {
+		return
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name: stagingVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: req.StagingClaim},
+		},
+	})
+	c := &pod.Spec.Containers[0]
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: stagingVolumeName, MountPath: stagingMountPath})
 }
 
 func podEnv(req Request) []corev1.EnvVar {
@@ -91,6 +115,9 @@ func podEnv(req Request) []corev1.EnvVar {
 		corev1.EnvVar{Name: "LEOFLOW_AGENT_TOKEN", Value: req.AgentToken},
 		corev1.EnvVar{Name: "LEOFLOW_TASK_INSTANCE_ID", Value: req.TaskInstanceID},
 	)
+	if req.StagingClaim != "" {
+		env = append(env, corev1.EnvVar{Name: "LEOFLOW_STAGING_DIR", Value: stagingMountPath})
+	}
 	for k, v := range req.Env {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}

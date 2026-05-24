@@ -61,6 +61,38 @@ func TestBuildPod(t *testing.T) {
 	}
 }
 
+func TestBuildPodMountsStagingVolume(t *testing.T) {
+	// Without a staging claim, no extra volume is added.
+	if vols := BuildPod(sampleReq()).Spec.Volumes; len(vols) != 0 {
+		t.Errorf("no staging claim should add no volumes, got %v", vols)
+	}
+	// With a claim, the run's PVC is mounted at /staging and exposed via env.
+	req := sampleReq()
+	req.StagingClaim = "leoflow-staging-etl-r1"
+	pod := BuildPod(req)
+	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].PersistentVolumeClaim == nil ||
+		pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "leoflow-staging-etl-r1" {
+		t.Fatalf("staging volume not wired to the PVC: %+v", pod.Spec.Volumes)
+	}
+	c := pod.Spec.Containers[0]
+	mounted := false
+	for _, m := range c.VolumeMounts {
+		if m.MountPath == stagingMountPath && m.Name == pod.Spec.Volumes[0].Name {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Errorf("staging volume not mounted at %s: %+v", stagingMountPath, c.VolumeMounts)
+	}
+	env := map[string]string{}
+	for _, e := range c.Env {
+		env[e.Name] = e.Value
+	}
+	if env["LEOFLOW_STAGING_DIR"] != stagingMountPath {
+		t.Errorf("LEOFLOW_STAGING_DIR = %q, want %s", env["LEOFLOW_STAGING_DIR"], stagingMountPath)
+	}
+}
+
 func TestBuildPodSanitizesName(t *testing.T) {
 	req := sampleReq()
 	req.DagID = "ETL Vendas"

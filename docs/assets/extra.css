@@ -9,3 +9,25 @@
 
 /* Home hero: the navbar wordmark + tagline carry the brand; drop the redundant H1. */
 .home-hero-title { display: none; }
+
+/* Two-column hero: text left, product screenshot right (stacks on small screens).
+   Fills the empty right-hand whitespace and leads with the product. */
+.home-hero {
+  display: flex;
+  align-items: center;
+  gap: 2.5rem;
+  margin: .5rem 0 1.5rem;
+}
+.home-hero__text { flex: 1 1 42%; min-width: 0; }
+.home-hero__media { flex: 1 1 58%; min-width: 0; }
+.home-hero__lead { font-size: 1.25rem; opacity: .85; margin-top: -.2rem; }
+/* Frame the screenshot so it reads as a product window, not an inline image. */
+.home-hero__shot {
+  width: 100%;
+  border-radius: .5rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .18);
+}
+@media screen and (max-width: 76.1875em) {
+  .home-hero { flex-direction: column; align-items: stretch; gap: 1.25rem; }
+}

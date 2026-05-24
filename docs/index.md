@@ -6,16 +6,25 @@ hide:
 
 # Leoflow { .home-hero-title }
 
-<p style="font-size:1.25rem; opacity:.85; margin-top:-.4rem;">
+<div class="home-hero" markdown>
+<div class="home-hero__text" markdown>
+
+<p class="home-hero__lead">
 The workflow orchestrator that ate Apache Airflow's lunch.<br>
-<strong>Same UI. Same vocabulary. Ten times the speed. Zero of the pain.</strong>
+<strong>Same UI. Same vocabulary. A Go control plane instead of Python's. Zero of the pain.</strong>
 </p>
 
 [Get started](quickstart.md){ .md-button .md-button--primary }
 [DAG authoring](dag-authoring.md){ .md-button }
 [GitHub](https://github.com/neochaotic/leoflow){ .md-button }
 
-![Leoflow Dev â the ETL graph (extract → transform → load), marked DEV](assets/screenshots/dev-graph.png){ width="100%" }
+</div>
+<div class="home-hero__media" markdown>
+
+![Leoflow Dev â the ETL graph (extract → transform → load), marked DEV](assets/screenshots/dev-graph.png){ .home-hero__shot }
+
+</div>
+</div>
 
 A **Go control plane** that keeps Airflow's proven **pod-per-task** model and its
 **UI**, and throws away the Python control plane that makes Airflow slow.

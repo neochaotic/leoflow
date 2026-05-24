@@ -28,3 +28,21 @@ func TestDBResetRequiresYes(t *testing.T) {
 		t.Errorf("db reset without --yes should refuse with a --yes hint, got %v", err)
 	}
 }
+
+func TestBrewInstallArgs(t *testing.T) {
+	if got := strings.Join(brewInstallArgs("k3d"), " "); got != "install k3d" {
+		t.Errorf("brewInstallArgs = %q, want 'install k3d'", got)
+	}
+}
+
+func TestDevSetupSubcommandWired(t *testing.T) {
+	var has bool
+	for _, c := range newDevCommand().Commands() {
+		if c.Name() == "setup" {
+			has = true
+		}
+	}
+	if !has {
+		t.Error("`leoflow dev` should have a `setup` subcommand")
+	}
+}

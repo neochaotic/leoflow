@@ -1,0 +1,14 @@
+schema_version: "1.0"
+dag_id: hello
+description: A minimal starter DAG — edit me.
+owner: you
+tags:
+  - starter
+python_version: "3.11"
+dependencies: []
+# Per-task overrides (ADR 0023) — uncomment to tune a task:
+# tasks:
+#   greet:
+#     retries: 2
+#     resources:
+#       requests: { cpu: "250m", memory: 128Mi }

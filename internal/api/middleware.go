@@ -113,6 +113,19 @@ func isPublic(path string) bool {
 	return true
 }
 
+// DevBypassAuth authenticates EVERY request as a fixed admin user, with no token
+// required. It exists solely for `leoflow dev` (the local, unsandboxed loop) so a
+// developer reaches the UI without logging in. It must only be wired under the
+// explicit dev opt-in (config auth.dev_no_auth); the server logs a prominent
+// warning when it is active. NEVER enable this in production.
+func DevBypassAuth() gin.HandlerFunc {
+	devUser := &auth.User{ID: "leoflow-dev", TenantID: "default", Email: "dev@leoflow.local", Roles: []string{"admin"}}
+	return func(c *gin.Context) {
+		c.Set(contextKeyUser, devUser)
+		c.Next()
+	}
+}
+
 // JWTAuth validates the bearer token on protected routes and stores the user.
 func JWTAuth(authn auth.Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {

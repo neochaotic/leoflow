@@ -134,6 +134,10 @@ func run() error {
 		InlineConcurrency:     cfg.Executor.HTTP.InlineConcurrencyLimit,
 	}
 
+	if cfg.Auth.DevNoAuth {
+		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
+	}
+
 	handler := api.NewServer(api.Dependencies{
 		Logger:        tel.Logger,
 		Authenticator: authn,
@@ -145,6 +149,7 @@ func run() error {
 		CORSOrigins:   cfg.Server.CORS.AllowedOrigins,
 		TokenTTLSecs:  cfg.Auth.JWT.TokenTTLSeconds,
 		InstanceName:  cfg.UI.InstanceName,
+		DevNoAuth:     cfg.Auth.DevNoAuth,
 
 		InlineHTTPMaxDurationSeconds: cfg.Executor.HTTP.InlineMaxDurationSeconds,
 		Dags:                         repo,

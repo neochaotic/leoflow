@@ -36,6 +36,15 @@ func NewJWTAuthenticator(store UserStore, secret string, ttl time.Duration) *JWT
 	return &JWTAuthenticator{store: store, secret: []byte(secret), ttl: ttl}
 }
 
+// MintUserToken signs a user JWT directly, without checking credentials against
+// a store. It is for trusted in-process callers only — notably `leoflow dev`,
+// which runs its own control plane and must register DAGs without a login
+// round-trip. The token validates under Authenticate using the same secret.
+func MintUserToken(secret string, ttl time.Duration, user User) (string, error) {
+	a := &JWTAuthenticator{secret: []byte(secret), ttl: ttl}
+	return a.sign(&user)
+}
+
 // IssueToken validates the credentials against the store and returns a signed JWT.
 func (a *JWTAuthenticator) IssueToken(ctx context.Context, creds Credentials) (string, error) {
 	user, hash, err := a.store.FindUserByLogin(ctx, creds.Tenant, creds.Username)

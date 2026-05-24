@@ -35,6 +35,10 @@ type Dependencies struct {
 	// InstanceName is shown in the UI navbar (Airflow's instance_name). Empty
 	// falls back to "Leoflow"; `leoflow dev` sets it to mark the DEV environment.
 	InstanceName string
+	// DevNoAuth replaces JWT auth with a dev-only bypass that authenticates every
+	// request as an admin (no login). It is for `leoflow dev` only and must never
+	// be set in production. See DevBypassAuth.
+	DevNoAuth bool
 
 	// InlineHTTPMaxDurationSeconds caps inline http_api task timeouts at push
 	// time. Zero falls back to domain.DefaultInlineMaxDurationSeconds.
@@ -77,7 +81,11 @@ func NewServer(deps Dependencies) *gin.Engine {
 	r.Use(Observe(deps.Metrics, deps.Tracer))
 	r.Use(StructuredLogger(deps.Logger))
 	r.Use(CORS(deps.CORSOrigins))
-	r.Use(JWTAuth(deps.Authenticator))
+	if deps.DevNoAuth {
+		r.Use(DevBypassAuth())
+	} else {
+		r.Use(JWTAuth(deps.Authenticator))
+	}
 
 	r.GET("/healthz", livenessHandler)
 	r.GET("/readyz", readinessHandler(deps.HealthChecks))

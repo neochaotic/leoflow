@@ -120,6 +120,11 @@ type RedisSection struct {
 type AuthSection struct {
 	Provider string     `mapstructure:"provider"`
 	JWT      JWTSection `mapstructure:"jwt"`
+	// DevNoAuth disables authentication entirely, treating every request as an
+	// admin. It exists ONLY for `leoflow dev` (local, unsandboxed). It is false by
+	// default and the server logs a prominent warning when it is on. NEVER set
+	// this in production (LEOFLOW_AUTH_DEV_NO_AUTH).
+	DevNoAuth bool `mapstructure:"dev_no_auth"`
 }
 
 // JWTSection configures JWT issuance and validation.
@@ -178,6 +183,7 @@ var serverDefaults = map[string]any{
 	"observability.log_level":                   "info",
 	"observability.log_format":                  "json",
 	"ui.instance_name":                          "Leoflow",
+	"auth.dev_no_auth":                          false,
 	"secret_key":                                "",
 }
 

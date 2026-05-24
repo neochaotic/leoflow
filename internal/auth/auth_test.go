@@ -124,3 +124,25 @@ func TestRateLimiter(t *testing.T) {
 		t.Error("after the window resets, should be allowed again")
 	}
 }
+
+func TestMintUserTokenRoundTrips(t *testing.T) {
+	const secret = "dev-insecure-jwt-secret-change-me"
+	token, err := MintUserToken(secret, time.Hour, User{
+		ID: "dev", TenantID: "default", Email: "admin@leoflow.local", Roles: []string{"admin"},
+	})
+	if err != nil {
+		t.Fatalf("MintUserToken: %v", err)
+	}
+	a := NewJWTAuthenticator(nil, secret, time.Hour)
+	u, aerr := a.Authenticate(context.Background(), token)
+	if aerr != nil {
+		t.Fatalf("Authenticate(minted) = %v", aerr)
+	}
+	if u.TenantID != "default" || u.Email != "admin@leoflow.local" || len(u.Roles) != 1 || u.Roles[0] != "admin" {
+		t.Errorf("round-trip user = %+v, want admin@default", u)
+	}
+	// A token signed with a different secret must be rejected.
+	if _, e := a.Authenticate(context.Background(), func() string { s, _ := MintUserToken("other", time.Hour, User{ID: "x"}); return s }()); e == nil {
+		t.Error("token signed with a different secret must not authenticate")
+	}
+}

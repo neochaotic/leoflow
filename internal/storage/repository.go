@@ -711,10 +711,14 @@ func (r *Repository) SecretConnectionURIs(ctx context.Context, tenantID string) 
 		if derr != nil {
 			return nil, fmt.Errorf("decrypting password for %q: %w", row.ConnID, derr)
 		}
+		extra, eerr := r.decryptExtra(row.Extra)
+		if eerr != nil {
+			return nil, fmt.Errorf("decrypting extra for %q: %w", row.ConnID, eerr)
+		}
 		out[row.ConnID] = airflowConnURI(domain.Connection{
 			ConnID: row.ConnID, ConnType: row.ConnType, Host: strOrEmpty(row.Host),
 			Schema: strOrEmpty(row.ConnSchema), Login: strOrEmpty(row.Login),
-			Password: pass, Port: int32PtrToInt(row.Port),
+			Password: pass, Port: int32PtrToInt(row.Port), Extra: extra,
 		})
 	}
 	return out, nil

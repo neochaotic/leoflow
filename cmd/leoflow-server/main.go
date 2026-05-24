@@ -144,6 +144,7 @@ func run() error {
 		HealthChecks:  map[string]api.HealthChecker{"postgres": pg, "redis": rd},
 		CORSOrigins:   cfg.Server.CORS.AllowedOrigins,
 		TokenTTLSecs:  cfg.Auth.JWT.TokenTTLSeconds,
+		InstanceName:  cfg.UI.InstanceName,
 
 		InlineHTTPMaxDurationSeconds: cfg.Executor.HTTP.InlineMaxDurationSeconds,
 		Dags:                         repo,
@@ -412,24 +413,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		MaxSeconds:  cfg.Executor.HTTP.InlineMaxDurationSeconds,
 		UserAgent:   cfg.Executor.HTTP.UserAgent,
 	}))
-	podDispatch := false
-	if cs, perr := buildK8sClient(); perr == nil {
-		controlAddr := cfg.Executor.AgentControlPlaneAddr
-		if controlAddr == "" {
-			controlAddr = cfg.Server.GRPCAddr
-		}
-		podExec := executor.NewKubernetesExecutor(cs, podNamespace)
-		dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
-		dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
-		dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
-		sched.SetDispatcher(dispatcher)
-		startReconciler(ctx, cs, execStore, logger)
-		startStagingGC(ctx, cs, store, logger)
-		logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
-		podDispatch = true
-	} else {
-		logger.Warn("pod dispatch disabled; only inline http_api tasks will run", "error", perr)
-	}
+	podDispatch := setupDispatch(ctx, cfg, sched, execStore, authn, store, logger)
 	leader := scheduler.NewLeader(leaderPool)
 	go func() {
 		defer leaderPool.Close()
@@ -478,6 +462,56 @@ func serve(s *http.Server, errCh chan<- error) {
 	if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errCh <- fmt.Errorf("serving %s: %w", s.Addr, err)
 	}
+}
+
+// setupDispatch wires the pod-path executor selected by executor.type onto the
+// scheduler and returns whether pod dispatch is active. "subprocess" runs the
+// agent on the host (dev only); "kubernetes" (default) launches task pods.
+func setupDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger) bool {
+	if cfg.Executor.Type == "subprocess" {
+		return setupSubprocessDispatch(cfg, sched, execStore, authn, logger)
+	}
+	return setupK8sDispatch(ctx, cfg, sched, execStore, authn, store, logger)
+}
+
+// resolveAgentControlAddr returns the address task agents dial back, defaulting
+// to the server's own gRPC address.
+func resolveAgentControlAddr(cfg *config.ServerConfig) string {
+	if cfg.Executor.AgentControlPlaneAddr != "" {
+		return cfg.Executor.AgentControlPlaneAddr
+	}
+	return cfg.Server.GRPCAddr
+}
+
+// setupSubprocessDispatch wires the dev-only subprocess executor (ADR 0023): it
+// runs the agent on the host with no isolation, so it is gated to dev use.
+func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger) bool {
+	subExec := executor.NewSubprocessExecutor(cfg.Executor.AgentPath, logger)
+	dispatcher := dispatch.NewDispatcher(subExec, execStore, authn, resolveAgentControlAddr(cfg), agentTokenTTL)
+	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
+	sched.SetDispatcher(dispatcher)
+	logger.Warn("subprocess dispatch enabled (dev only; user code runs unsandboxed)")
+	return true
+}
+
+// setupK8sDispatch wires the production pod-per-task executor; it is a no-op
+// (only inline http_api tasks run) when no Kubernetes client is available.
+func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger) bool {
+	cs, perr := buildK8sClient()
+	if perr != nil {
+		logger.Warn("pod dispatch disabled; only inline http_api tasks will run", "error", perr)
+		return false
+	}
+	controlAddr := resolveAgentControlAddr(cfg)
+	podExec := executor.NewKubernetesExecutor(cs, podNamespace)
+	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
+	dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
+	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
+	sched.SetDispatcher(dispatcher)
+	startReconciler(ctx, cs, execStore, logger)
+	startStagingGC(ctx, cs, store, logger)
+	logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
+	return true
 }
 
 // platformDefaults maps the executor.defaults config (L0 task defaults, ADR

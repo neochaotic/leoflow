@@ -20,6 +20,7 @@ type ServerConfig struct {
 	Executor      ExecutorSection      `mapstructure:"executor"`
 	Logs          LogsSection          `mapstructure:"logs"`
 	Observability ObservabilitySection `mapstructure:"observability"`
+	UI            UISection            `mapstructure:"ui"`
 	// SecretKey (LEOFLOW_SECRET_KEY) is the 32-byte key encrypting connection
 	// secrets at rest (ADR 0019). Raw 32 chars, 64-char hex, or base64. Empty
 	// disables connection writes.
@@ -35,6 +36,12 @@ type LogsSection struct {
 // ExecutorSection configures how tasks are executed.
 type ExecutorSection struct {
 	HTTP HTTPExecutorSection `mapstructure:"http"`
+	// Type selects the pod-path executor: "kubernetes" (default, pod-per-task) or
+	// "subprocess" (dev only, runs the agent on the host without isolation, used
+	// by `leoflow dev`).
+	Type string `mapstructure:"type"`
+	// AgentPath is the leoflow-agent binary the subprocess executor runs (dev only).
+	AgentPath string `mapstructure:"agent_path"`
 	// AgentControlPlaneAddr is the gRPC address task pods dial back to. Empty
 	// falls back to server.grpc_addr; in a local k3d/kind cluster set it to a
 	// host-reachable address such as host.k3d.internal:9091.
@@ -60,6 +67,13 @@ type PlatformDefaultsSection struct {
 	// override nor the DAG set any (Kubernetes quantities, e.g. "250m"/"256Mi").
 	ResourcesCPU    string `mapstructure:"resources_cpu"`
 	ResourcesMemory string `mapstructure:"resources_memory"`
+}
+
+// UISection configures the embedded Airflow UI.
+type UISection struct {
+	// InstanceName is shown in the UI navbar (Airflow's instance_name). Empty
+	// falls back to "Leoflow"; `leoflow dev` sets it to mark the DEV environment.
+	InstanceName string `mapstructure:"instance_name"`
 }
 
 // HTTPExecutorSection configures the inline http_api execution path (ADR 0002).
@@ -154,6 +168,8 @@ var serverDefaults = map[string]any{
 	"executor.http.inline_max_duration_seconds": 300,
 	"executor.http.inline_concurrency_limit":    256,
 	"executor.http.user_agent":                  "leoflow/0.1",
+	"executor.type":                             "kubernetes",
+	"executor.agent_path":                       "leoflow-agent",
 	"executor.agent_control_plane_addr":         "",
 	"executor.agent_tls_ca_configmap":           "",
 	"logs.dir":                                  "/var/log/leoflow",
@@ -161,6 +177,7 @@ var serverDefaults = map[string]any{
 	"observability.otel.endpoint":               "localhost:4317",
 	"observability.log_level":                   "info",
 	"observability.log_format":                  "json",
+	"ui.instance_name":                          "Leoflow",
 	"secret_key":                                "",
 }
 

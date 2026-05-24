@@ -39,8 +39,8 @@ var uiConfigRequiredFields = []string{
 // registerUI mounts the Airflow 3.2.1 internal UI API (/ui/*) that the bundled
 // React app calls. Unimplemented /ui paths degrade gracefully via uiNoRoute.
 // tokenTTLSecs feeds the expires_in_seconds field of /ui/auth/token.
-func registerUI(r gin.IRouter, tokenTTLSecs int) {
-	r.GET("/ui/config", uiConfigHandler())
+func registerUI(r gin.IRouter, tokenTTLSecs int, instanceName string) {
+	r.GET("/ui/config", uiConfigHandler(instanceName))
 	r.GET("/ui/auth/me", uiMeHandler())
 	r.GET("/ui/auth/menus", uiMenusHandler())
 	r.POST("/ui/auth/token", uiTokenHandler(tokenTTLSecs))
@@ -51,13 +51,16 @@ func registerUI(r gin.IRouter, tokenTTLSecs int) {
 // tunes them). theme is null — required-but-nullable in the spec — meaning "no
 // custom Chakra theme". is_db_isolation_mode is intentionally absent: it is not
 // part of the 3.2.1 ConfigResponse.
-func uiConfigHandler() gin.HandlerFunc {
+func uiConfigHandler(instanceName string) gin.HandlerFunc {
+	if instanceName == "" {
+		instanceName = "Leoflow"
+	}
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"fallback_page_limit":             50,
 			"auto_refresh_interval":           30,
 			"hide_paused_dags_by_default":     false,
-			"instance_name":                   "Leoflow",
+			"instance_name":                   instanceName,
 			"enable_swagger_ui":               true,
 			"require_confirmation_dag_change": false,
 			"default_wrap":                    false,

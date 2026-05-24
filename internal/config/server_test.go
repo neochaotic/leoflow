@@ -68,6 +68,27 @@ func TestLoadServerAgentControlPlaneAddr(t *testing.T) {
 	}
 }
 
+func TestLoadServerExecutorTypeDefault(t *testing.T) {
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Executor.Type != "kubernetes" {
+		t.Errorf("default executor.type = %q, want kubernetes", c.Executor.Type)
+	}
+	if c.Executor.AgentPath != "leoflow-agent" {
+		t.Errorf("default executor.agent_path = %q, want leoflow-agent", c.Executor.AgentPath)
+	}
+	t.Setenv("LEOFLOW_EXECUTOR_TYPE", "subprocess")
+	c, err = LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Executor.Type != "subprocess" {
+		t.Errorf("executor.type = %q, want subprocess", c.Executor.Type)
+	}
+}
+
 func TestLoadServerExecutorHTTPEnvOverride(t *testing.T) {
 	t.Setenv("LEOFLOW_EXECUTOR_HTTP_INLINE_MAX_DURATION_SECONDS", "60")
 	t.Setenv("LEOFLOW_EXECUTOR_HTTP_INLINE_CONCURRENCY_LIMIT", "16")

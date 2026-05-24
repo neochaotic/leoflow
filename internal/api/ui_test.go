@@ -25,6 +25,24 @@ func uiServer() *gin.Engine {
 	})
 }
 
+func TestUIConfigInstanceNameConfigurable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cases := map[string]string{"": "Leoflow", "Leoflow · DEV": "Leoflow · DEV"}
+	for in, want := range cases {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ui/config", http.NoBody)
+		uiConfigHandler(in)(c)
+		var cfg map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if cfg["instance_name"] != want {
+			t.Errorf("instance_name for %q = %v, want %v", in, cfg["instance_name"], want)
+		}
+	}
+}
+
 func TestUIConfigIsPublicAndShaped(t *testing.T) {
 	rec := authGet(uiServer(), http.MethodGet, "/ui/config", "") // no token: must still work (public)
 	if rec.Code != http.StatusOK {

@@ -32,6 +32,9 @@ type Dependencies struct {
 	HealthChecks  map[string]HealthChecker
 	CORSOrigins   []string
 	TokenTTLSecs  int
+	// InstanceName is shown in the UI navbar (Airflow's instance_name). Empty
+	// falls back to "Leoflow"; `leoflow dev` sets it to mark the DEV environment.
+	InstanceName string
 
 	// InlineHTTPMaxDurationSeconds caps inline http_api task timeouts at push
 	// time. Zero falls back to domain.DefaultInlineMaxDurationSeconds.
@@ -91,7 +94,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	r.GET("/api/v2/monitor/executor", monitorExecutorHandler(deps.ExecutorInfo))
 
 	registerResources(r, deps)
-	registerUI(r, deps.TokenTTLSecs)
+	registerUI(r, deps.TokenTTLSecs, deps.InstanceName)
 	registerUIViews(r, deps)
 	registerUIStructure(r, deps.Specs)
 	registerUISummaries(r, deps.TaskSummary)

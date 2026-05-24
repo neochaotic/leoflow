@@ -83,6 +83,19 @@ migrations:
   # path of the migrations dir inside the image.
   path: /migrations
 
+# TLS for the agent <-> control plane gRPC channel (issue #58). Off by default
+# (the per-task token still authenticates each call). When enabled, the control
+# plane serves gRPC over TLS using serverCertSecret, and task pods mount caConfigMap
+# so the agent verifies the server cert. Typically both are produced by
+# cert-manager (a Certificate Secret + a trust-bundle/CA ConfigMap).
+agentTLS:
+  enabled: false
+  # Secret (type kubernetes.io/tls) with tls.crt/tls.key for the gRPC server —
+  # e.g. created by a cert-manager Certificate. Required when enabled.
+  serverCertSecret: ""
+  # ConfigMap with key ca.crt, mounted into task pods to verify the server cert.
+  caConfigMap: ""
+
 observability:
   otel:
     enabled: false

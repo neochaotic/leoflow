@@ -70,6 +70,17 @@ spec:
             - name: LEOFLOW_OBSERVABILITY_OTEL_ENDPOINT
               value: {{ .Values.observability.otel.endpoint | quote }}
             {{- end }}
+            {{- if .Values.agentTLS.enabled }}
+            # TLS on the agent gRPC channel (issue #58). The server cert is
+            # mounted from agentTLS.serverCertSecret; the agent CA is delivered to
+            # task pods via agentTLS.caConfigMap (the dispatcher mounts + selects it).
+            - name: LEOFLOW_SERVER_GRPC_TLS_CERT
+              value: /etc/leoflow/grpc-tls/tls.crt
+            - name: LEOFLOW_SERVER_GRPC_TLS_KEY
+              value: /etc/leoflow/grpc-tls/tls.key
+            - name: LEOFLOW_EXECUTOR_AGENT_TLS_CA_CONFIGMAP
+              value: {{ .Values.agentTLS.caConfigMap | quote }}
+            {{- end }}
             - name: LEOFLOW_DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -109,9 +120,19 @@ spec:
           volumeMounts:
             - name: logs
               mountPath: {{ .Values.config.logsDir }}
+            {{- if .Values.agentTLS.enabled }}
+            - name: grpc-tls
+              mountPath: /etc/leoflow/grpc-tls
+              readOnly: true
+            {{- end }}
       volumes:
         - name: logs
           emptyDir: {}
+        {{- if .Values.agentTLS.enabled }}
+        - name: grpc-tls
+          secret:
+            secretName: {{ required "agentTLS.serverCertSecret is required when agentTLS.enabled" .Values.agentTLS.serverCertSecret }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

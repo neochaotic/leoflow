@@ -40,6 +40,11 @@ type Request struct {
 	StagingClaim        string
 	StagingSize         string
 	StagingStorageClass string
+
+	// AgentTLSCAConfigMap, when set, is the name of a ConfigMap holding the CA
+	// (key ca.crt) the agent uses to verify the control plane's gRPC TLS cert
+	// (issue #58). It is mounted into the task pod and selects TLS for the agent.
+	AgentTLSCAConfigMap string
 }
 
 // Executor runs or dispatches a task. For synchronous executors (inline HTTP)

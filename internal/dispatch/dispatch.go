@@ -37,11 +37,12 @@ type TokenIssuer interface {
 
 // Dispatcher builds executor requests for queued pod-path tasks and runs them.
 type Dispatcher struct {
-	exec        executor.Executor
-	resolver    Resolver
-	issuer      TokenIssuer
-	controlAddr string
-	tokenTTL    time.Duration
+	exec           executor.Executor
+	resolver       Resolver
+	issuer         TokenIssuer
+	controlAddr    string
+	tokenTTL       time.Duration
+	tlsCAConfigMap string
 }
 
 // NewDispatcher builds a Dispatcher that launches tasks via exec, resolves their
@@ -50,6 +51,11 @@ type Dispatcher struct {
 func NewDispatcher(exec executor.Executor, resolver Resolver, issuer TokenIssuer, controlAddr string, tokenTTL time.Duration) *Dispatcher {
 	return &Dispatcher{exec: exec, resolver: resolver, issuer: issuer, controlAddr: controlAddr, tokenTTL: tokenTTL}
 }
+
+// SetAgentTLSCAConfigMap configures the CA ConfigMap mounted into task pods so
+// agents verify the control plane's gRPC TLS cert (issue #58). Empty = the agent
+// stays on the insecure channel (dev).
+func (d *Dispatcher) SetAgentTLSCAConfigMap(name string) { d.tlsCAConfigMap = name }
 
 // Dispatch resolves the task, mints its agent token, and executes it.
 func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error {
@@ -101,5 +107,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 		req.StagingSize = r.Staging.Size
 		req.StagingStorageClass = r.Staging.StorageClass
 	}
+	req.AgentTLSCAConfigMap = d.tlsCAConfigMap
 	return d.exec.Execute(ctx, req)
 }

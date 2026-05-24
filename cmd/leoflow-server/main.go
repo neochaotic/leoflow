@@ -419,7 +419,9 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 			controlAddr = cfg.Server.GRPCAddr
 		}
 		podExec := executor.NewKubernetesExecutor(cs, podNamespace)
-		sched.SetDispatcher(dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL))
+		dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
+		dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
+		sched.SetDispatcher(dispatcher)
 		startReconciler(ctx, cs, execStore, logger)
 		startStagingGC(ctx, cs, store, logger)
 		logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)

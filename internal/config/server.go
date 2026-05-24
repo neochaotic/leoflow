@@ -39,6 +39,10 @@ type ExecutorSection struct {
 	// falls back to server.grpc_addr; in a local k3d/kind cluster set it to a
 	// host-reachable address such as host.k3d.internal:9091.
 	AgentControlPlaneAddr string `mapstructure:"agent_control_plane_addr"`
+	// AgentTLSCAConfigMap names a ConfigMap (key ca.crt) mounted into task pods so
+	// the agent verifies the control plane's gRPC TLS cert (issue #58). Empty =
+	// agents use the insecure channel (dev).
+	AgentTLSCAConfigMap string `mapstructure:"agent_tls_ca_configmap"`
 }
 
 // HTTPExecutorSection configures the inline http_api execution path (ADR 0002).
@@ -134,6 +138,7 @@ var serverDefaults = map[string]any{
 	"executor.http.inline_concurrency_limit":    256,
 	"executor.http.user_agent":                  "leoflow/0.1",
 	"executor.agent_control_plane_addr":         "",
+	"executor.agent_tls_ca_configmap":           "",
 	"logs.dir":                                  "/var/log/leoflow",
 	"observability.otel.enabled":                true,
 	"observability.otel.endpoint":               "localhost:4317",

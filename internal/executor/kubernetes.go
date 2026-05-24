@@ -89,7 +89,35 @@ func BuildPod(req Request) *corev1.Pod {
 		pod.Spec.ServiceAccountName = req.Execution.ServiceAccount
 	}
 	mountStagingVolume(pod, req)
+	mountAgentTLSCA(pod, req)
 	return pod
+}
+
+// agentCAVolumeName / agentCADir / agentCAFile place the CA the agent uses to
+// verify the control plane's gRPC server certificate (issue #58).
+const (
+	agentCAVolumeName = "leoflow-agent-ca"
+	agentCADir        = "/etc/leoflow/tls"
+	agentCAFile       = "ca.crt"
+)
+
+// mountAgentTLSCA mounts the CA ConfigMap (when configured) into the task pod so
+// the agent can verify the control plane's TLS cert. The matching env vars are
+// set in podEnv.
+func mountAgentTLSCA(pod *corev1.Pod, req Request) {
+	if req.AgentTLSCAConfigMap == "" {
+		return
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name: agentCAVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: req.AgentTLSCAConfigMap},
+			},
+		},
+	})
+	c := &pod.Spec.Containers[0]
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: agentCAVolumeName, MountPath: agentCADir, ReadOnly: true})
 }
 
 // stagingVolumeName is the pod volume name for the per-run staging PVC.
@@ -124,6 +152,12 @@ func podEnv(req Request) []corev1.EnvVar {
 	)
 	if req.StagingClaim != "" {
 		env = append(env, corev1.EnvVar{Name: "LEOFLOW_STAGING_DIR", Value: stagingMountPath})
+	}
+	if req.AgentTLSCAConfigMap != "" {
+		env = append(env,
+			corev1.EnvVar{Name: "LEOFLOW_AGENT_INSECURE", Value: "false"},
+			corev1.EnvVar{Name: "LEOFLOW_AGENT_TLS_CA", Value: agentCADir + "/" + agentCAFile},
+		)
 	}
 	for k, v := range req.Env {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})

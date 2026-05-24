@@ -93,6 +93,51 @@ func TestBuildPodMountsStagingVolume(t *testing.T) {
 	}
 }
 
+func TestBuildPodMountsAgentTLSCA(t *testing.T) {
+	// No CA configmap -> agent stays insecure (no TLS env, no extra volume).
+	base := BuildPod(sampleReq())
+	baseEnv := map[string]string{}
+	for _, e := range base.Spec.Containers[0].Env {
+		baseEnv[e.Name] = e.Value
+	}
+	if _, ok := baseEnv["LEOFLOW_AGENT_TLS_CA"]; ok {
+		t.Error("no CA configmap should not set LEOFLOW_AGENT_TLS_CA")
+	}
+	// With a CA configmap, mount it and tell the agent to use TLS.
+	req := sampleReq()
+	req.AgentTLSCAConfigMap = "leoflow-agent-ca"
+	pod := BuildPod(req)
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].ConfigMap != nil && pod.Spec.Volumes[i].ConfigMap.Name == "leoflow-agent-ca" {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatalf("CA configmap not mounted as a volume: %+v", pod.Spec.Volumes)
+	}
+	c := pod.Spec.Containers[0]
+	mounted := false
+	for _, m := range c.VolumeMounts {
+		if m.Name == vol.Name {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Errorf("CA volume not mounted: %+v", c.VolumeMounts)
+	}
+	env := map[string]string{}
+	for _, e := range c.Env {
+		env[e.Name] = e.Value
+	}
+	if env["LEOFLOW_AGENT_INSECURE"] != "false" {
+		t.Errorf("LEOFLOW_AGENT_INSECURE = %q, want false", env["LEOFLOW_AGENT_INSECURE"])
+	}
+	if env["LEOFLOW_AGENT_TLS_CA"] == "" {
+		t.Error("LEOFLOW_AGENT_TLS_CA must point to the mounted CA")
+	}
+}
+
 func TestBuildPodSanitizesName(t *testing.T) {
 	req := sampleReq()
 	req.DagID = "ETL Vendas"

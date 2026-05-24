@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -183,18 +184,6 @@ func TestDevPrintHelpers(t *testing.T) {
 	}
 }
 
-func TestResolveDevBinaries(t *testing.T) {
-	server, agent, err := resolveDevBinaries(devOptions{serverBin: "/s", agentBin: "/a"})
-	if err != nil || server != "/s" || agent != "/a" {
-		t.Errorf("resolveDevBinaries = (%q,%q,%v), want /s /a nil", server, agent, err)
-	}
-	// A missing server binary surfaces an actionable error.
-	t.Chdir(t.TempDir())
-	if _, _, e := resolveDevBinaries(devOptions{agentBin: "/a"}); e == nil {
-		t.Error("expected error when the server binary is missing")
-	}
-}
-
 func TestRunDevValidatesProject(t *testing.T) {
 	cmd := devTestCmd()
 	// Missing leoflow.yaml.
@@ -217,7 +206,7 @@ func TestStartDevServerStartsAndErrors(t *testing.T) {
 	defer cancel()
 
 	// A real, harmless binary starts successfully and a *Cmd is returned.
-	srv, err := startDevServer(ctx, cmd, "/bin/sleep", "/bin/true", t.TempDir(), "python3")
+	srv, err := startDevServer(ctx, cmd, "/bin/sleep", subprocessServerEnv("/bin/true", t.TempDir(), "python3"))
 	if err != nil || srv == nil {
 		t.Fatalf("startDevServer(real bin) = (%v,%v), want a running cmd", srv, err)
 	}
@@ -225,7 +214,7 @@ func TestStartDevServerStartsAndErrors(t *testing.T) {
 	_ = srv.Wait()
 
 	// A nonexistent binary fails at Start.
-	if _, e := startDevServer(context.Background(), cmd, "/no/such/leoflow-server", "/bin/true", t.TempDir(), "python3"); e == nil {
+	if _, e := startDevServer(context.Background(), cmd, "/no/such/leoflow-server", sharedServerEnv()); e == nil {
 		t.Error("expected error starting a nonexistent server binary")
 	}
 }
@@ -235,10 +224,15 @@ func TestDevWatchLoopExitsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already canceled: the loop must do its initial pass then return nil
 
-	dir := t.TempDir() // no leoflow.yaml → the initial compile fails fast (no parser run)
+	dir := t.TempDir()
 	cfg := &domain.LeoflowConfig{DagID: "p"}
-	if err := devWatchLoop(ctx, cmd, dir, cfg, devOptions{image: "x"}, "tok"); err != nil {
+	reloads := 0
+	reload := func() error { reloads++; return nil }
+	if err := devWatchLoop(ctx, cmd, dir, cfg, reload); err != nil {
 		t.Errorf("devWatchLoop on canceled ctx = %v, want nil", err)
+	}
+	if reloads != 1 {
+		t.Errorf("reload ran %d times, want 1 initial pass", reloads)
 	}
 }
 
@@ -261,5 +255,175 @@ func TestVenvPipArgs(t *testing.T) {
 		if !strings.Contains(joined, must) {
 			t.Errorf("pip args %q missing %q", joined, must)
 		}
+	}
+}
+
+func TestDevDagImageRef(t *testing.T) {
+	if got := devDagImageRef("my_etl"); got != "leoflow-dev-my_etl:dev" {
+		t.Errorf("devDagImageRef = %q, want leoflow-dev-my_etl:dev", got)
+	}
+}
+
+func TestDevDockerfile(t *testing.T) {
+	df := devDockerfile("leoflow-base:py3.11", "dag.py")
+	for _, must := range []string{"FROM leoflow-base:py3.11", "COPY dag.py", "PYTHONPATH"} {
+		if !strings.Contains(df, must) {
+			t.Errorf("generated Dockerfile missing %q:\n%s", must, df)
+		}
+	}
+}
+
+func TestServerEnvBuilders(t *testing.T) {
+	sub := strings.Join(subprocessServerEnv("/bin/agent", "/proj", "/venv/py"), "\n")
+	for _, must := range []string{"LEOFLOW_EXECUTOR_TYPE=subprocess", "LEOFLOW_EXECUTOR_AGENT_PATH=/bin/agent", "LEOFLOW_EXECUTOR_SUBPROCESS_WORKDIR=/proj", "LEOFLOW_PYTHON=/venv/py", "127.0.0.1:9091"} {
+		if !strings.Contains(sub, must) {
+			t.Errorf("subprocessServerEnv missing %q", must)
+		}
+	}
+	clu := strings.Join(clusterServerEnv("/home/u/.leoflow/dev/kubeconfig"), "\n")
+	for _, must := range []string{"LEOFLOW_EXECUTOR_TYPE=kubernetes", "KUBECONFIG=/home/u/.leoflow/dev/kubeconfig", "LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=" + devHostGRPCAddr} {
+		if !strings.Contains(clu, must) {
+			t.Errorf("clusterServerEnv missing %q", must)
+		}
+	}
+	// Both carry the shared dev settings (isolated DB + auth bypass).
+	if !strings.Contains(clu, "LEOFLOW_DATABASE_URL="+devDatabaseURL) || !strings.Contains(clu, "LEOFLOW_AUTH_DEV_NO_AUTH=true") {
+		t.Error("clusterServerEnv missing shared dev settings")
+	}
+}
+
+func TestK3dArgBuilders(t *testing.T) {
+	if got := strings.Join(k3dCreateArgs("leoflow-dev"), " "); got != "cluster create leoflow-dev --wait" {
+		t.Errorf("k3dCreateArgs = %q", got)
+	}
+	if got := strings.Join(k3dImportArgs("leoflow-dev", "base:1", "dag:dev"), " "); got != "image import base:1 dag:dev --cluster leoflow-dev" {
+		t.Errorf("k3dImportArgs = %q", got)
+	}
+}
+
+func TestDevKubeconfigPath(t *testing.T) {
+	home := filepath.FromSlash("/home/u/.leoflow/dev")
+	if got := devKubeconfigPath(home); got != filepath.Join(home, "kubeconfig") {
+		t.Errorf("devKubeconfigPath = %q", got)
+	}
+}
+
+func TestEnsureProjectDockerfile(t *testing.T) {
+	cmd := devTestCmd()
+	cfg := &domain.LeoflowConfig{DagID: "p", DagSource: "dag.py"}
+
+	// Generates one when absent.
+	dir := t.TempDir()
+	if err := ensureProjectDockerfile(cmd, dir, cfg); err != nil {
+		t.Fatalf("ensureProjectDockerfile: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("Dockerfile not generated: %v", err)
+	}
+	if !strings.Contains(string(data), "FROM "+devBaseImage) {
+		t.Errorf("generated Dockerfile = %q", data)
+	}
+
+	// Leaves an existing Dockerfile untouched.
+	dir2 := t.TempDir()
+	custom := []byte("FROM my/custom:image\n")
+	if werr := os.WriteFile(filepath.Join(dir2, "Dockerfile"), custom, 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	if err := ensureProjectDockerfile(cmd, dir2, cfg); err != nil {
+		t.Fatalf("ensureProjectDockerfile (existing): %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir2, "Dockerfile"))
+	if !bytes.Equal(got, custom) {
+		t.Errorf("existing Dockerfile was overwritten: %q", got)
+	}
+}
+
+func TestDevSubprocessSetupMissingAgent(t *testing.T) {
+	t.Chdir(t.TempDir()) // no agent on PATH or ./bin
+	cmd := devTestCmd()
+	cfg := &domain.LeoflowConfig{DagID: "p"}
+	if _, _, err := devSubprocessSetup(context.Background(), cmd, ".", devOptions{}, t.TempDir(), cfg); err == nil {
+		t.Error("expected error when the agent binary is missing")
+	}
+}
+
+func TestBaseImageBuildArgs(t *testing.T) {
+	got := strings.Join(baseImageBuildArgs(), " ")
+	for _, must := range []string{"build", "runtime/Dockerfile", "PYTHON_VERSION=" + devPyVersion, devBaseImage} {
+		if !strings.Contains(got, must) {
+			t.Errorf("baseImageBuildArgs %q missing %q", got, must)
+		}
+	}
+}
+
+func TestKubectlNamespaceArgs(t *testing.T) {
+	got := strings.Join(kubectlNamespaceArgs("/kc"), " ")
+	if got != "--kubeconfig /kc create namespace "+devNamespace {
+		t.Errorf("kubectlNamespaceArgs = %q", got)
+	}
+}
+
+func TestDevClusterSetupStubbed(t *testing.T) {
+	origRun, origOut := devRun, devOutput
+	defer func() { devRun, devOutput = origRun, origOut }()
+	var runs []string
+	devRun = func(_ context.Context, _ *cobra.Command, name string, args ...string) error {
+		runs = append(runs, name+" "+strings.Join(args, " "))
+		return nil
+	}
+	devOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "docker": // image inspect → "absent" so the base image is built
+			return nil, errors.New("no such image")
+		case name == "k3d" && len(args) > 1 && args[1] == "list": // cluster absent → create
+			return []byte(""), nil
+		case name == "k3d": // kubeconfig get
+			return []byte("apiVersion: v1\nkind: Config\n"), nil
+		case name == "kubectl":
+			return []byte("namespace/leoflow created"), nil
+		}
+		return nil, nil
+	}
+
+	home, dir := t.TempDir(), t.TempDir()
+	cfg := &domain.LeoflowConfig{DagID: "etl", DagSource: "dag.py"}
+	env, makeReload, err := devClusterSetup(context.Background(), devTestCmd(), dir, devOptions{}, home, cfg)
+	if err != nil {
+		t.Fatalf("devClusterSetup: %v", err)
+	}
+	if makeReload == nil || makeReload("tok") == nil {
+		t.Fatal("expected a reload factory")
+	}
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "LEOFLOW_EXECUTOR_TYPE=kubernetes") || !strings.Contains(joined, "KUBECONFIG="+devKubeconfigPath(home)) {
+		t.Errorf("cluster env did not target the isolated cluster: %v", env)
+	}
+	if _, e := os.Stat(devKubeconfigPath(home)); e != nil {
+		t.Error("isolated kubeconfig was not written")
+	}
+	if _, e := os.Stat(filepath.Join(dir, "Dockerfile")); e != nil {
+		t.Error("default Dockerfile was not generated")
+	}
+	// The base image build and cluster create were invoked.
+	if !strings.Contains(strings.Join(runs, "\n"), "docker build") || !strings.Contains(strings.Join(runs, "\n"), "cluster create") {
+		t.Errorf("expected docker build + k3d create, got: %v", runs)
+	}
+}
+
+func TestK3dImportStubbed(t *testing.T) {
+	origRun := devRun
+	defer func() { devRun = origRun }()
+	var got string
+	devRun = func(_ context.Context, _ *cobra.Command, name string, args ...string) error {
+		got = name + " " + strings.Join(args, " ")
+		return nil
+	}
+	if err := k3dImport(context.Background(), devTestCmd(), "leoflow-dev-etl:dev"); err != nil {
+		t.Fatalf("k3dImport: %v", err)
+	}
+	if !strings.Contains(got, "image import leoflow-dev-etl:dev") || !strings.Contains(got, "--cluster "+devClusterName) {
+		t.Errorf("k3dImport invoked %q", got)
 	}
 }

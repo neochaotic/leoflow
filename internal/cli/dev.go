@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,6 +44,15 @@ const (
 	devUIURL        = "http://localhost:8080"
 	devPollInterval = 750 * time.Millisecond
 	devReadyTimeout = 30 * time.Second
+	// Cluster-mode (default) runs real pod-per-task on a dedicated k3d cluster,
+	// fully isolated from any product/demo cluster. Pods dial the host control
+	// plane's gRPC; host.docker.internal resolves to the host on Docker Desktop.
+	devClusterName         = "leoflow-dev"
+	devNamespace           = "leoflow"
+	devPyVersion           = "3.11"
+	devBaseImage           = "leoflow-base:py3.11"
+	devHostGRPCAddr        = "host.docker.internal:9091"
+	devReadyTimeoutCluster = 90 * time.Second
 )
 
 const (
@@ -53,6 +63,7 @@ const (
 // devOptions holds the resolved flags for a dev run.
 type devOptions struct {
 	image       string
+	executor    string
 	composeFile string
 	migrations  string
 	runtimeSrc  string
@@ -65,12 +76,14 @@ func newDevCommand() *cobra.Command {
 	var o devOptions
 	cmd := &cobra.Command{
 		Use:   "dev [path]",
-		Short: "Run the project locally with hot reload (no image build).",
-		Long: "dev brings up local dependencies, runs the control plane with the " +
-			"subprocess executor (user code runs UNSANDBOXED — dev only), registers the " +
-			"DAG, and hot-reloads on every save. The Airflow UI is served at " + devUIURL +
-			" and marked as the DEV environment. Run it from the leoflow source tree " +
-			"(or point --migrations/--compose/--server-bin/--agent-bin elsewhere).",
+		Short: "Run the project locally with hot reload.",
+		Long: "dev brings up local dependencies and runs the control plane against an " +
+			"isolated dev database, registers the DAG, and hot-reloads on every save. The " +
+			"Airflow UI is served at " + devUIURL + ", marked as the DEV environment, with " +
+			"no login.\n\nExecutor (default k8s): 'k8s' runs real pod-per-task on a dedicated, " +
+			"isolated k3d cluster (leoflow-dev) — highest fidelity, rebuilds the DAG image on " +
+			"each change. 'subprocess' runs tasks unsandboxed on the host with no image build " +
+			"— the fast inner loop. Run from the leoflow source tree.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -80,7 +93,8 @@ func newDevCommand() *cobra.Command {
 			return runDev(cmd, dir, o)
 		},
 	}
-	cmd.Flags().StringVar(&o.image, "image", "leoflow-dev:local", "placeholder image recorded in dag.json (not built in dev)")
+	cmd.Flags().StringVar(&o.executor, "executor", "k8s", "execution mode: 'k8s' (dedicated k3d cluster, real pods) or 'subprocess' (host, fast, unsandboxed)")
+	cmd.Flags().StringVar(&o.image, "image", "leoflow-dev:local", "placeholder image recorded in dag.json (subprocess mode only)")
 	cmd.Flags().StringVar(&o.composeFile, "compose", "docker-compose.dev.yaml", "compose file for local Postgres + Redis")
 	cmd.Flags().StringVar(&o.migrations, "migrations", "migrations", "path to the SQL migrations directory")
 	cmd.Flags().StringVar(&o.runtimeSrc, "runtime-src", "runtime/python", "source of the leoflow_runtime package installed into the dev venv")
@@ -99,6 +113,51 @@ func devPrintf(w io.Writer, format string, a ...any) {
 // devPrintln writes a progress line for the dev loop, discarding the write error.
 func devPrintln(w io.Writer, a ...any) {
 	_, _ = fmt.Fprintln(w, a...) //nolint:errcheck // best-effort terminal progress output
+}
+
+// devDagImageRef returns the local image tag built for a DAG in cluster-mode.
+func devDagImageRef(dagID string) string {
+	return "leoflow-dev-" + dagID + ":dev"
+}
+
+// k3dCreateArgs builds the argv to create the dedicated dev cluster.
+func k3dCreateArgs(cluster string) []string {
+	return []string{"cluster", "create", cluster, "--wait"}
+}
+
+// k3dImportArgs builds the argv to import local images into the dev cluster (so
+// task pods can use them without a registry).
+func k3dImportArgs(cluster string, images ...string) []string {
+	args := make([]string, 0, len(images)+3)
+	args = append(args, "image", "import")
+	args = append(args, images...)
+	return append(args, "--cluster", cluster)
+}
+
+// devKubeconfigPath returns the isolated kubeconfig file under the dev home; the
+// control plane is pointed here so it only ever targets the dev cluster.
+func devKubeconfigPath(home string) string {
+	return filepath.Join(home, "kubeconfig")
+}
+
+// baseImageBuildArgs builds the docker argv for the task base image.
+func baseImageBuildArgs() []string {
+	return []string{"build", "-f", filepath.Join("runtime", "Dockerfile"),
+		"--build-arg", "PYTHON_VERSION=" + devPyVersion, "-t", devBaseImage, "."}
+}
+
+// kubectlNamespaceArgs builds the kubectl argv that creates the task-pod
+// namespace in the dev cluster.
+func kubectlNamespaceArgs(kubeconfig string) []string {
+	return []string{"--kubeconfig", kubeconfig, "create", "namespace", devNamespace}
+}
+
+// devDockerfile is the Dockerfile generated for a project that does not ship its
+// own: it layers the DAG source onto the task base image so the agent can import
+// it (matching runtime/Dockerfile's PYTHONPATH convention).
+func devDockerfile(baseImage, dagSource string) string {
+	base := filepath.Base(dagSource)
+	return fmt.Sprintf("FROM %s\nCOPY %s /home/leoflow/%s\nENV PYTHONPATH=/home/leoflow\n", baseImage, base, base)
 }
 
 // devBanner renders a high-visibility DEV-environment banner so a developer
@@ -174,19 +233,26 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if herr != nil {
 		return herr
 	}
-	venvPy, verr := ensureDevVenv(ctx, cmd, home, o.runtimeSrc, cfg.Dependencies)
-	if verr != nil {
-		return verr
-	}
-	serverBin, agentBin, berr := resolveDevBinaries(o)
+	serverBin, berr := resolveBinary(o.serverBin, "leoflow-server")
 	if berr != nil {
 		return berr
 	}
-	workDir, aerr := filepath.Abs(dir)
-	if aerr != nil {
-		return fmt.Errorf("resolving project dir: %w", aerr)
+
+	// Mode-specific setup: the env the control plane runs with and the per-reload
+	// build/register strategy. Cluster-mode (default) runs real pods on a
+	// dedicated k3d cluster; subprocess runs unsandboxed on the host (fast loop).
+	var serverEnv []string
+	var makeReload func(token string) func() error
+	if o.executor == "subprocess" {
+		serverEnv, makeReload, err = devSubprocessSetup(ctx, cmd, dir, o, home, cfg)
+	} else {
+		serverEnv, makeReload, err = devClusterSetup(ctx, cmd, dir, o, home, cfg)
 	}
-	server, serr := startDevServer(ctx, cmd, serverBin, agentBin, workDir, venvPy)
+	if err != nil {
+		return err
+	}
+
+	server, serr := startDevServer(ctx, cmd, serverBin, serverEnv)
 	if serr != nil {
 		return serr
 	}
@@ -204,7 +270,67 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if terr != nil {
 		return fmt.Errorf("minting dev token: %w", terr)
 	}
-	return devWatchLoop(ctx, cmd, dir, cfg, o, token)
+	return devWatchLoop(ctx, cmd, dir, cfg, makeReload(token))
+}
+
+// devSubprocessSetup provisions the isolated venv and returns the subprocess
+// server env plus a reload that compiles + registers (no image build) — the fast
+// inner loop, but user code runs unsandboxed on the host.
+func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o devOptions, home string, cfg *domain.LeoflowConfig) (env []string, makeReload func(string) func() error, err error) {
+	agentBin, err := resolveBinary(o.agentBin, "leoflow-agent")
+	if err != nil {
+		return nil, nil, err
+	}
+	venvPy, verr := ensureDevVenv(ctx, cmd, home, o.runtimeSrc, cfg.Dependencies)
+	if verr != nil {
+		return nil, nil, verr
+	}
+	workDir, aerr := filepath.Abs(dir)
+	if aerr != nil {
+		return nil, nil, fmt.Errorf("resolving project dir: %w", aerr)
+	}
+	env = subprocessServerEnv(agentBin, workDir, venvPy)
+	makeReload = func(token string) func() error {
+		return func() error {
+			return devCompileAndRegister(ctx, cmd, dir, compileOptions{image: o.image}, token, nil)
+		}
+	}
+	return env, makeReload, nil
+}
+
+// devClusterSetup ensures the task base image, the dedicated k3d cluster, its
+// namespace, and an isolated kubeconfig, then returns the Kubernetes-executor
+// server env plus a reload that builds the DAG image, imports it into the
+// cluster, and registers — real pod-per-task, fully isolated, at the cost of an
+// image build per change.
+func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devOptions, home string, cfg *domain.LeoflowConfig) (env []string, makeReload func(string) func() error, err error) {
+	if berr := ensureBaseImage(ctx, cmd); berr != nil {
+		return nil, nil, berr
+	}
+	if cerr := ensureDevCluster(ctx, cmd); cerr != nil {
+		return nil, nil, cerr
+	}
+	kubeconfig := devKubeconfigPath(home)
+	if kerr := writeDevKubeconfig(ctx, cmd, kubeconfig); kerr != nil {
+		return nil, nil, kerr
+	}
+	if nerr := ensureDevNamespace(ctx, cmd, kubeconfig); nerr != nil {
+		return nil, nil, nerr
+	}
+	if derr := ensureProjectDockerfile(cmd, dir, cfg); derr != nil {
+		return nil, nil, derr
+	}
+	image := devDagImageRef(cfg.DagID)
+	makeReload = func(token string) func() error {
+		return func() error {
+			opts := compileOptions{image: image, build: true, builder: "docker", dockerfile: "Dockerfile"}
+			return devCompileAndRegister(ctx, cmd, dir, opts, token, func() error {
+				return k3dImport(ctx, cmd, image)
+			})
+		}
+	}
+	env = clusterServerEnv(kubeconfig)
+	return env, makeReload, nil
 }
 
 // devComposeUp starts local Postgres + Redis via docker compose (the shared
@@ -310,18 +436,95 @@ func ensureDevVenv(ctx context.Context, cmd *cobra.Command, home, runtimeSrc str
 	return py, nil
 }
 
-// resolveDevBinaries locates the leoflow-server and leoflow-agent binaries,
-// honoring explicit flags and falling back to PATH then ./bin.
-func resolveDevBinaries(o devOptions) (server, agent string, err error) {
-	server, err = resolveBinary(o.serverBin, "leoflow-server")
-	if err != nil {
-		return "", "", err
+// devRun and devOutput run external dev tools (k3d/docker/kubectl). They are
+// package variables so tests can stub the external-tool calls; devRun streams to
+// the command's output, devOutput captures combined output for inspection.
+var (
+	devRun = func(ctx context.Context, cmd *cobra.Command, name string, args ...string) error {
+		c := exec.CommandContext(ctx, name, args...) //nolint:gosec // dev tool invoking fixed external binaries
+		c.Stdout, c.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+		return c.Run()
 	}
-	agent, err = resolveBinary(o.agentBin, "leoflow-agent")
-	if err != nil {
-		return "", "", err
+	devOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, name, args...).CombinedOutput() //nolint:gosec // dev tool invoking fixed external binaries
 	}
-	return server, agent, nil
+)
+
+// ensureBaseImage builds the task base image (runtime/Dockerfile) if it is not
+// already present, so DAG images can layer onto it. Requires the leoflow source
+// tree (it builds from runtime/Dockerfile with the repo as context).
+func ensureBaseImage(ctx context.Context, cmd *cobra.Command) error {
+	if _, err := devOutput(ctx, "docker", "image", "inspect", devBaseImage); err == nil {
+		return nil
+	}
+	devPrintln(cmd.OutOrStdout(), "▸ building task base image "+devBaseImage+" (first run) …")
+	if err := devRun(ctx, cmd, "docker", baseImageBuildArgs()...); err != nil {
+		return fmt.Errorf("building base image (run from the leoflow source tree): %w", err)
+	}
+	return nil
+}
+
+// ensureDevCluster creates the dedicated k3d cluster if it does not exist.
+func ensureDevCluster(ctx context.Context, cmd *cobra.Command) error {
+	out, _ := devOutput(ctx, "k3d", "cluster", "list", "--no-headers") //nolint:errcheck // absence is handled below
+	if strings.Contains(string(out), devClusterName) {
+		return nil
+	}
+	devPrintln(cmd.OutOrStdout(), "▸ creating dedicated dev cluster "+devClusterName+" (first run) …")
+	if err := devRun(ctx, cmd, "k3d", k3dCreateArgs(devClusterName)...); err != nil {
+		return fmt.Errorf("creating k3d cluster %s (is k3d installed?): %w", devClusterName, err)
+	}
+	return nil
+}
+
+// writeDevKubeconfig writes the dev cluster's kubeconfig to an isolated file so
+// the control plane only ever targets leoflow-dev, never the product cluster.
+func writeDevKubeconfig(ctx context.Context, _ *cobra.Command, path string) error {
+	out, err := devOutput(ctx, "k3d", "kubeconfig", "get", devClusterName)
+	if err != nil {
+		return fmt.Errorf("getting kubeconfig for %s: %w", devClusterName, err)
+	}
+	if werr := os.WriteFile(path, out, 0o600); werr != nil {
+		return fmt.Errorf("writing kubeconfig %s: %w", path, werr)
+	}
+	return nil
+}
+
+// ensureDevNamespace creates the task-pod namespace in the dev cluster (idempotent).
+func ensureDevNamespace(ctx context.Context, _ *cobra.Command, kubeconfig string) error {
+	out, err := devOutput(ctx, "kubectl", kubectlNamespaceArgs(kubeconfig)...)
+	if err != nil && !strings.Contains(string(out), "already exists") {
+		return fmt.Errorf("creating namespace %s: %s: %w", devNamespace, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// k3dImport imports a locally-built image into the dev cluster so task pods can
+// use it without a registry.
+func k3dImport(ctx context.Context, cmd *cobra.Command, image string) error {
+	devPrintln(cmd.OutOrStdout(), "▸ importing "+image+" into "+devClusterName+" …")
+	if err := devRun(ctx, cmd, "k3d", k3dImportArgs(devClusterName, image)...); err != nil {
+		return fmt.Errorf("importing %s into %s: %w", image, devClusterName, err)
+	}
+	return nil
+}
+
+// ensureProjectDockerfile generates a default Dockerfile when the project lacks
+// one, layering the DAG source onto the task base image.
+func ensureProjectDockerfile(cmd *cobra.Command, dir string, cfg *domain.LeoflowConfig) error {
+	df := filepath.Join(dir, "Dockerfile")
+	if _, err := os.Stat(df); err == nil {
+		return nil
+	}
+	src := cfg.DagSource
+	if src == "" {
+		src = "dag.py"
+	}
+	devPrintln(cmd.OutOrStdout(), "▸ generating a default Dockerfile (none found) …")
+	if werr := os.WriteFile(df, []byte(devDockerfile(devBaseImage, src)), 0o600); werr != nil {
+		return fmt.Errorf("writing Dockerfile: %w", werr)
+	}
+	return nil
 }
 
 // resolveBinary returns explicit when set, otherwise the binary found on PATH,
@@ -342,31 +545,52 @@ func resolveBinary(explicit, name string) (string, error) {
 	return "", fmt.Errorf("%s not found on PATH or ./bin; run `make build` or pass --%s", name, name)
 }
 
-// startDevServer launches the control plane with the subprocess executor and the
-// DEV instance name, inheriting the developer's environment for the rest.
-func startDevServer(ctx context.Context, cmd *cobra.Command, serverBin, agentBin, workDir, venvPython string) (*exec.Cmd, error) {
-	devPrintln(cmd.OutOrStdout(), "▸ starting control plane (subprocess executor) …")
-	srv := exec.CommandContext(ctx, serverBin) //nolint:gosec // serverBin is operator-resolved on the dev CLI
-	srv.Env = append(os.Environ(),
-		"LEOFLOW_EXECUTOR_TYPE=subprocess",
-		"LEOFLOW_EXECUTOR_AGENT_PATH="+agentBin,
-		// The agent runs on the host and dials the control plane back; 127.0.0.1 is
-		// dialable, whereas the server's 0.0.0.0 bind address is not.
-		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1:9091",
-		// The agent runs the user's dag.py from the project dir, with the isolated
-		// venv's Python, and ships logs to a writable dir (the prod default
-		// /var/log/leoflow is not writable on a host).
-		"LEOFLOW_EXECUTOR_SUBPROCESS_WORKDIR="+workDir,
-		"LEOFLOW_PYTHON="+venvPython,
-		"LEOFLOW_LOGS_DIR="+filepath.Join(os.TempDir(), "leoflow-dev-logs"),
-		"LEOFLOW_UI_INSTANCE_NAME="+devInstanceName,
-		"LEOFLOW_DATABASE_URL="+devDatabaseURL,
-		"LEOFLOW_REDIS_URL="+devRedisURL,
-		"LEOFLOW_AUTH_JWT_SECRET="+devJWTSecret,
-		"LEOFLOW_SECRET_KEY="+devSecretKey,
+// sharedServerEnv is the dev control plane environment common to both executor
+// modes: the isolated dev database, DEV instance name, dev-only auth bypass, and
+// a writable logs dir (the prod default /var/log/leoflow is not host-writable).
+func sharedServerEnv() []string {
+	return []string{
+		"LEOFLOW_LOGS_DIR=" + filepath.Join(os.TempDir(), "leoflow-dev-logs"),
+		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
+		"LEOFLOW_DATABASE_URL=" + devDatabaseURL,
+		"LEOFLOW_REDIS_URL=" + devRedisURL,
+		"LEOFLOW_AUTH_JWT_SECRET=" + devJWTSecret,
+		"LEOFLOW_SECRET_KEY=" + devSecretKey,
 		"LEOFLOW_AUTH_DEV_NO_AUTH=true",
 		"LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true",
+	}
+}
+
+// subprocessServerEnv adds the subprocess-executor settings: the agent binary,
+// the project workdir (so dag.py imports), the venv Python, and a dialable
+// control-plane address (the server binds 0.0.0.0, which is not a dial target).
+func subprocessServerEnv(agentBin, workDir, venvPython string) []string {
+	return append(sharedServerEnv(),
+		"LEOFLOW_EXECUTOR_TYPE=subprocess",
+		"LEOFLOW_EXECUTOR_AGENT_PATH="+agentBin,
+		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1:9091",
+		"LEOFLOW_EXECUTOR_SUBPROCESS_WORKDIR="+workDir,
+		"LEOFLOW_PYTHON="+venvPython,
 	)
+}
+
+// clusterServerEnv adds the Kubernetes-executor settings: the isolated dev
+// cluster's kubeconfig (so the control plane targets leoflow-dev, never the
+// product cluster) and the host address task pods dial back for gRPC.
+func clusterServerEnv(kubeconfig string) []string {
+	return append(sharedServerEnv(),
+		"LEOFLOW_EXECUTOR_TYPE=kubernetes",
+		"KUBECONFIG="+kubeconfig,
+		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="+devHostGRPCAddr,
+	)
+}
+
+// startDevServer launches the control plane with the given environment and
+// returns once it has started.
+func startDevServer(ctx context.Context, cmd *cobra.Command, serverBin string, env []string) (*exec.Cmd, error) {
+	devPrintln(cmd.OutOrStdout(), "▸ starting control plane …")
+	srv := exec.CommandContext(ctx, serverBin) //nolint:gosec // serverBin is operator-resolved on the dev CLI
+	srv.Env = append(os.Environ(), env...)
 	srv.Stdout, srv.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 	if err := srv.Start(); err != nil {
 		return nil, fmt.Errorf("starting control plane: %w", err)
@@ -405,11 +629,12 @@ func devReadyOnce(ctx context.Context, baseURL string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// devWatchLoop compiles + registers the DAG, then re-does it on every save until
-// the context is canceled (Ctrl-C).
-func devWatchLoop(ctx context.Context, cmd *cobra.Command, dir string, cfg *domain.LeoflowConfig, o devOptions, token string) error {
+// devWatchLoop runs reload once, then again on every save of a watched file
+// until the context is canceled (Ctrl-C). reload encapsulates the mode-specific
+// build/register step.
+func devWatchLoop(ctx context.Context, cmd *cobra.Command, dir string, cfg *domain.LeoflowConfig, reload func() error) error {
 	watched := devWatchPaths(dir, cfg)
-	if rerr := devCompileAndRegister(ctx, cmd, dir, o, token); rerr != nil {
+	if rerr := reload(); rerr != nil {
 		devPrintf(cmd.ErrOrStderr(), "✗ %v\n", rerr)
 	}
 	snap := projectMtimes(watched)
@@ -428,7 +653,7 @@ func devWatchLoop(ctx context.Context, cmd *cobra.Command, dir string, cfg *doma
 			}
 			snap = cur
 			devPrintf(cmd.OutOrStdout(), "[%s] change detected → reloading …\n", time.Now().Format("15:04:05"))
-			if rerr := devCompileAndRegister(ctx, cmd, dir, o, token); rerr != nil {
+			if rerr := reload(); rerr != nil {
 				devPrintf(cmd.ErrOrStderr(), "✗ %v\n", rerr)
 			}
 		}
@@ -440,19 +665,24 @@ func devWatchPaths(dir string, cfg *domain.LeoflowConfig) []string {
 	return []string{projectConfigPath(dir), dagSourcePath(dir, cfg)}
 }
 
-// devCompileAndRegister compiles the project in-memory (parser + overlay +
-// guardrails, no image build) and registers the resulting dag.json with the
-// running control plane.
-func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, o devOptions, token string) error {
-	dagJSON := filepath.Join(os.TempDir(), "leoflow-dev-dag.json")
-	// Each save is a fresh ephemeral version, so a hot reload never collides with
-	// the previous registration (dag_versions is unique per dag_id + version).
-	opts := compileOptions{output: dagJSON, image: o.image, dagVersion: fmt.Sprintf("dev-%d", time.Now().UnixNano())}
+// devCompileAndRegister compiles the project (parser + overlay + guardrails),
+// optionally runs afterCompile (e.g. import the built image into the cluster),
+// and registers the resulting dag.json with the running control plane. Each call
+// stamps a fresh dev version so a hot reload never collides with the previous
+// registration (dag_versions is unique per dag_id + version).
+func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, opts compileOptions, token string, afterCompile func() error) error {
+	opts.output = filepath.Join(os.TempDir(), "leoflow-dev-dag.json")
+	opts.dagVersion = fmt.Sprintf("dev-%d", time.Now().UnixNano())
 	//nolint:contextcheck // runCompile derives its context from cmd; ctx here is used for registration.
 	if cerr := runCompile(cmd, dir, opts); cerr != nil {
 		return cerr
 	}
-	data, err := os.ReadFile(dagJSON) //nolint:gosec // path is leoflow-controlled under TempDir
+	if afterCompile != nil {
+		if aerr := afterCompile(); aerr != nil {
+			return aerr
+		}
+	}
+	data, err := os.ReadFile(opts.output) //nolint:gosec // path is leoflow-controlled under TempDir
 	if err != nil {
 		return fmt.Errorf("reading compiled dag.json: %w", err)
 	}

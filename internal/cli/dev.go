@@ -41,9 +41,14 @@ const (
 	devJWTSecret    = "dev-insecure-jwt-secret-change-me"
 	devSecretKey    = "dev-insecure-secret-key-32bytes!"
 	devAdminUser    = "admin@leoflow.local"
-	devUIURL        = "http://localhost:8080"
 	devPollInterval = 750 * time.Millisecond
 	devReadyTimeout = 30 * time.Second
+	// Dev uses ports distinct from the demo/production defaults (8080/9090/9091)
+	// so a `leoflow dev` and a demo control plane can run side by side without
+	// colliding. --port overrides the HTTP port; gRPC/metrics are fixed for dev.
+	devDefaultPort     = 8088
+	devGRPCBindAddr    = ":9099"
+	devMetricsBindAddr = ":9098"
 	// Cluster-mode (default) runs real pod-per-task on a dedicated k3d cluster,
 	// fully isolated from any product/demo cluster. Pods dial the host control
 	// plane's gRPC; host.docker.internal resolves to the host on Docker Desktop.
@@ -51,7 +56,7 @@ const (
 	devNamespace    = "leoflow"
 	devPyVersion    = "3.11"
 	devBaseImage    = "leoflow-base:py3.11"
-	devHostGRPCAddr = "host.docker.internal:9091"
+	devHostGRPCAddr = "host.docker.internal:9099"
 )
 
 const (
@@ -63,6 +68,7 @@ const (
 type devOptions struct {
 	image       string
 	executor    string
+	port        int
 	composeFile string
 	migrations  string
 	runtimeSrc  string
@@ -71,6 +77,9 @@ type devOptions struct {
 	noUp        bool
 }
 
+// devURL is the dev UI/API base for the given HTTP port.
+func devURL(port int) string { return fmt.Sprintf("http://localhost:%d", port) }
+
 func newDevCommand() *cobra.Command {
 	var o devOptions
 	cmd := &cobra.Command{
@@ -78,11 +87,12 @@ func newDevCommand() *cobra.Command {
 		Short: "Run the project locally with hot reload.",
 		Long: "dev brings up local dependencies and runs the control plane against an " +
 			"isolated dev database, registers the DAG, and hot-reloads on every save. The " +
-			"Airflow UI is served at " + devUIURL + ", marked as the DEV environment, with " +
-			"no login.\n\nExecutor (default k8s): 'k8s' runs real pod-per-task on a dedicated, " +
-			"isolated k3d cluster (leoflow-dev) — highest fidelity, rebuilds the DAG image on " +
-			"each change. 'subprocess' runs tasks unsandboxed on the host with no image build " +
-			"— the fast inner loop. Run from the leoflow source tree.",
+			"Airflow UI is served on a dev-specific port (default 8088, --port), marked as the " +
+			"DEV environment, with no login — distinct from the demo/production defaults so the " +
+			"two can run side by side.\n\nExecutor (default k8s): 'k8s' runs real pod-per-task on " +
+			"a dedicated, isolated k3d cluster (leoflow-dev) — highest fidelity, rebuilds the DAG " +
+			"image on each change. 'subprocess' runs tasks unsandboxed on the host with no image " +
+			"build — the fast inner loop. Run from the leoflow source tree.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -93,6 +103,7 @@ func newDevCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&o.executor, "executor", "k8s", "execution mode: 'k8s' (dedicated k3d cluster, real pods) or 'subprocess' (host, fast, unsandboxed)")
+	cmd.Flags().IntVar(&o.port, "port", devDefaultPort, "HTTP/UI port (dev default 8088, distinct from the demo's 8080)")
 	cmd.Flags().StringVar(&o.image, "image", "leoflow-dev:local", "placeholder image recorded in dag.json (subprocess mode only)")
 	cmd.Flags().StringVar(&o.composeFile, "compose", "docker-compose.dev.yaml", "compose file for local Postgres + Redis")
 	cmd.Flags().StringVar(&o.migrations, "migrations", "migrations", "path to the SQL migrations directory")
@@ -209,8 +220,12 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if verr := cfg.Validate(); verr != nil {
 		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
 	}
+	if o.port == 0 {
+		o.port = devDefaultPort
+	}
+	uiURL := devURL(o.port)
 	out := cmd.OutOrStdout()
-	devPrintln(out, devBanner(devUIURL))
+	devPrintln(out, devBanner(uiURL))
 
 	ctx, stop := signal.NotifyContext(cmdContext(cmd), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -257,7 +272,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	}
 	defer func() { _ = server.Process.Signal(syscall.SIGTERM) }() //nolint:errcheck // best-effort shutdown of the dev server
 
-	if werr := waitForReady(ctx, devUIURL); werr != nil {
+	if werr := waitForReady(ctx, uiURL); werr != nil {
 		return werr
 	}
 	// Mint an admin token in-process signed with the dev JWT secret; the control
@@ -288,10 +303,10 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o d
 	if aerr != nil {
 		return nil, nil, fmt.Errorf("resolving project dir: %w", aerr)
 	}
-	env = subprocessServerEnv(agentBin, workDir, venvPy)
+	env = subprocessServerEnv(o.port, agentBin, workDir, venvPy)
 	makeReload = func(token string) func() error {
 		return func() error {
-			return devCompileAndRegister(ctx, cmd, dir, compileOptions{image: o.image}, token, nil)
+			return devCompileAndRegister(ctx, cmd, dir, compileOptions{image: o.image}, token, nil, devURL(o.port))
 		}
 	}
 	return env, makeReload, nil
@@ -325,10 +340,10 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 			opts := compileOptions{image: image, build: true, builder: "docker", dockerfile: "Dockerfile"}
 			return devCompileAndRegister(ctx, cmd, dir, opts, token, func() error {
 				return k3dImport(ctx, cmd, image)
-			})
+			}, devURL(o.port))
 		}
 	}
-	env = clusterServerEnv(kubeconfig)
+	env = clusterServerEnv(o.port, kubeconfig)
 	return env, makeReload, nil
 }
 
@@ -547,12 +562,14 @@ func resolveBinary(explicit, name string) (string, error) {
 // sharedServerEnv is the dev control plane environment common to both executor
 // modes: the isolated dev database, DEV instance name, dev-only auth bypass, and
 // a writable logs dir (the prod default /var/log/leoflow is not host-writable).
-func sharedServerEnv() []string {
+func sharedServerEnv(port int) []string {
 	return []string{
 		// Bind the HTTP API to loopback: dev disables auth, so the API must not be
 		// reachable off-host (the server also refuses dev_no_auth on a non-loopback
-		// address). Task pods use gRPC (9091), not this HTTP listener.
-		"LEOFLOW_SERVER_HTTP_ADDR=127.0.0.1:8080",
+		// address). Dev ports are distinct from the demo so both can run at once.
+		fmt.Sprintf("LEOFLOW_SERVER_HTTP_ADDR=127.0.0.1:%d", port),
+		"LEOFLOW_SERVER_GRPC_ADDR=" + devGRPCBindAddr,
+		"LEOFLOW_SERVER_METRICS_ADDR=" + devMetricsBindAddr,
 		"LEOFLOW_LOGS_DIR=" + filepath.Join(os.TempDir(), "leoflow-dev-logs"),
 		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
 		"LEOFLOW_DATABASE_URL=" + devDatabaseURL,
@@ -567,11 +584,11 @@ func sharedServerEnv() []string {
 // subprocessServerEnv adds the subprocess-executor settings: the agent binary,
 // the project workdir (so dag.py imports), the venv Python, and a dialable
 // control-plane address (the server binds 0.0.0.0, which is not a dial target).
-func subprocessServerEnv(agentBin, workDir, venvPython string) []string {
-	return append(sharedServerEnv(),
+func subprocessServerEnv(port int, agentBin, workDir, venvPython string) []string {
+	return append(sharedServerEnv(port),
 		"LEOFLOW_EXECUTOR_TYPE=subprocess",
 		"LEOFLOW_EXECUTOR_AGENT_PATH="+agentBin,
-		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1:9091",
+		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1"+devGRPCBindAddr,
 		"LEOFLOW_EXECUTOR_SUBPROCESS_WORKDIR="+workDir,
 		"LEOFLOW_PYTHON="+venvPython,
 	)
@@ -580,8 +597,8 @@ func subprocessServerEnv(agentBin, workDir, venvPython string) []string {
 // clusterServerEnv adds the Kubernetes-executor settings: the isolated dev
 // cluster's kubeconfig (so the control plane targets leoflow-dev, never the
 // product cluster) and the host address task pods dial back for gRPC.
-func clusterServerEnv(kubeconfig string) []string {
-	return append(sharedServerEnv(),
+func clusterServerEnv(port int, kubeconfig string) []string {
+	return append(sharedServerEnv(port),
 		"LEOFLOW_EXECUTOR_TYPE=kubernetes",
 		"KUBECONFIG="+kubeconfig,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="+devHostGRPCAddr,
@@ -673,7 +690,7 @@ func devWatchPaths(dir string, cfg *domain.LeoflowConfig) []string {
 // and registers the resulting dag.json with the running control plane. Each call
 // stamps a fresh dev version so a hot reload never collides with the previous
 // registration (dag_versions is unique per dag_id + version).
-func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, opts compileOptions, token string, afterCompile func() error) error {
+func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, opts compileOptions, token string, afterCompile func() error, uiURL string) error {
 	opts.output = filepath.Join(os.TempDir(), "leoflow-dev-dag.json")
 	opts.dagVersion = fmt.Sprintf("dev-%d", time.Now().UnixNano())
 	//nolint:contextcheck // runCompile derives its context from cmd; ctx here is used for registration.
@@ -693,7 +710,7 @@ func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, 
 	if jerr := json.Unmarshal(data, &spec); jerr != nil {
 		return fmt.Errorf("parsing compiled dag.json: %w", jerr)
 	}
-	status, body, perr := pushVersion(ctx, devUIURL, token, spec.DagID, data)
+	status, body, perr := pushVersion(ctx, uiURL, token, spec.DagID, data)
 	if perr != nil {
 		return perr
 	}

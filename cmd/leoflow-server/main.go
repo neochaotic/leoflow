@@ -137,6 +137,10 @@ func run() error {
 	if cfg.Auth.DevNoAuth {
 		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
 	}
+	// The DEV overlay in the served UI shell tracks the same dev signal as the
+	// auth bypass, so the demo and production never show it.
+	uiSrv := ui.New()
+	uiSrv.SetDevBanner(cfg.Auth.DevNoAuth)
 
 	handler := api.NewServer(api.Dependencies{
 		Logger:        tel.Logger,
@@ -170,7 +174,7 @@ func run() error {
 		Audit:                        repo,
 		ExecutorInfo:                 executorInfo,
 		SchedulerHealth:              schedulerHealth,
-		UI:                           ui.New(),
+		UI:                           uiSrv,
 	})
 
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

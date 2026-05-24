@@ -127,3 +127,27 @@ func TestEmbeddedBundleHasIndex(t *testing.T) {
 		t.Errorf("embedded index = %d, body=%q", rec.Code, rec.Body.String())
 	}
 }
+
+func TestIndexInjectsDevBannerOnlyInDevMode(t *testing.T) {
+	fsys := fstest.MapFS{"index.html": {Data: []byte(`<body><div id="root"></div></body>`)}}
+
+	dev := NewFromFS(fsys, "v")
+	dev.SetDevBanner(true)
+	rec := httptest.NewRecorder()
+	dev.Index(rec, "/")
+	body := rec.Body.String()
+	if !strings.Contains(body, "leoflow-dev-banner") || !strings.Contains(body, ">DEV<") {
+		t.Errorf("dev mode must inject the DEV overlay, got:\n%s", body)
+	}
+	// The overlay goes before </body> so it renders on top of the SPA.
+	if strings.Index(body, "leoflow-dev-banner") > strings.Index(body, "</body>") {
+		t.Error("DEV overlay should be injected before </body>")
+	}
+
+	off := NewFromFS(fsys, "v") // dev banner not set → demo/prod
+	rec2 := httptest.NewRecorder()
+	off.Index(rec2, "/")
+	if strings.Contains(rec2.Body.String(), "leoflow-dev-banner") {
+		t.Error("non-dev mode must NOT inject the DEV overlay")
+	}
+}

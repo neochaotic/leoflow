@@ -15,6 +15,10 @@ import (
 // them without touching anything else in the namespace.
 const stagingLabel = "leoflow.io/staging"
 
+// stagingRunIDAnnotation holds the raw (unsanitized) run_id, which GC uses to
+// check run state — the run-id label is sanitized and may be lossy.
+const stagingRunIDAnnotation = "leoflow.io/run-id"
+
 // defaultStagingSize is used when a DAG enables staging without a size.
 const defaultStagingSize = "1Gi"
 
@@ -46,6 +50,9 @@ func (e *KubernetesExecutor) ensureStagingClaim(ctx context.Context, req Request
 				"leoflow.io/dag-id":    sanitizeLabel(req.DagID),
 				"leoflow.io/tenant-id": sanitizeLabel(req.TenantID),
 			},
+			// The label is sanitized (run IDs contain label-illegal chars); GC needs
+			// the raw run_id to check run state, so keep it as an annotation.
+			Annotations: map[string]string{stagingRunIDAnnotation: req.RunID},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
@@ -80,7 +87,7 @@ func (e *KubernetesExecutor) GCStagingClaims(ctx context.Context, isTerminal fun
 	cutoff := time.Now().Add(-ttl)
 	for i := range list.Items {
 		pvc := &list.Items[i]
-		runID := pvc.Labels["leoflow.io/run-id"]
+		runID := pvc.Annotations[stagingRunIDAnnotation]
 		if !isTerminal(runID) || pvc.CreationTimestamp.After(cutoff) {
 			continue
 		}

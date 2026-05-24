@@ -82,6 +82,9 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}); rerr != nil {
 		return rerr
 	}
+	if oerr := overlayStaging(o.output, cfg.Staging); oerr != nil {
+		return oerr
+	}
 	if verr := validateDAGFile(o.output); verr != nil {
 		return verr
 	}
@@ -197,6 +200,32 @@ func runParser(cmd *cobra.Command, command string, a parserArgs) error {
 	pc.Stderr = cmd.ErrOrStderr()
 	if err := pc.Run(); err != nil {
 		return fmt.Errorf("running parser %q: %w", command, err)
+	}
+	return nil
+}
+
+// overlayStaging writes the leoflow.yaml staging config onto the produced
+// dag.json. Staging is a Leoflow deployment concern, not an Airflow DAG
+// attribute, so it is not emitted by the parser (ADR 0022). No-op when unset.
+func overlayStaging(dagJSONPath string, staging *domain.StagingConfig) error {
+	if staging == nil {
+		return nil
+	}
+	data, err := os.ReadFile(dagJSONPath) //nolint:gosec // G304: output path is operator-supplied on the CLI.
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", dagJSONPath, err)
+	}
+	var spec domain.DAGSpec
+	if uerr := json.Unmarshal(data, &spec); uerr != nil {
+		return fmt.Errorf("parsing %s: %w", dagJSONPath, uerr)
+	}
+	spec.Staging = staging
+	out, err := json.MarshalIndent(&spec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding %s: %w", dagJSONPath, err)
+	}
+	if werr := os.WriteFile(dagJSONPath, append(out, '\n'), 0o600); werr != nil {
+		return fmt.Errorf("writing %s: %w", dagJSONPath, werr)
 	}
 	return nil
 }

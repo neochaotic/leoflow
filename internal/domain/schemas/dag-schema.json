@@ -96,6 +96,16 @@
       },
       "additionalProperties": false
     },
+    "staging": {
+      "type": "object",
+      "description": "Opt-in per-DAG-run shared RWX volume mounted at /staging (ADR 0022).",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "size": { "type": "string", "description": "Kubernetes quantity, e.g. 5Gi." },
+        "storage_class": { "type": "string", "description": "RWX StorageClass; empty = cluster default." }
+      },
+      "additionalProperties": false
+    },
     "tasks": {
       "type": "array",
       "minItems": 1,

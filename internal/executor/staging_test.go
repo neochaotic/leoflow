@@ -63,7 +63,8 @@ func TestGCStagingClaims(t *testing.T) {
 		_, _ = cs.CoreV1().PersistentVolumeClaims("leoflow").Create(context.Background(), &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name, CreationTimestamp: created,
-				Labels: map[string]string{"leoflow.io/staging": "true", "leoflow.io/run-id": runID},
+				Labels:      map[string]string{"leoflow.io/staging": "true"},
+				Annotations: map[string]string{"leoflow.io/run-id": runID},
 			},
 		}, metav1.CreateOptions{})
 	}

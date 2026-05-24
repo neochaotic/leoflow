@@ -19,6 +19,10 @@ type LeoflowConfig struct {
 	Build          *BuildConfig    `json:"build,omitempty" yaml:"build,omitempty"`
 	Registry       *RegistryConfig `json:"registry,omitempty" yaml:"registry,omitempty"`
 	Defaults       *ConfigDefaults `json:"defaults,omitempty" yaml:"defaults,omitempty"`
+	// Staging requests the opt-in per-DAG-run shared volume (ADR 0022). It is a
+	// Leoflow deployment concern (not an Airflow DAG attribute), so it lives in
+	// leoflow.yaml and the compiler overlays it onto the produced dag.json.
+	Staging *StagingConfig `json:"staging,omitempty" yaml:"staging,omitempty"`
 }
 
 // BuildConfig controls how the container image is built from the project.

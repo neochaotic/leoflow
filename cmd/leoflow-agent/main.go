@@ -25,8 +25,9 @@ func run() int {
 	addr := os.Getenv("LEOFLOW_CONTROL_PLANE_ADDR")
 	token := os.Getenv("LEOFLOW_AGENT_TOKEN")
 	allowInsecure := os.Getenv("LEOFLOW_AGENT_INSECURE") != "false"
+	caFile := os.Getenv("LEOFLOW_AGENT_TLS_CA") // PEM CA to verify the server cert (TLS)
 
-	client, conn, err := agent.Dial(addr, token, allowInsecure)
+	client, conn, err := agent.Dial(addr, token, allowInsecure, caFile)
 	if err != nil {
 		slog.Error("connecting to control plane", "error", err)
 		return 1

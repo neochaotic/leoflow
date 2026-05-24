@@ -16,6 +16,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -104,7 +105,7 @@ func run() error {
 	// insecure (dev) until gRPC TLS lands (issue #58); otherwise the handlers
 	// fail closed on a plaintext channel.
 	allowInsecureSecrets := os.Getenv("LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS") == "true"
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, tel.Logger)
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, tel.Logger)
 	if gerr != nil {
 		return gerr
 	}
@@ -244,10 +245,11 @@ func (s inlineStateSink) Transition(ctx context.Context, runID, taskID string, s
 	return s.store.ApplyTransition(ctx, runID, taskID, state)
 }
 
-// startAgentGRPC starts the AgentService gRPC server (insecure transport; the
-// per-task bearer token in metadata authenticates each call) and returns it for
-// graceful shutdown.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, logger *slog.Logger) (*grpc.Server, error) {
+// startAgentGRPC starts the AgentService gRPC server and returns it for graceful
+// shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
+// channel is plaintext (dev). The per-task bearer token in metadata authenticates
+// each call regardless.
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, tlsCert, tlsKey string, logger *slog.Logger) (*grpc.Server, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -257,14 +259,24 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	agentSrv.SetLogSink(logSink)
 	agentSrv.SetLogPublisher(logTailer)
 	agentSrv.SetSecrets(secretsStore, allowInsecureSecrets)
-	srv := grpc.NewServer()
+
+	var opts []grpc.ServerOption
+	secure := tlsCert != "" && tlsKey != ""
+	if secure {
+		creds, cerr := credentials.NewServerTLSFromFile(tlsCert, tlsKey)
+		if cerr != nil {
+			return nil, fmt.Errorf("loading agent grpc TLS cert: %w", cerr)
+		}
+		opts = append(opts, grpc.Creds(creds))
+	}
+	srv := grpc.NewServer(opts...)
 	agentv1.RegisterAgentServiceServer(srv, agentSrv)
 	go func() {
 		if serr := srv.Serve(lis); serr != nil && !errors.Is(serr, grpc.ErrServerStopped) {
 			logger.Error("agent grpc server", "error", serr)
 		}
 	}()
-	logger.Info("agent grpc server started", "grpc_addr", addr)
+	logger.Info("agent grpc server started", "grpc_addr", addr, "tls", secure)
 	return srv, nil
 }
 

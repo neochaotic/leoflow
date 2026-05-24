@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
@@ -13,10 +15,26 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// caPool builds a certificate pool trusting the PEM CA at path, for verifying a
+// self-signed / cluster server certificate.
+func caPool(path string) (*x509.CertPool, error) {
+	pem, err := os.ReadFile(path) //nolint:gosec // G304: CA path is operator-supplied config.
+	if err != nil {
+		return nil, fmt.Errorf("reading CA file %q: %w", path, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("no certificates found in CA file %q", path)
+	}
+	return pool, nil
+}
+
 // Dial connects to the control plane's AgentService, attaching the bearer token
 // to every RPC. When allowInsecure is true (local development against a cluster
-// without TLS) the transport is unencrypted; otherwise TLS 1.2+ is required.
-func Dial(addr, token string, allowInsecure bool) (agentv1.AgentServiceClient, *grpc.ClientConn, error) {
+// without TLS) the transport is unencrypted; otherwise TLS 1.2+ is required. When
+// caFile is set, the server certificate is verified against that CA (a
+// self-signed / cluster CA); otherwise the system roots are used.
+func Dial(addr, token string, allowInsecure bool, caFile string) (agentv1.AgentServiceClient, *grpc.ClientConn, error) {
 	if addr == "" {
 		return nil, nil, errors.New("control plane address is required")
 	}
@@ -24,9 +42,17 @@ func Dial(addr, token string, allowInsecure bool) (agentv1.AgentServiceClient, *
 		return nil, nil, errors.New("agent token is required")
 	}
 
-	transport := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
-	if allowInsecure {
-		transport = insecure.NewCredentials()
+	transport := insecure.NewCredentials()
+	if !allowInsecure {
+		tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+		if caFile != "" {
+			pool, cerr := caPool(caFile)
+			if cerr != nil {
+				return nil, nil, cerr
+			}
+			tlsCfg.RootCAs = pool
+		}
+		transport = credentials.NewTLS(tlsCfg)
 	}
 
 	conn, err := grpc.NewClient(addr,

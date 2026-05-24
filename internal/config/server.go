@@ -58,6 +58,10 @@ type ServerSection struct {
 	MetricsAddr string      `mapstructure:"metrics_addr"`
 	GRPCAddr    string      `mapstructure:"grpc_addr"`
 	CORS        CORSSection `mapstructure:"cors"`
+	// GRPCTLSCert/GRPCTLSKey enable TLS on the agent gRPC listener (issue #58).
+	// When both are set the channel is encrypted; empty means plaintext (dev).
+	GRPCTLSCert string `mapstructure:"grpc_tls_cert"`
+	GRPCTLSKey  string `mapstructure:"grpc_tls_key"`
 }
 
 // CORSSection configures cross-origin access.
@@ -114,6 +118,8 @@ var serverDefaults = map[string]any{
 	"server.http_addr":                          "0.0.0.0:8080",
 	"server.metrics_addr":                       "0.0.0.0:9090",
 	"server.grpc_addr":                          "0.0.0.0:9091",
+	"server.grpc_tls_cert":                      "",
+	"server.grpc_tls_key":                       "",
 	"server.cors.allowed_origins":               []string{"http://localhost:8080"},
 	"database.url":                              "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
 	"database.max_open_conns":                   25,

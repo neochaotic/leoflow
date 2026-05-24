@@ -67,7 +67,7 @@ func TestStreamLogsOverRealTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueAgentToken: %v", err)
 	}
-	client, conn, err := agent.Dial(lis.Addr().String(), token, true)
+	client, conn, err := agent.Dial(lis.Addr().String(), token, true, "")
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

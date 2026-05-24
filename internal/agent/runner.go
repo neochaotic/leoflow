@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
@@ -107,7 +108,32 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		}
 		xcom = append(xcom, XComEnvVar(param, resp.GetValue()))
 	}
-	return mergeEnv(r.Env, spec.GetEnvironment(), xcom), nil
+	env := mergeEnv(r.Env, spec.GetEnvironment(), xcom)
+	return append(env, r.secretsEnv(ctx)...), nil
+}
+
+// secretsEnv fetches the tenant's Variables/Connections and renders them as
+// AIRFLOW_VAR_<KEY> / AIRFLOW_CONN_<ID> so Airflow's native env secrets backend
+// (and plain os.environ) resolve them (ADR 0021). Best-effort: a fetch failure
+// (e.g. an insecure channel refusing secrets) logs and is skipped, so tasks that
+// do not use Variables/Connections still run.
+func (r *Runner) secretsEnv(ctx context.Context) []string {
+	var out []string
+	if resp, err := r.Client.GetVariables(ctx, &agentv1.GetVariablesRequest{}); err != nil {
+		slog.Warn("fetching variables; Variable.get may be unavailable", "error", err)
+	} else {
+		for k, v := range resp.GetVariables() {
+			out = append(out, "AIRFLOW_VAR_"+strings.ToUpper(k)+"="+v)
+		}
+	}
+	if resp, err := r.Client.GetConnections(ctx, &agentv1.GetConnectionsRequest{}); err != nil {
+		slog.Warn("fetching connections; get_connection may be unavailable", "error", err)
+	} else {
+		for id, uri := range resp.GetConnectionUris() {
+			out = append(out, "AIRFLOW_CONN_"+strings.ToUpper(id)+"="+uri)
+		}
+	}
+	return out
 }
 
 func (r *Runner) execute(ctx context.Context, argv, env []string) error {

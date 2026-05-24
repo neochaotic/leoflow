@@ -37,11 +37,35 @@ service AgentService {
 
     // Agent sends periodic heartbeats during long-running tasks.
     rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+
+    // Agent fetches the tenant's Variables to export as AIRFLOW_VAR_* env vars,
+    // so user code resolves them via Airflow's native env secrets backend.
+    rpc GetVariables (GetVariablesRequest) returns (GetVariablesResponse);
+
+    // Agent fetches the tenant's Connections (as Airflow connection URIs) to
+    // export as AIRFLOW_CONN_* env vars.
+    rpc GetConnections (GetConnectionsRequest) returns (GetConnectionsResponse);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Messages
 // ─────────────────────────────────────────────────────────────────────────
+
+// GetVariablesRequest is empty; the calling task instance is identified by its
+// agent token in metadata (the tenant is derived from it).
+message GetVariablesRequest {}
+
+message GetVariablesResponse {
+    // key -> value, exported by the agent as AIRFLOW_VAR_<KEY>.
+    map<string, string> variables = 1;
+}
+
+message GetConnectionsRequest {}
+
+message GetConnectionsResponse {
+    // conn_id -> Airflow connection URI, exported as AIRFLOW_CONN_<CONN_ID>.
+    map<string, string> connection_uris = 1;
+}
 
 message RegisterRequest {
     string agent_version = 1;

@@ -57,6 +57,10 @@ type Querier interface {
 	LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsParams) ([]LatestRunsForDagsRow, error)
 	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
+	// All of a tenant's connections WITH the encrypted password, for delivering
+	// credentials to task pods (ADR 0021). Never use this for UI/API responses,
+	// which must mask the password.
+	ListConnectionSecrets(ctx context.Context, tenantID pgtype.UUID) ([]ListConnectionSecretsRow, error)
 	ListConnections(ctx context.Context, arg ListConnectionsParams) ([]ListConnectionsRow, error)
 	ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagParams) ([]DagRun, error)
 	ListDagVersions(ctx context.Context, arg ListDagVersionsParams) ([]ListDagVersionsRow, error)

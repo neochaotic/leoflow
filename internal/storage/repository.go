@@ -662,6 +662,52 @@ func (r *Repository) ListVariables(ctx context.Context, tenant string, limit, of
 	return out, int(total), nil
 }
 
+// SecretVariables returns the tenant's variables as key→value, for delivering to
+// task pods (ADR 0021). The agent exports them as AIRFLOW_VAR_<KEY>.
+func (r *Repository) SecretVariables(ctx context.Context, tenant string) (map[string]string, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	// A high limit; tenants have far fewer variables than this in practice.
+	rows, err := r.q.ListVariables(ctx, queries.ListVariablesParams{TenantID: tid, Limit: 10000, Offset: 0})
+	if err != nil {
+		return nil, fmt.Errorf("listing variables: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, v := range rows {
+		out[v.Key] = v.Value
+	}
+	return out, nil
+}
+
+// SecretConnectionURIs returns the tenant's connections as conn_id→Airflow URI
+// (password decrypted), for delivering to task pods (ADR 0021). The agent exports
+// them as AIRFLOW_CONN_<CONN_ID>. Never expose these in UI/API responses.
+func (r *Repository) SecretConnectionURIs(ctx context.Context, tenant string) (map[string]string, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.ListConnectionSecrets(ctx, tid)
+	if err != nil {
+		return nil, fmt.Errorf("listing connection secrets: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		pass, derr := r.decryptExtra(row.Password)
+		if derr != nil {
+			return nil, fmt.Errorf("decrypting password for %q: %w", row.ConnID, derr)
+		}
+		out[row.ConnID] = airflowConnURI(domain.Connection{
+			ConnID: row.ConnID, ConnType: row.ConnType, Host: strOrEmpty(row.Host),
+			Schema: strOrEmpty(row.ConnSchema), Login: strOrEmpty(row.Login),
+			Password: pass, Port: int32PtrToInt(row.Port),
+		})
+	}
+	return out, nil
+}
+
 // AddFavorite marks a DAG as a favorite for the user (idempotent).
 func (r *Repository) AddFavorite(ctx context.Context, tenant, userID, dagID string) error {
 	if err := r.q.AddFavorite(ctx, queries.AddFavoriteParams{Tenant: tenant, UserID: userID, DagID: dagID}); err != nil {

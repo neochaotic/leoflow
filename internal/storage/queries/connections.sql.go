@@ -79,6 +79,56 @@ func (q *Queries) GetConnection(ctx context.Context, arg GetConnectionParams) (G
 	return i, err
 }
 
+const listConnectionSecrets = `-- name: ListConnectionSecrets :many
+SELECT conn_id, conn_type, host, conn_schema, login, password, port, extra
+FROM connections
+WHERE tenant_id = $1
+ORDER BY conn_id
+`
+
+type ListConnectionSecretsRow struct {
+	ConnID     string  `json:"conn_id"`
+	ConnType   string  `json:"conn_type"`
+	Host       *string `json:"host"`
+	ConnSchema *string `json:"conn_schema"`
+	Login      *string `json:"login"`
+	Password   *string `json:"password"`
+	Port       *int32  `json:"port"`
+	Extra      *string `json:"extra"`
+}
+
+// All of a tenant's connections WITH the encrypted password, for delivering
+// credentials to task pods (ADR 0021). Never use this for UI/API responses,
+// which must mask the password.
+func (q *Queries) ListConnectionSecrets(ctx context.Context, tenantID pgtype.UUID) ([]ListConnectionSecretsRow, error) {
+	rows, err := q.db.Query(ctx, listConnectionSecrets, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectionSecretsRow{}
+	for rows.Next() {
+		var i ListConnectionSecretsRow
+		if err := rows.Scan(
+			&i.ConnID,
+			&i.ConnType,
+			&i.Host,
+			&i.ConnSchema,
+			&i.Login,
+			&i.Password,
+			&i.Port,
+			&i.Extra,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConnections = `-- name: ListConnections :many
 SELECT conn_id, conn_type, host, conn_schema, login, port, extra, description
 FROM connections

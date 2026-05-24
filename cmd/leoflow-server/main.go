@@ -100,7 +100,11 @@ func run() error {
 
 	logSink := logs.NewDiskSink(cfg.Logs.Dir)
 	logTailer := logs.NewRedisTailer(rd.Client)
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, xcomSvc, logSink, logTailer, tel.Logger)
+	// Secrets are served over the agent channel only when explicitly allowed
+	// insecure (dev) until gRPC TLS lands (issue #58); otherwise the handlers
+	// fail closed on a plaintext channel.
+	allowInsecureSecrets := os.Getenv("LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS") == "true"
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, tel.Logger)
 	if gerr != nil {
 		return gerr
 	}
@@ -243,7 +247,7 @@ func (s inlineStateSink) Transition(ctx context.Context, runID, taskID string, s
 // startAgentGRPC starts the AgentService gRPC server (insecure transport; the
 // per-task bearer token in metadata authenticates each call) and returns it for
 // graceful shutdown.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, logger *slog.Logger) (*grpc.Server, error) {
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, logger *slog.Logger) (*grpc.Server, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -252,6 +256,7 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	agentSrv := agentrpc.NewServer(authn, store, xcomSvc)
 	agentSrv.SetLogSink(logSink)
 	agentSrv.SetLogPublisher(logTailer)
+	agentSrv.SetSecrets(secretsStore, allowInsecureSecrets)
 	srv := grpc.NewServer()
 	agentv1.RegisterAgentServiceServer(srv, agentSrv)
 	go func() {

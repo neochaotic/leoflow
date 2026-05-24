@@ -27,6 +27,16 @@ type fakeClient struct {
 	getSpecErr         error
 	pushErr            error
 	heartbeatTerminate bool
+	vars               map[string]string
+	conns              map[string]string
+}
+
+func (f *fakeClient) GetVariables(context.Context, *agentv1.GetVariablesRequest, ...grpc.CallOption) (*agentv1.GetVariablesResponse, error) {
+	return &agentv1.GetVariablesResponse{Variables: f.vars}, nil
+}
+
+func (f *fakeClient) GetConnections(context.Context, *agentv1.GetConnectionsRequest, ...grpc.CallOption) (*agentv1.GetConnectionsResponse, error) {
+	return &agentv1.GetConnectionsResponse{ConnectionUris: f.conns}, nil
 }
 
 func (f *fakeClient) Register(context.Context, *agentv1.RegisterRequest, ...grpc.CallOption) (*agentv1.RegisterResponse, error) {
@@ -149,6 +159,20 @@ func TestRunnerHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(joined, `LEOFLOW_XCOM_UPSTREAM_VAL={"n":1}`) {
 		t.Errorf("env missing xcom input: %v", cmd.env)
+	}
+	// Variables/Connections are exported as Airflow env secrets.
+	client.vars = map[string]string{"my_var": "v1"}
+	client.conns = map[string]string{"my_db": "postgres://u:p@h/db"}
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	if !strings.Contains(je, "AIRFLOW_VAR_MY_VAR=v1") {
+		t.Errorf("env missing AIRFLOW_VAR_MY_VAR: %v", env)
+	}
+	if !strings.Contains(je, "AIRFLOW_CONN_MY_DB=postgres://u:p@h/db") {
+		t.Errorf("env missing AIRFLOW_CONN_MY_DB: %v", env)
 	}
 	if len(sink.lines) != 2 || sink.lines[0] != "line one" {
 		t.Errorf("log lines = %v, want two captured lines", sink.lines)

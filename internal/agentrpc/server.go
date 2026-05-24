@@ -65,12 +65,14 @@ type LogPublisher interface {
 // Server implements agentv1.AgentServiceServer over a Store and Authenticator.
 type Server struct {
 	agentv1.UnimplementedAgentServiceServer
-	auth  Authenticator
-	store Store
-	xcom  XComService
-	logs  LogSink
-	tail  LogPublisher
-	now   func() time.Time
+	auth                 Authenticator
+	store                Store
+	xcom                 XComService
+	logs                 LogSink
+	tail                 LogPublisher
+	secrets              SecretsStore
+	allowInsecureSecrets bool
+	now                  func() time.Time
 }
 
 // NewServer builds an AgentService server backed by the given authenticator,

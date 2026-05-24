@@ -23,13 +23,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Register_FullMethodName    = "/leoflow.agent.v1.AgentService/Register"
-	AgentService_GetTaskSpec_FullMethodName = "/leoflow.agent.v1.AgentService/GetTaskSpec"
-	AgentService_FetchXCom_FullMethodName   = "/leoflow.agent.v1.AgentService/FetchXCom"
-	AgentService_PushXCom_FullMethodName    = "/leoflow.agent.v1.AgentService/PushXCom"
-	AgentService_StreamLogs_FullMethodName  = "/leoflow.agent.v1.AgentService/StreamLogs"
-	AgentService_ReportState_FullMethodName = "/leoflow.agent.v1.AgentService/ReportState"
-	AgentService_Heartbeat_FullMethodName   = "/leoflow.agent.v1.AgentService/Heartbeat"
+	AgentService_Register_FullMethodName       = "/leoflow.agent.v1.AgentService/Register"
+	AgentService_GetTaskSpec_FullMethodName    = "/leoflow.agent.v1.AgentService/GetTaskSpec"
+	AgentService_FetchXCom_FullMethodName      = "/leoflow.agent.v1.AgentService/FetchXCom"
+	AgentService_PushXCom_FullMethodName       = "/leoflow.agent.v1.AgentService/PushXCom"
+	AgentService_StreamLogs_FullMethodName     = "/leoflow.agent.v1.AgentService/StreamLogs"
+	AgentService_ReportState_FullMethodName    = "/leoflow.agent.v1.AgentService/ReportState"
+	AgentService_Heartbeat_FullMethodName      = "/leoflow.agent.v1.AgentService/Heartbeat"
+	AgentService_GetVariables_FullMethodName   = "/leoflow.agent.v1.AgentService/GetVariables"
+	AgentService_GetConnections_FullMethodName = "/leoflow.agent.v1.AgentService/GetConnections"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -56,6 +58,12 @@ type AgentServiceClient interface {
 	ReportState(ctx context.Context, in *ReportStateRequest, opts ...grpc.CallOption) (*ReportStateResponse, error)
 	// Agent sends periodic heartbeats during long-running tasks.
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
+	// Agent fetches the tenant's Variables to export as AIRFLOW_VAR_* env vars,
+	// so user code resolves them via Airflow's native env secrets backend.
+	GetVariables(ctx context.Context, in *GetVariablesRequest, opts ...grpc.CallOption) (*GetVariablesResponse, error)
+	// Agent fetches the tenant's Connections (as Airflow connection URIs) to
+	// export as AIRFLOW_CONN_* env vars.
+	GetConnections(ctx context.Context, in *GetConnectionsRequest, opts ...grpc.CallOption) (*GetConnectionsResponse, error)
 }
 
 type agentServiceClient struct {
@@ -139,6 +147,26 @@ func (c *agentServiceClient) Heartbeat(ctx context.Context, in *HeartbeatRequest
 	return out, nil
 }
 
+func (c *agentServiceClient) GetVariables(ctx context.Context, in *GetVariablesRequest, opts ...grpc.CallOption) (*GetVariablesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVariablesResponse)
+	err := c.cc.Invoke(ctx, AgentService_GetVariables_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) GetConnections(ctx context.Context, in *GetConnectionsRequest, opts ...grpc.CallOption) (*GetConnectionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetConnectionsResponse)
+	err := c.cc.Invoke(ctx, AgentService_GetConnections_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -163,6 +191,12 @@ type AgentServiceServer interface {
 	ReportState(context.Context, *ReportStateRequest) (*ReportStateResponse, error)
 	// Agent sends periodic heartbeats during long-running tasks.
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
+	// Agent fetches the tenant's Variables to export as AIRFLOW_VAR_* env vars,
+	// so user code resolves them via Airflow's native env secrets backend.
+	GetVariables(context.Context, *GetVariablesRequest) (*GetVariablesResponse, error)
+	// Agent fetches the tenant's Connections (as Airflow connection URIs) to
+	// export as AIRFLOW_CONN_* env vars.
+	GetConnections(context.Context, *GetConnectionsRequest) (*GetConnectionsResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -193,6 +227,12 @@ func (UnimplementedAgentServiceServer) ReportState(context.Context, *ReportState
 }
 func (UnimplementedAgentServiceServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedAgentServiceServer) GetVariables(context.Context, *GetVariablesRequest) (*GetVariablesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetVariables not implemented")
+}
+func (UnimplementedAgentServiceServer) GetConnections(context.Context, *GetConnectionsRequest) (*GetConnectionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetConnections not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -330,6 +370,42 @@ func _AgentService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_GetVariables_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVariablesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).GetVariables(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_GetVariables_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).GetVariables(ctx, req.(*GetVariablesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_GetConnections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetConnectionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).GetConnections(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_GetConnections_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).GetConnections(ctx, req.(*GetConnectionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -360,6 +436,14 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Heartbeat",
 			Handler:    _AgentService_Heartbeat_Handler,
+		},
+		{
+			MethodName: "GetVariables",
+			Handler:    _AgentService_GetVariables_Handler,
+		},
+		{
+			MethodName: "GetConnections",
+			Handler:    _AgentService_GetConnections_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

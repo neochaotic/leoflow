@@ -50,7 +50,7 @@ setup: ## Install Go tools, Python parser, and the pre-commit hook
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
-	command -v python3 >/dev/null && pip install -e "./parser[dev]" || echo "skip parser install (python3 not found)"
+	command -v python3 >/dev/null && pip install -e "./parser[dev]" && pip install -e ./runtime/python || echo "skip parser/runtime install (python3 not found)"
 	install -m 0755 scripts/pre-commit .git/hooks/pre-commit
 	@echo "setup complete"
 
@@ -60,6 +60,13 @@ build: ## Build all binaries into ./bin
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLI_BINARY) ./cmd/leoflow
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SERVER_BINARY) ./cmd/leoflow-server
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(AGENT_BINARY) ./cmd/leoflow-agent
+
+.PHONY: dev-install
+dev-install: ## Install the leoflow toolchain on PATH so `leoflow dev` runs from any project
+	go install -trimpath -ldflags="$(LDFLAGS)" ./cmd/leoflow ./cmd/leoflow-server ./cmd/leoflow-agent
+	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
+	@echo "installed leoflow, leoflow-server, leoflow-agent, migrate to $$(go env GOPATH)/bin"
+	@echo "ensure that dir is on your PATH, then run: leoflow dev   (the dev DB + venv are auto-provisioned)"
 
 .PHONY: fetch-airflow-ui
 fetch-airflow-ui: ## Extract the pinned Airflow UI SPA into internal/ui/assets (needs docker)

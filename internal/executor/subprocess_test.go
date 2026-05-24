@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -42,16 +44,55 @@ func writeScript(t *testing.T, body string) string {
 	return p
 }
 
-func TestSubprocessExecuteSuccessAndFailure(t *testing.T) {
+// waitForFile polls for a file to appear (the subprocess executor launches the
+// agent asynchronously, so its side effects land shortly after Execute returns).
+func waitForFile(t *testing.T, path string) []byte {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if data, err := os.ReadFile(path); err == nil {
+			return data
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("file %s never appeared", path)
+	return nil
+}
+
+func TestSubprocessExecuteRunsInWorkDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("bash agent stub is POSIX-only")
 	}
-	ok := NewSubprocessExecutor(writeScript(t, "exit 0"), discardLogger())
-	if err := ok.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
-		t.Errorf("exit 0 should succeed, got %v", err)
+	dir := t.TempDir()
+	// The script records its working directory; with SetWorkDir the agent must
+	// run there (so a dev host can import the project's dag.py).
+	e := NewSubprocessExecutor(writeScript(t, "pwd > cwd.txt"), discardLogger())
+	e.SetWorkDir(dir)
+	if err := e.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
+		t.Fatalf("execute: %v", err)
 	}
-	bad := NewSubprocessExecutor(writeScript(t, "exit 7"), discardLogger())
-	if err := bad.Execute(context.Background(), Request{TaskID: "t"}); err == nil {
-		t.Error("non-zero exit should fail")
+	got := waitForFile(t, filepath.Join(dir, "cwd.txt"))
+	// macOS resolves TempDir under /private; compare the basename to stay portable.
+	if filepath.Base(strings.TrimSpace(string(got))) != filepath.Base(dir) {
+		t.Errorf("agent ran in %q, want workdir %q", strings.TrimSpace(string(got)), dir)
+	}
+}
+
+func TestSubprocessExecuteLaunchesAsync(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash agent stub is POSIX-only")
+	}
+	// Execute launches the agent and returns immediately (like the K8s executor
+	// creating a pod); the agent reports its own terminal state over gRPC, so a
+	// non-zero exit is NOT surfaced synchronously. Only a failure to START errors.
+	dir := t.TempDir()
+	e := NewSubprocessExecutor(writeScript(t, "echo ran > "+filepath.Join(dir, "marker")+"; exit 7"), discardLogger())
+	if err := e.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
+		t.Errorf("Execute should return nil once the agent starts, got %v", err)
+	}
+	waitForFile(t, filepath.Join(dir, "marker")) // proves it actually ran async
+
+	// A binary that cannot start is a synchronous error.
+	if err := NewSubprocessExecutor("/no/such/agent-binary", discardLogger()).Execute(context.Background(), Request{TaskID: "t"}); err == nil {
+		t.Error("an un-startable agent binary should error synchronously")
 	}
 }

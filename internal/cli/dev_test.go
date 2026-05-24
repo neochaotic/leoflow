@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -93,8 +94,11 @@ func TestResolveBinaryExplicitAndFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	if got, err := resolveBinary("", name); err != nil || got != filepath.Join("bin", name) {
-		t.Errorf("fallback = (%q,%v), want bin/%s", got, err, name)
+	// The fallback must be absolute: the subprocess executor runs the agent in a
+	// different working directory, so a relative path would not resolve.
+	got, err := resolveBinary("", name)
+	if err != nil || !filepath.IsAbs(got) || filepath.Base(got) != name {
+		t.Errorf("fallback = (%q,%v), want an absolute path ending in %s", got, err, name)
 	}
 	// Not found anywhere → actionable error.
 	if _, err := resolveBinary("", "definitely-not-a-real-binary-xyz"); err == nil {
@@ -213,7 +217,7 @@ func TestStartDevServerStartsAndErrors(t *testing.T) {
 	defer cancel()
 
 	// A real, harmless binary starts successfully and a *Cmd is returned.
-	srv, err := startDevServer(ctx, cmd, "/bin/sleep", "/bin/true")
+	srv, err := startDevServer(ctx, cmd, "/bin/sleep", "/bin/true", t.TempDir(), "python3")
 	if err != nil || srv == nil {
 		t.Fatalf("startDevServer(real bin) = (%v,%v), want a running cmd", srv, err)
 	}
@@ -221,7 +225,7 @@ func TestStartDevServerStartsAndErrors(t *testing.T) {
 	_ = srv.Wait()
 
 	// A nonexistent binary fails at Start.
-	if _, e := startDevServer(context.Background(), cmd, "/no/such/leoflow-server", "/bin/true"); e == nil {
+	if _, e := startDevServer(context.Background(), cmd, "/no/such/leoflow-server", "/bin/true", t.TempDir(), "python3"); e == nil {
 		t.Error("expected error starting a nonexistent server binary")
 	}
 }
@@ -235,5 +239,27 @@ func TestDevWatchLoopExitsOnCancel(t *testing.T) {
 	cfg := &domain.LeoflowConfig{DagID: "p"}
 	if err := devWatchLoop(ctx, cmd, dir, cfg, devOptions{image: "x"}, "tok"); err != nil {
 		t.Errorf("devWatchLoop on canceled ctx = %v, want nil", err)
+	}
+}
+
+func TestVenvPythonOSAware(t *testing.T) {
+	home := filepath.FromSlash("/home/u/.leoflow/dev")
+	got := venvPython(home)
+	want := filepath.Join(home, "venv", "bin", "python")
+	if runtime.GOOS == "windows" {
+		want = filepath.Join(home, "venv", "Scripts", "python.exe")
+	}
+	if got != want {
+		t.Errorf("venvPython = %q, want %q", got, want)
+	}
+}
+
+func TestVenvPipArgs(t *testing.T) {
+	args := venvPipArgs("runtime/python", []string{"pandas==2.1.0"})
+	joined := strings.Join(args, " ")
+	for _, must := range []string{"-m pip install", "runtime/python", taskSDKVersion, "pandas==2.1.0"} {
+		if !strings.Contains(joined, must) {
+			t.Errorf("pip args %q missing %q", joined, must)
+		}
 	}
 }

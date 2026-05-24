@@ -23,6 +23,17 @@ func TestBuildCommandPython(t *testing.T) {
 	}
 }
 
+func TestBuildCommandPythonHonorsInterpreterEnv(t *testing.T) {
+	t.Setenv("LEOFLOW_PYTHON", "python3")
+	argv, err := BuildCommand("python", "dag:extract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[0] != "python3" {
+		t.Errorf("argv[0] = %q, want python3 (LEOFLOW_PYTHON)", argv[0])
+	}
+}
+
 func TestBuildCommandPythonBadEntrypoint(t *testing.T) {
 	for _, ep := range []string{"", "noseparator", ":run", "mod:"} {
 		if _, err := BuildCommand("python", ep); err == nil {

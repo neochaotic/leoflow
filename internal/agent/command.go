@@ -26,8 +26,10 @@ func BuildCommand(operator, entrypoint string) ([]string, error) {
 			return nil, fmt.Errorf("python entrypoint must be module:callable, got %q", entrypoint)
 		}
 		// Delegate to the leoflow_runtime helper, which runs the callable and
-		// writes its return value for the agent to push as an XCom.
-		return []string{"python", "-m", "leoflow_runtime", entrypoint}, nil
+		// writes its return value for the agent to push as an XCom. The interpreter
+		// is configurable (LEOFLOW_PYTHON) because task images standardize on
+		// "python" while a dev host may only have "python3".
+		return []string{pythonInterpreter(), "-m", "leoflow_runtime", entrypoint}, nil
 	case "bash":
 		if entrypoint == "" {
 			return nil, errors.New("bash operator requires a command")
@@ -38,6 +40,15 @@ func BuildCommand(operator, entrypoint string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("unsupported operator %q", operator)
 	}
+}
+
+// pythonInterpreter returns the Python executable the agent runs, from
+// LEOFLOW_PYTHON when set, defaulting to "python" (the task-image convention).
+func pythonInterpreter() string {
+	if p := os.Getenv("LEOFLOW_PYTHON"); p != "" {
+		return p
+	}
+	return "python"
 }
 
 // XComEnvVar formats an XCom input as a LEOFLOW_XCOM_<NAME>=<json> env entry.

@@ -492,6 +492,7 @@ func resolveAgentControlAddr(cfg *config.ServerConfig) string {
 // runs the agent on the host with no isolation, so it is gated to dev use.
 func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger) bool {
 	subExec := executor.NewSubprocessExecutor(cfg.Executor.AgentPath, logger)
+	subExec.SetWorkDir(cfg.Executor.SubprocessWorkDir)
 	dispatcher := dispatch.NewDispatcher(subExec, execStore, authn, resolveAgentControlAddr(cfg), agentTokenTTL)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 	sched.SetDispatcher(dispatcher)

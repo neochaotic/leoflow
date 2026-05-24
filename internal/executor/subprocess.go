@@ -12,6 +12,7 @@ import (
 // is for dev mode only and logs a prominent warning on construction.
 type SubprocessExecutor struct {
 	agentPath string
+	workDir   string
 	logger    *slog.Logger
 }
 
@@ -21,6 +22,12 @@ func NewSubprocessExecutor(agentPath string, logger *slog.Logger) *SubprocessExe
 	logger.Warn("subprocess executor active; user code runs without isolation. Do NOT use in production")
 	return &SubprocessExecutor{agentPath: agentPath, logger: logger}
 }
+
+// SetWorkDir sets the working directory the agent runs in. In a task pod the
+// image's WORKDIR holds the DAG code; on a dev host `leoflow dev` points this at
+// the project directory so the agent can import the user's dag.py. Empty keeps
+// the parent process's working directory.
+func (e *SubprocessExecutor) SetWorkDir(dir string) { e.workDir = dir }
 
 // agentEnv builds the environment injected into the agent process.
 func agentEnv(req Request) []string {
@@ -36,13 +43,29 @@ func agentEnv(req Request) []string {
 	return env
 }
 
-// Execute runs the agent subprocess to completion (the agent reports task state
-// over gRPC while it runs); the returned error reflects the process outcome.
+// Execute launches the agent subprocess and returns once it has started, like
+// the Kubernetes executor creating a pod. The agent reports its own task state
+// over gRPC, so the scheduler can record the task as queued before the agent
+// finishes; running it synchronously here would let the agent report success
+// before the scheduler recorded queued, and the queued write would clobber it.
+// A non-zero exit is therefore NOT a synchronous error; only a failure to start
+// is. The process is reaped in the background.
 func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
 	cmd := exec.CommandContext(ctx, e.agentPath) //nolint:gosec // dev-only executor running the trusted agent binary
 	cmd.Env = append(os.Environ(), agentEnv(req)...)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("agent subprocess for task %s exited: %w", req.TaskID, err)
+	cmd.Dir = e.workDir
+	// Surface the agent's own diagnostics (it logs to stderr); otherwise an agent
+	// that fails to start or connect fails silently. The task's stdout/stderr are
+	// shipped separately over gRPC.
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting agent subprocess for task %s: %w", req.TaskID, err)
 	}
+	go func() {
+		if werr := cmd.Wait(); werr != nil {
+			e.logger.Warn("agent subprocess exited non-zero (the agent reports task state over gRPC)",
+				"task", req.TaskID, "error", werr)
+		}
+	}()
 	return nil
 }

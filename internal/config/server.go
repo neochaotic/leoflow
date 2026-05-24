@@ -42,6 +42,10 @@ type ExecutorSection struct {
 	Type string `mapstructure:"type"`
 	// AgentPath is the leoflow-agent binary the subprocess executor runs (dev only).
 	AgentPath string `mapstructure:"agent_path"`
+	// SubprocessWorkDir is the working directory the subprocess executor runs the
+	// agent in, so it can import the project's dag.py (dev only). Empty keeps the
+	// server's working directory.
+	SubprocessWorkDir string `mapstructure:"subprocess_workdir"`
 	// AgentControlPlaneAddr is the gRPC address task pods dial back to. Empty
 	// falls back to server.grpc_addr; in a local k3d/kind cluster set it to a
 	// host-reachable address such as host.k3d.internal:9091.
@@ -175,6 +179,7 @@ var serverDefaults = map[string]any{
 	"executor.http.user_agent":                  "leoflow/0.1",
 	"executor.type":                             "kubernetes",
 	"executor.agent_path":                       "leoflow-agent",
+	"executor.subprocess_workdir":               "",
 	"executor.agent_control_plane_addr":         "",
 	"executor.agent_tls_ca_configmap":           "",
 	"logs.dir":                                  "/var/log/leoflow",

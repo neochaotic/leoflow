@@ -51,6 +51,9 @@ plugins:
       enabled: !ENV [CI, false]
   # Render Python docstrings (the task runtime) into the API reference.
   - mkdocstrings:
+      # Override the source block so "Source code in <path>" links to GitHub
+      # (parity with the Go reference, which links every symbol to its source).
+      custom_templates: mkdocs_templates
       handlers:
         python:
           paths: [runtime/python]

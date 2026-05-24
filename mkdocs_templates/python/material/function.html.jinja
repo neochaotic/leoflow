@@ -1,0 +1,22 @@
+{% extends "_base/function.html.jinja" %}
+
+{#- Override only the source block so the "Source code in <path>" path links to
+    the file on GitHub at the right lines (parity with the Go reference, which
+    links every symbol to its source). -#}
+{% block source scoped %}
+  {% if config.show_source and function.source %}
+    {% if function.relative_filepath.is_absolute() %}
+      {% set _src_path = function.relative_package_filepath %}
+    {% else %}
+      {% set _src_path = function.relative_filepath %}
+    {% endif %}
+    {% set _src_url = "https://github.com/neochaotic/leoflow/blob/main/" ~ _src_path|string %}
+    {% if function.lineno %}{% set _src_url = _src_url ~ "#L" ~ function.lineno %}{% if function.endlineno %}{% set _src_url = _src_url ~ "-L" ~ function.endlineno %}{% endif %}{% endif %}
+    <details class="mkdocstrings-source">
+      <summary>{{ lang.t("Source code in") }}
+        <a class="leoflow-src" href="{{ _src_url }}" target="_blank" rel="noopener"><code>{{ _src_path }}</code></a>
+      </summary>
+      {{ function.source|highlight(language="python", linestart=function.lineno or 0, linenums=True) }}
+    </details>
+  {% endif %}
+{% endblock source %}

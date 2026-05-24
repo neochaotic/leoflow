@@ -1,0 +1,30 @@
+{% extends "_base/class.html.jinja" %}
+
+{#- Override only the source block so the "Source code in <path>" path links to
+    the file on GitHub (parity with the Go reference). Mirrors the upstream
+    branching (merge_init_into_class vs. the class body). -#}
+{% macro _src_link(obj) -%}
+  {%- if obj.relative_filepath.is_absolute() -%}{% set _p = obj.relative_package_filepath %}{%- else -%}{% set _p = obj.relative_filepath %}{%- endif -%}
+  {%- set _u = "https://github.com/neochaotic/leoflow/blob/main/" ~ _p|string -%}
+  {%- if obj.lineno %}{% set _u = _u ~ "#L" ~ obj.lineno %}{% if obj.endlineno %}{% set _u = _u ~ "-L" ~ obj.endlineno %}{% endif %}{% endif -%}
+  <a class="leoflow-src" href="{{ _u }}" target="_blank" rel="noopener"><code>{{ _p }}</code></a>
+{%- endmacro %}
+{% block source scoped %}
+  {% if config.show_source %}
+    {% if config.merge_init_into_class %}
+      {% if "__init__" in all_members and all_members["__init__"].source %}
+        {% with init = all_members["__init__"] %}
+          <details class="mkdocstrings-source">
+            <summary>{{ lang.t("Source code in") }} {{ _src_link(init) }}</summary>
+            {{ init.source|highlight(language="python", linestart=init.lineno or 0, linenums=True) }}
+          </details>
+        {% endwith %}
+      {% endif %}
+    {% elif class.source %}
+      <details class="mkdocstrings-source">
+        <summary>{{ lang.t("Source code in") }} {{ _src_link(class) }}</summary>
+        {{ class.source|highlight(language="python", linestart=class.lineno or 0, linenums=True) }}
+      </details>
+    {% endif %}
+  {% endif %}
+{% endblock source %}

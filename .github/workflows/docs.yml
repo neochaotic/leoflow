@@ -45,6 +45,18 @@ jobs:
       # Scalar reads the spec from the site root.
       - run: cp docs/api/openapi.yaml docs/openapi.yaml
       - run: mkdocs build --strict   # CI=true enables the social plugin
+      # The Go reference used to be one page at go/reference.html; it is now split
+      # per package. Write a static redirect stub so old links don't 404 (no plugin
+      # dependency needed).
+      - run: |
+          cat > site/go/reference.html <<'HTML'
+          <!doctype html><html lang="en"><head><meta charset="utf-8">
+          <title>Redirecting…</title>
+          <meta http-equiv="refresh" content="0; url=../go-api.html">
+          <link rel="canonical" href="../go-api.html">
+          </head><body>The Go reference moved. Redirecting to
+          <a href="../go-api.html">Go packages</a>…</body></html>
+          HTML
       - uses: actions/upload-pages-artifact@v3
         with: { path: site }
   deploy:

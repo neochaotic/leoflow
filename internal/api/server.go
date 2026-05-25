@@ -65,6 +65,10 @@ type Dependencies struct {
 	Audit          AuditWriter
 	ExecutorInfo   ExecutorInfo
 
+	// Workspace backs the Lite web editor (ADR 0025). When nil the editor's
+	// filesystem API is not registered (Production, or Lite without a workspace).
+	Workspace WorkspaceFS
+
 	// SchedulerHealth reports the scheduler's heartbeat for /monitor/health.
 	// When nil the component reports healthy (single-process role assumption).
 	SchedulerHealth Heartbeater
@@ -115,6 +119,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIConnections(r, deps.Connections, deps.ConnectionTest)
 	registerUIFavorites(r, deps.Favorites)
 	registerImportErrors(r, deps.ImportErrors)
+	registerIDE(r, deps.Workspace)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

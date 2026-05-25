@@ -19,6 +19,30 @@ curl -X POST "$LEOFLOW_SERVER/api/v2/connections" -H "Authorization: Bearer $TOK
   -d '{"connection_id":"warehouse","conn_type":"postgres","host":"db","login":"u","password":"p","schema":"analytics"}'
 ```
 
+## In the UI: connection types & editing
+
+The Admin → Connections form offers a catalog of common connection types
+(borrowed from Airflow's providers — Postgres, MySQL, HTTP, AWS, Google Cloud,
+Snowflake, Redis, SSH, …); pick one and edit the fields it needs.
+
+![Add Connection — the connection-type catalog](assets/screenshots/conn-types.png){ .home-hero__shot }
+
+The form renders the standard fields for the chosen type (host, login, password,
+port, schema, description) plus an Extra JSON block, and an existing connection
+opens pre-filled (the password is write-only and never returned):
+
+![Edit Connection pre-filled (dark mode)](assets/screenshots/conn-edit.png){ .home-hero__shot }
+
+## Test a connection
+
+The **Test** button (`POST /api/v2/connections/test`) checks the endpoint's
+reachability **from the control plane** — an HTTP(S) request, or a TCP dial to
+`host:port` (the type's well-known port when none is set) — and returns
+`{status, message}`. Note this tests from the control plane, not the task pod, so
+a host only resolvable inside the cluster (e.g. `host.k3d.internal` in dev) reads
+as unreachable there even though pods can reach it. Full per-provider credential
+validation needs the provider hooks (a later addition).
+
 ## Read them in a task
 The agent injects each tenant's Variables/Connections before running your code:
 

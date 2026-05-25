@@ -5,18 +5,18 @@ Get a DAG running locally in a few minutes. **Dev-only** today (Production is
 
 ## 1 · Install
 ```bash
-# Homebrew (macOS/Linux) — coming with the first release; until then:
-go install github.com/neochaotic/leoflow/cmd/leoflow@latest
-go install github.com/neochaotic/leoflow/cmd/leoflow-server@latest
-go install github.com/neochaotic/leoflow/cmd/leoflow-agent@latest
-# ensure $(go env GOPATH)/bin is on your PATH
+curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
 ```
-You also need **Docker** running, and **k3d** + **kubectl** for the default
-cluster mode (`brew install k3d kubectl`).
+This installs the binaries and runs `leoflow setup` (ensures Python, provisions
+the parser, creates your workspace) — **no sudo, no system Python**. Docker is
+optional and only unlocks the higher [tiers](installation.md#what-you-need); the
+subprocess tier needs nothing else. See [Installation](installation.md) for
+platforms (incl. WSL2) and verification.
 
 ## 2 · Prepare the machine
 ```bash
-leoflow dev setup            # checks deps, builds the base image, provisions the dev DB
+leoflow doctor               # see your platform, deps, and achievable tier
+leoflow dev setup            # builds the base image, provisions the dev DB
 ```
 
 ## 3 · Create and run a DAG

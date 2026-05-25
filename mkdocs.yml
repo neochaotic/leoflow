@@ -101,6 +101,7 @@ nav:
   - Home: index.md
   - Why Leoflow: why-leoflow.md
   - Get started:
+      - Installation: installation.md
       - Quickstart: quickstart.md
       - Operating modes: operating-modes.md
       - Concepts & glossary: concepts.md

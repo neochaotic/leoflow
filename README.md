@@ -33,6 +33,22 @@
 
 ---
 
+## ⚡ Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
+```
+
+Installs the binaries and runs `leoflow setup` (ensures Python, provisions the
+parser, creates your workspace) — **no sudo, no system Python, no package
+manager**. Docker is optional and only unlocks the higher tiers. Linux + macOS,
+amd64 + arm64 (Windows via WSL2). See **[Installation](docs/installation.md)**.
+
+> **Pre-alpha:** builds carry a ~90-day expiry and refuse to run past it (this
+> version is not durable). Re-run the installer for a fresh build.
+
+---
+
 ## The Five Wounds Apache Airflow Will Not Heal
 
 Airflow is the most widely deployed workflow orchestrator on earth. It is also the one that bleeds the most in production. Every data engineer recognizes these wounds:

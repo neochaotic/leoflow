@@ -11,6 +11,8 @@ below was measured on that setup.
     (ADR 0019/0021) · the volume **lifecycle** (success vs. failure) · **clear +
     re-run** with staged-data reuse (ADR 0020) · per-deployment **version** tracing.
 
+![The etl_duckdb pipeline in the dev UI — extract → transform → load](assets/screenshots/etl-graph.png){ .home-hero__shot }
+
 ## The pipeline
 
 Three tasks, each in its own pod, sharing one `/staging` volume for the run. XCom
@@ -97,6 +99,11 @@ Single-node k3d on a 10-core laptop, **real pods**, `--executor=k8s`:
 | **load** | agg → 50 rows into external Postgres | — | 0.8 s |
 | **whole run** | including pod scheduling | | **~21–25 s** |
 
+The run detail makes the timing concrete — **~22 s for ~1 GB end to end** on a
+laptop pseudo-cluster, with per-task durations:
+
+![Run detail: Duration 00:00:21.998; extract 8.68s, transform 1.15s, load 0.74s](assets/screenshots/etl-timing.png){ .home-hero__shot }
+
 DuckDB is vectorized, multi-threaded, and out-of-core, so ~1 GB of Parquet is
 written in seconds and aggregated in a fraction of a second — within a
 memory-modest pod. The 1.1 GB lives on `/staging`, written by `extract` and read
@@ -148,6 +155,10 @@ secret never appears in the pod spec. The task log confirms it:
 load: connecting via managed Connection etl_target
 load: loaded 50 rows into EXTERNAL postgres warehouse.category_revenue
 ```
+
+The Connection is managed in the UI (encrypted; the password is never returned):
+
+![Admin → Connections showing etl_target (postgres, host.k3d.internal:55432)](assets/screenshots/etl-connection.png){ .home-hero__shot }
 
 Each run is traceable to the exact **deployment** that produced it: the
 `dag_versions` entry carries a deployment label (git describe in prod,

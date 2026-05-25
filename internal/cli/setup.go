@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,21 +15,16 @@ import (
 	"github.com/neochaotic/leoflow/internal/setup"
 )
 
-// parserTaskSDK pins the Airflow Task SDK installed alongside the parser, so the
-// parser venv matches the task image and runtime (see dev.go taskSDKVersion).
-const parserTaskSDK = "apache-airflow-task-sdk==1.2.1"
-
 // setupManifest records what `leoflow setup` provisioned, so later runs and
 // `leoflow doctor` can report the managed state.
 type setupManifest struct {
-	Python     string    `json:"python"`
-	Workspace  string    `json:"workspace"`
-	Tier       string    `json:"tier"`
-	OS         string    `json:"os"`
-	Arch       string    `json:"arch"`
-	ParserVenv string    `json:"parser_venv,omitempty"`
-	ParserCmd  string    `json:"parser_cmd,omitempty"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	Python    string    `json:"python"`
+	Workspace string    `json:"workspace"`
+	Tier      string    `json:"tier"`
+	OS        string    `json:"os"`
+	Arch      string    `json:"arch"`
+	ParserCmd string    `json:"parser_cmd,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // newSetupCommand bootstraps the managed runtime: a usable Python 3.11 (the
@@ -39,29 +32,27 @@ type setupManifest struct {
 // workspace directory for the user's DAG projects.
 func newSetupCommand() *cobra.Command {
 	var workspace string
-	var dryRun, skipPythonDeps bool
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Bootstrap the managed Leoflow runtime (Python, parser venv, workspace).",
+		Short: "Bootstrap the managed Leoflow runtime (Python, parser, workspace).",
 		Long: "setup prepares ~/.leoflow: it ensures a Python 3.11 is available " +
 			"(using a system interpreter if present, otherwise downloading a pinned, " +
 			"checksum-verified relocatable CPython — no sudo, no system packages), " +
-			"extracts the embedded parser and runtime sources, provisions a parser venv " +
-			"(Airflow — done once, then cached), and creates a workspace directory. " +
-			"Re-running is safe. Use --dry-run to see the plan, or --skip-python-deps to " +
-			"install binaries and Python only (e.g. when parsing happens in containers).",
+			"extracts the embedded parser and runtime sources, points the parser at the " +
+			"interpreter (pure Python, no venv, no Airflow — ADR 0024), and creates a " +
+			"workspace directory. Re-running is safe; --dry-run shows the plan.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSetup(cmd, workspace, dryRun, skipPythonDeps)
+			return runSetup(cmd, workspace, dryRun)
 		},
 	}
 	cmd.Flags().StringVar(&workspace, "workspace", "", "workspace dir for your DAG projects (default ~/leoflow)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "detect and print the plan without downloading or writing anything")
-	cmd.Flags().BoolVar(&skipPythonDeps, "skip-python-deps", false, "skip the parser venv (Airflow) install")
 	return cmd
 }
 
-func runSetup(cmd *cobra.Command, workspace string, dryRun, skipPythonDeps bool) error {
+func runSetup(cmd *cobra.Command, workspace string, dryRun bool) error {
 	out := cmd.OutOrStdout()
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -111,25 +102,19 @@ func runSetup(cmd *cobra.Command, workspace string, dryRun, skipPythonDeps bool)
 	}
 	_, _ = fmt.Fprintf(out, "  sources    extracted parser + runtime to %s\n", pysrcDir) //nolint:errcheck // best-effort terminal output
 
-	var parserVenv, parserCmd string
-	if skipPythonDeps {
-		_, _ = fmt.Fprintln(out, "  parser     skipped (--skip-python-deps)") //nolint:errcheck // best-effort terminal output
+	// The parser is pure Python with vendored deps (ADR 0024) — no venv, no pip,
+	// no Airflow. Point parser_cmd at the ensured interpreter with the extracted
+	// sources on PYTHONPATH.
+	parserCmd := fmt.Sprintf("env PYTHONPATH=%s %s -m leoflow_parser",
+		filepath.Join(pysrcDir, "parser"), pyPath)
+	wrote, cErr := writeParserConfig(leoflowHome, parserCmd)
+	if cErr != nil {
+		return fmt.Errorf("writing parser config: %w", cErr)
+	}
+	if wrote {
+		_, _ = fmt.Fprintf(out, "  parser     parser_cmd set (no venv, no Airflow)\n") //nolint:errcheck // best-effort terminal output
 	} else {
-		venvPy, pErr := provisionParserVenv(cmd, out, leoflowHome, pysrcDir, pyPath)
-		if pErr != nil {
-			return pErr
-		}
-		parserVenv = filepath.Join(leoflowHome, "parser-venv")
-		parserCmd = venvPy + " -m leoflow_parser"
-		wrote, cErr := writeParserConfig(leoflowHome, parserCmd)
-		if cErr != nil {
-			return fmt.Errorf("writing parser config: %w", cErr)
-		}
-		if wrote {
-			_, _ = fmt.Fprintf(out, "  parser     parser_cmd set to %q\n", parserCmd) //nolint:errcheck // best-effort terminal output
-		} else {
-			_, _ = fmt.Fprintf(out, "  parser     ~/.leoflow/config.yaml exists; ensure parser_cmd: %q\n", parserCmd) //nolint:errcheck // best-effort terminal output
-		}
+		_, _ = fmt.Fprintf(out, "  parser     ~/.leoflow/config.yaml exists; ensure parser_cmd: %q\n", parserCmd) //nolint:errcheck // best-effort terminal output
 	}
 
 	if wsErr := os.MkdirAll(workspace, 0o750); wsErr != nil {
@@ -137,7 +122,7 @@ func runSetup(cmd *cobra.Command, workspace string, dryRun, skipPythonDeps bool)
 	}
 	if wErr := writeSetupManifest(leoflowHome, setupManifest{
 		Python: pyPath, Workspace: workspace, Tier: r.Tier.String(),
-		OS: r.OS, Arch: r.Arch, ParserVenv: parserVenv, ParserCmd: parserCmd,
+		OS: r.OS, Arch: r.Arch, ParserCmd: parserCmd,
 		UpdatedAt: time.Now().UTC(),
 	}); wErr != nil {
 		return fmt.Errorf("writing setup manifest: %w", wErr)
@@ -148,30 +133,6 @@ func runSetup(cmd *cobra.Command, workspace string, dryRun, skipPythonDeps bool)
 	}
 	_, _ = fmt.Fprintf(out, "\n  ready. Next: `leoflow dev %s/<your-dag>` (creates the task venv on first run).\n", workspace) //nolint:errcheck // best-effort terminal output
 	return nil
-}
-
-// provisionParserVenv creates (or reuses) the parser venv under ~/.leoflow and
-// installs the extracted parser plus the Airflow Task SDK into it. The heavy
-// Airflow install runs once; an existing venv interpreter is reused.
-func provisionParserVenv(cmd *cobra.Command, out io.Writer, leoflowHome, pysrcDir, pyPath string) (string, error) {
-	venvDir := filepath.Join(leoflowHome, "parser-venv")
-	venvPy := filepath.Join(venvDir, "bin", "python")
-	if _, err := os.Stat(venvPy); err == nil {
-		_, _ = fmt.Fprintf(out, "  parser     reusing existing venv at %s\n", venvDir) //nolint:errcheck // best-effort terminal output
-		return venvPy, nil
-	}
-	_, _ = fmt.Fprintln(out, "  parser     provisioning venv (installing Airflow — this runs once)...") //nolint:errcheck // best-effort terminal output
-	run := func(ctx context.Context, name string, args ...string) error {
-		c := exec.CommandContext(ctx, name, args...) //nolint:gosec // name/args are the managed interpreter and fixed install targets
-		c.Stdout, c.Stderr = out, cmd.ErrOrStderr()
-		return c.Run()
-	}
-	venvPy, err := setup.ProvisionVenv(cmd.Context(), run, pyPath, venvDir,
-		[]string{filepath.Join(pysrcDir, "parser"), parserTaskSDK})
-	if err != nil {
-		return "", fmt.Errorf("provisioning parser venv: %w", err)
-	}
-	return venvPy, nil
 }
 
 // writeParserConfig writes parser_cmd to ~/.leoflow/config.yaml when that file

@@ -8,31 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/spf13/cobra"
 )
-
-func TestProvisionParserVenvReuse(t *testing.T) {
-	home := t.TempDir()
-	venvPy := filepath.Join(home, "parser-venv", "bin", "python")
-	if err := os.MkdirAll(filepath.Dir(venvPy), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(venvPy, []byte("#!/x"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	got, err := provisionParserVenv(&cobra.Command{}, &out, home, filepath.Join(home, "pysrc"), "/sys/python3.11")
-	if err != nil {
-		t.Fatalf("err = %v, want nil (reuse branch)", err)
-	}
-	if got != venvPy {
-		t.Errorf("got %q, want existing venv python %q", got, venvPy)
-	}
-	if !strings.Contains(out.String(), "reusing") {
-		t.Errorf("output = %q, want a reuse notice", out.String())
-	}
-}
 
 func TestLibcSuffix(t *testing.T) {
 	cases := map[string]string{"": "", "glibc": " (glibc)", "musl": " (musl)"}
@@ -47,7 +23,7 @@ func TestWriteSetupManifest(t *testing.T) {
 	home := t.TempDir()
 	want := setupManifest{
 		Python: "/p/python3.11", Workspace: "/w", Tier: "k8s",
-		OS: "linux", Arch: "amd64", ParserVenv: "/v", ParserCmd: "/v/bin/python -m leoflow_parser",
+		OS: "linux", Arch: "amd64", ParserCmd: "/v/bin/python -m leoflow_parser",
 		UpdatedAt: time.Now().UTC().Truncate(time.Second),
 	}
 	if err := writeSetupManifest(home, want); err != nil {
@@ -66,7 +42,7 @@ func TestWriteSetupManifest(t *testing.T) {
 	}
 }
 
-func TestRunSetupSkipPythonDeps(t *testing.T) {
+func TestRunSetupVenvless(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	// A fake python3.11 on PATH so EnsurePython uses it instead of downloading.
@@ -81,22 +57,27 @@ func TestRunSetupSkipPythonDeps(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	ws := filepath.Join(home, "ws")
-	cmd.SetArgs([]string{"--skip-python-deps", "--workspace", ws})
+	cmd.SetArgs([]string{"--workspace", ws})
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("setup --skip-python-deps err = %v\n%s", err, out.String())
+		t.Fatalf("setup err = %v\n%s", err, out.String())
 	}
-	// Sources extracted, workspace + manifest created, parser venv skipped.
+	// Sources extracted, workspace + manifest + config created — no parser venv.
 	for _, p := range []string{
 		filepath.Join(home, ".leoflow", "pysrc", "parser", "pyproject.toml"),
 		filepath.Join(home, ".leoflow", "setup.json"),
+		filepath.Join(home, ".leoflow", "config.yaml"),
 		ws,
 	} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("expected %s to exist: %v", p, err)
 		}
 	}
-	if !strings.Contains(out.String(), "skipped") {
-		t.Errorf("output should note the parser venv was skipped:\n%s", out.String())
+	if _, err := os.Stat(filepath.Join(home, ".leoflow", "parser-venv")); !os.IsNotExist(err) {
+		t.Error("a parser-venv was created; setup must be venv-less (ADR 0024)")
+	}
+	cfg, _ := os.ReadFile(filepath.Join(home, ".leoflow", "config.yaml"))
+	if !strings.Contains(string(cfg), "leoflow_parser") || !strings.Contains(string(cfg), "PYTHONPATH") {
+		t.Errorf("config.yaml should set a PYTHONPATH-based parser_cmd:\n%s", cfg)
 	}
 }
 

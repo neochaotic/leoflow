@@ -48,9 +48,10 @@ picks the highest path available**; without Docker it uses subprocess. Run
    `~/.leoflow/python`. No sudo, no system install.
 2. **Extracts the DAG parser and task runtime** (embedded in the binary) to
    `~/.leoflow/pysrc`.
-3. **Provisions the parser venv** at `~/.leoflow/parser-venv` (installs the parser
-   and Apache Airflow — this is the one heavy step, and it runs **once**, then is
-   cached), and points `parser_cmd` at it in `~/.leoflow/config.yaml`.
+3. **Points `parser_cmd` at the parser** in `~/.leoflow/config.yaml`. The parser is
+   pure Python with its dependencies vendored (the Airflow shim and PyYAML — ADR
+   0024), so there is **no parser venv, no pip, and no Apache Airflow install** — it
+   runs on the interpreter from step 1 directly.
 4. **Creates your workspace** (default `~/leoflow`, override with `--workspace`)
    for your DAG projects.
 

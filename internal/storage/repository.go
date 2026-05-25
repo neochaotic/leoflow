@@ -529,6 +529,17 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 // tenant has no users yet, assigning the seeded admin role. It returns whether
 // a user was created (false when users already exist).
 func (r *Repository) BootstrapAdmin(ctx context.Context, tenant, email, password string) (bool, error) {
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return false, err
+	}
+	return r.BootstrapAdminHash(ctx, tenant, email, hash)
+}
+
+// BootstrapAdminHash is BootstrapAdmin given a precomputed bcrypt hash, so a
+// caller (e.g. Leoflow Lite) can provision the admin without the plaintext
+// password ever reaching the control plane. It is a no-op when users exist.
+func (r *Repository) BootstrapAdminHash(ctx context.Context, tenant, email, hash string) (bool, error) {
 	tid, err := r.tenantID(ctx, tenant)
 	if err != nil {
 		return false, err
@@ -539,10 +550,6 @@ func (r *Repository) BootstrapAdmin(ctx context.Context, tenant, email, password
 	}
 	if n > 0 {
 		return false, nil
-	}
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		return false, err
 	}
 	uid, err := r.q.CreateUser(ctx, queries.CreateUserParams{TenantID: tid, Email: email, PasswordHash: strPtr(hash)})
 	if err != nil {

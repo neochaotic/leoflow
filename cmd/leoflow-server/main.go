@@ -247,16 +247,29 @@ func configureSecretCipher(repo *storage.Repository, secretKey string, logger *s
 }
 
 func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.Logger) error {
+	const email = "admin@leoflow.local"
+	// Prefer a precomputed bcrypt hash (Leoflow Lite never sends the plaintext to
+	// the control plane); fall back to a plaintext bootstrap password.
+	if hash := os.Getenv("LEOFLOW_BOOTSTRAP_PASSWORD_HASH"); hash != "" {
+		created, err := repo.BootstrapAdminHash(ctx, "default", email, hash)
+		if err != nil {
+			return fmt.Errorf("bootstrap admin (hash): %w", err)
+		}
+		if created {
+			logger.Info("bootstrapped admin user", "email", email)
+		}
+		return nil
+	}
 	pw := os.Getenv("LEOFLOW_BOOTSTRAP_PASSWORD")
 	if pw == "" {
 		return nil
 	}
-	created, err := repo.BootstrapAdmin(ctx, "default", "admin@leoflow.local", pw)
+	created, err := repo.BootstrapAdmin(ctx, "default", email, pw)
 	if err != nil {
 		return fmt.Errorf("bootstrap admin: %w", err)
 	}
 	if created {
-		logger.Info("bootstrapped admin user", "email", "admin@leoflow.local")
+		logger.Info("bootstrapped admin user", "email", email)
 	}
 	return nil
 }

@@ -86,6 +86,12 @@ type UISection struct {
 	// Edition marks the running edition; "lite" shows the LITE badge in the UI
 	// shell (independent of the auth mode). Empty/"production" shows no badge.
 	Edition string `mapstructure:"edition"`
+	// Workspace is the DAG project directory the Lite web editor edits (ADR 0025).
+	// Empty disables the editor (Production, or Lite without one).
+	Workspace string `mapstructure:"workspace"`
+	// MonacoDir is where the pinned Monaco bundle was fetched by `leoflow setup`;
+	// the editor page is served Monaco from it. Empty shows a setup hint.
+	MonacoDir string `mapstructure:"monaco_dir"`
 }
 
 // HTTPExecutorSection configures the inline http_api execution path (ADR 0002).
@@ -197,6 +203,9 @@ var serverDefaults = map[string]any{
 	"observability.log_level":                   "info",
 	"observability.log_format":                  "json",
 	"ui.instance_name":                          "Leoflow",
+	"ui.edition":                                "",
+	"ui.workspace":                              "",
+	"ui.monaco_dir":                             "",
 	"auth.dev_no_auth":                          false,
 	"secret_key":                                "",
 }

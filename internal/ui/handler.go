@@ -27,18 +27,32 @@ const liteBannerHTML = `<div id="leoflow-lite-banner">LITE</div>` +
 	`font:600 11px/1.7 system-ui,-apple-system,sans-serif;padding:1px 16px;` +
 	`border-radius:0 0 6px 6px;letter-spacing:3px;pointer-events:none}</style>`
 
+// ideButtonHTML is a discreet floating "IDE" button (bottom-right) injected into
+// the served shell when the Lite web editor is enabled (ADR 0025). It opens the
+// editor at /ide in a new tab, so the SPA is untouched.
+const ideButtonHTML = `<a id="leoflow-ide-button" href="/ide" target="_blank" rel="noopener" title="Open the Leoflow editor">⌨ IDE</a>` +
+	`<style>#leoflow-ide-button{position:fixed;right:16px;bottom:16px;z-index:2147483647;` +
+	`background:rgba(100,116,139,.95);color:#fff;text-decoration:none;` +
+	`font:600 12px/1 system-ui,-apple-system,sans-serif;padding:9px 13px;border-radius:18px;` +
+	`box-shadow:0 2px 8px rgba(0,0,0,.25)}#leoflow-ide-button:hover{background:rgba(71,85,105,.98)}</style>`
+
 // Server serves the embedded Airflow 3.2.1 SPA: static assets under a prefix and
 // an index.html fallback for client-side routes.
 type Server struct {
-	fsys       fs.FS
-	version    string
-	liteBanner bool
+	fsys         fs.FS
+	version      string
+	liteBanner   bool
+	editorButton bool
 }
 
 // SetLiteBanner toggles injection of the LITE overlay into the served shell. It
 // is enabled by the Lite edition (`leoflow lite`); the demo and production never
 // set it.
 func (s *Server) SetLiteBanner(on bool) { s.liteBanner = on }
+
+// SetEditorButton toggles injection of the "IDE" button that opens the Lite web
+// editor (/ide). It is enabled only when a workspace is configured (Lite).
+func (s *Server) SetEditorButton(on bool) { s.editorButton = on }
 
 // New builds a Server over the embedded, pinned SPA bundle.
 func New() *Server { return NewFromFS(Assets(), Version()) }
@@ -162,7 +176,10 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 	// SPA fallback (a text/html MIME type that breaks module preloading).
 	body = strings.ReplaceAll(body, `"./assets/`, `"./static/assets/`)
 	if s.liteBanner {
-		body = injectLiteBanner(body)
+		body = injectBeforeBodyEnd(body, liteBannerHTML)
+	}
+	if s.editorButton {
+		body = injectBeforeBodyEnd(body, ideButtonHTML)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -172,13 +189,13 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 	}
 }
 
-// injectLiteBanner places the LITE overlay just before </body> so it renders
-// over the SPA; if there is no </body> it appends to the end.
-func injectLiteBanner(body string) string {
+// injectBeforeBodyEnd places snippet just before </body> so it renders over the
+// SPA; if there is no </body> it appends to the end.
+func injectBeforeBodyEnd(body, snippet string) string {
 	if i := strings.LastIndex(body, "</body>"); i >= 0 {
-		return body[:i] + liteBannerHTML + body[i:]
+		return body[:i] + snippet + body[i:]
 	}
-	return body + liteBannerHTML
+	return body + snippet
 }
 
 // cacheControl picks a Cache-Control value for a static path. Content-hashed

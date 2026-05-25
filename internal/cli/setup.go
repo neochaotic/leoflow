@@ -194,6 +194,15 @@ func provisionLite(cmd *cobra.Command, out io.Writer, leoflowHome string, r setu
 	}
 	_, _ = fmt.Fprintf(out, "  sources    extracted parser + runtime to %s\n", pysrcDir) //nolint:errcheck // best-effort terminal output
 
+	// Fetch the Monaco editor bundle for the Lite web editor (ADR 0025).
+	// Best-effort: an offline install still succeeds; the editor page shows a
+	// `leoflow setup` hint until the bundle is present.
+	if _, mErr := setup.EnsureMonaco(cmd.Context(), nil, leoflowHome, func(format string, a ...any) {
+		_, _ = fmt.Fprintf(out, "  "+format+"\n", a...) //nolint:errcheck // best-effort terminal output
+	}); mErr != nil {
+		_, _ = fmt.Fprintf(out, "  WARNING: editor assets not fetched (%v) — the web editor will be unavailable until you re-run setup with network.\n", mErr) //nolint:errcheck // best-effort terminal output
+	}
+
 	// The parser is pure Python with vendored deps (ADR 0024) — no venv, no Airflow.
 	parserCmd := fmt.Sprintf("env PYTHONPATH=%s %s -m leoflow_parser", filepath.Join(pysrcDir, "parser"), pyPath)
 

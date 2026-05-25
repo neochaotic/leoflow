@@ -151,3 +151,29 @@ func TestIndexInjectsDevBannerOnlyInDevMode(t *testing.T) {
 		t.Error("non-lite mode must NOT inject the LITE overlay")
 	}
 }
+
+func TestIndexInjectsEditorButtonOnlyWhenEnabled(t *testing.T) {
+	fsys := fstest.MapFS{"index.html": {Data: []byte(`<body><div id="root"></div></body>`)}}
+
+	on := NewFromFS(fsys, "v")
+	on.SetEditorButton(true)
+	rec := httptest.NewRecorder()
+	on.Index(rec, "/")
+	body := rec.Body.String()
+	if !strings.Contains(body, "leoflow-ide-button") || !strings.Contains(body, `href="/ide"`) {
+		t.Errorf("editor enabled must inject an IDE button linking to /ide, got:\n%s", body)
+	}
+	if !strings.Contains(body, `target="_blank"`) {
+		t.Error("the IDE button should open in a new tab")
+	}
+	if strings.Index(body, "leoflow-ide-button") > strings.Index(body, "</body>") {
+		t.Error("IDE button should be injected before </body>")
+	}
+
+	off := NewFromFS(fsys, "v")
+	rec2 := httptest.NewRecorder()
+	off.Index(rec2, "/")
+	if strings.Contains(rec2.Body.String(), "leoflow-ide-button") {
+		t.Error("editor disabled must NOT inject the IDE button")
+	}
+}

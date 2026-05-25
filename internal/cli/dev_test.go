@@ -17,6 +17,7 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/setup"
 )
 
 // devTestCmd returns a cobra command whose stdout/stderr are discarded, for
@@ -351,6 +352,17 @@ func TestSharedServerEnvAuthModes(t *testing.T) {
 		if !strings.Contains(withAdmin, must) {
 			t.Errorf("real-auth env missing %q", must)
 		}
+	}
+}
+
+func TestLiteEditorEnv(t *testing.T) {
+	env := strings.Join(liteEditorEnv("/home/u/proj", "/home/u/.leoflow"), "\n")
+	if !strings.Contains(env, "LEOFLOW_UI_WORKSPACE=/home/u/proj") {
+		t.Errorf("editor env missing workspace; got %q", env)
+	}
+	wantMonaco := "LEOFLOW_UI_MONACO_DIR=" + setup.MonacoDir("/home/u/.leoflow")
+	if !strings.Contains(env, wantMonaco) {
+		t.Errorf("editor env missing %q; got %q", wantMonaco, env)
 	}
 }
 

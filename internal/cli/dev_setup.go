@@ -2,9 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/neochaotic/leoflow/internal/setup"
 )
 
 // devTool is a host dependency `leoflow dev` needs, with how to install it when
@@ -59,6 +63,15 @@ func runLiteProvision(cmd *cobra.Command, install bool) error {
 	devPrintln(out, "▸ leoflow lite provision (contributor machine prep; end users use `leoflow setup`)")
 
 	missing := checkDevTools(cmd, install)
+
+	// Fetch the Monaco editor bundle for the Lite web editor (best-effort).
+	if home, herr := os.UserHomeDir(); herr == nil {
+		if _, mErr := setup.EnsureMonaco(ctx, nil, filepath.Join(home, ".leoflow"), func(format string, a ...any) {
+			devPrintf(out, "  "+format+"\n", a...)
+		}); mErr != nil {
+			devPrintf(out, "  ! editor assets not fetched (%v) — web editor unavailable until re-run with network\n", mErr)
+		}
+	}
 
 	// Ensure the task base image (built from source today; pulled once published, #48).
 	devPrintf(out, "▸ ensuring task base image %s …\n", devBaseImage)

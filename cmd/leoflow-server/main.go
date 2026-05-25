@@ -35,6 +35,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/storage"
 	"github.com/neochaotic/leoflow/internal/ui"
 	"github.com/neochaotic/leoflow/internal/version"
+	"github.com/neochaotic/leoflow/internal/workspace"
 	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
@@ -146,6 +147,9 @@ func run() error {
 	uiSrv := ui.New()
 	uiSrv.SetLiteBanner(showLiteBadge(cfg))
 
+	editorFS := liteEditorFS(cfg, tel.Logger)
+	uiSrv.SetEditorButton(editorFS != nil)
+
 	handler := api.NewServer(api.Dependencies{
 		Logger:        tel.Logger,
 		Authenticator: authn,
@@ -180,6 +184,8 @@ func run() error {
 		ExecutorInfo:                 executorInfo,
 		SchedulerHealth:              schedulerHealth,
 		UI:                           uiSrv,
+		Workspace:                    editorFS,
+		MonacoDir:                    cfg.UI.MonacoDir,
 	})
 
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -217,6 +223,21 @@ func awaitShutdown(ctx context.Context, errCh <-chan error, logger *slog.Logger,
 // edition, or the legacy dev auth bypass.
 func showLiteBadge(cfg *config.ServerConfig) bool {
 	return cfg.UI.Edition == "lite" || cfg.Auth.DevNoAuth
+}
+
+// liteEditorFS builds the workspace filesystem backing the Lite web editor when
+// a workspace is configured (Lite only). A misconfigured workspace logs a
+// warning and disables the editor rather than failing server boot.
+func liteEditorFS(cfg *config.ServerConfig, logger *slog.Logger) api.WorkspaceFS {
+	if cfg.UI.Workspace == "" {
+		return nil
+	}
+	fs, err := workspace.New(cfg.UI.Workspace)
+	if err != nil {
+		logger.Warn("Lite editor disabled: invalid workspace", "workspace", cfg.UI.Workspace, "error", err)
+		return nil
+	}
+	return fs
 }
 
 // serverExpiryStatus resolves the build's expiry; a var so tests can inject one.

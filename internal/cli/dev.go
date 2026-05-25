@@ -26,6 +26,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/setup"
 	"github.com/neochaotic/leoflow/migrations"
 )
 
@@ -332,6 +333,7 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o d
 		return nil, nil, fmt.Errorf("resolving project dir: %w", aerr)
 	}
 	env = subprocessServerEnv(o.port, agentBin, workDir, venvPy, o.adminHash, o.adminEmail)
+	env = append(env, liteEditorEnv(workDir, filepath.Dir(home))...)
 	makeReload = func(token string) func() error {
 		base := func() error {
 			return devCompileAndRegister(ctx, cmd, dir, compileOptions{image: o.image}, token, nil, devURL(o.port))
@@ -374,6 +376,9 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 		return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))
 	}
 	env = clusterServerEnv(o.port, kubeconfig, o.adminHash, o.adminEmail)
+	if wd, aerr := filepath.Abs(dir); aerr == nil {
+		env = append(env, liteEditorEnv(wd, filepath.Dir(home))...)
+	}
 	return env, makeReload, nil
 }
 
@@ -626,6 +631,17 @@ func sharedServerEnv(port int, adminHash, adminEmail string) []string {
 	}
 	// No admin configured: dev no-auth fallback (runDev warns; loopback-bound).
 	return append(env, "LEOFLOW_AUTH_DEV_NO_AUTH=true")
+}
+
+// liteEditorEnv enables the Lite web editor (ADR 0025) for the launched server:
+// the workspace it edits (the watched project dir) and the directory holding the
+// Monaco bundle that `leoflow setup` fetched. Both executors get it — the editor
+// is orthogonal to execution.
+func liteEditorEnv(workspaceDir, leoflowRoot string) []string {
+	return []string{
+		"LEOFLOW_UI_WORKSPACE=" + workspaceDir,
+		"LEOFLOW_UI_MONACO_DIR=" + setup.MonacoDir(leoflowRoot),
+	}
 }
 
 // applyLiteConfigDefaults loads ~/.leoflow/config.yaml and applies the recorded

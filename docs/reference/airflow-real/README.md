@@ -78,3 +78,30 @@ Latest Run, Next Run, Max Active Runs, Owner, Tags, Latest Dag Version + actions
 
 **logs JSON** — `{content:[{event,sources:[…]} | {timestamp,event,level,logger,filename,lineno}], continuation_token}`.
 `::group::` / `::endgroup::` events drive the collapsible drill-down; `level` drives coloring.
+
+## Task logs contract (crawled 2026-05-25, apache/airflow:3.2.1 standalone)
+
+How the React SPA fetches task logs (captured from the live UI):
+
+```
+GET /api/v2/dags/{dag}/dagRuns/{run}/taskInstances/{task}/logs/{try}?map_index=-1
+Accept: application/x-ndjson
+```
+
+- **Accept negotiation:** the SPA uses `application/x-ndjson` (one JSON event per
+  line). `application/json` returns the single `{content:[…], continuation_token}`
+  object. **`text/plain` is rejected** — `406 {"detail":"Only application/json or
+  application/x-ndjson is supported"}`. (Leoflow additionally serves plain text as
+  a permissive, curl-friendly superset; the SPA never uses it.)
+- **No `follow`/streaming:** the SPA does a one-shot fetch and re-polls for live
+  updates (it does not hold an SSE/stream). So accurate per-line `level` is what
+  drives the live view's color + the "All Log Levels" filter.
+- **`map_index=-1`** is sent for non-mapped tasks.
+- **Event shapes** (`bodies/ti_logs_ndjson.ndjson`): every line carries
+  `timestamp` (explicitly `null` on the `::group::`/`::endgroup::` markers).
+  Group: `{timestamp:null, event, sources:[…]}` and `{timestamp:null, event}`.
+  Task output: `{timestamp, event, level, logger:"task.stdout"|"task.stderr"}`.
+  Framework lines add `filename, lineno` (and sometimes `ti`) — Leoflow emits no
+  framework lines, so it legitimately omits those; its task output matches the
+  `task.stdout` shape. Leoflow omits `timestamp` on group markers (vs real
+  Airflow's explicit `null`) — cosmetic, the viewer treats absent and null alike.

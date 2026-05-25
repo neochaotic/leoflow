@@ -40,6 +40,13 @@ HASH="$(sed -n 's/^admin_password_hash:[[:space:]]*"\(.*\)"/\1/p' "$HOME_DIR/.le
 [ -n "$HASH" ] || fail "setup did not store an admin_password_hash"
 pass "setup generated an admin password (shown once) and stored only the hash"
 
+# Seed the editor's workspace (a DAG project) and a fake Monaco bundle so the
+# IDE surface can be exercised without the ~18 MB Monaco download (provisioning
+# itself is unit-tested + smoke-verified separately).
+printf 'print("hello")\n' > "$HOME_DIR/ws/dag.py"
+mkdir -p "$HOME_DIR/monaco/vs"
+printf '// fake monaco loader\n' > "$HOME_DIR/monaco/vs/loader.js"
+
 echo "==> starting the control plane with REAL auth (no dev bypass)"
 LEOFLOW_SERVER_HTTP_ADDR="127.0.0.1:${PORT}" \
 LEOFLOW_SERVER_GRPC_ADDR=":19099" \
@@ -51,6 +58,8 @@ LEOFLOW_SECRET_KEY="e2e-insecure-secret-key-32bytes!" \
 LEOFLOW_BOOTSTRAP_PASSWORD_HASH="$HASH" \
 LEOFLOW_BOOTSTRAP_EMAIL="admin@leoflow.local" \
 LEOFLOW_UI_EDITION="lite" \
+LEOFLOW_UI_WORKSPACE="$HOME_DIR/ws" \
+LEOFLOW_UI_MONACO_DIR="$HOME_DIR/monaco" \
 LEOFLOW_LOGS_DIR="$HOME_DIR/logs" \
   "$HOME_DIR/leoflow-server" >"$HOME_DIR/server.log" 2>&1 &
 SERVER_PID=$!
@@ -88,5 +97,42 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/v2/dags?limit=1")"
 [ "$code" = "401" ] || [ "$code" = "403" ] || fail "unauthenticated /api/v2/dags returned $code (want 401/403)"
 pass "JWT authorizes API calls; missing token is rejected"
 
+echo "==> the Lite web editor (ADR 0025) is served and workspace-confined"
+AUTH=(-H "Authorization: Bearer ${TOKEN}")
+
+# The editor page is served (public shell) and references Monaco + the files API.
+curl -s "${BASE}/ide" > "$HOME_DIR/ide.html"
+grep -q "monaco" "$HOME_DIR/ide.html" && grep -q "/api/v2/ide/tree" "$HOME_DIR/ide.html" \
+  || fail "/ide page missing expected markers"
+pass "/ide editor page served"
+
+# The file tree lists the seeded workspace file.
+curl -s "${AUTH[@]}" "${BASE}/api/v2/ide/tree" > "$HOME_DIR/tree.json"
+grep -q '"dag.py"' "$HOME_DIR/tree.json" || fail "tree missing dag.py\n$(cat "$HOME_DIR/tree.json")"
+pass "GET /api/v2/ide/tree lists the workspace"
+
+# Write then read a file round-trips.
+code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X PUT "${BASE}/api/v2/ide/file" \
+  -H 'content-type: application/json' -d '{"path":"dag.py","content":"print(\"edited\")\n"}')"
+[ "$code" = "200" ] || fail "PUT /api/v2/ide/file returned $code (want 200)"
+curl -s "${AUTH[@]}" "${BASE}/api/v2/ide/file?path=dag.py" > "$HOME_DIR/file.json"
+grep -q 'edited' "$HOME_DIR/file.json" || fail "read-back missing the written content\n$(cat "$HOME_DIR/file.json")"
+pass "PUT then GET /api/v2/ide/file round-trips"
+
+# Path traversal is rejected (400), never reads outside the workspace.
+code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${BASE}/api/v2/ide/file?path=../../../../etc/passwd")"
+[ "$code" = "400" ] || fail "traversal returned $code (want 400)"
+pass "path traversal rejected (400)"
+
+# Monaco assets are served from the configured dir.
+code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/ide/vs/loader.js")"
+[ "$code" = "200" ] || fail "GET /ide/vs/loader.js returned $code (want 200)"
+pass "Monaco assets served from the bundle dir"
+
+# The files API is protected: no token is rejected.
+code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/v2/ide/tree")"
+[ "$code" = "401" ] || [ "$code" = "403" ] || fail "unauthenticated /api/v2/ide/tree returned $code (want 401/403)"
+pass "files API requires auth"
+
 echo
-echo "  ✅ Lite happy path verified: setup → control plane → login."
+echo "  ✅ Lite happy path verified: setup → control plane → login → web editor."

@@ -182,12 +182,23 @@ func TestIDEMonacoNotProvisioned404(t *testing.T) {
 func TestIDEMonacoServedFromDir(t *testing.T) {
 	fs, _ := newWorkspace(t)
 	mdir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(mdir, "loader.js"), []byte("// monaco loader"), 0o600); err != nil {
+	// The bundle lives in a vs/ subdir, matching how Monaco is extracted and how
+	// the page requests it (/ide/vs/...).
+	if err := os.MkdirAll(filepath.Join(mdir, "vs", "editor"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mdir, "vs", "loader.js"), []byte("// monaco loader"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mdir, "vs", "editor", "editor.main.js"), []byte("// editor"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	srv := ideServerWithMonaco(fs, mdir)
-	rec := authGet(srv, http.MethodGet, "/ide/vs/loader.js", "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "monaco loader") {
+	if rec := authGet(srv, http.MethodGet, "/ide/vs/loader.js", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "monaco loader") {
 		t.Fatalf("monaco loader = %d (%s)", rec.Code, rec.Body.String())
+	}
+	// A nested asset resolves too.
+	if rec := authGet(srv, http.MethodGet, "/ide/vs/editor/editor.main.js", ""); rec.Code != http.StatusOK {
+		t.Fatalf("nested monaco asset = %d", rec.Code)
 	}
 }

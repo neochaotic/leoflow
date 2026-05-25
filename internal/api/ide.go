@@ -80,14 +80,16 @@ func idePageHandler() gin.HandlerFunc {
 	}
 }
 
-// monacoHandler serves the pinned Monaco bundle from dir. When dir is empty or a
-// requested file is missing it returns 404, which the page reads as "Monaco not
-// provisioned" and shows a `leoflow setup` hint. http.Dir confines reads to dir.
+// monacoHandler serves the pinned Monaco bundle from dir. The bundle lives in a
+// vs/ subdirectory (dir/vs/loader.js, …), and requests come in under /ide/vs/,
+// so stripping /ide/ maps /ide/vs/<f> to dir/vs/<f>. When dir is empty or a file
+// is missing it returns 404, which the page reads as "Monaco not provisioned"
+// and shows a `leoflow setup` hint. http.Dir confines reads to dir.
 func monacoHandler(dir string) gin.HandlerFunc {
 	if dir == "" {
 		return func(c *gin.Context) { c.Status(http.StatusNotFound) }
 	}
-	fileServer := http.StripPrefix("/ide/vs/", http.FileServer(http.Dir(dir)))
+	fileServer := http.StripPrefix("/ide/", http.FileServer(http.Dir(dir)))
 	return func(c *gin.Context) {
 		// Reject directory listings: only serve concrete files.
 		rel := filepath.Clean(c.Param("filepath"))

@@ -48,10 +48,7 @@ func TestUIStubsReturnSchemaValidEmpties(t *testing.T) {
 		}
 	}
 
-	// hook_meta is a bare array.
-	if rec := authGet(srv, http.MethodGet, "/ui/connections/hook_meta", ""); rec.Body.String() != "[]" {
-		t.Errorf("hook_meta = %q, want []", rec.Body.String())
-	}
+	// hook_meta is the connection-type catalog (not empty); see TestConnectionHookMeta.
 
 	// dag_stats carries its four required counts.
 	rec := authGet(srv, http.MethodGet, "/ui/dashboard/dag_stats", "")

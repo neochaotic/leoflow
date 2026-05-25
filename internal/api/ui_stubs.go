@@ -21,13 +21,6 @@ func emptyCollection(field string) gin.HandlerFunc {
 	}
 }
 
-// emptyArray renders a bare empty JSON array.
-func emptyArray() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, []any{})
-	}
-}
-
 // emptyObject renders a bare empty JSON object.
 func emptyObject() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -53,6 +46,6 @@ func registerUIStubs(r gin.IRouter) {
 	r.GET("/ui/calendar/:dag_id", emptyCollection("dag_runs"))
 	r.GET("/ui/backfills", emptyCollection("backfills"))
 	r.GET("/ui/teams", emptyCollection("teams"))
-	r.GET("/ui/connections/hook_meta", emptyArray())
+	r.GET("/ui/connections/hook_meta", connectionHookMetaHandler())
 	r.GET("/ui/next_run_assets/:dag_id", emptyObject())
 }

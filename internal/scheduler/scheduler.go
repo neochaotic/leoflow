@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -74,19 +75,38 @@ type InlineRunner interface {
 
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
-	store      Store
-	logger     *slog.Logger
-	interval   time.Duration
-	recorder   Recorder
-	dispatcher Dispatcher
-	inline     InlineRunner
-	lastTick   atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	store       Store
+	logger      *slog.Logger
+	interval    time.Duration
+	stepTimeout time.Duration
+	recorder    Recorder
+	dispatcher  Dispatcher
+	inline      InlineRunner
+	lastTick    atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
 }
 
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
 func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Scheduler {
-	return &Scheduler{store: store, logger: logger, interval: interval}
+	return &Scheduler{
+		store:       store,
+		logger:      logger,
+		interval:    interval,
+		stepTimeout: defaultStepTimeout(interval),
+	}
 }
+
+// defaultStepTimeout bounds how long one scheduling tick may run before it is
+// canceled so the loop can recover, rather than hang forever on a stuck query.
+// It is generous (well above a healthy tick) to avoid aborting legitimate work.
+func defaultStepTimeout(interval time.Duration) time.Duration {
+	if t := 30 * interval; t > 30*time.Second {
+		return t
+	}
+	return 30 * time.Second
+}
+
+// SetStepTimeout overrides the per-tick timeout (optional; mainly for tests).
+func (s *Scheduler) SetStepTimeout(d time.Duration) { s.stepTimeout = d }
 
 // SetRecorder attaches a metrics recorder (optional).
 func (s *Scheduler) SetRecorder(r Recorder) { s.recorder = r }
@@ -99,7 +119,9 @@ func (s *Scheduler) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 // inline http_api tasks fall back to the standard queued dispatch path).
 func (s *Scheduler) SetInlineRunner(r InlineRunner) { s.inline = r }
 
-// Run drives the scheduling loop until ctx is canceled.
+// Run drives the scheduling loop until ctx is canceled. The loop is crash-proof:
+// a panic or error in a tick is recovered and logged, so the scheduler keeps
+// ticking — it may fall behind, but it never dies (the critical invariant).
 func (s *Scheduler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -108,10 +130,32 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if err := s.Step(ctx); err != nil {
-				s.logger.Error("scheduler step", "error", err)
-			}
+			s.tick(ctx)
 		}
+	}
+}
+
+// tick runs one Step under a timeout, recovering any panic so a single bad tick
+// can never crash the process or stop the loop. It is the top-level backstop;
+// per-run isolation in Step quarantines individual poison runs underneath it.
+func (s *Scheduler) tick(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("scheduler tick panic recovered", "panic", r, "stack", string(debug.Stack()))
+			s.record("panic")
+		}
+	}()
+	stepCtx, cancel := context.WithTimeout(ctx, s.stepTimeout)
+	defer cancel()
+	if err := s.Step(stepCtx); err != nil {
+		s.logger.Error("scheduler step", "error", err)
+	}
+}
+
+// record reports a scheduler decision metric, ignoring a nil recorder.
+func (s *Scheduler) record(decision string) {
+	if s.recorder != nil {
+		s.recorder.RecordSchedulerDecision(decision)
 	}
 }
 
@@ -128,7 +172,11 @@ func (s *Scheduler) Heartbeat() (bool, time.Time) {
 	return time.Since(last) <= 3*s.interval+time.Second, last
 }
 
-// Step runs one deterministic scheduling iteration over every active run.
+// Step runs one deterministic scheduling iteration over every active run. Each
+// run is advanced in isolation (see advanceSafely): a panic or error in one run
+// is contained, so it never blocks the other runs or new-run creation. Only a
+// failure to list runs or create due runs — infrastructure-level errors that
+// affect the whole tick — is returned.
 func (s *Scheduler) Step(ctx context.Context) error {
 	s.lastTick.Store(time.Now().UnixNano())
 	runs, err := s.store.ActiveRuns(ctx)
@@ -136,11 +184,28 @@ func (s *Scheduler) Step(ctx context.Context) error {
 		return fmt.Errorf("listing active runs: %w", err)
 	}
 	for _, run := range runs {
-		if err := s.advance(ctx, run); err != nil {
-			return err
-		}
+		s.advanceSafely(ctx, run)
 	}
 	return s.createDueRuns(ctx)
+}
+
+// advanceSafely advances one run, isolating it: a panic or error in a single run
+// is recovered, logged, and metered, but never aborts the tick. This keeps one
+// poison run (a malformed spec, a panicking dispatcher, a transient per-run DB
+// error) from stalling every other run or crashing the process — the scheduler
+// may fall behind on that run, but it stays alive and keeps the rest moving.
+func (s *Scheduler) advanceSafely(ctx context.Context, run RunState) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("scheduler run panic recovered",
+				"run", run.RunID, "dag", run.DagID, "panic", r, "stack", string(debug.Stack()))
+			s.record("panic")
+		}
+	}()
+	if err := s.advance(ctx, run); err != nil {
+		s.logger.Error("advancing run", "run", run.RunID, "dag", run.DagID, "error", err)
+		s.record("run_error")
+	}
 }
 
 // createDueRuns creates a new run for each scheduled DAG whose next cron slot

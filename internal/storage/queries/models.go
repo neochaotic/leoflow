@@ -292,6 +292,19 @@ type SchedulerLoop struct {
 	Errors         int32              `json:"errors"`
 }
 
+type StagingVolume struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	DagID        string             `json:"dag_id"`
+	RunID        string             `json:"run_id"`
+	PvcName      string             `json:"pvc_name"`
+	Size         string             `json:"size"`
+	State        string             `json:"state"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
+	DeleteReason *string            `json:"delete_reason"`
+}
+
 type TaskInstance struct {
 	ID              pgtype.UUID        `json:"id"`
 	TenantID        pgtype.UUID        `json:"tenant_id"`

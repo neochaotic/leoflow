@@ -363,23 +363,20 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter exec
 }
 
 // stagingGCInterval is how often the per-run staging-volume GC sweeps; stagingTTL
-// is the grace window after a run is no longer active before its PVC is deleted
-// (ADR 0022 — long enough for a clear+re-run to re-attach the data).
+// is how long a FAILED run's volume is kept after its terminal time before the
+// PVC is deleted (ADR 0022 — long enough for a clear+re-run to re-attach the
+// data). A SUCCEEDED run's volume is freed immediately, regardless of the TTL.
 const (
-	stagingGCInterval = time.Hour
+	stagingGCInterval = time.Minute // frequent so a succeeded run's volume is freed ~at DAG end
 	stagingTTL        = 24 * time.Hour
 )
 
-// activeRunLister surfaces the currently active (queued/running) runs so staging
-// GC can treat any other run as terminal.
-type activeRunLister interface {
-	ActiveRuns(ctx context.Context) ([]scheduler.RunState, error)
-}
-
-// startStagingGC periodically deletes staging PVCs whose run is no longer active
-// and older than the TTL (ADR 0022).
-func startStagingGC(ctx context.Context, cs kubernetes.Interface, runs activeRunLister, logger *slog.Logger) {
+// startStagingGC periodically reclaims per-run staging PVCs from the
+// metadatabase-tracked lifecycle: succeeded runs immediately, failed runs after
+// the TTL, orphaned volumes (run gone) on sight (ADR 0022).
+func startStagingGC(ctx context.Context, cs kubernetes.Interface, store executor.StagingStore, logger *slog.Logger) {
 	exec := executor.NewKubernetesExecutor(cs, podNamespace)
+	exec.SetStagingStore(store)
 	go func() {
 		t := time.NewTicker(stagingGCInterval)
 		defer t.Stop()
@@ -388,16 +385,7 @@ func startStagingGC(ctx context.Context, cs kubernetes.Interface, runs activeRun
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				active, err := runs.ActiveRuns(ctx)
-				if err != nil {
-					logger.Error("staging gc: listing active runs", "error", err)
-					continue
-				}
-				live := make(map[string]bool, len(active))
-				for _, r := range active {
-					live[r.RunID] = true
-				}
-				if err := exec.GCStagingClaims(ctx, func(runID string) bool { return !live[runID] }, stagingTTL); err != nil {
+				if err := exec.GCStagingClaims(ctx, stagingTTL); err != nil {
 					logger.Error("staging gc", "error", err)
 				}
 			}
@@ -515,6 +503,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	}
 	controlAddr := resolveAgentControlAddr(cfg)
 	podExec := executor.NewKubernetesExecutor(cs, podNamespace)
+	podExec.SetStagingStore(store) // record per-run staging volumes in the metadatabase (ADR 0022)
 	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
 	dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))

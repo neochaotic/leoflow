@@ -190,3 +190,51 @@ func applyDefaultRetries(spec *domain.DAGSpec) {
 }
 
 var _ scheduler.Store = (*SchedulerStore)(nil)
+
+// RecordStagingVolume records a per-run staging volume as active, keyed by PVC
+// name (idempotent — called per task as the PVC is ensured). ADR 0022.
+func (s *SchedulerStore) RecordStagingVolume(ctx context.Context, tenantID, dagID, runID, pvcName, size string) error {
+	tid, err := parseUUID(tenantID)
+	if err != nil {
+		return fmt.Errorf("staging volume tenant id %q: %w", tenantID, err)
+	}
+	if err := s.q.RecordStagingVolume(ctx, queries.RecordStagingVolumeParams{
+		TenantID: tid, DagID: dagID, RunID: runID, PvcName: pvcName, Size: size,
+	}); err != nil {
+		return fmt.Errorf("recording staging volume: %w", err)
+	}
+	return nil
+}
+
+// MarkStagingDeleted records that a staging volume's PVC was deleted and why
+// (run_succeeded | ttl_expired | orphaned).
+func (s *SchedulerStore) MarkStagingDeleted(ctx context.Context, pvcName, reason string) error {
+	var rp *string
+	if reason != "" {
+		rp = &reason
+	}
+	if err := s.q.MarkStagingDeleted(ctx, queries.MarkStagingDeletedParams{PvcName: pvcName, Reason: rp}); err != nil {
+		return fmt.Errorf("marking staging volume deleted: %w", err)
+	}
+	return nil
+}
+
+// ListActiveStagingVolumes returns active staging volumes joined with their DAG
+// run's state (empty when the run row is gone), for the GC (ADR 0022).
+func (s *SchedulerStore) ListActiveStagingVolumes(ctx context.Context) ([]domain.StagingVolumeState, error) {
+	rows, err := s.q.ListActiveStagingVolumes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing staging volumes: %w", err)
+	}
+	out := make([]domain.StagingVolumeState, 0, len(rows))
+	for _, row := range rows {
+		st := ""
+		if row.RunState != nil {
+			st = string(*row.RunState)
+		}
+		out = append(out, domain.StagingVolumeState{
+			PVCName: row.PvcName, RunState: st, RunEndedAt: timePtr(row.RunEndedAt),
+		})
+	}
+	return out, nil
+}

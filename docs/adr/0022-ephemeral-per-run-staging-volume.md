@@ -91,3 +91,31 @@ Default is **off**: XCom for small handoffs, object storage for durable data.
   lifecycle, isolation, or re-run safety — exactly the gaps this ADR closes.
 - **Delete the volume on run terminal (no TTL).** Rejected: a clear+re-run right
   after a failure would lose the data; the 24h TTL is the safety margin.
+
+## Amendment (2026-05-24): success frees immediately; DB-tracked lifecycle
+
+Two refinements after exercising staging in dev, agreed by the project founder.
+Both align the implementation with this ADR's stated rationale rather than
+reversing it.
+
+1. **The TTL is the failure-recovery margin, so it applies only to failed runs.**
+   This ADR justified the 24h TTL entirely by the failure case ("so a re-run
+   shortly after a **failure** still finds the data"; the rejected "delete on
+   terminal" alternative was rejected because a clear+re-run *after a failure*
+   loses data). A **successful** run has no such need — re-running an
+   already-successful run is rare — so its volume is now **freed immediately at
+   run end**. A **failed** run keeps its volume for the **24h post-terminal TTL**
+   (measured from the run's terminal time, not PVC creation). Within-run retries
+   are unaffected (the volume lives for the whole run). The accepted trade-off,
+   documented for users: a clear+re-run of an already-succeeded run, or a failed
+   run after its TTL, re-runs **all** tasks.
+
+2. **The volume lifecycle is tracked in the metadatabase** (`staging_volumes`
+   table) as the source of truth, instead of being inferred from Kubernetes
+   object state. Each volume has `state` (`active` → `deleted`), `created_at`,
+   `deleted_at`, and `delete_reason` (`run_succeeded` | `ttl_expired` |
+   `orphaned`), so the lifecycle is auditable — when and *why* each disk was
+   reclaimed. The GC reads the active set joined with each run's state and
+   reclaims accordingly (succeeded now, failed after TTL, orphaned on sight),
+   recording the reason. The PVC is identified by its deterministic name
+   (`leoflow-staging-<dag_id>-<run_id>`), unique per namespace.

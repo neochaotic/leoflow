@@ -949,3 +949,59 @@ func TestImportErrorsIntegration(t *testing.T) {
 		}
 	}
 }
+
+// TestStagingVolumesIntegration guards the record → list (joined with the run's
+// state) → mark-deleted flow that drives staging-volume GC (ADR 0022) against
+// real Postgres, including the staging_volumes ⋈ dags ⋈ dag_runs join.
+func TestStagingVolumesIntegration(t *testing.T) {
+	repo, store, ctx := openRepo(t)
+	dagID := fmt.Sprintf("sv_%d", time.Now().UnixNano())
+	runID := "r1"
+	pvc := fmt.Sprintf("leoflow-staging-%s-r1", dagID)
+
+	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "extract", Type: domain.TaskTypePython}})
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: runID, State: domain.DagRunStateSuccess, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("tenant uuid: %v", err)
+	}
+
+	if err := store.RecordStagingVolume(ctx, tenantUUID, dagID, runID, pvc, "5Gi"); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	// Idempotent: a second record (per-task) is a no-op.
+	if err := store.RecordStagingVolume(ctx, tenantUUID, dagID, runID, pvc, "5Gi"); err != nil {
+		t.Fatalf("record (idempotent): %v", err)
+	}
+
+	vols, err := store.ListActiveStagingVolumes(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var found *domain.StagingVolumeState
+	for i := range vols {
+		if vols[i].PVCName == pvc {
+			found = &vols[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("staging volume %s not listed active", pvc)
+	}
+	if found.RunState != string(domain.DagRunStateSuccess) {
+		t.Errorf("join did not resolve run state: got %q, want success", found.RunState)
+	}
+
+	if err := store.MarkStagingDeleted(ctx, pvc, "run_succeeded"); err != nil {
+		t.Fatalf("mark deleted: %v", err)
+	}
+	vols, _ = store.ListActiveStagingVolumes(ctx)
+	for _, v := range vols {
+		if v.PVCName == pvc {
+			t.Errorf("deleted volume %s still listed active", pvc)
+		}
+	}
+}

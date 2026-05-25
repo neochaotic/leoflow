@@ -57,6 +57,7 @@ type Querier interface {
 	InsertDagVersion(ctx context.Context, arg InsertDagVersionParams) (DagVersion, error)
 	LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsParams) ([]LatestRunsForDagsRow, error)
 	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
+	ListActiveStagingVolumes(ctx context.Context) ([]ListActiveStagingVolumesRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
 	// All of a tenant's connections WITH the encrypted password, for delivering
 	// credentials to task pods (ADR 0021). Never use this for UI/API responses,
@@ -73,6 +74,8 @@ type Querier interface {
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
+	MarkStagingDeleted(ctx context.Context, arg MarkStagingDeletedParams) error
+	RecordStagingVolume(ctx context.Context, arg RecordStagingVolumeParams) error
 	RecordXCom(ctx context.Context, arg RecordXComParams) error
 	RemoveFavorite(ctx context.Context, arg RemoveFavoriteParams) error
 	// $3 is cast to task_state in every usage: without the cast Postgres deduces an

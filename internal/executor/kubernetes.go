@@ -20,7 +20,12 @@ import (
 type KubernetesExecutor struct {
 	clientset kubernetes.Interface
 	namespace string
+	staging   StagingStore
 }
+
+// SetStagingStore wires the metadatabase-backed staging-volume lifecycle store
+// (ADR 0022). With no store set, provisioning is not recorded and GC is a no-op.
+func (e *KubernetesExecutor) SetStagingStore(s StagingStore) { e.staging = s }
 
 // NewKubernetesExecutor builds an executor creating pods in the given namespace.
 func NewKubernetesExecutor(clientset kubernetes.Interface, namespace string) *KubernetesExecutor {

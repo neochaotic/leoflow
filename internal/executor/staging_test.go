@@ -8,6 +8,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/neochaotic/leoflow/internal/domain"
 )
 
 func TestStagingClaimName(t *testing.T) {
@@ -54,65 +56,87 @@ func TestEnsureStagingClaimIsIdempotent(t *testing.T) {
 	}
 }
 
-// The TTL is measured from when the run became terminal (ADR 0022: "24h
-// post-terminal TTL"), not from PVC creation. GC stamps a PVC the first sweep it
-// sees the run terminal, deletes it once that stamp ages past the TTL, and clears
-// the stamp if the run goes active again (clear+re-run restarts the clock).
+// fakeStagingStore is an in-memory StagingStore for the GC tests.
+type fakeStagingStore struct {
+	active  []domain.StagingVolumeState
+	deleted map[string]string // pvc name -> reason
+}
+
+func (f *fakeStagingStore) RecordStagingVolume(_ context.Context, _, _, _, pvcName, _ string) error {
+	f.active = append(f.active, domain.StagingVolumeState{PVCName: pvcName, RunState: "running"})
+	return nil
+}
+
+func (f *fakeStagingStore) MarkStagingDeleted(_ context.Context, pvcName, reason string) error {
+	if f.deleted == nil {
+		f.deleted = map[string]string{}
+	}
+	f.deleted[pvcName] = reason
+	return nil
+}
+
+func (f *fakeStagingStore) ListActiveStagingVolumes(_ context.Context) ([]domain.StagingVolumeState, error) {
+	return f.active, nil
+}
+
+// GC reclaims from the metadatabase-tracked run state (ADR 0022): a succeeded run
+// frees its volume now, a failed run after the TTL from its terminal time, an
+// orphan (run row gone) on sight; an active run stays. Each deletion is recorded
+// with its reason (run_succeeded | ttl_expired | orphaned).
 func TestGCStagingClaims(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	e := NewKubernetesExecutor(cs, "leoflow")
-	oldStamp := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
-	recentStamp := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
-	created48h := metav1.NewTime(time.Now().Add(-48 * time.Hour))
-	mk := func(name, runID string, terminalSince string) {
-		ann := map[string]string{"leoflow.io/run-id": runID}
-		if terminalSince != "" {
-			ann[stagingTerminalAnnotation] = terminalSince
-		}
-		_, _ = cs.CoreV1().PersistentVolumeClaims("leoflow").Create(context.Background(), &corev1.PersistentVolumeClaim{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: name, CreationTimestamp: created48h, // all old by creation; only terminal time matters
-				Labels:      map[string]string{"leoflow.io/staging": "true"},
-				Annotations: ann,
-			},
-		}, metav1.CreateOptions{})
+	failedOld := time.Now().Add(-48 * time.Hour)
+	failedNew := time.Now().Add(-1 * time.Hour)
+	store := &fakeStagingStore{active: []domain.StagingVolumeState{
+		{PVCName: "s-success", RunState: "success"},
+		{PVCName: "s-failed-old", RunState: "failed", RunEndedAt: &failedOld},
+		{PVCName: "s-failed-new", RunState: "failed", RunEndedAt: &failedNew},
+		{PVCName: "s-running", RunState: "running"},
+		{PVCName: "s-orphan", RunState: ""},
+	}}
+	e.SetStagingStore(store)
+	for _, n := range []string{"s-success", "s-failed-old", "s-failed-new", "s-running", "s-orphan"} {
+		_, _ = cs.CoreV1().PersistentVolumeClaims("leoflow").Create(context.Background(),
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: n}}, metav1.CreateOptions{})
 	}
-	mk("s-terminal-stamped-old", "run-done-old", oldStamp)    // terminal > TTL ago -> delete
-	mk("s-terminal-stamped-new", "run-done-new", recentStamp) // terminal recently -> keep
-	mk("s-terminal-unstamped", "run-just-done", "")           // first sweep: stamp + keep (even though created 48h ago)
-	mk("s-running-stale-stamp", "run-active", oldStamp)       // re-activated -> keep + clear stamp
-
-	terminal := map[string]bool{"run-done-old": true, "run-done-new": true, "run-just-done": true}
-	gc := func() error {
-		return e.GCStagingClaims(context.Background(), func(runID string) bool { return terminal[runID] }, 24*time.Hour)
-	}
-	if err := gc(); err != nil {
+	if err := e.GCStagingClaims(context.Background(), 24*time.Hour); err != nil {
 		t.Fatalf("GC: %v", err)
 	}
-	get := func(name string) *corev1.PersistentVolumeClaim {
-		p, err := cs.CoreV1().PersistentVolumeClaims("leoflow").Get(context.Background(), name, metav1.GetOptions{})
-		if err != nil {
-			return nil
+	exists := func(n string) bool {
+		_, err := cs.CoreV1().PersistentVolumeClaims("leoflow").Get(context.Background(), n, metav1.GetOptions{})
+		return err == nil
+	}
+	for pvc, want := range map[string]string{"s-success": "run_succeeded", "s-failed-old": "ttl_expired", "s-orphan": "orphaned"} {
+		if exists(pvc) {
+			t.Errorf("%s should be deleted", pvc)
 		}
-		return p
+		if store.deleted[pvc] != want {
+			t.Errorf("%s delete reason = %q, want %q", pvc, store.deleted[pvc], want)
+		}
 	}
-	if get("s-terminal-stamped-old") != nil {
-		t.Error("terminal PVC stamped past TTL should be deleted")
+	for _, pvc := range []string{"s-failed-new", "s-running"} {
+		if !exists(pvc) {
+			t.Errorf("%s should be kept", pvc)
+		}
+		if _, ok := store.deleted[pvc]; ok {
+			t.Errorf("%s should not be marked deleted", pvc)
+		}
 	}
-	if get("s-terminal-stamped-new") == nil {
-		t.Error("terminal PVC stamped within TTL should be kept")
+}
+
+// ensureStagingClaim records the volume as active when a store is wired (ADR 0022).
+func TestEnsureStagingClaimRecords(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	e := NewKubernetesExecutor(cs, "leoflow")
+	store := &fakeStagingStore{}
+	e.SetStagingStore(store)
+	req := sampleReq()
+	req.StagingClaim = "leoflow-staging-etl-r1"
+	if err := e.ensureStagingClaim(context.Background(), req); err != nil {
+		t.Fatalf("ensure: %v", err)
 	}
-	// Unstamped terminal PVC: kept this sweep, but now stamped (so it is NOT
-	// deleted just for being old — the clock starts at terminal, not creation).
-	if p := get("s-terminal-unstamped"); p == nil {
-		t.Error("unstamped terminal PVC should be kept on first sweep")
-	} else if p.Annotations[stagingTerminalAnnotation] == "" {
-		t.Error("unstamped terminal PVC should be stamped with the terminal time")
-	}
-	// Re-activated run: kept, and its stale terminal stamp cleared.
-	if p := get("s-running-stale-stamp"); p == nil {
-		t.Error("active run's PVC should be kept")
-	} else if p.Annotations[stagingTerminalAnnotation] != "" {
-		t.Error("re-activated run's PVC should have its terminal stamp cleared")
+	if len(store.active) != 1 || store.active[0].PVCName != "leoflow-staging-etl-r1" {
+		t.Fatalf("expected the volume recorded as active, got %+v", store.active)
 	}
 }

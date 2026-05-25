@@ -9,6 +9,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/neochaotic/leoflow/internal/domain"
 )
 
 // stagingLabel marks PVCs Leoflow manages for per-run staging, so GC can find
@@ -64,98 +66,75 @@ func (e *KubernetesExecutor) ensureStagingClaim(ctx context.Context, req Request
 		pvc.Spec.StorageClassName = &sc
 	}
 	_, err = e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Create(ctx, pvc, metav1.CreateOptions{})
-	if apierrors.IsAlreadyExists(err) {
-		return nil // another task of the run already provisioned it
-	}
-	if err != nil {
+	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("creating staging PVC %s: %w", req.StagingClaim, err)
 	}
+	// Track the volume in the metadatabase (idempotent by PVC name) so GC is
+	// deterministic and the lifecycle is auditable (ADR 0022). AlreadyExists just
+	// means another task of the run provisioned it first; still record.
+	if e.staging != nil {
+		if rerr := e.staging.RecordStagingVolume(ctx, req.TenantID, req.DagID, req.RunID, req.StagingClaim, size); rerr != nil {
+			return fmt.Errorf("recording staging volume %s: %w", req.StagingClaim, rerr)
+		}
+	}
 	return nil
 }
 
-// stagingTerminalAnnotation records when GC first observed a run terminal. The
-// post-terminal TTL (ADR 0022) is measured from this stamp — not from PVC
-// creation, which would expire the volume while the run was still active — and it
-// is cleared if the run goes active again so a clear+re-run restarts the clock.
-const stagingTerminalAnnotation = "leoflow.io/terminal-since"
+// StagingStore persists the per-run staging-volume lifecycle in the metadatabase
+// (ADR 0022): provisioning records an active row, GC marks it deleted with a
+// reason, and GC reads the active set joined with each run's state. Identified by
+// the deterministic PVC name (unique per namespace).
+type StagingStore interface {
+	RecordStagingVolume(ctx context.Context, tenantID, dagID, runID, pvcName, size string) error
+	MarkStagingDeleted(ctx context.Context, pvcName, reason string) error
+	ListActiveStagingVolumes(ctx context.Context) ([]domain.StagingVolumeState, error)
+}
 
-// GCStagingClaims deletes staging PVCs whose run has been terminal for longer
-// than ttl. isTerminal reports whether a run has finished; the TTL is measured
-// from when the run first became terminal (ADR 0022's "24h post-terminal TTL"),
-// the grace window so a clear+re-run shortly after a failure still finds the
-// data. It mirrors the pod Reconciler.
-func (e *KubernetesExecutor) GCStagingClaims(ctx context.Context, isTerminal func(runID string) bool, ttl time.Duration) error {
-	list, err := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: stagingLabel + "=true",
-	})
+// GCStagingClaims reclaims per-run staging PVCs from the metadatabase-tracked
+// lifecycle (ADR 0022): a successful run frees its volume immediately; a failed
+// run keeps it until ttl elapses after the run's terminal time (clear+re-run
+// safety); an orphaned volume (run row gone) is reclaimed. Each deletion is
+// recorded with its reason. A no-op when no StagingStore is wired.
+func (e *KubernetesExecutor) GCStagingClaims(ctx context.Context, ttl time.Duration) error {
+	if e.staging == nil {
+		return nil
+	}
+	vols, err := e.staging.ListActiveStagingVolumes(ctx)
 	if err != nil {
-		return fmt.Errorf("listing staging PVCs: %w", err)
+		return fmt.Errorf("listing active staging volumes: %w", err)
 	}
 	now := time.Now()
-	for i := range list.Items {
-		pvc := &list.Items[i]
-		runID := pvc.Annotations[stagingRunIDAnnotation]
-		stamp := pvc.Annotations[stagingTerminalAnnotation]
-		if !isTerminal(runID) {
-			if stamp != "" { // re-activated: restart the post-terminal clock
-				if serr := e.setStagingTerminalStamp(ctx, pvc.Name, ""); serr != nil {
-					return serr
-				}
-			}
+	for _, v := range vols {
+		reason, drop := stagingDeleteDecision(v, now, ttl)
+		if !drop {
 			continue
 		}
-		since, ok := parseStagingStamp(stamp)
-		if !ok {
-			// First sweep that sees the run terminal (or a corrupt stamp): stamp
-			// now so the TTL starts at terminal, and keep the volume this round.
-			if serr := e.setStagingTerminalStamp(ctx, pvc.Name, now.UTC().Format(time.RFC3339)); serr != nil {
-				return serr
-			}
-			continue
+		if derr := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Delete(ctx, v.PVCName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			return fmt.Errorf("deleting staging PVC %s: %w", v.PVCName, derr)
 		}
-		if now.Sub(since) <= ttl {
-			continue
-		}
-		if derr := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-			return fmt.Errorf("deleting staging PVC %s: %w", pvc.Name, derr)
+		if merr := e.staging.MarkStagingDeleted(ctx, v.PVCName, reason); merr != nil {
+			return fmt.Errorf("recording staging deletion %s: %w", v.PVCName, merr)
 		}
 	}
 	return nil
 }
 
-// parseStagingStamp parses the terminal-since annotation, reporting whether it
-// held a usable timestamp.
-func parseStagingStamp(stamp string) (time.Time, bool) {
-	if stamp == "" {
-		return time.Time{}, false
-	}
-	t, err := time.Parse(time.RFC3339, stamp)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return t, true
-}
-
-// setStagingTerminalStamp sets (value != "") or clears (value == "") the
-// terminal-since annotation on a staging PVC. A missing PVC is not an error.
-func (e *KubernetesExecutor) setStagingTerminalStamp(ctx context.Context, name, value string) error {
-	pvc, err := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
+// stagingDeleteDecision returns the delete reason and whether to reclaim a tracked
+// staging volume given its run's state (ADR 0022).
+func stagingDeleteDecision(v domain.StagingVolumeState, now time.Time, ttl time.Duration) (reason string, drop bool) {
+	switch domain.DagRunState(v.RunState) {
+	case domain.DagRunStateSuccess:
+		return "run_succeeded", true // success: nothing to re-run, free it now
+	case domain.DagRunStateFailed:
+		// Keep until ttl after the run's terminal time so a fix-and-clear+re-run
+		// still finds the upstream data.
+		if v.RunEndedAt == nil || now.Sub(*v.RunEndedAt) > ttl {
+			return "ttl_expired", true
 		}
-		return fmt.Errorf("reading staging PVC %s: %w", name, err)
+		return "", false
+	case "":
+		return "orphaned", true // the run row is gone (history cleared): no re-run
+	default:
+		return "", false // queued / running / scheduled: still active — keep
 	}
-	if pvc.Annotations == nil {
-		pvc.Annotations = map[string]string{}
-	}
-	if value == "" {
-		delete(pvc.Annotations, stagingTerminalAnnotation)
-	} else {
-		pvc.Annotations[stagingTerminalAnnotation] = value
-	}
-	if _, err := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("stamping staging PVC %s: %w", name, err)
-	}
-	return nil
 }

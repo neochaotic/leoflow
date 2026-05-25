@@ -64,7 +64,7 @@ func uiConfigHandler(instanceName string) gin.HandlerFunc {
 			"enable_swagger_ui":               true,
 			"require_confirmation_dag_change": false,
 			"default_wrap":                    false,
-			"test_connection":                 "Disabled",
+			"test_connection":                 "Enabled",
 			"dashboard_alert":                 []any{},
 			"show_external_log_redirect":      false,
 			"external_log_name":               nil,

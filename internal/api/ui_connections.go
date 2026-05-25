@@ -164,7 +164,13 @@ func handleConnWriteError(c *gin.Context, err error) {
 
 // registerUIConnections mounts the Admin Connections CRUD when a store is set;
 // otherwise an empty-collection stub keeps the Admin page rendering.
-func registerUIConnections(r gin.IRouter, store ConnectionStore) {
+func registerUIConnections(r gin.IRouter, store ConnectionStore, tester ConnectionTester) {
+	if tester == nil {
+		tester = defaultConnectionTester{}
+	}
+	// The panel's "Test" button (POST /api/v2/connections/test) tests the posted
+	// body without persisting; available even when no store is configured.
+	r.POST("/api/v2/connections/test", RequirePermission("write", "connection"), testConnectionHandler(tester))
 	if store == nil {
 		r.GET("/api/v2/connections", apiEmptyCollection("connections"))
 		return

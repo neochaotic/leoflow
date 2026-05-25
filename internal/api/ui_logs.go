@@ -19,8 +19,11 @@ import (
 // lines carry a timestamp and logger; the UI's log viewer needs the timestamp
 // to render the row (without it the panel stays empty even on a 200 response).
 type structuredLogEvent struct {
-	Event     string   `json:"event"`
-	Timestamp string   `json:"timestamp,omitempty"`
+	Event string `json:"event"`
+	// Timestamp is always present to match real Airflow (which emits it as
+	// `null` on the ::group::/::endgroup:: markers and as an RFC3339 string on
+	// log lines); a pointer serializes nil as JSON null rather than being omitted.
+	Timestamp *string  `json:"timestamp"`
 	Level     string   `json:"level,omitempty"`
 	Logger    string   `json:"logger,omitempty"`
 	Sources   []string `json:"sources,omitempty"`
@@ -88,7 +91,8 @@ func structuredLogContent(c *gin.Context, rc io.Reader, try int) []structuredLog
 func toStructuredEvent(ev logs.Event) structuredLogEvent {
 	item := structuredLogEvent{Event: ev.Message, Level: ev.Level}
 	if !ev.Time.IsZero() {
-		item.Timestamp = ev.Time.UTC().Format("2006-01-02T15:04:05.000000Z07:00")
+		ts := ev.Time.UTC().Format("2006-01-02T15:04:05.000000Z07:00")
+		item.Timestamp = &ts
 	}
 	if ev.Stream != "" {
 		// Airflow labels print output "task.stdout"/"task.stderr"; mirror that

@@ -49,18 +49,53 @@ func DecodeLine(line string) Event {
 	return Event{Level: inferLevel(line), Stream: "stdout", Message: line}
 }
 
-// inferLevel guesses a level from a legacy plain line's text.
-func inferLevel(line string) string {
-	switch {
-	case strings.Contains(line, "ERROR") || strings.Contains(line, "Traceback") || strings.Contains(line, "Exception"):
-		return "error"
-	case strings.Contains(line, "WARN"):
-		return "warning"
-	case strings.Contains(line, "DEBUG"):
-		return "debug"
-	default:
-		return "info"
+// inferLevel guesses a level from a legacy plain line's text, defaulting to
+// info when nothing in the text indicates a severity.
+func inferLevel(line string) string { return RefineLevel(line, "info") }
+
+// RefineLevel returns the severity indicated by a log line's own text when it
+// carries a clear level token, otherwise the supplied fallback. It lets the line
+// content correct a level that was derived only from the source stream — so an
+// "ERROR …" line printed to stdout is colored error (not info), and an "INFO …"
+// line written to stderr is colored info (not error). When the text gives no
+// signal, the stream-derived fallback stands, so behavior is unchanged for plain
+// output. The returned values match the Event.Level vocabulary the UI colors by
+// (error/warning/info/debug); callers control the contract, this only sharpens
+// the level value.
+func RefineLevel(line, fallback string) string {
+	if lvl, ok := levelFromContent(line); ok {
+		return lvl
 	}
+	return fallback
+}
+
+// levelFromContent reports the severity a line's text indicates, if any. Tokens
+// are matched uppercase (standard logger output: Python logging, structured
+// loggers) to avoid false positives from ordinary lowercase prose. error is
+// checked first so "ERROR" wins over a stray "INFO" later in the same line.
+func levelFromContent(line string) (string, bool) {
+	switch {
+	case containsAny(line, "ERROR", "CRITICAL", "FATAL", "Traceback", "Exception"):
+		return "error", true
+	case containsAny(line, "WARNING", "WARN"):
+		return "warning", true
+	case containsAny(line, "DEBUG"):
+		return "debug", true
+	case containsAny(line, "INFO", "NOTICE"):
+		return "info", true
+	default:
+		return "", false
+	}
+}
+
+// containsAny reports whether s contains any of the given substrings.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // Ref identifies a task instance's log stream and maps to its storage location.

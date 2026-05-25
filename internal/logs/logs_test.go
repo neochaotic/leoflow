@@ -144,3 +144,35 @@ func TestDiskSinkPruneKeepsRecentAndMissingRoot(t *testing.T) {
 		t.Errorf("pruning a missing root should be a no-op, got %v", err)
 	}
 }
+
+func TestRefineLevel(t *testing.T) {
+	cases := []struct {
+		msg, fallback, want string
+	}{
+		// Content with a clear token wins over the stream-derived fallback.
+		{"ERROR: connection refused", "info", "error"}, // error printed to stdout
+		{"Traceback (most recent call last):", "info", "error"},
+		{"CRITICAL boom", "info", "error"},
+		{"INFO: started run", "error", "info"}, // info written to stderr
+		{"WARNING: deprecated API", "error", "warning"},
+		{"DEBUG cache hit", "info", "debug"},
+		// No recognizable token -> the stream-derived fallback stands.
+		{"processed 42 rows", "info", "info"},
+		{"raw stderr noise", "error", "error"},
+		{"", "info", "info"},
+	}
+	for _, c := range cases {
+		if got := RefineLevel(c.msg, c.fallback); got != c.want {
+			t.Errorf("RefineLevel(%q, %q) = %q, want %q", c.msg, c.fallback, got, c.want)
+		}
+	}
+}
+
+func TestInferLevelDefaultsToInfo(t *testing.T) {
+	if inferLevel("nothing notable here") != "info" {
+		t.Error("a line with no severity token should infer info")
+	}
+	if inferLevel("WARNING: heads up") != "warning" {
+		t.Error("a WARNING line should infer warning")
+	}
+}

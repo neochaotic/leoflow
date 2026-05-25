@@ -270,9 +270,14 @@ func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish
 			return status.Errorf(codes.Internal, "receiving log line: %v", err)
 		}
 		msg := line.GetMessage()
+		// The agent derives the wire level from the source stream (stdout=info,
+		// stderr=error), which mis-colors an error printed to stdout or an info
+		// line written to stderr (e.g. Python logging). Refine it from the line's
+		// own text when that carries a clear level token; otherwise the
+		// stream-derived level stands. The Event shape and stream are unchanged.
 		ev := logs.Event{
 			Time:    line.GetTime().AsTime(),
-			Level:   logLevelString(line.GetLevel()),
+			Level:   logs.RefineLevel(msg, logLevelString(line.GetLevel())),
 			Stream:  line.GetStream(),
 			Message: msg,
 		}

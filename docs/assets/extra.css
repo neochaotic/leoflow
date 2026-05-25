@@ -21,13 +21,33 @@
 .home-hero__text { flex: 1 1 42%; min-width: 0; }
 .home-hero__media { flex: 1 1 58%; min-width: 0; }
 .home-hero__lead { font-size: 1.25rem; opacity: .85; margin-top: -.2rem; }
-/* Frame the screenshot so it reads as a product window, not an inline image. */
-.home-hero__shot {
-  width: 100%;
-  border-radius: .5rem;
+/* Frame the screenshot as a product window (faux titlebar + traffic lights) so
+   the crop reads as deliberate, not an accidentally truncated image. */
+.home-hero__window {
+  border-radius: .6rem;
+  overflow: hidden;
   border: 1px solid var(--md-default-fg-color--lightest);
-  box-shadow: 0 8px 30px rgba(0, 0, 0, .18);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .20);
 }
+.home-hero__chrome {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  height: 34px;
+  padding: 0 .8rem;
+  background: var(--md-default-fg-color--lightest);
+}
+.home-hero__chrome i {
+  width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto;
+}
+.home-hero__chrome i:nth-child(1) { background: #ff5f57; }
+.home-hero__chrome i:nth-child(2) { background: #febc2e; }
+.home-hero__chrome i:nth-child(3) { background: #28c840; }
+.home-hero__chrome em {
+  margin-left: .4rem; font-style: normal; font-size: .72rem;
+  opacity: .65; letter-spacing: .01em;
+}
+.home-hero__shot { display: block; width: 100%; }
 @media screen and (max-width: 76.1875em) {
   .home-hero { flex-direction: column; align-items: stretch; gap: 1.25rem; }
 }

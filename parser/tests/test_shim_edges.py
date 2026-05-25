@@ -49,6 +49,43 @@ def test_operator_attached_via_dag_kwarg_without_context(tmp_path):
     assert _task(spec, "t")["type"] == "bash"
 
 
+def test_sibling_module_import_resolves(tmp_path):
+    """A DAG importing a helper module next to it must compile (Airflow's DagBag
+    puts the DAG folder on sys.path; the shim loader must too)."""
+    (tmp_path / "helpers.py").write_text("def names():\n    return ['x', 'y', 'z']\n")
+    spec = _compile(tmp_path, """
+        from airflow.sdk import DAG, task
+        from helpers import names
+        @task
+        def step() -> None: ...
+        with DAG("g"):
+            for _ in names():
+                step()
+    """)
+    assert len(spec["tasks"]) == 3  # one per helper-provided id (deduped)
+
+
+def test_sibling_modules_are_isolated_between_compiles(tmp_path, tmp_path_factory):
+    """Two DAGs in different dirs with a same-named helper must not bleed state."""
+    d1 = tmp_path_factory.mktemp("one")
+    d2 = tmp_path_factory.mktemp("two")
+    (d1 / "shared.py").write_text("N = 1\n")
+    (d2 / "shared.py").write_text("N = 4\n")
+    for d in (d1, d2):
+        (d / "leoflow.yaml").write_text("schema_version: '1.0'\n")
+        (d / "dag.py").write_text(
+            "from airflow.sdk import DAG, task\n"
+            "from shared import N\n"
+            "@task\ndef t() -> None: ...\n"
+            "with DAG('g'):\n"
+            "    [t() for _ in range(N)]\n"
+        )
+    from leoflow_parser.compiler import compile_dag
+    s1 = compile_dag(str(d1 / "dag.py"), str(d1 / "leoflow.yaml"), "x:v")
+    s2 = compile_dag(str(d2 / "dag.py"), str(d2 / "leoflow.yaml"), "x:v")
+    assert len(s1["tasks"]) == 1 and len(s2["tasks"]) == 4
+
+
 def test_missing_sdk_helper_gives_clear_unsupported_error(tmp_path):
     """`from airflow.sdk import chain` (a name the shim lacks) is a clear error,
     not a raw ImportError."""

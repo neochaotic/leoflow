@@ -106,6 +106,13 @@ def _load_dags_shim(source: str):
     import airflow._core as core  # the shim
 
     core.reset()
+    # Put the DAG's own directory on sys.path so sibling-module imports
+    # (`from helpers import ...` next to dag.py) resolve, as Airflow's DagBag does.
+    source_dir = os.path.dirname(os.path.abspath(source))
+    added_dir = source_dir not in sys.path
+    if added_dir:
+        sys.path.insert(0, source_dir)
+    before = set(sys.modules)
     try:
         runpy.run_path(source, run_name="__leoflow_dag__")
     except ModuleNotFoundError as exc:
@@ -116,6 +123,16 @@ def _load_dags_shim(source: str):
     except NotImplementedError as exc:
         # A construct the shim deliberately rejects (e.g. dynamic task mapping).
         return {}, _unsupported(str(exc))
+    finally:
+        # Isolate compiles: drop modules the DAG imported (incl. sibling helpers)
+        # and remove its directory, so repeated compiles never serve stale code.
+        for name in set(sys.modules) - before:
+            del sys.modules[name]
+        if added_dir:
+            try:
+                sys.path.remove(source_dir)
+            except ValueError:
+                pass
     return dict(core.COLLECTED), None
 
 

@@ -47,7 +47,12 @@ def task(fn=None, **dec_kwargs):
                     op.upstream_task_ids.add(xarg.operator.task_id)
             return XComArg(op)
 
+        def _no_dynamic_mapping(*_a, **_k):
+            raise NotImplementedError("dynamic task mapping (.expand/.partial)")
+
         maker.function = func
+        maker.expand = _no_dynamic_mapping
+        maker.partial = _no_dynamic_mapping
         return maker
 
     return wrap(fn) if callable(fn) else wrap

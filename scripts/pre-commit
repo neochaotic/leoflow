@@ -24,6 +24,16 @@ go vet ./...
 echo "[pre-commit] golangci-lint"
 golangci-lint run ./...
 
+# Python lint for the parser + runtime — the CI "Python parser tests" job runs
+# `ruff check`, so gate it locally too (each subdir has its own pyproject /
+# excludes). Best-effort: skip with a note if ruff is not installed.
+echo "[pre-commit] ruff (parser + runtime)"
+if command -v ruff >/dev/null 2>&1; then
+	ruff check parser runtime/python
+else
+	echo "  ruff not found; skipping (CI enforces it) — 'pip install ruff' to gate locally"
+fi
+
 echo "[pre-commit] test + coverage gate"
 profile=$(mktemp)
 filtered=$(mktemp)

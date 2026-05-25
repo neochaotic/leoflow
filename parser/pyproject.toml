@@ -38,6 +38,8 @@ packages = ["leoflow_parser"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# Vendored third-party code (pure-Python PyYAML) is not ours to lint.
+extend-exclude = ["leoflow_parser/_vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -45,3 +47,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# Don't count vendored third-party code toward the parser's coverage floor.
+omit = ["*/leoflow_parser/_vendor/*"]

@@ -154,6 +154,6 @@ def test_unsupported_trigger_rule_errors(tmp_path):
             from airflow.providers.standard.operators.bash import BashOperator
             from airflow.sdk import DAG
             with DAG("g"):
-                BashOperator(task_id="a", bash_command="x", trigger_rule="none_failed_min_one_success")
+                BashOperator(task_id="a", bash_command="x", trigger_rule="none_failed")
         """)
     assert "trigger rule" in str(ei.value)

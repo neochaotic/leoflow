@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# End-to-end happy path for Leoflow Lite: setup (as the installer runs it) →
+# control plane with REAL auth → admin login. Asserts the login the wizard
+# provisions actually works, and that a wrong password is rejected.
+#
+# Requires a local Postgres + Redis (docker-compose.dev.yaml). DESTRUCTIVE: it
+# resets the leoflow_dev database. Run from the repo root:  bash scripts/e2e-lite-login.sh
+set -euo pipefail
+
+PORT=18099
+DB_URL="postgres://leoflow:leoflow@localhost:5432/leoflow_dev?sslmode=disable"
+REDIS_URL="redis://localhost:6379/0"
+BASE="http://127.0.0.1:${PORT}"
+HOME_DIR="$(mktemp -d)"
+SERVER_PID=""
+pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
+fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; cleanup; exit 1; }
+cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; chmod -R u+w "$HOME_DIR" 2>/dev/null || true; rm -rf "$HOME_DIR"; }
+trap cleanup EXIT
+
+echo "==> building binaries"
+go build -o "$HOME_DIR/leoflow" ./cmd/leoflow
+go build -o "$HOME_DIR/leoflow-server" ./cmd/leoflow-server
+
+# A fake python3.11 on PATH so `setup` uses it instead of downloading a CPython
+# (the parser is not exercised by this login test).
+mkdir -p "$HOME_DIR/bin"
+printf '#!/bin/sh\n' > "$HOME_DIR/bin/python3.11"
+chmod +x "$HOME_DIR/bin/python3.11"
+export PATH="$HOME_DIR/bin:$PATH"
+
+echo "==> resetting the leoflow_dev database (migrated, empty)"
+"$HOME_DIR/leoflow" db reset --yes >/dev/null
+
+echo "==> leoflow setup (installer path) — generates the admin, prints the password once"
+SETUP_OUT="$(HOME="$HOME_DIR" "$HOME_DIR/leoflow" setup --workspace "$HOME_DIR/ws" </dev/null 2>&1)"
+PW="$(printf '%s\n' "$SETUP_OUT" | sed -n 's/^[[:space:]]*password:[[:space:]]*//p' | head -1)"
+HASH="$(sed -n 's/^admin_password_hash:[[:space:]]*"\(.*\)"/\1/p' "$HOME_DIR/.leoflow/config.yaml")"
+[ -n "$PW" ]   || fail "setup did not print a generated password"
+[ -n "$HASH" ] || fail "setup did not store an admin_password_hash"
+pass "setup generated an admin password (shown once) and stored only the hash"
+
+echo "==> starting the control plane with REAL auth (no dev bypass)"
+LEOFLOW_SERVER_HTTP_ADDR="127.0.0.1:${PORT}" \
+LEOFLOW_SERVER_GRPC_ADDR=":19099" \
+LEOFLOW_SERVER_METRICS_ADDR=":19098" \
+LEOFLOW_DATABASE_URL="$DB_URL" \
+LEOFLOW_REDIS_URL="$REDIS_URL" \
+LEOFLOW_AUTH_JWT_SECRET="e2e-insecure-jwt-secret-please-change" \
+LEOFLOW_SECRET_KEY="e2e-insecure-secret-key-32bytes!" \
+LEOFLOW_BOOTSTRAP_PASSWORD_HASH="$HASH" \
+LEOFLOW_BOOTSTRAP_EMAIL="admin@leoflow.local" \
+LEOFLOW_UI_EDITION="lite" \
+LEOFLOW_LOGS_DIR="$HOME_DIR/logs" \
+  "$HOME_DIR/leoflow-server" >"$HOME_DIR/server.log" 2>&1 &
+SERVER_PID=$!
+
+echo "==> waiting for readiness"
+for i in $(seq 1 40); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/readyz" || true)"
+  [ "$code" = "200" ] && break
+  kill -0 "$SERVER_PID" 2>/dev/null || fail "server exited early:\n$(cat "$HOME_DIR/server.log")"
+  sleep 0.5
+done
+[ "$code" = "200" ] || fail "server not ready (last /readyz=$code)\n$(cat "$HOME_DIR/server.log")"
+pass "control plane is ready"
+
+echo "==> login with the correct admin password (the happy path)"
+login() { curl -s -o "$HOME_DIR/resp.json" -w '%{http_code}' -X POST "${BASE}/auth/token" \
+  -H 'content-type: application/json' -d "$1"; }
+
+code="$(login "{\"username\":\"admin@leoflow.local\",\"password\":$(printf '%s' "$PW" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')}")"
+[ "$code" = "200" ] || fail "login returned $code (want 200)\n$(cat "$HOME_DIR/resp.json")"
+grep -q '"access_token"' "$HOME_DIR/resp.json" || fail "login 200 but no access_token\n$(cat "$HOME_DIR/resp.json")"
+TOKEN="$(python3 -c 'import json;print(json.load(open("'"$HOME_DIR"'/resp.json"))["access_token"])')"
+[ -n "$TOKEN" ] || fail "empty access_token"
+pass "admin login succeeded and returned a JWT"
+
+echo "==> wrong password must be rejected"
+code="$(login '{"username":"admin@leoflow.local","password":"definitely-wrong"}')"
+[ "$code" = "401" ] || fail "wrong password returned $code (want 401)"
+pass "wrong password rejected (401)"
+
+echo "==> the JWT authenticates an API call"
+code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v2/dags?limit=1")"
+[ "$code" = "200" ] || fail "authed /api/v2/dags returned $code (want 200)"
+code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/v2/dags?limit=1")"
+[ "$code" = "401" ] || [ "$code" = "403" ] || fail "unauthenticated /api/v2/dags returned $code (want 401/403)"
+pass "JWT authorizes API calls; missing token is rejected"
+
+echo
+echo "  ✅ Lite happy path verified: setup → control plane → login."

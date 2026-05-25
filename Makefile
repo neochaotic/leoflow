@@ -93,6 +93,10 @@ rebrand-ui: ## Rewrite the embedded SPA's Docs/GitHub nav links from Airflow to 
 	done
 	@echo "rebranded nav Docs/GitHub links to Leoflow (templated provider docs left pointing at Airflow)"
 
+.PHONY: e2e-lite
+e2e-lite: ## End-to-end Lite happy path (setup -> control plane -> login); needs local Postgres+Redis (DESTRUCTIVE: resets leoflow_dev)
+	bash scripts/e2e-lite-login.sh
+
 .PHONY: runtime-images
 runtime-images: ## Build the task base images for each supported Python version
 	for v in 3.10 3.11 3.12; do \

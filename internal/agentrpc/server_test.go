@@ -273,8 +273,10 @@ func TestWriteLinesDrainsStreamToSink(t *testing.T) {
 	if len(w.lines) != 3 || w.lines[2] != "line three" {
 		t.Errorf("written lines = %v, want the three messages", w.lines)
 	}
-	if len(published) != 3 || published[0] != "line one" {
-		t.Errorf("published lines = %v, want the three messages tailed", published)
+	// The tail channel now carries the full event JSON (level/stream/ts), so a
+	// live NDJSON follower can color lines; decoding it yields the message.
+	if len(published) != 3 || logs.DecodeLine(published[0]).Message != "line one" {
+		t.Errorf("published lines = %v, want the three events tailed", published)
 	}
 }
 

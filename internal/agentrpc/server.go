@@ -284,7 +284,9 @@ func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish
 		if werr := w.WriteEvent(ev); werr != nil {
 			return status.Errorf(codes.Internal, "writing log line: %v", werr)
 		}
-		publish(msg)
+		// Publish the full event (level/stream/ts), not just the text, so a live
+		// NDJSON follower can color lines exactly like the stored drill-down.
+		publish(logs.EncodeLine(ev))
 	}
 }
 

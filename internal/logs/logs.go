@@ -98,6 +98,21 @@ func containsAny(s string, subs ...string) bool {
 	return false
 }
 
+// EncodeLine serializes an Event to the same JSON line used for storage, so the
+// live-tail channel carries the full event (level + stream + timestamp), not
+// just the message text. On the unlikely marshal error it falls back to the raw
+// message, so a line is never dropped.
+func EncodeLine(ev Event) string {
+	if ev.Time.IsZero() {
+		ev.Time = time.Now().UTC()
+	}
+	encoded, err := json.Marshal(ev)
+	if err != nil {
+		return ev.Message
+	}
+	return string(encoded)
+}
+
 // Ref identifies a task instance's log stream and maps to its storage location.
 type Ref struct {
 	TenantID  string

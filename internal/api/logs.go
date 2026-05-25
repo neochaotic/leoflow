@@ -49,6 +49,9 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 	switch negotiateLogFormat(c) {
 	case logFormatNDJSON:
 		serveNdjsonLogs(c, rc, try)
+		if c.Query("follow") == "true" {
+			tailNdjson(c, reader, try)
+		}
 		return
 	case logFormatJSON:
 		serveStructuredLogs(c, rc, try)
@@ -114,7 +117,9 @@ func tailLogs(c *gin.Context, reader LogReader, try int) {
 			if !open {
 				return
 			}
-			if _, werr := c.Writer.WriteString(line + "\n"); werr != nil {
+			// The channel now carries the full event JSON; the plain stream shows
+			// just the message (DecodeLine tolerates legacy raw lines too).
+			if _, werr := c.Writer.WriteString(logs.DecodeLine(line).Message + "\n"); werr != nil {
 				return
 			}
 			if canFlush {

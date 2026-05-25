@@ -176,3 +176,14 @@ func TestInferLevelDefaultsToInfo(t *testing.T) {
 		t.Error("a WARNING line should infer warning")
 	}
 }
+
+func TestEncodeLineRoundTrip(t *testing.T) {
+	ev := Event{Level: "error", Stream: "stderr", Message: `boom: "quoted"`, Time: time.Now().UTC().Truncate(time.Second)}
+	got := DecodeLine(EncodeLine(ev))
+	if got.Level != "error" || got.Stream != "stderr" || got.Message != `boom: "quoted"` {
+		t.Errorf("EncodeLine->DecodeLine lost fields: %+v", got)
+	}
+	if !got.Time.Equal(ev.Time) {
+		t.Errorf("timestamp lost: got %v want %v", got.Time, ev.Time)
+	}
+}

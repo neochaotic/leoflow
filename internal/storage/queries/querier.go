@@ -57,6 +57,8 @@ type Querier interface {
 	InsertDagVersion(ctx context.Context, arg InsertDagVersionParams) (DagVersion, error)
 	LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsParams) ([]LatestRunsForDagsRow, error)
 	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
+	// run_id is the dag_run's UUID (StagingClaimName uses it), so join on dag_runs.id,
+	// which is globally unique. run_state is NULL only when the run row is truly gone.
 	ListActiveStagingVolumes(ctx context.Context) ([]ListActiveStagingVolumesRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
 	// All of a tenant's connections WITH the encrypted password, for delivering
@@ -84,6 +86,11 @@ type Querier interface {
 	// agent path is the first to exercise this query end-to-end.
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
 	ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error)
+	// Clear re-binds the run to the DAG's current registered version (ADR 0020): a
+	// re-run after a code/yaml fix picks up the newest image and config — in dev that
+	// is the last hot-reload, in prod the last deploy — while everything within a
+	// version stays reproducible.
+	ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVersionParams) error
 	ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTaskInstanceParams) (int64, error)
 	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
 	ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (ResolveRunRefRow, error)

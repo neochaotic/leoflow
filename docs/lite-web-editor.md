@@ -5,6 +5,8 @@ straight from the browser — no separate IDE, no extra process. It is a
 **Lite-only** convenience for the local, single-machine workflow; **Production**
 teams author DAGs in their own editor and ship them through the GitOps flow.
 
+![The Lite web editor: a file tree on the left and a Python DAG open with syntax highlighting](assets/screenshots/lite-web-editor.png){ .home-hero__shot }
+
 !!! info "Why it exists, and what it is not"
     The editor is a thin **[Monaco](https://microsoft.github.io/monaco-editor/)**
     surface (the engine behind VS Code) with a file tree — enough to open, edit,
@@ -20,8 +22,19 @@ When you run `leoflow lite <project>`, the served UI shows a small **⌨ IDE**
 button in the bottom-right corner. Click it — the editor opens in a **new tab**
 at `/ide`, scoped to your project workspace.
 
+![The Leoflow home with the LITE badge at top-center and the IDE button at bottom-right](assets/screenshots/lite-ide-button.png){ .home-hero__shot }
+
+<figure markdown>
+  ![Close-up of the IDE button](assets/screenshots/lite-ide-button-zoom.png)
+  <figcaption>The <strong>⌨ IDE</strong> button, bottom-right of every screen.</figcaption>
+</figure>
+
 You can also open it directly at `http://localhost:8088/ide` (or your Lite host
 and port).
+
+!!! tip "Deep-link to a file"
+    Append `?open=<path>` to jump straight to a file, e.g.
+    `/ide?open=dag.py` — handy for sharing a link to a specific DAG.
 
 The editor follows your OS light/dark preference. Force a theme with a query
 parameter:

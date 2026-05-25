@@ -163,7 +163,9 @@ function bootEditor() {
     document.getElementById("btn-new").onclick = newFile;
     document.getElementById("btn-delete").onclick = deleteCurrent;
     refreshTree();
-    setStatus("ready");
+    // Deep-link: /ide?open=<path> opens a file directly (shareable links).
+    const open = new URLSearchParams(location.search).get("open");
+    if (open) openFile(open); else setStatus("ready");
   });
 }
 

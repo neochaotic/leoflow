@@ -108,8 +108,11 @@ def _load_dags_shim(source: str):
     core.reset()
     try:
         runpy.run_path(source, run_name="__leoflow_dag__")
-    except ModuleNotFoundError as exc:
-        return {}, (f"{exc.name!r} is not supported by Leoflow "
+    except ImportError as exc:
+        # A missing module (unsupported provider/operator) or a missing name
+        # (e.g. an SDK helper the shim does not provide) both mean "not supported".
+        what = getattr(exc, "name", None) or str(exc)
+        return {}, (f"{what!r} is not supported by Leoflow "
                     f"(supported operators: Bash, Http, Python/@task)")
     return dict(core.COLLECTED), None
 

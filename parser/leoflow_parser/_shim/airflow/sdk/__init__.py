@@ -36,7 +36,8 @@ def task(fn=None, **dec_kwargs):
     def wrap(func):
         @functools.wraps(func)
         def maker(*args, **kwargs):
-            op = PythonOperator(task_id=func.__name__)
+            # @task(trigger_rule=…, …) decorator kwargs apply to the operator.
+            op = PythonOperator(task_id=func.__name__, **dec_kwargs)
             op.python_callable = func
             op.op_args = args
             op.op_kwargs = kwargs

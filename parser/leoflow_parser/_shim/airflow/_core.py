@@ -50,11 +50,13 @@ class BaseOperator:
         self.trigger_rule = kwargs.get("trigger_rule", "all_success")
         for key, value in kwargs.items():
             setattr(self, key, value)
-        if _CURRENT:
-            # Mirror Airflow: a duplicate task_id within a DAG is auto-suffixed
-            # __1, __2, … (e.g. calling the same @task in a loop).
-            self.task_id = _CURRENT[-1].unique_task_id(task_id)
-            _CURRENT[-1].add_task(self)
+        # Attach to a DAG: an explicit dag= kwarg wins (operators built outside a
+        # `with DAG()` block), otherwise the active context DAG. Mirrors Airflow.
+        target = kwargs.get("dag") or (_CURRENT[-1] if _CURRENT else None)
+        if target is not None:
+            # Airflow auto-suffixes a duplicate task_id within a DAG (__1, __2, …).
+            self.task_id = target.unique_task_id(task_id)
+            target.add_task(self)
         else:
             self.task_id = task_id
 
@@ -82,6 +84,9 @@ class DAG:
         self.schedule = schedule
         self.tags = list(tags or [])
         self.task_dict: dict = {}
+        # Collect on construction too, so DAGs defined without `with` (e.g.
+        # module-level `dag = DAG(...)` with operators attached via dag=) are seen.
+        COLLECTED[dag_id] = self
 
     def add_task(self, op):
         self.task_dict[op.task_id] = op

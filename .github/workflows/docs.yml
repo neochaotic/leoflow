@@ -57,7 +57,7 @@ jobs:
           </head><body>The Go reference moved. Redirecting to
           <a href="../go-api.html">Go packages</a>…</body></html>
           HTML
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with: { path: site }
   deploy:
     needs: build

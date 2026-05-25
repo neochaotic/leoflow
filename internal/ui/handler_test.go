@@ -169,6 +169,15 @@ func TestIndexInjectsEditorButtonOnlyWhenEnabled(t *testing.T) {
 	if strings.Index(body, "leoflow-ide-button") > strings.Index(body, "</body>") {
 		t.Error("IDE button should be injected before </body>")
 	}
+	// Regression guard (#88): the button must carry a visible inline SVG icon and
+	// the IDE label. A bare unicode glyph rendered faintly/not at all on some
+	// platforms, so if the icon is ever dropped or reverted to a glyph, fail.
+	if !strings.Contains(body, "<svg") || !strings.Contains(body, "polyline") {
+		t.Errorf("the IDE button must include its inline SVG icon (not a unicode glyph), got:\n%s", body)
+	}
+	if !strings.Contains(body, ">IDE<") {
+		t.Error("the IDE button must show the 'IDE' label")
+	}
 
 	off := NewFromFS(fsys, "v")
 	rec2 := httptest.NewRecorder()

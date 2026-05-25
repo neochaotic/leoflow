@@ -29,12 +29,21 @@ const liteBannerHTML = `<div id="leoflow-lite-banner">LITE</div>` +
 
 // ideButtonHTML is a discreet floating "IDE" button (bottom-right) injected into
 // the served shell when the Lite web editor is enabled (ADR 0025). It opens the
-// editor at /ide in a new tab, so the SPA is untouched.
-const ideButtonHTML = `<a id="leoflow-ide-button" href="/ide" target="_blank" rel="noopener" title="Open the Leoflow editor">⌨ IDE</a>` +
+// editor at /ide in a new tab, so the SPA is untouched. The icon is an inline
+// "code" (< >) SVG drawn with currentColor, so it renders crisply at any size
+// regardless of the system font (an emoji/Unicode glyph rendered faintly or not
+// at all on some platforms).
+const ideButtonHTML = `<a id="leoflow-ide-button" href="/ide" target="_blank" rel="noopener" title="Open the Leoflow editor">` +
+	`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+	`stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+	`<polyline points="8 7 3 12 8 17"></polyline><polyline points="16 7 21 12 16 17"></polyline></svg>` +
+	`<span>IDE</span></a>` +
 	`<style>#leoflow-ide-button{position:fixed;right:16px;bottom:16px;z-index:2147483647;` +
+	`display:inline-flex;align-items:center;gap:6px;` +
 	`background:rgba(100,116,139,.95);color:#fff;text-decoration:none;` +
 	`font:600 12px/1 system-ui,-apple-system,sans-serif;padding:9px 13px;border-radius:18px;` +
-	`box-shadow:0 2px 8px rgba(0,0,0,.25)}#leoflow-ide-button:hover{background:rgba(71,85,105,.98)}</style>`
+	`box-shadow:0 2px 8px rgba(0,0,0,.25)}#leoflow-ide-button:hover{background:rgba(71,85,105,.98)}` +
+	`#leoflow-ide-button svg{display:block}</style>`
 
 // Server serves the embedded Airflow 3.2.1 SPA: static assets under a prefix and
 // an index.html fallback for client-side routes.

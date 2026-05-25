@@ -106,6 +106,15 @@ grep -q "monaco" "$HOME_DIR/ide.html" && grep -q "/api/v2/ide/tree" "$HOME_DIR/i
   || fail "/ide page missing expected markers"
 pass "/ide editor page served"
 
+# The IDE entry button is injected into the UI shell, with its inline SVG icon
+# (regression guard for #88 — the icon must not silently vanish).
+curl -s "${BASE}/" > "$HOME_DIR/home.html"
+grep -q "leoflow-ide-button" "$HOME_DIR/home.html" \
+  && grep -q 'href="/ide"' "$HOME_DIR/home.html" \
+  && grep -q "<svg" "$HOME_DIR/home.html" \
+  || fail "UI shell missing the IDE button or its icon"
+pass "IDE button with icon injected into the UI shell"
+
 # The file tree lists the seeded workspace file.
 curl -s "${AUTH[@]}" "${BASE}/api/v2/ide/tree" > "$HOME_DIR/tree.json"
 grep -q '"dag.py"' "$HOME_DIR/tree.json" || fail "tree missing dag.py\n$(cat "$HOME_DIR/tree.json")"

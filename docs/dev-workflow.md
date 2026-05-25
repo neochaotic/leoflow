@@ -25,7 +25,7 @@ leoflow lite dags/my_dag    # hot-reload at http://localhost:8088 (marked LITE)
 
 !!! tip "Edit in the browser"
     Lite includes a small built-in code editor (Python/YAML highlighting, file
-    tree) — click the **⌨ IDE** button in the UI, or open `/ide`. See
+    tree) — click the **IDE** button in the UI, or open `/ide`. See
     [The Lite web editor](lite-web-editor.md).
 
 ## Two executors

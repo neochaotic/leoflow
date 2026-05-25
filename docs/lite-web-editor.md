@@ -18,15 +18,15 @@ teams author DAGs in their own editor and ship them through the GitOps flow.
 
 ## Opening it
 
-When you run `leoflow lite <project>`, the served UI shows a small **⌨ IDE**
-button in the bottom-right corner. Click it — the editor opens in a **new tab**
-at `/ide`, scoped to your project workspace.
+When you run `leoflow lite <project>`, the served UI shows a small **IDE** button
+(a `< >` icon) in the bottom-right corner. Click it — the editor opens in a **new
+tab** at `/ide`, scoped to your project workspace.
 
 ![The Leoflow home with the LITE badge at top-center and the IDE button at bottom-right](assets/screenshots/lite-ide-button.png){ .home-hero__shot }
 
 <figure markdown>
   ![Close-up of the IDE button](assets/screenshots/lite-ide-button-zoom.png)
-  <figcaption>The <strong>⌨ IDE</strong> button, bottom-right of every screen.</figcaption>
+  <figcaption>The <strong>IDE</strong> button (a <code>&lt; &gt;</code> icon), bottom-right of every screen.</figcaption>
 </figure>
 
 You can also open it directly at `http://localhost:8088/ide` (or your Lite host

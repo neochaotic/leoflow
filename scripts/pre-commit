@@ -7,7 +7,9 @@
 set -euo pipefail
 
 # Coverage floor (percent). Keep in sync with .github/workflows/ci.yaml.
-COVERAGE_FLOOR=75
+# Raised 75 -> 78 to lock in the resilience/critical-path test coverage; the
+# filtered total sits at ~79%, leaving a small margin for platform variance.
+COVERAGE_FLOOR=78
 
 echo "[pre-commit] gofmt"
 unformatted=$(gofmt -l $(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true) 2>/dev/null || true)

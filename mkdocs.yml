@@ -128,6 +128,7 @@ nav:
       - HTTP API (Scalar): api-reference.html
       - Configuration: configuration.md
   - Guides:
+      - The leoflow dev workflow: dev-workflow.md
       - Variables & Connections: variables-connections.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md

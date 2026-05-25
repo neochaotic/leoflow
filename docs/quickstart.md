@@ -16,22 +16,22 @@ platforms (incl. WSL2) and verification.
 ## 2 · Prepare the machine
 ```bash
 leoflow doctor               # see your platform, deps, and achievable tier
-leoflow dev setup            # builds the base image, provisions the dev DB
+leoflow lite setup            # builds the base image, provisions the dev DB
 ```
 
 ## 3 · Create and run a DAG
 ```bash
 leoflow init dags/my_pipeline      # scaffold dag.py + leoflow.yaml
-leoflow dev dags/my_pipeline       # hot-reload; UI at http://localhost:8088 (marked DEV)
+leoflow lite dags/my_pipeline       # hot-reload; UI at http://localhost:8088 (marked LITE)
 ```
 Edit `dags/my_pipeline/dag.py`, save, and watch it reload. Trigger the DAG from
 the UI to see real pods run.
 
 !!! tip "Faster inner loop"
-    `leoflow dev --executor=subprocess dags/my_pipeline` skips the image build and
+    `leoflow lite --executor=subprocess dags/my_pipeline` skips the image build and
     runs tasks on the host venv (unsandboxed) — instant reloads.
 
 ## Next
 - [DAG authoring](dag-authoring.md) — the dialect, `leoflow.yaml`, overrides.
 - [CI/CD & deploy examples](deploy.md) — ship it.
-- [Operating modes](operating-modes.md) — Demo · Dev · Production.
+- [Editions](editions.md) — Lite (now) vs Production (coming).

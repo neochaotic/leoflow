@@ -53,21 +53,30 @@ picks the highest path available**; without Docker it uses subprocess. Run
    0024), so there is **no parser venv, no pip, and no Apache Airflow install** — it
    runs on the interpreter from step 1 directly.
 4. **Creates your workspace** (default `~/leoflow`, override with `--workspace`)
-   for your DAG projects.
+   for your DAG projects, and asks (on a terminal) for the workspace, executor
+   (`subprocess` for local use, `k8s` for a dev mini-cluster — changeable later),
+   and UI port. Run non-interactively (e.g. `curl | sh`) it uses sensible defaults.
+5. **Creates the Lite admin** (`admin@leoflow.local`) with a generated,
+   human-friendly password, **shown once** at the end (only its hash is stored).
+   Recover it with `sudo leoflow lite reset-password`.
+
+!!! warning "Lite is for trusted networks"
+    The admin password is short by design and there is no SSO/RBAC — run Lite on
+    **localhost, an internal network, or a VPN**, never exposed publicly. See
+    [Editions](editions.md).
 
 Everything Leoflow manages lives under `~/.leoflow`; your DAG source lives in the
 workspace — the two are kept separate.
 
 ```bash
-leoflow setup                      # bootstrap (prompts nothing; safe to re-run)
+leoflow setup                      # interactive on a terminal; defaults otherwise (safe to re-run)
 leoflow setup --dry-run            # show the plan, change nothing
 leoflow setup --workspace ~/work   # choose where your DAG projects live
-leoflow setup --skip-python-deps   # binaries + Python only (e.g. parsing in containers)
 ```
 
 !!! note "There is no scanned `dags/` folder"
     Unlike Airflow, Leoflow has no monolithic DAGs directory. Each DAG is its own
-    project (`dag.py` + `leoflow.yaml`); you point `leoflow dev <path>` at it. The
+    project (`dag.py` + `leoflow.yaml`); you point `leoflow lite <path>` at it. The
     workspace is just a convenient home for those projects.
 
 ## Platforms
@@ -80,7 +89,7 @@ not matter** — only the C library and CPU architecture do:
   **musl** (Alpine) are both supported; `setup` detects musl and fetches the
   matching CPython build.
 - **Windows:** use **WSL2** (it's a glibc Linux). Keep your project in the WSL
-  **native filesystem** (`~/...`), not under `/mnt/c` — `leoflow dev`'s hot-reload
+  **native filesystem** (`~/...`), not under `/mnt/c` — `leoflow lite`'s hot-reload
   uses inotify, which is unreliable on the Windows 9p mount. `leoflow doctor`
   warns when your project is under `/mnt`.
 
@@ -147,12 +156,12 @@ A source build is not stamped with an expiry, so it never expires.
 Everything is self-contained:
 
 ```bash
-rm -rf ~/.leoflow      # binaries, managed Python, parser venv, config
+rm -rf ~/.leoflow      # binaries, managed Python, parser sources, config
 rm -rf ~/leoflow       # your workspace (only if you want to remove your DAGs too)
 ```
 
 ## Next
 
 - [Quickstart](quickstart.md) — run your first DAG.
-- [The `leoflow dev` workflow](dev-workflow.md) — the hot-reload inner loop.
-- [Operating modes](operating-modes.md) — Demo · Dev · Production.
+- [The `leoflow lite` workflow](dev-workflow.md) — the hot-reload inner loop.
+- [Editions](editions.md) — Lite (now) vs Production (coming).

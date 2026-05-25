@@ -18,7 +18,7 @@ flowchart LR
 3. **`leoflow push dag.json`** — register the artifact with the control plane.
 
 !!! tip "The guardrails are your CI gate"
-    The same checks that warn you locally in `leoflow dev` fail the CI build, so a
+    The same checks that warn you locally in `leoflow lite` fail the CI build, so a
     bad `dag_id`/`task_id` binding or an unsupported operator never reaches prod.
 
 ## Prerequisites

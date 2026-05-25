@@ -6,7 +6,7 @@ covering every Leoflow task type and the common patterns. Each is compile-valid
 tasks). Run any of them with:
 
 ```bash
-leoflow dev examples/<name>      # hot-reload at http://localhost:8088, then Trigger
+leoflow lite examples/<name>      # hot-reload at http://localhost:8088, then Trigger
 ```
 
 ## The gallery
@@ -49,8 +49,8 @@ distinct actions (ADR 0020).
 But deregister alone is **not permanent while the source exists** — it gets
 re-registered:
 
-- **Dev (`leoflow dev`):** the watcher re-registers the DAG on the next reload.
-  To remove it for good, **delete the DAG's file** (or stop/point `leoflow dev`
+- **Dev (`leoflow lite`):** the watcher re-registers the DAG on the next reload.
+  To remove it for good, **delete the DAG's file** (or stop/point `leoflow lite`
   elsewhere).
 - **Production (CI deploy):** the next deploy that still includes the DAG
   re-registers it as a new version. To remove it for good, **drop it from the

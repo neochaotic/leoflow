@@ -1,17 +1,27 @@
-# The `leoflow dev` workflow
+# The `leoflow lite` workflow
 
-`leoflow dev` runs the whole stack locally — control plane, the embedded Airflow
-UI, and a real executor — against an **isolated dev database and venv**, and
-**hot-reloads on every save**. The UI is served on a dev port (default
-**8088**), marked **DEV**, with **no login**, so it never collides with a demo or
+`leoflow lite` runs the whole stack locally — control plane, the embedded Airflow
+UI, and a real executor — against an **isolated local database**, and
+**hot-reloads on every save**. The UI is served on a Lite port (default
+**8088**), marked with the **LITE** badge, so it never collides with a demo or
 production instance.
 
+This page is the **from-source** loop for working on Leoflow itself:
+
 ```bash
-make dev-install            # put leoflow + server + agent on your PATH
-leoflow dev setup           # check/provision dev dependencies
+make dev-install            # build + put leoflow / server / agent on your PATH
+leoflow lite setup          # provision local dev deps (base image, local DB)
 leoflow init dags/my_dag    # scaffold a project
-leoflow dev dags/my_dag     # hot-reload at http://localhost:8088 (marked DEV)
+leoflow lite dags/my_dag    # hot-reload at http://localhost:8088 (marked LITE)
 ```
+
+!!! note "Login"
+    If you ran [`leoflow setup`](installation.md#what-leoflow-setup-does) (the
+    end-user installer does), Lite enforces a real **admin login** — recover it
+    with `sudo leoflow lite reset-password`. A bare source checkout without that
+    config falls back to no-auth (loopback only) with a warning, for a quick loop.
+
+(End users install Lite with one command — see [Installation](installation.md).)
 
 ## Two executors
 
@@ -115,7 +125,7 @@ Fix the file and save — the watcher registers the next good version and the ba
     works in any environment. In **production** you rarely see it: DAGs are
     immutable artifacts and a broken DAG fails `leoflow compile` in **CI** before it
     is ever deployed — CI is the safety net there. In **dev**, where you edit live,
-    the `leoflow dev` watcher publishes the error so you catch it in the UI, not
+    the `leoflow lite` watcher publishes the error so you catch it in the UI, not
     only the terminal.
 
 ## Where to look when something's wrong

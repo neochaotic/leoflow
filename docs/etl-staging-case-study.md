@@ -1,7 +1,7 @@
 # Case study: a real 1 GB ETL on the staging volume
 
 A worked, **measured** end-to-end pipeline: generate ~1 GB, process it with DuckDB,
-and load the result into an external Postgres — all on `leoflow dev` running real
+and load the result into an external Postgres — all on `leoflow lite` running real
 pods on a single-node k3d cluster (a "pseudo-cluster" on a laptop). Every number
 below was measured on that setup.
 

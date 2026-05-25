@@ -107,7 +107,7 @@ task override (tasks.<id>)  >  DAG default (defaults)  >  platform default (serv
 
 ```mermaid
 flowchart LR
-  I[leoflow init] --> D[leoflow dev<br/>hot-reload loop]
+  I[leoflow init] --> D[leoflow lite<br/>hot-reload loop]
   D -->|save & iterate| D
   D --> G[git push]
   G --> CI[CI: leoflow compile --build --push]
@@ -119,8 +119,8 @@ flowchart LR
 
 ```bash
 leoflow init dags/my_pipeline          # scaffold dag.py + leoflow.yaml
-leoflow dev dags/my_pipeline           # cluster-mode: real pods on an isolated k3d
-# or: leoflow dev --executor=subprocess dags/my_pipeline   (fastest, host venv)
+leoflow lite dags/my_pipeline           # cluster-mode: real pods on an isolated k3d
+# or: leoflow lite --executor=subprocess dags/my_pipeline   (fastest, host venv)
 ```
 
 Open <http://localhost:8088> — the UI is marked **DEV** (no login). Edit

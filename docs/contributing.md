@@ -48,14 +48,14 @@ make dev-up       # start Postgres + Redis (Docker) and apply migrations
 make lint test    # the gates you must pass before pushing
 ```
 
-For a full author→run loop without Kubernetes, `leoflow dev` runs an isolated,
+For a full author→run loop without Kubernetes, `leoflow lite` runs an isolated,
 hot-reloading stack marked **DEV** (see [Operating modes](operating-modes.md)):
 
 ```bash
 make dev-install            # put leoflow + server + agent on your PATH
-leoflow dev setup           # check/provision dev dependencies
+leoflow lite setup           # check/provision dev dependencies
 leoflow init dags/my_dag    # scaffold a project
-leoflow dev dags/my_dag     # hot-reload at http://localhost:8088 (marked DEV)
+leoflow lite dags/my_dag     # hot-reload at http://localhost:8088 (marked DEV)
 ```
 
 ## 3. The quality bar (non-negotiable)

@@ -3,7 +3,7 @@
 Leoflow runs in three modes. **The product proves itself in Dev first**;
 Production is a near-term goal, not yet for testing.
 
-| | **Demo** | **Dev** (`leoflow dev`) | **Production** *(coming soon)* |
+| | **Demo** | **Dev** (`leoflow lite`) | **Production** *(coming soon)* |
 |---|---|---|---|
 | Purpose | Production-like reference (UI-compatibility, showcasing) | Author + iterate on DAGs locally | Real workloads |
 | Auth | JWT login (real) | **Disabled** (loopback-only, dev bypass) | JWT + RBAC, TLS (#58), workload identity (#56) |
@@ -19,7 +19,7 @@ The familiar, production-like environment for validating the Airflow-UI
 compatibility and showing the product. It serves frozen artifacts — to change a
 DAG you `leoflow compile` + `leoflow push`. Auth is on; log in normally.
 
-## Dev — `leoflow dev`
+## Dev — `leoflow lite`
 The authoring loop, fully **isolated** from Demo (own DB, own cluster, own ports)
 so there is no split brain. Edit `dags/<project>/dag.py` or `leoflow.yaml`, save,
 and it hot-reloads at <http://localhost:8088> (marked DEV, no login).
@@ -27,10 +27,10 @@ and it hot-reloads at <http://localhost:8088> (marked DEV, no login).
 ![Leoflow Dev — home dashboard, marked DEV](assets/screenshots/dev-graph.png)
 
 
-- `leoflow dev setup` — check + provision host deps (Docker/k3d/kubectl/python3),
+- `leoflow lite setup` — check + provision host deps (Docker/k3d/kubectl/python3),
   the base image, and the `leoflow_dev` database.
-- `leoflow dev dags/hello` — run a project (cluster-mode: real pods).
-- `leoflow dev --executor=subprocess dags/hello` — fast host loop (no image build).
+- `leoflow lite dags/hello` — run a project (cluster-mode: real pods).
+- `leoflow lite --executor=subprocess dags/hello` — fast host loop (no image build).
 - `leoflow db migrate|reset` — manage the dev database (Airflow-style).
 
 Dev runs user code unsandboxed (subprocess) or in throwaway pods (k3d); it is for

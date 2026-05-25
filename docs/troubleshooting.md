@@ -5,18 +5,18 @@
 | Symptom | Cause / fix |
 |---|---|
 | `command not found: leoflow` | Not on PATH — `go install …/cmd/leoflow@latest` and add `$(go env GOPATH)/bin` to PATH. |
-| `docker compose up … no such file` | Run `leoflow dev` from the leoflow source tree, or use `--no-up` with deps already running. |
+| `docker compose up … no such file` | Run `leoflow lite` from the leoflow source tree, or use `--no-up` with deps already running. |
 | Task pod `ErrImagePull` | The DAG's image isn't in the cluster — rebuild + import (cluster-mode rebuilds on save; for a manual push, `leoflow compile --build --push`). |
 | Run stuck at `queued` (subprocess) | The agent must reach the control plane — dev uses `127.0.0.1:<grpc>`; the executor launches async and the agent reports state over gRPC. |
 | `Invalid credentials` in the UI | Type the password manually (autofill may add a trailing space; usernames are trimmed, passwords are not). |
-| No `DEV` marker on `localhost:8080` | That's the **Demo** (production-like) — the DEV marker is on `leoflow dev` (`:8088`). See [operating modes](operating-modes.md). |
-| `setup incomplete: dev database` | Postgres isn't up — start deps (`leoflow dev setup`) or `--no-up` against a running Postgres. |
+| No `DEV` marker on `localhost:8080` | That's the **Demo** (production-like) — the DEV marker is on `leoflow lite` (`:8088`). See [operating modes](operating-modes.md). |
+| `setup incomplete: dev database` | Postgres isn't up — start deps (`leoflow lite setup`) or `--no-up` against a running Postgres. |
 
 ## Logs
 Task logs stream from the agent over gRPC to the control plane's log sink and are
 served at `/api/v2/dags/<dag>/dagRuns/<run>/taskInstances/<task>/logs/<try>`
 (the UI's drill-down). The sink directory is `LEOFLOW_LOGS_DIR` (must be writable;
-`leoflow dev` points it at a temp dir).
+`leoflow lite` points it at a temp dir).
 
 ## Observability
 - **Metrics:** Prometheus at `:9090/metrics` (scheduler, dispatch, inline runner, undispatchable counters).

@@ -42,4 +42,4 @@ See [DAG authoring](dag-authoring.md) for the override layers.
 | `LEOFLOW_LOGS_DIR` | `/var/log/leoflow` | Task-log sink directory. |
 | `LEOFLOW_OBSERVABILITY_*` | — | OTel endpoint, log level/format. |
 
-`leoflow dev` sets the dev-appropriate values automatically (isolated DB, port 8088, no-auth on loopback).
+`leoflow lite` sets the dev-appropriate values automatically (isolated DB, port 8088, no-auth on loopback).

@@ -21,7 +21,7 @@ the vocabulary, the pod-per-task model) and cuts out the part that hurts: the
 - The **TaskFlow** authoring you already know. ([DAG authoring](dag-authoring.md))
 
 ## What you gain
-- A **real dev loop** (`leoflow dev` — isolated cluster, hot reload). ([Operating modes](operating-modes.md))
+- A **real dev loop** (`leoflow lite` — isolated cluster, hot reload). ([Operating modes](operating-modes.md))
 - **GitOps**: every DAG is a versioned, immutable artifact built in CI. ([Deploy](deploy.md))
 - A control plane you can actually **operate** — Go, observable, no GIL.
 

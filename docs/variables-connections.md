@@ -62,4 +62,4 @@ def use_secrets():
 
 Scope is global (per tenant). Delivery requires a secure agent channel (TLS, #58)
 or, in dev, the explicit `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true` (set by
-`leoflow dev`). See [ADR 0021](adr/0021-exposing-variables-connections-to-pods.md).
+`leoflow lite`). See [ADR 0021](adr/0021-exposing-variables-connections-to-pods.md).

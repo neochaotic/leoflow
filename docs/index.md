@@ -84,7 +84,7 @@ SDK). They compile to one immutable artifact — `dag.json` + a container image.
 
 - :material-rocket-launch-outline: **A real dev loop**
 
-    `leoflow dev` — isolated cluster, hot reload, marked DEV. Edit, save, see it
+    `leoflow lite` — isolated cluster, hot reload, marked DEV. Edit, save, see it
     run. [Operating modes →](operating-modes.md)
 
 - :material-api: **Airflow-compatible API & UI**
@@ -96,9 +96,9 @@ SDK). They compile to one immutable artifact — `dag.json` + a container image.
 ## The dev loop
 
 ```bash
-leoflow dev setup            # check + provision host deps (dev-only)
+leoflow lite setup            # check + provision host deps (dev-only)
 leoflow init dags/my_dag     # scaffold a project
-leoflow dev dags/my_dag      # hot-reload at http://localhost:8088 (marked DEV)
+leoflow lite dags/my_dag      # hot-reload at http://localhost:8088 (marked DEV)
 ```
 
 The product **proves itself in Dev first**; **Production** is a near-term goal

@@ -242,13 +242,15 @@ func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runI
 		return cleared, err
 	}
 	if resetDagRun {
-		if _, err := r.q.UpdateDagRunState(ctx, queries.UpdateDagRunStateParams{
-			ID:        run.ID,
-			State:     queries.DagRunStateQueued,
-			StartedAt: pgtype.Timestamptz{},
-			EndedAt:   pgtype.Timestamptz{},
+		// Re-bind the run to the DAG's current version so a clear after a code/yaml
+		// fix re-runs against the newest image + config (ADR 0020). In dev the
+		// current version is the last hot-reload; in prod, the last deploy. When the
+		// version is unchanged this is equivalent to a plain state reset.
+		if err := r.q.ResetDagRunToVersion(ctx, queries.ResetDagRunToVersionParams{
+			ID:           run.ID,
+			DagVersionID: dag.CurrentVersionID,
 		}); err != nil {
-			return cleared, fmt.Errorf("resetting dag run: %w", err)
+			return cleared, fmt.Errorf("re-binding dag run to current version: %w", err)
 		}
 	}
 	return cleared, nil

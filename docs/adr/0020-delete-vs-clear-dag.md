@@ -41,3 +41,28 @@ Split the two operations Airflow conflates:
   flag), so accidental artifact loss is unlikely.
 - A future custom UI (ADR 0018) can present "Clear" and "Deregister" as two
   distinct, clearly-labeled actions.
+
+## Amendment (2026-05-24): clearing a task re-binds the run to the current version
+
+Clearing **task instances** (re-run, distinct from "clear history" above) is the
+**single mutability exception** to the otherwise-immutable run↔version pin
+(ADR 0003: DAGs are immutable artifacts). Decided by the project founder.
+
+- A DAG run is created pinned to a `dag_version`; everything **within a version**
+  stays reproducible/idempotent (same `dag.json` + same image).
+- **`clear` (with reset) re-binds the run to the DAG's current registered
+  version**, so a re-run after a code/yaml fix executes against the **newest
+  image + config** — not the version the run was pinned to. The update source
+  differs by environment but the rule is identical: in **dev** the current version
+  is the **last hot-reload** (`leoflow dev` registers one per save); in
+  **production** it is the **last deploy** (CI push). When the version is
+  unchanged, clear is a plain state reset.
+- This matches Airflow, whose clear re-runs against the current DAG code, and is
+  what makes "fix the DAG, clear the failed task, watch it pass" work.
+- **Drift guard:** if the current version removed or renamed a task that is being
+  cleared, that task no longer exists in the spec — the re-run simply has nothing
+  to schedule for it (no crash). Clearing tasks that still exist is unaffected.
+- Implemented as `ResetDagRunToVersion` (sets the run's `dag_version_id` to the
+  DAG's `current_version_id` on reset). Tasks not cleared keep their results; the
+  per-run staging volume is re-attached by its deterministic name (ADR 0022), so a
+  clear+re-run reuses upstream staged data.

@@ -653,6 +653,26 @@ func (q *Queries) ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgty
 	return result.RowsAffected(), nil
 }
 
+const resetDagRunToVersion = `-- name: ResetDagRunToVersion :exec
+UPDATE dag_runs
+SET state = 'queued', started_at = NULL, ended_at = NULL, dag_version_id = $2
+WHERE id = $1
+`
+
+type ResetDagRunToVersionParams struct {
+	ID           pgtype.UUID `json:"id"`
+	DagVersionID pgtype.UUID `json:"dag_version_id"`
+}
+
+// Clear re-binds the run to the DAG's current registered version (ADR 0020): a
+// re-run after a code/yaml fix picks up the newest image and config — in dev that
+// is the last hot-reload, in prod the last deploy — while everything within a
+// version stays reproducible.
+func (q *Queries) ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVersionParams) error {
+	_, err := q.db.Exec(ctx, resetDagRunToVersion, arg.ID, arg.DagVersionID)
+	return err
+}
+
 const resetFailedTaskInstance = `-- name: ResetFailedTaskInstance :execrows
 UPDATE task_instances
 SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1

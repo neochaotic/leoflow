@@ -1025,3 +1025,63 @@ func TestStagingVolumesIntegration(t *testing.T) {
 		}
 	}
 }
+
+// TestClearRebindsRunToCurrentVersion guards the single mutability rule (ADR 0020):
+// clear re-binds the run to the DAG's current version, so a re-run after a
+// code/yaml fix picks up the newest version (the last hot-reload in dev, the last
+// deploy in prod) instead of the version the run was pinned to.
+func TestClearRebindsRunToCurrentVersion(t *testing.T) {
+	repo, store, ctx := openRepo(t)
+	dagID := fmt.Sprintf("rebind_%d", time.Now().UnixNano())
+
+	// v1: a single task; create a run pinned to it.
+	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "extract", Type: domain.TaskTypePython}})
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateFailed, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	// v2: a new version with an extra task (simulates a code/yaml fix + re-deploy).
+	spec2 := domain.DAGSpec{
+		SchemaVersion: "1.0", DagID: dagID, DagVersion: "v2", Image: "img:v2",
+		Tasks: []domain.TaskSpec{
+			{TaskID: "extract", Type: domain.TaskTypePython},
+			{TaskID: "load", Type: domain.TaskTypePython, DependsOn: []string{"extract"}},
+		},
+	}
+	hash2, herr := spec2.CanonicalHash()
+	if herr != nil {
+		t.Fatal(herr)
+	}
+	if created, rerr := repo.RegisterDagVersion(ctx, "default", spec2, hash2); rerr != nil || !created {
+		t.Fatalf("register v2: created=%v err=%v", created, rerr)
+	}
+
+	// Clear with reset re-binds the run to the current version (v2).
+	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", []string{"extract"}, false, true); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+
+	// The (now queued) run resolves to v2's spec — proving the re-bind.
+	active, err := store.ActiveRuns(ctx)
+	if err != nil {
+		t.Fatalf("active runs: %v", err)
+	}
+	var tasks []string
+	for _, r := range active {
+		if r.DagID == dagID && r.RunID != "" {
+			for _, ts := range r.Tasks {
+				tasks = append(tasks, ts.TaskID)
+			}
+		}
+	}
+	hasLoad := false
+	for _, id := range tasks {
+		if id == "load" {
+			hasLoad = true
+		}
+	}
+	if !hasLoad {
+		t.Errorf("after clear the run should re-bind to v2 (tasks include 'load'), got %v", tasks)
+	}
+}

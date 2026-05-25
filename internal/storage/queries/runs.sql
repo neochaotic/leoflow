@@ -26,6 +26,15 @@ SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
 RETURNING *;
 
+-- name: ResetDagRunToVersion :exec
+-- Clear re-binds the run to the DAG's current registered version (ADR 0020): a
+-- re-run after a code/yaml fix picks up the newest image and config — in dev that
+-- is the last hot-reload, in prod the last deploy — while everything within a
+-- version stays reproducible.
+UPDATE dag_runs
+SET state = 'queued', started_at = NULL, ended_at = NULL, dag_version_id = $2
+WHERE id = $1;
+
 -- name: StampDagRunState :exec
 -- Transitions a run's state and stamps the run's own timestamps so the UI can
 -- show its duration: started_at on first entry into 'running', ended_at on a

@@ -240,11 +240,13 @@ func (s *Scheduler) createDueRuns(ctx context.Context) error {
 			continue
 		}
 		if err := s.store.CreateScheduledRun(ctx, d.DagID, logical); err != nil {
-			return fmt.Errorf("creating scheduled run for %s: %w", d.DagID, err)
+			// Isolate per DAG: one DAG's creation failure must not block run
+			// creation for every other scheduled DAG this tick.
+			s.logger.Error("creating scheduled run", "dag", d.DagID, "error", err)
+			s.record("create_run_error")
+			continue
 		}
-		if s.recorder != nil {
-			s.recorder.RecordSchedulerDecision("create_run")
-		}
+		s.record("create_run")
 	}
 	return nil
 }

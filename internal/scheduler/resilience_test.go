@@ -22,6 +22,7 @@ type flakyStore struct {
 	scheduled []ScheduledDAG
 
 	materializeErrOn map[string]bool // runIDs whose MaterializeTasks errors
+	createErrOn      map[string]bool // dagIDs whose CreateScheduledRun errors
 	activeRunsPanics bool
 	activeRunsBlocks bool // block until ctx is canceled (hung-query simulation)
 
@@ -34,6 +35,7 @@ type flakyStore struct {
 func newFlakyStore() *flakyStore {
 	return &flakyStore{
 		materializeErrOn: map[string]bool{},
+		createErrOn:      map[string]bool{},
 		runStates:        map[string]domain.DagRunState{},
 	}
 }
@@ -56,6 +58,9 @@ func (f *flakyStore) ScheduledDAGs(context.Context) ([]ScheduledDAG, error) {
 func (f *flakyStore) CreateScheduledRun(_ context.Context, dagID string, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.createErrOn[dagID] {
+		return errors.New("poison: create failed for " + dagID)
+	}
 	f.createdRuns = append(f.createdRuns, dagID)
 	return nil
 }
@@ -164,6 +169,31 @@ func TestStepIsolatesErroringRun(t *testing.T) {
 	}
 	if rec.count("run_error") != 1 {
 		t.Errorf("the per-run error should be metered once, got %d", rec.count("run_error"))
+	}
+}
+
+// TestCreateDueRunsIsolatesFailingDag asserts one DAG's run-creation failure
+// does not block run creation for the other due DAGs (no head-of-line blocking).
+func TestCreateDueRunsIsolatesFailingDag(t *testing.T) {
+	last := time.Now().UTC().Add(-2 * time.Hour)
+	store := newFlakyStore()
+	store.scheduled = []ScheduledDAG{
+		{DagID: "bad", Schedule: "@hourly", LastLogical: &last},
+		{DagID: "good", Schedule: "@hourly", LastLogical: &last},
+	}
+	store.createErrOn["bad"] = true
+	rec := &capturingRecorder{}
+	s := newResilienceScheduler(store)
+	s.SetRecorder(rec)
+
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatalf("Step should not surface a per-DAG create error, got %v", err)
+	}
+	if len(store.createdRuns) != 1 || store.createdRuns[0] != "good" {
+		t.Errorf("the good DAG should get a run despite the bad one failing; created=%v", store.createdRuns)
+	}
+	if rec.count("create_run_error") != 1 {
+		t.Errorf("the failed creation should be metered once, got %d", rec.count("create_run_error"))
 	}
 }
 

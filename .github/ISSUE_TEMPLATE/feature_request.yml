@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest an idea or enhancement.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For open-ended ideas or design questions, consider
+        [Discussions](https://github.com/neochaotic/leoflow/discussions) instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do? What is missing or painful today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: adr
+    attributes:
+      label: Does this likely need an ADR?
+      description: >
+        Significant or architectural changes require a draft ADR under `docs/adr/`
+        with status "Proposed" (see CONTRIBUTING.md). Unsure is fine.
+      options:
+        - "No — small / local change"
+        - "Unsure"
+        - "Yes — architectural or cross-cutting"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and discussions for duplicates.
+          required: true

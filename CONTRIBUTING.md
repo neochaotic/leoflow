@@ -80,30 +80,32 @@ If you have a contribution in these areas, please open a discussion issue first.
 
 ```bash
 # Clone the repo
-git clone https://github.com/leoflow/leoflow.git
+git clone https://github.com/neochaotic/leoflow.git
 cd leoflow
-
-# Copy agent template (gitignored)
-cp docs/agent-templates/CLAUDE.md.template ./CLAUDE.md  # optional, for Claude Code users
-
-# Install dev dependencies
-make setup
-
-# Start local infrastructure (Postgres + Redis)
-docker compose -f docker-compose.dev.yaml up -d
-
-# Run migrations
-make migrate-up
-
-# Run tests
-make test
-
-# Run linter
-make lint
-
-# Build all binaries
-make build
 ```
+
+### See it run first (one command)
+
+```bash
+docker compose --profile demo up --build
+# open http://localhost:8080 — log in as admin@leoflow.local / admin
+# stop with: docker compose --profile demo down   (add -v to wipe data)
+```
+
+### Set up for development
+
+```bash
+# Optional, for Claude Code users (the file is gitignored):
+cp docs/agent-templates/CLAUDE.md.template ./CLAUDE.md
+
+make setup        # Go tools, Python parser/runtime, pre-commit hook
+make build        # build bin/leoflow, bin/leoflow-server, bin/leoflow-agent
+make dev-up       # start Postgres + Redis (Docker) and apply migrations
+make lint test    # the quality gates you must pass before pushing
+```
+
+For an end-to-end author→run loop without Kubernetes, use `leoflow dev`
+(see [`docs/operating-modes.md`](docs/operating-modes.md)).
 
 ## Project Layout
 

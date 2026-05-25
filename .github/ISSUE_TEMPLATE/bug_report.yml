@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a defect so we can reproduce and fix it.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please search
+        [existing issues](https://github.com/neochaotic/leoflow/issues) first to
+        avoid duplicates.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug — what you expected vs. what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `docker compose --profile demo up --build`
+        2. Open http://localhost:8080 and ...
+        3. See error ...
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How are you running Leoflow?
+      options:
+        - Demo (docker compose --profile demo)
+        - Dev (leoflow dev)
+        - Local server (make dev-up + bin/leoflow-server)
+        - Other (describe in Environment)
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: "OS, `go version`, Docker / k3d versions, and the Leoflow commit or tag."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I checked the relevant ADRs under `docs/adr/` (behavior may be by design).
+          required: false

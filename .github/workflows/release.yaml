@@ -50,9 +50,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Bake the pre-alpha expiry: build time + 90 days (UTC, RFC3339) ──
-      # internal/version reads this via the expiresAt ldflag; an empty value
-      # would mean "no expiry", so this step must run before GoReleaser.
+      # internal/version reads this via the expiresAt ldflag. Only pre-alpha tags
+      # (v*-prealpha.*) carry an expiry; for stable tags this step is skipped, so
+      # env.EXPIRES_AT stays empty and GoReleaser bakes an empty value = no expiry.
+      # Must run before GoReleaser.
       - name: Compute alpha expiry
+        if: contains(github.ref_name, '-prealpha.')
         run: echo "EXPIRES_AT=$(date -u -d '+90 days' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
       # ── GoReleaser handles the build, packaging, signing, and release ──

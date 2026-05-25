@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,43 +100,59 @@ func TestRunSetupDryRun(t *testing.T) {
 	}
 }
 
-func TestWriteParserConfig(t *testing.T) {
-	t.Run("writes parser_cmd when config is absent", func(t *testing.T) {
-		home := t.TempDir()
-		wrote, err := writeParserConfig(home, "/v/bin/python -m leoflow_parser")
-		if err != nil {
-			t.Fatalf("err = %v", err)
+func TestWriteLiteConfig(t *testing.T) {
+	home := t.TempDir()
+	lc := liteSettings{Workspace: "/ws", Executor: "subprocess", AdminEmail: "admin@leoflow.local", Port: 8088}
+	if err := writeLiteConfig(home, "env PYTHONPATH=/p python -m leoflow_parser", lc, "$2a$12$abcHASH"); err != nil {
+		t.Fatalf("writeLiteConfig err = %v", err)
+	}
+	data, rerr := os.ReadFile(filepath.Join(home, "config.yaml"))
+	if rerr != nil {
+		t.Fatalf("reading config: %v", rerr)
+	}
+	s := string(data)
+	for _, want := range []string{
+		"parser_cmd:", "leoflow_parser", "workspace: \"/ws\"", "lite_executor: \"subprocess\"",
+		"lite_port: 8088", "admin_email: \"admin@leoflow.local\"", "admin_password_hash:",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("config missing %q\n---\n%s", want, s)
 		}
-		if !wrote {
-			t.Fatal("wrote = false, want true on a fresh config")
-		}
-		data, rerr := os.ReadFile(filepath.Join(home, "config.yaml"))
-		if rerr != nil {
-			t.Fatalf("reading config: %v", rerr)
-		}
-		if !strings.Contains(string(data), "parser_cmd:") ||
-			!strings.Contains(string(data), "leoflow_parser") {
-			t.Errorf("config = %q, want parser_cmd entry", data)
+	}
+	// Only the hash is stored — never a plaintext password field.
+	if strings.Contains(s, "password:") {
+		t.Errorf("config must not contain a plaintext password field:\n%s", s)
+	}
+	if fi, _ := os.Stat(filepath.Join(home, "config.yaml")); fi != nil && fi.Mode().Perm() != 0o600 {
+		t.Errorf("config.yaml mode = %v, want 0600", fi.Mode().Perm())
+	}
+}
+
+func TestGatherLiteConfig(t *testing.T) {
+	def := liteSettings{Workspace: "/def/ws", Executor: "subprocess", AdminEmail: "admin@leoflow.local", Port: 8088}
+
+	t.Run("non-interactive returns defaults verbatim", func(t *testing.T) {
+		got := gatherLiteConfig(false, bufio.NewReader(strings.NewReader("")), io.Discard, def)
+		if got != def {
+			t.Errorf("got %+v, want defaults %+v", got, def)
 		}
 	})
 
-	t.Run("leaves an existing config untouched", func(t *testing.T) {
-		home := t.TempDir()
-		path := filepath.Join(home, "config.yaml")
-		original := "server_url: http://example\n"
-		if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
-			t.Fatal(err)
+	t.Run("interactive parses answers; blank keeps default; invalid executor re-asks", func(t *testing.T) {
+		// workspace, executor(invalid then valid), port, admin email
+		in := bufio.NewReader(strings.NewReader("/my/ws\nbogus\nk8s\n9000\nme@x.io\n"))
+		got := gatherLiteConfig(true, in, io.Discard, def)
+		want := liteSettings{Workspace: "/my/ws", Executor: "k8s", AdminEmail: "me@x.io", Port: 9000}
+		if got != want {
+			t.Errorf("got %+v, want %+v", got, want)
 		}
-		wrote, err := writeParserConfig(home, "/v/bin/python -m leoflow_parser")
-		if err != nil {
-			t.Fatalf("err = %v", err)
-		}
-		if wrote {
-			t.Error("wrote = true, want false (must not clobber existing config)")
-		}
-		data, _ := os.ReadFile(path)
-		if string(data) != original {
-			t.Errorf("config changed to %q, want it preserved", data)
+	})
+
+	t.Run("interactive with all-blank keeps defaults", func(t *testing.T) {
+		in := bufio.NewReader(strings.NewReader("\n\n\n\n"))
+		got := gatherLiteConfig(true, in, io.Discard, def)
+		if got != def {
+			t.Errorf("got %+v, want defaults %+v", got, def)
 		}
 	})
 }

@@ -38,6 +38,19 @@ type Config struct {
 	Registry string `mapstructure:"registry"`
 	// ParserCmd is the command used to invoke the Python parser from compile.
 	ParserCmd string `mapstructure:"parser_cmd"`
+
+	// Lite-edition settings written by `leoflow setup` and read by `leoflow lite`.
+	// Workspace is the default directory holding the user's DAG projects.
+	Workspace string `mapstructure:"workspace"`
+	// LiteExecutor is the chosen executor: "subprocess" (local) or "k8s" (mini-cluster).
+	LiteExecutor string `mapstructure:"lite_executor"`
+	// LitePort is the UI/API port for the Lite control plane.
+	LitePort int `mapstructure:"lite_port"`
+	// AdminEmail is the Lite admin login created at bootstrap.
+	AdminEmail string `mapstructure:"admin_email"`
+	// AdminPasswordHash is the bcrypt hash of the generated admin password; the
+	// plaintext is shown once at setup and never stored (Lite only).
+	AdminPasswordHash string `mapstructure:"admin_password_hash"`
 }
 
 // DefaultConfigFile returns the default configuration file path,

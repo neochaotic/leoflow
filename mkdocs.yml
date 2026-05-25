@@ -129,6 +129,7 @@ nav:
       - Configuration: configuration.md
   - Guides:
       - The leoflow dev workflow: dev-workflow.md
+      - "Case study: 1 GB ETL on staging": etl-staging-case-study.md
       - Variables & Connections: variables-connections.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md

@@ -1,0 +1,13 @@
+schema_version: "1.0"
+dag_id: etl_duckdb
+description: Real ETL — generate ~1GB, process with DuckDB (out-of-core), load back to disk, all staged on the per-run /staging volume.
+owner: data-eng
+tags:
+  - etl
+python_version: "3.11"
+dependencies:
+  - duckdb==1.4.4
+  - psycopg2-binary==2.9.10
+staging:
+  enabled: true
+  size: 5Gi

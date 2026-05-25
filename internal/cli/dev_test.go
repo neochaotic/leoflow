@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
@@ -281,6 +282,35 @@ func TestDevDockerfile(t *testing.T) {
 	if strings.Index(withDeps, "pip install") > strings.Index(withDeps, "COPY") {
 		t.Errorf("pip install must come before COPY for layer caching:\n%s", withDeps)
 	}
+}
+
+func TestMergeLiteDefaults(t *testing.T) {
+	cfg := &config.Config{LiteExecutor: "subprocess", LitePort: 9091}
+
+	t.Run("applies config when flags unset", func(t *testing.T) {
+		o := devOptions{executor: "k8s", port: 8088}
+		mergeLiteDefaults(&o, cfg, false, false)
+		if o.executor != "subprocess" || o.port != 9091 {
+			t.Errorf("got executor=%q port=%d, want subprocess/9091", o.executor, o.port)
+		}
+	})
+
+	t.Run("command-line flags win", func(t *testing.T) {
+		o := devOptions{executor: "k8s", port: 8088}
+		mergeLiteDefaults(&o, cfg, true, true)
+		if o.executor != "k8s" || o.port != 8088 {
+			t.Errorf("got executor=%q port=%d, want the flag values kept", o.executor, o.port)
+		}
+	})
+
+	t.Run("nil/empty config is a no-op", func(t *testing.T) {
+		o := devOptions{executor: "k8s", port: 8088}
+		mergeLiteDefaults(&o, nil, false, false)
+		mergeLiteDefaults(&o, &config.Config{}, false, false)
+		if o.executor != "k8s" || o.port != 8088 {
+			t.Errorf("got executor=%q port=%d, want unchanged", o.executor, o.port)
+		}
+	})
 }
 
 func TestServerEnvBuilders(t *testing.T) {

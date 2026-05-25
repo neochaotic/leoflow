@@ -240,6 +240,10 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if verr := cfg.Validate(); verr != nil {
 		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
 	}
+	// Apply the executor/port chosen in `leoflow setup` (stored in config) as the
+	// defaults, unless overridden on the command line. This honors the wizard's
+	// choice while keeping --executor/--port changeable per run.
+	applyLiteConfigDefaults(cmd, &o)
 	if o.port == 0 {
 		o.port = devDefaultPort
 	}
@@ -622,6 +626,30 @@ func sharedServerEnv(port int, adminHash, adminEmail string) []string {
 	}
 	// No admin configured: dev no-auth fallback (runDev warns; loopback-bound).
 	return append(env, "LEOFLOW_AUTH_DEV_NO_AUTH=true")
+}
+
+// applyLiteConfigDefaults loads ~/.leoflow/config.yaml and applies the recorded
+// executor/port to o, unless those flags were set on the command line.
+func applyLiteConfigDefaults(cmd *cobra.Command, o *devOptions) {
+	c, err := config.Load(configFilePath(cmd), nil)
+	if err != nil {
+		return
+	}
+	mergeLiteDefaults(o, c, cmd.Flags().Changed("executor"), cmd.Flags().Changed("port"))
+}
+
+// mergeLiteDefaults applies the executor/port from config (written by
+// `leoflow setup`) when the corresponding flag was not set on the command line.
+func mergeLiteDefaults(o *devOptions, c *config.Config, executorSet, portSet bool) {
+	if c == nil {
+		return
+	}
+	if !executorSet && c.LiteExecutor != "" {
+		o.executor = c.LiteExecutor
+	}
+	if !portSet && c.LitePort != 0 {
+		o.port = c.LitePort
+	}
 }
 
 // resolveLiteAdmin loads the configured admin credential and warns when none is

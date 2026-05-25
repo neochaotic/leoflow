@@ -1,0 +1,88 @@
+name: Prune pre-alpha releases
+
+# Lifecycle cleanup for #89: pre-alpha builds expire locally (the in-binary
+# expiresAt gate), but their GitHub releases linger as downloadable. This prunes
+# stale pre-alpha releases (and their tags) so expired artifacts do not pile up.
+#
+# Safety:
+#   - Only touches PRE-RELEASES whose tag matches *-prealpha.* — never stable.
+#   - Always keeps the newest KEEP releases, regardless of age.
+#   - Only deletes the rest when older than MAX_AGE_DAYS.
+#   - Manual runs default to dry-run (report only); the weekly cron prunes for real.
+
+on:
+  schedule:
+    - cron: "17 4 * * 1" # Mondays 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only; do not delete"
+        type: boolean
+        default: true
+      keep:
+        description: "Always keep the newest N pre-alpha releases"
+        type: string
+        default: "3"
+      max_age_days:
+        description: "Delete pre-alpha releases older than this many days"
+        type: string
+        default: "90"
+
+permissions:
+  contents: write # delete releases and tags
+
+jobs:
+  prune:
+    name: Prune stale pre-alpha releases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # The weekly cron prunes for real; manual runs honor the dry_run input
+          # (default true). github.event.inputs.* is empty for scheduled runs.
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          KEEP: ${{ github.event.inputs.keep || '3' }}
+          MAX_AGE_DAYS: ${{ github.event.inputs.max_age_days || '90' }}
+        run: |
+          set -euo pipefail
+          echo "Repo=$REPO dry_run=$DRY_RUN keep=$KEEP max_age_days=$MAX_AGE_DAYS"
+
+          # Pre-release releases tagged *-prealpha.*, newest first, as "created_at tag".
+          mapfile -t rows < <(
+            gh api "repos/$REPO/releases" --paginate \
+              --jq '.[] | select(.prerelease == true) | select(.tag_name | contains("-prealpha.")) | "\(.created_at) \(.tag_name)"' \
+            | sort -r
+          )
+
+          echo "Found ${#rows[@]} pre-alpha release(s)."
+          now=$(date -u +%s)
+          deleted=0
+          idx=0
+          for row in "${rows[@]}"; do
+            created="${row%% *}"
+            tag="${row##* }"
+            idx=$((idx + 1))
+
+            if [ "$idx" -le "$KEEP" ]; then
+              echo "keep   (newest #$idx)         $tag"
+              continue
+            fi
+
+            created_s=$(date -u -d "$created" +%s)
+            age_days=$(( (now - created_s) / 86400 ))
+            if [ "$age_days" -le "$MAX_AGE_DAYS" ]; then
+              echo "keep   (age ${age_days}d <= $MAX_AGE_DAYS) $tag"
+              continue
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "WOULD DELETE (age ${age_days}d)    $tag"
+            else
+              echo "delete (age ${age_days}d)         $tag"
+              gh release delete "$tag" --repo "$REPO" --cleanup-tag --yes
+              deleted=$((deleted + 1))
+            fi
+          done
+          echo "Done. Deleted $deleted release(s) (dry_run=$DRY_RUN)."

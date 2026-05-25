@@ -29,6 +29,7 @@ func NewRootCommand() *cobra.Command {
 		newDevCommand(),
 		newDBCommand(),
 		newPushCommand(),
+		newDagsCommand(),
 		newRunsCommand(),
 		newAuthCommand(),
 		newServerCommand(),

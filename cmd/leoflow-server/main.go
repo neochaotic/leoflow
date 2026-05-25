@@ -482,10 +482,27 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 	return sched, podDispatch, nil
 }
 
-// campaignAndRun acquires scheduler leadership (polling every 5s) and runs the
-// loop only while leader, so a single replica schedules at a time (ADR 0009).
+// leaderCheckInterval is how often we both poll for leadership (as a follower)
+// and revalidate it (as a leader).
+const leaderCheckInterval = 5 * time.Second
+
+// maxLeaderCheckFailures is how many consecutive leadership-check errors are
+// tolerated before stepping down, so a single transient error (e.g. the leader
+// connection being recycled) does not cause needless leadership churn.
+const maxLeaderCheckFailures = 3
+
+// leadershipChecker reports whether this instance still holds leadership.
+type leadershipChecker interface {
+	HoldsLock(ctx context.Context) (bool, error)
+}
+
+// campaignAndRun acquires scheduler leadership (polling every leaderCheckInterval)
+// and runs the loop only while leader, so a single replica schedules at a time
+// (ADR 0009). If leadership is lost mid-run (the advisory lock dropped because the
+// connection blipped, was idle-reaped, or recycled), it steps down and
+// re-campaigns rather than scheduling alongside the new leader.
 func campaignAndRun(ctx context.Context, leader *scheduler.Leader, sched *scheduler.Scheduler, logger *slog.Logger) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(leaderCheckInterval)
 	defer ticker.Stop()
 	for {
 		acquired, err := leader.TryAcquire(ctx)
@@ -493,12 +510,11 @@ func campaignAndRun(ctx context.Context, leader *scheduler.Leader, sched *schedu
 		case err != nil:
 			logger.Error("acquiring leadership", "error", err)
 		case acquired:
-			logger.Info("became scheduler leader")
-			if runErr := sched.Run(ctx); runErr != nil && !errors.Is(runErr, context.Canceled) {
-				logger.Error("scheduler stopped", "error", runErr)
+			runAsLeader(ctx, leader, sched, logger)
+			if ctx.Err() != nil {
+				return // shutting down, not a leadership loss
 			}
-			releaseLeader(leader, logger) //nolint:contextcheck // release uses a fresh bounded context after shutdown
-			return
+			logger.Warn("stepped down as scheduler leader; re-campaigning")
 		default:
 			logger.Info("scheduler follower; retrying for leadership")
 		}
@@ -506,6 +522,70 @@ func campaignAndRun(ctx context.Context, leader *scheduler.Leader, sched *schedu
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		}
+	}
+}
+
+// runAsLeader runs the scheduling loop while leadership is held. A watchdog
+// revalidates the advisory lock and cancels the loop the moment leadership is
+// lost, so a stale leader (whose lock-holding session died) steps down instead
+// of double-scheduling against the new leader. It signals leadership to the
+// scheduler so the heartbeat/health reflects whether this instance is the
+// active scheduler.
+func runAsLeader(ctx context.Context, leader *scheduler.Leader, sched *scheduler.Scheduler, logger *slog.Logger) {
+	logger.Info("became scheduler leader")
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sched.SetLeading(true)
+	defer sched.SetLeading(false)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchLeadership(runCtx, leader, leaderCheckInterval, cancel, logger)
+	}()
+
+	if runErr := sched.Run(runCtx); runErr != nil && !errors.Is(runErr, context.Canceled) {
+		logger.Error("scheduler stopped", "error", runErr)
+	}
+	cancel()
+	<-done
+	releaseLeader(leader, logger) //nolint:contextcheck // release uses a fresh bounded context
+}
+
+// watchLeadership cancels the run when leadership is lost: a definitive "not
+// held" steps down immediately, while transient check errors are tolerated up to
+// maxLeaderCheckFailures (a connection blip should not churn leadership). It
+// returns when the run context is canceled.
+func watchLeadership(ctx context.Context, chk leadershipChecker, interval time.Duration, cancel context.CancelFunc, logger *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	failures := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			held, err := chk.HoldsLock(ctx)
+			switch {
+			case err != nil:
+				if ctx.Err() != nil {
+					return // canceled mid-check (shutdown/stepdown)
+				}
+				failures++
+				logger.Warn("leadership check failed", "error", err, "consecutive", failures)
+				if failures >= maxLeaderCheckFailures {
+					logger.Warn("too many failed leadership checks; stepping down")
+					cancel()
+					return
+				}
+			case !held:
+				logger.Warn("lost scheduler advisory lock; stepping down")
+				cancel()
+				return
+			default:
+				failures = 0
+			}
 		}
 	}
 }

@@ -213,6 +213,41 @@ func TestHeartbeatTracksTicks(t *testing.T) {
 	}
 }
 
+func TestHeartbeatIsLeadershipAware(t *testing.T) {
+	s := NewScheduler(&fakeStore{}, slog.New(slog.NewTextHandler(io.Discard, nil)), 10*time.Millisecond)
+
+	// Not leading: healthy regardless of ticks — a follower (or an instance that
+	// stepped down) is correctly idle, not stalled. Even a very old lastTick is OK.
+	s.lastTick.Store(time.Now().Add(-time.Hour).UnixNano())
+	if ok, _ := s.Heartbeat(); !ok {
+		t.Error("a non-leader must report healthy (idle), not stalled")
+	}
+
+	// Becoming leader resets the clock (startup grace), then a tick is fresh+healthy.
+	s.SetLeading(true)
+	if ok, _ := s.Heartbeat(); !ok {
+		t.Error("a fresh leader should be healthy (startup grace)")
+	}
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	if ok, _ := s.Heartbeat(); !ok {
+		t.Error("a leader that just ticked should be healthy")
+	}
+
+	// A leader whose ticks went stale is unhealthy, so the UI/monitor surfaces it.
+	s.lastTick.Store(time.Now().Add(-time.Hour).UnixNano())
+	if ok, _ := s.Heartbeat(); ok {
+		t.Error("a leader with a stale heartbeat must be unhealthy")
+	}
+
+	// After stepping down it is idle again — healthy, not falsely stalled.
+	s.SetLeading(false)
+	if ok, _ := s.Heartbeat(); !ok {
+		t.Error("after stepping down, an idle instance should be healthy")
+	}
+}
+
 type fakeRecorder struct{ undispatchable []string }
 
 func (r *fakeRecorder) RecordSchedulerDecision(string)      {}

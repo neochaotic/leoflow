@@ -83,6 +83,7 @@ type Scheduler struct {
 	dispatcher  Dispatcher
 	inline      InlineRunner
 	lastTick    atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	leading     atomic.Bool  // true only while this instance holds leadership and ticks
 }
 
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
@@ -107,6 +108,18 @@ func defaultStepTimeout(interval time.Duration) time.Duration {
 
 // SetStepTimeout overrides the per-tick timeout (optional; mainly for tests).
 func (s *Scheduler) SetStepTimeout(d time.Duration) { s.stepTimeout = d }
+
+// SetLeading marks whether this instance currently holds scheduler leadership.
+// The leadership manager sets it true while the loop runs and false when it
+// steps down (lost lock) or stops. Becoming leader resets the tick clock so the
+// startup grace applies afresh and a stale pre-step-down heartbeat is not
+// mistaken for a stall. It governs Heartbeat: only a leader is expected to tick.
+func (s *Scheduler) SetLeading(on bool) {
+	if on {
+		s.lastTick.Store(0)
+	}
+	s.leading.Store(on)
+}
 
 // SetRecorder attaches a metrics recorder (optional).
 func (s *Scheduler) SetRecorder(r Recorder) { s.recorder = r }
@@ -160,10 +173,15 @@ func (s *Scheduler) record(decision string) {
 }
 
 // Heartbeat reports whether the scheduling loop is live and when it last ticked.
-// It is healthy before the first tick (startup grace) and while ticks stay
-// within a small multiple of the loop interval; a stalled leader goes unhealthy.
-// A non-leader process never ticks (lastTick stays 0) and stays in grace.
+// Only a leader is expected to tick, so a non-leader (a follower, or an instance
+// that stepped down after losing the lock) reports healthy without ticking — it
+// is correctly idle, not stalled. A leader is healthy during the startup grace
+// (before its first tick) and while ticks stay within a small multiple of the
+// loop interval; a stalled leader goes unhealthy so the UI/monitor surfaces it.
 func (s *Scheduler) Heartbeat() (bool, time.Time) {
+	if !s.leading.Load() {
+		return true, time.Now().UTC()
+	}
 	nanos := s.lastTick.Load()
 	if nanos == 0 {
 		return true, time.Now().UTC()

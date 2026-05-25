@@ -39,3 +39,29 @@ func (l *Leader) Release(ctx context.Context) error {
 	}
 	return nil
 }
+
+// HoldsLock reports whether this leader's session still holds the advisory lock.
+// The lock is session-scoped, so if the dedicated connection dropped (network
+// blip, idle reap, lifetime recycle) and was replaced, the new session does not
+// hold it and another replica may have taken over — this returns false, letting
+// the caller step down instead of running on as a stale leader (the split-brain
+// guard). A query error (connection down) is surfaced so the caller treats it as
+// lost leadership too.
+func (l *Leader) HoldsLock(ctx context.Context) (bool, error) {
+	// pg_locks splits the 64-bit advisory key into (classid, objid) with
+	// objsubid=1; matching pid against pg_backend_pid() confines the check to
+	// this leader's own session (verified against Postgres).
+	classid := int32(LockID >> 32)
+	objid := int32(LockID & 0xFFFFFFFF)
+	var held bool
+	err := l.pool.QueryRow(ctx,
+		`SELECT EXISTS (
+		   SELECT 1 FROM pg_locks
+		   WHERE locktype = 'advisory' AND classid = $1 AND objid = $2
+		     AND objsubid = 1 AND pid = pg_backend_pid()
+		 )`, classid, objid).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("checking scheduler lock: %w", err)
+	}
+	return held, nil
+}

@@ -956,25 +956,40 @@ func TestImportErrorsIntegration(t *testing.T) {
 func TestStagingVolumesIntegration(t *testing.T) {
 	repo, store, ctx := openRepo(t)
 	dagID := fmt.Sprintf("sv_%d", time.Now().UnixNano())
-	runID := "r1"
-	pvc := fmt.Sprintf("leoflow-staging-%s-r1", dagID)
+	runIDStr := "manual__sv_run"
 
 	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "extract", Type: domain.TaskTypePython}})
 	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
-		RunID: runID, State: domain.DagRunStateSuccess, RunType: "manual", LogicalDate: time.Now().UTC(),
+		RunID: runIDStr, State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
+	// The staging volume is keyed by the dag_run's UUID (what StagingClaimName and
+	// dispatch use), NOT the run_id string — so the join must resolve on dag_runs.id.
+	active, err := store.ActiveRuns(ctx)
+	if err != nil {
+		t.Fatalf("active runs: %v", err)
+	}
+	var runUUID string
+	for _, r := range active {
+		if r.DagID == dagID {
+			runUUID = r.RunID
+		}
+	}
+	if runUUID == "" {
+		t.Fatalf("could not find the run's UUID for %s", dagID)
+	}
+	pvc := fmt.Sprintf("leoflow-staging-%s-%s", dagID, runUUID)
 	tenantUUID, err := repo.TenantUUID(ctx, "default")
 	if err != nil {
 		t.Fatalf("tenant uuid: %v", err)
 	}
 
-	if err := store.RecordStagingVolume(ctx, tenantUUID, dagID, runID, pvc, "5Gi"); err != nil {
+	if err := store.RecordStagingVolume(ctx, tenantUUID, dagID, runUUID, pvc, "5Gi"); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	// Idempotent: a second record (per-task) is a no-op.
-	if err := store.RecordStagingVolume(ctx, tenantUUID, dagID, runID, pvc, "5Gi"); err != nil {
+	if err := store.RecordStagingVolume(ctx, tenantUUID, dagID, runUUID, pvc, "5Gi"); err != nil {
 		t.Fatalf("record (idempotent): %v", err)
 	}
 
@@ -991,8 +1006,13 @@ func TestStagingVolumesIntegration(t *testing.T) {
 	if found == nil {
 		t.Fatalf("staging volume %s not listed active", pvc)
 	}
-	if found.RunState != string(domain.DagRunStateSuccess) {
-		t.Errorf("join did not resolve run state: got %q, want success", found.RunState)
+	// The join must resolve the run's state (regression: keying by run_id string
+	// returned NULL → the GC wrongly treated active runs as orphaned and deleted them).
+	if found.RunState != string(domain.DagRunStateRunning) {
+		t.Errorf("join did not resolve run state by UUID: got %q, want running", found.RunState)
+	}
+	if found.CreatedAt.IsZero() {
+		t.Errorf("created_at not populated")
 	}
 
 	if err := store.MarkStagingDeleted(ctx, pvc, "run_succeeded"); err != nil {

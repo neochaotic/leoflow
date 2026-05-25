@@ -86,17 +86,19 @@ func (f *fakeStagingStore) ListActiveStagingVolumes(_ context.Context) ([]domain
 func TestGCStagingClaims(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	e := NewKubernetesExecutor(cs, "leoflow")
-	failedOld := time.Now().Add(-48 * time.Hour)
-	failedNew := time.Now().Add(-1 * time.Hour)
+	old := time.Now().Add(-48 * time.Hour)
+	recent := time.Now().Add(-1 * time.Hour)
+	now := time.Now()
 	store := &fakeStagingStore{active: []domain.StagingVolumeState{
-		{PVCName: "s-success", RunState: "success"},
-		{PVCName: "s-failed-old", RunState: "failed", RunEndedAt: &failedOld},
-		{PVCName: "s-failed-new", RunState: "failed", RunEndedAt: &failedNew},
-		{PVCName: "s-running", RunState: "running"},
-		{PVCName: "s-orphan", RunState: ""},
+		{PVCName: "s-success", RunState: "success", CreatedAt: now},
+		{PVCName: "s-failed-old", RunState: "failed", RunEndedAt: &old, CreatedAt: old},
+		{PVCName: "s-failed-new", RunState: "failed", RunEndedAt: &recent, CreatedAt: recent},
+		{PVCName: "s-running", RunState: "running", CreatedAt: now},
+		{PVCName: "s-orphan-old", RunState: "", CreatedAt: old},   // run gone + older than TTL -> reclaim
+		{PVCName: "s-orphan-fresh", RunState: "", CreatedAt: now}, // unresolved but fresh -> KEEP (safety)
 	}}
 	e.SetStagingStore(store)
-	for _, n := range []string{"s-success", "s-failed-old", "s-failed-new", "s-running", "s-orphan"} {
+	for _, n := range []string{"s-success", "s-failed-old", "s-failed-new", "s-running", "s-orphan-old", "s-orphan-fresh"} {
 		_, _ = cs.CoreV1().PersistentVolumeClaims("leoflow").Create(context.Background(),
 			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: n}}, metav1.CreateOptions{})
 	}
@@ -107,7 +109,7 @@ func TestGCStagingClaims(t *testing.T) {
 		_, err := cs.CoreV1().PersistentVolumeClaims("leoflow").Get(context.Background(), n, metav1.GetOptions{})
 		return err == nil
 	}
-	for pvc, want := range map[string]string{"s-success": "run_succeeded", "s-failed-old": "ttl_expired", "s-orphan": "orphaned"} {
+	for pvc, want := range map[string]string{"s-success": "run_succeeded", "s-failed-old": "ttl_expired", "s-orphan-old": "orphaned"} {
 		if exists(pvc) {
 			t.Errorf("%s should be deleted", pvc)
 		}
@@ -115,7 +117,9 @@ func TestGCStagingClaims(t *testing.T) {
 			t.Errorf("%s delete reason = %q, want %q", pvc, store.deleted[pvc], want)
 		}
 	}
-	for _, pvc := range []string{"s-failed-new", "s-running"} {
+	// Kept — crucially s-orphan-fresh: an unresolved run-state must NEVER delete a
+	// freshly-created volume (an active run's pods would be stranded — prod safety).
+	for _, pvc := range []string{"s-failed-new", "s-running", "s-orphan-fresh"} {
 		if !exists(pvc) {
 			t.Errorf("%s should be kept", pvc)
 		}

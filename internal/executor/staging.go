@@ -148,7 +148,14 @@ func stagingDeleteDecision(v domain.StagingVolumeState, now time.Time, ttl time.
 		}
 		return "", false
 	case "":
-		return "orphaned", true // the run row is gone (history cleared): no re-run
+		// The run did not resolve — usually history was cleared, but it could also
+		// be a transient lookup miss for a still-active run. Only reclaim once the
+		// volume is older than the TTL, so a miss can never delete an active run's
+		// fresh volume (which would strand its pods). This is the prod safety net.
+		if now.Sub(v.CreatedAt) > ttl {
+			return "orphaned", true
+		}
+		return "", false
 	default:
 		return "", false // queued / running / scheduled: still active — keep
 	}

@@ -12,19 +12,21 @@ import (
 )
 
 const listActiveStagingVolumes = `-- name: ListActiveStagingVolumes :many
-SELECT s.pvc_name, r.state AS run_state, r.ended_at AS run_ended_at
+SELECT s.pvc_name, s.created_at, r.state AS run_state, r.ended_at AS run_ended_at
 FROM staging_volumes s
-LEFT JOIN dags d ON d.tenant_id = s.tenant_id AND d.dag_id = s.dag_id
-LEFT JOIN dag_runs r ON r.dag_id = d.id AND r.run_id = s.run_id
+LEFT JOIN dag_runs r ON r.id::text = s.run_id
 WHERE s.state = 'active'
 `
 
 type ListActiveStagingVolumesRow struct {
 	PvcName    string             `json:"pvc_name"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	RunState   *DagRunState       `json:"run_state"`
 	RunEndedAt pgtype.Timestamptz `json:"run_ended_at"`
 }
 
+// run_id is the dag_run's UUID (StagingClaimName uses it), so join on dag_runs.id,
+// which is globally unique. run_state is NULL only when the run row is truly gone.
 func (q *Queries) ListActiveStagingVolumes(ctx context.Context) ([]ListActiveStagingVolumesRow, error) {
 	rows, err := q.db.Query(ctx, listActiveStagingVolumes)
 	if err != nil {
@@ -34,7 +36,12 @@ func (q *Queries) ListActiveStagingVolumes(ctx context.Context) ([]ListActiveSta
 	items := []ListActiveStagingVolumesRow{}
 	for rows.Next() {
 		var i ListActiveStagingVolumesRow
-		if err := rows.Scan(&i.PvcName, &i.RunState, &i.RunEndedAt); err != nil {
+		if err := rows.Scan(
+			&i.PvcName,
+			&i.CreatedAt,
+			&i.RunState,
+			&i.RunEndedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

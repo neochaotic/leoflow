@@ -14,4 +14,8 @@ type StagingVolumeState struct {
 	RunState string
 	// RunEndedAt is when the run reached a terminal state, if known.
 	RunEndedAt *time.Time
+	// CreatedAt is when the volume was provisioned. The GC never deletes a volume
+	// younger than the TTL when its run cannot be resolved, so a lookup miss can
+	// never reclaim an active run's fresh volume.
+	CreatedAt time.Time
 }

@@ -233,7 +233,7 @@ func (s *SchedulerStore) ListActiveStagingVolumes(ctx context.Context) ([]domain
 			st = string(*row.RunState)
 		}
 		out = append(out, domain.StagingVolumeState{
-			PVCName: row.PvcName, RunState: st, RunEndedAt: timePtr(row.RunEndedAt),
+			PVCName: row.PvcName, RunState: st, RunEndedAt: timePtr(row.RunEndedAt), CreatedAt: timeVal(row.CreatedAt),
 		})
 	}
 	return out, nil

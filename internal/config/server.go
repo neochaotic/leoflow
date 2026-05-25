@@ -68,6 +68,10 @@ type PlatformDefaultsSection struct {
 	// DAG enabled staging without pinning them (e.g. the cluster's RWX class).
 	StagingSize         string `mapstructure:"staging_size"`
 	StagingStorageClass string `mapstructure:"staging_storage_class"`
+	// StagingAccessMode is the PVC access mode for the staging volume. Defaults to
+	// ReadWriteMany (multi-node prod); single-node dev (k3d local-path, no RWX)
+	// sets ReadWriteOnce, which is sufficient for a run's sequential same-node pods.
+	StagingAccessMode string `mapstructure:"staging_access_mode"`
 	// ResourcesCPU/ResourcesMemory default a task's request when neither the task
 	// override nor the DAG set any (Kubernetes quantities, e.g. "250m"/"256Mi").
 	ResourcesCPU    string `mapstructure:"resources_cpu"`
@@ -183,6 +187,7 @@ var serverDefaults = map[string]any{
 	"executor.subprocess_workdir":               "",
 	"executor.agent_control_plane_addr":         "",
 	"executor.agent_tls_ca_configmap":           "",
+	"executor.defaults.staging_access_mode":     "ReadWriteMany",
 	"logs.dir":                                  "/var/log/leoflow",
 	"observability.otel.enabled":                true,
 	"observability.otel.endpoint":               "localhost:4317",

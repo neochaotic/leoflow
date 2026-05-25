@@ -125,6 +125,31 @@ func TestGCStagingClaims(t *testing.T) {
 	}
 }
 
+// The staging PVC honors the configured access mode: ReadWriteOnce for single-node
+// dev (k3d local-path rejects RWX), ReadWriteMany by default (ADR 0022).
+func TestStagingAccessMode(t *testing.T) {
+	cases := map[string]corev1.PersistentVolumeAccessMode{
+		"":                 corev1.ReadWriteMany, // default = multi-node prod
+		"ReadWriteMany":    corev1.ReadWriteMany,
+		"ReadWriteOnce":    corev1.ReadWriteOnce, // single-node dev
+		"ReadWriteOncePod": corev1.ReadWriteOncePod,
+	}
+	for mode, want := range cases {
+		cs := fake.NewSimpleClientset()
+		e := NewKubernetesExecutor(cs, "leoflow")
+		req := sampleReq()
+		req.StagingClaim = "leoflow-staging-etl-r1"
+		req.StagingAccessMode = mode
+		if err := e.ensureStagingClaim(context.Background(), req); err != nil {
+			t.Fatalf("mode %q: ensure: %v", mode, err)
+		}
+		pvc, _ := cs.CoreV1().PersistentVolumeClaims("leoflow").Get(context.Background(), req.StagingClaim, metav1.GetOptions{})
+		if len(pvc.Spec.AccessModes) != 1 || pvc.Spec.AccessModes[0] != want {
+			t.Errorf("mode %q -> %v, want [%v]", mode, pvc.Spec.AccessModes, want)
+		}
+	}
+}
+
 // ensureStagingClaim records the volume as active when a store is wired (ADR 0022).
 func TestEnsureStagingClaimRecords(t *testing.T) {
 	cs := fake.NewSimpleClientset()

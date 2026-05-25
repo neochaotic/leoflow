@@ -620,6 +620,9 @@ func clusterServerEnv(port int, kubeconfig string) []string {
 		"LEOFLOW_EXECUTOR_TYPE=kubernetes",
 		"KUBECONFIG="+kubeconfig,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="+devHostGRPCAddr,
+		// The dev k3d cluster's local-path provisioner rejects RWX; it is
+		// single-node, so RWO is sufficient for a run's sequential pods (ADR 0022).
+		"LEOFLOW_EXECUTOR_DEFAULTS_STAGING_ACCESS_MODE=ReadWriteOnce",
 	)
 }
 

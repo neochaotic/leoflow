@@ -521,6 +521,7 @@ func platformDefaults(c config.PlatformDefaultsSection) dispatch.PlatformDefault
 	d := dispatch.PlatformDefaults{
 		StagingSize:         c.StagingSize,
 		StagingStorageClass: c.StagingStorageClass,
+		StagingAccessMode:   c.StagingAccessMode,
 	}
 	if c.ResourcesCPU != "" || c.ResourcesMemory != "" {
 		d.Resources = &domain.Resources{

@@ -40,6 +40,9 @@ type Request struct {
 	StagingClaim        string
 	StagingSize         string
 	StagingStorageClass string
+	// StagingAccessMode is the PVC access mode (default ReadWriteMany; single-node
+	// dev uses ReadWriteOnce). Empty means ReadWriteMany.
+	StagingAccessMode string
 
 	// AgentTLSCAConfigMap, when set, is the name of a ConfigMap holding the CA
 	// (key ca.crt) the agent uses to verify the control plane's gRPC TLS cert

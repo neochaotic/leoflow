@@ -24,6 +24,21 @@ const stagingRunIDAnnotation = "leoflow.io/run-id"
 // defaultStagingSize is used when a DAG enables staging without a size.
 const defaultStagingSize = "1Gi"
 
+// stagingAccessMode maps the configured access mode to the PVC enum, defaulting
+// to ReadWriteMany (multi-node). Single-node dev uses ReadWriteOnce because the
+// k3d local-path provisioner rejects RWX, and a run's sequential same-node pods
+// share an RWO volume fine.
+func stagingAccessMode(mode string) corev1.PersistentVolumeAccessMode {
+	switch mode {
+	case "ReadWriteOnce":
+		return corev1.ReadWriteOnce
+	case "ReadWriteOncePod":
+		return corev1.ReadWriteOncePod
+	default:
+		return corev1.ReadWriteMany
+	}
+}
+
 // StagingClaimName is the deterministic PVC name for a run's staging volume. It
 // must be stable across retries and clear+re-run so the same PVC is re-attached
 // (ADR 0022), and DNS-safe.
@@ -57,7 +72,7 @@ func (e *KubernetesExecutor) ensureStagingClaim(ctx context.Context, req Request
 			Annotations: map[string]string{stagingRunIDAnnotation: req.RunID},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			AccessModes: []corev1.PersistentVolumeAccessMode{stagingAccessMode(req.StagingAccessMode)},
 			Resources:   corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: qty}},
 		},
 	}

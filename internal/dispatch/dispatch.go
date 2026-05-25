@@ -44,6 +44,9 @@ type PlatformDefaults struct {
 	// DAG enabled staging but did not pin them (e.g. the cluster's RWX class).
 	StagingSize         string
 	StagingStorageClass string
+	// StagingAccessMode is the PVC access mode for the staging volume (default
+	// ReadWriteMany; single-node dev uses ReadWriteOnce).
+	StagingAccessMode string
 	// Resources defaults a task's requests/limits when neither the task override
 	// nor the DAG set any.
 	Resources *domain.Resources
@@ -131,6 +134,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 		// from the per-cluster default without overriding an explicit value.
 		req.StagingSize = firstNonEmpty(r.Staging.Size, d.defaults.StagingSize)
 		req.StagingStorageClass = firstNonEmpty(r.Staging.StorageClass, d.defaults.StagingStorageClass)
+		req.StagingAccessMode = d.defaults.StagingAccessMode
 	}
 	req.AgentTLSCAConfigMap = d.tlsCAConfigMap
 	return d.exec.Execute(ctx, req)

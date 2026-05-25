@@ -36,13 +36,15 @@ and port).
     Append `?open=<path>` to jump straight to a file, e.g.
     `/ide?open=dag.py` — handy for sharing a link to a specific DAG.
 
-The editor follows your OS light/dark preference. Force a theme with a query
-parameter:
+The editor follows your OS light/dark preference (and the IDE button matches the
+UI's accent in either theme). Force a theme with a query parameter:
 
 ```text
 /ide?theme=light
 /ide?theme=dark
 ```
+
+![The editor in the dark theme, editing a Python DAG](assets/screenshots/lite-web-editor-dark.png){ .home-hero__shot }
 
 ## What it can do
 

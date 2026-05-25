@@ -29,20 +29,27 @@ const liteBannerHTML = `<div id="leoflow-lite-banner">LITE</div>` +
 
 // ideButtonHTML is a discreet floating "IDE" button (bottom-right) injected into
 // the served shell when the Lite web editor is enabled (ADR 0025). It opens the
-// editor at /ide in a new tab, so the SPA is untouched. The icon is an inline
-// "code" (< >) SVG drawn with currentColor, so it renders crisply at any size
-// regardless of the system font (an emoji/Unicode glyph rendered faintly or not
-// at all on some platforms).
+// editor at /ide in a new tab, so the SPA is untouched.
+//
+// It matches the UI's native button identity (sampled from the app's active nav
+// button): the same accent color, Inter font, weight, and radius — so it reads
+// as part of the app rather than a foreign control, and looks right on both the
+// light and dark themes (a solid accent fill with white text works on either).
+// The icon is an inline "code" (< >) SVG drawn with currentColor, so it renders
+// crisply at any size regardless of the system font (a Unicode glyph rendered
+// faintly or not at all on some platforms). The accent has a hex fallback before
+// the oklch the app uses, for browsers without oklch support.
 const ideButtonHTML = `<a id="leoflow-ide-button" href="/ide" target="_blank" rel="noopener" title="Open the Leoflow editor">` +
-	`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+	`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
 	`stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
 	`<polyline points="8 7 3 12 8 17"></polyline><polyline points="16 7 21 12 16 17"></polyline></svg>` +
 	`<span>IDE</span></a>` +
 	`<style>#leoflow-ide-button{position:fixed;right:16px;bottom:16px;z-index:2147483647;` +
-	`display:inline-flex;align-items:center;gap:6px;` +
-	`background:rgba(100,116,139,.95);color:#fff;text-decoration:none;` +
-	`font:600 12px/1 system-ui,-apple-system,sans-serif;padding:9px 13px;border-radius:18px;` +
-	`box-shadow:0 2px 8px rgba(0,0,0,.25)}#leoflow-ide-button:hover{background:rgba(71,85,105,.98)}` +
+	`display:inline-flex;align-items:center;gap:7px;` +
+	`background:#3f5c91;background:oklch(0.469 0.084 257.657);color:#fff;text-decoration:none;` +
+	`font:500 14px/1 Inter,-apple-system,system-ui,"Segoe UI",Helvetica,Arial,sans-serif;` +
+	`padding:9px 15px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.25)}` +
+	`#leoflow-ide-button:hover{background:#35507f;background:oklch(0.42 0.084 257.657)}` +
 	`#leoflow-ide-button svg{display:block}</style>`
 
 // Server serves the embedded Airflow 3.2.1 SPA: static assets under a prefix and

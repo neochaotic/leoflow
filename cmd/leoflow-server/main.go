@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -333,7 +334,12 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	agentSrv.SetLogPublisher(logTailer)
 	agentSrv.SetSecrets(secretsStore, allowInsecureSecrets)
 
-	var opts []grpc.ServerOption
+	// Recover panics in any agent RPC handler so a single malformed request from a
+	// worker pod cannot crash the control plane (it returns Internal instead).
+	opts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(agentrpc.RecoveryUnaryInterceptor(logger)),
+		grpc.ChainStreamInterceptor(agentrpc.RecoveryStreamInterceptor(logger)),
+	}
 	secure := tlsCert != "" && tlsKey != ""
 	if secure {
 		creds, cerr := credentials.NewServerTLSFromFile(tlsCert, tlsKey)
@@ -393,15 +399,30 @@ func startCleanup(ctx context.Context, idx *storage.XComIndex, sink *logs.DiskSi
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := idx.PurgeExpired(ctx); err != nil {
-					logger.Error("purging expired xcom index", "error", err)
-				}
-				if err := sink.Prune(time.Now(), logRetention); err != nil {
-					logger.Error("pruning old logs", "error", err)
-				}
+				safeCycle("cleanup", logger, func() {
+					if err := idx.PurgeExpired(ctx); err != nil {
+						logger.Error("purging expired xcom index", "error", err)
+					}
+					if err := sink.Prune(time.Now(), logRetention); err != nil {
+						logger.Error("pruning old logs", "error", err)
+					}
+				})
 			}
 		}
 	}()
+}
+
+// safeCycle runs one iteration of a periodic background loop, recovering any
+// panic so a single bad cycle logs and is retried next tick instead of crashing
+// the goroutine (and, since an unrecovered panic in any goroutine aborts the
+// program, the whole control plane). It changes no behavior on the happy path.
+func safeCycle(name string, logger *slog.Logger, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("recovered panic in background cycle", "cycle", name, "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	fn()
 }
 
 // startReconciler runs a periodic pod reconciler that marks task instances
@@ -416,9 +437,11 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter exec
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := rec.Reconcile(ctx); err != nil {
-					logger.Error("pod reconcile", "error", err)
-				}
+				safeCycle("pod-reconcile", logger, func() {
+					if err := rec.Reconcile(ctx); err != nil {
+						logger.Error("pod reconcile", "error", err)
+					}
+				})
 			}
 		}
 	}()
@@ -447,9 +470,11 @@ func startStagingGC(ctx context.Context, cs kubernetes.Interface, store executor
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := exec.GCStagingClaims(ctx, stagingTTL); err != nil {
-					logger.Error("staging gc", "error", err)
-				}
+				safeCycle("staging-gc", logger, func() {
+					if err := exec.GCStagingClaims(ctx, stagingTTL); err != nil {
+						logger.Error("staging gc", "error", err)
+					}
+				})
 			}
 		}
 	}()

@@ -169,6 +169,38 @@ func TestInlineRunnerRecoversPanic(t *testing.T) {
 	}
 }
 
+type panicXComPusher struct{}
+
+func (panicXComPusher) Push(context.Context, xcom.Key, []byte, string, map[string]any) error {
+	panic("boom in xcom push")
+}
+
+// TestInlineRunnerRecoversPostExecutePanic guards the run-level backstop: a panic
+// in the post-execute path (here, XCom shipping) must not crash the control
+// plane. Without the recover, the goroutine panic would abort the test binary;
+// with it, the runner cleans up (releases the semaphore) and stays alive.
+func TestInlineRunnerRecoversPostExecutePanic(t *testing.T) {
+	sink := &fakeSink{}
+	r := NewInlineRunner(InlineConfig{
+		Sink: sink, XCom: panicXComPusher{}, Logs: &fakeLogSink{},
+		Concurrency: 1, MaxSeconds: 300, UserAgent: "leoflow/test",
+	})
+	// A successful call returns a body, so the success path ships XCom -> panics.
+	r.exec = func(context.Context, Request) ([]byte, error) { return []byte(`{"ok":true}`), nil }
+
+	if _, err := r.Start(context.Background(), "run1", "etl", "acme", 1, httpTask("t1", "http://x", http.MethodGet, 0)); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	r.Wait() // returns only if run() did not crash the process
+
+	// The semaphore was released despite the panic, so the runner accepts more work.
+	started, err := r.Start(context.Background(), "run1", "etl", "acme", 1, httpTask("t2", "http://x", http.MethodGet, 0))
+	if err != nil || !started {
+		t.Errorf("runner should accept work after a recovered panic (sem released): started=%v err=%v", started, err)
+	}
+	r.Wait()
+}
+
 func TestInlineRunnerSemaphoreExhaustion(t *testing.T) {
 	r, _, _, _ := newInline(t)
 	r.sem = make(chan struct{}, 1)

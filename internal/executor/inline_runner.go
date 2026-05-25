@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -120,10 +121,20 @@ func (r *InlineRunner) Start(ctx context.Context, runID, dagID, tenantID string,
 func (r *InlineRunner) Wait() { r.wg.Wait() }
 
 // run executes the task, ships its output and logs, and records its terminal
-// state. It always releases the semaphore and the wait group.
+// state. It always releases the semaphore and the wait group. As a detached
+// control-plane goroutine, it recovers any panic from the post-execute path
+// (XCom/log shipping, metrics, the terminal write) so a misbehaving dependency
+// fails this one task instead of crashing the control plane. (execute has its
+// own recover for the task body; this is the backstop for everything after it.)
 func (r *InlineRunner) run(ctx context.Context, it inlineTask) {
 	defer r.wg.Done()
 	defer func() { <-r.sem }()
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("recovered panic in inline task runner",
+				"run", it.runID, "task", it.spec.TaskID, "panic", rec, "stack", string(debug.Stack()))
+		}
+	}()
 
 	start := time.Now()
 	state, body := r.execute(ctx, it.spec)

@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: fan_out_aggregate
+description: Fan-out to parallel workers then fan-in to an aggregate.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

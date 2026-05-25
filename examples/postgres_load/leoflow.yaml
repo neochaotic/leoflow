@@ -1,0 +1,9 @@
+schema_version: "1.0"
+dag_id: postgres_load
+description: Compute rows and load them into an external Postgres via a managed Connection.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies:
+  - psycopg2-binary==2.9.10

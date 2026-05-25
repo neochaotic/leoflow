@@ -1,0 +1,9 @@
+schema_version: "1.0"
+dag_id: api_chain
+description: Chain two public API calls — list users, then fetch one user's details.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies:
+  - requests==2.32.3

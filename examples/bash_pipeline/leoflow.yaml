@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: bash_pipeline
+description: BashOperator tasks (the bash task type).
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

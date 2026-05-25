@@ -1,0 +1,9 @@
+schema_version: "1.0"
+dag_id: http_jsonplaceholder
+description: Fetch posts from a public JSON API (jsonplaceholder) and summarize.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies:
+  - requests==2.32.3

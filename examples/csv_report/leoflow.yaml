@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: csv_report
+description: Generate a CSV, compute a report from it, all in-task (no deps).
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

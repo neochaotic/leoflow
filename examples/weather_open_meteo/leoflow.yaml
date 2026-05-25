@@ -1,0 +1,9 @@
+schema_version: "1.0"
+dag_id: weather_open_meteo
+description: Fetch current weather from the public Open-Meteo API (no key) per city.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies:
+  - requests==2.32.3

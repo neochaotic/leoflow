@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: http_operator
+description: HttpOperator hitting a public API inline (the http_api task type).
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

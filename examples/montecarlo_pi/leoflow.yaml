@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: montecarlo_pi
+description: Estimate pi with parallel Monte-Carlo workers, then combine.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

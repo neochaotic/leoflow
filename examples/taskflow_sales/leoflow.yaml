@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: taskflow_sales
+description: Pure TaskFlow ETL passing data via XCom (no external deps).
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

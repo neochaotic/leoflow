@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: xcom_typed
+description: Pass typed dict payloads across tasks via XCom with validation.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

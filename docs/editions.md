@@ -35,6 +35,10 @@ It is deliberately simple, which has security implications:
     internal network, or a VPN**. Do **not** expose a Lite instance to the public
     internet. For team/production use, that is what the Production edition is for.
 
+Lite also includes a small built-in **[web editor](lite-web-editor.md)** (Monaco,
+with Python/YAML highlighting) so you can edit DAG projects from the browser — a
+Lite-only convenience; Production teams use their own editor and the GitOps flow.
+
 Pre-alpha Lite builds also **expire** (~90 days) and refuse to run past it — a
 reminder that Lite is for iterating locally, not for durable deployments.
 

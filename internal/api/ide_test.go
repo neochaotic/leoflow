@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,12 +18,18 @@ import (
 // ideServer wires a server whose IDE routes are backed by a real workspace FS
 // rooted at dir. A nil fs leaves the IDE disabled.
 func ideServer(fs WorkspaceFS) *gin.Engine {
+	return ideServerWithMonaco(fs, "")
+}
+
+// ideServerWithMonaco is ideServer plus a Monaco assets directory to serve.
+func ideServerWithMonaco(fs WorkspaceFS, monacoDir string) *gin.Engine {
 	return NewServer(Dependencies{
 		Logger:        discardLogger(),
 		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
 		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
 		CORSOrigins:   []string{"*"},
 		Workspace:     fs,
+		MonacoDir:     monacoDir,
 	})
 }
 
@@ -143,5 +150,44 @@ func TestIDEDisabledWhenNoWorkspace(t *testing.T) {
 	srv := ideServer(nil)
 	if r := authGet(srv, http.MethodGet, "/api/v2/ide/tree", ""); r.Code != http.StatusNotFound {
 		t.Errorf("tree without workspace = %d, want 404 (route absent)", r.Code)
+	}
+	if r := authGet(srv, http.MethodGet, "/ide", ""); r.Code != http.StatusNotFound {
+		t.Errorf("/ide without workspace = %d, want 404 (route absent)", r.Code)
+	}
+}
+
+func TestIDEPageServed(t *testing.T) {
+	fs, _ := newWorkspace(t)
+	srv := ideServer(fs)
+	rec := authGet(srv, http.MethodGet, "/ide", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/ide = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, marker := range []string{"<html", "monaco", "/api/v2/ide/tree", "Leoflow"} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("/ide page missing marker %q", marker)
+		}
+	}
+}
+
+func TestIDEMonacoNotProvisioned404(t *testing.T) {
+	fs, _ := newWorkspace(t)
+	srv := ideServer(fs) // no Monaco dir
+	if r := authGet(srv, http.MethodGet, "/ide/vs/loader.js", ""); r.Code != http.StatusNotFound {
+		t.Errorf("monaco loader without dir = %d, want 404", r.Code)
+	}
+}
+
+func TestIDEMonacoServedFromDir(t *testing.T) {
+	fs, _ := newWorkspace(t)
+	mdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mdir, "loader.js"), []byte("// monaco loader"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := ideServerWithMonaco(fs, mdir)
+	rec := authGet(srv, http.MethodGet, "/ide/vs/loader.js", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "monaco loader") {
+		t.Fatalf("monaco loader = %d (%s)", rec.Code, rec.Body.String())
 	}
 }

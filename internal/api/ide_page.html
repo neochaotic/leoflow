@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Leoflow Lite — Editor</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; font: 13px/1.5 system-ui, -apple-system, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 6px 12px; background: #1e293b; color: #e2e8f0; flex: 0 0 auto;
+  }
+  header .badge {
+    background: rgba(100,116,139,.92); color: #fff; font-weight: 600;
+    letter-spacing: 2px; font-size: 10px; padding: 1px 8px; border-radius: 4px;
+  }
+  header .path { color: #94a3b8; font-family: ui-monospace, monospace; font-size: 12px; }
+  header .spacer { flex: 1; }
+  header button {
+    background: #334155; color: #e2e8f0; border: 1px solid #475569;
+    border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 12px;
+  }
+  header button:hover { background: #475569; }
+  #main { display: flex; flex: 1; min-height: 0; }
+  #tree {
+    width: 240px; flex: 0 0 auto; overflow: auto; padding: 6px 0;
+    background: #f8fafc; border-right: 1px solid #e2e8f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    #tree { background: #0f172a; border-right-color: #1e293b; }
+  }
+  #tree .node {
+    padding: 2px 10px 2px 0; cursor: pointer; white-space: nowrap;
+    font-family: ui-monospace, monospace; font-size: 12px; user-select: none;
+  }
+  #tree .node:hover { background: rgba(100,116,139,.15); }
+  #tree .node.active { background: rgba(59,130,246,.20); }
+  #tree .node.dir { color: #64748b; }
+  #editor { flex: 1; min-width: 0; }
+  #status {
+    flex: 0 0 auto; padding: 3px 12px; font-size: 11px;
+    background: #1e293b; color: #94a3b8; font-family: ui-monospace, monospace;
+  }
+  #unprovisioned {
+    margin: auto; max-width: 560px; padding: 40px; text-align: center; color: #475569;
+  }
+  #unprovisioned code { background: rgba(100,116,139,.18); padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="badge">LITE</span>
+  <strong>Leoflow</strong> Editor
+  <span class="path" id="current-path"></span>
+  <span class="spacer"></span>
+  <button id="btn-new">New file</button>
+  <button id="btn-delete">Delete</button>
+  <button id="btn-save">Save (⌘S)</button>
+</header>
+<div id="main">
+  <div id="tree">loading…</div>
+  <div id="editor"></div>
+</div>
+<div id="status">ready</div>
+
+<script>
+// Minimal Leoflow Lite editor: a file tree backed by /api/v2/ide/* and a Monaco
+// editor served from /ide/vs (provisioned by `leoflow setup`). Same-origin, so
+// the auth cookie authenticates every request — no token handling here.
+const api = {
+  tree:   () => fetch("/api/v2/ide/tree").then(r => r.json()),
+  read:   (p) => fetch("/api/v2/ide/file?path=" + encodeURIComponent(p)).then(r => r.json()),
+  write:  (p, content) => fetch("/api/v2/ide/file", { method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path: p, content }) }),
+  create: (p, dir) => fetch("/api/v2/ide/file", { method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path: p, dir: !!dir }) }),
+  remove: (p) => fetch("/api/v2/ide/file?path=" + encodeURIComponent(p), { method: "DELETE" }),
+};
+
+const statusEl = document.getElementById("status");
+const pathEl = document.getElementById("current-path");
+const setStatus = (m) => { statusEl.textContent = m; };
+let current = null, editor = null;
+
+// Map a file extension to a Monaco language id (highlighting only; no LSP).
+function languageFor(path) {
+  const ext = path.split(".").pop().toLowerCase();
+  return ({ py: "python", yaml: "yaml", yml: "yaml", json: "json",
+            md: "markdown", sh: "shell", toml: "ini", txt: "plaintext",
+            dockerfile: "dockerfile" })[ext] || "plaintext";
+}
+
+async function refreshTree() {
+  const treeEl = document.getElementById("tree");
+  try {
+    const { entries } = await api.tree();
+    treeEl.innerHTML = "";
+    (entries || []).forEach((e) => {
+      const div = document.createElement("div");
+      div.className = "node" + (e.is_dir ? " dir" : "");
+      div.style.paddingLeft = (10 + e.path.split("/").length * 12) + "px";
+      div.textContent = (e.is_dir ? "▸ " : "") + e.name;
+      div.dataset.path = e.path;
+      if (!e.is_dir) div.onclick = () => openFile(e.path);
+      if (e.path === current) div.classList.add("active");
+      treeEl.appendChild(div);
+    });
+    if (!entries || entries.length === 0) treeEl.textContent = "empty workspace";
+  } catch (err) { setStatus("tree error: " + err); }
+}
+
+async function openFile(path) {
+  try {
+    const { content } = await api.read(path);
+    current = path;
+    pathEl.textContent = path;
+    const model = monaco.editor.createModel(content, languageFor(path));
+    editor.setModel(model);
+    setStatus("opened " + path);
+    document.querySelectorAll("#tree .node").forEach((n) =>
+      n.classList.toggle("active", n.dataset.path === path));
+  } catch (err) { setStatus("open error: " + err); }
+}
+
+async function save() {
+  if (!current) { setStatus("nothing open"); return; }
+  const res = await api.write(current, editor.getValue());
+  setStatus(res.ok ? "saved " + current : "save failed (" + res.status + ")");
+}
+
+async function newFile() {
+  const p = prompt("New file path (relative to workspace):");
+  if (!p) return;
+  const res = await api.create(p, false);
+  if (res.ok) { await refreshTree(); openFile(p); }
+  else setStatus("create failed (" + res.status + ")");
+}
+
+async function deleteCurrent() {
+  if (!current) { setStatus("nothing open"); return; }
+  if (!confirm("Delete " + current + "?")) return;
+  const res = await api.remove(current);
+  if (res.ok) { current = null; pathEl.textContent = ""; editor.setValue(""); await refreshTree(); setStatus("deleted"); }
+  else setStatus("delete failed (" + res.status + ")");
+}
+
+function bootEditor() {
+  const dark = matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+  const q = new URLSearchParams(location.search).get("theme");
+  const theme = (q === "light" ? "vs" : q === "dark" ? "vs-dark" : (dark ? "vs-dark" : "vs"));
+  require.config({ paths: { vs: "/ide/vs" } });
+  require(["vs/editor/editor.main"], () => {
+    editor = monaco.editor.create(document.getElementById("editor"), {
+      value: "", language: "plaintext", theme, automaticLayout: true, minimap: { enabled: false },
+    });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, save);
+    document.getElementById("btn-save").onclick = save;
+    document.getElementById("btn-new").onclick = newFile;
+    document.getElementById("btn-delete").onclick = deleteCurrent;
+    refreshTree();
+    setStatus("ready");
+  });
+}
+
+// Probe that Monaco was provisioned; if not, show the setup hint.
+fetch("/ide/vs/loader.js", { method: "HEAD" }).then((r) => {
+  if (r.ok) {
+    const s = document.createElement("script");
+    s.src = "/ide/vs/loader.js";
+    s.onload = bootEditor;
+    s.onerror = showUnprovisioned;
+    document.head.appendChild(s);
+  } else { showUnprovisioned(); }
+}).catch(showUnprovisioned);
+
+function showUnprovisioned() {
+  document.getElementById("editor").innerHTML =
+    '<div id="unprovisioned"><h2>Editor not provisioned</h2>' +
+    '<p>The Monaco editor assets are not installed yet. Run ' +
+    '<code>leoflow setup</code> (or <code>leoflow lite provision</code>) to fetch them, ' +
+    'then reload this page.</p></div>';
+  setStatus("monaco not provisioned");
+}
+</script>
+</body>
+</html>

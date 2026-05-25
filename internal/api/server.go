@@ -69,6 +69,11 @@ type Dependencies struct {
 	// filesystem API is not registered (Production, or Lite without a workspace).
 	Workspace WorkspaceFS
 
+	// MonacoDir is the directory holding the pinned Monaco bundle that
+	// `leoflow setup` fetched; the editor page is served Monaco from it. Empty or
+	// missing makes the page show a setup hint instead of a broken editor.
+	MonacoDir string
+
 	// SchedulerHealth reports the scheduler's heartbeat for /monitor/health.
 	// When nil the component reports healthy (single-process role assumption).
 	SchedulerHealth Heartbeater
@@ -119,7 +124,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIConnections(r, deps.Connections, deps.ConnectionTest)
 	registerUIFavorites(r, deps.Favorites)
 	registerImportErrors(r, deps.ImportErrors)
-	registerIDE(r, deps.Workspace)
+	registerIDE(r, deps.Workspace, deps.MonacoDir)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

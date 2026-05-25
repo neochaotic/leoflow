@@ -74,8 +74,15 @@ new browser tab from an injected "IDE" button in the served UI shell.
   confined to the workspace root (reject absolute paths and `..` traversal), and is
   Lite-only / loopback-or-trusted-network only, consistent with Lite's "run on an
   internal network/VPN" posture.
-- **Assets**: the Monaco bundle is vendored/served by the control plane (pinned),
-  consistent with the supply-chain stance (ADR 0014).
+- **Assets / binary weight**: Monaco's bundle (~5 MB) is **not embedded in the
+  binary**. It is fetched once by `leoflow setup` / `leoflow lite provision` into
+  the managed home (`~/.leoflow/assets/monaco/<pinned-version>/`), SHA-256-verified
+  (the same download-and-verify path used for the relocatable Python), and served
+  same-origin from there by the control plane. This keeps the binary light, works
+  offline after the one-time fetch, and stays pinned + checksummed per the
+  supply-chain stance (ADR 0014). Only the small editor page (a few KB of
+  HTML/JS) is embedded. If Monaco is not yet provisioned, the page shows a
+  `leoflow setup` hint instead of a broken editor.
 - **Production**: out of scope — enterprise teams use their own IDE and the GitOps
   deploy flow.
 

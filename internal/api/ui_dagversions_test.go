@@ -32,7 +32,7 @@ func versionsServer(dags []domain.DAG, versions []domain.DagVersion) *gin.Engine
 
 func TestDagVersionsEndpoint(t *testing.T) {
 	srv := versionsServer([]domain.DAG{{DagID: "etl"}},
-		[]domain.DagVersion{{ID: "v-uuid", VersionNumber: 1, CreatedAt: time.Now().UTC()}})
+		[]domain.DagVersion{{ID: "v-uuid", VersionNumber: 1, CreatedAt: time.Now().UTC(), Version: "v1.2.3-abc123"}})
 	rec := authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagVersions?order_by=-version_number", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/dagVersions = %d (%s)", rec.Code, rec.Body.String())
@@ -51,6 +51,10 @@ func TestDagVersionsEndpoint(t *testing.T) {
 	// version_number drives the Graph view's structure_data fetch — must be present.
 	if v["version_number"].(float64) != 1 {
 		t.Errorf("version_number = %v, want 1", v["version_number"])
+	}
+	// The deployment label is surfaced as bundle_version (traceability).
+	if v["bundle_version"] != "v1.2.3-abc123" {
+		t.Errorf("bundle_version (deployment id) = %v, want v1.2.3-abc123", v["bundle_version"])
 	}
 	for _, f := range []string{"id", "dag_id", "bundle_name", "created_at", "dag_display_name", "bundle_version", "bundle_url"} {
 		if _, ok := v[f]; !ok {

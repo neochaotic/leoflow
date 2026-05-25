@@ -25,6 +25,10 @@ type DagVersion struct {
 	ID            string
 	VersionNumber int
 	CreatedAt     time.Time
+	// Version is the deployment label that produced this snapshot: a git describe
+	// (tag/SHA) in production, or "dev-<timestamp>" in dev. It is the stable
+	// per-deployment identifier under a stable dag_id.
+	Version string
 }
 
 // DagRun is an execution of a DAG, identified by dag_id + run_id.

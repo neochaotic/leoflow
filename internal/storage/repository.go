@@ -441,6 +441,7 @@ func (r *Repository) ListDagVersions(ctx context.Context, tenant, dagID string) 
 			ID:            uuidToString(row.ID),
 			VersionNumber: int(row.VersionNumber),
 			CreatedAt:     timeVal(row.CreatedAt),
+			Version:       row.Version,
 		})
 	}
 	return out, nil

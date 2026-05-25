@@ -18,8 +18,10 @@ type DagVersionLister interface {
 	ListDagVersions(ctx context.Context, tenant, dagID string) ([]domain.DagVersion, error)
 }
 
-// dagVersionDTO is the Airflow 3.2.1 DAGVersionResponse. Leoflow has no bundle
-// concept, so bundle_version/bundle_url are null and bundle_name is a constant.
+// dagVersionDTO is the Airflow 3.2.1 DAGVersionResponse. Leoflow surfaces the
+// deployment label (git describe in prod, "dev-<ts>" in dev) as bundle_version —
+// Airflow's field for the deployed bundle's version — so a run is traceable to
+// its deployment. bundle_url is null; bundle_name is a constant.
 type dagVersionDTO struct {
 	ID             string    `json:"id"`
 	VersionNumber  int       `json:"version_number"`
@@ -43,6 +45,7 @@ func toDagVersionDTO(dagID string, v domain.DagVersion) dagVersionDTO {
 		VersionNumber:  v.VersionNumber,
 		DagID:          dagID,
 		BundleName:     "leoflow",
+		BundleVersion:  strPtrOrNil(v.Version),
 		CreatedAt:      v.CreatedAt,
 		DagDisplayName: dagID,
 	}

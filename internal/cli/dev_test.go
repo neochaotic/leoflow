@@ -163,7 +163,7 @@ func TestWaitForReadyHonorsCancel(t *testing.T) {
 }
 
 func TestNewDevCommandFlagDefaults(t *testing.T) {
-	cmd := newDevCommand()
+	cmd := newLiteCommand()
 	for flag, want := range map[string]string{
 		"compose": "docker-compose.dev.yaml",
 		"image":   "leoflow-dev:local",

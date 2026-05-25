@@ -87,19 +87,20 @@ type devOptions struct {
 // devURL is the dev UI/API base for the given HTTP port.
 func devURL(port int) string { return fmt.Sprintf("http://localhost:%d", port) }
 
-func newDevCommand() *cobra.Command {
+func newLiteCommand() *cobra.Command {
 	var o devOptions
 	cmd := &cobra.Command{
-		Use:   "dev [path]",
-		Short: "Run the project locally with hot reload.",
-		Long: "dev brings up local dependencies and runs the control plane against an " +
-			"isolated dev database, registers the DAG, and hot-reloads on every save. The " +
-			"Airflow UI is served on a dev-specific port (default 8088, --port), marked as the " +
-			"DEV environment, with no login — distinct from the demo/production defaults so the " +
-			"two can run side by side.\n\nExecutor (default k8s): 'k8s' runs real pod-per-task on " +
-			"a dedicated, isolated k3d cluster (leoflow-dev) — highest fidelity, rebuilds the DAG " +
-			"image on each change. 'subprocess' runs tasks unsandboxed on the host with no image " +
-			"build — the fast inner loop. Run from the leoflow source tree.",
+		Use:     "lite [path]",
+		Aliases: []string{"dev"},
+		Short:   "Run Leoflow Lite locally with hot reload.",
+		Long: "lite is the Leoflow Lite edition: it brings up local dependencies and runs the " +
+			"control plane against an isolated local database, registers the DAG, and hot-reloads " +
+			"on every save. The UI is served on a Lite port (default 8088, --port), marked with a " +
+			"LITE badge, and behind a login (the admin created by `leoflow setup`).\n\nExecutor " +
+			"(--executor): 'subprocess' runs tasks unsandboxed on the host with no image build — " +
+			"the fast inner loop, best for local use. 'k8s' runs real pod-per-task on a dedicated, " +
+			"isolated k3d mini-cluster (leoflow-dev) — highest fidelity, best for development; it " +
+			"rebuilds the DAG image on each change.\n\n('leoflow dev' remains as a deprecated alias.)",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."

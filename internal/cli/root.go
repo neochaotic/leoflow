@@ -32,7 +32,7 @@ func NewRootCommand() *cobra.Command {
 		newInitCommand(),
 		newValidateCommand(),
 		newCompileCommand(),
-		newDevCommand(),
+		newLiteCommand(),
 		newDBCommand(),
 		newPushCommand(),
 		newDagsCommand(),

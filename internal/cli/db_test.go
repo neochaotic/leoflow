@@ -37,7 +37,7 @@ func TestBrewInstallArgs(t *testing.T) {
 
 func TestDevSetupSubcommandWired(t *testing.T) {
 	var has bool
-	for _, c := range newDevCommand().Commands() {
+	for _, c := range newLiteCommand().Commands() {
 		if c.Name() == "setup" {
 			has = true
 		}

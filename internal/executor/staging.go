@@ -73,10 +73,17 @@ func (e *KubernetesExecutor) ensureStagingClaim(ctx context.Context, req Request
 	return nil
 }
 
-// GCStagingClaims deletes staging PVCs whose run is terminal and which are older
-// than ttl. isTerminal reports whether a run has finished; the TTL is the grace
-// window so a clear+re-run shortly after a failure still finds the data (ADR
-// 0022). It mirrors the pod Reconciler.
+// stagingTerminalAnnotation records when GC first observed a run terminal. The
+// post-terminal TTL (ADR 0022) is measured from this stamp — not from PVC
+// creation, which would expire the volume while the run was still active — and it
+// is cleared if the run goes active again so a clear+re-run restarts the clock.
+const stagingTerminalAnnotation = "leoflow.io/terminal-since"
+
+// GCStagingClaims deletes staging PVCs whose run has been terminal for longer
+// than ttl. isTerminal reports whether a run has finished; the TTL is measured
+// from when the run first became terminal (ADR 0022's "24h post-terminal TTL"),
+// the grace window so a clear+re-run shortly after a failure still finds the
+// data. It mirrors the pod Reconciler.
 func (e *KubernetesExecutor) GCStagingClaims(ctx context.Context, isTerminal func(runID string) bool, ttl time.Duration) error {
 	list, err := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: stagingLabel + "=true",
@@ -84,16 +91,71 @@ func (e *KubernetesExecutor) GCStagingClaims(ctx context.Context, isTerminal fun
 	if err != nil {
 		return fmt.Errorf("listing staging PVCs: %w", err)
 	}
-	cutoff := time.Now().Add(-ttl)
+	now := time.Now()
 	for i := range list.Items {
 		pvc := &list.Items[i]
 		runID := pvc.Annotations[stagingRunIDAnnotation]
-		if !isTerminal(runID) || pvc.CreationTimestamp.After(cutoff) {
+		stamp := pvc.Annotations[stagingTerminalAnnotation]
+		if !isTerminal(runID) {
+			if stamp != "" { // re-activated: restart the post-terminal clock
+				if serr := e.setStagingTerminalStamp(ctx, pvc.Name, ""); serr != nil {
+					return serr
+				}
+			}
 			continue
 		}
-		if err := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("deleting staging PVC %s: %w", pvc.Name, err)
+		since, ok := parseStagingStamp(stamp)
+		if !ok {
+			// First sweep that sees the run terminal (or a corrupt stamp): stamp
+			// now so the TTL starts at terminal, and keep the volume this round.
+			if serr := e.setStagingTerminalStamp(ctx, pvc.Name, now.UTC().Format(time.RFC3339)); serr != nil {
+				return serr
+			}
+			continue
 		}
+		if now.Sub(since) <= ttl {
+			continue
+		}
+		if derr := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			return fmt.Errorf("deleting staging PVC %s: %w", pvc.Name, derr)
+		}
+	}
+	return nil
+}
+
+// parseStagingStamp parses the terminal-since annotation, reporting whether it
+// held a usable timestamp.
+func parseStagingStamp(stamp string) (time.Time, bool) {
+	if stamp == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// setStagingTerminalStamp sets (value != "") or clears (value == "") the
+// terminal-since annotation on a staging PVC. A missing PVC is not an error.
+func (e *KubernetesExecutor) setStagingTerminalStamp(ctx context.Context, name, value string) error {
+	pvc, err := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("reading staging PVC %s: %w", name, err)
+	}
+	if pvc.Annotations == nil {
+		pvc.Annotations = map[string]string{}
+	}
+	if value == "" {
+		delete(pvc.Annotations, stagingTerminalAnnotation)
+	} else {
+		pvc.Annotations[stagingTerminalAnnotation] = value
+	}
+	if _, err := e.clientset.CoreV1().PersistentVolumeClaims(e.namespace).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("stamping staging PVC %s: %w", name, err)
 	}
 	return nil
 }

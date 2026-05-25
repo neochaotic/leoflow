@@ -54,37 +54,65 @@ func TestEnsureStagingClaimIsIdempotent(t *testing.T) {
 	}
 }
 
+// The TTL is measured from when the run became terminal (ADR 0022: "24h
+// post-terminal TTL"), not from PVC creation. GC stamps a PVC the first sweep it
+// sees the run terminal, deletes it once that stamp ages past the TTL, and clears
+// the stamp if the run goes active again (clear+re-run restarts the clock).
 func TestGCStagingClaims(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	e := NewKubernetesExecutor(cs, "leoflow")
-	old := metav1.NewTime(time.Now().Add(-48 * time.Hour))
-	recent := metav1.NewTime(time.Now())
-	mk := func(name, runID string, created metav1.Time) {
+	oldStamp := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	recentStamp := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	created48h := metav1.NewTime(time.Now().Add(-48 * time.Hour))
+	mk := func(name, runID string, terminalSince string) {
+		ann := map[string]string{"leoflow.io/run-id": runID}
+		if terminalSince != "" {
+			ann[stagingTerminalAnnotation] = terminalSince
+		}
 		_, _ = cs.CoreV1().PersistentVolumeClaims("leoflow").Create(context.Background(), &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: name, CreationTimestamp: created,
+				Name: name, CreationTimestamp: created48h, // all old by creation; only terminal time matters
 				Labels:      map[string]string{"leoflow.io/staging": "true"},
-				Annotations: map[string]string{"leoflow.io/run-id": runID},
+				Annotations: ann,
 			},
 		}, metav1.CreateOptions{})
 	}
-	mk("s-terminal-old", "run-done-old", old)    // terminal + past TTL -> delete
-	mk("s-terminal-new", "run-done-new", recent) // terminal but within TTL -> keep
-	mk("s-running", "run-active", old)           // not terminal -> keep
+	mk("s-terminal-stamped-old", "run-done-old", oldStamp)    // terminal > TTL ago -> delete
+	mk("s-terminal-stamped-new", "run-done-new", recentStamp) // terminal recently -> keep
+	mk("s-terminal-unstamped", "run-just-done", "")           // first sweep: stamp + keep (even though created 48h ago)
+	mk("s-running-stale-stamp", "run-active", oldStamp)       // re-activated -> keep + clear stamp
 
-	terminal := map[string]bool{"run-done-old": true, "run-done-new": true}
-	if err := e.GCStagingClaims(context.Background(), func(runID string) bool { return terminal[runID] }, 24*time.Hour); err != nil {
+	terminal := map[string]bool{"run-done-old": true, "run-done-new": true, "run-just-done": true}
+	gc := func() error {
+		return e.GCStagingClaims(context.Background(), func(runID string) bool { return terminal[runID] }, 24*time.Hour)
+	}
+	if err := gc(); err != nil {
 		t.Fatalf("GC: %v", err)
 	}
-	left, _ := cs.CoreV1().PersistentVolumeClaims("leoflow").List(context.Background(), metav1.ListOptions{})
-	names := map[string]bool{}
-	for _, p := range left.Items {
-		names[p.Name] = true
+	get := func(name string) *corev1.PersistentVolumeClaim {
+		p, err := cs.CoreV1().PersistentVolumeClaims("leoflow").Get(context.Background(), name, metav1.GetOptions{})
+		if err != nil {
+			return nil
+		}
+		return p
 	}
-	if names["s-terminal-old"] {
-		t.Error("terminal PVC past TTL should be deleted")
+	if get("s-terminal-stamped-old") != nil {
+		t.Error("terminal PVC stamped past TTL should be deleted")
 	}
-	if !names["s-terminal-new"] || !names["s-running"] {
-		t.Errorf("kept set wrong: %v (want s-terminal-new + s-running)", names)
+	if get("s-terminal-stamped-new") == nil {
+		t.Error("terminal PVC stamped within TTL should be kept")
+	}
+	// Unstamped terminal PVC: kept this sweep, but now stamped (so it is NOT
+	// deleted just for being old — the clock starts at terminal, not creation).
+	if p := get("s-terminal-unstamped"); p == nil {
+		t.Error("unstamped terminal PVC should be kept on first sweep")
+	} else if p.Annotations[stagingTerminalAnnotation] == "" {
+		t.Error("unstamped terminal PVC should be stamped with the terminal time")
+	}
+	// Re-activated run: kept, and its stale terminal stamp cleared.
+	if p := get("s-running-stale-stamp"); p == nil {
+		t.Error("active run's PVC should be kept")
+	} else if p.Annotations[stagingTerminalAnnotation] != "" {
+		t.Error("re-activated run's PVC should have its terminal stamp cleared")
 	}
 }

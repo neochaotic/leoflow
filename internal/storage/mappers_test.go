@@ -101,3 +101,35 @@ func TestMapTaskInstance(t *testing.T) {
 		t.Errorf("unexpected ti: %+v", ti)
 	}
 }
+
+func TestTimeFromAny(t *testing.T) {
+	now := time.Now().UTC()
+	if p := timeFromAny(now); p == nil || !p.Equal(now) {
+		t.Errorf("timeFromAny(time.Time) should return it, got %v", p)
+	}
+	// Anything that is not a time.Time (wrong type, nil) must yield nil, not panic.
+	for _, v := range []any{nil, "2026-01-02", 12345, []byte("x"), (*time.Time)(nil)} {
+		if p := timeFromAny(v); p != nil {
+			t.Errorf("timeFromAny(%T) should be nil, got %v", v, p)
+		}
+	}
+}
+
+func TestParseTimestamptz(t *testing.T) {
+	for _, ok := range []string{
+		"2026-01-02T03:04:05Z",      // RFC3339
+		"2026-01-02T03:04:05+02:00", // RFC3339 with offset
+		"2026-01-02T03:04:05",       // no zone
+		"2026-01-02",                // date only
+	} {
+		if ts := parseTimestamptz(ok); !ts.Valid {
+			t.Errorf("parseTimestamptz(%q) should be valid", ok)
+		}
+	}
+	// Empty and unparseable inputs yield NULL (invalid), never a panic.
+	for _, bad := range []string{"", "nope", "2026-13-99", "01/02/2026", "now"} {
+		if ts := parseTimestamptz(bad); ts.Valid {
+			t.Errorf("parseTimestamptz(%q) should be invalid (NULL)", bad)
+		}
+	}
+}

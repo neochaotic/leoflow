@@ -3,6 +3,7 @@ package observability
 import (
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -31,6 +32,46 @@ func touchAll(m *Metrics) {
 	m.PodsRunning.Set(3)
 	m.PodPendingDuration.Observe(1)
 	m.KubernetesAPICalls.WithLabelValues("create_pod", "success").Inc()
+}
+
+func TestRecordersIncrementCounters(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+	m.RecordHTTPRequest("GET", "/api/v2/dags", 200, 5*time.Millisecond)
+	m.RecordSchedulerDecision("panic")    // backs the scheduler resilience metric
+	m.RecordUndispatchable("no_executor") // backs the undispatchable signal (#46)
+
+	// Each recorder must have incremented its counter to 1.
+	for name, want := range map[string]float64{
+		"leoflow_http_requests_total":        1,
+		"leoflow_scheduler_decisions_total":  1,
+		"leoflow_tasks_undispatchable_total": 1,
+	} {
+		if got := counterTotal(t, reg, name); got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// counterTotal sums every sample of the named counter family in reg.
+func counterTotal(t *testing.T, reg *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fam := range families {
+		if fam.GetName() != name {
+			continue
+		}
+		var sum float64
+		for _, met := range fam.GetMetric() {
+			sum += met.GetCounter().GetValue()
+		}
+		return sum
+	}
+	t.Fatalf("counter %q not found in registry", name)
+	return 0
 }
 
 func TestRecordTaskDurationObserves(t *testing.T) {

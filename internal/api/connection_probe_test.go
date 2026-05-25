@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +87,36 @@ func TestDefaultConnectionTesterReachability(t *testing.T) {
 		domain.Connection{ConnType: "postgres", Host: "127.0.0.1", Port: &port})
 	if ok2 {
 		t.Errorf("closed port should be unreachable")
+	}
+}
+
+func TestHTTPReachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	// The httptest URL already carries the http:// scheme.
+	if ok, msg := testHTTPReachable(context.Background(), domain.Connection{ConnType: "http", Host: srv.URL}); !ok || msg != "HTTP 200" {
+		t.Errorf("200 should be reachable, got ok=%v msg=%q", ok, msg)
+	}
+
+	// A 5xx is treated as unreachable (the endpoint is up but unhealthy).
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer bad.Close()
+	if ok, _ := testHTTPReachable(context.Background(), domain.Connection{ConnType: "http", Host: bad.URL}); ok {
+		t.Error("a 502 should be reported unreachable")
+	}
+
+	// A bare host (no scheme) gets http:// prepended and still resolves.
+	host := strings.TrimPrefix(srv.URL, "http://")
+	if ok, msg := testHTTPReachable(context.Background(), domain.Connection{ConnType: "http", Host: host}); !ok {
+		t.Errorf("scheme should be prepended for a bare host, got ok=%v msg=%q", ok, msg)
+	}
+
+	// A host that cannot connect fails cleanly (no panic), reporting the failure.
+	if ok, msg := testHTTPReachable(context.Background(), domain.Connection{ConnType: "http", Host: "127.0.0.1:1"}); ok || msg == "" {
+		t.Errorf("an unreachable host should fail with a message, got ok=%v msg=%q", ok, msg)
 	}
 }

@@ -20,18 +20,23 @@ and then runs [`leoflow setup`](#what-leoflow-setup-does).
 ## What you need
 
 Almost nothing. The control plane, CLI, and agent are **static Go binaries**, and
-`leoflow setup` provisions a Python 3.11 itself if you don't have one. The only
-things that unlock higher tiers are Docker and a cluster — and those are optional:
+`leoflow setup` provisions a Python 3.11 itself if you don't have one.
 
-| Tier | Needs | For |
-|---|---|---|
-| **0 — subprocess** | just the install (binaries + a managed Python) | small projects, zero Docker/k8s |
-| **1 — docker** | + Docker | pod-per-task isolation, no Kubernetes |
-| **2 — k8s** | + Docker (k3d/kubectl fetched on demand) | a local Kubernetes executor |
+There are **two execution paths** — and **no Docker executor**, on purpose
+([ADR 0015](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0015-kubernetes-only-execution.md)):
+the Docker Go SDK carries an unfixable advisory (Moby AuthZ bypass, GO-2026-4887)
+that would reach the control-plane binary and fail the security gate. So:
 
-`leoflow setup` **detects what's present and picks the highest tier available**;
-without Docker it falls back to the subprocess tier. Run
-[`leoflow doctor`](#leoflow-doctor) anytime to see where you stand.
+| Executor | Needs | Isolation | For |
+|---|---|---|---|
+| **subprocess** | just the install (binaries + a managed Python) | none (dev-only) | fast local iteration, small projects |
+| **kubernetes** | + Docker (to host a local **k3d** cluster; k3d/kubectl fetched on demand) | real pods | production parity, the staging volume, resource limits |
+
+Docker, when present, is only the engine that **hosts the local k3d cluster** —
+it is never an executor itself. `leoflow setup` **detects what's present and
+picks the highest path available**; without Docker it uses subprocess. Run
+[`leoflow doctor`](#leoflow-doctor) anytime to see where you stand, and see
+[Choosing an executor](dev-workflow.md#choosing-an-executor) for the trade-offs.
 
 ## What `leoflow setup` does
 
@@ -107,10 +112,9 @@ leoflow doctor
   k3d           not found (fetched on demand for the k8s tier)
   kubectl       not found (fetched on demand for the k8s tier)
 
-  recommended tier: k8s
-    tier 0 subprocess  always available
-    tier 1 docker      available (Docker present; k3d/kubectl fetched on demand)
-    tier 2 k8s         available (Docker present; k3d/kubectl fetched on demand)
+  recommended executor: k8s
+    subprocess  always available (dev-only, no isolation)
+    kubernetes  available (Docker present; k3d/kubectl fetched on demand)
 
   next: run `leoflow setup` to bootstrap the managed runtime.
 ```

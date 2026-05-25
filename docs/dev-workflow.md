@@ -23,6 +23,32 @@ leoflow dev dags/my_dag     # hot-reload at http://localhost:8088 (marked DEV)
 These numbers are the time from **save** to the **new version registered in the
 control plane** (measured against the `lifecycle` example).
 
+## Choosing an executor
+
+There are **only these two** — and deliberately **no Docker executor**
+([ADR 0015](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0015-kubernetes-only-execution.md)).
+A Docker-socket executor would mean importing the Docker Go SDK
+(`github.com/docker/docker`), which carries an unfixable advisory (Moby AuthZ
+bypass, GO-2026-4887) reachable from the control-plane binary — it would fail the
+security gate (ADR 0014) — and talking to the Docker socket is itself a
+root-equivalent privilege-escalation surface. So **Kubernetes is the sole
+container path** (the same `KubernetesExecutor` locally and in production), and
+**subprocess is a dev-only, unisolated escape hatch**. Docker, when installed, is
+only the engine that hosts the local k3d cluster — never an executor.
+
+| | `subprocess` | `k8s` (k3d / prod) |
+|---|---|---|
+| Speed (per task, reload) | fastest — host process, no build | slower — image build + pod schedule |
+| Isolation | **none** (shared host venv) | real pods (limits, RBAC) |
+| Production fidelity | low | **high** (identical path to prod) |
+| Moving parts that can break | few (just the venv) | more (cluster, scheduler, registry, PVC) |
+| Shared `/staging` volume (ADR 0022) | **not provided** (`LEOFLOW_STAGING_DIR` unset; tasks have direct host-disk access instead) | **yes** — per-run PVC at `/staging`, `LEOFLOW_STAGING_DIR` set, GC'd |
+
+Rule of thumb: iterate on DAG logic in **`subprocess`** (instant loop), then
+validate in **`k8s`** before deploy — especially anything that uses the staging
+volume, resource limits, Connections injection, or other pod-only behavior, since
+those only exist on the Kubernetes path.
+
 ## The edit → reload → see-it cycle
 
 On save, the watcher recompiles and registers a **new DAG version** in seconds.

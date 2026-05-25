@@ -13,12 +13,13 @@ import (
 type Tier int
 
 const (
-	// TierSubprocess runs tasks in the managed venv on the host: binaries +
-	// Python + Postgres + Redis, no Docker or Kubernetes.
+	// TierSubprocess runs the agent directly on the host with no isolation — the
+	// dev-only escape hatch (ADR 0015). Fastest loop; no Docker or Kubernetes.
 	TierSubprocess Tier = iota
-	// TierDocker adds Docker: Postgres/Redis via compose and pod-per-task.
-	TierDocker
-	// TierK8s adds k3d/kubectl for a local Kubernetes executor.
+	// TierK8s runs each task in an ephemeral pod via client-go, on a local
+	// single-node cluster (k3d) or a real cluster. The sole container path
+	// (ADR 0015); Docker is only the engine that hosts the local cluster, never
+	// an executor itself.
 	TierK8s
 )
 
@@ -27,8 +28,6 @@ func (t Tier) String() string {
 	switch t {
 	case TierSubprocess:
 		return "subprocess"
-	case TierDocker:
-		return "docker"
 	case TierK8s:
 		return "k8s"
 	default:

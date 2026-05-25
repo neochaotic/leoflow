@@ -55,10 +55,12 @@ func renderDoctor(w io.Writer, r setup.Report) {
 	p("  k3d           %s\n", found(r.K3d, "found", "not found (fetched on demand for the k8s tier)"))
 	p("  kubectl       %s\n", found(r.Kubectl, "found", "not found (fetched on demand for the k8s tier)"))
 
-	p("\n  recommended tier: %s\n", r.Tier)
-	p("    tier 0 subprocess  always available\n")
-	p("    tier 1 docker      %s\n", availability(r.Docker))
-	p("    tier 2 k8s         %s\n", availability(r.Docker))
+	// Two execution paths only — no Docker executor (ADR 0015): the Docker SDK
+	// carries an unfixable advisory, so Kubernetes (local k3d or prod) is the
+	// sole container path and subprocess is the dev-only, unisolated escape hatch.
+	p("\n  recommended executor: %s\n", r.Tier)
+	p("    subprocess  always available (dev-only, no isolation)\n")
+	p("    kubernetes  %s\n", availability(r.Docker))
 
 	if r.UnderMnt {
 		p("\n  WARNING: this directory is under /mnt (WSL). Keep your project in the WSL\n")

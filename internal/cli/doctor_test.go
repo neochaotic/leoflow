@@ -34,7 +34,7 @@ func TestDoctorCommand(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("doctor err = %v", err)
 	}
-	if !strings.Contains(out.String(), "leoflow doctor") || !strings.Contains(out.String(), "recommended tier") {
+	if !strings.Contains(out.String(), "leoflow doctor") || !strings.Contains(out.String(), "recommended executor") {
 		t.Errorf("doctor output unexpected:\n%s", out.String())
 	}
 }
@@ -51,7 +51,7 @@ func TestRenderDoctor(t *testing.T) {
 		for _, want := range []string{
 			"linux/amd64 (glibc)",
 			"/usr/bin/python3.11",
-			"recommended tier: k8s",
+			"recommended executor: k8s",
 			"available (Docker present",
 		} {
 			if !strings.Contains(out, want) {
@@ -71,7 +71,7 @@ func TestRenderDoctor(t *testing.T) {
 		for _, want := range []string{
 			"linux/arm64 (musl)",
 			"will download a relocatable CPython",
-			"recommended tier: subprocess",
+			"recommended executor: subprocess",
 			"needs Docker (not detected)",
 			"WSL",
 			"leoflow setup",

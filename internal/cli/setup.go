@@ -77,7 +77,7 @@ func runSetup(cmd *cobra.Command, workspace string, dryRun, skipPythonDeps bool)
 		LookPath: exec.LookPath, Stat: os.Stat, Getwd: os.Getwd,
 	})
 
-	_, _ = fmt.Fprintf(out, "leoflow setup\n\n  platform   %s/%s%s\n  tier       %s\n  workspace  %s\n\n", //nolint:errcheck // best-effort terminal output
+	_, _ = fmt.Fprintf(out, "leoflow setup\n\n  platform   %s/%s%s\n  executor   %s\n  workspace  %s\n\n", //nolint:errcheck // best-effort terminal output
 		r.OS, r.Arch, libcSuffix(r.Libc), r.Tier, workspace)
 
 	if r.Python311 {

@@ -1,6 +1,7 @@
 # ADR 0005: Hybrid DAG Authoring with Compile-Time Parsing
 
 **Status:** Accepted
+**Refined by:** [ADR 0024](0024-dag-parsing-structural-shim.md) — the parser extracts the graph via a dependency-free structural shim of Airflow, not the official Airflow SDK.
 **Date:** 2026-05-21
 
 ## Context

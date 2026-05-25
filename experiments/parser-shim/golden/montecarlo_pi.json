@@ -1,0 +1,42 @@
+{
+  "dag_id": "montecarlo_pi",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "depends_on": [
+        "estimate",
+        "estimate__1",
+        "estimate__2",
+        "estimate__3"
+      ],
+      "entrypoint": "dag:combine",
+      "task_id": "combine",
+      "type": "python"
+    },
+    {
+      "entrypoint": "dag:estimate",
+      "task_id": "estimate",
+      "type": "python"
+    },
+    {
+      "entrypoint": "dag:estimate",
+      "task_id": "estimate__1",
+      "type": "python"
+    },
+    {
+      "entrypoint": "dag:estimate",
+      "task_id": "estimate__2",
+      "type": "python"
+    },
+    {
+      "entrypoint": "dag:estimate",
+      "task_id": "estimate__3",
+      "type": "python"
+    }
+  ]
+}

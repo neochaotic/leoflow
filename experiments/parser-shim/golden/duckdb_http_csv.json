@@ -1,0 +1,27 @@
+{
+  "dag_id": "duckdb_http_csv",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "entrypoint": "dag:aggregate",
+      "task_id": "aggregate",
+      "type": "python"
+    },
+    {
+      "depends_on": [
+        "aggregate"
+      ],
+      "entrypoint": "dag:report",
+      "task_id": "report",
+      "type": "python",
+      "xcom_input": {
+        "by_class": "aggregate"
+      }
+    }
+  ]
+}

@@ -35,14 +35,18 @@ class BaseOperator:
     """Minimal operator base: registers into the active DAG and tracks edges."""
 
     def __init__(self, task_id, **kwargs):
-        self.task_id = task_id
         self.upstream_task_ids: set[str] = set()
         self.downstream_task_ids: set[str] = set()
         self.trigger_rule = kwargs.get("trigger_rule", "all_success")
         for key, value in kwargs.items():
             setattr(self, key, value)
         if _CURRENT:
+            # Mirror Airflow: a duplicate task_id within a DAG is auto-suffixed
+            # __1, __2, … (e.g. calling the same @task in a loop).
+            self.task_id = _CURRENT[-1].unique_task_id(task_id)
             _CURRENT[-1].add_task(self)
+        else:
+            self.task_id = task_id
 
     def _link(self, others, downstream: bool):
         targets = others if isinstance(others, (list, tuple)) else [others]
@@ -70,6 +74,14 @@ class DAG:
 
     def add_task(self, op):
         self.task_dict[op.task_id] = op
+
+    def unique_task_id(self, task_id: str) -> str:
+        if task_id not in self.task_dict:
+            return task_id
+        i = 1
+        while f"{task_id}__{i}" in self.task_dict:
+            i += 1
+        return f"{task_id}__{i}"
 
     def __enter__(self):
         _CURRENT.append(self)

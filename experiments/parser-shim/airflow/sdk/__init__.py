@@ -16,6 +16,18 @@ class EmptyOperator(BaseOperator):
     """No-op operator; mapped by Leoflow like a python task with no body."""
 
 
+def _iter_xcomargs(value):
+    """Yield every XComArg in value, recursing through lists/tuples/sets/dicts."""
+    if isinstance(value, XComArg):
+        yield value
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_xcomargs(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_xcomargs(item)
+
+
 def task(fn=None, **dec_kwargs):
     """TaskFlow @task: calling the wrapped function builds a python operator and
     returns an XComArg, wiring upstream edges from any XComArg arguments."""
@@ -28,10 +40,12 @@ def task(fn=None, **dec_kwargs):
             op.op_args = args
             op.op_kwargs = kwargs
             op.function = func  # parity with the SDK's @task (.function unwrap)
+            # Airflow scans args/kwargs (including inside lists/tuples/dicts) for
+            # XComArgs and adds each producing task as upstream — e.g. a fan-in
+            # combine([a(), b(), c()]).
             for value in list(args) + list(kwargs.values()):
-                upstream = getattr(getattr(value, "operator", None), "task_id", None)
-                if upstream:
-                    op.upstream_task_ids.add(upstream)
+                for xarg in _iter_xcomargs(value):
+                    op.upstream_task_ids.add(xarg.operator.task_id)
             return XComArg(op)
 
         maker.function = func

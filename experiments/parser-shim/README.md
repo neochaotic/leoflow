@@ -37,9 +37,25 @@ python3 extract.py ../../examples/taskflow_sales/dag.py   # prints the compiled 
 python3 -m pytest test_examples.py -q                     # all 12 examples + edge cases
 ```
 
+## Golden tests (Phase 1)
+
+`golden/<name>.json` was produced by the **real** Airflow-based compiler
+(`leoflow_parser compile`, apache-airflow installed) for every example, with the
+pass-through `image` field stripped. `test_golden.py` runs only the shim and
+asserts its structural output (`dag_id`, `schedule`, `tags`, `tasks`) matches the
+golden — so fidelity is gated in CI without Airflow.
+
+These golden tests caught (and we fixed) two real fidelity gaps:
+
+- **Duplicate task_id auto-suffixing** — calling the same `@task` in a loop yields
+  `estimate`, `estimate__1`, `estimate__2`, … (Airflow's dedup).
+- **Fan-in via a list** — `combine([a(), b(), c()])` must add every producer as
+  upstream (XComArgs are scanned inside lists/tuples/dicts).
+
 ## Status
 
-PoC validated: 15/15 checks pass against the 12 shipped examples (structure +
-TaskFlow XCom edges + unsupported-operator error). Not wired into the real
-compiler yet — see #83 for the productization plan (fidelity tests, replace
-`DagBag`, then drop the parser venv and embed the parser as pure Python).
+**Phase 1 done.** 28/28 checks pass: the shim matches the real compiler's
+structural spec for all 13 examples (`test_golden.py`), plus TaskFlow edges and
+the unsupported-operator error (`test_examples.py`). Not wired into the real
+compiler yet — see #83 for Phase 2/3 (replace `DagBag` behind the `parser_cmd`
+seam, then drop the parser venv and embed the parser as pure Python).

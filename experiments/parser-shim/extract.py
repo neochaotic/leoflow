@@ -100,16 +100,37 @@ def map_task(task, source: str) -> dict[str, Any]:
     return entry
 
 
-def compile_dag(source: str, dag_id: str | None = None) -> dict:
+def _load_config(config: str | None) -> dict:
+    if not config:
+        return {}
+    import yaml
+
+    with open(config, encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def compile_dag(source: str, dag_id: str | None = None, config: str | None = None) -> dict:
+    """Produce the same structural spec the real compiler emits (minus the
+    pass-through ``image``), so golden comparison is apples-to-apples: dag_id,
+    optional schedule, optional tags (config overrides the DAG), and tasks."""
+    cfg = _load_config(config)
     dags = load_dags(source)
     if not dags:
         raise ValueError(f"no DAG found in {source}")
-    dag = dags[dag_id] if dag_id else next(iter(dags.values()))
-    return {
+    want = dag_id or cfg.get("dag_id")
+    dag = dags[want] if want and want in dags else next(iter(dags.values()))
+
+    spec: dict[str, Any] = {
         "dag_id": dag.dag_id,
-        "tags": sorted(dag.tags),
         "tasks": [map_task(dag.task_dict[t], source) for t in sorted(dag.task_dict)],
     }
+    schedule = getattr(dag, "schedule", None)
+    if schedule is not None:
+        spec["schedule"] = schedule
+    tags = cfg.get("tags") or sorted(dag.tags)
+    if tags:
+        spec["tags"] = list(tags)
+    return spec
 
 
 if __name__ == "__main__":
@@ -119,5 +140,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("source")
     ap.add_argument("--dag-id")
+    ap.add_argument("--config")
     args = ap.parse_args()
-    print(json.dumps(compile_dag(args.source, args.dag_id), indent=2))
+    print(json.dumps(compile_dag(args.source, args.dag_id, args.config), indent=2))

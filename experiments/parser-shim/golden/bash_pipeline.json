@@ -1,0 +1,24 @@
+{
+  "dag_id": "bash_pipeline",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "depends_on": [
+        "prepare"
+      ],
+      "entrypoint": "seq 1 1000 | awk '{s+=$1} END {print \"sum 1..1000 =\", s}'",
+      "task_id": "crunch",
+      "type": "bash"
+    },
+    {
+      "entrypoint": "echo 'preparing workspace' && mkdir -p /tmp/bashpipe && echo ok",
+      "task_id": "prepare",
+      "type": "bash"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "dag_id": "postgres_load",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "entrypoint": "dag:compute",
+      "task_id": "compute",
+      "type": "python"
+    },
+    {
+      "depends_on": [
+        "compute"
+      ],
+      "entrypoint": "dag:load",
+      "task_id": "load",
+      "type": "python",
+      "xcom_input": {
+        "rows": "compute"
+      }
+    }
+  ]
+}

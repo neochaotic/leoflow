@@ -1,0 +1,27 @@
+{
+  "dag_id": "api_chain",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "depends_on": [
+        "pick_user"
+      ],
+      "entrypoint": "dag:fetch_detail",
+      "task_id": "fetch_detail",
+      "type": "python",
+      "xcom_input": {
+        "user_id": "pick_user"
+      }
+    },
+    {
+      "entrypoint": "dag:pick_user",
+      "task_id": "pick_user",
+      "type": "python"
+    }
+  ]
+}

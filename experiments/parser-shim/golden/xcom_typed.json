@@ -1,0 +1,38 @@
+{
+  "dag_id": "xcom_typed",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "entrypoint": "dag:produce",
+      "task_id": "produce",
+      "type": "python"
+    },
+    {
+      "depends_on": [
+        "validate"
+      ],
+      "entrypoint": "dag:sink",
+      "task_id": "sink",
+      "type": "python",
+      "xcom_input": {
+        "checked": "validate"
+      }
+    },
+    {
+      "depends_on": [
+        "produce"
+      ],
+      "entrypoint": "dag:validate",
+      "task_id": "validate",
+      "type": "python",
+      "xcom_input": {
+        "batch": "produce"
+      }
+    }
+  ]
+}

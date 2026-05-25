@@ -1,0 +1,28 @@
+{
+  "dag_id": "csv_report",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schedule": "0 6 * * *",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "entrypoint": "dag:generate",
+      "task_id": "generate",
+      "type": "python"
+    },
+    {
+      "depends_on": [
+        "generate"
+      ],
+      "entrypoint": "dag:report",
+      "task_id": "report",
+      "type": "python",
+      "xcom_input": {
+        "path": "generate"
+      }
+    }
+  ]
+}

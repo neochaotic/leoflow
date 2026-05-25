@@ -1,0 +1,38 @@
+{
+  "dag_id": "taskflow_sales",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "entrypoint": "dag:extract",
+      "task_id": "extract",
+      "type": "python"
+    },
+    {
+      "depends_on": [
+        "transform"
+      ],
+      "entrypoint": "dag:load",
+      "task_id": "load",
+      "type": "python",
+      "xcom_input": {
+        "totals": "transform"
+      }
+    },
+    {
+      "depends_on": [
+        "extract"
+      ],
+      "entrypoint": "dag:transform",
+      "task_id": "transform",
+      "type": "python",
+      "xcom_input": {
+        "rows": "extract"
+      }
+    }
+  ]
+}

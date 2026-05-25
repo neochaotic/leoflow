@@ -1,0 +1,19 @@
+{
+  "dag_id": "http_operator",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "http_request": {
+        "method": "GET",
+        "url": "https://jsonplaceholder.typicode.com/todos/1"
+      },
+      "task_id": "get_todo",
+      "type": "http_api"
+    }
+  ]
+}

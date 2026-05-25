@@ -1,0 +1,38 @@
+{
+  "dag_id": "lifecycle",
+  "dag_version": "v1",
+  "owner": "airflow",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "entrypoint": "dag:extract",
+      "task_id": "extract",
+      "type": "python"
+    },
+    {
+      "depends_on": [
+        "transform"
+      ],
+      "entrypoint": "dag:load",
+      "task_id": "load",
+      "type": "python",
+      "xcom_input": {
+        "result": "transform"
+      }
+    },
+    {
+      "depends_on": [
+        "extract"
+      ],
+      "entrypoint": "dag:transform",
+      "task_id": "transform",
+      "type": "python",
+      "xcom_input": {
+        "data": "extract"
+      }
+    }
+  ]
+}

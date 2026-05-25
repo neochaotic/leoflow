@@ -1,0 +1,42 @@
+{
+  "dag_id": "fan_out_aggregate",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example"
+  ],
+  "tasks": [
+    {
+      "depends_on": [
+        "shard",
+        "shard__1",
+        "shard__2",
+        "shard__3"
+      ],
+      "entrypoint": "dag:aggregate",
+      "task_id": "aggregate",
+      "type": "python"
+    },
+    {
+      "entrypoint": "dag:shard",
+      "task_id": "shard",
+      "type": "python"
+    },
+    {
+      "entrypoint": "dag:shard",
+      "task_id": "shard__1",
+      "type": "python"
+    },
+    {
+      "entrypoint": "dag:shard",
+      "task_id": "shard__2",
+      "type": "python"
+    },
+    {
+      "entrypoint": "dag:shard",
+      "task_id": "shard__3",
+      "type": "python"
+    }
+  ]
+}

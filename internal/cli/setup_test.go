@@ -128,6 +128,72 @@ func TestWriteLiteConfig(t *testing.T) {
 	}
 }
 
+func TestLoadManifestSettings(t *testing.T) {
+	def := liteSettings{Workspace: "/def", Executor: "subprocess", AdminEmail: "admin@leoflow.local", Port: 8088}
+
+	t.Run("missing manifest returns defaults", func(t *testing.T) {
+		if got := loadManifestSettings(t.TempDir(), def); got != def {
+			t.Errorf("got %+v, want defaults", got)
+		}
+	})
+
+	t.Run("reads recorded settings", func(t *testing.T) {
+		home := t.TempDir()
+		m := setupManifest{Workspace: "/ws", Executor: "k8s", Port: 9090, AdminEmail: "me@x.io"}
+		data, _ := json.MarshalIndent(m, "", "  ")
+		if err := os.WriteFile(filepath.Join(home, "setup.json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := loadManifestSettings(home, def)
+		want := liteSettings{Workspace: "/ws", Executor: "k8s", AdminEmail: "me@x.io", Port: 9090}
+		if got != want {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+}
+
+func TestRunSetupReRunKeepsSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "python3.11"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Pre-existing config + manifest = a re-run: must not re-prompt or re-generate.
+	lf := filepath.Join(home, ".leoflow")
+	if err := os.MkdirAll(lf, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lf, "config.yaml"),
+		[]byte("admin_password_hash: \"$2a$12$x\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.MarshalIndent(setupManifest{Workspace: filepath.Join(home, "ws"), Executor: "k8s", Port: 9090, AdminEmail: "me@x.io"}, "", "  ")
+	if err := os.WriteFile(filepath.Join(lf, "setup.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newSetupCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("re-run setup err = %v\n%s", err, out.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "already configured") {
+		t.Errorf("re-run should say 'already configured':\n%s", s)
+	}
+	if strings.Contains(s, "shown only once") {
+		t.Error("re-run must NOT generate/print a new password")
+	}
+	if !strings.Contains(s, "me@x.io") || !strings.Contains(s, "k8s") {
+		t.Errorf("re-run should keep recorded settings (admin/executor):\n%s", s)
+	}
+}
+
 func TestGatherLiteConfig(t *testing.T) {
 	def := liteSettings{Workspace: "/def/ws", Executor: "subprocess", AdminEmail: "admin@leoflow.local", Port: 8088}
 

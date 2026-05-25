@@ -124,3 +124,17 @@ func TestDetect(t *testing.T) {
 		}
 	})
 }
+
+func TestTierString(t *testing.T) {
+	cases := map[Tier]string{
+		TierSubprocess: "subprocess",
+		TierDocker:     "docker",
+		TierK8s:        "k8s",
+		Tier(99):       "unknown",
+	}
+	for tier, want := range cases {
+		if got := tier.String(); got != want {
+			t.Errorf("Tier(%d).String() = %q, want %q", int(tier), got, want)
+		}
+	}
+}

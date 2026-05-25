@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Leoflow pre-commit hook (ADR 0011 + 0012).
-# Blocks the commit when formatting, vetting, or linting fail, or when total
-# test coverage drops by more than 1% from the recorded baseline.
+# Blocks the commit when formatting, vetting, or linting fail, or when filtered
+# unit-test coverage is below the floor. The floor is the SAME fixed threshold
+# the CI enforces — a moving baseline would let coverage ratchet downward locally
+# and only fail in CI (which is exactly what happened once).
 set -euo pipefail
+
+# Coverage floor (percent). Keep in sync with .github/workflows/ci.yaml.
+COVERAGE_FLOOR=75
 
 echo "[pre-commit] gofmt"
 unformatted=$(gofmt -l $(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true) 2>/dev/null || true)
@@ -31,13 +36,10 @@ grep -vE "$exclude" "$profile" >"$filtered"
 current=$(go tool cover -func="$filtered" | tail -1 | awk '{print $3}' | tr -d '%')
 rm -f "$profile" "$filtered"
 
-baseline_file=".git/coverage-baseline"
-baseline=$(cat "$baseline_file" 2>/dev/null || echo "0")
-echo "  total coverage: ${current}% (baseline ${baseline}%)"
-if awk -v c="$current" -v b="$baseline" 'BEGIN { exit !(b - c > 1.0) }'; then
-	echo "::error:: coverage dropped from ${baseline}% to ${current}% (>1%); add tests (ADR 0011)"
+echo "  filtered coverage: ${current}% (floor ${COVERAGE_FLOOR}%)"
+if awk -v c="$current" -v f="$COVERAGE_FLOOR" 'BEGIN { exit !(c < f) }'; then
+	echo "::error:: coverage ${current}% is below floor ${COVERAGE_FLOOR}% (ADR 0011); add tests"
 	exit 1
 fi
-echo "$current" >"$baseline_file"
 
 echo "[pre-commit] ok"

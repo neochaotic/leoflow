@@ -151,3 +151,70 @@ func TestEnsurePythonBranches(t *testing.T) {
 		}
 	})
 }
+
+func TestExtractTarGzDirAndSymlink(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	// directory entry
+	if err := tw.WriteHeader(&tar.Header{Name: "python/lib", Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+		t.Fatal(err)
+	}
+	// regular file
+	if err := tw.WriteHeader(&tar.Header{Name: "python/bin/python3.11", Typeflag: tar.TypeReg, Mode: 0o755, Size: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	// symlink entry (install_only archives include these)
+	if err := tw.WriteHeader(&tar.Header{Name: "python/bin/python", Typeflag: tar.TypeSymlink, Linkname: "python3.11"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	sum := sha256.Sum256(buf.Bytes())
+	srv := serve(t, buf.Bytes())
+	if err := downloadVerifyExtract(context.Background(), srv.Client(),
+		PythonBuild{URL: srv.URL, SHA256: hex.EncodeToString(sum[:])}, dest); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if fi, err := os.Stat(filepath.Join(dest, "python", "lib")); err != nil || !fi.IsDir() {
+		t.Errorf("dir entry not extracted: %v", err)
+	}
+	link, err := os.Readlink(filepath.Join(dest, "python", "bin", "python"))
+	if err != nil || link != "python3.11" {
+		t.Errorf("symlink = %q err = %v, want -> python3.11", link, err)
+	}
+}
+
+func TestDownloadVerifyExtractErrors(t *testing.T) {
+	t.Run("non-200 status is an error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+		err := downloadVerifyExtract(context.Background(), srv.Client(),
+			PythonBuild{URL: srv.URL, SHA256: "x"}, t.TempDir())
+		if err == nil {
+			t.Fatal("err = nil, want non-200 error")
+		}
+	})
+
+	t.Run("non-gzip body with matching checksum fails to extract", func(t *testing.T) {
+		body := []byte("this is not a gzip stream")
+		sum := sha256.Sum256(body)
+		srv := serve(t, body)
+		err := downloadVerifyExtract(context.Background(), srv.Client(),
+			PythonBuild{URL: srv.URL, SHA256: hex.EncodeToString(sum[:])}, t.TempDir())
+		if err == nil {
+			t.Fatal("err = nil, want gzip-open error")
+		}
+	})
+}

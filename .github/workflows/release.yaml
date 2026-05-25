@@ -27,7 +27,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       # ── Sigstore cosign for keyless signing ──
+      # Pin cosign to the 2.4.x line: cosign 3.x changed `sign-blob` to write a
+      # Sigstore bundle by default, which breaks GoReleaser's
+      # --output-signature/--output-certificate recipe ("create bundle file:
+      # open : no such file or directory").
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.4.3
 
       # ── syft for SBOM generation ──
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0

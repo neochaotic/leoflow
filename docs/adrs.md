@@ -25,3 +25,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0021: Exposing Variables and Connections to Task Pods](adr/0021-exposing-variables-connections-to-pods.md)
 - [ADR 0022: Ephemeral Per-DAG-Run Staging Volume](adr/0022-ephemeral-per-run-staging-volume.md)
 - [ADR 0023: DAG Authoring — Config Binding and Override Layers](adr/0023-dag-authoring-config-binding.md)
+- [ADR 0024: DAG Parsing via a Structural Shim (No Airflow SDK Dependency)](adr/0024-dag-parsing-structural-shim.md)
+- [ADR 0025: Embedded Monaco Web Editor for Leoflow Lite](adr/0025-lite-embedded-web-editor.md)

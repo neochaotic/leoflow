@@ -144,7 +144,7 @@ func run() error {
 	// The DEV overlay in the served UI shell tracks the same dev signal as the
 	// auth bypass, so the demo and production never show it.
 	uiSrv := ui.New()
-	uiSrv.SetDevBanner(cfg.Auth.DevNoAuth)
+	uiSrv.SetLiteBanner(cfg.Auth.DevNoAuth)
 
 	handler := api.NewServer(api.Dependencies{
 		Logger:        tel.Logger,

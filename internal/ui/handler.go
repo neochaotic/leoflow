@@ -17,26 +17,28 @@ import (
 // request time, mirroring Airflow's TemplateResponse.
 const baseHrefPlaceholder = "{{ backend_server_base_url }}"
 
-// devBannerHTML is a discreet, translucent-yellow "DEV" pill fixed at top-center,
-// injected into the served shell only in dev mode so a developer never mistakes
-// the local environment for production. pointer-events:none keeps it click-through.
-const devBannerHTML = `<div id="leoflow-dev-banner">DEV</div>` +
-	`<style>#leoflow-dev-banner{position:fixed;top:0;left:50%;transform:translateX(-50%);` +
-	`z-index:2147483647;background:rgba(255,193,7,.85);color:#1a1a1a;` +
+// liteBannerHTML is a discreet, neutral-gray "LITE" pill fixed at top-center,
+// injected into the served shell in the Lite edition so the local environment is
+// never mistaken for production. The slate gray (with white text) reads well on
+// both the light and dark UI themes; pointer-events:none keeps it click-through.
+const liteBannerHTML = `<div id="leoflow-lite-banner">LITE</div>` +
+	`<style>#leoflow-lite-banner{position:fixed;top:0;left:50%;transform:translateX(-50%);` +
+	`z-index:2147483647;background:rgba(100,116,139,.92);color:#fff;` +
 	`font:600 11px/1.7 system-ui,-apple-system,sans-serif;padding:1px 16px;` +
 	`border-radius:0 0 6px 6px;letter-spacing:3px;pointer-events:none}</style>`
 
 // Server serves the embedded Airflow 3.2.1 SPA: static assets under a prefix and
 // an index.html fallback for client-side routes.
 type Server struct {
-	fsys      fs.FS
-	version   string
-	devBanner bool
+	fsys       fs.FS
+	version    string
+	liteBanner bool
 }
 
-// SetDevBanner toggles injection of the DEV overlay into the served shell. It is
-// enabled only by `leoflow dev` (dev mode); the demo and production never set it.
-func (s *Server) SetDevBanner(on bool) { s.devBanner = on }
+// SetLiteBanner toggles injection of the LITE overlay into the served shell. It
+// is enabled by the Lite edition (`leoflow lite`); the demo and production never
+// set it.
+func (s *Server) SetLiteBanner(on bool) { s.liteBanner = on }
 
 // New builds a Server over the embedded, pinned SPA bundle.
 func New() *Server { return NewFromFS(Assets(), Version()) }
@@ -159,8 +161,8 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 	// served /static/assets path so they resolve to JS instead of the index.html
 	// SPA fallback (a text/html MIME type that breaks module preloading).
 	body = strings.ReplaceAll(body, `"./assets/`, `"./static/assets/`)
-	if s.devBanner {
-		body = injectDevBanner(body)
+	if s.liteBanner {
+		body = injectLiteBanner(body)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -170,13 +172,13 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 	}
 }
 
-// injectDevBanner places the DEV overlay just before </body> so it renders over
-// the SPA; if there is no </body> it appends to the end.
-func injectDevBanner(body string) string {
+// injectLiteBanner places the LITE overlay just before </body> so it renders
+// over the SPA; if there is no </body> it appends to the end.
+func injectLiteBanner(body string) string {
 	if i := strings.LastIndex(body, "</body>"); i >= 0 {
-		return body[:i] + devBannerHTML + body[i:]
+		return body[:i] + liteBannerHTML + body[i:]
 	}
-	return body + devBannerHTML
+	return body + liteBannerHTML
 }
 
 // cacheControl picks a Cache-Control value for a static path. Content-hashed

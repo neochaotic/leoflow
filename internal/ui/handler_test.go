@@ -132,22 +132,22 @@ func TestIndexInjectsDevBannerOnlyInDevMode(t *testing.T) {
 	fsys := fstest.MapFS{"index.html": {Data: []byte(`<body><div id="root"></div></body>`)}}
 
 	dev := NewFromFS(fsys, "v")
-	dev.SetDevBanner(true)
+	dev.SetLiteBanner(true)
 	rec := httptest.NewRecorder()
 	dev.Index(rec, "/")
 	body := rec.Body.String()
-	if !strings.Contains(body, "leoflow-dev-banner") || !strings.Contains(body, ">DEV<") {
-		t.Errorf("dev mode must inject the DEV overlay, got:\n%s", body)
+	if !strings.Contains(body, "leoflow-lite-banner") || !strings.Contains(body, ">LITE<") {
+		t.Errorf("lite mode must inject the LITE overlay, got:\n%s", body)
 	}
 	// The overlay goes before </body> so it renders on top of the SPA.
-	if strings.Index(body, "leoflow-dev-banner") > strings.Index(body, "</body>") {
-		t.Error("DEV overlay should be injected before </body>")
+	if strings.Index(body, "leoflow-lite-banner") > strings.Index(body, "</body>") {
+		t.Error("LITE overlay should be injected before </body>")
 	}
 
 	off := NewFromFS(fsys, "v") // dev banner not set → demo/prod
 	rec2 := httptest.NewRecorder()
 	off.Index(rec2, "/")
-	if strings.Contains(rec2.Body.String(), "leoflow-dev-banner") {
-		t.Error("non-dev mode must NOT inject the DEV overlay")
+	if strings.Contains(rec2.Body.String(), "leoflow-lite-banner") {
+		t.Error("non-lite mode must NOT inject the LITE overlay")
 	}
 }

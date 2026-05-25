@@ -69,7 +69,7 @@ const (
 
 const (
 	ansiReset = "\x1b[0m"
-	ansiDev   = "\x1b[30;43m" // black text on a yellow background
+	ansiLite  = "\x1b[100;97m" // white text on a gray background
 )
 
 // devOptions holds the resolved flags for a dev run.
@@ -185,18 +185,18 @@ func devDockerfile(baseImage, dagSource string, deps []string) string {
 	return df
 }
 
-// devBanner renders a high-visibility DEV-environment banner so a developer
+// liteBanner renders a high-visibility Lite-environment banner so a developer
 // never mistakes the local loop for production. url is the served UI address.
-func devBanner(uiURL string) string {
-	line := fmt.Sprintf(" LEOFLOW DEV — local, unsandboxed — %s ", uiURL)
+func liteBanner(uiURL string) string {
+	line := fmt.Sprintf(" LEOFLOW LITE — local — %s ", uiURL)
 	bar := ""
 	for range line {
 		bar += "─"
 	}
 	return fmt.Sprintf("%s╭%s╮%s\n%s│%s│%s\n%s╰%s╯%s",
-		ansiDev, bar, ansiReset,
-		ansiDev, line, ansiReset,
-		ansiDev, bar, ansiReset)
+		ansiLite, bar, ansiReset,
+		ansiLite, line, ansiReset,
+		ansiLite, bar, ansiReset)
 }
 
 // projectMtimes returns the modtime of each existing path, silently skipping
@@ -240,7 +240,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	}
 	uiURL := devURL(o.port)
 	out := cmd.OutOrStdout()
-	devPrintln(out, devBanner(uiURL))
+	devPrintln(out, liteBanner(uiURL))
 
 	ctx, stop := signal.NotifyContext(cmdContext(cmd), os.Interrupt, syscall.SIGTERM)
 	defer stop()

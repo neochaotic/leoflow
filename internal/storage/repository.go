@@ -941,3 +941,44 @@ func (r *Repository) ClearDagHistory(ctx context.Context, tenant, dagID string) 
 	}
 	return nil
 }
+
+// ListImportErrors returns the tenant's DAG parse/compile errors, newest first.
+func (r *Repository) ListImportErrors(ctx context.Context, tenant string) ([]domain.ImportError, error) {
+	rows, err := r.q.ListImportErrors(ctx, tenant)
+	if err != nil {
+		return nil, fmt.Errorf("listing import errors: %w", err)
+	}
+	out := make([]domain.ImportError, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ImportError{
+			ID:         uuidToString(row.ID),
+			Filename:   row.Filename,
+			StackTrace: row.Stacktrace,
+			BundleName: strOrEmpty(row.BundleName),
+			Timestamp:  timeVal(row.CreatedAt),
+		})
+	}
+	return out, nil
+}
+
+// SetImportError records (or replaces) the parse/compile error for a file.
+func (r *Repository) SetImportError(ctx context.Context, tenant string, e domain.ImportError) error {
+	var bundle *string
+	if e.BundleName != "" {
+		bundle = &e.BundleName
+	}
+	if err := r.q.UpsertImportError(ctx, queries.UpsertImportErrorParams{
+		Tenant: tenant, Filename: e.Filename, Stacktrace: e.StackTrace, BundleName: bundle,
+	}); err != nil {
+		return fmt.Errorf("upserting import error: %w", err)
+	}
+	return nil
+}
+
+// ClearImportError removes any recorded error for a file (a good re-import).
+func (r *Repository) ClearImportError(ctx context.Context, tenant, filename string) error {
+	if err := r.q.DeleteImportError(ctx, queries.DeleteImportErrorParams{Tenant: tenant, Filename: filename}); err != nil {
+		return fmt.Errorf("clearing import error: %w", err)
+	}
+	return nil
+}

@@ -23,9 +23,10 @@ func apiEmptyCollection(field string) gin.HandlerFunc {
 // registerAPIStubs mounts graceful empty responses for the unimplemented public
 // /api/v2 list endpoints the Airflow UI polls.
 func registerAPIStubs(r gin.IRouter) {
-	r.GET("/api/v2/dagTags", apiEmptyCollection("tags"))                       // #26
-	r.GET("/api/v2/dagWarnings", apiEmptyCollection("dag_warnings"))           // #27
-	r.GET("/api/v2/importErrors", apiEmptyCollection("import_errors"))         // #28
+	r.GET("/api/v2/dagTags", apiEmptyCollection("tags"))             // #26
+	r.GET("/api/v2/dagWarnings", apiEmptyCollection("dag_warnings")) // #27
+	// /api/v2/importErrors is owned by registerImportErrors (real when an
+	// ImportErrorStore is set, empty stub otherwise) — see #28.
 	r.GET("/api/v2/plugins/importErrors", apiEmptyCollection("import_errors")) // #28
 	r.GET("/api/v2/assets", apiEmptyCollection("assets"))                      // #29
 	r.GET("/api/v2/assets/events", apiEmptyCollection("asset_events"))         // #29

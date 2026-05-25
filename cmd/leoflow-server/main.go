@@ -171,6 +171,7 @@ func run() error {
 		Variables:                    repo,
 		Connections:                  repo,
 		Favorites:                    repo,
+		ImportErrors:                 repo,
 		Audit:                        repo,
 		ExecutorInfo:                 executorInfo,
 		SchedulerHealth:              schedulerHealth,

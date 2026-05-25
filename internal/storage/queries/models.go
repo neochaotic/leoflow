@@ -237,6 +237,15 @@ type DagVersion struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
+type ImportError struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	Filename   string             `json:"filename"`
+	Stacktrace string             `json:"stacktrace"`
+	BundleName *string            `json:"bundle_name"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type Permission struct {
 	ID          pgtype.UUID `json:"id"`
 	Action      string      `json:"action"`

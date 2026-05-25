@@ -35,6 +35,7 @@ type Querier interface {
 	DeleteConnection(ctx context.Context, arg DeleteConnectionParams) (int64, error)
 	DeleteDag(ctx context.Context, arg DeleteDagParams) (int64, error)
 	DeleteExpiredXComIndex(ctx context.Context) error
+	DeleteImportError(ctx context.Context, arg DeleteImportErrorParams) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInstanceIfActiveParams) error
 	GetConnection(ctx context.Context, arg GetConnectionParams) (GetConnectionRow, error)
@@ -67,6 +68,7 @@ type Querier interface {
 	ListDags(ctx context.Context, arg ListDagsParams) ([]Dag, error)
 	ListDagsFiltered(ctx context.Context, arg ListDagsFilteredParams) ([]Dag, error)
 	ListFavoriteDagIDs(ctx context.Context, arg ListFavoriteDagIDsParams) ([]string, error)
+	ListImportErrors(ctx context.Context, tenant string) ([]ListImportErrorsRow, error)
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
@@ -99,6 +101,7 @@ type Querier interface {
 	UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error
 	UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
+	UpsertImportError(ctx context.Context, arg UpsertImportErrorParams) error
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) error
 }
 

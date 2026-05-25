@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,11 +200,32 @@ func runParser(cmd *cobra.Command, command string, a parserArgs) error {
 	//nolint:gosec // G204: the parser command is operator-configured by design (ADR 0005).
 	pc := exec.CommandContext(cmdContext(cmd), fields[0], argv...)
 	pc.Stdout = cmd.OutOrStdout()
-	pc.Stderr = cmd.ErrOrStderr()
+	// Stream the parser's stderr to the terminal and capture it, so a parse
+	// failure carries the real traceback (e.g. the SyntaxError + file:line) in
+	// the returned error — surfaced both in the dev terminal and the UI's import
+	// error banner, not just an opaque "exit status 1".
+	var stderr bytes.Buffer
+	pc.Stderr = io.MultiWriter(cmd.ErrOrStderr(), &stderr)
 	if err := pc.Run(); err != nil {
+		if detail := lastLines(strings.TrimSpace(stderr.String()), 20); detail != "" {
+			return fmt.Errorf("running parser %q: %w\n%s", command, err, detail)
+		}
 		return fmt.Errorf("running parser %q: %w", command, err)
 	}
 	return nil
+}
+
+// lastLines returns the final n lines of s (the most relevant tail of a Python
+// traceback), trimming the rest so the error stays bounded.
+func lastLines(s string, n int) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // overlayProject writes the leoflow.yaml Leoflow-specific config (staging and

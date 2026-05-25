@@ -60,6 +60,7 @@ type Dependencies struct {
 	Variables      VariableStore
 	Connections    ConnectionStore
 	Favorites      FavoriteStore
+	ImportErrors   ImportErrorStore
 	Audit          AuditWriter
 	ExecutorInfo   ExecutorInfo
 
@@ -112,6 +113,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIVariables(r, deps.Variables)
 	registerUIConnections(r, deps.Connections)
 	registerUIFavorites(r, deps.Favorites)
+	registerImportErrors(r, deps.ImportErrors)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

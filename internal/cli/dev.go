@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -178,8 +179,8 @@ func devDockerfile(baseImage, dagSource string) string {
 
 // devBanner renders a high-visibility DEV-environment banner so a developer
 // never mistakes the local loop for production. url is the served UI address.
-func devBanner(url string) string {
-	line := fmt.Sprintf(" LEOFLOW DEV — local, unsandboxed — %s ", url)
+func devBanner(uiURL string) string {
+	line := fmt.Sprintf(" LEOFLOW DEV — local, unsandboxed — %s ", uiURL)
 	bar := ""
 	for range line {
 		bar += "─"
@@ -311,9 +312,10 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o d
 	}
 	env = subprocessServerEnv(o.port, agentBin, workDir, venvPy)
 	makeReload = func(token string) func() error {
-		return func() error {
+		base := func() error {
 			return devCompileAndRegister(ctx, cmd, dir, compileOptions{image: o.image}, token, nil, devURL(o.port))
 		}
+		return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))
 	}
 	return env, makeReload, nil
 }
@@ -342,12 +344,13 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 	}
 	image := devDagImageRef(cfg.DagID)
 	makeReload = func(token string) func() error {
-		return func() error {
+		base := func() error {
 			opts := compileOptions{image: image, build: true, builder: "docker", dockerfile: "Dockerfile"}
 			return devCompileAndRegister(ctx, cmd, dir, opts, token, func() error {
 				return k3dImport(ctx, cmd, image)
 			}, devURL(o.port))
 		}
+		return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))
 	}
 	env = clusterServerEnv(o.port, kubeconfig)
 	return env, makeReload, nil
@@ -733,5 +736,64 @@ func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, 
 		return fmt.Errorf("control plane returned %d registering %q: %s", status, spec.DagID, body)
 	}
 	devPrintf(cmd.OutOrStdout(), "✓ registered %q\n", spec.DagID)
+	return nil
+}
+
+// devReportingReload wraps a reload so a failed compile is published to the
+// control plane as an import error — lighting the Airflow home's native "Import
+// Errors" banner so the failure is visible in the UI, not only the terminal — and
+// a good compile clears it. Reporting is best-effort and never masks the reload's
+// own result.
+func devReportingReload(ctx context.Context, reload func() error, serverURL, token, filename string) func() error {
+	return func() error {
+		if err := reload(); err != nil {
+			_ = reportImportError(ctx, serverURL, token, filename, err.Error()) //nolint:errcheck // best-effort UI hint; the reload error below is authoritative
+			return err
+		}
+		_ = clearImportError(ctx, serverURL, token, filename) //nolint:errcheck // best-effort: clears the banner on a good compile
+		return nil
+	}
+}
+
+// reportImportError records a failed compile as an Airflow import error so the
+// UI home banner surfaces it (keyed by filename; replaces any previous error).
+func reportImportError(ctx context.Context, serverURL, token, filename, stack string) error {
+	body, err := json.Marshal(map[string]string{"filename": filename, "stack_trace": stack, "bundle_name": "leoflow"})
+	if err != nil {
+		return fmt.Errorf("encoding import error: %w", err)
+	}
+	return devImportErrorRequest(ctx, http.MethodPut, strings.TrimRight(serverURL, "/")+"/api/v2/importErrors", token, body)
+}
+
+// clearImportError removes any recorded import error for a file (a good re-import).
+func clearImportError(ctx context.Context, serverURL, token, filename string) error {
+	u := strings.TrimRight(serverURL, "/") + "/api/v2/importErrors?filename=" + url.QueryEscape(filename)
+	return devImportErrorRequest(ctx, http.MethodDelete, u, token, nil)
+}
+
+// devImportErrorRequest issues an authenticated import-error write to the control plane.
+func devImportErrorRequest(ctx context.Context, method, reqURL, token string, body []byte) error {
+	var r io.Reader
+	if body != nil {
+		r = strings.NewReader(string(body))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, r)
+	if err != nil {
+		return fmt.Errorf("building request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("calling %s: %w", reqURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // response body discarded
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("import error endpoint returned %d", resp.StatusCode)
+	}
 	return nil
 }

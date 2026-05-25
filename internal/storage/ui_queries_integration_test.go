@@ -899,3 +899,53 @@ func TestRegisterDagPersistsTagsIntegration(t *testing.T) {
 	}
 	_ = repo.DeleteDag(ctx, "default", dagID)
 }
+
+// TestImportErrorsIntegration guards upsert-by-filename, list, and clear against
+// real Postgres — the feed behind the Airflow home's "Import Errors" banner.
+func TestImportErrorsIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	file := fmt.Sprintf("dags/broken_%d/dag.py", time.Now().UnixNano())
+
+	if err := repo.SetImportError(ctx, "default", domain.ImportError{
+		Filename: file, StackTrace: "SyntaxError: boom", BundleName: "leoflow",
+	}); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	// Re-import of the same file replaces the row (no duplicate, newer trace).
+	if err := repo.SetImportError(ctx, "default", domain.ImportError{
+		Filename: file, StackTrace: "NameError: later", BundleName: "leoflow",
+	}); err != nil {
+		t.Fatalf("upsert replace: %v", err)
+	}
+	errs, err := repo.ListImportErrors(ctx, "default")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var found *domain.ImportError
+	count := 0
+	for i := range errs {
+		if errs[i].Filename == file {
+			found = &errs[i]
+			count++
+		}
+	}
+	if found == nil || count != 1 {
+		t.Fatalf("want exactly one row for %s, got %d", file, count)
+	}
+	if found.StackTrace != "NameError: later" {
+		t.Errorf("upsert did not replace trace: %q", found.StackTrace)
+	}
+	if found.BundleName != "leoflow" || found.ID == "" || found.Timestamp.IsZero() {
+		t.Errorf("fields not populated: %+v", *found)
+	}
+
+	if err := repo.ClearImportError(ctx, "default", file); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	errs, _ = repo.ListImportErrors(ctx, "default")
+	for _, e := range errs {
+		if e.Filename == file {
+			t.Errorf("clear did not remove %s", file)
+		}
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/neochaotic/leoflow/internal/auth"
+	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/migrations"
 )
@@ -82,6 +83,9 @@ type devOptions struct {
 	serverBin   string
 	agentBin    string
 	noUp        bool
+	// Resolved from ~/.leoflow/config.yaml (written by `leoflow setup`), not flags.
+	adminHash  string
+	adminEmail string
 }
 
 // devURL is the dev UI/API base for the given HTTP port.
@@ -242,6 +246,10 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	out := cmd.OutOrStdout()
 	devPrintln(out, liteBanner(uiURL))
 
+	// The admin login is provisioned by `leoflow setup` (hash-only in config).
+	// With it, Lite enforces real auth; without it, fall back to no-auth + warn.
+	o.adminHash, o.adminEmail = resolveLiteAdmin(cmd, out)
+
 	ctx, stop := signal.NotifyContext(cmdContext(cmd), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -318,7 +326,7 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o d
 	if aerr != nil {
 		return nil, nil, fmt.Errorf("resolving project dir: %w", aerr)
 	}
-	env = subprocessServerEnv(o.port, agentBin, workDir, venvPy)
+	env = subprocessServerEnv(o.port, agentBin, workDir, venvPy, o.adminHash, o.adminEmail)
 	makeReload = func(token string) func() error {
 		base := func() error {
 			return devCompileAndRegister(ctx, cmd, dir, compileOptions{image: o.image}, token, nil, devURL(o.port))
@@ -360,7 +368,7 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 		}
 		return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))
 	}
-	env = clusterServerEnv(o.port, kubeconfig)
+	env = clusterServerEnv(o.port, kubeconfig, o.adminHash, o.adminEmail)
 	return env, makeReload, nil
 }
 
@@ -585,33 +593,65 @@ func resolveBinary(explicit, name string) (string, error) {
 	return "", fmt.Errorf("%s not found on PATH or ./bin; run `make build` or pass --%s", name, name)
 }
 
-// sharedServerEnv is the dev control plane environment common to both executor
-// modes: the isolated dev database, DEV instance name, dev-only auth bypass, and
-// a writable logs dir (the prod default /var/log/leoflow is not host-writable).
-func sharedServerEnv(port int) []string {
-	return []string{
-		// Bind the HTTP API to loopback: dev disables auth, so the API must not be
-		// reachable off-host (the server also refuses dev_no_auth on a non-loopback
-		// address). Dev ports are distinct from the demo so both can run at once.
+// sharedServerEnv is the Lite control plane environment common to both executor
+// modes: the isolated local database, the LITE edition marker, and a writable
+// logs dir. When an admin hash is configured (by `leoflow setup`), Lite enforces
+// real auth and bootstraps that admin; otherwise it falls back to the dev no-auth
+// bypass (loopback only). The HTTP API binds loopback in both cases.
+func sharedServerEnv(port int, adminHash, adminEmail string) []string {
+	env := []string{
 		fmt.Sprintf("LEOFLOW_SERVER_HTTP_ADDR=127.0.0.1:%d", port),
 		"LEOFLOW_SERVER_GRPC_ADDR=" + devGRPCBindAddr,
 		"LEOFLOW_SERVER_METRICS_ADDR=" + devMetricsBindAddr,
 		"LEOFLOW_LOGS_DIR=" + filepath.Join(os.TempDir(), "leoflow-dev-logs"),
 		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
+		"LEOFLOW_UI_EDITION=lite",
 		"LEOFLOW_DATABASE_URL=" + devDatabaseURL,
 		"LEOFLOW_REDIS_URL=" + devRedisURL,
 		"LEOFLOW_AUTH_JWT_SECRET=" + devJWTSecret,
 		"LEOFLOW_SECRET_KEY=" + devSecretKey,
-		"LEOFLOW_AUTH_DEV_NO_AUTH=true",
 		"LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true",
 	}
+	if adminHash != "" {
+		// Real auth: bootstrap the admin from the hash; no bypass.
+		return append(env,
+			"LEOFLOW_BOOTSTRAP_PASSWORD_HASH="+adminHash,
+			"LEOFLOW_BOOTSTRAP_EMAIL="+adminEmail,
+		)
+	}
+	// No admin configured: dev no-auth fallback (runDev warns; loopback-bound).
+	return append(env, "LEOFLOW_AUTH_DEV_NO_AUTH=true")
+}
+
+// resolveLiteAdmin loads the configured admin credential and warns when none is
+// set (Lite then falls back to no-auth).
+func resolveLiteAdmin(cmd *cobra.Command, out io.Writer) (hash, email string) {
+	hash, email = loadLiteAdmin(cmd)
+	if hash == "" {
+		devPrintln(out, "  WARNING: no admin configured — run `leoflow setup`. Falling back to no-auth (local only, insecure).")
+	}
+	return hash, email
+}
+
+// loadLiteAdmin reads the admin credential the setup wizard persisted (hash only)
+// from ~/.leoflow/config.yaml. Returns an empty hash when none is configured.
+func loadLiteAdmin(cmd *cobra.Command) (hash, email string) {
+	c, err := config.Load(configFilePath(cmd), nil)
+	if err != nil || c == nil {
+		return "", ""
+	}
+	email = c.AdminEmail
+	if email == "" {
+		email = "admin@leoflow.local"
+	}
+	return c.AdminPasswordHash, email
 }
 
 // subprocessServerEnv adds the subprocess-executor settings: the agent binary,
 // the project workdir (so dag.py imports), the venv Python, and a dialable
 // control-plane address (the server binds 0.0.0.0, which is not a dial target).
-func subprocessServerEnv(port int, agentBin, workDir, venvPython string) []string {
-	return append(sharedServerEnv(port),
+func subprocessServerEnv(port int, agentBin, workDir, venvPython, adminHash, adminEmail string) []string {
+	return append(sharedServerEnv(port, adminHash, adminEmail),
 		"LEOFLOW_EXECUTOR_TYPE=subprocess",
 		"LEOFLOW_EXECUTOR_AGENT_PATH="+agentBin,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1"+devGRPCBindAddr,
@@ -623,8 +663,8 @@ func subprocessServerEnv(port int, agentBin, workDir, venvPython string) []strin
 // clusterServerEnv adds the Kubernetes-executor settings: the isolated dev
 // cluster's kubeconfig (so the control plane targets leoflow-dev, never the
 // product cluster) and the host address task pods dial back for gRPC.
-func clusterServerEnv(port int, kubeconfig string) []string {
-	return append(sharedServerEnv(port),
+func clusterServerEnv(port int, kubeconfig, adminHash, adminEmail string) []string {
+	return append(sharedServerEnv(port, adminHash, adminEmail),
 		"LEOFLOW_EXECUTOR_TYPE=kubernetes",
 		"KUBECONFIG="+kubeconfig,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="+devHostGRPCAddr,

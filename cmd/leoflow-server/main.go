@@ -141,10 +141,10 @@ func run() error {
 	if cfg.Auth.DevNoAuth {
 		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
 	}
-	// The DEV overlay in the served UI shell tracks the same dev signal as the
-	// auth bypass, so the demo and production never show it.
+	// Show the LITE badge for the Lite edition (independent of the auth mode), and
+	// also when the legacy dev auth bypass is on. The demo/production show neither.
 	uiSrv := ui.New()
-	uiSrv.SetLiteBanner(cfg.Auth.DevNoAuth)
+	uiSrv.SetLiteBanner(showLiteBadge(cfg))
 
 	handler := api.NewServer(api.Dependencies{
 		Logger:        tel.Logger,
@@ -213,6 +213,12 @@ func awaitShutdown(ctx context.Context, errCh <-chan error, logger *slog.Logger,
 	}
 }
 
+// showLiteBadge reports whether the served UI shows the LITE badge: the Lite
+// edition, or the legacy dev auth bypass.
+func showLiteBadge(cfg *config.ServerConfig) bool {
+	return cfg.UI.Edition == "lite" || cfg.Auth.DevNoAuth
+}
+
 // serverExpiryStatus resolves the build's expiry; a var so tests can inject one.
 var serverExpiryStatus = version.ExpiryStatus
 
@@ -247,7 +253,10 @@ func configureSecretCipher(repo *storage.Repository, secretKey string, logger *s
 }
 
 func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.Logger) error {
-	const email = "admin@leoflow.local"
+	email := os.Getenv("LEOFLOW_BOOTSTRAP_EMAIL")
+	if email == "" {
+		email = "admin@leoflow.local"
+	}
 	// Prefer a precomputed bcrypt hash (Leoflow Lite never sends the plaintext to
 	// the control plane); fall back to a plaintext bootstrap password.
 	if hash := os.Getenv("LEOFLOW_BOOTSTRAP_PASSWORD_HASH"); hash != "" {

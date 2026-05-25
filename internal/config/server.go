@@ -81,8 +81,11 @@ type PlatformDefaultsSection struct {
 // UISection configures the embedded Airflow UI.
 type UISection struct {
 	// InstanceName is shown in the UI navbar (Airflow's instance_name). Empty
-	// falls back to "Leoflow"; `leoflow dev` sets it to mark the DEV environment.
+	// falls back to "Leoflow"; `leoflow lite` sets it to mark the environment.
 	InstanceName string `mapstructure:"instance_name"`
+	// Edition marks the running edition; "lite" shows the LITE badge in the UI
+	// shell (independent of the auth mode). Empty/"production" shows no badge.
+	Edition string `mapstructure:"edition"`
 }
 
 // HTTPExecutorSection configures the inline http_api execution path (ADR 0002).

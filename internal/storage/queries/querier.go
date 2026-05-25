@@ -109,6 +109,7 @@ type Querier interface {
 	// re-emitted transition does not move the recorded time. $3 is cast to
 	// task_state (see ReportTaskResult for why the cast is required).
 	UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error
+	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error)
 	UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
 	UpsertImportError(ctx context.Context, arg UpsertImportErrorParams) error

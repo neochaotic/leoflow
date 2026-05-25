@@ -9,14 +9,20 @@ description = "Leoflow DAG parser: compiles Airflow DAGs into Leoflow dag.json."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
+# The parser uses a bundled, dependency-free structural shim of Airflow (ADR 0024),
+# so apache-airflow is NOT required. Only YAML + JSON-Schema are needed.
 dependencies = [
-    "apache-airflow>=3.2,<3.3",
-    "apache-airflow-providers-standard",
-    "apache-airflow-providers-http",
     "jsonschema>=4.21",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
+# Opt-in fallback backend: LEOFLOW_PARSER_BACKEND=airflow uses the real DagBag.
+airflow = [
+    "apache-airflow>=3.2,<3.3",
+    "apache-airflow-providers-standard",
+    "apache-airflow-providers-http",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",

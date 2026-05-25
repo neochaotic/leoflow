@@ -13,7 +13,7 @@ class PythonOperator(BaseOperator):
 
 
 class EmptyOperator(BaseOperator):
-    """No-op operator; mapped by Leoflow like a python task with no body."""
+    """No-op operator."""
 
 
 def _iter_xcomargs(value):
@@ -30,7 +30,8 @@ def _iter_xcomargs(value):
 
 def task(fn=None, **dec_kwargs):
     """TaskFlow @task: calling the wrapped function builds a python operator and
-    returns an XComArg, wiring upstream edges from any XComArg arguments."""
+    returns an XComArg, wiring upstream edges from any XComArg arguments
+    (including those nested in lists/dicts, e.g. a fan-in)."""
 
     def wrap(func):
         @functools.wraps(func)
@@ -40,9 +41,6 @@ def task(fn=None, **dec_kwargs):
             op.op_args = args
             op.op_kwargs = kwargs
             op.function = func  # parity with the SDK's @task (.function unwrap)
-            # Airflow scans args/kwargs (including inside lists/tuples/dicts) for
-            # XComArgs and adds each producing task as upstream — e.g. a fan-in
-            # combine([a(), b(), c()]).
             for value in list(args) + list(kwargs.values()):
                 for xarg in _iter_xcomargs(value):
                     op.upstream_task_ids.add(xarg.operator.task_id)

@@ -7,6 +7,9 @@ task. It supports Python (including TaskFlow ``@task``), Bash, and HTTP tasks.
 from __future__ import annotations
 
 import inspect
+import os
+import runpy
+import sys
 import warnings
 from pathlib import Path
 from typing import Any
@@ -60,23 +63,66 @@ def _load_config(path: str) -> dict[str, Any]:
 
 
 def _load_dag(source: str, dag_id: str | None):
+    """Load the DAG(s) from ``source`` and select one. The default backend is the
+    dependency-free structural shim (ADR 0024); set LEOFLOW_PARSER_BACKEND=airflow
+    to use the real Airflow DagBag (requires apache-airflow installed)."""
+    if os.environ.get("LEOFLOW_PARSER_BACKEND") == "airflow":
+        dags, error = _load_dags_airflow(source)
+    else:
+        dags, error = _load_dags_shim(source)
+
+    if error:
+        raise ValueError(f"failed to import {source}: {error}")
+    if not dags:
+        raise ValueError(f"no DAG found in {source}")
+    if dag_id and dag_id in dags:
+        return dags[dag_id]
+    if dag_id:
+        raise ValueError(f"DAG {dag_id!r} not found in {source}; found {sorted(dags)}")
+    if len(dags) > 1:
+        raise ValueError(f"multiple DAGs in {source}; set dag_id in leoflow.yaml")
+    return next(iter(dags.values()))
+
+
+def _ensure_shim_on_path() -> None:
+    """Put the bundled `airflow` shim first on sys.path so the user's DAG imports
+    resolve to it, dropping any real-airflow modules already imported in-process."""
+    shim_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_shim")
+    try:
+        sys.path.remove(shim_dir)
+    except ValueError:
+        pass
+    sys.path.insert(0, shim_dir)
+    for name in list(sys.modules):
+        if (name == "airflow" or name.startswith("airflow.")) and \
+                shim_dir not in (getattr(sys.modules[name], "__file__", "") or ""):
+            del sys.modules[name]
+
+
+def _load_dags_shim(source: str):
+    """Exec the DAG file against the structural shim; return ({dag_id: DAG}, error).
+    An unsupported operator surfaces as a clear import error (ADR 0024)."""
+    _ensure_shim_on_path()
+    import airflow._core as core  # the shim
+
+    core.reset()
+    try:
+        runpy.run_path(source, run_name="__leoflow_dag__")
+    except ModuleNotFoundError as exc:
+        return {}, (f"{exc.name!r} is not supported by Leoflow "
+                    f"(supported operators: Bash, Http, Python/@task)")
+    return dict(core.COLLECTED), None
+
+
+def _load_dags_airflow(source: str):
+    """Fallback loader using the real Airflow DagBag (opt-in)."""
     from airflow.dag_processing.dagbag import DagBag
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         bag = DagBag(dag_folder=source, include_examples=False)
-
-    if bag.import_errors:
-        raise ValueError(f"failed to import {source}: {bag.import_errors}")
-    if not bag.dags:
-        raise ValueError(f"no DAG found in {source}")
-    if dag_id and dag_id in bag.dags:
-        return bag.dags[dag_id]
-    if dag_id:
-        raise ValueError(f"DAG {dag_id!r} not found in {source}; found {sorted(bag.dags)}")
-    if len(bag.dags) > 1:
-        raise ValueError(f"multiple DAGs in {source}; set dag_id in leoflow.yaml")
-    return next(iter(bag.dags.values()))
+    error = f"{bag.import_errors}" if bag.import_errors else None
+    return dict(bag.dags), error
 
 
 def _ordered_tasks(dag) -> list[Any]:

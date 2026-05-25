@@ -1,16 +1,13 @@
-"""Structural shim of Apache Airflow for *parsing only* — PoC for issue #83.
+"""Structural shim of Apache Airflow for *parsing only* (ADR 0024).
 
 It records DAG/operator structure when a ``dag.py`` is exec'd, without importing
-real Airflow. Pure stdlib, zero third-party dependencies. It reproduces exactly
-the surface ``parser/leoflow_parser/compiler.py`` reads: a DagBag-like loader,
-``DAG.dag_id/tags/task_dict``, and per-task ``task_id / upstream_task_ids /
-trigger_rule / python_callable / op_args / op_kwargs / bash_command / endpoint /
-method / headers``, plus ``>>``/``<<`` dependencies and TaskFlow ``@task`` XComArg
-wiring.
+real Airflow. Pure standard library, zero third-party dependencies. It reproduces
+exactly the attribute surface ``leoflow_parser.compiler`` reads, and TaskFlow
+``@task`` calls only build structure (task bodies never run).
 
-Unsupported operators are simply absent from the shim, so importing them raises
-ModuleNotFoundError — which the loader turns into a clear "operator not supported"
-import error (the behavior issue #83 asks for).
+Unsupported operators are simply absent from this package, so importing one
+raises ModuleNotFoundError — which the loader turns into a clear "not supported"
+error (the behavior ADR 0024 specifies).
 """
 from __future__ import annotations
 
@@ -25,10 +22,23 @@ def reset() -> None:
 
 
 class XComArg:
-    """Duck-typed stand-in for Airflow's XComArg: carries the producing operator."""
+    """Duck-typed stand-in for Airflow's XComArg: carries the producing operator
+    and proxies dependency operators (``>>`` / ``<<``) to it, so TaskFlow chains
+    like ``a() >> b()`` and ``x >> [y(), z()]`` wire edges correctly."""
 
     def __init__(self, operator):
         self.operator = operator
+
+    def __rshift__(self, other):
+        return self.operator.__rshift__(other)
+
+    def __lshift__(self, other):
+        return self.operator.__lshift__(other)
+
+
+def _as_operator(node):
+    """Unwrap an XComArg to its operator; pass operators through unchanged."""
+    return node.operator if isinstance(node, XComArg) else node
 
 
 class BaseOperator:
@@ -51,7 +61,8 @@ class BaseOperator:
     def _link(self, others, downstream: bool):
         targets = others if isinstance(others, (list, tuple)) else [others]
         for other in targets:
-            ups, downs = (self, other) if downstream else (other, self)
+            other_op = _as_operator(other)
+            ups, downs = (self, other_op) if downstream else (other_op, self)
             downs.upstream_task_ids.add(ups.task_id)
             ups.downstream_task_ids.add(downs.task_id)
         return others

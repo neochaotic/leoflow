@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	leoflow "github.com/neochaotic/leoflow"
 	"github.com/neochaotic/leoflow/internal/auth"
@@ -79,10 +80,11 @@ func gatherLiteConfig(interactive bool, in *bufio.Reader, out io.Writer, def lit
 	return s
 }
 
-// isInteractive reports whether f is a terminal (so prompting makes sense).
+// isInteractive reports whether f is a real terminal (so prompting makes sense).
+// Using x/term distinguishes a TTY from a pipe (`curl | sh`) or /dev/null, which
+// a ModeCharDevice check would wrongly treat as interactive.
 func isInteractive(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // newSetupCommand bootstraps the managed runtime: a usable Python 3.11 (the
@@ -130,8 +132,18 @@ func runSetup(cmd *cobra.Command, workspaceFlag string, dryRun bool) error {
 
 	_, _ = fmt.Fprintf(out, "leoflow setup\n\n  platform   %s/%s%s\n", r.OS, r.Arch, libcSuffix(r.Libc)) //nolint:errcheck // best-effort terminal output
 
-	interactive := isInteractive(os.Stdin) && !dryRun
-	lc := gatherLiteConfig(interactive, bufio.NewReader(os.Stdin), out, def)
+	// Prompt only on first setup. On a re-run the config already exists and is not
+	// rewritten, so re-asking would silently discard the answers — instead keep the
+	// recorded settings (and point at reset-password to change the admin).
+	firstRun := !liteConfigExists(leoflowHome)
+	var lc liteSettings
+	if firstRun {
+		interactive := isInteractive(os.Stdin) && !dryRun
+		lc = gatherLiteConfig(interactive, bufio.NewReader(os.Stdin), out, def)
+	} else {
+		lc = loadManifestSettings(leoflowHome, def)
+		_, _ = fmt.Fprintln(out, "\n  already configured (~/.leoflow/config.yaml) — keeping your settings.\n  change the admin with `sudo leoflow lite reset-password`.") //nolint:errcheck // best-effort terminal output
+	}
 
 	_, _ = fmt.Fprintf(out, "\n  workspace  %s\n  executor   %s\n  port       %d\n  admin      %s\n", lc.Workspace, lc.Executor, lc.Port, lc.AdminEmail) //nolint:errcheck // best-effort terminal output
 	if r.Python311 {
@@ -244,6 +256,33 @@ func printSetupSummary(out io.Writer, lc liteSettings, generatedPassword string)
 func liteConfigExists(leoflowHome string) bool {
 	_, err := os.Stat(filepath.Join(leoflowHome, "config.yaml"))
 	return err == nil
+}
+
+// loadManifestSettings reads the previously-recorded Lite settings from
+// setup.json (used on a re-run so prompts are not repeated), falling back to def.
+func loadManifestSettings(leoflowHome string, def liteSettings) liteSettings {
+	data, err := os.ReadFile(filepath.Join(leoflowHome, "setup.json"))
+	if err != nil {
+		return def
+	}
+	var m setupManifest
+	if json.Unmarshal(data, &m) != nil {
+		return def
+	}
+	out := def
+	if m.Workspace != "" {
+		out.Workspace = m.Workspace
+	}
+	if m.Executor != "" {
+		out.Executor = m.Executor
+	}
+	if m.Port != 0 {
+		out.Port = m.Port
+	}
+	if m.AdminEmail != "" {
+		out.AdminEmail = m.AdminEmail
+	}
+	return out
 }
 
 // writeLiteConfig writes the Lite settings to ~/.leoflow/config.yaml (0600). Only

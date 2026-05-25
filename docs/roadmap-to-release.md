@@ -19,7 +19,7 @@ flowchart LR
 ### 🟡 Alpha — Developer experience (current focus)
 A data engineer can author, run, and iterate on DAGs locally with confidence.
 
-- `leoflow lite` (isolated k3d/subprocess), `leoflow lite setup`, `leoflow db`, hot reload, DEV marker.
+- `leoflow lite` (isolated k3d/subprocess), `leoflow lite provision`, `leoflow db`, hot reload, DEV marker.
 - DAG authoring + binding/overrides (ADR 0023), guardrails, embedded migrations.
 - Documentation site, examples, the `dags/` convention.
 - **Exit:** the dev loop is reliable end-to-end; the authoring model is documented and tested.

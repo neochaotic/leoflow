@@ -96,7 +96,7 @@ SDK). They compile to one immutable artifact — `dag.json` + a container image.
 ## The dev loop
 
 ```bash
-leoflow lite setup            # check + provision host deps (dev-only)
+leoflow lite provision            # check + provision host deps (dev-only)
 leoflow init dags/my_dag     # scaffold a project
 leoflow lite dags/my_dag      # hot-reload at http://localhost:8088 (marked DEV)
 ```

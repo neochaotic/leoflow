@@ -35,14 +35,16 @@ func TestBrewInstallArgs(t *testing.T) {
 	}
 }
 
-func TestDevSetupSubcommandWired(t *testing.T) {
-	var has bool
+func TestLiteSubcommandsWired(t *testing.T) {
+	want := map[string]bool{"provision": false, "reset-password": false}
 	for _, c := range newLiteCommand().Commands() {
-		if c.Name() == "setup" {
-			has = true
+		if _, ok := want[c.Name()]; ok {
+			want[c.Name()] = true
 		}
 	}
-	if !has {
-		t.Error("`leoflow dev` should have a `setup` subcommand")
+	for name, found := range want {
+		if !found {
+			t.Errorf("`leoflow lite` should have a %q subcommand", name)
+		}
 	}
 }

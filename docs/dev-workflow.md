@@ -10,7 +10,7 @@ This page is the **from-source** loop for working on Leoflow itself:
 
 ```bash
 make dev-install            # build + put leoflow / server / agent on your PATH
-leoflow lite setup          # provision local dev deps (base image, local DB)
+leoflow lite provision          # provision local dev deps (base image, local DB)
 leoflow init dags/my_dag    # scaffold a project
 leoflow lite dags/my_dag    # hot-reload at http://localhost:8088 (marked LITE)
 ```

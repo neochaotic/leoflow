@@ -16,7 +16,7 @@ platforms (incl. WSL2) and verification.
 ## 2 · Prepare the machine
 ```bash
 leoflow doctor               # see your platform, deps, and achievable tier
-leoflow lite setup            # builds the base image, provisions the dev DB
+leoflow lite provision            # builds the base image, provisions the dev DB
 ```
 
 ## 3 · Create and run a DAG

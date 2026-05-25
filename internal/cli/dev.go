@@ -33,7 +33,7 @@ import (
 // subprocess executor runs user code unsandboxed, so `leoflow dev` is dev-only
 // and shouts that fact in the banner and the UI navbar (ADR 0023).
 const (
-	devInstanceName = "Leoflow · DEV"
+	devInstanceName = "Leoflow Lite"
 	// devDatabaseURL targets a DEDICATED database, isolated from the product's
 	// "leoflow" db so the dev experience never mixes data with product development
 	// (no split brain). devMaintenanceURL is used only to CREATE it on first run.
@@ -122,7 +122,7 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
 	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres/Redis already running); the dev DB + venv are still provisioned")
-	cmd.AddCommand(newDevSetupCommand())
+	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
 	return cmd
 }

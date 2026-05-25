@@ -27,33 +27,36 @@ var devTools = []devTool{
 // brewInstallArgs builds the `brew install <pkg>` argv.
 func brewInstallArgs(pkg string) []string { return []string{"install", pkg} }
 
-// newDevSetupCommand prepares the local machine for `leoflow dev`: it checks the
-// host dependencies (installing the brew-installable ones with --install),
-// ensures the task base image, and provisions the isolated dev database.
-func newDevSetupCommand() *cobra.Command {
+// newLiteProvisionCommand prepares the local machine for the from-source
+// `leoflow lite` loop: it checks the host dependencies (installing the
+// brew-installable ones with --install), ensures the task base image, and
+// provisions the isolated local database. Named `provision` to avoid colliding
+// with the top-level `leoflow setup` (the end-user install bootstrap).
+func newLiteProvisionCommand() *cobra.Command {
 	var install bool
 	cmd := &cobra.Command{
-		Use:   "setup",
-		Short: "Check and provision everything `leoflow dev` needs (dev-only).",
-		Long: "setup readies this machine for `leoflow dev`: it checks Docker/k3d/" +
-			"kubectl/python3 (installing the brew-installable ones with --install), ensures " +
-			"the task base image, and provisions the isolated dev database (leoflow_dev). " +
-			"Dev-only — production setup is coming soon (#48/#61).",
+		Use:   "provision",
+		Short: "Check and provision the local deps the from-source `leoflow lite` loop needs.",
+		Long: "provision readies this machine for the from-source `leoflow lite` loop: it " +
+			"checks Docker/k3d/kubectl/python3 (installing the brew-installable ones with " +
+			"--install), ensures the task base image, and provisions the isolated local " +
+			"database (leoflow_dev). For end users, `leoflow setup` (the installer) handles " +
+			"onboarding; this is the contributor's machine prep.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDevSetup(cmd, install)
+			return runLiteProvision(cmd, install)
 		},
 	}
 	cmd.Flags().BoolVar(&install, "install", false, "brew-install missing dependencies (where possible)")
 	return cmd
 }
 
-// runDevSetup checks/installs host deps, ensures the base image, and provisions
+// runLiteProvision checks/installs host deps, ensures the base image, and provisions
 // the dev database. It returns an error if a required dependency is still missing.
-func runDevSetup(cmd *cobra.Command, install bool) error {
+func runLiteProvision(cmd *cobra.Command, install bool) error {
 	out := cmd.OutOrStdout()
 	ctx := cmdContext(cmd)
-	devPrintln(out, "▸ leoflow dev setup (dev-only; production setup coming soon — #48/#61)")
+	devPrintln(out, "▸ leoflow lite provision (contributor machine prep; end users use `leoflow setup`)")
 
 	missing := checkDevTools(cmd, install)
 
@@ -78,9 +81,9 @@ func runDevSetup(cmd *cobra.Command, install bool) error {
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("setup incomplete; unresolved: %v (see hints above)", missing)
+		return fmt.Errorf("provision incomplete; unresolved: %v (see hints above)", missing)
 	}
-	devPrintln(out, "✓ dev environment ready — run: leoflow dev dags/<project>")
+	devPrintln(out, "✓ local environment ready — run: leoflow lite dags/<project>")
 	return nil
 }
 

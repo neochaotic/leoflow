@@ -10,7 +10,7 @@
 | Run stuck at `queued` (subprocess) | The agent must reach the control plane — dev uses `127.0.0.1:<grpc>`; the executor launches async and the agent reports state over gRPC. |
 | `Invalid credentials` in the UI | Type the password manually (autofill may add a trailing space; usernames are trimmed, passwords are not). |
 | No `DEV` marker on `localhost:8080` | That's the **Demo** (production-like) — the DEV marker is on `leoflow lite` (`:8088`). See [operating modes](operating-modes.md). |
-| `setup incomplete: dev database` | Postgres isn't up — start deps (`leoflow lite setup`) or `--no-up` against a running Postgres. |
+| `provision incomplete: dev database` | Postgres isn't up — start deps (`leoflow lite provision`) or `--no-up` against a running Postgres. |
 
 ## Logs
 Task logs stream from the agent over gRPC to the control plane's log sink and are

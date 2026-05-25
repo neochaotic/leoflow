@@ -27,7 +27,7 @@ and it hot-reloads at <http://localhost:8088> (marked DEV, no login).
 ![Leoflow Dev — home dashboard, marked DEV](assets/screenshots/dev-graph.png)
 
 
-- `leoflow lite setup` — check + provision host deps (Docker/k3d/kubectl/python3),
+- `leoflow lite provision` — check + provision host deps (Docker/k3d/kubectl/python3),
   the base image, and the `leoflow_dev` database.
 - `leoflow lite dags/hello` — run a project (cluster-mode: real pods).
 - `leoflow lite --executor=subprocess dags/hello` — fast host loop (no image build).

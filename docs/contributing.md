@@ -53,7 +53,7 @@ hot-reloading stack marked **DEV** (see [Operating modes](operating-modes.md)):
 
 ```bash
 make dev-install            # put leoflow + server + agent on your PATH
-leoflow lite setup           # check/provision dev dependencies
+leoflow lite provision           # check/provision dev dependencies
 leoflow init dags/my_dag    # scaffold a project
 leoflow lite dags/my_dag     # hot-reload at http://localhost:8088 (marked DEV)
 ```

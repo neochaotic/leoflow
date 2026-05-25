@@ -1,0 +1,109 @@
+#!/bin/sh
+# Leoflow installer — downloads the release archive for this OS/arch, verifies
+# its checksum, installs the binaries into ~/.leoflow/bin, and runs
+# `leoflow setup` to bootstrap the managed runtime (Python, workspace).
+#
+#   curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
+#
+# Environment overrides:
+#   LEOFLOW_VERSION=v0.1.0-alpha.1   pin a specific release (default: latest)
+#   LEOFLOW_NO_SETUP=1               install binaries only, skip `leoflow setup`
+#   LEOFLOW_INSTALL_DIR=~/.leoflow/bin
+set -eu
+
+REPO="neochaotic/leoflow"
+INSTALL_DIR="${LEOFLOW_INSTALL_DIR:-${HOME}/.leoflow/bin}"
+
+info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
+err() { printf '\033[31merror:\033[0m %s\n' "$1" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ── Detect platform (Go binaries are static, so libc does not matter here) ──
+os=$(uname -s)
+case "$os" in
+	Linux) os=linux ;;
+	Darwin) os=darwin ;;
+	*) err "unsupported OS '$os' (Leoflow ships linux and darwin; on Windows use WSL2)" ;;
+esac
+
+arch=$(uname -m)
+case "$arch" in
+	x86_64 | amd64) arch=amd64 ;;
+	aarch64 | arm64) arch=arm64 ;;
+	*) err "unsupported architecture '$arch'" ;;
+esac
+
+# ── Pick a downloader ──
+if have curl; then
+	dl() { curl -fsSL "$1" -o "$2"; }
+	fetch() { curl -fsSL "$1"; }
+elif have wget; then
+	dl() { wget -qO "$2" "$1"; }
+	fetch() { wget -qO - "$1"; }
+else
+	err "need curl or wget to download Leoflow"
+fi
+
+# ── Resolve version ──
+version="${LEOFLOW_VERSION:-}"
+if [ -z "$version" ]; then
+	info "resolving latest release..."
+	# Use the releases list (newest-first), not /releases/latest, because the
+	# latter excludes pre-releases — and Leoflow alphas are pre-releases.
+	version=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=1" \
+		| grep '"tag_name"' | head -1 | sed 's/.*: *"//; s/".*//')
+	[ -n "$version" ] || err "could not resolve the latest release tag (set LEOFLOW_VERSION)"
+fi
+# GoReleaser archive names drop the leading 'v' from the version.
+ver_nov=$(printf '%s' "$version" | sed 's/^v//')
+
+archive="leoflow_${ver_nov}_${os}_${arch}.tar.gz"
+base="https://github.com/${REPO}/releases/download/${version}"
+info "installing Leoflow ${version} (${os}/${arch})"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+dl "${base}/${archive}" "${tmp}/${archive}" || err "downloading ${archive} failed"
+dl "${base}/checksums.txt" "${tmp}/checksums.txt" || err "downloading checksums.txt failed"
+
+# ── Verify SHA-256 ──
+info "verifying checksum..."
+expected=$(grep " ${archive}\$" "${tmp}/checksums.txt" | awk '{print $1}')
+[ -n "$expected" ] || err "no checksum entry for ${archive}"
+if have sha256sum; then
+	actual=$(sha256sum "${tmp}/${archive}" | awk '{print $1}')
+elif have shasum; then
+	actual=$(shasum -a 256 "${tmp}/${archive}" | awk '{print $1}')
+else
+	err "need sha256sum or shasum to verify the download"
+fi
+[ "$actual" = "$expected" ] || err "checksum mismatch for ${archive} (got ${actual}, want ${expected})"
+
+# ── Extract and install ──
+tar -xzf "${tmp}/${archive}" -C "$tmp"
+mkdir -p "$INSTALL_DIR"
+for bin in leoflow leoflow-server leoflow-agent; do
+	[ -f "${tmp}/${bin}" ] || err "archive is missing ${bin}"
+	install -m 0755 "${tmp}/${bin}" "${INSTALL_DIR}/${bin}"
+done
+info "installed binaries to ${INSTALL_DIR}"
+
+# ── PATH hint ──
+case ":${PATH}:" in
+	*":${INSTALL_DIR}:"*) ;;
+	*)
+		info "add ${INSTALL_DIR} to your PATH:"
+		printf '    export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+		;;
+esac
+
+# ── Bootstrap the managed runtime ──
+if [ "${LEOFLOW_NO_SETUP:-}" = "1" ]; then
+	info "skipping setup (LEOFLOW_NO_SETUP=1); run '${INSTALL_DIR}/leoflow setup' when ready"
+else
+	info "running 'leoflow setup'..."
+	"${INSTALL_DIR}/leoflow" setup
+fi
+
+info "done. Try: leoflow doctor"

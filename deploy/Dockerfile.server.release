@@ -1,0 +1,10 @@
+# GoReleaser runtime image for the control plane. Unlike deploy/Dockerfile.server
+# (which compiles from source), this copies the binary GoReleaser already built
+# and stamped with version + expiry ldflags, into a minimal non-root image.
+# The binary embeds the pinned Airflow 3.2.1 SPA (ADR 0017), so this one image
+# serves /api/v2 + /ui and the UI.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY leoflow-server /leoflow-server
+EXPOSE 8080 9090
+USER nonroot:nonroot
+ENTRYPOINT ["/leoflow-server"]

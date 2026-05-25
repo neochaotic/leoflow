@@ -1,0 +1,150 @@
+# GoReleaser configuration for Leoflow pre-alpha releases.
+#
+# Produces static (CGO-free) binaries for linux/darwin × amd64/arm64, bundles all
+# three binaries per platform into a single archive (so install.sh fetches the CLI,
+# server, and agent in one download), publishes SHA-256 checksums, an SBOM per
+# archive, cosign keyless signatures, and a control-plane container image on GHCR.
+#
+# Pre-alpha builds carry an expiry baked via ldflags: the release workflow sets
+# EXPIRES_AT (build time + ~90 days). A missing EXPIRES_AT yields an empty value,
+# i.e. no expiry — never run goreleaser without it for an actual alpha release.
+version: 2
+
+project_name: leoflow
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: leoflow
+    main: ./cmd/leoflow
+    binary: leoflow
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags: &ldflags
+      - -s -w
+      - -X github.com/neochaotic/leoflow/internal/version.version={{ .Version }}
+      - -X github.com/neochaotic/leoflow/internal/version.gitCommit={{ .Commit }}
+      - -X github.com/neochaotic/leoflow/internal/version.buildDate={{ .Date }}
+      - -X github.com/neochaotic/leoflow/internal/version.expiresAt={{ .Env.EXPIRES_AT }}
+  - id: leoflow-server
+    main: ./cmd/leoflow-server
+    binary: leoflow-server
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags: *ldflags
+  - id: leoflow-agent
+    main: ./cmd/leoflow-agent
+    binary: leoflow-agent
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags: *ldflags
+
+archives:
+  - id: leoflow
+    # One archive per platform containing all three binaries; install.sh extracts
+    # them into ~/.leoflow/bin.
+    ids: [leoflow, leoflow-server, leoflow-agent]
+    formats: [tar.gz]
+    name_template: "leoflow_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+sboms:
+  - id: archive
+    artifacts: archive
+
+# Cosign keyless signing of the checksums file. Verifying the checksums covers
+# every archive listed in it. Requires id-token: write (set in the workflow).
+signs:
+  - id: checksums
+    cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+    artifacts: checksum
+    output: true
+
+# Control-plane container image (the binary embeds the UI). Built per arch and
+# joined into a multi-arch manifest.
+dockers:
+  - id: server-amd64
+    ids: [leoflow-server]
+    goarch: amd64
+    dockerfile: deploy/Dockerfile.server.release
+    image_templates:
+      - "ghcr.io/neochaotic/leoflow-server:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/neochaotic/leoflow"
+  - id: server-arm64
+    ids: [leoflow-server]
+    goarch: arm64
+    dockerfile: deploy/Dockerfile.server.release
+    image_templates:
+      - "ghcr.io/neochaotic/leoflow-server:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/neochaotic/leoflow"
+
+docker_manifests:
+  - name_template: "ghcr.io/neochaotic/leoflow-server:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/neochaotic/leoflow-server:{{ .Version }}-amd64"
+      - "ghcr.io/neochaotic/leoflow-server:{{ .Version }}-arm64"
+
+release:
+  github:
+    owner: neochaotic
+    name: leoflow
+  # Pre-alpha tags (v0.x.y-alpha.N) are pre-releases; GoReleaser auto-detects the
+  # prerelease suffix, but make it explicit.
+  prerelease: auto
+  name_template: "{{ .Tag }}"
+  header: |
+    ## Leoflow {{ .Tag }} (pre-alpha)
+
+    Pre-alpha build. **This binary carries an expiry** and will refuse to run
+    after it; grab the latest release when prompted. Install with:
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
+    ```
+  footer: |
+    ---
+    Artifacts are checksummed (SHA-256) and the checksums file is cosign-signed
+    (keyless). Verify with `cosign verify-blob`.
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "merge conflict"

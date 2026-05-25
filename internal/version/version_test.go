@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGetReturnsLinkTimeDefaults(t *testing.T) {
@@ -20,6 +21,48 @@ func TestGetReturnsLinkTimeDefaults(t *testing.T) {
 	if got.GoVersion != runtime.Version() {
 		t.Errorf("GoVersion = %q, want %q", got.GoVersion, runtime.Version())
 	}
+}
+
+func TestExpiryStatus(t *testing.T) {
+	orig := expiresAt
+	t.Cleanup(func() { expiresAt = orig })
+
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+
+	t.Run("no expiry baked in never expires", func(t *testing.T) {
+		expiresAt = ""
+		set, _, expired := ExpiryStatus(now)
+		if set || expired {
+			t.Errorf("set=%v expired=%v, want both false for empty expiresAt", set, expired)
+		}
+	})
+
+	t.Run("future expiry is set but not expired", func(t *testing.T) {
+		expiresAt = "2026-08-23T00:00:00Z"
+		set, at, expired := ExpiryStatus(now)
+		if !set || expired {
+			t.Errorf("set=%v expired=%v, want set && !expired", set, expired)
+		}
+		if !at.Equal(time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)) {
+			t.Errorf("at = %v, want 2026-08-23", at)
+		}
+	})
+
+	t.Run("past expiry is expired", func(t *testing.T) {
+		expiresAt = "2026-05-01T00:00:00Z"
+		set, _, expired := ExpiryStatus(now)
+		if !set || !expired {
+			t.Errorf("set=%v expired=%v, want set && expired", set, expired)
+		}
+	})
+
+	t.Run("unparseable expiry is ignored", func(t *testing.T) {
+		expiresAt = "not-a-date"
+		set, _, expired := ExpiryStatus(now)
+		if set || expired {
+			t.Errorf("set=%v expired=%v, want both false for bad expiresAt", set, expired)
+		}
+	})
 }
 
 func TestInfoStringContainsEveryField(t *testing.T) {

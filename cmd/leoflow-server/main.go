@@ -34,6 +34,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/secrets"
 	"github.com/neochaotic/leoflow/internal/storage"
 	"github.com/neochaotic/leoflow/internal/ui"
+	"github.com/neochaotic/leoflow/internal/version"
 	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
@@ -55,6 +56,9 @@ func run() error {
 	}
 	if verr := cfg.Validate(); verr != nil {
 		return verr
+	}
+	if xerr := checkServerExpiry(time.Now(), os.Getenv); xerr != nil {
+		return xerr
 	}
 
 	tel, shutdownTel, err := observability.Setup(ctx, observability.Config{
@@ -207,6 +211,21 @@ func awaitShutdown(ctx context.Context, errCh <-chan error, logger *slog.Logger,
 		}
 		return nil
 	}
+}
+
+// serverExpiryStatus resolves the build's expiry; a var so tests can inject one.
+var serverExpiryStatus = version.ExpiryStatus
+
+// checkServerExpiry refuses to start an expired pre-alpha build, mirroring the
+// CLI gate. Dev builds (no baked expiry) always pass, as does any build when
+// LEOFLOW_IGNORE_EXPIRY is set. getenv is injected for testability.
+func checkServerExpiry(now time.Time, getenv func(string) string) error {
+	set, at, expired := serverExpiryStatus(now)
+	if !set || !expired || getenv("LEOFLOW_IGNORE_EXPIRY") != "" {
+		return nil
+	}
+	return fmt.Errorf("this alpha build expired on %s; download a newer release at %s (or set LEOFLOW_IGNORE_EXPIRY=1 to override)",
+		at.Format("2006-01-02"), "https://github.com/neochaotic/leoflow/releases")
 }
 
 // configureSecretCipher wires the AES-256-GCM cipher for connection secrets

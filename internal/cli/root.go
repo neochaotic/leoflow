@@ -4,6 +4,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,9 @@ func NewRootCommand() *cobra.Command {
 		Short:         "Leoflow is a GitOps-first, container-native workflow orchestrator.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			return enforceExpiry(time.Now(), cmd.Name(), cmd.ErrOrStderr())
+		},
 	}
 	root.PersistentFlags().String("config", "", "config file path (default ~/.leoflow/config.yaml)")
 	root.PersistentFlags().String("log-level", "", "log level: debug, info, warn, error")

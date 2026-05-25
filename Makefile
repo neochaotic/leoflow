@@ -83,7 +83,15 @@ fetch-airflow-ui: ## Extract the pinned Airflow UI SPA into internal/ui/assets (
 	docker rm $$cid >/dev/null ; \
 	echo "$(AIRFLOW_UI_VERSION)" > $(UI_ASSETS_DIR)/VERSION ; \
 	echo "extracted $$(find $(UI_ASSETS_DIR) -type f | wc -l | tr -d ' ') files to $(UI_ASSETS_DIR) (VERSION=$(AIRFLOW_UI_VERSION))"
+	@$(MAKE) rebrand-ui
 	@echo "NOTE: the bundle is unverified until walked in a real browser (see docs/ui-compatibility.md)."
+
+.PHONY: rebrand-ui
+rebrand-ui: ## Rewrite the embedded SPA's Docs/GitHub nav links from Airflow to Leoflow
+	@for js in $(UI_ASSETS_DIR)/assets/index-*.js ; do \
+		perl -i -pe 's{https://github\.com/apache/airflow}{https://github.com/neochaotic/leoflow}g; s{`https://airflow\.apache\.org/docs/`,key:`documentation`}{`https://neochaotic.github.io/leoflow/`,key:`documentation`}g; s{`https://airflow\.apache\.org/`,rel:`noopener}{`https://neochaotic.github.io/leoflow/`,rel:`noopener}g;' "$$js" ; \
+	done
+	@echo "rebranded nav Docs/GitHub links to Leoflow (templated provider docs left pointing at Airflow)"
 
 .PHONY: runtime-images
 runtime-images: ## Build the task base images for each supported Python version

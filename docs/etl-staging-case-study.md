@@ -20,11 +20,12 @@ carries only small paths/metadata; the GBs live on `/staging`.
 
 ```mermaid
 flowchart LR
-  E["extract<br/>(pod)"] --> T["transform<br/>(pod)"] --> L["load<br/>(pod)"]
-  E -. raw.parquet .-> D[("/staging RWX/RWO<br/>one PVC per run")]
-  T -. agg.parquet .-> D
-  L -. reads agg .- D
-  L --> PG[("external Postgres<br/>via managed Connection")]
+  E["extract (pod)"] --> T["transform (pod)"] --> L["load (pod)"]
+  D[("/staging<br/>one PVC per run")]
+  E -->|writes raw| D
+  T -->|writes agg| D
+  D -->|reads agg| L
+  L -->|50 rows| PG[("external Postgres<br/>managed Connection")]
 ```
 
 === "leoflow.yaml"
@@ -139,6 +140,11 @@ was **kept**. After fixing the external dependency, **clearing only `load`** :
 - `extract` and `transform` stayed `success` (not re-run),
 - `load` re-ran alone, **re-attached the same PVC** and read the existing
   `agg.parquet` (no 1 GB regeneration), and loaded successfully.
+
+The task instances make it visible — `load` is on **try 2**, `extract` and
+`transform` stayed on **try 1** (never re-executed):
+
+![Run detail after clearing load: load try 2, extract/transform try 1, all success](assets/screenshots/etl-rerun.png){ .home-hero__shot }
 
 `clear` also **re-binds the run to the DAG's current version** (the single
 mutability rule): a re-run after a code/yaml fix picks up the newest image — the

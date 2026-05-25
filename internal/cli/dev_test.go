@@ -264,11 +264,22 @@ func TestDevDagImageRef(t *testing.T) {
 }
 
 func TestDevDockerfile(t *testing.T) {
-	df := devDockerfile("leoflow-base:py3.11", "dag.py")
+	df := devDockerfile("leoflow-base:py3.11", "dag.py", nil)
 	for _, must := range []string{"FROM leoflow-base:py3.11", "COPY dag.py", "PYTHONPATH"} {
 		if !strings.Contains(df, must) {
 			t.Errorf("generated Dockerfile missing %q:\n%s", must, df)
 		}
+	}
+	if strings.Contains(df, "pip install") {
+		t.Errorf("no deps -> no pip install line:\n%s", df)
+	}
+	// Declared dependencies are pip-installed before COPY (cached layer).
+	withDeps := devDockerfile("leoflow-base:py3.11", "dag.py", []string{"duckdb==1.1.3", "pandas"})
+	if !strings.Contains(withDeps, "RUN pip install --no-cache-dir duckdb==1.1.3 pandas") {
+		t.Errorf("deps not installed in Dockerfile:\n%s", withDeps)
+	}
+	if strings.Index(withDeps, "pip install") > strings.Index(withDeps, "COPY") {
+		t.Errorf("pip install must come before COPY for layer caching:\n%s", withDeps)
 	}
 }
 

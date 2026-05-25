@@ -172,9 +172,16 @@ func kubectlNamespaceArgs(kubeconfig string) []string {
 // devDockerfile is the Dockerfile generated for a project that does not ship its
 // own: it layers the DAG source onto the task base image so the agent can import
 // it (matching runtime/Dockerfile's PYTHONPATH convention).
-func devDockerfile(baseImage, dagSource string) string {
+func devDockerfile(baseImage, dagSource string, deps []string) string {
 	base := filepath.Base(dagSource)
-	return fmt.Sprintf("FROM %s\nCOPY %s /home/leoflow/%s\nENV PYTHONPATH=/home/leoflow\n", baseImage, base, base)
+	df := "FROM " + baseImage + "\n"
+	// Install the DAG's declared dependencies before COPY so the (rarely-changing)
+	// dependency layer is cached across edits to dag.py.
+	if len(deps) > 0 {
+		df += "RUN pip install --no-cache-dir " + strings.Join(deps, " ") + "\n"
+	}
+	df += fmt.Sprintf("COPY %s /home/leoflow/%s\nENV PYTHONPATH=/home/leoflow\n", base, base)
+	return df
 }
 
 // devBanner renders a high-visibility DEV-environment banner so a developer
@@ -553,7 +560,7 @@ func ensureProjectDockerfile(cmd *cobra.Command, dir string, cfg *domain.Leoflow
 		src = "dag.py"
 	}
 	devPrintln(cmd.OutOrStdout(), "▸ generating a default Dockerfile (none found) …")
-	if werr := os.WriteFile(df, []byte(devDockerfile(devBaseImage, src)), 0o600); werr != nil {
+	if werr := os.WriteFile(df, []byte(devDockerfile(devBaseImage, src, cfg.Dependencies)), 0o600); werr != nil {
 		return fmt.Errorf("writing Dockerfile: %w", werr)
 	}
 	return nil

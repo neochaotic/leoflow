@@ -167,7 +167,8 @@ func TestWaitForReadyHonorsCancel(t *testing.T) {
 func TestNewDevCommandFlagDefaults(t *testing.T) {
 	cmd := newLiteCommand()
 	for flag, want := range map[string]string{
-		"compose": "docker-compose.dev.yaml",
+		"compose": "", // empty = a managed compose under ~/.leoflow, materialized on first run
+		"host":    "127.0.0.1",
 		"image":   "leoflow-dev:local",
 	} {
 		if got, _ := cmd.Flags().GetString(flag); got != want {
@@ -207,7 +208,7 @@ func TestStartDevServerStartsAndErrors(t *testing.T) {
 	defer cancel()
 
 	// A real, harmless binary starts successfully and a *Cmd is returned.
-	srv, err := startDevServer(ctx, cmd, "/bin/sleep", subprocessServerEnv(8088, "/bin/true", t.TempDir(), "python3", "", ""))
+	srv, err := startDevServer(ctx, cmd, "/bin/sleep", subprocessServerEnv("127.0.0.1", 8088, "/bin/true", t.TempDir(), "python3", "", ""))
 	if err != nil || srv == nil {
 		t.Fatalf("startDevServer(real bin) = (%v,%v), want a running cmd", srv, err)
 	}
@@ -215,7 +216,7 @@ func TestStartDevServerStartsAndErrors(t *testing.T) {
 	_ = srv.Wait()
 
 	// A nonexistent binary fails at Start.
-	if _, e := startDevServer(context.Background(), cmd, "/no/such/leoflow-server", sharedServerEnv(8088, "", "")); e == nil {
+	if _, e := startDevServer(context.Background(), cmd, "/no/such/leoflow-server", sharedServerEnv("127.0.0.1", 8088, "", "")); e == nil {
 		t.Error("expected error starting a nonexistent server binary")
 	}
 }
@@ -315,14 +316,14 @@ func TestMergeLiteDefaults(t *testing.T) {
 }
 
 func TestServerEnvBuilders(t *testing.T) {
-	sub := strings.Join(subprocessServerEnv(8088, "/bin/agent", "/proj", "/venv/py", "", ""), "\n")
+	sub := strings.Join(subprocessServerEnv("127.0.0.1", 8088, "/bin/agent", "/proj", "/venv/py", "", ""), "\n")
 	// Lite binds its own HTTP/gRPC/metrics ports (distinct from the demo's 8080/9090/9091).
 	for _, must := range []string{"LEOFLOW_EXECUTOR_TYPE=subprocess", "LEOFLOW_EXECUTOR_AGENT_PATH=/bin/agent", "LEOFLOW_EXECUTOR_SUBPROCESS_WORKDIR=/proj", "LEOFLOW_PYTHON=/venv/py", "127.0.0.1:9099", "LEOFLOW_SERVER_HTTP_ADDR=127.0.0.1:8088", "LEOFLOW_SERVER_GRPC_ADDR=:9099", "LEOFLOW_SERVER_METRICS_ADDR=:9098"} {
 		if !strings.Contains(sub, must) {
 			t.Errorf("subprocessServerEnv missing %q", must)
 		}
 	}
-	clu := strings.Join(clusterServerEnv(8088, "/home/u/.leoflow/dev/kubeconfig", "", ""), "\n")
+	clu := strings.Join(clusterServerEnv("127.0.0.1", 8088, "/home/u/.leoflow/dev/kubeconfig", "", ""), "\n")
 	for _, must := range []string{"LEOFLOW_EXECUTOR_TYPE=kubernetes", "KUBECONFIG=/home/u/.leoflow/dev/kubeconfig", "LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=" + devHostGRPCAddr} {
 		if !strings.Contains(clu, must) {
 			t.Errorf("clusterServerEnv missing %q", must)
@@ -336,7 +337,7 @@ func TestServerEnvBuilders(t *testing.T) {
 
 func TestSharedServerEnvAuthModes(t *testing.T) {
 	// No admin configured -> dev no-auth fallback (loopback only).
-	noAdmin := strings.Join(sharedServerEnv(8088, "", ""), "\n")
+	noAdmin := strings.Join(sharedServerEnv("127.0.0.1", 8088, "", ""), "\n")
 	if !strings.Contains(noAdmin, "LEOFLOW_AUTH_DEV_NO_AUTH=true") {
 		t.Error("with no admin, expected the dev no-auth fallback")
 	}
@@ -344,7 +345,7 @@ func TestSharedServerEnvAuthModes(t *testing.T) {
 		t.Error("no admin should not set a bootstrap hash")
 	}
 	// Admin hash configured -> real auth: bootstrap the admin, NO bypass.
-	withAdmin := strings.Join(sharedServerEnv(8088, "$2a$12$hash", "admin@leoflow.local"), "\n")
+	withAdmin := strings.Join(sharedServerEnv("127.0.0.1", 8088, "$2a$12$hash", "admin@leoflow.local"), "\n")
 	if strings.Contains(withAdmin, "LEOFLOW_AUTH_DEV_NO_AUTH") {
 		t.Error("with an admin hash, the dev no-auth bypass must be OFF")
 	}

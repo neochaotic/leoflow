@@ -23,6 +23,14 @@ leoflow lite dags/my_dag    # hot-reload at http://localhost:8088 (marked LITE)
 
 (End users install Lite with one command — see [Installation](installation.md).)
 
+!!! note "Reaching Lite from another machine"
+    Lite binds **loopback** (`127.0.0.1`) by default, so the UI opens on the
+    machine running it. To reach it from your internal network/VPN (e.g. a
+    headless box), pass `--host 0.0.0.0` — **only with a configured admin login**
+    (a no-auth instance is always forced back to loopback) and only on a trusted
+    network. Otherwise, an SSH tunnel works without exposing anything:
+    `ssh -L 8088:localhost:8088 <host>`.
+
 !!! tip "Edit in the browser"
     Lite includes a small built-in code editor (Python/YAML highlighting, file
     tree) — click the **IDE** button in the UI, or open `/ide`. See

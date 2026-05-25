@@ -20,3 +20,12 @@ var pythonSources embed.FS
 // PythonSources returns the embedded parser and runtime package sources, rooted
 // so that "parser/..." and "runtime/python/..." resolve.
 func PythonSources() embed.FS { return pythonSources }
+
+//go:embed docker-compose.dev.yaml
+var devCompose []byte
+
+// DevCompose returns the embedded docker-compose for Leoflow Lite's local
+// Postgres + Redis, so a binary-only install (no source checkout) can bring the
+// datastores up with `leoflow lite` alone — it is materialized under ~/.leoflow
+// on first run.
+func DevCompose() []byte { return devCompose }

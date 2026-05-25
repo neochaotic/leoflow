@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/spf13/cobra"
 
+	leoflow "github.com/neochaotic/leoflow"
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
@@ -78,6 +79,7 @@ const (
 type devOptions struct {
 	image       string
 	executor    string
+	host        string
 	port        int
 	composeFile string
 	runtimeSrc  string
@@ -89,8 +91,97 @@ type devOptions struct {
 	adminEmail string
 }
 
-// devURL is the dev UI/API base for the given HTTP port.
+// devURL is the dev UI/API base for the given HTTP port. It is always localhost
+// because the control plane is reachable on loopback regardless of bind address
+// (used for the in-process readiness check and token push).
 func devURL(port int) string { return fmt.Sprintf("http://localhost:%d", port) }
+
+// displayURL is the URL to show the user, reflecting the bind host. For a
+// wildcard bind we cannot know the reachable address, so we hint to use the
+// machine's own IP.
+func displayURL(host string, port int) string {
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return fmt.Sprintf("http://<this-machine-ip>:%d", port)
+	default:
+		return fmt.Sprintf("http://%s:%d", host, port)
+	}
+}
+
+// isLoopbackHost reports whether host keeps the UI reachable only from the
+// machine itself (the safe default).
+func isLoopbackHost(host string) bool {
+	return host == "" || host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+// warnIfExposed alerts when the user asked to bind beyond loopback: a clear
+// security warning with real auth, or a notice that no-auth was forced back to
+// loopback (resolveBindHost enforces the latter).
+func warnIfExposed(out io.Writer, host, adminHash string) {
+	if isLoopbackHost(host) {
+		return
+	}
+	if adminHash == "" {
+		devPrintf(out, "  NOTE: --host %s ignored — no admin configured, so Lite stays on loopback "+
+			"(an unauthenticated control plane is never exposed). Run `leoflow setup` to enable a login first.\n", host)
+		return
+	}
+	devPrintf(out, "  ⚠ SECURITY: binding to %s exposes Leoflow Lite on your network. Lite uses a short "+
+		"admin password — only do this on a trusted internal network or VPN, never the public internet.\n", host)
+}
+
+// announceReady prints, once the control plane is up, a prominent line with the
+// URL to open and the login — so it is not lost above the provisioning output.
+func announceReady(out io.Writer, host string, port int, adminEmail string) {
+	login := "no-auth (loopback only)"
+	if adminEmail != "" {
+		login = adminEmail
+	}
+	devPrintf(out, "\n  ✓ Leoflow Lite is ready\n      open:  %s\n      login: %s\n\n", displayURL(host, port), login)
+}
+
+// bringUpDependencies starts Lite's local Postgres + Redis via docker compose
+// unless --no-up was given, resolving (and materializing) the compose file first.
+func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions) error {
+	if o.noUp {
+		return nil
+	}
+	cf, err := resolveComposeFile(o.composeFile)
+	if err != nil {
+		return err
+	}
+	o.composeFile = cf
+	return devComposeUp(ctx, cmd, *o)
+}
+
+// resolveComposeFile returns the docker-compose file Lite uses for its local
+// Postgres + Redis. An explicit --compose wins; else a docker-compose.dev.yaml in
+// the working dir (a source checkout) is used; else the compose embedded in the
+// binary is materialized under ~/.leoflow, so a binary-only install runs with
+// `leoflow lite` alone.
+func resolveComposeFile(flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if _, err := os.Stat("docker-compose.dev.yaml"); err == nil {
+		return "docker-compose.dev.yaml", nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home dir: %w", err)
+	}
+	dir := filepath.Join(home, ".leoflow")
+	if mkErr := os.MkdirAll(dir, 0o750); mkErr != nil {
+		return "", fmt.Errorf("creating %s: %w", dir, mkErr)
+	}
+	path := filepath.Join(dir, "docker-compose.yaml")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if wErr := os.WriteFile(path, leoflow.DevCompose(), 0o600); wErr != nil {
+			return "", fmt.Errorf("writing managed compose %s: %w", path, wErr)
+		}
+	}
+	return path, nil
+}
 
 func newLiteCommand() *cobra.Command {
 	var o devOptions
@@ -117,8 +208,9 @@ func newLiteCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&o.executor, "executor", "k8s", "execution mode: 'k8s' (dedicated k3d cluster, real pods) or 'subprocess' (host, fast, unsandboxed)")
 	cmd.Flags().IntVar(&o.port, "port", devDefaultPort, "HTTP/UI port (dev default 8088, distinct from the demo's 8080)")
+	cmd.Flags().StringVar(&o.host, "host", "127.0.0.1", "address to bind the UI/API to; use 0.0.0.0 to reach it from your internal network/VPN (insecure — see the warning)")
 	cmd.Flags().StringVar(&o.image, "image", "leoflow-dev:local", "placeholder image recorded in dag.json (subprocess mode only)")
-	cmd.Flags().StringVar(&o.composeFile, "compose", "docker-compose.dev.yaml", "compose file for local Postgres + Redis")
+	cmd.Flags().StringVar(&o.composeFile, "compose", "", "compose file for local Postgres + Redis (default: a managed one under ~/.leoflow, materialized on first run)")
 	cmd.Flags().StringVar(&o.runtimeSrc, "runtime-src", "runtime/python", "source of the leoflow_runtime package installed into the dev venv")
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
@@ -259,10 +351,9 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	ctx, stop := signal.NotifyContext(cmdContext(cmd), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if !o.noUp {
-		if uerr := devComposeUp(ctx, cmd, o); uerr != nil {
-			return uerr
-		}
+	warnIfExposed(out, o.host, o.adminHash)
+	if uerr := bringUpDependencies(ctx, cmd, &o); uerr != nil {
+		return uerr
 	}
 	// Provision the isolated dev state: own database + own venv (never the
 	// product's database or the system Python).
@@ -304,6 +395,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if werr := waitForReady(ctx, uiURL); werr != nil {
 		return werr
 	}
+	announceReady(out, o.host, o.port, o.adminEmail)
 	// Mint an admin token in-process signed with the dev JWT secret; the control
 	// plane validates it by signature + claims, so no login or seeded user is
 	// needed (works against a fresh or pre-existing dev database).
@@ -332,7 +424,7 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o d
 	if aerr != nil {
 		return nil, nil, fmt.Errorf("resolving project dir: %w", aerr)
 	}
-	env = subprocessServerEnv(o.port, agentBin, workDir, venvPy, o.adminHash, o.adminEmail)
+	env = subprocessServerEnv(o.host, o.port, agentBin, workDir, venvPy, o.adminHash, o.adminEmail)
 	env = append(env, liteEditorEnv(workDir, filepath.Dir(home))...)
 	makeReload = func(token string) func() error {
 		base := func() error {
@@ -375,7 +467,7 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 		}
 		return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))
 	}
-	env = clusterServerEnv(o.port, kubeconfig, o.adminHash, o.adminEmail)
+	env = clusterServerEnv(o.host, o.port, kubeconfig, o.adminHash, o.adminEmail)
 	if wd, aerr := filepath.Abs(dir); aerr == nil {
 		env = append(env, liteEditorEnv(wd, filepath.Dir(home))...)
 	}
@@ -607,10 +699,14 @@ func resolveBinary(explicit, name string) (string, error) {
 // modes: the isolated local database, the LITE edition marker, and a writable
 // logs dir. When an admin hash is configured (by `leoflow setup`), Lite enforces
 // real auth and bootstraps that admin; otherwise it falls back to the dev no-auth
-// bypass (loopback only). The HTTP API binds loopback in both cases.
-func sharedServerEnv(port int, adminHash, adminEmail string) []string {
+// bypass.
+//
+// host is the bind address. It is honored only with real auth; a no-auth
+// fallback is ALWAYS forced to loopback so an unauthenticated control plane can
+// never be exposed to the network (resolveBindHost enforces this).
+func sharedServerEnv(host string, port int, adminHash, adminEmail string) []string {
 	env := []string{
-		fmt.Sprintf("LEOFLOW_SERVER_HTTP_ADDR=127.0.0.1:%d", port),
+		fmt.Sprintf("LEOFLOW_SERVER_HTTP_ADDR=%s:%d", resolveBindHost(host, adminHash), port),
 		"LEOFLOW_SERVER_GRPC_ADDR=" + devGRPCBindAddr,
 		"LEOFLOW_SERVER_METRICS_ADDR=" + devMetricsBindAddr,
 		"LEOFLOW_LOGS_DIR=" + filepath.Join(os.TempDir(), "leoflow-dev-logs"),
@@ -631,6 +727,20 @@ func sharedServerEnv(port int, adminHash, adminEmail string) []string {
 	}
 	// No admin configured: dev no-auth fallback (runDev warns; loopback-bound).
 	return append(env, "LEOFLOW_AUTH_DEV_NO_AUTH=true")
+}
+
+// resolveBindHost returns the address the control plane binds to. A non-loopback
+// host (e.g. 0.0.0.0 for internal-network access) is honored only when real auth
+// is configured; without an admin (no-auth fallback) it is forced to loopback,
+// so an unauthenticated control plane is never exposed beyond the machine.
+func resolveBindHost(host, adminHash string) string {
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if adminHash == "" {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 // liteEditorEnv enables the Lite web editor (ADR 0025) for the launched server:
@@ -695,8 +805,8 @@ func loadLiteAdmin(cmd *cobra.Command) (hash, email string) {
 // subprocessServerEnv adds the subprocess-executor settings: the agent binary,
 // the project workdir (so dag.py imports), the venv Python, and a dialable
 // control-plane address (the server binds 0.0.0.0, which is not a dial target).
-func subprocessServerEnv(port int, agentBin, workDir, venvPython, adminHash, adminEmail string) []string {
-	return append(sharedServerEnv(port, adminHash, adminEmail),
+func subprocessServerEnv(host string, port int, agentBin, workDir, venvPython, adminHash, adminEmail string) []string {
+	return append(sharedServerEnv(host, port, adminHash, adminEmail),
 		"LEOFLOW_EXECUTOR_TYPE=subprocess",
 		"LEOFLOW_EXECUTOR_AGENT_PATH="+agentBin,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1"+devGRPCBindAddr,
@@ -708,8 +818,8 @@ func subprocessServerEnv(port int, agentBin, workDir, venvPython, adminHash, adm
 // clusterServerEnv adds the Kubernetes-executor settings: the isolated dev
 // cluster's kubeconfig (so the control plane targets leoflow-dev, never the
 // product cluster) and the host address task pods dial back for gRPC.
-func clusterServerEnv(port int, kubeconfig, adminHash, adminEmail string) []string {
-	return append(sharedServerEnv(port, adminHash, adminEmail),
+func clusterServerEnv(host string, port int, kubeconfig, adminHash, adminEmail string) []string {
+	return append(sharedServerEnv(host, port, adminHash, adminEmail),
 		"LEOFLOW_EXECUTOR_TYPE=kubernetes",
 		"KUBECONFIG="+kubeconfig,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="+devHostGRPCAddr,

@@ -123,6 +123,7 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
 	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres/Redis already running); the dev DB + venv are still provisioned")
 	cmd.AddCommand(newDevSetupCommand())
+	cmd.AddCommand(newResetPasswordCommand())
 	return cmd
 }
 

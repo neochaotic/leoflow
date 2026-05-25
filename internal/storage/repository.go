@@ -536,6 +536,19 @@ func (r *Repository) BootstrapAdmin(ctx context.Context, tenant, email, password
 	return r.BootstrapAdminHash(ctx, tenant, email, hash)
 }
 
+// SetUserPassword sets a user's bcrypt hash by email, returning whether a user
+// was updated (false when no such user exists). Used by `leoflow lite
+// reset-password`.
+func (r *Repository) SetUserPassword(ctx context.Context, tenant, email, hash string) (bool, error) {
+	n, err := r.q.UpdateUserPassword(ctx, queries.UpdateUserPasswordParams{
+		Name: tenant, Email: email, PasswordHash: strPtr(hash),
+	})
+	if err != nil {
+		return false, fmt.Errorf("updating password: %w", err)
+	}
+	return n > 0, nil
+}
+
 // BootstrapAdminHash is BootstrapAdmin given a precomputed bcrypt hash, so a
 // caller (e.g. Leoflow Lite) can provision the admin without the plaintext
 // password ever reaching the control plane. It is a no-op when users exist.

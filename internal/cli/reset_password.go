@@ -1,0 +1,114 @@
+package cli
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/user"
+	"path/filepath"
+
+	"github.com/spf13/cobra"
+
+	"github.com/neochaotic/leoflow/internal/config"
+	"github.com/neochaotic/leoflow/internal/storage"
+)
+
+// newResetPasswordCommand resets the Lite admin password. It is root-gated: a
+// password reset is a privileged local recovery operation.
+func newResetPasswordCommand() *cobra.Command {
+	var userEmail string
+	cmd := &cobra.Command{
+		Use:   "reset-password",
+		Short: "Reset the Leoflow Lite admin password (requires sudo/root).",
+		Long: "reset-password generates a new admin password, updates it in the Lite " +
+			"database, and shows it once. It must run as root (a privileged local " +
+			"recovery operation): `sudo leoflow lite reset-password`. The Lite Postgres " +
+			"must be reachable (start `leoflow lite` if it is not).",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runResetPassword(cmd, userEmail)
+		},
+	}
+	cmd.Flags().StringVar(&userEmail, "user", "", "admin email to reset (default: the admin from config)")
+	return cmd
+}
+
+func runResetPassword(cmd *cobra.Command, userEmail string) error {
+	if os.Geteuid() != 0 {
+		return errors.New("reset-password must run as root — try `sudo leoflow lite reset-password`")
+	}
+	out := cmd.OutOrStdout()
+	home := invokingUserHome()
+	cfg := loadUserConfig(home)
+	email := resolveAdminEmail(userEmail, cfg)
+
+	pw, hash, err := generateAdminCredential()
+	if err != nil {
+		return err
+	}
+
+	ctx := cmdContext(cmd)
+	pg, err := storage.NewPostgres(ctx, config.DatabaseSection{URL: devDatabaseURL})
+	if err != nil {
+		return fmt.Errorf("connecting to the Lite database (is Postgres up? start `leoflow lite`): %w", err)
+	}
+	defer pg.Close()
+
+	repo := storage.NewRepository(pg)
+	ok, err := repo.SetUserPassword(ctx, "default", email, hash)
+	if err != nil {
+		return fmt.Errorf("resetting password: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("no admin %q found; run `leoflow lite` once to create it", email)
+	}
+
+	// Keep config.yaml's hash in sync (used to bootstrap a fresh database).
+	if cfg != nil && home != "" {
+		_ = writeLiteConfig(filepath.Join(home, ".leoflow"), cfg.ParserCmd, //nolint:errcheck // best-effort sync; the DB is the source of truth
+			liteSettings{Workspace: cfg.Workspace, Executor: cfg.LiteExecutor, AdminEmail: email, Port: cfg.LitePort}, hash)
+	}
+
+	_, _ = fmt.Fprintf(out, "\n  password reset for %s\n  new password: %s\n  (shown once — save it)\n", email, pw) //nolint:errcheck // best-effort terminal output
+	return nil
+}
+
+// invokingUserHome returns the home of the human who ran the command, resolving
+// SUDO_USER so `sudo leoflow lite reset-password` still finds the user's config
+// rather than root's.
+func invokingUserHome() string {
+	if su := os.Getenv("SUDO_USER"); su != "" {
+		if u, err := user.Lookup(su); err == nil && u.HomeDir != "" {
+			return u.HomeDir
+		}
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
+// loadUserConfig loads ~/.leoflow/config.yaml for the given home, or nil.
+func loadUserConfig(home string) *config.Config {
+	if home == "" {
+		return nil
+	}
+	c, err := config.Load(filepath.Join(home, ".leoflow", "config.yaml"), nil)
+	if err != nil {
+		return nil
+	}
+	return c
+}
+
+// resolveAdminEmail picks the email to reset: the --user flag, else the config
+// admin, else the Lite default.
+func resolveAdminEmail(flag string, cfg *config.Config) string {
+	if flag != "" {
+		return flag
+	}
+	if cfg != nil && cfg.AdminEmail != "" {
+		return cfg.AdminEmail
+	}
+	return "admin@leoflow.local"
+}

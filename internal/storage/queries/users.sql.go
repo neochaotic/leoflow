@@ -135,3 +135,24 @@ func (q *Queries) GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]strin
 	}
 	return items, nil
 }
+
+const updateUserPassword = `-- name: UpdateUserPassword :execrows
+UPDATE users
+SET password_hash = $3
+WHERE email = $2
+  AND tenant_id = (SELECT id FROM tenants WHERE name = $1)
+`
+
+type UpdateUserPasswordParams struct {
+	Name         string  `json:"name"`
+	Email        string  `json:"email"`
+	PasswordHash *string `json:"password_hash"`
+}
+
+func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUserPassword, arg.Name, arg.Email, arg.PasswordHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

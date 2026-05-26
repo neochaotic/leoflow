@@ -1,0 +1,29 @@
+{{- /*
+DRAFT (Production track) — Prometheus Operator ServiceMonitor so the control
+plane's /metrics (ADR 0010) is scraped automatically. Requires the
+monitoring.coreos.com CRDs (kube-prometheus-stack). Disabled by default.
+*/ -}}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "leoflow.fullname" . }}
+  namespace: {{ .Values.metrics.serviceMonitor.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "leoflow.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout | default "10s" }}
+{{- end }}

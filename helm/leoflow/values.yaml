@@ -134,3 +134,41 @@ securityContext:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# ── Production hardening (DRAFT) — all OFF by default; opt in per environment. ──
+
+# HorizontalPodAutoscaler. Safe with the leader-elected scheduler (ADR 0009):
+# extra replicas serve the API/UI while one scheduler stays active.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: ""
+  behavior: {}
+
+# PodDisruptionBudget so node drains/upgrades keep the API available (needs
+# replicaCount > 1). Set one of minAvailable / maxUnavailable.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: ""
+
+# NetworkPolicy for the control plane (requires a CNI that enforces it). See the
+# template header — egress defaults to permissive so enabling it never silently
+# breaks DB/Redis/kube-apiserver access; tighten per environment.
+networkPolicy:
+  enabled: false
+  ingressFrom: []   # e.g. [{namespaceSelector: {}}] to allow same-namespace clients + task pods
+  metricsFrom: []   # e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]
+  egress: []        # explicit egress rules; empty = allow-all (besides DNS, always allowed)
+
+# Prometheus Operator ServiceMonitor for /metrics (ADR 0010). Requires the
+# kube-prometheus-stack CRDs.
+metrics:
+  serviceMonitor:
+    enabled: false
+    namespace: ""           # defaults to the release namespace
+    interval: 30s
+    scrapeTimeout: 10s
+    additionalLabels: {}    # e.g. {release: kube-prometheus-stack} to match the Prometheus selector

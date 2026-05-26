@@ -1,0 +1,104 @@
+# DRAFT (Production track) — Helm chart CI. Mirrors the Lite install gate, but for
+# Kubernetes: lint + schema (every PR touching helm/**), then a real kind cluster
+# install with a pod-per-task smoke. Triggered manually (workflow_dispatch) and on
+# helm/** changes so it stays dormant until the Production front opens.
+#
+# TODO before enabling as a required gate:
+#   - SHA-pin the helm/kind/azure actions (ADR 0014 supply chain).
+#   - Flesh out the pod-per-task smoke (build a tiny DAG image, `kind load`, register
+#     via POST /api/v2/dags/:id/versions, trigger a run, assert the task pod succeeds).
+name: Chart test (DRAFT)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths: ["helm/**", ".github/workflows/chart-test.yaml"]
+
+permissions:
+  contents: read
+
+jobs:
+  # Fast, always-runnable: chart syntax + rendered-manifest schema.
+  lint:
+    name: helm lint + kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/setup-helm@v4 # TODO: pin to SHA
+        with:
+          version: v3.16.2
+      - name: helm lint
+        run: helm lint helm/leoflow
+      - name: Render + validate manifests (kubeconform)
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+          # Render with the Production toggles ON so the new templates are validated too.
+          helm template leoflow helm/leoflow \
+            --set autoscaling.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+            --set networkPolicy.enabled=true \
+            --set database.url=postgres://x \
+            --set redis.url=redis://x \
+            --set auth.jwtSecret=x \
+            | kubeconform -strict -summary -ignore-missing-schemas \
+                -schema-location default \
+                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+  # Real cluster: install the chart on kind against ephemeral Postgres + Redis and
+  # smoke the control plane. The pod-per-task run is the milestone to complete.
+  kind-e2e:
+    name: kind install + smoke
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.3"
+          cache: true
+
+      - uses: helm/kind-action@v1 # TODO: pin to SHA
+        with:
+          cluster_name: leoflow-ci
+
+      - name: Build + load the control-plane image into kind
+        run: |
+          docker build -t leoflow-server:ci -f deploy/Dockerfile .
+          kind load docker-image leoflow-server:ci --name leoflow-ci
+          # Migration image (golang-migrate + migrations).
+          docker build -t leoflow-migrate:ci -f deploy/Dockerfile.migrate .
+          kind load docker-image leoflow-migrate:ci --name leoflow-ci
+
+      - name: Ephemeral Postgres + Redis
+        run: |
+          kubectl create namespace leoflow
+          kubectl -n leoflow apply -f .github/ci/kind-datastores.yaml  # TODO: add this manifest (bare pg + redis + services)
+          kubectl -n leoflow rollout status deploy/postgres --timeout=120s
+          kubectl -n leoflow rollout status deploy/redis --timeout=120s
+
+      - name: helm install
+        run: |
+          helm install leoflow helm/leoflow -n leoflow \
+            --set image.repository=leoflow-server --set image.tag=ci \
+            --set migrations.image.repository=leoflow-migrate --set migrations.image.tag=ci \
+            --set database.url='postgres://leoflow:leoflow@postgres:5432/leoflow?sslmode=disable' \
+            --set redis.url='redis://redis:6379/0' \
+            --set auth.jwtSecret=ci-secret \
+            --set bootstrap.password=ci-admin \
+            --wait --timeout 180s
+          kubectl -n leoflow rollout status deploy/leoflow --timeout=120s
+
+      - name: Smoke — readyz + RBAC for pod-per-task
+        run: |
+          kubectl -n leoflow port-forward svc/leoflow 8080:8080 &
+          sleep 5
+          curl -fsS http://127.0.0.1:8080/readyz
+          # The control plane must be allowed to create task pods in its namespace.
+          kubectl -n leoflow auth can-i create pods \
+            --as=system:serviceaccount:leoflow:leoflow
+
+      # TODO (Production milestone): build a sample DAG image, `kind load` it,
+      #   POST /api/v2/dags/:id/versions, trigger a DagRun, and assert the task pod
+      #   reaches Succeeded — the K8s analog of the Lite e2e. This is the real gate.

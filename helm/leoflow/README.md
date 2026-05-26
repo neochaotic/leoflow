@@ -66,6 +66,20 @@ or set `migrations.enabled=false` to migrate out of band.
 | `migrations.enabled` | `true` | golang-migrate hook Job |
 | `ingress.enabled` | `false` | HTTP ingress |
 
+## Production hardening (draft)
+
+Off by default; opt in per environment. See the full
+[Production deployment guide](../../docs/production-deployment.md) for publishing,
+CI (kind pod-per-task gate), and the GitOps delivery model.
+
+| Key | Resource | Notes |
+|---|---|---|
+| `autoscaling.enabled` | `HorizontalPodAutoscaler` | safe with the leader-elected scheduler |
+| `podDisruptionBudget.enabled` | `PodDisruptionBudget` | keep the API available across node drains |
+| `networkPolicy.enabled` | `NetworkPolicy` | clients → HTTP, Prometheus → metrics, task pods → gRPC |
+| `metrics.serviceMonitor.enabled` | `ServiceMonitor` | Prometheus Operator scrape of `/metrics` |
+| `agentTLS.enabled` | — | mTLS for the agent ↔ control-plane gRPC (cert-manager, #58) |
+
 ## Validate
 
 ```bash

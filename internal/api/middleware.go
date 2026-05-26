@@ -16,7 +16,11 @@ import (
 const (
 	contextKeyUser      = "leoflow.user"
 	contextKeyRequestID = "leoflow.request_id"
-	headerRequestID     = "X-Request-Id"
+	// contextKeyProblemDetail carries the AbortProblem detail so StructuredLogger
+	// can surface WHY a 4xx/5xx happened — otherwise a failing request is logged
+	// only as a status code, with no cause (an observability blind spot).
+	contextKeyProblemDetail = "leoflow.problem_detail"
+	headerRequestID         = "X-Request-Id"
 )
 
 // RequestID assigns a request id (honoring an inbound X-Request-Id) and echoes it.
@@ -51,13 +55,28 @@ func StructuredLogger(logger *slog.Logger) gin.HandlerFunc {
 		if path == "" {
 			path = c.Request.URL.Path
 		}
-		logger.Info("http request",
+		status := c.Writer.Status()
+		attrs := []any{
 			"method", c.Request.Method,
 			"path", path,
-			"status", c.Writer.Status(),
+			"status", status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"request_id", c.GetString(contextKeyRequestID),
-		)
+		}
+		// Surface the cause on failures so a 4xx/5xx is diagnosable from the log,
+		// not just a status code. 5xx is a server fault (ERROR); 4xx is a rejected
+		// request (WARN). Below 400 stays INFO.
+		if detail := c.GetString(contextKeyProblemDetail); detail != "" {
+			attrs = append(attrs, "detail", detail)
+		}
+		switch {
+		case status >= 500:
+			logger.Error("http request", attrs...)
+		case status >= 400:
+			logger.Warn("http request", attrs...)
+		default:
+			logger.Info("http request", attrs...)
+		}
 	}
 }
 

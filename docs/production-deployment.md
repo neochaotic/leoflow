@@ -13,6 +13,19 @@ and a thin agent (ADR 0004) reports state back over gRPC. Two things are deliver
 on independent tracks — **the platform** (this chart) and **the DAGs** (immutable
 images, see [CI/CD & deploy](deploy.md)). Keep them separate.
 
+## Who does what
+
+Leoflow is a product two kinds of people use, with very different effort:
+
+| Role | What they do | Effort |
+|---|---|---|
+| **Platform operator** (once) | Provision a K8s cluster, Postgres, Redis; set a handful of values; `helm install`. | Real infra work — but a **paved road**: sane defaults, BYO-or-quickstart datastores, one install command, and an install gate (see *Testing in CI* below) so it works on first try. |
+| **DAG author** (daily) | Write `dag.py` + `leoflow.yaml`; push. CI builds the image and registers it. | **Only build DAGs.** No cluster, no YAML plumbing — the [CI/CD examples](deploy.md) + the [`examples/`](https://github.com/neochaotic/leoflow/tree/main/examples) starters are copy-paste. |
+
+The design goal is not "zero infra" — a production platform always needs a cluster
+and datastores. The goal is to make the operator's setup **as small as possible**
+and the author's loop **as close to "just write the DAG" as possible**.
+
 ## 1 · The chart
 
 `helm/leoflow/` deploys the control plane. See the [chart README](https://github.com/neochaotic/leoflow/tree/main/helm/leoflow) for the full values reference.

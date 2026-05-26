@@ -324,9 +324,20 @@ func TestServerEnvBuilders(t *testing.T) {
 		}
 	}
 	clu := strings.Join(clusterServerEnv("127.0.0.1", 8088, "/home/u/.leoflow/dev/kubeconfig", "", ""), "\n")
-	for _, must := range []string{"LEOFLOW_EXECUTOR_TYPE=kubernetes", "KUBECONFIG=/home/u/.leoflow/dev/kubeconfig", "LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=" + devHostGRPCAddr} {
+	for _, must := range []string{"LEOFLOW_EXECUTOR_TYPE=kubernetes", "KUBECONFIG=/home/u/.leoflow/dev/kubeconfig", "LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=" + devHostGRPCAddr(8088)} {
 		if !strings.Contains(clu, must) {
 			t.Errorf("clusterServerEnv missing %q", must)
+		}
+	}
+	// gRPC/metrics derive from --port so two Lite instances coexist: a different
+	// --port must yield different gRPC/metrics ports (and OTel is off in Lite).
+	if !strings.Contains(sub, "LEOFLOW_OBSERVABILITY_OTEL_ENABLED=false") {
+		t.Error("Lite env should disable the OTLP exporter (no local collector)")
+	}
+	alt := strings.Join(subprocessServerEnv("127.0.0.1", 8090, "/bin/agent", "/proj", "/venv/py", "", ""), "\n")
+	for _, must := range []string{"LEOFLOW_SERVER_GRPC_ADDR=:9101", "LEOFLOW_SERVER_METRICS_ADDR=:9100", "127.0.0.1:9101"} {
+		if !strings.Contains(alt, must) {
+			t.Errorf("--port 8090 should offset gRPC/metrics, missing %q", must)
 		}
 	}
 	// Both carry the shared settings (isolated DB + LITE badge).

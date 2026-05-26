@@ -35,6 +35,25 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
   # ─────────────────────────────────────────────────────────────────────
+  # Lint the GitHub Actions workflows themselves (actionlint). A malformed
+  # workflow can silently fail to trigger or break a release; catching schema and
+  # expression errors here keeps the CI/release workflows valid before they merge.
+  # ─────────────────────────────────────────────────────────────────────
+  workflow-lint:
+    name: Lint workflows (actionlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
+
+  # ─────────────────────────────────────────────────────────────────────
   # Tests (ADR 0011: TDD with coverage floor per phase)
   # ─────────────────────────────────────────────────────────────────────
   test:

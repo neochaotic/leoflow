@@ -64,6 +64,11 @@ else
 	err "need curl or wget to download Leoflow"
 fi
 
+# tar extracts the release archive (tar -xzf below). Minimal images (e.g. openSUSE
+# Leap) ship without it; check up front so we fail with a clear, actionable
+# message instead of a raw "tar: command not found" mid-install.
+have tar || err "need tar to extract the release archive (install it, e.g. 'apk add tar', 'zypper in tar', 'dnf install tar')"
+
 # ── Resolve version ──
 version="${LEOFLOW_VERSION:-}"
 if [ -z "$version" ]; then

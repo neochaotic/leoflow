@@ -98,15 +98,47 @@ type devOptions struct {
 func devURL(port int) string { return fmt.Sprintf("http://localhost:%d", port) }
 
 // displayURL is the URL to show the user, reflecting the bind host. For a
-// wildcard bind we cannot know the reachable address, so we hint to use the
-// machine's own IP.
+// wildcard bind it resolves the machine's own LAN IP so the printed URL is
+// directly reachable from another machine; if detection fails it falls back to a
+// placeholder hint.
 func displayURL(host string, port int) string {
 	switch host {
 	case "", "0.0.0.0", "::", "[::]":
+		if ip := machineIP(); ip != "" {
+			return fmt.Sprintf("http://%s:%d", ip, port)
+		}
 		return fmt.Sprintf("http://<this-machine-ip>:%d", port)
 	default:
 		return fmt.Sprintf("http://%s:%d", host, port)
 	}
+}
+
+// machineIP returns this machine's primary LAN IPv4. It first asks the OS which
+// local address would route to a default gateway (a UDP "connect" sets up the
+// route without sending any packet), which picks the real LAN interface over
+// docker/virtual bridges; it falls back to the first non-loopback IPv4. Empty
+// when there is no usable address.
+func machineIP() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if c, err := (&net.Dialer{}).DialContext(ctx, "udp", "8.8.8.8:80"); err == nil {
+		defer func() { _ = c.Close() }() //nolint:errcheck // no packet sent; close is best-effort
+		if a, ok := c.LocalAddr().(*net.UDPAddr); ok && a.IP != nil && !a.IP.IsLoopback() {
+			return a.IP.String()
+		}
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() {
+			if v4 := n.IP.To4(); v4 != nil {
+				return v4.String()
+			}
+		}
+	}
+	return ""
 }
 
 // isLoopbackHost reports whether host keeps the UI reachable only from the

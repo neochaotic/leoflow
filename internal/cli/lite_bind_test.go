@@ -42,8 +42,10 @@ func TestDisplayURL(t *testing.T) {
 	if got := displayURL("127.0.0.1", 8088); got != "http://127.0.0.1:8088" {
 		t.Errorf("loopback display = %q", got)
 	}
-	if got := displayURL("0.0.0.0", 8088); !strings.Contains(got, "this-machine-ip") {
-		t.Errorf("wildcard display should hint the machine IP, got %q", got)
+	// A wildcard bind resolves to a reachable address (the LAN IP when one exists,
+	// else the placeholder hint) — never the unreachable 0.0.0.0.
+	if got := displayURL("0.0.0.0", 8088); !strings.HasPrefix(got, "http://") || !strings.HasSuffix(got, ":8088") || strings.Contains(got, "0.0.0.0") {
+		t.Errorf("wildcard display = %q, want a reachable http://<ip|hint>:8088", got)
 	}
 }
 

@@ -70,16 +70,21 @@ fi
 have tar || err "need tar to extract the release archive (install it, e.g. 'apk add tar', 'zypper in tar', 'dnf install tar')"
 
 # ── Resolve version ──
+# Pin any version (incl. a pre-release once stable exists): LEOFLOW_VERSION=...
 version="${LEOFLOW_VERSION:-}"
 if [ -z "$version" ]; then
 	info "resolving latest release..."
-	# Use the releases list, not /releases/latest, because the latter excludes
-	# pre-releases — and Leoflow alphas are pre-releases. The list is NOT reliably
-	# newest-first (a retracted draft can reorder it), so DON'T trust its order:
-	# take the highest version tag with `sort -V`. Unauthenticated requests omit
-	# drafts, so only published releases are considered.
-	version=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=50" \
-		| grep '"tag_name"' | sed 's/.*: *"//; s/".*//' | sort -V | tail -1)
+	# Prefer the latest STABLE release: /releases/latest excludes pre-releases AND
+	# drafts, so once a stable ships, users get it by default (the right behavior).
+	version=$(fetch "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+		| grep '"tag_name"' | head -1 | sed 's/.*: *"//; s/".*//')
+	# No stable yet (the pre-alpha phase): fall back to the highest published
+	# pre-release. Don't trust the list order (a retracted draft reorders it) —
+	# take the highest tag with sort -V over the non-draft list.
+	if [ -z "$version" ]; then
+		version=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=50" \
+			| grep '"tag_name"' | sed 's/.*: *"//; s/".*//' | sort -V | tail -1)
+	fi
 	[ -n "$version" ] || err "could not resolve the latest release tag (set LEOFLOW_VERSION)"
 fi
 # GoReleaser archive names drop the leading 'v' from the version.

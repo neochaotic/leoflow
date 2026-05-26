@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -130,14 +131,43 @@ func warnIfExposed(out io.Writer, host, adminHash string) {
 		"admin password — only do this on a trusted internal network or VPN, never the public internet.\n", host)
 }
 
-// announceReady prints, once the control plane is up, a prominent line with the
-// URL to open and the login — so it is not lost above the provisioning output.
-func announceReady(out io.Writer, host string, port int, adminEmail string) {
+// announceReady prints, once the control plane is up, a prominent block with the
+// URL to open, the login, and the watched project path — so they are not lost
+// above the provisioning output. When the friendly name leoflow.local resolves it
+// is shown too; otherwise a one-line tip explains how to enable it.
+func announceReady(out io.Writer, host string, port int, adminEmail, dir string) {
 	login := "no-auth (loopback only)"
 	if adminEmail != "" {
 		login = adminEmail
 	}
-	devPrintf(out, "\n  ✓ Leoflow Lite is ready\n      open:  %s\n      login: %s\n\n", displayURL(host, port), login)
+	project := dir
+	if abs, err := filepath.Abs(dir); err == nil {
+		project = abs
+	}
+	devPrintf(out, "\n  ✓ Leoflow Lite is ready\n")
+	devPrintf(out, "      open:    %s\n", displayURL(host, port))
+	if friendlyResolves() {
+		devPrintf(out, "      or:      %s\n", fmt.Sprintf("http://%s:%d", friendlyHost, port))
+	}
+	devPrintf(out, "      login:   %s\n", login)
+	devPrintf(out, "      project: %s\n", project)
+	if !friendlyResolves() {
+		devPrintf(out, "      tip: for %s, add '127.0.0.1 %s' to /etc/hosts (sudo).\n",
+			friendlyHost, friendlyHost)
+	}
+	devPrintf(out, "\n")
+}
+
+// friendlyHost is the convenience hostname Leoflow suggests for the local UI.
+const friendlyHost = "leoflow.local"
+
+// friendlyResolves reports whether leoflow.local resolves on this machine, so the
+// ready banner only offers it when it actually works (a hosts entry or mDNS).
+func friendlyResolves() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, friendlyHost)
+	return err == nil && len(addrs) > 0
 }
 
 // bringUpDependencies starts Lite's local Postgres + Redis via docker compose
@@ -395,7 +425,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if werr := waitForReady(ctx, uiURL); werr != nil {
 		return werr
 	}
-	announceReady(out, o.host, o.port, o.adminEmail)
+	announceReady(out, o.host, o.port, o.adminEmail, dir)
 	// Mint an admin token in-process signed with the dev JWT secret; the control
 	// plane validates it by signature + claims, so no login or seeded user is
 	// needed (works against a fresh or pre-existing dev database).

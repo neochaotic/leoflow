@@ -21,6 +21,15 @@ import (
 	"github.com/neochaotic/leoflow/internal/setup"
 )
 
+// leoflowLogo is the wordmark shown atop `leoflow setup` on a terminal (figlet
+// "standard"). It is plain ASCII so it renders anywhere; printed only with color
+// (TTY), so piped/CI output stays clean.
+const leoflowLogo = ` _                __ _
+| |    ___  ___  / _| | _____      __
+| |   / _ \/ _ \| |_| |/ _ \ \ /\ / /
+| |__|  __/ (_) |  _| | (_) \ V  V /
+|_____\___|\___/|_| |_|\___/ \_/\_/`
+
 // liteSettings are the Lite-edition choices the setup wizard gathers.
 type liteSettings struct {
 	Workspace  string
@@ -45,9 +54,10 @@ type setupManifest struct {
 }
 
 // promptLine asks for a value with a default; an empty answer keeps the default.
-func promptLine(in *bufio.Reader, out io.Writer, label, def string) string {
-	_, _ = fmt.Fprintf(out, "  %s [%s]: ", label, def) //nolint:errcheck // best-effort prompt
-	line, _ := in.ReadString('\n')                     //nolint:errcheck // empty -> default
+// The label is highlighted and the default dimmed when color is enabled.
+func promptLine(in *bufio.Reader, out io.Writer, p palette, label, def string) string {
+	_, _ = fmt.Fprintf(out, "  %s%s%s [%s%s%s]: ", p.cyan, label, p.reset, p.dim, def, p.reset) //nolint:errcheck // best-effort prompt
+	line, _ := in.ReadString('\n')                                                              //nolint:errcheck // empty -> default
 	if line = strings.TrimSpace(line); line != "" {
 		return line
 	}
@@ -62,26 +72,27 @@ func gatherLiteConfig(interactive bool, in *bufio.Reader, out io.Writer, def lit
 	if !interactive {
 		return def
 	}
-	_, _ = fmt.Fprintln(out, "\nLeoflow Lite setup — press Enter to accept each [default].") //nolint:errcheck // best-effort
+	p := newPalette(colorEnabled(out))
+	_, _ = fmt.Fprintf(out, "\n%sLeoflow Lite setup%s — press Enter to accept each [default].\n", p.bold, p.reset) //nolint:errcheck // best-effort
 	s := def
-	s.Workspace = promptLine(in, out, "Where should your DAGs live (workspace)", def.Workspace)
+	s.Workspace = promptLine(in, out, p, "Where should your DAGs live (workspace)", def.Workspace)
 	// Run mode, in plain language — not the internal "subprocess|k8s" jargon a
 	// first-timer can't answer. The named choices map to the executor below.
-	_, _ = fmt.Fprintln(out, "\n  How should tasks run?")                                                                           //nolint:errcheck // best-effort
-	_, _ = fmt.Fprintln(out, "    local    — each task runs as a process on this machine; simple, fast, no Docker (recommended)")   //nolint:errcheck // best-effort
-	_, _ = fmt.Fprintln(out, "    cluster  — real pod-per-task on a local mini-Kubernetes (k3d); mirrors Production, needs Docker") //nolint:errcheck // best-effort
+	_, _ = fmt.Fprintf(out, "\n  %sHow should tasks run?%s\n", p.bold, p.reset)                                                                                               //nolint:errcheck // best-effort
+	_, _ = fmt.Fprintf(out, "    %slocal%s    — each task runs as a process on this machine; simple, fast, no Docker %s(recommended)%s\n", p.cyan, p.reset, p.green, p.reset) //nolint:errcheck // best-effort
+	_, _ = fmt.Fprintf(out, "    %scluster%s  — real pod-per-task on a local mini-Kubernetes (k3d); mirrors Production, needs Docker\n", p.cyan, p.reset)                     //nolint:errcheck // best-effort
 	for {
-		choice := strings.ToLower(promptLine(in, out, "Run mode (local|cluster)", executorLabel(def.Executor)))
+		choice := strings.ToLower(promptLine(in, out, p, "Run mode (local|cluster)", executorLabel(def.Executor)))
 		if executor, ok := executorFromChoice(choice); ok {
 			s.Executor = executor
 			break
 		}
 		_, _ = fmt.Fprintln(out, "  please type 'local' or 'cluster'") //nolint:errcheck // best-effort
 	}
-	if p, err := strconv.Atoi(promptLine(in, out, "UI port", strconv.Itoa(def.Port))); err == nil && p > 0 {
-		s.Port = p
+	if port, err := strconv.Atoi(promptLine(in, out, p, "UI port", strconv.Itoa(def.Port))); err == nil && port > 0 {
+		s.Port = port
 	}
-	s.AdminEmail = promptLine(in, out, "Admin email", def.AdminEmail)
+	s.AdminEmail = promptLine(in, out, p, "Admin email", def.AdminEmail)
 	return s
 }
 
@@ -90,6 +101,29 @@ func gatherLiteConfig(interactive bool, in *bufio.Reader, out io.Writer, def lit
 // a ModeCharDevice check would wrongly treat as interactive.
 func isInteractive(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
+}
+
+// palette holds ANSI styles for the wizard; all fields are empty when color is
+// disabled, so the same format strings render plain.
+type palette struct{ bold, dim, green, cyan, reset string }
+
+// colorEnabled reports whether to emit ANSI color: only to a real terminal, and
+// never when NO_COLOR is set (https://no-color.org). Piped/CI output (a non-*os.File
+// writer, or a redirected file) stays clean, so logs are never polluted.
+func colorEnabled(out io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	f, ok := out.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// newPalette returns ANSI styles when enabled, or empty strings otherwise.
+func newPalette(enabled bool) palette {
+	if !enabled {
+		return palette{}
+	}
+	return palette{bold: "\x1b[1m", dim: "\x1b[2m", green: "\x1b[32m", cyan: "\x1b[36m", reset: "\x1b[0m"}
 }
 
 // executorLabel maps the internal executor value to the user-facing run-mode name
@@ -156,6 +190,10 @@ func runSetup(cmd *cobra.Command, workspaceFlag string, dryRun bool) error {
 		def.Workspace = filepath.Join(homeDir, "leoflow")
 	}
 
+	pal := newPalette(colorEnabled(out))
+	if pal.cyan != "" { // only on a real terminal — keep CI/pipe output clean
+		_, _ = fmt.Fprintf(out, "%s%s%s\n", pal.cyan, leoflowLogo, pal.reset) //nolint:errcheck // best-effort terminal output
+	}
 	_, _ = fmt.Fprintf(out, "leoflow setup\n\n  platform   %s/%s%s\n", r.OS, r.Arch, libcSuffix(r.Libc)) //nolint:errcheck // best-effort terminal output
 
 	// Prompt only on first setup. On a re-run the config already exists and is not
@@ -276,19 +314,21 @@ func generateAdminCredential() (plaintext, hash string, err error) {
 // printSetupSummary closes setup with the admin credentials (shown once) and the
 // network-exposure warning, or — on a re-run — points at reset-password.
 func printSetupSummary(out io.Writer, lc liteSettings, generatedPassword string) {
+	p := newPalette(colorEnabled(out))
 	if generatedPassword != "" {
-		_, _ = fmt.Fprintf(out, "\n  ── Leoflow Lite admin (save this — it is shown only once) ──\n    user:     %s\n    password: %s\n", lc.AdminEmail, generatedPassword) //nolint:errcheck // best-effort terminal output
-		_, _ = fmt.Fprintln(out, "    (forgot it? `sudo leoflow lite reset-password`)")                                                                                     //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "\n  %s── Leoflow Lite admin (save this — it is shown only once) ──%s\n    user:     %s\n    password: %s%s%s\n", p.bold, p.reset, lc.AdminEmail, p.bold, generatedPassword, p.reset) //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintln(out, "    (forgot it? `sudo leoflow lite reset-password`)")                                                                                                                               //nolint:errcheck // best-effort terminal output
 	} else {
 		_, _ = fmt.Fprintln(out, "\n  admin already configured (~/.leoflow/config.yaml); reset with `sudo leoflow lite reset-password`.") //nolint:errcheck // best-effort terminal output
 	}
 	_, _ = fmt.Fprintln(out, "\n  SECURITY: Lite uses a short, human-friendly password and is meant for local/")     //nolint:errcheck // best-effort terminal output
 	_, _ = fmt.Fprintln(out, "  trusted use only. Run it on an internal network or VPN — never expose it publicly.") //nolint:errcheck // best-effort terminal output
 	// AAA close: tell the dev exactly what to do next, with what it does.
-	devPrintln(out, "\n  ✓ You're all set!")
-	devPrintf(out, "\n      Start Leoflow Lite:        leoflow lite\n"+
+	_, _ = fmt.Fprintf(out, "\n  %s✓ You're all set!%s\n", p.green, p.reset) //nolint:errcheck // best-effort terminal output
+	devPrintf(out, "\n      Start Leoflow Lite:        %sleoflow lite%s\n"+
 		"        (opens the UI, scaffolds a starter DAG in %s if empty, and hot-reloads on save)\n"+
-		"      Reach it from your network: leoflow lite --host 0.0.0.0\n", lc.Workspace)
+		"      Reach it from your network: %sleoflow lite --host 0.0.0.0%s\n",
+		p.cyan, p.reset, lc.Workspace, p.cyan, p.reset)
 }
 
 // liteConfigExists reports whether ~/.leoflow/config.yaml is already present.

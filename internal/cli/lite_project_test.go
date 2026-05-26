@@ -99,3 +99,20 @@ func TestDevBasePythonPrefersManaged(t *testing.T) {
 		t.Errorf("devBasePython = %q, want the managed %q", got, managed)
 	}
 }
+
+func TestResolveRuntimeSrc(t *testing.T) {
+	// Explicit override wins.
+	if got := resolveRuntimeSrc("/my/runtime", "/h/.leoflow/dev"); got != "/my/runtime" {
+		t.Errorf("explicit = %q", got)
+	}
+	// No repo in cwd, default flag -> the extracted pysrc path under the leoflow home.
+	t.Chdir(t.TempDir()) // a dir with no runtime/python
+	home := "/h/.leoflow/dev"
+	want := "/h/.leoflow/pysrc/runtime/python"
+	if got := resolveRuntimeSrc("runtime/python", home); got != want {
+		t.Errorf("fallback = %q, want %q", got, want)
+	}
+	if got := resolveRuntimeSrc("", home); got != want {
+		t.Errorf("empty flag fallback = %q, want %q", got, want)
+	}
+}

@@ -509,7 +509,7 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o d
 	if err != nil {
 		return nil, nil, err
 	}
-	venvPy, verr := ensureDevVenv(ctx, cmd, home, o.runtimeSrc, cfg.Dependencies)
+	venvPy, verr := ensureDevVenv(ctx, cmd, home, resolveRuntimeSrc(o.runtimeSrc, home), cfg.Dependencies)
 	if verr != nil {
 		return nil, nil, verr
 	}
@@ -674,6 +674,21 @@ func devBasePython(home string) string {
 		}
 	}
 	return "python3"
+}
+
+// resolveRuntimeSrc returns the leoflow_runtime package source to pip-install
+// into the dev venv. An explicit --runtime-src wins; otherwise the repo path
+// (source checkout) is used when present; otherwise the copy `leoflow setup`
+// extracted under ~/.leoflow/pysrc — a binary-only install has no repo, so the
+// repo-relative "runtime/python" does not exist there.
+func resolveRuntimeSrc(flagValue, home string) string {
+	if flagValue != "" && flagValue != "runtime/python" {
+		return flagValue
+	}
+	if _, err := os.Stat(filepath.Join("runtime", "python", "pyproject.toml")); err == nil {
+		return "runtime/python"
+	}
+	return filepath.Join(filepath.Dir(home), "pysrc", "runtime", "python")
 }
 
 func ensureDevVenv(ctx context.Context, cmd *cobra.Command, home, runtimeSrc string, deps []string) (string, error) {

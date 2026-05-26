@@ -94,7 +94,15 @@ info "installed binaries to ${INSTALL_DIR}"
 # new shells without a manual step. Idempotent; opt out with LEOFLOW_NO_PATH=1.
 add_to_profile() {
 	dir="$1"
-	case "$(basename "${SHELL:-sh}")" in
+	# Detect the user's login shell from /etc/passwd, not $SHELL: under
+	# `curl | sh` the script runs in /bin/sh and $SHELL is unreliable (it caused
+	# the PATH to land in ~/.profile while the user's bash reads ~/.bashrc).
+	login_shell="${SHELL:-}"
+	if command -v getent >/dev/null 2>&1; then
+		ls_shell=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)
+		[ -n "$ls_shell" ] && login_shell="$ls_shell"
+	fi
+	case "$(basename "${login_shell:-sh}")" in
 		zsh) profile="${HOME}/.zshrc" ;;
 		bash) profile="${HOME}/.bashrc" ;;
 		*) profile="${HOME}/.profile" ;;

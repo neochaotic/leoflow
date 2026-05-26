@@ -168,7 +168,12 @@ else
 	# DAGs live, how tasks run, the admin login) can prompt even under `curl | sh`,
 	# where stdin is the piped script, not a TTY. With no terminal (CI) or
 	# LEOFLOW_NONINTERACTIVE=1, fall back to non-interactive defaults.
-	if [ "${LEOFLOW_NONINTERACTIVE:-}" != "1" ] && [ -r /dev/tty ]; then
+	#
+	# Probe by actually OPENING /dev/tty in a subshell — a `[ -r /dev/tty ]` test
+	# passes on the device node's permissions even in a CI container that has no
+	# controlling terminal, where the `</dev/tty` redirect then fails ("No such
+	# device or address") and aborts the installer.
+	if [ "${LEOFLOW_NONINTERACTIVE:-}" != "1" ] && (exec 3</dev/tty) 2>/dev/null; then
 		"${INSTALL_DIR}/leoflow" setup </dev/tty
 	else
 		"${INSTALL_DIR}/leoflow" setup

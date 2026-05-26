@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -103,9 +104,21 @@ func tenantOf(c *gin.Context) string {
 	return "default"
 }
 
+// statusClientClosedRequest (499, nginx convention) marks a request the client
+// aborted before the server finished — not a server fault.
+const statusClientClosedRequest = 499
+
 func handleRepoError(c *gin.Context, err error) {
 	if errors.Is(err, ErrNotFound) {
 		AbortProblem(c, http.StatusNotFound, "not found", err.Error())
+		return
+	}
+	// A canceled/timed-out context means the client went away (the UI routinely
+	// supersedes in-flight grid requests). That is NOT a server error — mapping it
+	// to 500 produced spurious ti_summaries 500s under rapid refresh. Report 499 so
+	// it logs as a client-side 4xx, not a server fault.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		AbortProblem(c, statusClientClosedRequest, "client closed request", err.Error())
 		return
 	}
 	AbortProblem(c, http.StatusInternalServerError, "internal error", err.Error())
@@ -368,16 +381,50 @@ func listTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository
 	}
 }
 
+// clearTaskIDs accepts the Airflow UI's task_ids, where each element is either a
+// task id string OR a [task_id, map_index] tuple (mapped tasks). Lite is unmapped,
+// so the map index is dropped. Without this, the real UI payload (e.g.
+// [["hello", -1]]) fails to bind and the clear request 400s.
+type clearTaskIDs []string
+
+// UnmarshalJSON decodes each task_ids element as a string or a [task_id, map_index] tuple.
+func (t *clearTaskIDs) UnmarshalJSON(b []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(raw))
+	for _, el := range raw {
+		var s string
+		if json.Unmarshal(el, &s) == nil {
+			out = append(out, s)
+			continue
+		}
+		var tuple []json.RawMessage
+		if err := json.Unmarshal(el, &tuple); err != nil || len(tuple) == 0 {
+			return fmt.Errorf("task_ids element must be a string or [task_id, map_index] tuple")
+		}
+		var id string
+		if err := json.Unmarshal(tuple[0], &id); err != nil {
+			return fmt.Errorf("task_ids tuple task id: %w", err)
+		}
+		out = append(out, id)
+	}
+	*t = out
+	return nil
+}
+
 type clearRequest struct {
-	TaskIDs           []string `json:"task_ids"`
-	DagRunID          string   `json:"dag_run_id"`
-	OnlyFailed        *bool    `json:"only_failed"`
-	ResetDagRuns      *bool    `json:"reset_dag_runs"`
-	DryRun            *bool    `json:"dry_run"`
-	IncludeUpstream   bool     `json:"include_upstream"`
-	IncludeDownstream bool     `json:"include_downstream"`
-	IncludePast       bool     `json:"include_past"`
-	IncludeFuture     bool     `json:"include_future"`
+	TaskIDs           clearTaskIDs `json:"task_ids"`
+	DagRunID          string       `json:"dag_run_id"`
+	OnlyFailed        *bool        `json:"only_failed"`
+	OnlyRunning       *bool        `json:"only_running"`
+	ResetDagRuns      *bool        `json:"reset_dag_runs"`
+	DryRun            *bool        `json:"dry_run"`
+	IncludeUpstream   bool         `json:"include_upstream"`
+	IncludeDownstream bool         `json:"include_downstream"`
+	IncludePast       bool         `json:"include_past"`
+	IncludeFuture     bool         `json:"include_future"`
 }
 
 func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, specs DagSpecReader, audit AuditWriter) gin.HandlerFunc {
@@ -423,14 +470,15 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 // include_upstream/downstream is set (needs the spec); otherwise returns them
 // unchanged. An empty task list (clear-the-whole-run) is left empty.
 func expandClearTasks(c *gin.Context, specs DagSpecReader, body clearRequest) []string {
-	if specs == nil || len(body.TaskIDs) == 0 || (!body.IncludeUpstream && !body.IncludeDownstream) {
-		return body.TaskIDs
+	seeds := []string(body.TaskIDs)
+	if specs == nil || len(seeds) == 0 || (!body.IncludeUpstream && !body.IncludeDownstream) {
+		return seeds
 	}
 	spec, err := specs.GetCurrentSpec(c.Request.Context(), tenantOf(c), c.Param("dag_id"))
 	if err != nil {
-		return body.TaskIDs
+		return seeds
 	}
-	return expandTaskIDs(spec.Tasks, body.TaskIDs, body.IncludeUpstream, body.IncludeDownstream)
+	return expandTaskIDs(spec.Tasks, seeds, body.IncludeUpstream, body.IncludeDownstream)
 }
 
 // clearTargetRuns resolves which runs a clear applies to: just the named run, or

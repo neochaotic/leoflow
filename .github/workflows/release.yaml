@@ -67,3 +67,68 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPIRES_AT: ${{ env.EXPIRES_AT }}
+
+  # ── Faithful install smoke: run the REAL `curl | sh` of the just-published
+  # release in a clean container per distro and verify the binary plus the managed
+  # CPython actually run. This catches install-path bugs (PATH, checksum, tar, the
+  # relocatable CPython, glibc/musl) — the class of failure that previously only
+  # surfaced on real machines. GoReleaser publishes pre-releases (publicly
+  # downloadable, so `curl | sh` works here); if ANY distro fails, the `gate` job
+  # below retracts the release to a draft. Net effect: a release only survives if
+  # it installs cleanly on every supported distro ("só corta se passar").
+  install-smoke:
+    name: Install smoke (${{ matrix.image }})
+    needs: release
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    defaults:
+      run:
+        shell: sh # Alpine ships busybox sh, not bash; keep every distro on sh.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "debian:12", prep: "apt-get update -qq && apt-get install -y -qq curl ca-certificates tar" }
+          - { image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y -qq curl ca-certificates tar" }
+          - { image: "fedora:41", prep: "dnf install -y -q tar curl --allowerasing" }
+          - { image: "quay.io/rockylinux/rockylinux:9", prep: "dnf install -y -q tar curl --allowerasing" }
+          - { image: "opensuse/leap:15", prep: "zypper -n in -y curl tar gzip" }
+          - { image: "archlinux:latest", prep: "pacman -Sy --noconfirm curl tar" }
+          - { image: "alpine:3.20", prep: "apk add --no-cache curl tar" }
+    steps:
+      - name: Install prerequisites (curl + tar)
+        run: ${{ matrix.prep }}
+
+      - name: Install Leoflow via the published install.sh
+        env:
+          LEOFLOW_VERSION: ${{ github.ref_name }} # pin to the just-pushed tag
+        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" | sh
+
+      - name: Verify the binary and managed CPython run
+        run: |
+          set -eu
+          leoflow version
+          "$HOME/.leoflow/python/bin/python3.11" --version
+
+  # ── Release gate: if the install smoke failed on any distro, retract the
+  # pre-release to a draft so `curl | sh` (which resolves the newest public
+  # release) stops handing users a broken build. Runs always() so it can act on a
+  # smoke failure; on success it leaves the published pre-release untouched.
+  gate:
+    name: Gate release on install smoke
+    needs: [release, install-smoke]
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retract release to draft on smoke failure
+        if: needs.install-smoke.result != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          echo "::error::install smoke failed on at least one distro; retracting ${GITHUB_REF_NAME} to a draft."
+          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft
+          exit 1
+      - name: Confirm release passed the install gate
+        if: needs.install-smoke.result == 'success'
+        run: echo "install smoke passed on all distros; ${GITHUB_REF_NAME} stays published."

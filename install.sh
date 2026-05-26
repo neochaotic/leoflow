@@ -12,7 +12,27 @@
 set -eu
 
 REPO="neochaotic/leoflow"
-INSTALL_DIR="${LEOFLOW_INSTALL_DIR:-${HOME}/.leoflow/bin}"
+
+# Choose where to put the binaries. Prefer a directory ALREADY on PATH so the
+# user needs no `source`/new shell — the common "command not found" trap. Order:
+# an explicit override; /usr/local/bin when writable (root); ~/.local/bin when
+# it is already on PATH; otherwise the managed ~/.leoflow/bin (we then edit the
+# profile). ON_PATH=1 means no profile edit is needed.
+resolve_install_dir() {
+	if [ -n "${LEOFLOW_INSTALL_DIR:-}" ]; then
+		printf '%s' "$LEOFLOW_INSTALL_DIR"
+		return
+	fi
+	if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+		printf '/usr/local/bin'
+		return
+	fi
+	case ":${PATH}:" in
+		*":${HOME}/.local/bin:"*) printf '%s' "${HOME}/.local/bin"; return ;;
+	esac
+	printf '%s' "${HOME}/.leoflow/bin"
+}
+INSTALL_DIR="$(resolve_install_dir)"
 
 info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
 err() { printf '\033[31merror:\033[0m %s\n' "$1" >&2; exit 1; }

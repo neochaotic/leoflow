@@ -106,9 +106,16 @@ grep -q "monaco" "$HOME_DIR/ide.html" && grep -q "/api/v2/ide/tree" "$HOME_DIR/i
   || fail "/ide page missing expected markers"
 pass "/ide editor page served"
 
+# An unauthenticated visitor must NOT be served the app shell — the gate
+# redirects to the login page (no flash of the logged-in UI before bouncing).
+code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/")"
+[ "$code" = "302" ] || fail "unauthenticated / returned $code (want 302 to login)"
+pass "unauthenticated shell redirects to login (gate)"
+
 # The IDE entry button is injected into the UI shell, with its inline SVG icon
-# (regression guard for #88 — the icon must not silently vanish).
-curl -s "${BASE}/" > "$HOME_DIR/home.html"
+# (regression guard for #88 — the icon must not silently vanish). The shell is
+# now behind the login gate, so request it WITH the token.
+curl -s "${AUTH[@]}" "${BASE}/" > "$HOME_DIR/home.html"
 grep -q "leoflow-ide-button" "$HOME_DIR/home.html" \
   && grep -q 'href="/ide"' "$HOME_DIR/home.html" \
   && grep -q "<svg" "$HOME_DIR/home.html" \

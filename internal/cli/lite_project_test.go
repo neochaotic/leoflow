@@ -36,9 +36,15 @@ type nopWriter struct{}
 func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func TestResolveLiteProjectExplicitArg(t *testing.T) {
-	got, err := resolveLiteProject(bareCmd(), []string{"/some/dag"})
-	if err != nil || got != "/some/dag" {
-		t.Errorf("explicit arg = (%q,%v), want /some/dag", got, err)
+	// An explicit argument must point at a real project (a dir with leoflow.yaml);
+	// a non-project arg now errors clearly instead of being swallowed as a path.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte("dag_id: x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveLiteProject(bareCmd(), []string{dir})
+	if err != nil || got != dir {
+		t.Errorf("explicit project arg = (%q,%v), want %q", got, err, dir)
 	}
 }
 

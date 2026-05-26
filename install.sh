@@ -73,10 +73,13 @@ have tar || err "need tar to extract the release archive (install it, e.g. 'apk 
 version="${LEOFLOW_VERSION:-}"
 if [ -z "$version" ]; then
 	info "resolving latest release..."
-	# Use the releases list (newest-first), not /releases/latest, because the
-	# latter excludes pre-releases — and Leoflow alphas are pre-releases.
-	version=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=1" \
-		| grep '"tag_name"' | head -1 | sed 's/.*: *"//; s/".*//')
+	# Use the releases list, not /releases/latest, because the latter excludes
+	# pre-releases — and Leoflow alphas are pre-releases. The list is NOT reliably
+	# newest-first (a retracted draft can reorder it), so DON'T trust its order:
+	# take the highest version tag with `sort -V`. Unauthenticated requests omit
+	# drafts, so only published releases are considered.
+	version=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=50" \
+		| grep '"tag_name"' | sed 's/.*: *"//; s/".*//' | sort -V | tail -1)
 	[ -n "$version" ] || err "could not resolve the latest release tag (set LEOFLOW_VERSION)"
 fi
 # GoReleaser archive names drop the leading 'v' from the version.

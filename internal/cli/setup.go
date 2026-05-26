@@ -78,16 +78,16 @@ func gatherLiteConfig(interactive bool, in *bufio.Reader, out io.Writer, def lit
 	s.Workspace = promptLine(in, out, p, "Where should your DAGs live (workspace)", def.Workspace)
 	// Run mode, in plain language — not the internal "subprocess|k8s" jargon a
 	// first-timer can't answer. The named choices map to the executor below.
-	_, _ = fmt.Fprintf(out, "\n  %sHow should tasks run?%s\n", p.bold, p.reset)                                                                                               //nolint:errcheck // best-effort
-	_, _ = fmt.Fprintf(out, "    %slocal%s    — each task runs as a process on this machine; simple, fast, no Docker %s(recommended)%s\n", p.cyan, p.reset, p.green, p.reset) //nolint:errcheck // best-effort
-	_, _ = fmt.Fprintf(out, "    %scluster%s  — real pod-per-task on a local mini-Kubernetes (k3d); mirrors Production, needs Docker\n", p.cyan, p.reset)                     //nolint:errcheck // best-effort
+	_, _ = fmt.Fprintf(out, "\n  %sHow should tasks run?%s\n", p.bold, p.reset)                                                                                                           //nolint:errcheck // best-effort
+	_, _ = fmt.Fprintf(out, "    %s1)%s local    — %srecommended for everyday use%s: each task runs as a process here; simple, no Docker\n", p.cyan, p.reset, p.green, p.reset)           //nolint:errcheck // best-effort
+	_, _ = fmt.Fprintf(out, "    %s2)%s cluster  — for a development environment that mirrors Production: real pod-per-task on a mini-Kubernetes (k3d); needs Docker\n", p.cyan, p.reset) //nolint:errcheck // best-effort
 	for {
-		choice := strings.ToLower(promptLine(in, out, p, "Run mode (local|cluster)", executorLabel(def.Executor)))
+		choice := strings.ToLower(promptLine(in, out, p, "Run mode (1 or 2)", executorChoiceLabel(def.Executor)))
 		if executor, ok := executorFromChoice(choice); ok {
 			s.Executor = executor
 			break
 		}
-		_, _ = fmt.Fprintln(out, "  please type 'local' or 'cluster'") //nolint:errcheck // best-effort
+		_, _ = fmt.Fprintln(out, "  please type 1 (local) or 2 (cluster)") //nolint:errcheck // best-effort
 	}
 	if port, err := strconv.Atoi(promptLine(in, out, p, "UI port", strconv.Itoa(def.Port))); err == nil && port > 0 {
 		s.Port = port
@@ -126,22 +126,23 @@ func newPalette(enabled bool) palette {
 	return palette{bold: "\x1b[1m", dim: "\x1b[2m", green: "\x1b[32m", cyan: "\x1b[36m", reset: "\x1b[0m"}
 }
 
-// executorLabel maps the internal executor value to the user-facing run-mode name
-// shown in the wizard ("local"/"cluster"), so users never see "subprocess|k8s".
-func executorLabel(executor string) string {
+// executorChoiceLabel maps the executor to its menu number for the [default]
+// prompt (so the default reads "1"/"2", matching the numbered menu).
+func executorChoiceLabel(executor string) string {
 	if executor == "k8s" {
-		return "cluster"
+		return "2"
 	}
-	return "local"
+	return "1"
 }
 
 // executorFromChoice maps a run-mode answer to the internal executor, accepting
-// both the friendly names and the legacy raw values. Returns ok=false otherwise.
+// the menu numbers (1/2), the friendly names (local/cluster), and the legacy raw
+// values. Returns ok=false otherwise.
 func executorFromChoice(choice string) (string, bool) {
 	switch choice {
-	case "local", "subprocess":
+	case "1", "local", "subprocess":
 		return "subprocess", true
-	case "cluster", "k8s", "kubernetes":
+	case "2", "cluster", "k8s", "kubernetes":
 		return "k8s", true
 	}
 	return "", false

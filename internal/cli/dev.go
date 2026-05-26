@@ -822,6 +822,16 @@ func ensureBaseImage(ctx context.Context, cmd *cobra.Command) error {
 	if _, err := devOutput(ctx, "docker", "image", "inspect", devBaseImage); err == nil {
 		return nil
 	}
+	// The base image is built from runtime/Dockerfile with the repo as context;
+	// a binary install (curl|sh) has no source tree, so fail clearly and point at
+	// the local run mode instead of the cryptic "lstat runtime: no such file".
+	if _, err := os.Stat(filepath.Join("runtime", "Dockerfile")); err != nil {
+		return fmt.Errorf("cluster run mode needs the Leoflow source tree to build the task base image " +
+			"(runtime/Dockerfile), which a binary install does not have.\n" +
+			"  Use the 'local' run mode: re-run `leoflow setup` and choose 1 (local), " +
+			"or set `lite_executor: subprocess` in ~/.leoflow/config.yaml.\n" +
+			"  (Cluster mode works when you run `leoflow lite` from a Leoflow source checkout.)")
+	}
 	devPrintln(cmd.OutOrStdout(), "▸ building task base image "+devBaseImage+" (first run) …")
 	if err := devRun(ctx, cmd, "docker", baseImageBuildArgs()...); err != nil {
 		return fmt.Errorf("building base image (run from the leoflow source tree): %w", err)

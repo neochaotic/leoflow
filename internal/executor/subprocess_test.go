@@ -77,6 +77,26 @@ func TestSubprocessExecuteRunsInWorkDir(t *testing.T) {
 	}
 }
 
+func TestSubprocessExecuteSurvivesContextCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash agent stub is POSIX-only")
+	}
+	// The agent must outlive the dispatch context, exactly like a Kubernetes pod
+	// outlives the request that created it. Binding the process to the dispatch
+	// ctx (exec.CommandContext(ctx, ...)) SIGKILLs the agent the moment that ctx
+	// is canceled — surfacing as "signal: killed" and a falsely failed task even
+	// for a trivial task that already did its work.
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+	e := NewSubprocessExecutor(writeScript(t, "sleep 0.3; echo ran > "+marker), discardLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := e.Execute(ctx, Request{TaskID: "t"}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	cancel()               // the dispatch context ends immediately; the agent must keep running
+	waitForFile(t, marker) // never appears if cancellation killed the agent mid-run
+}
+
 func TestSubprocessExecuteLaunchesAsync(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("bash agent stub is POSIX-only")

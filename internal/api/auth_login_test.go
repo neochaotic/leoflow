@@ -44,6 +44,31 @@ func TestLoginPageIsPublicHTML(t *testing.T) {
 	}
 }
 
+func TestLoginPageLetsBrowserSaveCredentials(t *testing.T) {
+	body := anonGet(loginServer(), "/api/v2/auth/login").Body.String()
+	// Autofill on load needs the standard autocomplete tokens.
+	for _, want := range []string{`autocomplete="username"`, `autocomplete="current-password"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("login form missing %s", want)
+		}
+	}
+	// A fetch login does not trigger the browser "save password?" prompt by
+	// itself; the Credential Management API does. Without this the user has to
+	// retype the password every session.
+	if !strings.Contains(body, "navigator.credentials.store") || !strings.Contains(body, "PasswordCredential") {
+		t.Error("login page should store credentials via the Credential Management API so the browser can save them")
+	}
+}
+
+func TestLoginPageDistinguishesRateLimit(t *testing.T) {
+	body := anonGet(loginServer(), "/api/v2/auth/login").Body.String()
+	// A 429 must NOT show "Invalid credentials" — that makes a rate-limited user
+	// retry and dig the hole deeper. The page must tell them to wait.
+	if !strings.Contains(body, "429") || !strings.Contains(body, "wait") {
+		t.Errorf("login page should handle 429 with a 'wait' message, not 'Invalid credentials':\n%s", body)
+	}
+}
+
 func TestLoginPageSanitizesNext(t *testing.T) {
 	// Open-redirect targets collapse to "/".
 	for _, bad := range []string{"//evil.com", "https://evil.com", "javascript:alert(1)"} {

@@ -49,10 +49,25 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
        method: 'POST', headers: {'Content-Type':'application/json'},
        body: JSON.stringify({username: f.username.value, password: f.password.value})
      });
-     if (!r.ok) { document.getElementById('e').textContent = 'Invalid credentials'; return; }
+     if (!r.ok) {
+       document.getElementById('e').textContent = r.status === 429
+         ? 'Too many attempts — wait about a minute, then try again.'
+         : 'Invalid credentials';
+       return;
+     }
      const data = await r.json();
      const secure = location.protocol === 'https:' ? '; secure' : '';
      document.cookie = '_token=' + data.access_token + '; path=/; samesite=lax' + secure;
+     // Ask the browser to remember the credentials. A fetch-based login (no
+     // native form navigation) does not trigger the "save password?" prompt on
+     // its own; the Credential Management API does. Best-effort, guarded.
+     if (window.PasswordCredential) {
+       try {
+         await navigator.credentials.store(new PasswordCredential({
+           id: f.username.value, name: f.username.value, password: f.password.value
+         }));
+       } catch (_) { /* unsupported or denied: fall through */ }
+     }
      window.location.replace(next);
    } catch (_) { document.getElementById('e').textContent = 'Sign-in failed'; }
  });

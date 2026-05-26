@@ -178,6 +178,24 @@ func (r *Repository) GetDagRun(ctx context.Context, tenant, dagID, runID string)
 	return mapDagRun(run, dagID), nil
 }
 
+// DeleteDagRun removes one run (and, by cascade, its task instances and XCom).
+// It returns domain.ErrNotFound when no run with that id exists for the DAG, so
+// the API can answer 404 rather than a silent 204 for a bad id.
+func (r *Repository) DeleteDagRun(ctx context.Context, tenant, dagID, runID string) error {
+	dag, err := r.resolveDag(ctx, tenant, dagID)
+	if err != nil {
+		return err
+	}
+	n, err := r.q.DeleteDagRun(ctx, queries.DeleteDagRunParams{DagID: dag.ID, RunID: runID})
+	if err != nil {
+		return fmt.Errorf("deleting dag run: %w", err)
+	}
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 // CreateDagRun inserts a new run for a DAG at its current version.
 func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run domain.DagRun) (domain.DagRun, error) {
 	dag, err := r.resolveDag(ctx, tenant, dagID)

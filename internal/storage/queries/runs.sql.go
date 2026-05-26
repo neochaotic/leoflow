@@ -269,6 +269,24 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 	return i, err
 }
 
+const deleteDagRun = `-- name: DeleteDagRun :execrows
+DELETE FROM dag_runs WHERE dag_id = $1 AND run_id = $2
+`
+
+type DeleteDagRunParams struct {
+	DagID pgtype.UUID `json:"dag_id"`
+	RunID string      `json:"run_id"`
+}
+
+// Removes one run; its task_instances and XCom rows cascade (ON DELETE CASCADE).
+func (q *Queries) DeleteDagRun(ctx context.Context, arg DeleteDagRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteDagRun, arg.DagID, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const failTaskInstanceIfActive = `-- name: FailTaskInstanceIfActive :exec
 UPDATE task_instances
 SET state = 'failed', ended_at = now(), error_message = $2

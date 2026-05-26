@@ -84,15 +84,20 @@ type Scheduler struct {
 	inline      InlineRunner
 	lastTick    atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
 	leading     atomic.Bool  // true only while this instance holds leadership and ticks
+	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
+	// the offending expression) so a bad cron logs once, not every tick. Accessed
+	// only from the single-threaded tick (createDueRuns), so it needs no lock.
+	warnedSchedules map[string]string
 }
 
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
 func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Scheduler {
 	return &Scheduler{
-		store:       store,
-		logger:      logger,
-		interval:    interval,
-		stepTimeout: defaultStepTimeout(interval),
+		store:           store,
+		logger:          logger,
+		interval:        interval,
+		stepTimeout:     defaultStepTimeout(interval),
+		warnedSchedules: map[string]string{},
 	}
 }
 
@@ -235,20 +240,51 @@ func (s *Scheduler) createDueRuns(ctx context.Context) error {
 	}
 	now := time.Now().UTC()
 	for _, d := range dags {
+		if domain.IsOnceSchedule(d.Schedule) {
+			// @once: fire exactly one run on first sight, then never again. Once the
+			// run exists, the DAG's LastLogical is non-nil and this is skipped.
+			if d.LastLogical == nil {
+				s.createScheduledRun(ctx, d.DagID, now)
+			}
+			continue
+		}
+		if domain.IsCronlessSchedule(d.Schedule) {
+			// Manual-only or @continuous: nothing to cron-schedule — skip quietly.
+			continue
+		}
+		// A non-empty but unparseable schedule (a 4-field cron, a typo) would
+		// otherwise be swallowed silently: nextScheduledRun returns "not due" and
+		// the DAG never runs, with nothing logged. Surface it (once per bad
+		// expression) so the operator sees why a scheduled DAG sits idle. Compile
+		// validation (domain.ValidateSchedule) catches this earlier; this is the
+		// backstop for DAGs registered before the fix.
+		if !scheduleParseable(d.Schedule) {
+			if s.warnedSchedules[d.DagID] != d.Schedule {
+				s.logger.Warn("DAG has an unparseable cron schedule; it will not run on a schedule until fixed",
+					"dag", d.DagID, "schedule", d.Schedule)
+				s.warnedSchedules[d.DagID] = d.Schedule
+			}
+			continue
+		}
 		logical, due := nextScheduledRun(d.Schedule, d.LastLogical, now)
 		if !due {
 			continue
 		}
-		if err := s.store.CreateScheduledRun(ctx, d.DagID, logical); err != nil {
-			// Isolate per DAG: one DAG's creation failure must not block run
-			// creation for every other scheduled DAG this tick.
-			s.logger.Error("creating scheduled run", "dag", d.DagID, "error", err)
-			s.record("create_run_error")
-			continue
-		}
-		s.record("create_run")
+		s.createScheduledRun(ctx, d.DagID, logical)
 	}
 	return nil
+}
+
+// createScheduledRun creates one scheduled run for a DAG, isolating per-DAG
+// failures: a single DAG's creation error is logged and metered but never blocks
+// run creation for the other scheduled DAGs in this tick.
+func (s *Scheduler) createScheduledRun(ctx context.Context, dagID string, logical time.Time) {
+	if err := s.store.CreateScheduledRun(ctx, dagID, logical); err != nil {
+		s.logger.Error("creating scheduled run", "dag", dagID, "error", err)
+		s.record("create_run_error")
+		return
+	}
+	s.record("create_run")
 }
 
 func (s *Scheduler) advance(ctx context.Context, run RunState) error {

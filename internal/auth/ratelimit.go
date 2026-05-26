@@ -30,6 +30,21 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	}
 }
 
+// Blocked reports whether key has already reached its limit in the current
+// window, WITHOUT recording an attempt (a peek). The login handler uses it to
+// reject an over-limit caller up front while calling Allow only for actual
+// failures — so a successful login never consumes the budget and a user who
+// mistypes a few times is not locked out the moment they finally get it right.
+func (r *RateLimiter) Blocked(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st, ok := r.buckets[key]
+	if !ok || r.now().After(st.resetAt) {
+		return false
+	}
+	return st.count >= r.limit
+}
+
 // Allow records an event for key and reports whether it is within the limit.
 func (r *RateLimiter) Allow(key string) bool {
 	r.mu.Lock()

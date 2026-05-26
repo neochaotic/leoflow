@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -181,6 +182,55 @@ func TestStepNoScheduledRunWhenNotDue(t *testing.T) {
 	}
 	if len(store.createdRuns) != 0 {
 		t.Errorf("no run should be created when not due, got %v", store.createdRuns)
+	}
+}
+
+func TestStepOnceScheduleFiresExactlyOnce(t *testing.T) {
+	// @once with no prior run -> create exactly one run.
+	store := newFakeStore()
+	store.scheduled = []ScheduledDAG{{DagID: "once_dag", Schedule: "@once"}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) != 1 || store.createdRuns[0] != "once_dag" {
+		t.Errorf("@once with no prior run should create exactly one run, got %v", store.createdRuns)
+	}
+
+	// @once that has ALREADY run (LastLogical set) -> create nothing more.
+	ran := time.Now().UTC().Add(-time.Hour)
+	store2 := newFakeStore()
+	store2.scheduled = []ScheduledDAG{{DagID: "once_dag", Schedule: "@once", LastLogical: &ran}}
+	if err := newScheduler(store2).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store2.createdRuns) != 0 {
+		t.Errorf("@once that already ran must not run again, got %v", store2.createdRuns)
+	}
+}
+
+func TestStepWarnsOnUnparseableScheduleAndCreatesNoRun(t *testing.T) {
+	store := newFakeStore()
+	// A 4-field cron (the real bug): the scheduler must not silently ignore it.
+	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "*/3 * * *"}}
+	var buf bytes.Buffer
+	s := NewScheduler(store, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})), time.Millisecond)
+
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) != 0 {
+		t.Errorf("a bad schedule must create no run, got %v", store.createdRuns)
+	}
+	if !strings.Contains(buf.String(), "unparseable") || !strings.Contains(buf.String(), "*/3 * * *") {
+		t.Errorf("expected a WARN naming the bad schedule, got: %q", buf.String())
+	}
+	// A second tick with the same bad schedule must not re-warn (deduped).
+	buf.Reset()
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "unparseable") {
+		t.Errorf("the warning should be deduped per expression, but it logged again: %q", buf.String())
 	}
 }
 

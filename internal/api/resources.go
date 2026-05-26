@@ -35,6 +35,7 @@ type DagRunRepository interface {
 	GetDagRun(ctx context.Context, tenant, dagID, runID string) (domain.DagRun, error)
 	CreateDagRun(ctx context.Context, tenant, dagID string, run domain.DagRun) (domain.DagRun, error)
 	SetDagRunState(ctx context.Context, tenant, dagID, runID, state string) error
+	DeleteDagRun(ctx context.Context, tenant, dagID, runID string) error
 }
 
 // TaskInstanceRepository reads task instances, clears them for re-run, and sets
@@ -185,6 +186,20 @@ func deleteDagHandler(repo DagRepository) gin.HandlerFunc {
 			err = repo.ClearDagHistory(c.Request.Context(), tenantOf(c), dagID)
 		}
 		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		c.Status(http.StatusNoContent)
+	}
+}
+
+// deleteDagRunHandler implements DELETE /api/v2/dags/{dag_id}/dagRuns/{run_id},
+// mirroring Airflow: it removes a single run (task instances and XCom cascade)
+// and returns 204, or 404 when the run does not exist. The UI's "delete run"
+// action calls this; without the route it 404'd as "API route not found".
+func deleteDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := repo.DeleteDagRun(c.Request.Context(), tenantOf(c), c.Param("dag_id"), c.Param("dag_run_id")); err != nil {
 			handleRepoError(c, err)
 			return
 		}
@@ -699,9 +714,34 @@ func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xco
 			serveTaskTries(c, tasks, runs, versions, strings.TrimPrefix(action, "tries"))
 			return
 		}
+		// The SPA also addresses sub-resources under an explicit map_index, e.g.
+		// "{map_index}/tries" — the attempts list for one instance, requested right
+		// after a Clear (captured live from the 3.2 UI). The leading integer is the
+		// map_index (-1 for the single unmapped instance); route the sub-resource.
+		// TODO(#103): this handles only "{map_index}/tries" and serveTaskTries
+		// ignores the map_index. Correct while tasks are unmapped (map_index always
+		// -1); generalize the {map_index}/{subresource} routing + filter by
+		// map_index before dynamic task mapping lands.
+		if slash := strings.IndexByte(action, '/'); slash > 0 {
+			if _, err := strconv.Atoi(action[:slash]); err == nil {
+				if sub := action[slash+1:]; sub == "tries" || strings.HasPrefix(sub, "tries/") {
+					serveTaskTries(c, tasks, runs, versions, strings.TrimPrefix(sub, "tries"))
+					return
+				}
+			}
+		}
+		if action == "" {
+			// A bare path is the single (unmapped) instance.
+			serveSingleTaskInstance(c, tasks, runs, versions, specs, -1)
+			return
+		}
 		mapIndex, err := strconv.Atoi(action)
 		if err != nil {
-			AbortProblem(c, http.StatusBadRequest, "bad request", "map_index must be an integer")
+			// Not a map_index and not a known sub-resource. Say so honestly: the old
+			// "map_index must be an integer" 400 was misleading for an action that
+			// was never a map_index (e.g. a sub-resource the UI added).
+			AbortProblem(c, http.StatusNotFound, "not found",
+				fmt.Sprintf("unsupported task instance action %q", action))
 			return
 		}
 		serveSingleTaskInstance(c, tasks, runs, versions, specs, mapIndex)
@@ -821,6 +861,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 		g.POST("", RequirePermission("execute", "dag"), createDagRunHandler(deps.DagRuns, deps.Audit))
 		g.GET("/:dag_run_id", RequirePermission("read", "dag_run"), getDagRunHandler(deps.DagRuns))
 		g.PATCH("/:dag_run_id", RequirePermission("write", "dag_run"), patchDagRunHandler(deps.DagRuns, deps.Audit))
+		g.DELETE("/:dag_run_id", RequirePermission("write", "dag_run"), deleteDagRunHandler(deps.DagRuns))
 	}
 	if deps.Tasks != nil {
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances",

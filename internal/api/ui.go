@@ -2,9 +2,12 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/auth"
 )
 
 // supportedMenuItems are the Airflow 3.2.1 UI menu sections Leoflow backs. The
@@ -127,7 +130,7 @@ func uiMenusHandler() gin.HandlerFunc {
 // writes). An unmatched /api path is a 404. Any other GET falls back to the SPA
 // shell so the React router can handle client-side routes; without a UI server,
 // or for non-GET, it is a 404.
-func uiNoRoute(uiSrv UIServer) gin.HandlerFunc {
+func uiNoRoute(uiSrv UIServer, authn auth.Authenticator, devNoAuth bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		switch {
@@ -144,9 +147,35 @@ func uiNoRoute(uiSrv UIServer) gin.HandlerFunc {
 			return
 		}
 		if uiSrv != nil && c.Request.Method == http.MethodGet {
+			// Gate the SPA shell: an unauthenticated visitor must NOT see the
+			// app rendered behind the login screen. Without this, the SPA shell
+			// loads, mounts the authenticated layout, and fires its data calls
+			// (which 401) before redirecting — flashing the whole UI and lighting
+			// the log with 401s. Redirecting here keeps the shell off-screen until
+			// there is a valid session. Skipped under dev no-auth.
+			if !devNoAuth && !shellSessionValid(c, authn) {
+				c.Redirect(http.StatusFound, "/api/v2/auth/login?next="+url.QueryEscape(path))
+				return
+			}
 			uiSrv.Index(c.Writer, "/")
 			return
 		}
 		AbortProblem(c, http.StatusNotFound, "not found", "no such resource")
 	}
+}
+
+// shellSessionValid reports whether the request carries a token (bearer or the
+// _token cookie) that authenticates — the same check JWTAuth applies to data
+// routes, reused to gate the SPA shell so the gate and the data plane agree on
+// what "logged in" means.
+func shellSessionValid(c *gin.Context, authn auth.Authenticator) bool {
+	if authn == nil {
+		return false
+	}
+	for _, token := range candidateTokens(c) {
+		if _, err := authn.Authenticate(c.Request.Context(), token); err == nil {
+			return true
+		}
+	}
+	return false
 }

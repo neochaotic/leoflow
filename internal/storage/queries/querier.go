@@ -34,6 +34,8 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.UUID, error)
 	DeleteConnection(ctx context.Context, arg DeleteConnectionParams) (int64, error)
 	DeleteDag(ctx context.Context, arg DeleteDagParams) (int64, error)
+	// Removes one run; its task_instances and XCom rows cascade (ON DELETE CASCADE).
+	DeleteDagRun(ctx context.Context, arg DeleteDagRunParams) (int64, error)
 	DeleteExpiredXComIndex(ctx context.Context) error
 	DeleteImportError(ctx context.Context, arg DeleteImportErrorParams) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)

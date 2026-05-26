@@ -26,9 +26,16 @@ func TestServeSingleTaskInstance(t *testing.T) {
 	if rec := authGet(srv, http.MethodGet, tiBase+"/ghost/0", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("ghost/0 = %d, want 404", rec.Code)
 	}
-	// A non-integer map_index is a 400 (not a 500/panic).
-	if rec := authGet(srv, http.MethodGet, tiBase+"/extract/banana", ""); rec.Code != http.StatusBadRequest {
-		t.Errorf("extract/banana = %d, want 400", rec.Code)
+	// A segment that is neither a map_index nor a known sub-resource is a clear
+	// 404 "unsupported action" — NOT the old misleading "map_index must be an
+	// integer" 400, which mislabeled UI sub-resources (e.g. "{map_index}/tries")
+	// as a bad map_index.
+	rec := authGet(srv, http.MethodGet, tiBase+"/extract/banana", "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("extract/banana = %d, want 404", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "map_index must be an integer") {
+		t.Errorf("unknown action must not be reported as a map_index error: %s", rec.Body.String())
 	}
 }
 

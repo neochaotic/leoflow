@@ -452,6 +452,17 @@ func TestKubectlNamespaceArgs(t *testing.T) {
 }
 
 func TestDevClusterSetupStubbed(t *testing.T) {
+	// Cluster mode builds the base image from runtime/Dockerfile (CWD context);
+	// run from a tree that has it so ensureBaseImage's source-tree precheck passes.
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "runtime"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "runtime", "Dockerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(src)
+
 	origRun, origOut := devRun, devOutput
 	defer func() { devRun, devOutput = origRun, origOut }()
 	var runs []string

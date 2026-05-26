@@ -221,4 +221,15 @@ func TestGatherLiteConfig(t *testing.T) {
 			t.Errorf("got %+v, want defaults %+v", got, def)
 		}
 	})
+
+	// The numbered menu (the human feedback): typing 1/2 must work, not only the
+	// names. 2 -> cluster (k8s), 1 -> local (subprocess).
+	t.Run("numbered run mode picks the executor", func(t *testing.T) {
+		if got := gatherLiteConfig(true, bufio.NewReader(strings.NewReader("/ws\n2\n8088\nx@y.io\n")), io.Discard, def); got.Executor != "k8s" {
+			t.Errorf("'2' should select cluster (k8s), got %q", got.Executor)
+		}
+		if got := gatherLiteConfig(true, bufio.NewReader(strings.NewReader("/ws\n1\n8088\nx@y.io\n")), io.Discard, def); got.Executor != "subprocess" {
+			t.Errorf("'1' should select local (subprocess), got %q", got.Executor)
+		}
+	})
 }

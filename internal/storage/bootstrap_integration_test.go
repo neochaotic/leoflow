@@ -3,10 +3,64 @@
 package storage_test
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/neochaotic/leoflow/internal/auth"
 )
+
+// TestPasswordRecoveryLoginIntegration is the end-to-end recovery flow behind
+// `leoflow lite reset-password`: after a reset, the admin must be able to LOG IN
+// with the new password (issue a token), and the old password must stop working.
+// This guards the real recovery scenario, not just the DB hash update.
+func TestPasswordRecoveryLoginIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	const email = "admin@leoflow.local"
+	const oldPW, newPW = "old-secret-1", "new-secret-2"
+
+	oldHash, err := auth.HashPassword(oldPW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ensure the admin exists (creates it on a fresh tenant; a no-op otherwise),
+	// then force a known starting password — robust whether or not the DB already
+	// has an admin (BootstrapAdminHash only seeds an empty tenant).
+	if _, err := repo.BootstrapAdminHash(ctx, "default", email, oldHash); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if ok, err := repo.SetUserPassword(ctx, "default", email, oldHash); err != nil || !ok {
+		t.Fatalf("seed starting password: ok=%v err=%v", ok, err)
+	}
+
+	authn := auth.NewJWTAuthenticator(repo, "recovery-test-secret", time.Hour)
+	login := func(pw string) error {
+		_, e := authn.IssueToken(context.Background(), auth.Credentials{Tenant: "default", Username: email, Password: pw})
+		return e
+	}
+
+	// Sanity: the original password logs in.
+	if err := login(oldPW); err != nil {
+		t.Fatalf("login with original password failed: %v", err)
+	}
+
+	// Recover: reset to a new password (what reset-password does).
+	newHash, err := auth.HashPassword(newPW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := repo.SetUserPassword(ctx, "default", email, newHash); err != nil || !ok {
+		t.Fatalf("reset password: ok=%v err=%v", ok, err)
+	}
+
+	// The new password now logs in; the old one no longer does.
+	if err := login(newPW); err != nil {
+		t.Errorf("login with the reset password failed (recovery broken): %v", err)
+	}
+	if err := login(oldPW); err == nil {
+		t.Error("old password still logs in after reset")
+	}
+}
 
 // TestBootstrapAdminHashIntegration checks the hash-only admin bootstrap used by
 // Leoflow Lite: the stored hash must accept the password (login compatibility),

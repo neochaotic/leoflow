@@ -133,18 +133,24 @@ func JWTAuth(authn auth.Authenticator) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		token := tokenFromRequest(c)
-		if token == "" {
+		tokens := candidateTokens(c)
+		if len(tokens) == 0 {
 			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "missing bearer token")
 			return
 		}
-		user, err := authn.Authenticate(c.Request.Context(), token)
-		if err != nil {
-			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "invalid token")
-			return
+		// Try each candidate (bearer, then cookie) and accept the first that
+		// validates. The cookie is a real fallback even when a bearer is present:
+		// on a full-page refresh the Airflow UI loses its in-memory token and may
+		// send a stale/empty bearer, but a valid _token cookie still authenticates
+		// — otherwise the invalid bearer 401s and the UI bounces to login.
+		for _, token := range tokens {
+			if user, err := authn.Authenticate(c.Request.Context(), token); err == nil {
+				c.Set(contextKeyUser, user)
+				c.Next()
+				return
+			}
 		}
-		c.Set(contextKeyUser, user)
-		c.Next()
+		AbortProblem(c, http.StatusUnauthorized, "unauthorized", "invalid token")
 	}
 }
 
@@ -156,16 +162,20 @@ func bearerToken(header string) string {
 	return ""
 }
 
-// tokenFromRequest extracts the JWT from the Authorization header, falling back
-// to the Airflow UI's _token cookie so cookie-only requests authenticate too.
-func tokenFromRequest(c *gin.Context) string {
+// candidateTokens returns the JWTs to try authenticating, in order: the
+// Authorization bearer first, then the Airflow UI's _token cookie. Both are
+// returned (not just the first present) so JWTAuth can fall back to the cookie
+// when the bearer is stale/invalid — the SPA-refresh case — rather than failing
+// on the bearer alone.
+func candidateTokens(c *gin.Context) []string {
+	var tokens []string
 	if t := bearerToken(c.GetHeader("Authorization")); t != "" {
-		return t
+		tokens = append(tokens, t)
 	}
-	if cookie, err := c.Request.Cookie(authTokenCookie); err == nil {
-		return cookie.Value
+	if cookie, err := c.Request.Cookie(authTokenCookie); err == nil && cookie.Value != "" {
+		tokens = append(tokens, cookie.Value)
 	}
-	return ""
+	return tokens
 }
 
 // UserFromContext returns the authenticated user stored by JWTAuth.

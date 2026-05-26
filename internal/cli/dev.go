@@ -92,6 +92,37 @@ type devOptions struct {
 	adminEmail string
 }
 
+// resolveLiteProject picks the project dir for `leoflow lite`. With an explicit
+// path argument it uses that. With no argument it uses the configured workspace
+// (the directory `leoflow setup` chose), scaffolding a starter DAG there if it
+// has no project yet — so a fresh install runs with a bare `leoflow lite`.
+func resolveLiteProject(cmd *cobra.Command, args []string) (string, error) {
+	if len(args) == 1 {
+		return args[0], nil
+	}
+	dir := defaultWorkspace(cmd)
+	if _, err := os.Stat(filepath.Join(dir, "leoflow.yaml")); errors.Is(err, os.ErrNotExist) {
+		dagID, serr := scaffoldProject(dir)
+		if serr != nil {
+			return "", serr
+		}
+		devPrintf(cmd.OutOrStdout(), "▸ no DAG yet — scaffolded a starter project %q in %s (edit it in the web editor)\n", dagID, dir)
+	}
+	return dir, nil
+}
+
+// defaultWorkspace returns the workspace from config (set by `leoflow setup`),
+// falling back to ~/leoflow.
+func defaultWorkspace(cmd *cobra.Command) string {
+	if c, err := config.Load(configFilePath(cmd), nil); err == nil && c.Workspace != "" {
+		return c.Workspace
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "leoflow")
+	}
+	return "."
+}
+
 // devURL is the dev UI/API base for the given HTTP port. It is always localhost
 // because the control plane is reachable on loopback regardless of bind address
 // (used for the in-process readiness check and token push).
@@ -261,9 +292,9 @@ func newLiteCommand() *cobra.Command {
 			"rebuilds the DAG image on each change.\n\n('leoflow dev' remains as a deprecated alias.)",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := "."
-			if len(args) == 1 {
-				dir = args[0]
+			dir, err := resolveLiteProject(cmd, args)
+			if err != nil {
+				return err
 			}
 			return runDev(cmd, dir, o)
 		},

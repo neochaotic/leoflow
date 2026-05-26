@@ -89,12 +89,40 @@ for bin in leoflow leoflow-server leoflow-agent; do
 done
 info "installed binaries to ${INSTALL_DIR}"
 
-# ── PATH hint ──
+# ── PATH ──
+# Persist INSTALL_DIR on PATH in the user's shell profile so `leoflow` works in
+# new shells without a manual step. Idempotent; opt out with LEOFLOW_NO_PATH=1.
+add_to_profile() {
+	dir="$1"
+	case "$(basename "${SHELL:-sh}")" in
+		zsh) profile="${HOME}/.zshrc" ;;
+		bash) profile="${HOME}/.bashrc" ;;
+		*) profile="${HOME}/.profile" ;;
+	esac
+	if [ -f "$profile" ] && grep -qF "$dir" "$profile" 2>/dev/null; then
+		info "${dir} already on PATH in ${profile}"
+		return
+	fi
+	printf '\n# added by leoflow install.sh\nexport PATH="%s:$PATH"\n' "$dir" >>"$profile" || {
+		info "could not update ${profile}; add this to your shell profile:"
+		printf '    export PATH="%s:$PATH"\n' "$dir"
+		return
+	}
+	info "added ${dir} to PATH in ${profile}"
+	PATH_PROFILE="$profile"
+}
+
 case ":${PATH}:" in
 	*":${INSTALL_DIR}:"*) ;;
 	*)
-		info "add ${INSTALL_DIR} to your PATH:"
-		printf '    export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+		if [ "${LEOFLOW_NO_PATH:-}" = "1" ]; then
+			info "add ${INSTALL_DIR} to your PATH:"
+			printf '    export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+		else
+			add_to_profile "$INSTALL_DIR"
+		fi
+		# Make leoflow usable for the rest of this script too.
+		export PATH="${INSTALL_DIR}:${PATH}"
 		;;
 esac
 
@@ -106,4 +134,14 @@ else
 	"${INSTALL_DIR}/leoflow" setup
 fi
 
-info "done. Try: leoflow doctor"
+printf '\n'
+info "Leoflow Lite is installed."
+if [ -n "${PATH_PROFILE:-}" ]; then
+	info "next steps:"
+	printf '    1) reload your shell:  source %s   (or open a new terminal)\n' "$PATH_PROFILE"
+	printf '    2) start Leoflow:       leoflow lite\n'
+else
+	info "next: leoflow lite"
+fi
+printf '    leoflow lite scaffolds a starter DAG (if needed), prints the URL + login,\n'
+printf '    and hot-reloads on save. Add --host 0.0.0.0 to reach it from your network.\n'

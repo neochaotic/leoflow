@@ -164,7 +164,15 @@ if [ "${LEOFLOW_NO_SETUP:-}" = "1" ]; then
 	info "skipping setup (LEOFLOW_NO_SETUP=1); run '${INSTALL_DIR}/leoflow setup' when ready"
 else
 	info "running 'leoflow setup'..."
-	"${INSTALL_DIR}/leoflow" setup
+	# Attach the controlling terminal so the interactive setup wizard (where your
+	# DAGs live, how tasks run, the admin login) can prompt even under `curl | sh`,
+	# where stdin is the piped script, not a TTY. With no terminal (CI) or
+	# LEOFLOW_NONINTERACTIVE=1, fall back to non-interactive defaults.
+	if [ "${LEOFLOW_NONINTERACTIVE:-}" != "1" ] && [ -r /dev/tty ]; then
+		"${INSTALL_DIR}/leoflow" setup </dev/tty
+	else
+		"${INSTALL_DIR}/leoflow" setup
+	fi
 fi
 
 printf '\n'

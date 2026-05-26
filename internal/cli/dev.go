@@ -122,7 +122,18 @@ type devOptions struct {
 // has no project yet — so a fresh install runs with a bare `leoflow lite`.
 func resolveLiteProject(cmd *cobra.Command, args []string) (string, error) {
 	if len(args) == 1 {
-		return args[0], nil
+		p := args[0]
+		// An explicit argument must be an existing project dir. Without this check a
+		// typo like `leoflow lite uninstall` was swallowed as a project path and
+		// failed later with a cryptic "open uninstall/leoflow.yaml". Fail clearly.
+		if _, err := os.Stat(filepath.Join(p, "leoflow.yaml")); err != nil {
+			return "", fmt.Errorf("no Leoflow project at %q (no leoflow.yaml).\n"+
+				"  - run `leoflow lite` with no argument to use your workspace (%s)\n"+
+				"  - run `leoflow init %s` to create a project there\n"+
+				"  - for other actions see `leoflow --help` (e.g. `leoflow uninstall`)",
+				p, defaultWorkspace(cmd), p)
+		}
+		return p, nil
 	}
 	dir := defaultWorkspace(cmd)
 	if _, err := os.Stat(filepath.Join(dir, "leoflow.yaml")); errors.Is(err, os.ErrNotExist) {

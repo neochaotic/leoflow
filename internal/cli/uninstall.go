@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,7 +56,11 @@ func runUninstall(cmd *cobra.Command, yes, purge bool) error {
 		workspace = c.Workspace
 	}
 
-	devPrintf(out, "This will remove the Leoflow installation:\n  %s  (binaries, config, Python, Monaco)\n", root)
+	binDir := installBinDir()
+	devPrintf(out, "This will remove the Leoflow installation:\n  %s  (config, managed Python, Monaco, sources)\n", root)
+	if binDir != "" {
+		devPrintf(out, "  the leoflow binaries in %s\n", binDir)
+	}
 	if purge {
 		if workspace != "" {
 			devPrintf(out, "  %s  (your DAG workspace)\n", workspace)
@@ -77,6 +82,10 @@ func runUninstall(cmd *cobra.Command, yes, purge bool) error {
 		return fmt.Errorf("removing %s: %w", root, rerr)
 	}
 	devPrintf(out, "✓ removed %s\n", root)
+	// Remove the binaries too — install.sh places them on a PATH dir (e.g.
+	// /usr/local/bin), NOT under ~/.leoflow, so removing the home alone left a
+	// working `leoflow` behind.
+	removeBinariesIn(out, installBinDir())
 	if purge && workspace != "" {
 		if rerr := os.RemoveAll(workspace); rerr != nil {
 			devPrintf(out, "  ! could not remove workspace %s: %v\n", workspace, rerr)
@@ -84,8 +93,39 @@ func runUninstall(cmd *cobra.Command, yes, purge bool) error {
 			devPrintf(out, "✓ removed workspace %s\n", workspace)
 		}
 	}
-	devPrintln(out, "Done. Remove the 'export PATH=\"$HOME/.leoflow/bin:$PATH\"' line from your shell profile if you added it.")
+	devPrintln(out, "Done. If install.sh added a 'leoflow' PATH line to your shell profile, remove it.")
 	return nil
+}
+
+// installBinDir is the directory the running leoflow binary lives in — where
+// install.sh placed the binaries (/usr/local/bin, ~/.local/bin, or ~/.leoflow/bin).
+func installBinDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+// removeBinariesIn deletes the leoflow binaries from dir (leoflow last — it is the
+// running process; on Linux unlinking a running binary is safe). A removal failure
+// (e.g. /usr/local/bin without sudo) is reported, not fatal, so ~/.leoflow is still
+// cleaned.
+func removeBinariesIn(out io.Writer, dir string) {
+	if dir == "" {
+		return
+	}
+	for _, name := range []string{"leoflow-server", "leoflow-agent", "leoflow"} {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		if err := os.Remove(p); err != nil {
+			devPrintf(out, "  ! could not remove %s: %v (remove it manually, e.g. `sudo rm %s`)\n", p, err, p)
+		} else {
+			devPrintf(out, "✓ removed %s\n", p)
+		}
+	}
 }
 
 // confirmUninstall reads a yes/no from stdin; anything but yes/y (and any EOF on

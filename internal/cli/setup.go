@@ -64,14 +64,19 @@ func gatherLiteConfig(interactive bool, in *bufio.Reader, out io.Writer, def lit
 	}
 	_, _ = fmt.Fprintln(out, "\nLeoflow Lite setup — press Enter to accept each [default].") //nolint:errcheck // best-effort
 	s := def
-	s.Workspace = promptLine(in, out, "Workspace directory (your DAG projects)", def.Workspace)
-	_, _ = fmt.Fprintln(out, "  Executor: 'subprocess' = local use (fast, no Docker); 'k8s' = mini-cluster for development (k3d, needs Docker).") //nolint:errcheck // best-effort
+	s.Workspace = promptLine(in, out, "Where should your DAGs live (workspace)", def.Workspace)
+	// Run mode, in plain language — not the internal "subprocess|k8s" jargon a
+	// first-timer can't answer. The named choices map to the executor below.
+	_, _ = fmt.Fprintln(out, "\n  How should tasks run?")                                                                           //nolint:errcheck // best-effort
+	_, _ = fmt.Fprintln(out, "    local    — each task runs as a process on this machine; simple, fast, no Docker (recommended)")   //nolint:errcheck // best-effort
+	_, _ = fmt.Fprintln(out, "    cluster  — real pod-per-task on a local mini-Kubernetes (k3d); mirrors Production, needs Docker") //nolint:errcheck // best-effort
 	for {
-		s.Executor = promptLine(in, out, "Executor (subprocess|k8s)", def.Executor)
-		if s.Executor == "subprocess" || s.Executor == "k8s" {
+		choice := strings.ToLower(promptLine(in, out, "Run mode (local|cluster)", executorLabel(def.Executor)))
+		if executor, ok := executorFromChoice(choice); ok {
+			s.Executor = executor
 			break
 		}
-		_, _ = fmt.Fprintln(out, "  please type 'subprocess' or 'k8s'") //nolint:errcheck // best-effort
+		_, _ = fmt.Fprintln(out, "  please type 'local' or 'cluster'") //nolint:errcheck // best-effort
 	}
 	if p, err := strconv.Atoi(promptLine(in, out, "UI port", strconv.Itoa(def.Port))); err == nil && p > 0 {
 		s.Port = p
@@ -85,6 +90,27 @@ func gatherLiteConfig(interactive bool, in *bufio.Reader, out io.Writer, def lit
 // a ModeCharDevice check would wrongly treat as interactive.
 func isInteractive(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
+}
+
+// executorLabel maps the internal executor value to the user-facing run-mode name
+// shown in the wizard ("local"/"cluster"), so users never see "subprocess|k8s".
+func executorLabel(executor string) string {
+	if executor == "k8s" {
+		return "cluster"
+	}
+	return "local"
+}
+
+// executorFromChoice maps a run-mode answer to the internal executor, accepting
+// both the friendly names and the legacy raw values. Returns ok=false otherwise.
+func executorFromChoice(choice string) (string, bool) {
+	switch choice {
+	case "local", "subprocess":
+		return "subprocess", true
+	case "cluster", "k8s", "kubernetes":
+		return "k8s", true
+	}
+	return "", false
 }
 
 // newSetupCommand bootstraps the managed runtime: a usable Python 3.11 (the
@@ -258,7 +284,11 @@ func printSetupSummary(out io.Writer, lc liteSettings, generatedPassword string)
 	}
 	_, _ = fmt.Fprintln(out, "\n  SECURITY: Lite uses a short, human-friendly password and is meant for local/")     //nolint:errcheck // best-effort terminal output
 	_, _ = fmt.Fprintln(out, "  trusted use only. Run it on an internal network or VPN — never expose it publicly.") //nolint:errcheck // best-effort terminal output
-	_, _ = fmt.Fprintf(out, "\n  ready. Next: `leoflow lite %s/<your-dag>`\n", lc.Workspace)                         //nolint:errcheck // best-effort terminal output
+	// AAA close: tell the dev exactly what to do next, with what it does.
+	devPrintln(out, "\n  ✓ You're all set!")
+	devPrintf(out, "\n      Start Leoflow Lite:        leoflow lite\n"+
+		"        (opens the UI, scaffolds a starter DAG in %s if empty, and hot-reloads on save)\n"+
+		"      Reach it from your network: leoflow lite --host 0.0.0.0\n", lc.Workspace)
 }
 
 // liteConfigExists reports whether ~/.leoflow/config.yaml is already present.

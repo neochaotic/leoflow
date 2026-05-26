@@ -17,9 +17,18 @@ trusted internal network — see [Editions](editions.md).
 curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
 ```
 
-This installs the binaries to `~/.leoflow/bin`, **adds them to your PATH**, and
-runs `leoflow setup` — which fetches a managed Python + the editor, creates your
-workspace (`~/leoflow`), and prints your **admin password once**:
+This installs the binaries to a directory on your `PATH` (e.g. `/usr/local/bin`)
+and runs the **setup wizard**, which asks a few questions — press Enter to accept
+each `[default]`:
+
+- **Where your DAGs live** (workspace) — default `~/leoflow`
+- **How tasks run**: `local` (each task as a process on this machine — simple, no
+  Docker, recommended) or `cluster` (real pod-per-task on a local mini-Kubernetes
+  — mirrors Production, needs Docker)
+- **Admin email** — default `admin@leoflow.local`
+
+It then fetches a managed Python + the editor, creates your workspace, and prints
+your **admin password once** (`sudo leoflow lite reset-password` resets it):
 
 ```
 ── Leoflow Lite admin (save this — it is shown only once) ──
@@ -27,11 +36,10 @@ workspace (`~/leoflow`), and prints your **admin password once**:
   password: tiger98
 ```
 
-Save that password. Then load the new PATH (or open a new terminal):
-
-```bash
-source ~/.bashrc        # or ~/.zshrc
-```
+(Piping non-interactively, or re-running with an existing config, skips the
+questions and uses the defaults — which are always printed, so you are never
+guessing.) If the installer added a PATH line to your shell profile, open a new
+terminal (or `source` it); installing to `/usr/local/bin` needs no reload.
 
 ## 2 · Run it
 

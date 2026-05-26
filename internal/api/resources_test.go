@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -493,6 +494,57 @@ func TestTaskInstancesAndClear(t *testing.T) {
 	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", `{"task_ids":["extract"],"dag_run_id":"r1"}`)
 	if rec.Code != http.StatusOK {
 		t.Errorf("clear = %d, want 200", rec.Code)
+	}
+}
+
+// TestClearAcceptsAirflowTupleTaskIDs is a CONTRACT test against the REAL Airflow
+// 3.2 UI payload: the SPA sends task_ids as [task_id, map_index] tuples (captured
+// from the bundle as task_ids:[[...]]), not plain strings. The clear endpoint must
+// accept that shape. The prior []string DTO 400'd on it — and the older tests used
+// our own invented `["extract"]` shape, so they never caught the mismatch (issue
+// #98). This test posts the real shape, so it fails if the contract breaks again.
+func TestClearAcceptsAirflowTupleTaskIDs(t *testing.T) {
+	srv := authedServer()
+	// Real Airflow shape: each task_ids element is a [task_id, map_index] tuple.
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"dag_run_id":"r1","task_ids":[["extract",-1]],"dry_run":true}`)
+	if rec.Code == http.StatusBadRequest {
+		t.Fatalf("the real Airflow tuple payload must bind, not 400: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear (tuple task_ids) = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	// Backward compatibility: plain-string task_ids still bind.
+	if rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"dag_run_id":"r1","task_ids":["extract"]}`); rec.Code != http.StatusOK {
+		t.Errorf("string task_ids should still bind, got %d", rec.Code)
+	}
+}
+
+// TestHandleRepoErrorClientCancel guards the ti_summaries 500 regression: a
+// canceled/timed-out context means the client aborted (the UI supersedes in-flight
+// grid requests), which must map to 499 (client closed), not a 500 server fault.
+func TestHandleRepoErrorClientCancel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"client canceled", context.Canceled, statusClientClosedRequest},
+		{"deadline exceeded", context.DeadlineExceeded, statusClientClosedRequest},
+		{"wrapped cancel", errors.Join(errors.New("task instances for runs"), context.Canceled), statusClientClosedRequest},
+		{"not found", ErrNotFound, http.StatusNotFound},
+		{"real server error", errors.New("db exploded"), http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
+		handleRepoError(c, tc.err)
+		if w.Code != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, w.Code, tc.want)
+		}
 	}
 }
 

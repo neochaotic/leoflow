@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +14,44 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/auth"
 )
+
+// TestStructuredLoggerSurfacesErrorDetail is the observability guard the escaped
+// 400/500 regressions exposed: a failing request must log its CAUSE and the right
+// level (5xx=ERROR, 4xx=WARN), not just a bare status code.
+func TestStructuredLoggerSurfacesErrorDetail(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	r := gin.New()
+	r.Use(StructuredLogger(logger))
+	r.GET("/bad", func(c *gin.Context) {
+		AbortProblem(c, http.StatusBadRequest, "bad request", "cannot unmarshal array into Go struct field clearRequest.task_ids of type string")
+	})
+	r.GET("/boom", func(c *gin.Context) {
+		AbortProblem(c, http.StatusInternalServerError, "server error", "scanning task instances: db exploded")
+	})
+	r.GET("/ok", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	do := func(p string) map[string]any {
+		buf.Reset()
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, p, http.NoBody))
+		var m map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+			t.Fatalf("log line not JSON: %q", buf.String())
+		}
+		return m
+	}
+	if m := do("/bad"); m["level"] != "WARN" || !strings.Contains(m["detail"].(string), "task_ids") {
+		t.Errorf("4xx must log WARN + cause, got %v", m)
+	}
+	if m := do("/boom"); m["level"] != "ERROR" || !strings.Contains(m["detail"].(string), "db exploded") {
+		t.Errorf("5xx must log ERROR + cause, got %v", m)
+	}
+	if m := do("/ok"); m["level"] != "INFO" {
+		t.Errorf("2xx stays INFO, got %v", m)
+	}
+}
 
 // tokenAuthn authenticates exactly one token value; anything else is invalid. It
 // lets a test distinguish a stale bearer from a valid session cookie.

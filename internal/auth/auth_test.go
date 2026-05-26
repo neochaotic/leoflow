@@ -125,6 +125,33 @@ func TestRateLimiter(t *testing.T) {
 	}
 }
 
+func TestRateLimiterBlockedIsAPeek(t *testing.T) {
+	now := time.Now()
+	r := NewRateLimiter(2, time.Minute)
+	r.now = func() time.Time { return now }
+	// Blocked must NOT consume budget: peeking any number of times keeps the key
+	// usable. This lets the handler reject over-limit callers up front while only
+	// counting actual failures.
+	for i := 0; i < 10; i++ {
+		if r.Blocked("ip") {
+			t.Fatal("peek must not count toward the limit")
+		}
+	}
+	r.Allow("ip")
+	if r.Blocked("ip") {
+		t.Error("one recorded event must not block (limit 2)")
+	}
+	r.Allow("ip")
+	if !r.Blocked("ip") {
+		t.Error("reaching the limit must block")
+	}
+	// The window resets the block.
+	now = now.Add(time.Minute + time.Second)
+	if r.Blocked("ip") {
+		t.Error("a new window must not be blocked")
+	}
+}
+
 func TestMintUserTokenRoundTrips(t *testing.T) {
 	const secret = "dev-insecure-jwt-secret-change-me"
 	token, err := MintUserToken(secret, time.Hour, User{

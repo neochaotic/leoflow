@@ -48,11 +48,15 @@ func writeScript(t *testing.T, body string) string {
 // agent asynchronously, so its side effects land shortly after Execute returns).
 func waitForFile(t *testing.T, path string) []byte {
 	t.Helper()
-	for i := 0; i < 100; i++ {
+	// Generous deadline: the executor spawns the agent asynchronously, and under
+	// parallel `go test ./...` with coverage instrumentation that side effect can
+	// land well after Execute returns. Poll up to 10s (returns as soon as the file
+	// appears) so the test is not flaky under load — a fixed 2s wait was.
+	for i := 0; i < 200; i++ {
 		if data, err := os.ReadFile(path); err == nil {
 			return data
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("file %s never appeared", path)
 	return nil

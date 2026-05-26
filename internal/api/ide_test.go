@@ -169,6 +169,13 @@ func TestIDEPageServed(t *testing.T) {
 			t.Errorf("/ide page missing marker %q", marker)
 		}
 	}
+	// Guard the Monaco model-leak fix: opening a file must dispose the previous
+	// model (models are not GC'd), or every open leaks a buffer and a few tabs
+	// freeze the browser. Verified live: without dispose, getModels() grew 1->16
+	// over 15 opens; with it, stayed at 1.
+	if !strings.Contains(body, ".dispose()") {
+		t.Error("/ide page must dispose the previous Monaco model on file open (memory leak otherwise)")
+	}
 }
 
 func TestIDEMonacoNotProvisioned404(t *testing.T) {

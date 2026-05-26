@@ -132,7 +132,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 		r.GET("/static/*filepath", static)
 		r.HEAD("/static/*filepath", static)
 	}
-	r.NoRoute(uiNoRoute(deps.UI))
+	r.NoRoute(uiNoRoute(deps.UI, deps.Authenticator, deps.DevNoAuth))
 
 	return r
 }

@@ -6,6 +6,10 @@ RETURNING *;
 -- name: GetDagRun :one
 SELECT * FROM dag_runs WHERE dag_id = $1 AND run_id = $2;
 
+-- name: DeleteDagRun :execrows
+-- Removes one run; its task_instances and XCom rows cascade (ON DELETE CASCADE).
+DELETE FROM dag_runs WHERE dag_id = $1 AND run_id = $2;
+
 -- name: ListDagRunsByDag :many
 SELECT * FROM dag_runs
 WHERE dag_id = $1

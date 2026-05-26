@@ -119,8 +119,15 @@ async function openFile(path) {
     const { content } = await api.read(path);
     current = path;
     pathEl.textContent = path;
+    // Dispose the previous model before swapping in the new one. Monaco models are
+    // NOT garbage-collected — they live in the editor's model registry until
+    // disposed — so creating one per file-open without disposing leaks the full
+    // text buffer + tokenization + undo stack each time. Opening files across a
+    // few tabs then exhausts memory and freezes the browser.
+    const previous = editor.getModel();
     const model = monaco.editor.createModel(content, languageFor(path));
     editor.setModel(model);
+    if (previous) previous.dispose();
     setStatus("opened " + path);
     document.querySelectorAll("#tree .node").forEach((n) =>
       n.classList.toggle("active", n.dataset.path === path));

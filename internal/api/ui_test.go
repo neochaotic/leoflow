@@ -174,26 +174,46 @@ func TestUINoRouteDegradesGracefully(t *testing.T) {
 	}
 }
 
-func TestUnauthenticatedCanLoadSPAButNotData(t *testing.T) {
+func TestUnauthenticatedShellRedirectsToLogin(t *testing.T) {
 	srv := uiServer()
-	anon := func(path string) int {
+	anon := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
-		rec := httptest.NewRecorder() // no Authorization header
+		rec := httptest.NewRecorder() // no Authorization header, no cookie
 		srv.ServeHTTP(rec, req)
-		return rec.Code
+		return rec
 	}
-	// The static SPA (shell + assets + pre-login config) must load anonymously,
-	// or the browser can never reach the login screen.
-	for _, p := range []string{"/", "/dags/etl/grid", "/static/VERSION", "/ui/config"} {
-		if code := anon(p); code != http.StatusOK {
-			t.Errorf("anonymous GET %s = %d, want 200 (public SPA)", p, code)
+	// The app shell must NOT render for an unauthenticated visitor: rendering it
+	// flashes the whole logged-in UI before bouncing to login (and lights the log
+	// with 401s). Shell routes redirect straight to the login page instead.
+	for _, p := range []string{"/", "/dags/etl/grid"} {
+		rec := anon(p)
+		if rec.Code != http.StatusFound {
+			t.Errorf("anonymous shell GET %s = %d, want 302 to login", p, rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); !strings.HasPrefix(loc, "/api/v2/auth/login") {
+			t.Errorf("anonymous shell GET %s -> %q, want /api/v2/auth/login", p, loc)
 		}
 	}
-	// The data planes stay gated.
+	// Static assets and the pre-login config stay public — the login page and the
+	// SPA bundle it loads after sign-in must be fetchable without a token.
+	for _, p := range []string{"/static/VERSION", "/ui/config"} {
+		if rec := anon(p); rec.Code != http.StatusOK {
+			t.Errorf("anonymous GET %s = %d, want 200 (public)", p, rec.Code)
+		}
+	}
+	// Data planes stay gated with 401 (API calls, not a redirect).
 	for _, p := range []string{"/api/v2/version", "/ui/auth/me"} {
-		if code := anon(p); code != http.StatusUnauthorized {
-			t.Errorf("anonymous GET %s = %d, want 401 (gated data)", p, code)
+		if rec := anon(p); rec.Code != http.StatusUnauthorized {
+			t.Errorf("anonymous GET %s = %d, want 401 (gated data)", p, rec.Code)
 		}
+	}
+	// With a session cookie, the gate lets the shell through.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/dags/etl/grid", http.NoBody)
+	req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: "valid"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<div id=\"root\"") {
+		t.Errorf("cookie-authenticated shell = %d, want 200 SPA shell", rec.Code)
 	}
 }
 

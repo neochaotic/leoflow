@@ -100,6 +100,15 @@ func (f *fakeRunRepo) SetDagRunState(_ context.Context, _, _, runID, state strin
 	}
 	return nil
 }
+func (f *fakeRunRepo) DeleteDagRun(_ context.Context, _, _, runID string) error {
+	for i := range f.runs {
+		if f.runs[i].RunID == runID {
+			f.runs = append(f.runs[:i], f.runs[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
 func (f *fakeRunRepo) CreateDagRun(_ context.Context, _, dagID string, run domain.DagRun) (domain.DagRun, error) {
 	run.DagID = dagID
 	return run, nil
@@ -310,6 +319,28 @@ func authGet(srv *gin.Engine, method, path, body string) *httptest.ResponseRecor
 	return rec
 }
 
+func TestDeleteDagRun(t *testing.T) {
+	admin := &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}
+	runs := &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1", State: domain.DagRunStateSuccess}}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: admin},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		DagRuns: runs,
+	})
+	// The UI's "delete run" must succeed (204), not 404 as "API route not found".
+	rec := authGet(srv, http.MethodDelete, "/api/v2/dags/etl/dagRuns/r1", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE existing run = %d, want 204; body=%q", rec.Code, rec.Body.String())
+	}
+	if len(runs.runs) != 0 {
+		t.Errorf("run was not removed: %+v", runs.runs)
+	}
+	// A missing run is a clean 404, not a silent 204.
+	if rec := authGet(srv, http.MethodDelete, "/api/v2/dags/etl/dagRuns/nope", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("DELETE missing run = %d, want 404", rec.Code)
+	}
+}
+
 func TestListDagRunsStateFilter(t *testing.T) {
 	// The "failed runs" widget filters with ?state=failed; the handler must honor
 	// it (it previously ignored the filter and returned every run).
@@ -518,6 +549,36 @@ func TestClearAcceptsAirflowTupleTaskIDs(t *testing.T) {
 	if rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
 		`{"dag_run_id":"r1","task_ids":["extract"]}`); rec.Code != http.StatusOK {
 		t.Errorf("string task_ids should still bind, got %d", rec.Code)
+	}
+}
+
+// TestTaskInstanceActionMapIndexSubresources is a CONTRACT test against the real
+// Airflow 3.2 SPA, captured live from a browser: right after a Clear, the UI
+// requests the attempts list as "{map_index}/tries" (e.g. "-1/tries"). The
+// catch-all only knew "tries"/"tries/{n}", so "-1/tries" fell through to
+// strconv.Atoi and 400'd with the misleading "map_index must be an integer".
+// This asserts the real URL shape works and that a genuinely unknown action gets
+// a clear 404 — never that misleading 400.
+func TestTaskInstanceActionMapIndexSubresources(t *testing.T) {
+	srv := authedServer()
+	base := "/api/v2/dags/etl/dagRuns/r1/taskInstances/extract"
+
+	// The exact shape the SPA sends after a Clear (was a 400 in the wild).
+	if rec := authGet(srv, http.MethodGet, base+"/-1/tries", ""); rec.Code != http.StatusOK {
+		t.Errorf("GET {map_index}/tries = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	// The bare map_index still returns the single instance (the fake's TI is at
+	// map_index 0).
+	if rec := authGet(srv, http.MethodGet, base+"/0", ""); rec.Code != http.StatusOK {
+		t.Errorf("GET {map_index} = %d, want 200", rec.Code)
+	}
+	// A genuinely unknown action must NOT masquerade as a map_index error.
+	rec := authGet(srv, http.MethodGet, base+"/dependencies", "")
+	if strings.Contains(rec.Body.String(), "map_index must be an integer") {
+		t.Errorf("unknown action misreported as a map_index error: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown action = %d, want 404", rec.Code)
 	}
 }
 

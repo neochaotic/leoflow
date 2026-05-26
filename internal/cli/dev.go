@@ -51,12 +51,19 @@ const (
 	devRedisURL   = "redis://localhost:6379/0"
 	// taskSDKVersion matches the task image (runtime/Dockerfile); the dev venv
 	// installs it so dag.py's `from airflow.sdk import ...` resolves.
-	taskSDKVersion  = "apache-airflow-task-sdk==1.2.1"
-	devJWTSecret    = "dev-insecure-jwt-secret-change-me"
-	devSecretKey    = "dev-insecure-secret-key-32bytes!"
-	devAdminUser    = "admin@leoflow.local"
-	devPollInterval = 750 * time.Millisecond
-	devReadyTimeout = 30 * time.Second
+	taskSDKVersion = "apache-airflow-task-sdk==1.2.1"
+	devJWTSecret   = "dev-insecure-jwt-secret-change-me"
+	devSecretKey   = "dev-insecure-secret-key-32bytes!"
+	// liteTokenTTLSeconds is the lite session lifetime: 30 days. Lite is a local
+	// single-user tool, so the server's 1-hour default just means surprise
+	// re-logins mid-session.
+	liteTokenTTLSeconds = 30 * 24 * 60 * 60
+	// liteLoginRateLimit is the per-minute failed-login cap for Lite — generous,
+	// because locking out the single local user is pure friction, not security.
+	liteLoginRateLimit = 30
+	devAdminUser       = "admin@leoflow.local"
+	devPollInterval    = 750 * time.Millisecond
+	devReadyTimeout    = 30 * time.Second
 	// Dev uses ports distinct from the demo/production defaults (8080/9090/9091)
 	// so a `leoflow dev` and a demo control plane can run side by side without
 	// colliding. --port overrides the HTTP port; the gRPC and metrics ports derive
@@ -944,6 +951,15 @@ func sharedServerEnv(host string, port int, adminHash, adminEmail string) []stri
 		"LEOFLOW_DATABASE_URL=" + devDatabaseURL,
 		"LEOFLOW_REDIS_URL=" + devRedisURL,
 		"LEOFLOW_AUTH_JWT_SECRET=" + devJWTSecret,
+		// Lite is a local, single-user tool: a 1-hour token (the server default)
+		// expires mid-session and silently bounces the user to a re-login they did
+		// not ask for. Mint 30-day sessions so signing in is a once-a-month event,
+		// not an hourly tax.
+		fmt.Sprintf("LEOFLOW_AUTH_JWT_TOKEN_TTL_SECONDS=%d", liteTokenTTLSeconds),
+		// A local single-user tool should not lock you out for fat-fingering the
+		// password a few times (only failures count, but the production default of
+		// 5/min is still tight here). Be generous.
+		fmt.Sprintf("LEOFLOW_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE=%d", liteLoginRateLimit),
 		"LEOFLOW_SECRET_KEY=" + devSecretKey,
 		"LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true",
 	}

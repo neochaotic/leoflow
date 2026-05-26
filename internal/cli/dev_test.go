@@ -365,6 +365,18 @@ func TestSharedServerEnvAuthModes(t *testing.T) {
 			t.Errorf("real-auth env missing %q", must)
 		}
 	}
+	// Lite mints 30-day sessions (not the server's 1h default) so the user is not
+	// silently logged out mid-session.
+	for _, env := range []string{noAdmin, withAdmin} {
+		if !strings.Contains(env, "LEOFLOW_AUTH_JWT_TOKEN_TTL_SECONDS=2592000") {
+			t.Errorf("lite env missing 30-day token TTL; got:\n%s", env)
+		}
+		// A local single-user tool gets a generous login rate limit so fat-fingering
+		// the password does not lock the user out.
+		if !strings.Contains(env, "LEOFLOW_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE=30") {
+			t.Errorf("lite env missing generous login rate limit; got:\n%s", env)
+		}
+	}
 }
 
 func TestLiteEditorEnv(t *testing.T) {

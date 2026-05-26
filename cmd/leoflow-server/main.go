@@ -154,7 +154,7 @@ func run() error {
 	handler := api.NewServer(api.Dependencies{
 		Logger:        tel.Logger,
 		Authenticator: authn,
-		RateLimiter:   auth.NewRateLimiter(5, time.Minute),
+		RateLimiter:   auth.NewRateLimiter(loginRateLimit(cfg), time.Minute),
 		Registry:      tel.Registry,
 		Metrics:       tel.Metrics,
 		Tracer:        tel.Tracer,
@@ -310,6 +310,16 @@ const podNamespace = "leoflow"
 
 // agentTokenTTL is how long a dispatched task's agent identity token stays valid.
 const agentTokenTTL = 24 * time.Hour
+
+// loginRateLimit returns the per-minute failed-login cap with a safe floor: a
+// missing or nonsensical (<=0) config value falls back to the conservative
+// default rather than 0, which would lock every user out.
+func loginRateLimit(cfg *config.ServerConfig) int {
+	if cfg.Auth.LoginRateLimitPerMinute > 0 {
+		return cfg.Auth.LoginRateLimitPerMinute
+	}
+	return 5
+}
 
 // inlineStateSink adapts the scheduler store to the inline runner's StateSink,
 // recording inline http_api task transitions.

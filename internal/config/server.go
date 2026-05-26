@@ -143,6 +143,11 @@ type AuthSection struct {
 	// default and the server logs a prominent warning when it is on. NEVER set
 	// this in production (LEOFLOW_AUTH_DEV_NO_AUTH).
 	DevNoAuth bool `mapstructure:"dev_no_auth"`
+	// LoginRateLimitPerMinute caps failed /auth/token attempts per client IP per
+	// minute (anti-brute-force). Only failures count, so a successful login never
+	// consumes budget. Lite raises this well above the production default because
+	// it is a local single-user tool where lockouts are pure friction.
+	LoginRateLimitPerMinute int `mapstructure:"login_rate_limit_per_minute"`
 }
 
 // JWTSection configures JWT issuance and validation.
@@ -186,6 +191,7 @@ var serverDefaults = map[string]any{
 	"auth.provider":                             "jwt",
 	"auth.jwt.secret":                           "",
 	"auth.jwt.token_ttl_seconds":                3600,
+	"auth.login_rate_limit_per_minute":          5,
 	"scheduler.loop_interval_ms":                1000,
 	"scheduler.enabled":                         true,
 	"executor.http.inline_max_duration_seconds": 300,

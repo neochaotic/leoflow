@@ -6,6 +6,16 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// scheduleParseable reports whether expr is a cron schedule the scheduler can
+// run (the same ParseStandard check nextScheduledRun applies). It lets the
+// caller distinguish "not due yet" from "can never be due because the
+// expression is malformed", so the latter can be surfaced instead of silently
+// ignored.
+func scheduleParseable(expr string) bool {
+	_, err := cron.ParseStandard(expr)
+	return err == nil
+}
+
 // nextScheduledRun returns the logical date of the next due run for a cron
 // expression given the latest run's logical date (nil if the DAG never ran) and
 // the current time. due is false when nothing is due yet or the expression is

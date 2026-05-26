@@ -25,8 +25,13 @@ type tokenResponse struct {
 // authTokenHandler issues a JWT for valid credentials, rate-limited per client IP.
 func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSeconds int) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !limiter.Allow(c.ClientIP()) {
-			AbortProblem(c, http.StatusTooManyRequests, "rate limited", "too many login attempts")
+		// Peek the limiter up front but DON'T count this attempt yet: only failed
+		// logins consume the budget (recorded below). This is what keeps a user who
+		// mistypes a couple times — or whose SPA re-fetches a token — from getting
+		// locked out the instant they finally send the right password.
+		if limiter.Blocked(c.ClientIP()) {
+			AbortProblem(c, http.StatusTooManyRequests, "rate limited",
+				"too many failed login attempts; wait about a minute and try again")
 			return
 		}
 		var req tokenRequest
@@ -48,6 +53,7 @@ func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSe
 		})
 		if err != nil {
 			if errors.Is(err, auth.ErrInvalidCredentials) {
+				limiter.Allow(c.ClientIP()) // count the failure toward the lockout budget
 				AbortProblem(c, http.StatusUnauthorized, "unauthorized", "invalid credentials")
 				return
 			}

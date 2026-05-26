@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc"
@@ -96,9 +97,43 @@ func (s *grpcLogSink) Send(line *agentv1.LogLine) error {
 	return s.stream.Send(line)
 }
 
-// Close signals the control plane that no more log lines will be sent.
+// logDrainTimeout bounds how long Close waits for the server to acknowledge the
+// streamed lines. It must be generous enough for normal delivery but finite: a
+// task must never hang because log shipping stalls.
+const logDrainTimeout = 5 * time.Second
+
+// Close signals the control plane that no more log lines will be sent, then
+// waits (briefly) for the server to consume them. The drain is essential:
+// stream.Send only QUEUES a line into the gRPC transport, and CloseSend merely
+// half-closes; without waiting for the RPC to complete, the agent returns and
+// the deferred conn.Close() tears the connection down before the queued lines
+// are flushed — so a short task's logs never arrive and the attempt's log file
+// stays empty. Draining (Recv to EOF) blocks until the server has consumed every
+// line, guaranteeing delivery.
+//
+// The wait is bounded by logDrainTimeout: log delivery is best-effort and must
+// never hang the task. If the control plane stalls, Close returns and the caller
+// closes the connection — losing at most the tail of the logs, never the task.
 func (s *grpcLogSink) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.stream.CloseSend()
+	err := s.stream.CloseSend()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, rerr := s.stream.Recv(); rerr != nil {
+				return // EOF (clean) or any error: the drain is over
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(logDrainTimeout):
+		// The server did not finish in time; do not hang the task on it.
+	}
+	return nil
 }

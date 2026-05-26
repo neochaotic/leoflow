@@ -657,14 +657,34 @@ func venvPipArgs(runtimeSrc string, deps []string) []string {
 // runtime + Airflow SDK + project deps into it (skipping the install when the
 // runtime is already present, so reruns are fast). It returns the venv's python
 // path, which the agent uses to run user code — the host's Python is untouched.
+// devBasePython returns the interpreter used to CREATE the dev venv: the managed
+// relocatable CPython 3.11 (installed by `leoflow setup` under ~/.leoflow/python)
+// when present, since it bundles venv + ensurepip. It falls back to a python3.11
+// / python3 on PATH. Using the managed interpreter avoids needing the system
+// python3-venv package, which Debian/Ubuntu split out (the common first-run
+// failure: "ensurepip is not available").
+func devBasePython(home string) string {
+	managed := filepath.Join(filepath.Dir(home), "python", "bin", "python3.11")
+	if _, err := os.Stat(managed); err == nil {
+		return managed
+	}
+	for _, name := range []string{"python3.11", "python3"} {
+		if p, lerr := exec.LookPath(name); lerr == nil {
+			return p
+		}
+	}
+	return "python3"
+}
+
 func ensureDevVenv(ctx context.Context, cmd *cobra.Command, home, runtimeSrc string, deps []string) (string, error) {
 	py := venvPython(home)
 	if _, err := os.Stat(py); err != nil {
 		devPrintln(cmd.OutOrStdout(), "▸ creating isolated dev venv …")
-		mk := exec.CommandContext(ctx, "python3", "-m", "venv", filepath.Join(home, "venv")) //nolint:gosec // fixed args
+		base := devBasePython(home)
+		mk := exec.CommandContext(ctx, base, "-m", "venv", filepath.Join(home, "venv")) //nolint:gosec // base is the managed CPython or a resolved python3
 		mk.Stdout, mk.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 		if e := mk.Run(); e != nil {
-			return "", fmt.Errorf("creating dev venv: %w", e)
+			return "", fmt.Errorf("creating dev venv with %s (the managed CPython bundles venv; a system python3 may need its python3-venv package): %w", base, e)
 		}
 	}
 	check := exec.CommandContext(ctx, py, "-c", "import leoflow_runtime") //nolint:gosec // py is the managed venv interpreter

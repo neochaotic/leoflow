@@ -79,3 +79,23 @@ func TestResolveLiteProjectNoArgUsesExistingProject(t *testing.T) {
 		t.Errorf("existing project must not be overwritten, got %q", data)
 	}
 }
+
+func TestDevBasePythonPrefersManaged(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "dev") // home = ~/.leoflow/dev ; managed = ~/.leoflow/python/...
+	managed := filepath.Join(root, "python", "bin", "python3.11")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Before the managed CPython exists, it falls back to a PATH python.
+	if got := devBasePython(home); got == managed {
+		t.Errorf("should not return the managed path before it exists")
+	}
+	// Once present, the managed interpreter (which bundles venv) is preferred.
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	if got := devBasePython(home); got != managed {
+		t.Errorf("devBasePython = %q, want the managed %q", got, managed)
+	}
+}

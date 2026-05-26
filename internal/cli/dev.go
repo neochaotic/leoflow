@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -57,19 +59,41 @@ const (
 	devReadyTimeout = 30 * time.Second
 	// Dev uses ports distinct from the demo/production defaults (8080/9090/9091)
 	// so a `leoflow dev` and a demo control plane can run side by side without
-	// colliding. --port overrides the HTTP port; gRPC/metrics are fixed for dev.
-	devDefaultPort     = 8088
-	devGRPCBindAddr    = ":9099"
-	devMetricsBindAddr = ":9098"
+	// colliding. --port overrides the HTTP port; the gRPC and metrics ports derive
+	// from it (devGRPCPort/devMetricsPort) so multiple Lite instances can coexist.
+	devDefaultPort = 8088
+	// The gRPC and metrics ports are offset from the HTTP --port so that distinct
+	// --port values yield distinct gRPC/metrics ports (letting two Lite instances
+	// run on one host). The offsets preserve the historical defaults: the default
+	// HTTP port 8088 maps to gRPC 9099 and metrics 9098.
+	devGRPCPortOffset    = 1011
+	devMetricsPortOffset = 1010
 	// Cluster-mode (default) runs real pod-per-task on a dedicated k3d cluster,
 	// fully isolated from any product/demo cluster. Pods dial the host control
 	// plane's gRPC; host.docker.internal resolves to the host on Docker Desktop.
-	devClusterName  = "leoflow-dev"
-	devNamespace    = "leoflow"
-	devPyVersion    = "3.11"
-	devBaseImage    = "leoflow-base:py3.11"
-	devHostGRPCAddr = "host.docker.internal:9099"
+	devClusterName = "leoflow-dev"
+	devNamespace   = "leoflow"
+	devPyVersion   = "3.11"
+	devBaseImage   = "leoflow-base:py3.11"
 )
+
+// devGRPCPort derives the gRPC port from the HTTP --port; see devGRPCPortOffset.
+func devGRPCPort(httpPort int) int { return httpPort + devGRPCPortOffset }
+
+// devMetricsPort derives the metrics port from the HTTP --port.
+func devMetricsPort(httpPort int) int { return httpPort + devMetricsPortOffset }
+
+// devGRPCBindAddr is the gRPC listen address for the given HTTP --port.
+func devGRPCBindAddr(httpPort int) string { return fmt.Sprintf(":%d", devGRPCPort(httpPort)) }
+
+// devMetricsBindAddr is the metrics listen address for the given HTTP --port.
+func devMetricsBindAddr(httpPort int) string { return fmt.Sprintf(":%d", devMetricsPort(httpPort)) }
+
+// devHostGRPCAddr is the address task pods dial back for gRPC (cluster mode),
+// derived from the HTTP --port; host.docker.internal resolves to the host.
+func devHostGRPCAddr(httpPort int) string {
+	return fmt.Sprintf("host.docker.internal:%d", devGRPCPort(httpPort))
+}
 
 const (
 	ansiReset = "\x1b[0m"
@@ -445,6 +469,11 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	defer stop()
 
 	warnIfExposed(out, o.host, o.adminHash)
+	// Fail fast on a port conflict (a second Lite instance, or another service on
+	// the HTTP/gRPC/metrics ports) with a clear message, before starting Docker.
+	if perr := preflightDevPorts(ctx, o.host, o.port); perr != nil {
+		return perr
+	}
 	if uerr := bringUpDependencies(ctx, cmd, &o); uerr != nil {
 		return uerr
 	}
@@ -571,10 +600,57 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 // server; the dev's own database lives inside it, isolated by name).
 func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions) error {
 	devPrintln(cmd.OutOrStdout(), "▸ starting dependencies (docker compose) …")
+	var captured bytes.Buffer
 	up := exec.CommandContext(ctx, "docker", "compose", "-f", o.composeFile, "up", "-d", "--wait") //nolint:gosec // operator-supplied compose file on the dev CLI
-	up.Stdout, up.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+	up.Stdout = cmd.OutOrStdout()
+	// Tee stderr so the user still sees compose progress while we inspect it to
+	// translate a port-allocation failure into an actionable message.
+	up.Stderr = io.MultiWriter(cmd.ErrOrStderr(), &captured)
 	if err := up.Run(); err != nil {
-		return fmt.Errorf("docker compose up (is Docker running?): %w", err)
+		return composeUpError(err, captured.String())
+	}
+	return nil
+}
+
+// composeUpError turns a `docker compose up` failure into an actionable message.
+// A port-allocation failure — a foreign Postgres/Redis already bound to 5432/6379,
+// the common real-world conflict — produces a cryptic raw Docker error, so it is
+// translated; any other failure keeps the generic "is Docker running?" hint.
+func composeUpError(err error, output string) error {
+	low := strings.ToLower(output)
+	if strings.Contains(low, "already allocated") || strings.Contains(low, "address already in use") || strings.Contains(low, "port is already") {
+		return fmt.Errorf("a database/cache port is already in use — another Postgres or Redis is bound to 5432/6379. Stop it, or run `leoflow lite --no-up` to point at your own datastores (LEOFLOW_DATABASE_URL/LEOFLOW_REDIS_URL): %w", err)
+	}
+	return fmt.Errorf("docker compose up (is Docker running?): %w", err)
+}
+
+// preflightDevPorts checks that the HTTP, gRPC, and metrics ports Lite needs are
+// free, failing with a clear message that names the busy port — turning the
+// server's deep "bind: address already in use" into actionable advice before
+// anything starts. Best-effort: a port freed between the check and the bind still
+// surfaces the server's own error. The gRPC/metrics ports derive from the HTTP
+// --port, so picking a different --port sidesteps a conflict.
+func preflightDevPorts(ctx context.Context, host string, port int) error {
+	bindHost := host
+	if bindHost == "" || bindHost == "0.0.0.0" {
+		bindHost = "127.0.0.1"
+	}
+	checks := []struct {
+		role string
+		addr string
+		num  int
+	}{
+		{"the HTTP/UI server", net.JoinHostPort(bindHost, strconv.Itoa(port)), port},
+		{"the agent gRPC server", fmt.Sprintf(":%d", devGRPCPort(port)), devGRPCPort(port)},
+		{"the metrics endpoint", fmt.Sprintf(":%d", devMetricsPort(port)), devMetricsPort(port)},
+	}
+	var lc net.ListenConfig
+	for _, c := range checks {
+		ln, err := lc.Listen(ctx, "tcp", c.addr)
+		if err != nil {
+			return fmt.Errorf("port %d is already in use (needed for %s); another Leoflow Lite may be running — stop it, or pass --port to pick a free port", c.num, c.role)
+		}
+		_ = ln.Close() //nolint:errcheck // best-effort probe; closing frees the port for the real bind
 	}
 	return nil
 }
@@ -835,8 +911,12 @@ func resolveBinary(explicit, name string) (string, error) {
 func sharedServerEnv(host string, port int, adminHash, adminEmail string) []string {
 	env := []string{
 		fmt.Sprintf("LEOFLOW_SERVER_HTTP_ADDR=%s:%d", resolveBindHost(host, adminHash), port),
-		"LEOFLOW_SERVER_GRPC_ADDR=" + devGRPCBindAddr,
-		"LEOFLOW_SERVER_METRICS_ADDR=" + devMetricsBindAddr,
+		"LEOFLOW_SERVER_GRPC_ADDR=" + devGRPCBindAddr(port),
+		"LEOFLOW_SERVER_METRICS_ADDR=" + devMetricsBindAddr(port),
+		// Lite has no OTLP collector locally; disabling the exporter avoids a noisy
+		// "connection refused to :4317" every export interval. Prometheus metrics
+		// (scraped, not pushed) stay on.
+		"LEOFLOW_OBSERVABILITY_OTEL_ENABLED=false",
 		"LEOFLOW_LOGS_DIR=" + filepath.Join(os.TempDir(), "leoflow-dev-logs"),
 		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
 		"LEOFLOW_UI_EDITION=lite",
@@ -937,7 +1017,7 @@ func subprocessServerEnv(host string, port int, agentBin, workDir, venvPython, a
 	return append(sharedServerEnv(host, port, adminHash, adminEmail),
 		"LEOFLOW_EXECUTOR_TYPE=subprocess",
 		"LEOFLOW_EXECUTOR_AGENT_PATH="+agentBin,
-		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1"+devGRPCBindAddr,
+		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1"+devGRPCBindAddr(port),
 		"LEOFLOW_EXECUTOR_SUBPROCESS_WORKDIR="+workDir,
 		"LEOFLOW_PYTHON="+venvPython,
 	)
@@ -950,7 +1030,7 @@ func clusterServerEnv(host string, port int, kubeconfig, adminHash, adminEmail s
 	return append(sharedServerEnv(host, port, adminHash, adminEmail),
 		"LEOFLOW_EXECUTOR_TYPE=kubernetes",
 		"KUBECONFIG="+kubeconfig,
-		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="+devHostGRPCAddr,
+		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="+devHostGRPCAddr(port),
 		// The dev k3d cluster's local-path provisioner rejects RWX; it is
 		// single-node, so RWO is sufficient for a run's sequential pods (ADR 0022).
 		"LEOFLOW_EXECUTOR_DEFAULTS_STAGING_ACCESS_MODE=ReadWriteOnce",

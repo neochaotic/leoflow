@@ -19,7 +19,7 @@ Leoflow is a product two kinds of people use, with very different effort:
 
 | Role | What they do | Effort |
 |---|---|---|
-| **Platform operator** (once) | Provision a K8s cluster, Postgres, Redis; set a handful of values; `helm install`. | Real infra work — but a **paved road**: sane defaults, BYO-or-quickstart datastores, one install command, and an install gate (see *Testing in CI* below) so it works on first try. |
+| **Platform operator** (once) | Provision a K8s cluster, point at their **own (managed) Postgres + Redis**; set a handful of values; `helm install`. | Real infra work — but a **paved road**: sane defaults, bring-your-own datastores, one install command, and an install gate (see *Testing in CI* below) so it works on first try. |
 | **DAG author** (daily) | Write `dag.py` + `leoflow.yaml`; push. CI builds the image and registers it. | **Only build DAGs.** No cluster, no YAML plumbing — the [CI/CD examples](deploy.md) + the [`examples/`](https://github.com/neochaotic/leoflow/tree/main/examples) starters are copy-paste. |
 
 The design goal is not "zero infra" — a production platform always needs a cluster
@@ -38,6 +38,27 @@ and the author's loop **as close to "just write the DAG" as possible**.
 | `Secret` | inline DB / Redis / JWT / bootstrap credentials (skipped with `existingSecret`) |
 | `Job` (hook) | `golang-migrate` before install/upgrade |
 | `Ingress` | optional |
+
+### Datastores: bring your own
+
+The chart **bundles no database or cache by design** — you point it at your own.
+This is deliberate, not a gap:
+
+- **Postgres is the system of record** (DagRuns, TaskInstances, users, connections,
+  variables). Durability, backups, PITR, and HA are the operator's call, so it must
+  be a **managed/owned Postgres** — RDS, Cloud SQL, AlloyDB, or your own cluster —
+  never a pod bundled in this chart.
+- **Redis holds XCom + scheduler locks** (ADR 0006/0009). Also bring your own
+  (ElastiCache, Memorystore, or self-managed); it is less durability-critical than
+  Postgres but still operator-owned.
+- Wire both via `database.url`/`redis.url`, or — preferred — `existingSecret` so
+  credentials never sit in plaintext values. With all creds in existing Secrets the
+  chart creates no Secret of its own.
+
+!!! warning "Bundled datastores are for throwaway trials only"
+    The ephemeral Postgres/Redis in the chart-test CI (kind, see *Testing in CI*
+    below) exist only to exercise an install. Never run production on an in-cluster
+    database pod — there is no backup or failover story there.
 
 ### High availability
 

@@ -363,7 +363,7 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
 	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres already running); the dev DB + venv are still provisioned")
-	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreDocker, "Postgres backend: 'docker' (default) or 'managed' (relocatable PG under ~/.leoflow, no Docker — experimental, Fase 2)")
+	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreManaged, "Postgres backend: 'managed' (default; relocatable PG under ~/.leoflow on a Unix socket, no Docker) or 'docker'")
 	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
 	return cmd

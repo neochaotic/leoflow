@@ -15,10 +15,10 @@ DAG once and it runs on either.
 | Install | one command (`curl … \| sh`) on one machine | Helm chart on your cluster |
 | Command | `leoflow lite` | the deployed control plane |
 | Auth | a single local **admin** login (password shown once at setup) | enterprise: SSO/OIDC, full RBAC, multi-tenant |
-| Executors | **subprocess** (local) or a local **k3d** mini-cluster | Kubernetes at scale |
+| Executors | a local **k3d** mini-cluster (real pods) or **subprocess** (dev-only, unsandboxed) | **Kubernetes only**, at scale |
 | Deploy | edit + hot-reload | GitOps: `leoflow compile` in CI → immutable image + `dag.json` |
-| Intended use | local & small projects, on a **trusted/internal network** | teams and production workloads |
-| Datastores | local Postgres + Redis (via Docker or pointed at your own) | your managed Postgres + Redis |
+| Intended use | local, small, or **light production** projects on a **trusted/internal network** | teams and production workloads at scale |
+| Datastores | **embedded** managed Postgres; **no Redis, no Docker** | **external** managed Postgres + Redis |
 
 ## Leoflow Lite
 
@@ -39,6 +39,22 @@ Lite also includes a small built-in **[web editor](lite-web-editor.md)** (Monaco
 with Python/YAML highlighting) so you can edit DAG projects from the browser — a
 Lite-only convenience; Production teams use their own editor and the GitOps flow.
 
+### No Docker, no Redis
+
+Lite runs its whole control plane on an **embedded managed Postgres** (a pinned,
+checksum-verified relocatable build under `~/.leoflow`, on a local Unix socket).
+It needs **no Redis** — scheduler locks use Postgres advisory locks and XCom is
+stored in Postgres — and **no Docker** for the datastore. The Postgres-backed
+XCom is *durable* (it survives a restart), which suits light production; very
+high XCom throughput is where you would move to the Production edition. (See
+[ADR 0026](adr/0026-lite-datastore-no-redis.md).)
+
+For task isolation, Lite's container path is a local **k3d** mini-cluster, not
+the Docker socket: a Docker-socket executor is **equivalent to host root** (a DAG
+could escape to the machine), so it was rejected on security grounds. `subprocess`
+exists only as an explicitly unsandboxed, dev-only escape hatch. (See
+[ADR 0027](adr/0027-product-editions-executors-delivery.md).)
+
 Pre-alpha Lite builds also **expire** (~90 days) and refuse to run past it — a
 reminder that Lite is for iterating locally, not for durable deployments.
 
@@ -54,11 +70,25 @@ images + `dag.json`, shipped from CI). It is not yet released; this site documen
 Lite today, and the production surfaces (the `/api/v2/` Airflow-compatible API,
 the executor, observability) are built with that target in mind.
 
-## Which one?
+## Which one? (recommendation)
 
-Today there is only one thing to run: **Lite**, and it's **pre-alpha** — for
-local iteration on a trusted network, not durable or production use. Production
-(the enterprise edition) is not released yet.
+**Today:** there is only one thing to run — **Lite**, and it's **pre-alpha**, for
+local iteration on a trusted network. Production (the enterprise edition) is not
+released yet.
+
+**When both ship, choose by deployment, not by feature checklist:**
+
+- **Choose Lite** when you run on **one machine** (laptop, a small VM, an
+  internal box), want a **one-command, Docker-free install**, and your workload
+  is local development, a small project, or **light production** on a
+  trusted/internal network. Lite goes from zero-dependency (`subprocess`) to
+  real pod-per-task (`k3d`) on the same binary, with a durable embedded Postgres.
+- **Choose Production** when you need **Kubernetes at scale**, a team
+  (SSO/OIDC + RBAC + multi-tenant), high XCom throughput, external managed
+  datastores, and the GitOps deploy flow — delivered as the **Helm chart**.
+
+Rule of thumb: if it fits on one host and the network is trusted, Lite is enough;
+when you need a cluster, multiple users, or scale, that's Production.
 
 Because both editions share the DAG format, the engine, and the UI, DAGs authored
 on Lite will carry straight over to Production when it ships — but there is

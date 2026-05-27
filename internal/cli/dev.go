@@ -118,6 +118,7 @@ type devOptions struct {
 	serverBin   string
 	agentBin    string
 	noUp        bool
+	postgres    string // "docker" (default) or "managed" (relocatable PG, no Docker)
 	// Resolved from ~/.leoflow/config.yaml (written by `leoflow setup`), not flags.
 	adminHash  string
 	adminEmail string
@@ -275,18 +276,32 @@ func friendlyResolves() bool {
 	return err == nil && len(addrs) > 0
 }
 
-// bringUpDependencies starts Lite's local Postgres + Redis via docker compose
-// unless --no-up was given, resolving (and materializing) the compose file first.
-func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions) error {
+// bringUpDependencies starts Lite's datastores and returns a cleanup func the
+// caller defers (a no-op for the Docker path, which leaves its containers up
+// across runs; a managed-Postgres stop for the managed path, which this run owns).
+func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions) (func(), error) {
+	noop := func() {}
 	if o.noUp {
-		return nil
+		return noop, nil
 	}
 	cf, err := resolveComposeFile(o.composeFile)
 	if err != nil {
-		return err
+		return noop, err
 	}
 	o.composeFile = cf
-	return devComposeUp(ctx, cmd, *o)
+	if o.postgres == datastoreManaged {
+		// Managed relocatable Postgres (no Docker for the database). Redis still
+		// comes up via Docker for now — managed Redis is the next Fase 2 step.
+		if perr := startManagedPostgres(ctx, cmd); perr != nil {
+			return noop, perr
+		}
+		if cerr := devComposeUp(ctx, cmd, *o, "redis"); cerr != nil {
+			return noop, cerr
+		}
+		//nolint:contextcheck // stop runs at shutdown with a fresh context; the run's ctx is already canceled
+		return func() { stopManagedPostgres(cmd) }, nil
+	}
+	return noop, devComposeUp(ctx, cmd, *o)
 }
 
 // resolveComposeFile returns the docker-compose file Lite uses for its local
@@ -350,6 +365,7 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
 	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres/Redis already running); the dev DB + venv are still provisioned")
+	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreDocker, "Postgres backend: 'docker' (default) or 'managed' (relocatable PG under ~/.leoflow, no Docker — experimental, Fase 2)")
 	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
 	return cmd
@@ -492,9 +508,11 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if perr := preflightDevPorts(ctx, o.host, o.port); perr != nil {
 		return perr
 	}
-	if uerr := bringUpDependencies(ctx, cmd, &o); uerr != nil {
+	cleanupDeps, uerr := bringUpDependencies(ctx, cmd, &o)
+	if uerr != nil {
 		return uerr
 	}
+	defer cleanupDeps() // stops managed Postgres on exit; no-op for the Docker path
 	// Provision the isolated dev state: own database + own venv (never the
 	// product's database or the system Python).
 	if derr := ensureDevDatabase(ctx, cmd); derr != nil {
@@ -616,10 +634,11 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 
 // devComposeUp starts local Postgres + Redis via docker compose (the shared
 // server; the dev's own database lives inside it, isolated by name).
-func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions) error {
+func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions, services ...string) error {
 	devPrintln(cmd.OutOrStdout(), "▸ starting dependencies (docker compose) …")
 	var captured bytes.Buffer
-	up := exec.CommandContext(ctx, "docker", "compose", "-f", o.composeFile, "up", "-d", "--wait") //nolint:gosec // operator-supplied compose file on the dev CLI
+	args := append([]string{"compose", "-f", o.composeFile, "up", "-d", "--wait"}, services...)
+	up := exec.CommandContext(ctx, "docker", args...) //nolint:gosec // operator-supplied compose file on the dev CLI
 	up.Stdout = cmd.OutOrStdout()
 	// Tee stderr so the user still sees compose progress while we inspect it to
 	// translate a port-allocation failure into an actionable message.

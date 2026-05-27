@@ -5,13 +5,12 @@
 
 BEGIN;
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- Tenants
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE tenants (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL UNIQUE,
     display_name TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -25,7 +24,7 @@ INSERT INTO tenants (name, display_name) VALUES ('default', 'Default Tenant');
 -- Users
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
     password_hash TEXT,                       -- bcrypt, nullable for OIDC-only users
@@ -47,7 +46,7 @@ CREATE INDEX idx_users_email ON users(email);
 -- Roles
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE roles (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT,
@@ -62,7 +61,7 @@ CREATE INDEX idx_roles_tenant ON roles(tenant_id);
 -- Permissions (system-wide, not per-tenant)
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE permissions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     action TEXT NOT NULL,                     -- 'read', 'write', 'execute', 'admin'
     resource TEXT NOT NULL,                   -- 'dag', 'dag_run', 'task_instance', 'xcom', '*'
     description TEXT,

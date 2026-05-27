@@ -7,7 +7,7 @@ BEGIN;
 -- DAGs (the logical entity, identified by dag_id within a tenant)
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE dags (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     dag_id TEXT NOT NULL,                     -- user-facing identifier
     description TEXT,
@@ -34,7 +34,7 @@ CREATE INDEX idx_dags_paused ON dags(tenant_id, is_paused) WHERE is_active = tru
 -- DAG versions (immutable snapshots of dag.json)
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE dag_versions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     dag_id UUID NOT NULL REFERENCES dags(id) ON DELETE CASCADE,
     version TEXT NOT NULL,                    -- 'v1.2.3' or autogen 'auto-2026-05-21-abc123'
     image_reference TEXT NOT NULL,            -- 'myrepo/etl:v1.2.3'

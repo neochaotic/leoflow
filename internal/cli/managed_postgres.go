@@ -33,11 +33,12 @@ func managedPGPaths() (binDir, dataDir string, err error) {
 }
 
 // startManagedPostgres downloads the relocatable PostgreSQL if needed, initdb's a
-// per-user data dir on first run, and starts it listening on localhost:5432 — the
-// same address the Docker datastore used, so dev-DB creation, migrations, and the
-// server connect unchanged. Idempotent: an already-running cluster is left as is.
-// trust auth is safe here: it binds loopback only on a local single-user machine,
-// the same threat model as the Docker datastore's well-known password.
+// per-user data dir on first run, and starts it on a Unix socket in that data dir
+// (TCP disabled) — so dev-DB creation, migrations, and the server reach it only
+// through the per-user socket and never collide with, or connect to, a foreign
+// Postgres bound to localhost:5432. Idempotent: an already-running cluster is
+// left as is. trust auth is safe here: the socket lives in the user's own
+// ~/.leoflow, the same single-user threat model as the Docker datastore.
 func startManagedPostgres(ctx context.Context, cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
 	h, herr := os.UserHomeDir()
@@ -55,8 +56,10 @@ func startManagedPostgres(ctx context.Context, cmd *cobra.Command) error {
 	}
 	dataDir := filepath.Join(root, "pgdata")
 
-	// Already accepting connections? leave it (idempotent across lite runs).
-	if exec.CommandContext(ctx, filepath.Join(binDir, "pg_isready"), "-h", "127.0.0.1", "-p", "5432").Run() == nil { //nolint:gosec // managed binary + fixed args
+	// Our cluster already accepting connections on its socket? leave it (idempotent
+	// across lite runs). Probing the socket dir — not 127.0.0.1 — means a foreign
+	// Postgres on 5432 is never mistaken for ours.
+	if exec.CommandContext(ctx, filepath.Join(binDir, "pg_isready"), "-h", dataDir, "-p", "5432").Run() == nil { //nolint:gosec // managed binary + fixed args
 		devPrintln(out, "▸ managed Postgres already running")
 		return nil
 	}
@@ -74,9 +77,12 @@ func startManagedPostgres(ctx context.Context, cmd *cobra.Command) error {
 	if mkErr := os.MkdirAll(filepath.Dir(logFile), 0o750); mkErr != nil {
 		return fmt.Errorf("creating postgres log dir: %w", mkErr)
 	}
+	// listen_addresses= (empty) disables TCP; -k keeps the Unix socket in dataDir
+	// (named .s.PGSQL.5432 from -p). No shell here, so an empty -c value is the
+	// reliable way to turn TCP off — "-h ''" would pass literal quote characters.
 	start := exec.CommandContext(ctx, filepath.Join(binDir, "pg_ctl"), //nolint:gosec // managed binary + fixed args
 		"-D", dataDir, "-l", logFile, "-w", "-t", "30",
-		"-o", "-p 5432 -h 127.0.0.1 -k "+dataDir, "start")
+		"-o", "-p 5432 -k "+dataDir+" -c listen_addresses=", "start")
 	start.Stdout, start.Stderr = io.Discard, cmd.ErrOrStderr()
 	if rerr := start.Run(); rerr != nil {
 		return fmt.Errorf("starting managed Postgres (see %s): %w", logFile, rerr)

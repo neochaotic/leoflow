@@ -46,7 +46,7 @@ func runResetPassword(cmd *cobra.Command, userEmail string) error {
 	}
 
 	ctx := cmdContext(cmd)
-	pg, err := storage.NewPostgres(ctx, config.DatabaseSection{URL: devDatabaseURL})
+	pg, err := storage.NewPostgres(ctx, config.DatabaseSection{URL: devDSNs().database})
 	if err != nil {
 		return fmt.Errorf("connecting to the Lite database (is Postgres up? start `leoflow lite`): %w", err)
 	}

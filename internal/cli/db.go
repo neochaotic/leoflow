@@ -66,7 +66,7 @@ func newDBResetCommand() *cobra.Command {
 // dropDevDatabase drops the isolated dev database, terminating any open
 // connections (Postgres 13+ WITH FORCE), via the maintenance database.
 func dropDevDatabase(ctx context.Context, cmd *cobra.Command) error {
-	conn, err := pgx.Connect(ctx, devMaintenanceURL)
+	conn, err := pgx.Connect(ctx, devDSNs().maintenance)
 	if err != nil {
 		return fmt.Errorf("connecting to Postgres (is it up?): %w", err)
 	}

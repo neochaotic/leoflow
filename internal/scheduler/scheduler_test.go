@@ -174,7 +174,11 @@ func TestStepCreatesDueScheduledRun(t *testing.T) {
 }
 
 func TestStepNoScheduledRunWhenNotDue(t *testing.T) {
-	recent := time.Now().UTC().Add(-1 * time.Minute)
+	// last == now, so the next @hourly slot is strictly after now and the DAG is
+	// not due. Using now-1min was clock-dependent: when the test ran within a
+	// minute after the top of the hour, the just-passed hour boundary fell inside
+	// [last, now] and the DAG became "due", flaking CI (it ran at 02:01).
+	recent := time.Now().UTC()
 	store := newFakeStore()
 	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "@hourly", LastLogical: &recent}}
 	if err := newScheduler(store).Step(context.Background()); err != nil {

@@ -62,41 +62,49 @@ func TestPasswordRecoveryLoginIntegration(t *testing.T) {
 	}
 }
 
-// TestBootstrapAdminHashIntegration checks the hash-only admin bootstrap used by
-// Leoflow Lite: the stored hash must accept the password (login compatibility),
-// and a second bootstrap must be a no-op once a user exists.
-func TestBootstrapAdminHashIntegration(t *testing.T) {
+// TestBootstrapAdminHashReconcilesIntegration is the reality-anchored guard for
+// the "can't log in against a stale DB" bug: BootstrapAdminHash must RECONCILE an
+// existing admin to the configured hash (config is Lite's source of truth), so
+// the password the setup printed always logs in — even when the database already
+// has an admin from a previous install — without anyone wiping Docker volumes.
+func TestBootstrapAdminHashReconcilesIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
 	const email = "admin@leoflow.local"
-	const pw = "river82"
 
-	hash, err := auth.HashPassword(pw)
+	h1, err := auth.HashPassword("first-pw-1")
 	if err != nil {
-		t.Fatalf("hash: %v", err)
+		t.Fatal(err)
+	}
+	if _, err := repo.BootstrapAdminHash(ctx, "default", email, h1); err != nil {
+		t.Fatalf("first bootstrap: %v", err)
+	}
+	if _, s1, ferr := repo.FindUserByLogin(ctx, "default", email); ferr != nil || !auth.VerifyPassword(s1, "first-pw-1") {
+		t.Fatalf("first bootstrap did not set the hash (err=%v)", ferr)
 	}
 
-	created, err := repo.BootstrapAdminHash(ctx, "default", email, hash)
+	// A second bootstrap with a DIFFERENT hash (the stale-DB case: a new install's
+	// config over an old admin) must RESET the admin to the new hash and report
+	// "not newly created".
+	h2, err := auth.HashPassword("second-pw-2")
 	if err != nil {
-		t.Fatalf("BootstrapAdminHash: %v", err)
+		t.Fatal(err)
 	}
-	if created {
-		// The hash setup persisted must verify the password the user wrote down.
-		_, storedHash, ferr := repo.FindUserByLogin(ctx, "default", email)
-		if ferr != nil {
-			t.Fatalf("loading admin: %v", ferr)
-		}
-		if !auth.VerifyPassword(storedHash, pw) {
-			t.Error("stored hash does not verify the bootstrap password")
-		}
-	}
-
-	// Idempotent: bootstrapping again is a no-op while a user exists.
-	again, err := repo.BootstrapAdminHash(ctx, "default", email, hash)
+	again, err := repo.BootstrapAdminHash(ctx, "default", email, h2)
 	if err != nil {
 		t.Fatalf("second BootstrapAdminHash: %v", err)
 	}
 	if again {
-		t.Error("second BootstrapAdminHash must be a no-op when users exist")
+		t.Error("reconcile must return false (it updated an existing admin, did not create one)")
+	}
+	_, s2, ferr := repo.FindUserByLogin(ctx, "default", email)
+	if ferr != nil {
+		t.Fatalf("load admin: %v", ferr)
+	}
+	if !auth.VerifyPassword(s2, "second-pw-2") {
+		t.Error("bootstrap did not reconcile the admin to the new config hash — stale-DB login would fail")
+	}
+	if auth.VerifyPassword(s2, "first-pw-1") {
+		t.Error("old password still verifies after reconcile")
 	}
 }
 

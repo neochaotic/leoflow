@@ -70,15 +70,16 @@ func TestInvokingUserHome(t *testing.T) {
 	})
 }
 
-func TestResetPasswordRequiresRoot(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root; the non-root refusal path cannot be exercised")
-	}
+func TestResetPasswordDoesNotRequireRoot(t *testing.T) {
+	// Lite is a per-user install, so reset-password must run as the normal user —
+	// never demand root (the old `sudo` requirement was a catch-22: without sudo it
+	// refused, and under sudo HOME became /root and it missed the user's config).
+	// With no Postgres in a unit test it fails on the DB connection — but it must
+	// NEVER fail with a "must run as root" refusal.
 	cmd := newResetPasswordCommand()
 	cmd.SetArgs([]string{})
 	cmd.SilenceUsage, cmd.SilenceErrors = true, true
-	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "must run as root") {
-		t.Fatalf("err = %v, want a root-required error", err)
+	if err := cmd.Execute(); err != nil && strings.Contains(err.Error(), "must run as root") {
+		t.Fatalf("reset-password must not require root anymore; got: %v", err)
 	}
 }

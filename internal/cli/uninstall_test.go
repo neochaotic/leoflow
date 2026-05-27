@@ -90,6 +90,19 @@ func TestUninstallRemovesHomeWithYes(t *testing.T) {
 	}
 }
 
+func TestUninstallRemovesDatastoreByDefault(t *testing.T) {
+	seedHome(t)
+	cmd, out := uninstallCmd("no\n") // decline, just to capture the announced plan
+	if err := runUninstall(cmd, false, false); err != nil {
+		t.Fatalf("uninstall (no --purge): %v", err)
+	}
+	// Default uninstall drops this user's datastore volumes so a reinstall starts
+	// fresh (the stale-admin / old-runs trap); the workspace is kept unless --purge.
+	if !strings.Contains(out.String(), "datastore") {
+		t.Errorf("default uninstall must announce removing the datastore volumes; got:\n%s", out.String())
+	}
+}
+
 func TestUninstallAbortsWithoutConfirmation(t *testing.T) {
 	home := seedHome(t)
 	cmd, out := uninstallCmd("no\n") // user declines

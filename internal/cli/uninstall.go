@@ -15,26 +15,27 @@ import (
 	"github.com/neochaotic/leoflow/internal/config"
 )
 
-// newUninstallCommand removes the Leoflow installation (~/.leoflow). It confirms
-// first (unless --yes); --purge additionally removes the DAG workspace and the
-// Docker datastore volumes.
+// newUninstallCommand removes the Leoflow installation (~/.leoflow) and this
+// user's Docker datastore volumes, so a reinstall starts fresh. It preserves the
+// DAG workspace unless --purge. Confirms first unless --yes.
 func newUninstallCommand() *cobra.Command {
 	var yes, purge bool
 	cmd := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove the Leoflow installation (~/.leoflow).",
+		Short: "Remove the Leoflow installation (~/.leoflow) and datastore.",
 		Long: "uninstall removes the managed Leoflow home (~/.leoflow): the binaries, config, " +
-			"managed Python, Monaco assets, and local dev state. It does NOT remove your DAG " +
-			"workspace or Docker datastore volumes unless you pass --purge. It asks for confirmation " +
-			"unless --yes is given. (To upgrade instead, just re-run install.sh — it replaces the " +
-			"binaries and keeps your config.)",
+			"managed Python, Monaco assets, and local dev state. It also drops this user's Docker " +
+			"datastore volumes (Postgres/Redis) so a reinstall starts clean. It KEEPS your DAG " +
+			"workspace unless you pass --purge. It asks for confirmation unless --yes is given. " +
+			"(To upgrade instead, just re-run install.sh — it replaces the binaries and keeps your " +
+			"config and datastore.)",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runUninstall(cmd, yes, purge)
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the confirmation prompt")
-	cmd.Flags().BoolVar(&purge, "purge", false, "also remove the DAG workspace and Docker datastore volumes (destructive)")
+	cmd.Flags().BoolVar(&purge, "purge", false, "also remove the DAG workspace (the datastore volumes are removed by default)")
 	return cmd
 }
 
@@ -61,11 +62,9 @@ func runUninstall(cmd *cobra.Command, yes, purge bool) error {
 	if binDir != "" {
 		devPrintf(out, "  the leoflow binaries in %s\n", binDir)
 	}
-	if purge {
-		if workspace != "" {
-			devPrintf(out, "  %s  (your DAG workspace)\n", workspace)
-		}
-		devPrintln(out, "  Docker datastore volumes: leoflow_pgdata, leoflow_redisdata")
+	devPrintln(out, "  the Docker datastore volumes (Postgres/Redis) — a reinstall then starts fresh")
+	if purge && workspace != "" {
+		devPrintf(out, "  %s  (your DAG workspace — only with --purge)\n", workspace)
 	}
 
 	if !yes && !confirmUninstall(cmd) {
@@ -73,11 +72,11 @@ func runUninstall(cmd *cobra.Command, yes, purge bool) error {
 		return nil
 	}
 
-	if purge {
-		// Best-effort: stop datastores and drop their volumes before deleting the
-		// compose file that defines them.
-		composeDownVolumes(cmd, filepath.Join(root, "docker-compose.yaml"))
-	}
+	// Always drop this user's datastore volumes so a reinstall starts clean — the
+	// stale-admin/old-runs trap. The DAG workspace is preserved (only --purge
+	// removes it). Targets the per-user compose project by name, so it works
+	// regardless of which compose file Lite used.
+	composeDownVolumes(cmd)
 	if rerr := os.RemoveAll(root); rerr != nil {
 		return fmt.Errorf("removing %s: %w", root, rerr)
 	}
@@ -141,19 +140,35 @@ func confirmUninstall(cmd *cobra.Command) bool {
 	return answer == "yes" || answer == "y"
 }
 
-// composeDownVolumes best-effort stops the datastores and removes their volumes
-// via the managed compose file, if both Docker and the file are present.
-func composeDownVolumes(cmd *cobra.Command, composeFile string) {
-	if _, err := os.Stat(composeFile); err != nil {
-		return
-	}
+// composeDownVolumes best-effort tears down this user's Lite datastore — the
+// per-user compose project's containers and named volumes — so a reinstall starts
+// fresh. It targets the project by NAME (-p leoflow-<uid>), independent of which
+// compose file `leoflow lite` used (a checkout's docker-compose.dev.yaml, the
+// managed ~/.leoflow one, or --compose), and then removes the project's volumes
+// directly (a file-less `down` does not know the volume definitions to drop). All
+// best-effort: an already-gone datastore is fine.
+func composeDownVolumes(cmd *cobra.Command) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return
 	}
-	c := exec.CommandContext(cmdContext(cmd), "docker", "compose", "-f", composeFile, "down", "-v") //nolint:gosec // fixed args, managed compose path
-	c.Stdout, c.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
-	if err := c.Run(); err != nil {
-		// Best-effort: a missing/already-down stack is fine; the files are removed next.
-		devPrintf(cmd.OutOrStdout(), "  ! docker compose down (datastores may already be gone): %v\n", err)
+	ctx := cmdContext(cmd)
+	project := liteComposeProject()
+	down := exec.CommandContext(ctx, "docker", "compose", "-p", project, "down", "--remove-orphans") //nolint:gosec // fixed args + derived project name
+	down.Stdout, down.Stderr = io.Discard, io.Discard
+	_ = down.Run() //nolint:errcheck // best-effort: containers may already be gone; volume rm below is the real cleanup
+	// Remove the project's named volumes (prefix "<project>_"; the trailing "_"
+	// avoids matching a different uid like leoflow-5011_*).
+	out, err := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "name="+project+"_").Output() //nolint:gosec // derived project name
+	if err != nil {
+		return
+	}
+	removed := 0
+	for _, v := range strings.Fields(string(out)) {
+		if exec.CommandContext(ctx, "docker", "volume", "rm", v).Run() == nil { //nolint:gosec // volume name from docker's own listing
+			removed++
+		}
+	}
+	if removed > 0 {
+		devPrintf(cmd.OutOrStdout(), "  ✓ removed %d Lite datastore volume(s)\n", removed)
 	}
 }

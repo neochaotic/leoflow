@@ -620,6 +620,7 @@ func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions) error {
 	devPrintln(cmd.OutOrStdout(), "▸ starting dependencies (docker compose) …")
 	var captured bytes.Buffer
 	up := exec.CommandContext(ctx, "docker", "compose", "-f", o.composeFile, "up", "-d", "--wait") //nolint:gosec // operator-supplied compose file on the dev CLI
+	up.Env = append(os.Environ(), "COMPOSE_PROJECT_NAME="+liteComposeProject())                    // per-user datastore (no root/non-root volume sharing)
 	up.Stdout = cmd.OutOrStdout()
 	// Tee stderr so the user still sees compose progress while we inspect it to
 	// translate a port-allocation failure into an actionable message.
@@ -740,6 +741,20 @@ func liteDevDir() string {
 		return filepath.Join(h, ".leoflow", "dev")
 	}
 	return os.TempDir()
+}
+
+// liteComposeProject is the docker compose project name for this user's Lite
+// datastore: leoflow-<uid>. Per-user, so root and an unprivileged user get
+// SEPARATE Postgres/Redis volumes instead of silently sharing one — the
+// root-vs-non-root data collision where a stale admin from a prior `sudo` run
+// blocked a fresh login. The host ports (5432/6379) stay shared, so only one
+// instance runs at a time, which is fine for a local single-user tool. Must be
+// set identically on every compose invocation (up and uninstall's down).
+func liteComposeProject() string {
+	if uid := os.Getuid(); uid >= 0 { // -1 on platforms without getuid (Windows); Lite is linux/darwin
+		return "leoflow-" + strconv.Itoa(uid)
+	}
+	return "leoflow"
 }
 
 // venvPython returns the Python interpreter inside the dev venv under home,

@@ -387,6 +387,16 @@ func TestSharedServerEnvAuthModes(t *testing.T) {
 	}
 }
 
+func TestLiteComposeProjectIsPerUser(t *testing.T) {
+	p := liteComposeProject()
+	// Per-user (leoflow-<uid>) so root and an unprivileged user never share a
+	// Postgres/Redis volume — the root-vs-non-root data collision where a stale
+	// admin from a prior `sudo` run blocked a fresh login.
+	if !strings.HasPrefix(p, "leoflow-") || p == "leoflow" {
+		t.Errorf("liteComposeProject = %q, want a per-user leoflow-<uid>", p)
+	}
+}
+
 func TestLiteEditorEnv(t *testing.T) {
 	env := strings.Join(liteEditorEnv("/home/u/proj", "/home/u/.leoflow"), "\n")
 	if !strings.Contains(env, "LEOFLOW_UI_WORKSPACE=/home/u/proj") {

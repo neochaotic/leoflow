@@ -65,7 +65,7 @@ func runUninstall(cmd *cobra.Command, yes, purge bool) error {
 		if workspace != "" {
 			devPrintf(out, "  %s  (your DAG workspace)\n", workspace)
 		}
-		devPrintln(out, "  Docker datastore volumes: leoflow_pgdata, leoflow_redisdata")
+		devPrintln(out, "  Docker datastore volume: leoflow_pgdata (and any legacy leoflow_redisdata)")
 	}
 
 	if !yes && !confirmUninstall(cmd) {

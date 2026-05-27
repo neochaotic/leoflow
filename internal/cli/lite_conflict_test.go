@@ -35,13 +35,13 @@ func TestPreflightDevPorts(t *testing.T) {
 }
 
 // TestComposeUpError translates the cryptic Docker port-allocation failure into a
-// clear "another Postgres/Redis is on 5432/6379, use --no-up" message, while
-// keeping the generic hint for other failures.
+// clear "another Postgres is on 5432, use --postgres managed or --no-up" message,
+// while keeping the generic hint for other failures.
 func TestComposeUpError(t *testing.T) {
 	base := errString("exit status 1")
 	portErr := composeUpError(base, "Error response from daemon: ... Bind for 0.0.0.0:5432 failed: port is already allocated")
 	if !strings.Contains(portErr.Error(), "--no-up") || !strings.Contains(strings.ToLower(portErr.Error()), "postgres") {
-		t.Errorf("port-allocation failure should mention --no-up and Postgres/Redis, got: %v", portErr)
+		t.Errorf("port-allocation failure should mention --no-up and Postgres, got: %v", portErr)
 	}
 	other := composeUpError(base, "Cannot connect to the Docker daemon")
 	if !strings.Contains(other.Error(), "is Docker running?") {

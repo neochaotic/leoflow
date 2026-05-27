@@ -303,7 +303,7 @@ func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions)
 }
 
 // resolveComposeFile returns the docker-compose file Lite uses for its local
-// Postgres + Redis. An explicit --compose wins; else a docker-compose.dev.yaml in
+// Postgres (Lite is Redis-free — ADR 0026). An explicit --compose wins; else a docker-compose.dev.yaml in
 // the working dir (a source checkout) is used; else the compose embedded in the
 // binary is materialized under ~/.leoflow, so a binary-only install runs with
 // `leoflow lite` alone.
@@ -358,11 +358,11 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().IntVar(&o.port, "port", devDefaultPort, "HTTP/UI port (dev default 8088, distinct from the demo's 8080)")
 	cmd.Flags().StringVar(&o.host, "host", "127.0.0.1", "address to bind the UI/API to; use 0.0.0.0 to reach it from your internal network/VPN (insecure — see the warning)")
 	cmd.Flags().StringVar(&o.image, "image", "leoflow-dev:local", "placeholder image recorded in dag.json (subprocess mode only)")
-	cmd.Flags().StringVar(&o.composeFile, "compose", "", "compose file for local Postgres + Redis (default: a managed one under ~/.leoflow, materialized on first run)")
+	cmd.Flags().StringVar(&o.composeFile, "compose", "", "compose file for the local Postgres (default: a managed one under ~/.leoflow, materialized on first run)")
 	cmd.Flags().StringVar(&o.runtimeSrc, "runtime-src", "runtime/python", "source of the leoflow_runtime package installed into the dev venv")
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
-	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres/Redis already running); the dev DB + venv are still provisioned")
+	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres already running); the dev DB + venv are still provisioned")
 	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreDocker, "Postgres backend: 'docker' (default) or 'managed' (relocatable PG under ~/.leoflow, no Docker — experimental, Fase 2)")
 	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
@@ -630,8 +630,9 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 	return env, makeReload, nil
 }
 
-// devComposeUp starts local Postgres + Redis via docker compose (the shared
-// server; the dev's own database lives inside it, isolated by name).
+// devComposeUp starts the named local datastore services via docker compose. Lite
+// brings up only Postgres (it is Redis-free — ADR 0026); the dev's own database
+// lives inside it, isolated by name.
 func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions, services ...string) error {
 	devPrintln(cmd.OutOrStdout(), "▸ starting dependencies (docker compose) …")
 	var captured bytes.Buffer

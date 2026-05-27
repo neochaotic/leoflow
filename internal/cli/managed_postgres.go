@@ -79,7 +79,7 @@ func startManagedPostgres(ctx context.Context, cmd *cobra.Command) error {
 		id.Env = pgLocaleEnv(os.Environ())
 		id.Stdout, id.Stderr = io.Discard, cmd.ErrOrStderr()
 		if rerr := id.Run(); rerr != nil {
-			return fmt.Errorf("initdb (see the locale note if it mentions LANG/LC_*): %w", rerr)
+			return fmt.Errorf("initdb failed%s: %w", managedPGHint, rerr)
 		}
 		// Pin the socket-only listener in postgresql.conf rather than via pg_ctl -o:
 		// the conf parser quotes paths natively, so a data dir with spaces works and
@@ -109,7 +109,7 @@ func startManagedPostgres(ctx context.Context, cmd *cobra.Command) error {
 	start.Env = pgLocaleEnv(os.Environ())
 	start.Stdout, start.Stderr = io.Discard, cmd.ErrOrStderr()
 	if rerr := start.Run(); rerr != nil {
-		return fmt.Errorf("starting managed Postgres (see %s): %w", logFile, rerr)
+		return fmt.Errorf("starting managed Postgres (see %s)%s: %w", logFile, managedPGHint, rerr)
 	}
 	return nil
 }
@@ -129,6 +129,11 @@ func stopManagedPostgres(cmd *cobra.Command) {
 	c.Stdout, c.Stderr = io.Discard, io.Discard
 	_ = c.Run() //nolint:errcheck // best-effort stop on shutdown
 }
+
+// managedPGHint is appended to managed-Postgres startup failures: if the
+// relocatable build can't run on this host (very old glibc, musl, locale), the
+// Docker datastore is the escape hatch.
+const managedPGHint = " — if the managed Postgres can't run on this host (very old glibc, musl, or a locale issue), use `leoflow lite --postgres docker`"
 
 // maxUnixSocketPath is a conservative cap on the managed Postgres socket path.
 // The OS sun_path limit is ~104 (macOS) to ~108 (Linux); we guard below it so a
@@ -178,8 +183,47 @@ func pgLocaleEnv(base []string) []string {
 // detectLibc reports the host libc ("glibc"/"musl" on linux, "" on darwin) so the
 // matching relocatable PostgreSQL build is selected.
 func detectLibc() string {
+	return hostProbe().Libc
+}
+
+// dockerAvailable reports whether Docker is usable on this host, used to resolve
+// the "auto" executor (k3d when present, else subprocess).
+func dockerAvailable() bool {
+	return hostProbe().Docker
+}
+
+// hostProbe runs the shared environment detection once per call site.
+func hostProbe() setup.Report {
 	return setup.Detect(setup.Probe{
 		GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 		LookPath: exec.LookPath, Stat: os.Stat, Getwd: os.Getwd,
-	}).Libc
+	})
+}
+
+// autoExecutor resolves an "auto" --executor at run time (detecting Docker) and
+// prints which path it chose; a non-auto value is returned unchanged.
+func autoExecutor(cmd *cobra.Command, flag string) string {
+	if flag != "auto" {
+		return flag
+	}
+	mode := resolveExecutor("auto", dockerAvailable())
+	if mode == "subprocess" {
+		devPrintln(cmd.OutOrStdout(), "⚠ no Docker detected — running tasks via the subprocess executor (no isolation, dev-only). Install Docker for pod-per-task (k3d), or pass --executor k8s.")
+	} else {
+		devPrintln(cmd.OutOrStdout(), "▸ Docker detected — using the k3d executor (pod-per-task). Pass --executor subprocess for a no-Docker run.")
+	}
+	return mode
+}
+
+// resolveExecutor maps the --executor flag to a concrete mode: "auto" picks k3d
+// when Docker is available, else the subprocess executor (Docker-free); any
+// explicit value is returned unchanged.
+func resolveExecutor(flag string, dockerOK bool) string {
+	if flag != "auto" {
+		return flag
+	}
+	if dockerOK {
+		return "k8s"
+	}
+	return "subprocess"
 }

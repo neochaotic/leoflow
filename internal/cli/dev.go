@@ -354,7 +354,7 @@ func newLiteCommand() *cobra.Command {
 			return runDev(cmd, dir, o)
 		},
 	}
-	cmd.Flags().StringVar(&o.executor, "executor", "k8s", "execution mode: 'k8s' (dedicated k3d cluster, real pods) or 'subprocess' (host, fast, unsandboxed)")
+	cmd.Flags().StringVar(&o.executor, "executor", "auto", "execution mode: 'auto' (default; k3d if Docker is present, else subprocess), 'k8s' (dedicated k3d cluster, real pods), or 'subprocess' (host, fast, unsandboxed)")
 	cmd.Flags().IntVar(&o.port, "port", devDefaultPort, "HTTP/UI port (dev default 8088, distinct from the demo's 8080)")
 	cmd.Flags().StringVar(&o.host, "host", "127.0.0.1", "address to bind the UI/API to; use 0.0.0.0 to reach it from your internal network/VPN (insecure — see the warning)")
 	cmd.Flags().StringVar(&o.image, "image", "leoflow-dev:local", "placeholder image recorded in dag.json (subprocess mode only)")
@@ -528,9 +528,13 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 		return berr
 	}
 
+	// "auto" (the default) uses k3d when Docker is present, else the unsandboxed
+	// subprocess executor so `leoflow lite` still runs without Docker.
+	o.executor = autoExecutor(cmd, o.executor)
+
 	// Mode-specific setup: the env the control plane runs with and the per-reload
-	// build/register strategy. Cluster-mode (default) runs real pods on a
-	// dedicated k3d cluster; subprocess runs unsandboxed on the host (fast loop).
+	// build/register strategy. k8s runs real pods on a dedicated k3d cluster;
+	// subprocess runs unsandboxed on the host (fast loop).
 	var serverEnv []string
 	var makeReload func(token string) func() error
 	if o.executor == "subprocess" {

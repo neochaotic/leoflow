@@ -48,7 +48,6 @@ const (
 	// devMigrateURL is the same dev database via golang-migrate's pgx5 scheme, used
 	// to apply the embedded migrations (no source tree / migrate CLI needed).
 	devMigrateURL = "pgx5://leoflow:leoflow@localhost:5432/leoflow_dev?sslmode=disable"
-	devRedisURL   = "redis://localhost:6379/0"
 	// taskSDKVersion matches the task image (runtime/Dockerfile); the dev venv
 	// installs it so dag.py's `from airflow.sdk import ...` resolves.
 	taskSDKVersion = "apache-airflow-task-sdk==1.2.1"
@@ -290,18 +289,17 @@ func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions)
 	}
 	o.composeFile = cf
 	if o.postgres == datastoreManaged {
-		// Managed relocatable Postgres (no Docker for the database). Redis still
-		// comes up via Docker for now — managed Redis is the next Fase 2 step.
+		// Managed relocatable Postgres, no Docker at all: Lite is Redis-free (XCom
+		// on Postgres, in-process log tailer — ADR 0026), so nothing comes up via
+		// docker compose.
 		if perr := startManagedPostgres(ctx, cmd); perr != nil {
 			return noop, perr
-		}
-		if cerr := devComposeUp(ctx, cmd, *o, "redis"); cerr != nil {
-			return noop, cerr
 		}
 		//nolint:contextcheck // stop runs at shutdown with a fresh context; the run's ctx is already canceled
 		return func() { stopManagedPostgres(cmd) }, nil
 	}
-	return noop, devComposeUp(ctx, cmd, *o)
+	// Docker datastore: only Postgres (Lite needs no Redis).
+	return noop, devComposeUp(ctx, cmd, *o, "postgres")
 }
 
 // resolveComposeFile returns the docker-compose file Lite uses for its local
@@ -650,13 +648,13 @@ func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions, service
 }
 
 // composeUpError turns a `docker compose up` failure into an actionable message.
-// A port-allocation failure — a foreign Postgres/Redis already bound to 5432/6379,
-// the common real-world conflict — produces a cryptic raw Docker error, so it is
+// A port-allocation failure — a foreign Postgres already bound to 5432, the
+// common real-world conflict — produces a cryptic raw Docker error, so it is
 // translated; any other failure keeps the generic "is Docker running?" hint.
 func composeUpError(err error, output string) error {
 	low := strings.ToLower(output)
 	if strings.Contains(low, "already allocated") || strings.Contains(low, "address already in use") || strings.Contains(low, "port is already") {
-		return fmt.Errorf("a database/cache port is already in use — another Postgres or Redis is bound to 5432/6379. Stop it, or run `leoflow lite --no-up` to point at your own datastores (LEOFLOW_DATABASE_URL/LEOFLOW_REDIS_URL): %w", err)
+		return fmt.Errorf("the Postgres port 5432 is already in use — another Postgres is bound to it. Stop it, run `leoflow lite --postgres managed` (a private, socket-only Postgres), or `leoflow lite --no-up` to point at your own (LEOFLOW_DATABASE_URL): %w", err)
 	}
 	return fmt.Errorf("docker compose up (is Docker running?): %w", err)
 }
@@ -984,7 +982,9 @@ func sharedServerEnv(host string, port int, adminHash, adminEmail string) []stri
 		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
 		"LEOFLOW_UI_EDITION=lite",
 		"LEOFLOW_DATABASE_URL=" + devDSNs().database,
-		"LEOFLOW_REDIS_URL=" + devRedisURL,
+		// No LEOFLOW_REDIS_URL: Lite runs Redis-free — XCom on Postgres and an
+		// in-process log tailer. The empty Redis URL is the signal the server uses
+		// to select the embedded backends (ADR 0026).
 		"LEOFLOW_AUTH_JWT_SECRET=" + devJWTSecret,
 		// Lite is a local, single-user tool: a 1-hour token (the server default)
 		// expires mid-session and silently bounces the user to a re-login they did

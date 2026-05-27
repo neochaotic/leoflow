@@ -18,7 +18,7 @@ func TestLoadServerAppliesDefaults(t *testing.T) {
 		"logs.dir":          {c.Logs.Dir, "/var/log/leoflow"},
 		"database.url":      {c.Database.URL, "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable"},
 		"max_open_conns":    {c.Database.MaxOpenConns, 25},
-		"redis.url":         {c.Redis.URL, "redis://localhost:6379/0"},
+		"redis.url":         {c.Redis.URL, ""},
 		"auth.provider":     {c.Auth.Provider, "jwt"},
 		"token_ttl":         {c.Auth.JWT.TokenTTLSeconds, 3600},
 		"loop_interval_ms":  {c.Scheduler.LoopIntervalMS, 1000},

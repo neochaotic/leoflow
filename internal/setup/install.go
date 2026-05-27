@@ -131,19 +131,22 @@ func extractTarGz(data []byte, destDir string) error {
 		if terr != nil {
 			return fmt.Errorf("reading tar entry: %w", terr)
 		}
-		target := filepath.Join(clean, hdr.Name) //nolint:gosec // guarded by the prefix check below
-		if target != clean && !strings.HasPrefix(target, clean+string(os.PathSeparator)) {
-			return fmt.Errorf("tar entry %q escapes destination", hdr.Name)
-		}
-		if err := extractEntry(tr, hdr, target); err != nil {
+		target := filepath.Join(clean, hdr.Name) //nolint:gosec // containment enforced in extractEntry
+		if err := extractEntry(tr, hdr, clean, target); err != nil {
 			return err
 		}
 	}
 }
 
 // extractEntry writes a single tar entry (directory, regular file, or symlink)
-// to target.
-func extractEntry(tr *tar.Reader, hdr *tar.Header, target string) error {
+// to target. It enforces, at the sink, that target stays within destDir (Zip
+// Slip), and that a symlink's resolved target does too — so a malicious archive
+// can neither write outside the extraction root nor plant an escaping symlink
+// that a later entry could write through.
+func extractEntry(tr *tar.Reader, hdr *tar.Header, destDir, target string) error {
+	if target != destDir && !strings.HasPrefix(target, destDir+string(os.PathSeparator)) {
+		return fmt.Errorf("tar entry %q escapes destination", hdr.Name)
+	}
 	switch hdr.Typeflag {
 	case tar.TypeDir:
 		return os.MkdirAll(target, 0o750)
@@ -168,13 +171,31 @@ func extractEntry(tr *tar.Reader, hdr *tar.Header, target string) error {
 		}
 		return f.Close()
 	case tar.TypeSymlink:
+		if err := validateSymlinkTarget(destDir, target, hdr.Linkname); err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 			return fmt.Errorf("creating parent of %q: %w", target, err)
 		}
-		return os.Symlink(hdr.Linkname, target)
+		return os.Symlink(hdr.Linkname, target) //nolint:gosec // link target validated to stay within destDir
 	default:
 		// Skip device nodes, fifos, and other special types the CPython archive
 		// does not use.
 		return nil
 	}
+}
+
+// validateSymlinkTarget rejects a symlink whose target would resolve outside
+// destDir: an absolute link, or a relative one that climbs out via "..". This
+// stops a hostile archive from planting a symlink that escapes the extraction
+// root (and one a later entry could then write through to escape it).
+func validateSymlinkTarget(destDir, linkPath, linkname string) error {
+	if filepath.IsAbs(linkname) {
+		return fmt.Errorf("symlink %q has absolute target %q", linkPath, linkname)
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkname))
+	if resolved != destDir && !strings.HasPrefix(resolved, destDir+string(os.PathSeparator)) {
+		return fmt.Errorf("symlink %q target %q escapes destination", linkPath, linkname)
+	}
+	return nil
 }

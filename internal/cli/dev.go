@@ -730,6 +730,18 @@ func devHome() (string, error) {
 	return d, nil
 }
 
+// liteDevDir is the per-user Lite scratch dir (~/.leoflow/dev) for state that must
+// never be shared between users: the compiled dag.json and task logs. A global
+// /tmp path is owned by whoever ran Lite first and then denies every other user
+// (the root-vs-non-root "permission denied" trap). Best-effort: it falls back to a
+// temp dir only if the home cannot be resolved.
+func liteDevDir() string {
+	if h, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(h, ".leoflow", "dev")
+	}
+	return os.TempDir()
+}
+
 // venvPython returns the Python interpreter inside the dev venv under home,
 // honoring the platform layout (bin on Unix, Scripts on Windows).
 func venvPython(home string) string {
@@ -945,7 +957,11 @@ func sharedServerEnv(host string, port int, adminHash, adminEmail string) []stri
 		// "connection refused to :4317" every export interval. Prometheus metrics
 		// (scraped, not pushed) stay on.
 		"LEOFLOW_OBSERVABILITY_OTEL_ENABLED=false",
-		"LEOFLOW_LOGS_DIR=" + filepath.Join(os.TempDir(), "leoflow-dev-logs"),
+		// Per-user, under ~/.leoflow — NOT a shared /tmp path. A global
+		// /tmp/leoflow-dev-logs is created by whoever runs Lite first and then
+		// rejects every other user with "permission denied" (root vs non-root). The
+		// user's own .leoflow dir never collides.
+		"LEOFLOW_LOGS_DIR=" + filepath.Join(liteDevDir(), "logs"),
 		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
 		"LEOFLOW_UI_EDITION=lite",
 		"LEOFLOW_DATABASE_URL=" + devDatabaseURL,
@@ -1160,7 +1176,7 @@ func devWatchPaths(dir string, cfg *domain.LeoflowConfig) []string {
 // stamps a fresh dev version so a hot reload never collides with the previous
 // registration (dag_versions is unique per dag_id + version).
 func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, opts compileOptions, token string, afterCompile func() error, uiURL string) error {
-	opts.output = filepath.Join(os.TempDir(), "leoflow-dev-dag.json")
+	opts.output = filepath.Join(liteDevDir(), "dag.json")
 	opts.dagVersion = fmt.Sprintf("dev-%d", time.Now().UnixNano())
 	//nolint:contextcheck // runCompile derives its context from cmd; ctx here is used for registration.
 	if cerr := runCompile(cmd, dir, opts); cerr != nil {
@@ -1171,7 +1187,7 @@ func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, 
 			return aerr
 		}
 	}
-	data, err := os.ReadFile(opts.output) //nolint:gosec // path is leoflow-controlled under TempDir
+	data, err := os.ReadFile(opts.output) //nolint:gosec // path is leoflow-controlled under ~/.leoflow
 	if err != nil {
 		return fmt.Errorf("reading compiled dag.json: %w", err)
 	}

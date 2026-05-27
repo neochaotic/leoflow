@@ -567,21 +567,31 @@ func (r *Repository) SetUserPassword(ctx context.Context, tenant, email, hash st
 	return n > 0, nil
 }
 
-// BootstrapAdminHash is BootstrapAdmin given a precomputed bcrypt hash, so a
-// caller (e.g. Leoflow Lite) can provision the admin without the plaintext
-// password ever reaching the control plane. It is a no-op when users exist.
+// BootstrapAdminHash provisions the Lite admin from a precomputed bcrypt hash
+// (so the plaintext never reaches the control plane). It RECONCILES: if the admin
+// already exists, its password is reset to this hash. The Lite config
+// (admin_password_hash) is the source of truth, so the password the setup printed
+// always logs in — even against a pre-existing or stale database — without anyone
+// having to wipe Docker volumes. The only sanctioned way to change the password,
+// `reset-password`, also writes the config, so the two never drift. Returns true
+// only when the admin was newly created (false when an existing one was
+// reconciled). See cmd/leoflow-server bootstrapAdmin.
 func (r *Repository) BootstrapAdminHash(ctx context.Context, tenant, email, hash string) (bool, error) {
 	tid, err := r.tenantID(ctx, tenant)
 	if err != nil {
 		return false, err
 	}
-	n, err := r.q.CountUsers(ctx, tid)
+	// Reconcile an existing admin to the configured hash.
+	updated, err := r.q.UpdateUserPassword(ctx, queries.UpdateUserPasswordParams{
+		Name: tenant, Email: email, PasswordHash: strPtr(hash),
+	})
 	if err != nil {
-		return false, fmt.Errorf("counting users: %w", err)
+		return false, fmt.Errorf("reconciling admin password: %w", err)
 	}
-	if n > 0 {
+	if updated > 0 {
 		return false, nil
 	}
+	// No such admin yet — create it and grant the admin role.
 	uid, err := r.q.CreateUser(ctx, queries.CreateUserParams{TenantID: tid, Email: email, PasswordHash: strPtr(hash)})
 	if err != nil {
 		return false, fmt.Errorf("creating admin user: %w", err)

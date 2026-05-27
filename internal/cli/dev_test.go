@@ -376,6 +376,14 @@ func TestSharedServerEnvAuthModes(t *testing.T) {
 		if !strings.Contains(env, "LEOFLOW_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE=30") {
 			t.Errorf("lite env missing generous login rate limit; got:\n%s", env)
 		}
+		// Logs go under the per-user ~/.leoflow, NOT a shared /tmp path that
+		// collides across users (root vs non-root permission-denied trap).
+		if !strings.Contains(env, filepath.Join(".leoflow", "dev", "logs")) {
+			t.Errorf("logs dir must be per-user under ~/.leoflow/dev/logs; got:\n%s", env)
+		}
+		if strings.Contains(env, "leoflow-dev-logs") {
+			t.Errorf("logs dir must not use the shared /tmp path; got:\n%s", env)
+		}
 	}
 }
 

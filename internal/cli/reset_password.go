@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -13,17 +12,19 @@ import (
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
-// newResetPasswordCommand resets the Lite admin password. It is root-gated: a
-// password reset is a privileged local recovery operation.
+// newResetPasswordCommand resets the Lite admin password. Lite is a per-user
+// install (the database and ~/.leoflow config belong to the user who ran it), so
+// this runs as that user — NOT root. Running it under sudo would resolve HOME to
+// /root and miss the user's config; run it as the same user as `leoflow lite`.
 func newResetPasswordCommand() *cobra.Command {
 	var userEmail string
 	cmd := &cobra.Command{
 		Use:   "reset-password",
-		Short: "Reset the Leoflow Lite admin password (requires sudo/root).",
+		Short: "Reset the Leoflow Lite admin password.",
 		Long: "reset-password generates a new admin password, updates it in the Lite " +
-			"database, and shows it once. It must run as root (a privileged local " +
-			"recovery operation): `sudo leoflow lite reset-password`. The Lite Postgres " +
-			"must be reachable (start `leoflow lite` if it is not).",
+			"database, and shows it once. Run it as the same user as `leoflow lite` " +
+			"(no sudo). The Lite Postgres must be reachable (start `leoflow lite` if it " +
+			"is not).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runResetPassword(cmd, userEmail)
@@ -34,9 +35,6 @@ func newResetPasswordCommand() *cobra.Command {
 }
 
 func runResetPassword(cmd *cobra.Command, userEmail string) error {
-	if os.Geteuid() != 0 {
-		return errors.New("reset-password must run as root — try `sudo leoflow lite reset-password`")
-	}
 	out := cmd.OutOrStdout()
 	home := invokingUserHome()
 	cfg := loadUserConfig(home)

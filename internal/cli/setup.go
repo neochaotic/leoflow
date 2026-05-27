@@ -207,7 +207,7 @@ func runSetup(cmd *cobra.Command, workspaceFlag string, dryRun bool) error {
 		lc = gatherLiteConfig(interactive, bufio.NewReader(os.Stdin), out, def)
 	} else {
 		lc = loadManifestSettings(leoflowHome, def)
-		_, _ = fmt.Fprintln(out, "\n  already configured (~/.leoflow/config.yaml) — keeping your settings.\n  change the admin with `sudo leoflow lite reset-password`.") //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintln(out, "\n  already configured (~/.leoflow/config.yaml) — keeping your settings.\n  change the admin with `leoflow lite reset-password`.") //nolint:errcheck // best-effort terminal output
 	}
 
 	_, _ = fmt.Fprintf(out, "\n  workspace  %s\n  executor   %s\n  port       %d\n  admin      %s\n", lc.Workspace, lc.Executor, lc.Port, lc.AdminEmail) //nolint:errcheck // best-effort terminal output
@@ -318,9 +318,9 @@ func printSetupSummary(out io.Writer, lc liteSettings, generatedPassword string)
 	p := newPalette(colorEnabled(out))
 	if generatedPassword != "" {
 		_, _ = fmt.Fprintf(out, "\n  %s── Leoflow Lite admin (save this — it is shown only once) ──%s\n    user:     %s\n    password: %s%s%s\n", p.bold, p.reset, lc.AdminEmail, p.bold, generatedPassword, p.reset) //nolint:errcheck // best-effort terminal output
-		_, _ = fmt.Fprintln(out, "    (forgot it? `sudo leoflow lite reset-password`)")                                                                                                                               //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintln(out, "    (forgot it? `leoflow lite reset-password`)")                                                                                                                                    //nolint:errcheck // best-effort terminal output
 	} else {
-		_, _ = fmt.Fprintln(out, "\n  admin already configured (~/.leoflow/config.yaml); reset with `sudo leoflow lite reset-password`.") //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintln(out, "\n  admin already configured (~/.leoflow/config.yaml); reset with `leoflow lite reset-password`.") //nolint:errcheck // best-effort terminal output
 	}
 	_, _ = fmt.Fprintln(out, "\n  SECURITY: Lite uses a short, human-friendly password and is meant for local/")     //nolint:errcheck // best-effort terminal output
 	_, _ = fmt.Fprintln(out, "  trusted use only. Run it on an internal network or VPN — never expose it publicly.") //nolint:errcheck // best-effort terminal output

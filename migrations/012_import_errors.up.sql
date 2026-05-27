@@ -3,7 +3,7 @@
 -- and clears it on the next good compile; GET /api/v2/importErrors reads the feed.
 -- One row per (tenant, filename) — a re-import replaces the previous error.
 CREATE TABLE import_errors (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     filename TEXT NOT NULL,
     stacktrace TEXT NOT NULL,

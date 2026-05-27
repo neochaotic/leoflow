@@ -9,7 +9,7 @@ BEGIN;
 -- Replica registry
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE replicas (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     hostname TEXT NOT NULL,
     process_id INT NOT NULL,
     version TEXT NOT NULL,                    -- build version of the binary

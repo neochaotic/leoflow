@@ -3,7 +3,7 @@
 -- are masked in API responses. Encryption-at-rest is a follow-up (see #45 / the
 -- connections ADR).
 CREATE TABLE variables (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     key TEXT NOT NULL,
     value TEXT NOT NULL DEFAULT '',

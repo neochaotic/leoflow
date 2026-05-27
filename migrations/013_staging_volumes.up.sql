@@ -4,7 +4,7 @@
 -- (run_succeeded | ttl_expired | orphaned). A successful run frees the volume
 -- immediately; a failed run keeps it for the post-terminal TTL (re-run safety).
 CREATE TABLE staging_volumes (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     dag_id TEXT NOT NULL,
     run_id TEXT NOT NULL,

@@ -21,7 +21,7 @@ CREATE TYPE dag_run_trigger AS ENUM (
 );
 
 CREATE TABLE dag_runs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     dag_id UUID NOT NULL REFERENCES dags(id) ON DELETE CASCADE,
     dag_version_id UUID NOT NULL REFERENCES dag_versions(id),
@@ -60,7 +60,7 @@ CREATE TYPE task_state AS ENUM (
 );
 
 CREATE TABLE task_instances (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     dag_run_id UUID NOT NULL REFERENCES dag_runs(id) ON DELETE CASCADE,
     task_id TEXT NOT NULL,                    -- as declared in dag.json

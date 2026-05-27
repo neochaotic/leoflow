@@ -701,7 +701,7 @@ func devMigrate(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("loading embedded migrations: %w", err)
 	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, devMigrateURL)
+	m, err := migrate.NewWithSourceInstance("iofs", src, devDSNs().migrate)
 	if err != nil {
 		return fmt.Errorf("initializing migrator: %w", err)
 	}
@@ -715,7 +715,7 @@ func devMigrate(cmd *cobra.Command) error {
 // ensureDevDatabase creates the isolated leoflow_dev database if it does not yet
 // exist, so the dev experience never shares the product's "leoflow" database.
 func ensureDevDatabase(ctx context.Context, cmd *cobra.Command) error {
-	conn, err := pgx.Connect(ctx, devMaintenanceURL)
+	conn, err := pgx.Connect(ctx, devDSNs().maintenance)
 	if err != nil {
 		return fmt.Errorf("connecting to Postgres (is it up?): %w", err)
 	}
@@ -983,7 +983,7 @@ func sharedServerEnv(host string, port int, adminHash, adminEmail string) []stri
 		"LEOFLOW_LOGS_DIR=" + filepath.Join(liteDevDir(), "logs"),
 		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
 		"LEOFLOW_UI_EDITION=lite",
-		"LEOFLOW_DATABASE_URL=" + devDatabaseURL,
+		"LEOFLOW_DATABASE_URL=" + devDSNs().database,
 		"LEOFLOW_REDIS_URL=" + devRedisURL,
 		"LEOFLOW_AUTH_JWT_SECRET=" + devJWTSecret,
 		// Lite is a local, single-user tool: a 1-hour token (the server default)

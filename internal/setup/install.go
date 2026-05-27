@@ -75,32 +75,41 @@ func logf(f func(string, ...any), format string, a ...any) {
 // guarded against path traversal (zip-slip). The download is verified in full
 // before any file is written.
 func downloadVerifyExtract(ctx context.Context, client *http.Client, b PythonBuild, destDir string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.URL, http.NoBody)
+	data, err := fetchVerify(ctx, client, b.URL, b.SHA256, maxPythonArchiveBytes, "CPython")
 	if err != nil {
-		return fmt.Errorf("building request: %w", err)
+		return err
+	}
+	return extractTarGz(data, destDir)
+}
+
+// fetchVerify downloads url, caps the body at maxBytes, and verifies its SHA-256
+// against wantSHA before returning the bytes — so a managed toolchain (CPython,
+// PostgreSQL) is never extracted unverified. label names the artifact in errors.
+func fetchVerify(ctx context.Context, client *http.Client, url, wantSHA string, maxBytes int64, label string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("building request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("downloading CPython: %w", err)
+		return nil, fmt.Errorf("downloading %s: %w", label, err)
 	}
 	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // best-effort close of the download body
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("downloading CPython: unexpected status %s", resp.Status)
+		return nil, fmt.Errorf("downloading %s: unexpected status %s", label, resp.Status)
 	}
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPythonArchiveBytes+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return fmt.Errorf("reading CPython archive: %w", err)
+		return nil, fmt.Errorf("reading %s archive: %w", label, err)
 	}
-	if len(data) > maxPythonArchiveBytes {
-		return fmt.Errorf("CPython archive exceeds %d bytes", maxPythonArchiveBytes)
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s archive exceeds %d bytes", label, maxBytes)
 	}
-
 	sum := sha256.Sum256(data)
-	if got := hex.EncodeToString(sum[:]); got != b.SHA256 {
-		return fmt.Errorf("CPython checksum mismatch: got %s, want %s", got, b.SHA256)
+	if got := hex.EncodeToString(sum[:]); got != wantSHA {
+		return nil, fmt.Errorf("%s checksum mismatch: got %s, want %s", label, got, wantSHA)
 	}
-	return extractTarGz(data, destDir)
+	return data, nil
 }
 
 // extractTarGz unpacks a gzipped tar archive into destDir, rejecting any entry

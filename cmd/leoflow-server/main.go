@@ -81,15 +81,14 @@ func run() error {
 	}
 	defer pg.Close()
 
-	rd, err := storage.NewRedis(ctx, cfg.Redis)
+	// Datastore for XCom + live-log tailing: Redis when configured (production,
+	// ADR 0006), or the embedded Postgres/in-process backends when no Redis is
+	// set (Lite — ADR 0026). The signal is the presence of a Redis URL.
+	xcomBackend, logTailer, redisHealth, dsCleanup, err := selectDatastore(ctx, cfg, pg, tel.Logger)
 	if err != nil {
-		return fmt.Errorf("redis: %w", err)
+		return err
 	}
-	defer func() {
-		if cerr := rd.Close(); cerr != nil {
-			tel.Logger.Error("closing redis", "error", cerr)
-		}
-	}()
+	defer dsCleanup()
 
 	repo := storage.NewRepository(pg)
 	if cerr := configureSecretCipher(repo, cfg.SecretKey, tel.Logger); cerr != nil {
@@ -97,7 +96,6 @@ func run() error {
 	}
 	authn := auth.NewJWTAuthenticator(repo, cfg.Auth.JWT.Secret, time.Duration(cfg.Auth.JWT.TokenTTLSeconds)*time.Second)
 	execStore := storage.NewExecutionStore(pg)
-	xcomBackend := xcom.NewRedisBackend(rd.Client)
 	xcomSvc := xcom.NewService(xcomBackend, storage.NewXComIndex(pg), xcom.DefaultTTL)
 	xcomReader := storage.NewXComReader(pg, xcomBackend)
 
@@ -106,7 +104,6 @@ func run() error {
 	}
 
 	logSink := logs.NewDiskSink(cfg.Logs.Dir)
-	logTailer := logs.NewRedisTailer(rd.Client)
 	// Secrets are served over the agent channel only when explicitly allowed
 	// insecure (dev) until gRPC TLS lands (issue #58); otherwise the handlers
 	// fail closed on a plaintext channel.
@@ -158,7 +155,7 @@ func run() error {
 		Registry:      tel.Registry,
 		Metrics:       tel.Metrics,
 		Tracer:        tel.Tracer,
-		HealthChecks:  map[string]api.HealthChecker{"postgres": pg, "redis": rd},
+		HealthChecks:  healthChecks(pg, redisHealth),
 		CORSOrigins:   cfg.Server.CORS.AllowedOrigins,
 		TokenTTLSecs:  cfg.Auth.JWT.TokenTTLSeconds,
 		InstanceName:  cfg.UI.InstanceName,
@@ -433,6 +430,67 @@ func safeCycle(name string, logger *slog.Logger, fn func()) {
 		}
 	}()
 	fn()
+}
+
+// xcomSweepInterval is how often the embedded Postgres XCom store is swept of
+// expired rows. Redis expires keys natively; Postgres needs a sweep (ADR 0026).
+const xcomSweepInterval = 10 * time.Minute
+
+// selectDatastore chooses the XCom backend and live-log tailer for the run. With
+// a configured Redis URL it uses the production Redis backends (ADR 0006); with
+// no Redis configured it uses the embedded backends — XCom on Postgres and an
+// in-process tailer — so Lite needs no Redis (ADR 0026). It returns a health
+// checker for Redis (nil when embedded) and a cleanup to defer.
+func selectDatastore(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger) (xcom.Backend, logs.Tailer, api.HealthChecker, func(), error) {
+	if cfg.Redis.URL == "" {
+		logger.Info("embedded datastore: XCom on Postgres, in-process log tailer (no Redis)")
+		backend := xcom.NewPostgresBackend(pg.Pool)
+		startXComSweep(ctx, backend, logger)
+		return backend, logs.NewMemoryTailer(), nil, func() {}, nil
+	}
+	rd, err := storage.NewRedis(ctx, cfg.Redis)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("redis: %w", err)
+	}
+	cleanup := func() {
+		if cerr := rd.Close(); cerr != nil {
+			logger.Error("closing redis", "error", cerr)
+		}
+	}
+	return xcom.NewRedisBackend(rd.Client), logs.NewRedisTailer(rd.Client), rd, cleanup, nil
+}
+
+// healthChecks builds the readiness checks, including Redis only when it is the
+// active datastore (redisHealth is nil in the embedded edition).
+func healthChecks(pg *storage.Postgres, redisHealth api.HealthChecker) map[string]api.HealthChecker {
+	checks := map[string]api.HealthChecker{"postgres": pg}
+	if redisHealth != nil {
+		checks["redis"] = redisHealth
+	}
+	return checks
+}
+
+// startXComSweep periodically deletes expired rows from the embedded Postgres
+// XCom store (the durable equivalent of Redis's native key expiry, ADR 0026).
+func startXComSweep(ctx context.Context, backend *xcom.PostgresBackend, logger *slog.Logger) {
+	go func() {
+		t := time.NewTicker(xcomSweepInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				safeCycle("xcom-sweep", logger, func() {
+					if n, err := backend.DeleteExpired(ctx); err != nil {
+						logger.Error("sweeping expired xcom", "error", err)
+					} else if n > 0 {
+						logger.Debug("swept expired xcom", "rows", n)
+					}
+				})
+			}
+		}
+	}()
 }
 
 // startReconciler runs a periodic pod reconciler that marks task instances

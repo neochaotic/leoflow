@@ -44,6 +44,8 @@ jobs:
       - run: pip install -e ./runtime/python
       # Scalar reads the spec from the site root.
       - run: cp docs/api/openapi.yaml docs/openapi.yaml
+      # The ADR index (docs/adrs.md) is generated from the ADR files; fail if stale.
+      - run: scripts/gen-adr-index.sh --check
       - run: mkdocs build --strict   # CI=true enables the social plugin
       # The Go reference used to be one page at go/reference.html; it is now split
       # per package. Write a static redirect stub so old links don't 404 (no plugin

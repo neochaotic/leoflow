@@ -1,3 +1,16 @@
+{{- /*
+The Production edition (this chart) must use EXTERNAL managed datastores and must
+never fall back to Lite's embedded backends (embedded Postgres / in-process XCom
++ tailer — ADR 0026/0027). The server selects embedded backends when no Redis URL
+is set, so fail the install loudly with a clear message if Postgres or Redis is
+not configured, rather than letting a misconfigured Pro deploy run embedded.
+*/}}
+{{- if and (not .Values.database.existingSecret) (not .Values.database.url) -}}
+{{- fail "database.url or database.existingSecret is required: the Production edition needs an external Postgres (the embedded datastore is Lite-only)." -}}
+{{- end -}}
+{{- if and (not .Values.redis.existingSecret) (not .Values.redis.url) -}}
+{{- fail "redis.url or redis.existingSecret is required: the Production edition needs an external Redis (the embedded XCom + log tailer is Lite-only)." -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

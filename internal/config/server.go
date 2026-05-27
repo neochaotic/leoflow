@@ -178,16 +178,19 @@ type OTelSection struct {
 // serverDefaults lists every leaf key with its default so that AutomaticEnv and
 // Unmarshal resolve nested keys correctly.
 var serverDefaults = map[string]any{
-	"server.http_addr":                          "0.0.0.0:8080",
-	"server.metrics_addr":                       "0.0.0.0:9090",
-	"server.grpc_addr":                          "0.0.0.0:9091",
-	"server.grpc_tls_cert":                      "",
-	"server.grpc_tls_key":                       "",
-	"server.cors.allowed_origins":               []string{"http://localhost:8080"},
-	"database.url":                              "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
-	"database.max_open_conns":                   25,
-	"database.max_idle_conns":                   5,
-	"redis.url":                                 "redis://localhost:6379/0",
+	"server.http_addr":            "0.0.0.0:8080",
+	"server.metrics_addr":         "0.0.0.0:9090",
+	"server.grpc_addr":            "0.0.0.0:9091",
+	"server.grpc_tls_cert":        "",
+	"server.grpc_tls_key":         "",
+	"server.cors.allowed_origins": []string{"http://localhost:8080"},
+	"database.url":                "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
+	"database.max_open_conns":     25,
+	"database.max_idle_conns":     5,
+	// Empty by default: no Redis configured selects the embedded edition (Lite —
+	// XCom on Postgres, in-process log tailer, ADR 0026). Production sets this
+	// explicitly via the Helm chart (external Redis).
+	"redis.url":                                 "",
 	"auth.provider":                             "jwt",
 	"auth.jwt.secret":                           "",
 	"auth.jwt.token_ttl_seconds":                3600,

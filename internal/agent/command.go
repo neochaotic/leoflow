@@ -7,14 +7,26 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-// ReturnValuePath is where the Python helper writes a task's return value.
-const ReturnValuePath = "/tmp/leoflow_return_value.json"
-
 const maxRetryAttempts = 5
+
+// NewReturnValuePath returns a unique, agent-owned path for this task's return
+// value, plus a cleanup. The agent runs one task per process, so a per-process
+// temp dir keeps concurrent tasks and other users from ever sharing a single
+// /tmp/leoflow_return_value.json (which collided — permission denied across uids,
+// clobbered across parallel tasks). The runtime is pointed here via the
+// LEOFLOW_RETURN_VALUE_PATH env the runner injects.
+func NewReturnValuePath() (path string, cleanup func() error, err error) {
+	dir, derr := os.MkdirTemp("", "leoflow-rv-")
+	if derr != nil {
+		return "", nil, fmt.Errorf("creating return-value dir: %w", derr)
+	}
+	return filepath.Join(dir, "return_value.json"), func() error { return os.RemoveAll(dir) }, nil
+}
 
 // BuildCommand returns the argv to execute the user's task for the given
 // operator. http_api tasks are executed by the control plane, not the agent.

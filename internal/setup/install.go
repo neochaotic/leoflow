@@ -131,71 +131,95 @@ func extractTarGz(data []byte, destDir string) error {
 		if terr != nil {
 			return fmt.Errorf("reading tar entry: %w", terr)
 		}
-		target := filepath.Join(clean, hdr.Name) //nolint:gosec // containment enforced in extractEntry
-		if err := extractEntry(tr, hdr, clean, target); err != nil {
+		if err := extractEntry(tr, hdr, clean, hdr.Name); err != nil {
 			return err
 		}
 	}
 }
 
 // extractEntry writes a single tar entry (directory, regular file, or symlink)
-// to target. It enforces, at the sink, that target stays within destDir (Zip
-// Slip), and that a symlink's resolved target does too — so a malicious archive
-// can neither write outside the extraction root nor plant an escaping symlink
-// that a later entry could write through.
-func extractEntry(tr *tar.Reader, hdr *tar.Header, destDir, target string) error {
-	if target != destDir && !strings.HasPrefix(target, destDir+string(os.PathSeparator)) {
-		return fmt.Errorf("tar entry %q escapes destination", hdr.Name)
+// under destDir. The entry name is sanitized to stay within destDir (Zip Slip),
+// and a symlink whose target would resolve outside destDir is refused — so a
+// malicious archive can neither write outside the extraction root nor plant an
+// escaping symlink that a later entry could write through.
+func extractEntry(tr *tar.Reader, hdr *tar.Header, destDir, name string) error {
+	target, err := sanitizeArchivePath(destDir, name)
+	if err != nil {
+		return err
 	}
 	switch hdr.Typeflag {
 	case tar.TypeDir:
 		return os.MkdirAll(target, 0o750)
 	case tar.TypeReg:
-		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-			return fmt.Errorf("creating parent of %q: %w", target, err)
+		if mkErr := os.MkdirAll(filepath.Dir(target), 0o750); mkErr != nil {
+			return fmt.Errorf("creating parent of %q: %w", target, mkErr)
 		}
 		// Preserve only the executable bit (interpreters, scripts); everything
 		// else is owner read/write. This sidesteps trusting arbitrary archive
-		// mode bits while keeping the CPython binaries runnable.
+		// mode bits while keeping the binaries runnable.
 		perm := os.FileMode(0o600)
 		if hdr.Mode&0o111 != 0 {
 			perm = 0o700
 		}
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
-		if err != nil {
-			return fmt.Errorf("creating %q: %w", target, err)
+		f, openErr := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+		if openErr != nil {
+			return fmt.Errorf("creating %q: %w", target, openErr)
 		}
-		if _, err := io.Copy(f, io.LimitReader(tr, maxPythonArchiveBytes)); err != nil { //nolint:gosec // bounded by the archive cap
+		if _, cpErr := io.Copy(f, io.LimitReader(tr, maxPythonArchiveBytes)); cpErr != nil { //nolint:gosec // bounded by the archive cap
 			_ = f.Close() //nolint:errcheck // already returning an error
-			return fmt.Errorf("writing %q: %w", target, err)
+			return fmt.Errorf("writing %q: %w", target, cpErr)
 		}
 		return f.Close()
 	case tar.TypeSymlink:
-		if err := validateSymlinkTarget(destDir, target, hdr.Linkname); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-			return fmt.Errorf("creating parent of %q: %w", target, err)
-		}
-		return os.Symlink(hdr.Linkname, target) //nolint:gosec // link target validated to stay within destDir
+		return extractSymlink(hdr, destDir, target, name)
 	default:
-		// Skip device nodes, fifos, and other special types the CPython archive
-		// does not use.
+		// Skip device nodes, fifos, and other special types these archives don't use.
 		return nil
 	}
 }
 
-// validateSymlinkTarget rejects a symlink whose target would resolve outside
-// destDir: an absolute link, or a relative one that climbs out via "..". This
-// stops a hostile archive from planting a symlink that escapes the extraction
-// root (and one a later entry could then write through to escape it).
-func validateSymlinkTarget(destDir, linkPath, linkname string) error {
-	if filepath.IsAbs(linkname) {
-		return fmt.Errorf("symlink %q has absolute target %q", linkPath, linkname)
+// extractSymlink creates one symlink entry safely. It refuses a link whose
+// target would resolve outside destDir — lexically (absolute, or climbing out
+// via "..") and, when the target already exists, by its real on-disk path. The
+// filepath.EvalSymlinks resolution both confirms containment and is what clears
+// go/unsafe-unzip-symlink (the query treats symlink resolution as the barrier).
+func extractSymlink(hdr *tar.Header, destDir, target, name string) error {
+	clean := filepath.Clean(destDir)
+	linkResolved := filepath.Join(filepath.Dir(target), hdr.Linkname) //nolint:gosec // not a sink: validated below before any symlink is created
+	if filepath.IsAbs(hdr.Linkname) || !withinDir(linkResolved, clean) {
+		return fmt.Errorf("symlink %q target %q escapes destination", name, hdr.Linkname)
 	}
-	resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkname))
-	if resolved != destDir && !strings.HasPrefix(resolved, destDir+string(os.PathSeparator)) {
-		return fmt.Errorf("symlink %q target %q escapes destination", linkPath, linkname)
+	if realTarget, evalErr := filepath.EvalSymlinks(linkResolved); evalErr == nil {
+		// Compare against the resolved root too: on macOS the dest (under /var)
+		// itself resolves to /private/var, so an unresolved-vs-resolved check
+		// would wrongly reject a contained link.
+		realRoot := clean
+		if rr, rootErr := filepath.EvalSymlinks(clean); rootErr == nil {
+			realRoot = rr
+		}
+		if !withinDir(realTarget, realRoot) {
+			return fmt.Errorf("symlink %q target %q escapes destination", name, hdr.Linkname)
+		}
 	}
-	return nil
+	if mkErr := os.MkdirAll(filepath.Dir(target), 0o750); mkErr != nil {
+		return fmt.Errorf("creating parent of %q: %w", target, mkErr)
+	}
+	return os.Symlink(hdr.Linkname, target) //nolint:gosec // target sanitized; link resolved within destDir
+}
+
+// sanitizeArchivePath joins a tar entry name onto destDir, returning the safe
+// path. It refuses any entry that is not a local path (absolute, empty, or
+// escaping via "..") — filepath.IsLocal is the canonical Zip-Slip guard, and
+// returning the path keeps the sanitizer on the same data flow as the sinks.
+func sanitizeArchivePath(destDir, name string) (string, error) {
+	if !filepath.IsLocal(name) {
+		return "", fmt.Errorf("archive entry %q escapes destination", name)
+	}
+	return filepath.Join(destDir, name), nil
+}
+
+// withinDir reports whether path is dir itself or lies beneath it.
+func withinDir(path, dir string) bool {
+	clean := filepath.Clean(path)
+	return clean == dir || strings.HasPrefix(clean, dir+string(os.PathSeparator))
 }

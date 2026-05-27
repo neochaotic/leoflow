@@ -80,8 +80,7 @@ func extractTarGzStrip(data []byte, destDir string, strip int) error {
 		if name == "" {
 			continue // the stripped top-level dir itself
 		}
-		target := filepath.Join(clean, name) //nolint:gosec // containment enforced in extractEntry
-		if err := extractEntry(tr, hdr, clean, target); err != nil {
+		if err := extractEntry(tr, hdr, clean, name); err != nil {
 			return err
 		}
 	}

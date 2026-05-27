@@ -30,4 +30,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0025: Embedded Monaco Web Editor for Leoflow Lite](adr/0025-lite-embedded-web-editor.md)
 - [ADR 0026: Lite Datastore — XCom on Postgres, No Redis](adr/0026-lite-datastore-no-redis.md)
 - [ADR 0027: Product Editions — Executors and Delivery](adr/0027-product-editions-executors-delivery.md)
+- [ADR 0028: Release & Versioning for the Two Editions (One Tag, Two Co-Versioned Artifacts)](adr/0028-release-versioning-two-editions.md)
 <!-- END ADR INDEX -->

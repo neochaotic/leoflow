@@ -295,6 +295,46 @@ func (s *SchedulerStore) ReapRun(ctx context.Context, runID string) error {
 	return nil
 }
 
+// ListAgentLostCandidates returns every `running` TI with a non-null
+// last_heartbeat_at, for the scheduler's TI heartbeat reaper (#128). The
+// reaper applies the threshold per row so the SQL stays simple.
+func (s *SchedulerStore) ListAgentLostCandidates(ctx context.Context) ([]scheduler.AgentLostCandidate, error) {
+	rows, err := s.q.ListAgentLostCandidates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing agent-lost candidates: %w", err)
+	}
+	out := make([]scheduler.AgentLostCandidate, 0, len(rows))
+	for _, r := range rows {
+		var last time.Time
+		if r.LastHeartbeatAt.Valid {
+			last = r.LastHeartbeatAt.Time.UTC()
+		}
+		out = append(out, scheduler.AgentLostCandidate{
+			TaskInstanceID: uuidToString(r.TaskInstanceID),
+			DagRunID:       uuidToString(r.DagRunID),
+			DagID:          r.DagIDText,
+			TaskID:         r.TaskID,
+			LastHeartbeat:  last,
+		})
+	}
+	return out, nil
+}
+
+// MarkTaskAgentLost transitions one TI to `failed` with the agent_lost
+// reason. The WHERE state='running' guard makes this idempotent and prevents
+// a late terminal report being overwritten — if the row already moved, we
+// touch zero rows and return nil.
+func (s *SchedulerStore) MarkTaskAgentLost(ctx context.Context, taskInstanceID string) error {
+	tid, err := parseUUID(taskInstanceID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.q.MarkTaskAgentLost(ctx, tid); err != nil {
+		return fmt.Errorf("marking task agent-lost: %w", err)
+	}
+	return nil
+}
+
 // ListActiveStagingVolumes returns active staging volumes joined with their DAG
 // run's state (empty when the run row is gone), for the GC (ADR 0022).
 func (s *SchedulerStore) ListActiveStagingVolumes(ctx context.Context) ([]domain.StagingVolumeState, error) {

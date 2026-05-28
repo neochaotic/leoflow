@@ -244,6 +244,50 @@ SET state = 'failed',
 WHERE dag_run_id = $1
   AND state IN ('scheduled', 'queued', 'running');
 
+-- name: RecordTaskHeartbeat :exec
+-- Stamps last_heartbeat_at on the active TI of an attempt. Bounded by the
+-- (dag_run_id, task_id, try_number) tuple to match the agent's identity. The
+-- state IN guard avoids stamping a heartbeat on a TI the scheduler already
+-- transitioned to terminal between the agent's last heartbeat and now — a
+-- terminal TI must stay terminal even if a late heartbeat arrives.
+UPDATE task_instances
+SET last_heartbeat_at = now()
+WHERE dag_run_id = $1
+  AND task_id = $2
+  AND try_number = $3
+  AND state IN ('queued', 'running');
+
+-- name: ListAgentLostCandidates :many
+-- Lists running TIs that have heartbeated at least once and whose latest
+-- heartbeat is non-null, alongside enough identity to log + observe.
+-- The "non-null" filter is the safety guarantee: a TI that never heartbeated
+-- is either inline (no agent ever exists) or fresh — out of scope for this
+-- reaper. The LIMIT bounds a single tick's reap work even after a large
+-- outage; the rest are picked up on the next tick.
+SELECT ti.id AS task_instance_id,
+       ti.dag_run_id AS dag_run_id,
+       d.dag_id AS dag_id_text,
+       ti.task_id AS task_id,
+       ti.last_heartbeat_at AS last_heartbeat_at
+FROM task_instances ti
+JOIN dag_runs dr ON dr.id = ti.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+WHERE ti.state = 'running'
+  AND ti.last_heartbeat_at IS NOT NULL
+ORDER BY ti.last_heartbeat_at
+LIMIT 100;
+
+-- name: MarkTaskAgentLost :execrows
+-- Fails a TI whose agent went silent. The WHERE state='running' guard
+-- prevents overwriting a TI the agent's last terminal report finally
+-- delivered between our list and our write (defense in depth — a late
+-- report wins over the reaper). Idempotent on a second call.
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'agent_lost: no heartbeat within the threshold — see #128'
+WHERE id = $1 AND state = 'running';
+
 -- name: MarkRunOrphanedRun :execrows
 -- Fails an orphaned dag run. The `state = 'running'` guard makes the reap a
 -- safety net, never a takeover: a competing finalizer (the normal scheduler

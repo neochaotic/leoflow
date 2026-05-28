@@ -19,17 +19,19 @@ type transition struct {
 }
 
 type fakeStore struct {
-	runs        []RunState
-	materialize []string
-	transitions []transition
-	retried     []transition
-	runStates   map[string]domain.DagRunState
-	scheduled   []ScheduledDAG
-	createdRuns []string
-	notes       map[string]string
-	reapCands   []ReapCandidate
-	reaped      []string
-	createErr   bool
+	runs            []RunState
+	materialize     []string
+	transitions     []transition
+	retried         []transition
+	runStates       map[string]domain.DagRunState
+	scheduled       []ScheduledDAG
+	createdRuns     []string
+	notes           map[string]string
+	reapCands       []ReapCandidate
+	reaped          []string
+	createErr       bool
+	agentLostCands  []AgentLostCandidate
+	agentLostMarked []string
 }
 
 func newFakeStore(runs ...RunState) *fakeStore {
@@ -75,6 +77,13 @@ func (f *fakeStore) ListReapCandidates(context.Context) ([]ReapCandidate, error)
 }
 func (f *fakeStore) ReapRun(_ context.Context, runID string) error {
 	f.reaped = append(f.reaped, runID)
+	return nil
+}
+func (f *fakeStore) ListAgentLostCandidates(context.Context) ([]AgentLostCandidate, error) {
+	return f.agentLostCands, nil
+}
+func (f *fakeStore) MarkTaskAgentLost(_ context.Context, tiID string) error {
+	f.agentLostMarked = append(f.agentLostMarked, tiID)
 	return nil
 }
 

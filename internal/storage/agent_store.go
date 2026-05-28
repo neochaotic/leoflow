@@ -65,6 +65,22 @@ func (s *ExecutionStore) ReportState(ctx context.Context, id auth.AgentIdentity,
 	return s.q.ReportTaskResult(ctx, params)
 }
 
+// RecordHeartbeat stamps last_heartbeat_at on the agent's TI so the
+// scheduler's heartbeat reaper (#128) can tell a live task from one whose
+// agent has gone silent. The SQL guard skips terminal rows — a late
+// heartbeat after a terminal report is a no-op, not a regression.
+func (s *ExecutionStore) RecordHeartbeat(ctx context.Context, id auth.AgentIdentity) error {
+	rid, err := parseUUID(id.RunID)
+	if err != nil {
+		return err
+	}
+	return s.q.RecordTaskHeartbeat(ctx, queries.RecordTaskHeartbeatParams{
+		DagRunID:  rid,
+		TaskID:    id.TaskID,
+		TryNumber: toInt32(id.TryNumber),
+	})
+}
+
 // FailTask marks a task instance failed by its ID, but only while it is still
 // active (scheduled/queued/running), so it never clobbers a terminal state. It
 // implements executor.FailureReporter for the pod reconciler.

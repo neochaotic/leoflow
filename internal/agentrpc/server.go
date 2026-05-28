@@ -44,6 +44,10 @@ type Store interface {
 	TaskSpec(ctx context.Context, id auth.AgentIdentity) (TaskSpec, error)
 	// ReportState records a state transition reported by the agent.
 	ReportState(ctx context.Context, id auth.AgentIdentity, state domain.TaskState, exitCode int, errMsg string) error
+	// RecordHeartbeat stamps last_heartbeat_at on the identified TI so the
+	// scheduler's heartbeat reaper (#128) can tell live tasks from agent-lost
+	// ones. The state guard inside the SQL skips already-terminal rows.
+	RecordHeartbeat(ctx context.Context, id auth.AgentIdentity) error
 }
 
 // XComService stores and retrieves XCom values for the agent.
@@ -142,10 +146,20 @@ func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateReques
 	return &agentv1.ReportStateResponse{Acknowledged: true}, nil
 }
 
-// Heartbeat returns the server clock so the agent can detect skew.
+// Heartbeat stamps the per-TI liveness signal (#128) and returns the server
+// clock so the agent can detect skew. A storage error stamping the heartbeat
+// is logged but does not fail the RPC — failing the call would risk the
+// agent terminating itself unnecessarily on a transient DB blip. The
+// scheduler reaper would, in the worst case, fail the TI as agent_lost on
+// the next tick; correct under "do no harm" (ADR 0031).
 func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*agentv1.HeartbeatResponse, error) {
-	if _, err := s.identify(ctx); err != nil {
+	id, err := s.identify(ctx)
+	if err != nil {
 		return nil, err
+	}
+	if hbErr := s.store.RecordHeartbeat(ctx, *id); hbErr != nil {
+		slog.Warn("recording heartbeat",
+			"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "error", hbErr)
 	}
 	return &agentv1.HeartbeatResponse{ServerTime: timestamppb.New(s.now())}, nil
 }

@@ -51,6 +51,10 @@ type Store interface {
 	// ReapStore methods drive the orphan reaper (#120): they list running runs
 	// that have gone quiet and fail them so the dashboard counter is correct.
 	ReapStore
+	// HeartbeatReapStore methods drive the TI heartbeat reaper (#128): they
+	// list `running` task instances whose agent has gone silent and fail them
+	// as `agent_lost` so the dashboard counter recovers from agent-side crashes.
+	HeartbeatReapStore
 }
 
 // Recorder records scheduler metrics. observability.Metrics implements it.
@@ -82,18 +86,25 @@ type InlineRunner interface {
 // that a real orphan is reaped before the operator looks at the dashboard.
 const defaultOrphanThreshold = 5 * time.Minute
 
+// defaultAgentLostThreshold is how long a running TI may go without an agent
+// heartbeat before the TI reaper declares the agent lost. 90 s is 6x the
+// default agent heartbeat interval (15 s, see cmd/leoflow-agent/main.go),
+// tolerating a handful of missed pings before failing the task.
+const defaultAgentLostThreshold = 90 * time.Second
+
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
-	store           Store
-	logger          *slog.Logger
-	interval        time.Duration
-	stepTimeout     time.Duration
-	recorder        Recorder
-	dispatcher      Dispatcher
-	inline          InlineRunner
-	orphanThreshold time.Duration
-	lastTick        atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
-	leading         atomic.Bool  // true only while this instance holds leadership and ticks
+	store              Store
+	logger             *slog.Logger
+	interval           time.Duration
+	stepTimeout        time.Duration
+	recorder           Recorder
+	dispatcher         Dispatcher
+	inline             InlineRunner
+	orphanThreshold    time.Duration
+	agentLostThreshold time.Duration
+	lastTick           atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	leading            atomic.Bool  // true only while this instance holds leadership and ticks
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
@@ -103,12 +114,13 @@ type Scheduler struct {
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
 func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Scheduler {
 	return &Scheduler{
-		store:           store,
-		logger:          logger,
-		interval:        interval,
-		stepTimeout:     defaultStepTimeout(interval),
-		orphanThreshold: defaultOrphanThreshold,
-		warnedSchedules: map[string]string{},
+		store:              store,
+		logger:             logger,
+		interval:           interval,
+		stepTimeout:        defaultStepTimeout(interval),
+		orphanThreshold:    defaultOrphanThreshold,
+		agentLostThreshold: defaultAgentLostThreshold,
+		warnedSchedules:    map[string]string{},
 	}
 }
 
@@ -116,6 +128,11 @@ func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Sch
 // declare a running dag run orphaned (optional; mainly for tests). The default
 // is defaultOrphanThreshold.
 func (s *Scheduler) SetOrphanThreshold(d time.Duration) { s.orphanThreshold = d }
+
+// SetAgentLostThreshold overrides the silence window the TI heartbeat reaper
+// uses to declare a task's agent lost (optional; mainly for tests). The default
+// is defaultAgentLostThreshold.
+func (s *Scheduler) SetAgentLostThreshold(d time.Duration) { s.agentLostThreshold = d }
 
 // defaultStepTimeout bounds how long one scheduling tick may run before it is
 // canceled so the loop can recover, rather than hang forever on a stuck query.
@@ -233,18 +250,25 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	return createErr
 }
 
-// reapOrphansIfLeader runs the orphan reaper exactly once per tick, only on the
-// leader: reaping writes state and we want one writer at a time across the
-// fleet. A list error is logged (not returned) because it should not stall the
-// rest of the loop — the reaper is a backstop, not on the critical path.
+// reapOrphansIfLeader runs both reapers (run-level orphans + TI-level
+// agent-lost) exactly once per tick, only on the leader: reaping writes state
+// and we want one writer at a time across the fleet. A list error is logged
+// (not returned) because it should not stall the rest of the loop — the
+// reapers are backstops, not on the critical path. The two reapers are
+// independent: a failure in one does not prevent the other from running.
 func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	if !s.leading.Load() {
 		return
 	}
-	r := newOrphanReaper(s.store, s.logger, s.orphanThreshold, s.recorder)
-	if err := r.run(ctx); err != nil {
+	runReaper := newOrphanReaper(s.store, s.logger, s.orphanThreshold, s.recorder)
+	if err := runReaper.run(ctx); err != nil {
 		s.logger.Error("orphan reaper", "error", err)
 		s.record("orphan_list_error")
+	}
+	tiReaper := newAgentLostReaper(s.store, s.logger, s.agentLostThreshold, s.recorder)
+	if err := tiReaper.run(ctx); err != nil {
+		s.logger.Error("agent-lost reaper", "error", err)
+		s.record("agent_lost_list_error")
 	}
 }
 

@@ -217,7 +217,7 @@ func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateSched
 const createTaskInstance = `-- name: CreateTaskInstance :one
 INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
 VALUES ($1, $2, $3, $4, $5, $6, 1)
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at
 `
 
 type CreateTaskInstanceParams struct {
@@ -265,6 +265,7 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 		&i.Hostname,
 		&i.Note,
 		&i.ScheduledAt,
+		&i.LastHeartbeatAt,
 	)
 	return i, err
 }
@@ -488,6 +489,61 @@ func (q *Queries) ListActiveDagRuns(ctx context.Context) ([]DagRun, error) {
 	return items, nil
 }
 
+const listAgentLostCandidates = `-- name: ListAgentLostCandidates :many
+SELECT ti.id AS task_instance_id,
+       ti.dag_run_id AS dag_run_id,
+       d.dag_id AS dag_id_text,
+       ti.task_id AS task_id,
+       ti.last_heartbeat_at AS last_heartbeat_at
+FROM task_instances ti
+JOIN dag_runs dr ON dr.id = ti.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+WHERE ti.state = 'running'
+  AND ti.last_heartbeat_at IS NOT NULL
+ORDER BY ti.last_heartbeat_at
+LIMIT 100
+`
+
+type ListAgentLostCandidatesRow struct {
+	TaskInstanceID  pgtype.UUID        `json:"task_instance_id"`
+	DagRunID        pgtype.UUID        `json:"dag_run_id"`
+	DagIDText       string             `json:"dag_id_text"`
+	TaskID          string             `json:"task_id"`
+	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
+}
+
+// Lists running TIs that have heartbeated at least once and whose latest
+// heartbeat is non-null, alongside enough identity to log + observe.
+// The "non-null" filter is the safety guarantee: a TI that never heartbeated
+// is either inline (no agent ever exists) or fresh — out of scope for this
+// reaper. The LIMIT bounds a single tick's reap work even after a large
+// outage; the rest are picked up on the next tick.
+func (q *Queries) ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listAgentLostCandidates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAgentLostCandidatesRow{}
+	for rows.Next() {
+		var i ListAgentLostCandidatesRow
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.DagRunID,
+			&i.DagIDText,
+			&i.TaskID,
+			&i.LastHeartbeatAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDagRunsByDag = `-- name: ListDagRunsByDag :many
 SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs
 WHERE dag_id = $1
@@ -633,7 +689,7 @@ func (q *Queries) ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow
 }
 
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
-SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at FROM task_instances
+SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at FROM task_instances
 WHERE dag_run_id = $1
 ORDER BY task_id
 `
@@ -670,6 +726,7 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 			&i.Hostname,
 			&i.Note,
 			&i.ScheduledAt,
+			&i.LastHeartbeatAt,
 		); err != nil {
 			return nil, err
 		}
@@ -716,6 +773,51 @@ WHERE dag_run_id = $1
 // parameter across an UPDATE-inside-WITH and the outer UPDATE.
 func (q *Queries) MarkRunOrphanedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, markRunOrphanedTaskInstances, dagRunID)
+	return err
+}
+
+const markTaskAgentLost = `-- name: MarkTaskAgentLost :execrows
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'agent_lost: no heartbeat within the threshold — see #128'
+WHERE id = $1 AND state = 'running'
+`
+
+// Fails a TI whose agent went silent. The WHERE state='running' guard
+// prevents overwriting a TI the agent's last terminal report finally
+// delivered between our list and our write (defense in depth — a late
+// report wins over the reaper). Idempotent on a second call.
+func (q *Queries) MarkTaskAgentLost(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markTaskAgentLost, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const recordTaskHeartbeat = `-- name: RecordTaskHeartbeat :exec
+UPDATE task_instances
+SET last_heartbeat_at = now()
+WHERE dag_run_id = $1
+  AND task_id = $2
+  AND try_number = $3
+  AND state IN ('queued', 'running')
+`
+
+type RecordTaskHeartbeatParams struct {
+	DagRunID  pgtype.UUID `json:"dag_run_id"`
+	TaskID    string      `json:"task_id"`
+	TryNumber int32       `json:"try_number"`
+}
+
+// Stamps last_heartbeat_at on the active TI of an attempt. Bounded by the
+// (dag_run_id, task_id, try_number) tuple to match the agent's identity. The
+// state IN guard avoids stamping a heartbeat on a TI the scheduler already
+// transitioned to terminal between the agent's last heartbeat and now — a
+// terminal TI must stay terminal even if a late heartbeat arrives.
+func (q *Queries) RecordTaskHeartbeat(ctx context.Context, arg RecordTaskHeartbeatParams) error {
+	_, err := q.db.Exec(ctx, recordTaskHeartbeat, arg.DagRunID, arg.TaskID, arg.TryNumber)
 	return err
 }
 
@@ -988,7 +1090,7 @@ const updateTaskInstanceState = `-- name: UpdateTaskInstanceState :one
 UPDATE task_instances
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at
 `
 
 type UpdateTaskInstanceStateParams struct {
@@ -1029,6 +1131,7 @@ func (q *Queries) UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskIns
 		&i.Hostname,
 		&i.Note,
 		&i.ScheduledAt,
+		&i.LastHeartbeatAt,
 	)
 	return i, err
 }

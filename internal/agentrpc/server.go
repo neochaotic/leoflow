@@ -31,6 +31,11 @@ type TaskSpec struct {
 	XComInputMapping map[string]string
 	XComSchema       map[string]any
 	TimeoutSeconds   int
+	// CallArgsJSON carries TaskFlow literal call args captured by the parser
+	// (#115). The agent injects this verbatim as LEOFLOW_CALL_ARGS_JSON; the
+	// runtime decodes it. Empty when the task has no literals. The name
+	// keeps Airflow's DAG-run `params` term free for a future feature (#148).
+	CallArgsJSON string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -127,6 +132,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		Environment:             spec.Environment,
 		XcomInputMapping:        spec.XComInputMapping,
 		ExecutionTimeoutSeconds: clampInt32(spec.TimeoutSeconds),
+		CallArgsJson:            spec.CallArgsJSON,
 	}, nil
 }
 

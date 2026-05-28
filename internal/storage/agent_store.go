@@ -34,6 +34,18 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 	if task.ExecutionTimeoutSeconds != nil {
 		timeout = *task.ExecutionTimeoutSeconds
 	}
+	// Marshal TaskFlow literals (#115) into a single string field on the gRPC
+	// TaskSpec; the agent forwards it as LEOFLOW_CALL_ARGS_JSON. Marshaling
+	// failures are surfaced — a non-serialisable map in dag.json is a
+	// compile-time bug we want to see, not paper over.
+	var callArgsJSON string
+	if len(task.CallArgs) > 0 {
+		b, mErr := json.Marshal(task.CallArgs)
+		if mErr != nil {
+			return agentrpc.TaskSpec{}, fmt.Errorf("marshaling task call_args: %w", mErr)
+		}
+		callArgsJSON = string(b)
+	}
 	return agentrpc.TaskSpec{
 		Operator:         string(task.Type),
 		Entrypoint:       task.Entrypoint,
@@ -42,6 +54,7 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		XComInputMapping: task.XComInput,
 		XComSchema:       task.XComSchema,
 		TimeoutSeconds:   timeout,
+		CallArgsJSON:     callArgsJSON,
 	}, nil
 }
 

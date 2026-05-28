@@ -95,3 +95,72 @@ def test_run_leaves_unbound_params_to_defaults(tmp_path, monkeypatch):
     runner.run(f"{mod}:task")
 
     assert json.loads(out.read_text()) == 6
+
+
+def test_run_resolves_literal_call_args_from_json(tmp_path, monkeypatch):
+    """TaskFlow literal args (#115): @task f(5) captured at compile, delivered at run.
+
+    The agent stamps LEOFLOW_CALL_ARGS_JSON with the literals captured by the
+    parser. The runtime decodes and merges them into kwargs, so a
+    ``shard(n=0)`` invocation at DAG-build time delivers ``n=0`` at execution.
+    """
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_CALL_ARGS_JSON", json.dumps({"n": 7}))
+    mod = _write_module(tmp_path, monkeypatch, "def shard(n):\n    return n * 3\n")
+
+    runner.run(f"{mod}:shard")
+
+    assert json.loads(out.read_text()) == 21
+
+
+def test_run_literal_call_args_carry_complex_values(tmp_path, monkeypatch):
+    """Nested JSON literals (dicts, lists, None) round-trip through CALL_ARGS_JSON."""
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    payload = {"opts": {"shards": [1, 2, 3], "name": "demo"}, "limit": None}
+    monkeypatch.setenv("LEOFLOW_CALL_ARGS_JSON", json.dumps(payload))
+    mod = _write_module(
+        tmp_path, monkeypatch,
+        "def task(opts, limit):\n    return [opts['shards'], opts['name'], limit]\n",
+    )
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == [[1, 2, 3], "demo", None]
+
+
+def test_run_xcom_wins_over_literal_call_arg(tmp_path, monkeypatch):
+    """XCom precedence: an upstream output supersedes a literal of the same name.
+
+    Matches Airflow semantics — when a parameter is bound to both an upstream
+    XComArg and a literal, the XComArg wins at runtime (the literal is only a
+    compile-time placeholder, in practice you would never bind both, but the
+    contract has to be deterministic).
+    """
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_CALL_ARGS_JSON", json.dumps({"n": 1}))
+    monkeypatch.setenv("LEOFLOW_XCOM_N", "100")
+    mod = _write_module(tmp_path, monkeypatch, "def task(n):\n    return n\n")
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == 100
+
+
+def test_run_ignores_malformed_call_args_json(tmp_path, monkeypatch):
+    """Malformed CALL_ARGS_JSON does not crash the runtime; silently dropped.
+
+    The parser's contract is to emit valid JSON; if the env is malformed, the
+    task is better off running with no literals (it may still find defaults
+    or XCom) than dying with a JSON error the user never wrote.
+    """
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_CALL_ARGS_JSON", "{not valid json")
+    mod = _write_module(tmp_path, monkeypatch, "def task(x=5):\n    return x\n")
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == 5

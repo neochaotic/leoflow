@@ -7,6 +7,7 @@ task. It supports Python (including TaskFlow ``@task``), Bash, and HTTP tasks.
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import runpy
 import sys
@@ -170,9 +171,11 @@ def _map_task(task, source: str) -> dict[str, Any]:
 
     if task_type == "python":
         entry["entrypoint"] = _python_entrypoint(task, source)
-        xcom_input = _xcom_inputs(task)
+        xcom_input, call_args = _bind_call_arguments(task)
         if xcom_input:
             entry["xcom_input"] = xcom_input
+        if call_args:
+            entry["call_args"] = call_args
     elif task_type == "bash":
         entry["entrypoint"] = _bash_command(task)
     elif task_type == "http_api":
@@ -204,31 +207,60 @@ def _python_entrypoint(task, source: str) -> str:
     return f"{Path(source).stem}:{name}"
 
 
-def _xcom_inputs(task) -> dict[str, str]:
-    """Map each TaskFlow parameter that consumes an upstream output to its task.
+def _bind_call_arguments(task) -> tuple[dict[str, str], dict[str, Any]]:
+    """Split a TaskFlow task's bound arguments into XCom inputs and literal call args.
 
-    For ``transform(extract())`` the operator stores ``extract``'s XComArg in its
-    op_args/op_kwargs; binding those to the callable's signature yields
-    ``{"n": "extract"}``. XComArg is duck-typed (a value carrying an ``operator``
-    with a ``task_id``) to stay robust across Airflow SDK versions. The agent
-    fetches each upstream's return_value and injects it for the runner.
+    For ``transform(extract())`` the operator stores ``extract``'s XComArg as
+    one argument; for ``shard(0)`` it stores the literal ``0``. Binding both
+    against the callable's signature lets us split them by type:
+
+    - **xcom_input**: ``param_name → upstream_task_id``. The agent fetches each
+      upstream's ``return_value`` at dispatch time.
+    - **call_args** (#115): ``param_name → JSON-serialisable literal``. The
+      agent stamps the whole map as LEOFLOW_CALL_ARGS_JSON; the runtime
+      decodes and delivers it to the function. Named call_args (not params)
+      to keep Airflow's DAG-run params term free (#148).
+
+    Arguments that are neither (e.g. a non-serialisable Python object) are
+    silently dropped so the function falls back to its default — matching the
+    pre-existing tolerance of the parser. An XComArg always wins precedence
+    via the runtime layer, where the merge happens deterministically.
     """
     callable_obj = getattr(task, "python_callable", None)
     if callable_obj is None:
-        return {}
+        return {}, {}
     op_args = getattr(task, "op_args", ()) or ()
     op_kwargs = getattr(task, "op_kwargs", {}) or {}
     try:
         bound = inspect.signature(callable_obj).bind_partial(*op_args, **op_kwargs)
     except (TypeError, ValueError):
-        return {}
-    mapping: dict[str, str] = {}
+        return {}, {}
+    xcom: dict[str, str] = {}
+    call_args: dict[str, Any] = {}
     for name, value in bound.arguments.items():
         operator = getattr(value, "operator", None)
         upstream = getattr(operator, "task_id", None)
         if upstream:
-            mapping[name] = upstream
-    return mapping
+            xcom[name] = upstream
+            continue
+        if _is_json_literal(value):
+            call_args[name] = value
+    return xcom, call_args
+
+
+def _is_json_literal(value: Any) -> bool:
+    """Reports whether value is safely round-trippable through JSON.
+
+    The runtime delivers params via LEOFLOW_PARAMS_JSON, so a value that
+    survives ``json.dumps`` cleanly is the safe-to-capture set. Anything
+    else (a class instance, a tuple of objects, a function) is dropped so
+    we never emit invalid JSON into dag.json.
+    """
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _bash_command(task) -> str:

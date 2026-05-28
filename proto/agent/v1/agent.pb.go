@@ -464,7 +464,8 @@ type TaskSpec struct {
 	Environment             map[string]string      `protobuf:"bytes,9,rep,name=environment,proto3" json:"environment,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	XcomInputMapping        map[string]string      `protobuf:"bytes,10,rep,name=xcom_input_mapping,json=xcomInputMapping,proto3" json:"xcom_input_mapping,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // param_name -> upstream_task_id
 	ExecutionTimeoutSeconds int32                  `protobuf:"varint,11,opt,name=execution_timeout_seconds,json=executionTimeoutSeconds,proto3" json:"execution_timeout_seconds,omitempty"`
-	Extra                   *structpb.Struct       `protobuf:"bytes,12,opt,name=extra,proto3" json:"extra,omitempty"` // operator-specific fields
+	Extra                   *structpb.Struct       `protobuf:"bytes,12,opt,name=extra,proto3" json:"extra,omitempty"`                                     // operator-specific fields
+	CallArgsJson            string                 `protobuf:"bytes,13,opt,name=call_args_json,json=callArgsJson,proto3" json:"call_args_json,omitempty"` // TaskFlow literal call args, JSON-encoded (#115). Named call_args to leave 'params' free for Airflow's DAG-run params (#148).
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -581,6 +582,13 @@ func (x *TaskSpec) GetExtra() *structpb.Struct {
 		return x.Extra
 	}
 	return nil
+}
+
+func (x *TaskSpec) GetCallArgsJson() string {
+	if x != nil {
+		return x.CallArgsJson
+	}
+	return ""
 }
 
 type FetchXComRequest struct {
@@ -1197,7 +1205,7 @@ const file_agent_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\"\x14\n" +
-	"\x12GetTaskSpecRequest\"\x89\x05\n" +
+	"\x12GetTaskSpecRequest\"\xaf\x05\n" +
 	"\bTaskSpec\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06dag_id\x18\x02 \x01(\tR\x05dagId\x12\x1f\n" +
@@ -1215,7 +1223,8 @@ const file_agent_proto_rawDesc = "" +
 	"\x12xcom_input_mapping\x18\n" +
 	" \x03(\v20.leoflow.agent.v1.TaskSpec.XcomInputMappingEntryR\x10xcomInputMapping\x12:\n" +
 	"\x19execution_timeout_seconds\x18\v \x01(\x05R\x17executionTimeoutSeconds\x12-\n" +
-	"\x05extra\x18\f \x01(\v2\x17.google.protobuf.StructR\x05extra\x1a>\n" +
+	"\x05extra\x18\f \x01(\v2\x17.google.protobuf.StructR\x05extra\x12$\n" +
+	"\x0ecall_args_json\x18\r \x01(\tR\fcallArgsJson\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aC\n" +

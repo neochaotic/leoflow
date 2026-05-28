@@ -661,7 +661,10 @@ func composeUpError(err error, output string) error {
 	if strings.Contains(low, "already allocated") || strings.Contains(low, "address already in use") || strings.Contains(low, "port is already") {
 		return fmt.Errorf("the Postgres port 5432 is already in use — another Postgres is bound to it. Stop it, run `leoflow lite --postgres managed` (a private, socket-only Postgres), or `leoflow lite --no-up` to point at your own (LEOFLOW_DATABASE_URL): %w", err)
 	}
-	return fmt.Errorf("docker compose up (is Docker running?): %w", err)
+	if strings.Contains(low, "unknown command") || strings.Contains(low, "is not a docker command") || strings.Contains(low, "compose") && strings.Contains(low, "not found") {
+		return fmt.Errorf("the Docker Compose v2 plugin is not installed (the `docker compose` subcommand is missing). Install it, or run `leoflow lite --postgres managed` for a Docker-free Postgres: %w", err)
+	}
+	return fmt.Errorf("docker compose up (is Docker running, with the Compose v2 plugin?): %w", err)
 }
 
 // preflightDevPorts checks that the HTTP, gRPC, and metrics ports Lite needs are

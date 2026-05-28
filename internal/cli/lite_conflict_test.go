@@ -43,8 +43,12 @@ func TestComposeUpError(t *testing.T) {
 	if !strings.Contains(portErr.Error(), "--no-up") || !strings.Contains(strings.ToLower(portErr.Error()), "postgres") {
 		t.Errorf("port-allocation failure should mention --no-up and Postgres, got: %v", portErr)
 	}
+	noCompose := composeUpError(base, "docker: 'compose' is not a docker command.")
+	if !strings.Contains(noCompose.Error(), "Compose v2") || !strings.Contains(noCompose.Error(), "--postgres managed") {
+		t.Errorf("missing-compose-plugin should point at the Compose v2 plugin and --postgres managed, got: %v", noCompose)
+	}
 	other := composeUpError(base, "Cannot connect to the Docker daemon")
-	if !strings.Contains(other.Error(), "is Docker running?") {
+	if !strings.Contains(other.Error(), "is Docker running") {
 		t.Errorf("non-port failure should keep the generic hint, got: %v", other)
 	}
 }

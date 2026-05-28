@@ -91,6 +91,25 @@ jobs:
           kubectl -n leoflow rollout status deploy/postgres --timeout=120s
           kubectl -n leoflow rollout status deploy/redis --timeout=120s
 
+      # If the helm install / upgrade / smoke fails below, dump the cluster
+      # state so the cause is visible from the workflow logs (without this,
+      # `--wait` timeouts surface as "timed out waiting for the condition"
+      # with no pod-level signal). The step runs on the failure of any
+      # subsequent step in the job.
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          set +e
+          echo "=== nodes ==="; kubectl get nodes -o wide
+          echo "=== all -n leoflow ==="; kubectl -n leoflow get all -o wide
+          echo "=== events -n leoflow (last 50) ==="; kubectl -n leoflow get events --sort-by=.lastTimestamp | tail -50
+          echo "=== pods describe -n leoflow ==="; kubectl -n leoflow describe pods
+          echo "=== jobs -n leoflow ==="; kubectl -n leoflow get jobs
+          echo "=== migrate job logs ==="; kubectl -n leoflow logs -l job-name -c migrate --tail=200 || true
+          echo "=== leoflow deploy logs ==="; kubectl -n leoflow logs deploy/leoflow --tail=200 || true
+          echo "=== postgres logs ==="; kubectl -n leoflow logs deploy/postgres --tail=100 || true
+          echo "=== redis logs ==="; kubectl -n leoflow logs deploy/redis --tail=50 || true
+
       - name: helm install
         run: |
           helm install leoflow helm/leoflow -n leoflow \

@@ -60,6 +60,17 @@ func startManagedPostgres(ctx context.Context, cmd *cobra.Command) error {
 	if serr := checkSocketPathLen(dataDir); serr != nil {
 		return serr
 	}
+	// Pre-flight: the relocatable Postgres dynamically links a chain of system
+	// libraries it does not bundle (ICU, Kerberos, zstd, lz4, libxml2, …). On a
+	// minimal host (Alpine/musl, slim containers) some are absent and the server
+	// dies with a cryptic loader error. Probe the `postgres` binary — it has the
+	// widest dependency set, wider than initdb — and fail with an actionable
+	// message before the confusing startup error.
+	if verr := exec.CommandContext(ctx, filepath.Join(binDir, "postgres"), "--version").Run(); verr != nil { //nolint:gosec // managed binary + fixed arg
+		return fmt.Errorf("the managed Postgres can't run on this host — it needs system libraries (ICU, Kerberos) that are missing here (common on Alpine/musl and slim containers): %w\n"+
+			"  use `leoflow lite --postgres docker` (recommended; works everywhere).\n"+
+			"  installing the libs may help if the versions match (Debian/Ubuntu: `apt-get install libicu-dev libgssapi-krb5-2`; Alpine: `apk add icu-libs krb5-libs` — but the bundled build may need exact versions)", verr)
+	}
 
 	// Our cluster already accepting connections on its socket? leave it (idempotent
 	// across lite runs). Probing the socket dir — not 127.0.0.1 — means a foreign

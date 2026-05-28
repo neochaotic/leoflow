@@ -1,0 +1,9 @@
+schema_version: "1.0"
+dag_id: redis_load
+description: Compute a key-value payload and write it into a Redis hash via a managed Connection.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies:
+  - redis==5.2.1

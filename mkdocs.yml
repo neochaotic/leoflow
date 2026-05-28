@@ -143,6 +143,7 @@ nav:
           - MySQL / MariaDB: connections/mysql.md
           - Microsoft SQL Server: connections/mssql.md
           - SQLite: connections/sqlite.md
+          - Redis: connections/redis.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

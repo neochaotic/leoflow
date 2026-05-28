@@ -1,0 +1,163 @@
+//go:build integration
+
+package storage_test
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/scheduler"
+	"github.com/neochaotic/leoflow/internal/storage"
+)
+
+// TestReapRunOrphanedRunIntegration pins the end-to-end contract of the orphan
+// reaper against a real Postgres: a `running` dag_run with a stuck `running`
+// task instance is transitioned to `failed`, the stuck task instance ends up
+// `failed` too, and a second reap on the same run is a no-op (idempotent).
+// This is the behavior the dashboard counter depends on (#120).
+func TestReapRunOrphanedRunIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+	dagID := fmt.Sprintf("reap_run_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{
+		{TaskID: "extract", Type: domain.TaskTypePython},
+		{TaskID: "load", Type: domain.TaskTypePython, DependsOn: []string{"extract"}},
+	}
+	registerSpec(t, repo, ctx, dagID, tasks)
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runUUID := resolveRunUUID(t, sched, ctx, dagID)
+	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
+		t.Fatalf("MaterializeTasks: %v", err)
+	}
+	// Pretend the agent dispatched extract: it is mid-run when the server dies.
+	if err := sched.ApplyTransition(ctx, runUUID, "extract", domain.TaskStateRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	cands, err := sched.ListReapCandidates(ctx)
+	if err != nil {
+		t.Fatalf("ListReapCandidates: %v", err)
+	}
+	if findCandidate(cands, runUUID) == nil {
+		t.Fatalf("freshly-running run should appear as an orphan candidate, got %+v", cands)
+	}
+
+	if err := sched.ReapRun(ctx, runUUID); err != nil {
+		t.Fatalf("ReapRun: %v", err)
+	}
+
+	// After reap, the run is gone from the active set: the scheduler view of
+	// "active runs" (queued + running) must not include it any longer, which is
+	// what makes the dashboard's running_dag_count drop.
+	for _, r := range mustActive(t, sched, ctx) {
+		if r.RunID == runUUID {
+			t.Errorf("reaped run still appears in ActiveRuns: %+v", r)
+		}
+	}
+
+	// The stuck `running` task instance is failed; the never-started `load` is
+	// left in `none` (a not-yet-active task was not "orphaned" — there was
+	// nothing to fail).
+	tis, _ := repo.TaskInstancesForRuns(ctx, "default", dagID, []string{"r1"})
+	states := map[string]domain.TaskState{}
+	for _, ti := range tis {
+		states[ti.TaskID] = ti.State
+	}
+	if states["extract"] != domain.TaskStateFailed {
+		t.Errorf("orphaned extract should be failed, got %q", states["extract"])
+	}
+	if states["load"] != domain.TaskStateNone {
+		t.Errorf("never-active load should stay none, got %q", states["load"])
+	}
+
+	// A second reap is a no-op: the WHERE guard skips the now-failed run, so the
+	// repository never overwrites state set by a competing finalizer (defense in
+	// depth — the run is no longer `running` after the first reap, but the
+	// idempotency is part of the contract).
+	if err := sched.ReapRun(ctx, runUUID); err != nil {
+		t.Errorf("second ReapRun should be a no-op, got %v", err)
+	}
+}
+
+// TestReapRunIgnoresTerminalRunIntegration pins the safety guard: a run already
+// in a terminal state (success or failed) is never overwritten. The reap is a
+// safety net for stuck `running` runs, never a takeover.
+func TestReapRunIgnoresTerminalRunIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+	dagID := fmt.Sprintf("reap_terminal_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}}
+	registerSpec(t, repo, ctx, dagID, tasks)
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runUUID := resolveRunUUID(t, sched, ctx, dagID)
+	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
+		t.Fatalf("MaterializeTasks: %v", err)
+	}
+	if err := sched.ApplyTransition(ctx, runUUID, "t", domain.TaskStateSuccess); err != nil {
+		t.Fatal(err)
+	}
+	// Move the run to its natural terminal state.
+	if err := sched.SetRunState(ctx, runUUID, domain.DagRunStateSuccess); err != nil {
+		t.Fatal(err)
+	}
+
+	// Try to reap: the WHERE state='running' guard short-circuits, so nothing
+	// changes. The note field stays untouched and the state stays success.
+	if err := sched.ReapRun(ctx, runUUID); err != nil {
+		t.Fatalf("ReapRun on terminal: %v", err)
+	}
+	runs, err := repo.LatestRunsForDags(ctx, "default", []string{dagID}, 1)
+	if err != nil {
+		t.Fatalf("LatestRunsForDags: %v", err)
+	}
+	got := runs[dagID]
+	if len(got) != 1 || got[0].State != domain.DagRunStateSuccess {
+		t.Errorf("reap must not overwrite a terminal run; got %+v", runs)
+	}
+}
+
+// resolveRunUUID returns the just-created run's internal UUID via ActiveRuns.
+// The UUID is the key MaterializeTasks, ApplyTransition, and ReapRun all use.
+func resolveRunUUID(t *testing.T, sched *storage.SchedulerStore, ctx context.Context, dagID string) string {
+	t.Helper()
+	runs, err := sched.ActiveRuns(ctx)
+	if err != nil {
+		t.Fatalf("ActiveRuns: %v", err)
+	}
+	for _, r := range runs {
+		if r.DagID == dagID {
+			return r.RunID
+		}
+	}
+	t.Fatalf("could not resolve run UUID for dag %s", dagID)
+	return ""
+}
+
+// findCandidate returns the candidate matching runUUID or nil.
+func findCandidate(cands []scheduler.ReapCandidate, runUUID string) *scheduler.ReapCandidate {
+	for i := range cands {
+		if cands[i].RunID == runUUID {
+			return &cands[i]
+		}
+	}
+	return nil
+}
+
+// mustActive returns the current active-runs snapshot or fails the test.
+func mustActive(t *testing.T, sched *storage.SchedulerStore, ctx context.Context) []scheduler.RunState {
+	t.Helper()
+	runs, err := sched.ActiveRuns(ctx)
+	if err != nil {
+		t.Fatalf("ActiveRuns: %v", err)
+	}
+	return runs
+}

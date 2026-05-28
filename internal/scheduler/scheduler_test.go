@@ -26,6 +26,8 @@ type fakeStore struct {
 	scheduled   []ScheduledDAG
 	createdRuns []string
 	notes       map[string]string
+	reapCands   []ReapCandidate
+	reaped      []string
 }
 
 func newFakeStore(runs ...RunState) *fakeStore {
@@ -61,6 +63,13 @@ func (f *fakeStore) SetTaskNote(_ context.Context, _, taskID, note string) error
 		f.notes = map[string]string{}
 	}
 	f.notes[taskID] = note
+	return nil
+}
+func (f *fakeStore) ListReapCandidates(context.Context) ([]ReapCandidate, error) {
+	return f.reapCands, nil
+}
+func (f *fakeStore) ReapRun(_ context.Context, runID string) error {
+	f.reaped = append(f.reaped, runID)
 	return nil
 }
 
@@ -158,6 +167,45 @@ func TestStepFinalizesCompletedRun(t *testing.T) {
 	}
 	if store.runStates["r1"] != domain.DagRunStateSuccess {
 		t.Errorf("completed run should be success, got %q", store.runStates["r1"])
+	}
+}
+
+// TestStepReapsOrphanRunsOnLeader covers the #120 fix end-to-end at the
+// scheduler layer: a leader tick must reap any candidate older than the orphan
+// threshold (default 5 min), turning a stuck `running` dag run into `failed` so
+// the dashboard's "Dags em Execução" gauge drops back to zero. Fresh candidates
+// stay untouched.
+func TestStepReapsOrphanRunsOnLeader(t *testing.T) {
+	store := newFakeStore()
+	now := time.Now().UTC()
+	store.reapCands = []ReapCandidate{
+		{RunID: "stuck", DagID: "etl", LastActivity: now.Add(-1 * time.Hour)},
+		{RunID: "fresh", DagID: "etl", LastActivity: now.Add(-30 * time.Second)},
+	}
+	s := newScheduler(store)
+	s.SetLeading(true)
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.reaped) != 1 || store.reaped[0] != "stuck" {
+		t.Errorf("reaped = %v, want [stuck]", store.reaped)
+	}
+}
+
+// TestStepDoesNotReapOnFollower: a follower (or an instance that lost the
+// lock) must not write — reaping is a state-changing operation reserved for the
+// leader. The followers tick to keep their heartbeat path warm but skip the
+// reaper.
+func TestStepDoesNotReapOnFollower(t *testing.T) {
+	store := newFakeStore()
+	store.reapCands = []ReapCandidate{{RunID: "stuck", LastActivity: time.Now().UTC().Add(-1 * time.Hour)}}
+	s := newScheduler(store)
+	// SetLeading defaults to false; do not call it. A follower must not reap.
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.reaped) != 0 {
+		t.Errorf("follower must not reap; got %v", store.reaped)
 	}
 }
 

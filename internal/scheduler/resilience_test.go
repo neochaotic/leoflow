@@ -93,6 +93,11 @@ func (f *flakyStore) SetRunState(_ context.Context, runID string, state domain.D
 
 func (f *flakyStore) SetTaskNote(context.Context, string, string, string) error { return nil }
 
+func (f *flakyStore) ListReapCandidates(context.Context) ([]ReapCandidate, error) {
+	return nil, nil
+}
+func (f *flakyStore) ReapRun(context.Context, string) error { return nil }
+
 func (f *flakyStore) snapshotMaterialized() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

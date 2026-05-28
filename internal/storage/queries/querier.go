@@ -74,10 +74,29 @@ type Querier interface {
 	ListDagsFiltered(ctx context.Context, arg ListDagsFilteredParams) ([]Dag, error)
 	ListFavoriteDagIDs(ctx context.Context, arg ListFavoriteDagIDsParams) ([]string, error)
 	ListImportErrors(ctx context.Context, tenant string) ([]ListImportErrorsRow, error)
+	// Lists every dag_run currently in 'running' alongside the timestamp of its
+	// most recent observable activity: the largest of the run's started_at, its
+	// task instances' started_at and ended_at, the run's queued_at as a final
+	// fallback. The scheduler reaper compares the gap from this stamp to "now"
+	// against its orphan threshold. Returning a single denormalised row per run
+	// (rather than relying on the caller to compute the max) keeps the decision
+	// purely in Go and the query trivially indexable (state='running' partial
+	// index plus the per-run-id TI lookup).
+	ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error)
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
+	// Fails an orphaned dag run. The `state = 'running'` guard makes the reap a
+	// safety net, never a takeover: a competing finalizer (the normal scheduler
+	// path) cannot be overwritten. Idempotent: a second call on a run already
+	// failed updates zero rows.
+	MarkRunOrphanedRun(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Fails any still-active task instance under an orphaned run. Called together
+	// with MarkRunOrphanedRun inside a single transaction (the repository owns the
+	// atomicity); split because sqlc cannot generate a CTE+UPDATE that reuses one
+	// parameter across an UPDATE-inside-WITH and the outer UPDATE.
+	MarkRunOrphanedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) error
 	MarkStagingDeleted(ctx context.Context, arg MarkStagingDeletedParams) error
 	RecordStagingVolume(ctx context.Context, arg RecordStagingVolumeParams) error
 	RecordXCom(ctx context.Context, arg RecordXComParams) error

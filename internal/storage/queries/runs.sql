@@ -198,3 +198,49 @@ WHERE dag_run_id = $1
 UPDATE task_instances
 SET note = $3
 WHERE dag_run_id = $1 AND task_id = $2;
+
+-- name: ListOrphanCandidates :many
+-- Lists every dag_run currently in 'running' alongside the timestamp of its
+-- most recent observable activity: the largest of the run's started_at, its
+-- task instances' started_at and ended_at, the run's queued_at as a final
+-- fallback. The scheduler reaper compares the gap from this stamp to "now"
+-- against its orphan threshold. Returning a single denormalised row per run
+-- (rather than relying on the caller to compute the max) keeps the decision
+-- purely in Go and the query trivially indexable (state='running' partial
+-- index plus the per-run-id TI lookup).
+SELECT dr.id AS id,
+       d.dag_id AS dag_id_text,
+       GREATEST(
+           COALESCE(MAX(ti.ended_at), 'epoch'::timestamptz),
+           COALESCE(MAX(ti.started_at), 'epoch'::timestamptz),
+           COALESCE(dr.started_at, 'epoch'::timestamptz),
+           dr.queued_at
+       )::timestamptz AS last_activity
+FROM dag_runs dr
+JOIN dags d ON d.id = dr.dag_id
+LEFT JOIN task_instances ti ON ti.dag_run_id = dr.id
+WHERE dr.state = 'running'
+GROUP BY dr.id, d.dag_id, dr.started_at, dr.queued_at;
+
+-- name: MarkRunOrphanedTaskInstances :exec
+-- Fails any still-active task instance under an orphaned run. Called together
+-- with MarkRunOrphanedRun inside a single transaction (the repository owns the
+-- atomicity); split because sqlc cannot generate a CTE+UPDATE that reuses one
+-- parameter across an UPDATE-inside-WITH and the outer UPDATE.
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'orphaned: scheduler restart left this task without a runner'
+WHERE dag_run_id = $1
+  AND state IN ('scheduled', 'queued', 'running');
+
+-- name: MarkRunOrphanedRun :execrows
+-- Fails an orphaned dag run. The `state = 'running'` guard makes the reap a
+-- safety net, never a takeover: a competing finalizer (the normal scheduler
+-- path) cannot be overwritten. Idempotent: a second call on a run already
+-- failed updates zero rows.
+UPDATE dag_runs
+SET state = 'failed',
+    ended_at = now(),
+    note = 'orphaned: no scheduler activity within the orphan window — see #120'
+WHERE id = $1 AND state = 'running';

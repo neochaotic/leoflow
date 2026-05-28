@@ -52,6 +52,13 @@ func run() int {
 		hostname = "unknown"
 	}
 
+	returnPath, cleanupReturn, rverr := agent.NewReturnValuePath()
+	if rverr != nil {
+		slog.Error("preparing return-value path", "error", rverr)
+		return 1
+	}
+	defer func() { _ = cleanupReturn() }() //nolint:errcheck // best-effort cleanup of the per-task temp dir on exit
+
 	runner := &agent.Runner{
 		Client:            client,
 		Cmd:               agent.NewExecRunner(),
@@ -59,7 +66,7 @@ func run() int {
 		Hostname:          hostname,
 		Version:           version,
 		Env:               os.Environ(),
-		ReturnPath:        agent.ReturnValuePath,
+		ReturnPath:        returnPath,
 		HeartbeatInterval: 15 * time.Second,
 	}
 	if rerr := runner.Run(ctx); rerr != nil {

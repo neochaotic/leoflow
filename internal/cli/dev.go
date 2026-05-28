@@ -117,7 +117,7 @@ type devOptions struct {
 	serverBin   string
 	agentBin    string
 	noUp        bool
-	postgres    string // "docker" (default) or "managed" (relocatable PG, no Docker)
+	postgres    string // "auto" (default), "docker", or "managed" (relocatable PG, no Docker)
 	// Resolved from ~/.leoflow/config.yaml (written by `leoflow setup`), not flags.
 	adminHash  string
 	adminEmail string
@@ -275,19 +275,17 @@ func friendlyResolves() bool {
 	return err == nil && len(addrs) > 0
 }
 
-// bringUpDependencies starts Lite's datastores and returns a cleanup func the
-// caller defers (a no-op for the Docker path, which leaves its containers up
-// across runs; a managed-Postgres stop for the managed path, which this run owns).
+// bringUpDependencies starts Lite's datastore and returns a cleanup func the
+// caller defers. It resolves the "auto" --postgres for the host first (Docker
+// Postgres when Docker is present, else a managed relocatable PG), then: the
+// Docker path is a no-op cleanup (its container is left up across runs); the
+// managed path returns a stop, since this run owns the cluster.
 func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions) (func(), error) {
 	noop := func() {}
 	if o.noUp {
 		return noop, nil
 	}
-	cf, err := resolveComposeFile(o.composeFile)
-	if err != nil {
-		return noop, err
-	}
-	o.composeFile = cf
+	o.postgres = autoDatastore(cmd, o.postgres)
 	if o.postgres == datastoreManaged {
 		// Managed relocatable Postgres, no Docker at all: Lite is Redis-free (XCom
 		// on Postgres, in-process log tailer — ADR 0026), so nothing comes up via
@@ -298,7 +296,20 @@ func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions)
 		//nolint:contextcheck // stop runs at shutdown with a fresh context; the run's ctx is already canceled
 		return func() { stopManagedPostgres(cmd) }, nil
 	}
-	// Docker datastore: only Postgres (Lite needs no Redis).
+	// Docker datastore: only Postgres (Lite needs no Redis). Pick a host port that
+	// is free (so a foreign Postgres on 5432 — system or another project — never
+	// conflicts; Lite stays isolated rather than adopting it). The port is
+	// persisted so reset-password / db reset agree with the running server.
+	port, perr := resolveDevDBPort(liteDevDir(), func() int { return firstFreePort(defaultDevDBPort) })
+	if perr != nil {
+		return noop, perr
+	}
+	cf, err := resolveComposeFile(o.composeFile)
+	if err != nil {
+		return noop, err
+	}
+	o.composeFile = cf
+	devPrintf(cmd.OutOrStdout(), "▸ Postgres (Docker) on localhost:%d  [project %s]\n", port, devProjectName())
 	return noop, devComposeUp(ctx, cmd, *o, "postgres")
 }
 
@@ -354,7 +365,7 @@ func newLiteCommand() *cobra.Command {
 			return runDev(cmd, dir, o)
 		},
 	}
-	cmd.Flags().StringVar(&o.executor, "executor", "k8s", "execution mode: 'k8s' (dedicated k3d cluster, real pods) or 'subprocess' (host, fast, unsandboxed)")
+	cmd.Flags().StringVar(&o.executor, "executor", "auto", "execution mode: 'auto' (default; k3d if Docker is present, else subprocess), 'k8s' (dedicated k3d cluster, real pods), or 'subprocess' (host, fast, unsandboxed)")
 	cmd.Flags().IntVar(&o.port, "port", devDefaultPort, "HTTP/UI port (dev default 8088, distinct from the demo's 8080)")
 	cmd.Flags().StringVar(&o.host, "host", "127.0.0.1", "address to bind the UI/API to; use 0.0.0.0 to reach it from your internal network/VPN (insecure — see the warning)")
 	cmd.Flags().StringVar(&o.image, "image", "leoflow-dev:local", "placeholder image recorded in dag.json (subprocess mode only)")
@@ -363,7 +374,7 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
 	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres already running); the dev DB + venv are still provisioned")
-	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreManaged, "Postgres backend: 'managed' (default; relocatable PG under ~/.leoflow on a Unix socket, no Docker) or 'docker'")
+	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreAuto, "Postgres backend: 'auto' (default; the Docker postgres:16 when Docker is present, else a managed relocatable PG under ~/.leoflow on a Unix socket, no Docker), 'docker', or 'managed' (best on full distros; minimal hosts may lack its system libs)")
 	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
 	return cmd
@@ -528,9 +539,13 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 		return berr
 	}
 
+	// "auto" (the default) uses k3d when Docker is present, else the unsandboxed
+	// subprocess executor so `leoflow lite` still runs without Docker.
+	o.executor = autoExecutor(cmd, o.executor)
+
 	// Mode-specific setup: the env the control plane runs with and the per-reload
-	// build/register strategy. Cluster-mode (default) runs real pods on a
-	// dedicated k3d cluster; subprocess runs unsandboxed on the host (fast loop).
+	// build/register strategy. k8s runs real pods on a dedicated k3d cluster;
+	// subprocess runs unsandboxed on the host (fast loop).
 	var serverEnv []string
 	var makeReload func(token string) func() error
 	if o.executor == "subprocess" {
@@ -632,12 +647,15 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 
 // devComposeUp starts the named local datastore services via docker compose. Lite
 // brings up only Postgres (it is Redis-free — ADR 0026); the dev's own database
-// lives inside it, isolated by name.
+// lives inside it, isolated by name. The compose runs under a per-install project
+// name (so two users/installs never share or clobber a container/volume) and on
+// the resolved host port (LEOFLOW_DB_PORT, which the compose interpolates).
 func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions, services ...string) error {
 	devPrintln(cmd.OutOrStdout(), "▸ starting dependencies (docker compose) …")
 	var captured bytes.Buffer
 	args := append([]string{"compose", "-f", o.composeFile, "up", "-d", "--wait"}, services...)
 	up := exec.CommandContext(ctx, "docker", args...) //nolint:gosec // operator-supplied compose file on the dev CLI
+	up.Env = composeEnv()
 	up.Stdout = cmd.OutOrStdout()
 	// Tee stderr so the user still sees compose progress while we inspect it to
 	// translate a port-allocation failure into an actionable message.
@@ -657,7 +675,10 @@ func composeUpError(err error, output string) error {
 	if strings.Contains(low, "already allocated") || strings.Contains(low, "address already in use") || strings.Contains(low, "port is already") {
 		return fmt.Errorf("the Postgres port 5432 is already in use — another Postgres is bound to it. Stop it, run `leoflow lite --postgres managed` (a private, socket-only Postgres), or `leoflow lite --no-up` to point at your own (LEOFLOW_DATABASE_URL): %w", err)
 	}
-	return fmt.Errorf("docker compose up (is Docker running?): %w", err)
+	if strings.Contains(low, "unknown command") || strings.Contains(low, "is not a docker command") || strings.Contains(low, "compose") && strings.Contains(low, "not found") {
+		return fmt.Errorf("the Docker Compose v2 plugin is not installed (the `docker compose` subcommand is missing). Install it, or run `leoflow lite --postgres managed` for a Docker-free Postgres: %w", err)
+	}
+	return fmt.Errorf("docker compose up (is Docker running, with the Compose v2 plugin?): %w", err)
 }
 
 // preflightDevPorts checks that the HTTP, gRPC, and metrics ports Lite needs are

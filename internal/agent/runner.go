@@ -109,6 +109,12 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		xcom = append(xcom, XComEnvVar(param, resp.GetValue()))
 	}
 	env := mergeEnv(r.Env, spec.GetEnvironment(), xcom)
+	if r.ReturnPath != "" {
+		// Tell the runtime to write the return value to the agent's per-task path,
+		// not the shared global default — so concurrent tasks and other users never
+		// collide on /tmp/leoflow_return_value.json.
+		env = append(env, "LEOFLOW_RETURN_VALUE_PATH="+r.ReturnPath)
+	}
 	return append(env, r.secretsEnv(ctx)...), nil
 }
 

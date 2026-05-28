@@ -114,7 +114,7 @@ func run() error {
 	}
 	defer grpcSrv.GracefulStop()
 
-	startCleanup(ctx, storage.NewXComIndex(pg), logSink, tel.Logger)
+	startCleanup(ctx, storage.NewXComIndex(pg), logSink, cfg.Logs.Dir, tel.Logger)
 
 	var schedulerHealth api.Heartbeater
 	podDispatch := false
@@ -394,10 +394,15 @@ const cleanupInterval = time.Hour
 // logRetention is how long task logs are kept before garbage collection.
 const logRetention = 30 * 24 * time.Hour
 
-// startCleanup runs a periodic janitor that purges expired XCom index rows and
-// prunes old log files. The operations are idempotent, so it is safe on every
-// replica.
-func startCleanup(ctx context.Context, idx *storage.XComIndex, sink *logs.DiskSink, logger *slog.Logger) {
+// lowDiskWarnBytes is the free-space threshold below which the janitor warns: the
+// embedded datastore (managed Postgres + logs) lives on this filesystem, and a
+// full disk makes Postgres fail writes with a cryptic error.
+const lowDiskWarnBytes = 1 << 30 // 1 GiB
+
+// startCleanup runs a periodic janitor that purges expired XCom index rows,
+// prunes old log files, and warns on low disk for the datastore dir. The
+// operations are idempotent, so it is safe on every replica.
+func startCleanup(ctx context.Context, idx *storage.XComIndex, sink *logs.DiskSink, dataDir string, logger *slog.Logger) {
 	go func() {
 		t := time.NewTicker(cleanupInterval)
 		defer t.Stop()
@@ -413,10 +418,26 @@ func startCleanup(ctx context.Context, idx *storage.XComIndex, sink *logs.DiskSi
 					if err := sink.Prune(time.Now(), logRetention); err != nil {
 						logger.Error("pruning old logs", "error", err)
 					}
+					if free, derr := dirFreeBytes(dataDir); derr == nil && lowDisk(free, lowDiskWarnBytes) {
+						logger.Warn("low disk space for the datastore", "dir", dataDir,
+							"free_mb", free/(1<<20), "threshold_mb", uint64(lowDiskWarnBytes)/(1<<20))
+					}
 				})
 			}
 		}
 	}()
+}
+
+// lowDisk reports whether free is below the threshold (both in bytes).
+func lowDisk(free, threshold uint64) bool { return free < threshold }
+
+// dirFreeBytes returns the bytes available on the filesystem holding dir.
+func dirFreeBytes(dir string) (uint64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, fmt.Errorf("statfs %s: %w", dir, err)
+	}
+	return st.Bavail * uint64(st.Bsize), nil //nolint:gosec // G115: a filesystem block size is never negative
 }
 
 // safeCycle runs one iteration of a periodic background loop, recovering any

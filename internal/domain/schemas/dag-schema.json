@@ -315,9 +315,9 @@
             "type": "string"
           }
         },
-        "params": {
+        "call_args": {
           "type": "object",
-          "description": "TaskFlow literal call arguments captured at compile time (#115). Delivered to the runtime as LEOFLOW_PARAMS_JSON. Each value must be JSON-serialisable; XCom upstreams take precedence at runtime over a same-name literal.",
+          "description": "TaskFlow literal call arguments captured at compile time (#115). Delivered to the runtime as LEOFLOW_CALL_ARGS_JSON. Each value must be JSON-serialisable; XCom upstreams take precedence at runtime over a same-name literal. Named call_args (not params) to leave Airflow's DAG-run params term free for a future feature.",
           "additionalProperties": true
         },
         "xcom_schema": {

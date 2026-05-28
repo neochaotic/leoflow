@@ -112,12 +112,14 @@ type TaskSpec struct {
 	Execution               *Execution        `json:"execution,omitempty"`
 	XComInput               map[string]string `json:"xcom_input,omitempty"`
 	XComSchema              map[string]any    `json:"xcom_schema,omitempty"`
-	// Params carries TaskFlow literal call arguments captured at compile time
+	// CallArgs carries TaskFlow literal call arguments captured at compile time
 	// (#115). The agent serializes the whole map as a single env var
-	// LEOFLOW_PARAMS_JSON; the runtime decodes and delivers each value to the
-	// user function. XCom upstreams take precedence at runtime over a
+	// LEOFLOW_CALL_ARGS_JSON; the runtime decodes and delivers each value to
+	// the user function. XCom upstreams take precedence at runtime over a
 	// same-name literal (the deterministic merge owned by leoflow_runtime).
-	Params map[string]any `json:"params,omitempty"`
+	// Named call_args (not params) to leave the term free for Airflow's
+	// DAG-run params semantic (#148).
+	CallArgs map[string]any `json:"call_args,omitempty"`
 }
 
 // HTTPRequest is the request executed directly by the control plane for

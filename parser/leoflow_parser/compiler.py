@@ -171,11 +171,11 @@ def _map_task(task, source: str) -> dict[str, Any]:
 
     if task_type == "python":
         entry["entrypoint"] = _python_entrypoint(task, source)
-        xcom_input, params = _bind_call_arguments(task)
+        xcom_input, call_args = _bind_call_arguments(task)
         if xcom_input:
             entry["xcom_input"] = xcom_input
-        if params:
-            entry["params"] = params
+        if call_args:
+            entry["call_args"] = call_args
     elif task_type == "bash":
         entry["entrypoint"] = _bash_command(task)
     elif task_type == "http_api":
@@ -208,7 +208,7 @@ def _python_entrypoint(task, source: str) -> str:
 
 
 def _bind_call_arguments(task) -> tuple[dict[str, str], dict[str, Any]]:
-    """Split a TaskFlow task's bound arguments into XCom inputs and literal params.
+    """Split a TaskFlow task's bound arguments into XCom inputs and literal call args.
 
     For ``transform(extract())`` the operator stores ``extract``'s XComArg as
     one argument; for ``shard(0)`` it stores the literal ``0``. Binding both
@@ -216,9 +216,10 @@ def _bind_call_arguments(task) -> tuple[dict[str, str], dict[str, Any]]:
 
     - **xcom_input**: ``param_name → upstream_task_id``. The agent fetches each
       upstream's ``return_value`` at dispatch time.
-    - **params** (#115): ``param_name → JSON-serialisable literal``. The agent
-      stamps the whole map as LEOFLOW_PARAMS_JSON; the runtime decodes and
-      delivers it to the function.
+    - **call_args** (#115): ``param_name → JSON-serialisable literal``. The
+      agent stamps the whole map as LEOFLOW_CALL_ARGS_JSON; the runtime
+      decodes and delivers it to the function. Named call_args (not params)
+      to keep Airflow's DAG-run params term free (#148).
 
     Arguments that are neither (e.g. a non-serialisable Python object) are
     silently dropped so the function falls back to its default — matching the
@@ -235,7 +236,7 @@ def _bind_call_arguments(task) -> tuple[dict[str, str], dict[str, Any]]:
     except (TypeError, ValueError):
         return {}, {}
     xcom: dict[str, str] = {}
-    params: dict[str, Any] = {}
+    call_args: dict[str, Any] = {}
     for name, value in bound.arguments.items():
         operator = getattr(value, "operator", None)
         upstream = getattr(operator, "task_id", None)
@@ -243,8 +244,8 @@ def _bind_call_arguments(task) -> tuple[dict[str, str], dict[str, Any]]:
             xcom[name] = upstream
             continue
         if _is_json_literal(value):
-            params[name] = value
-    return xcom, params
+            call_args[name] = value
+    return xcom, call_args
 
 
 def _is_json_literal(value: Any) -> bool:

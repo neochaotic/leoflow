@@ -35,16 +35,16 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		timeout = *task.ExecutionTimeoutSeconds
 	}
 	// Marshal TaskFlow literals (#115) into a single string field on the gRPC
-	// TaskSpec; the agent forwards it as LEOFLOW_PARAMS_JSON. Marshaling
+	// TaskSpec; the agent forwards it as LEOFLOW_CALL_ARGS_JSON. Marshaling
 	// failures are surfaced — a non-serialisable map in dag.json is a
 	// compile-time bug we want to see, not paper over.
-	var paramsJSON string
-	if len(task.Params) > 0 {
-		b, mErr := json.Marshal(task.Params)
+	var callArgsJSON string
+	if len(task.CallArgs) > 0 {
+		b, mErr := json.Marshal(task.CallArgs)
 		if mErr != nil {
-			return agentrpc.TaskSpec{}, fmt.Errorf("marshaling task params: %w", mErr)
+			return agentrpc.TaskSpec{}, fmt.Errorf("marshaling task call_args: %w", mErr)
 		}
-		paramsJSON = string(b)
+		callArgsJSON = string(b)
 	}
 	return agentrpc.TaskSpec{
 		Operator:         string(task.Type),
@@ -54,7 +54,7 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		XComInputMapping: task.XComInput,
 		XComSchema:       task.XComSchema,
 		TimeoutSeconds:   timeout,
-		ParamsJSON:       paramsJSON,
+		CallArgsJSON:     callArgsJSON,
 	}, nil
 }
 

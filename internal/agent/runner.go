@@ -115,11 +115,12 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		// collide on /tmp/leoflow_return_value.json.
 		env = append(env, "LEOFLOW_RETURN_VALUE_PATH="+r.ReturnPath)
 	}
-	if params := spec.GetParamsJson(); params != "" {
+	if callArgs := spec.GetCallArgsJson(); callArgs != "" {
 		// TaskFlow literal call args (#115). The runtime decodes this and merges
 		// values into the user function's kwargs. XCom upstreams take precedence
-		// at runtime for any same-name parameter.
-		env = append(env, "LEOFLOW_PARAMS_JSON="+params)
+		// at runtime for any same-name parameter. The env var name keeps
+		// Airflow's DAG-run `params` term free for a future feature (#148).
+		env = append(env, "LEOFLOW_CALL_ARGS_JSON="+callArgs)
 	}
 	return append(env, r.secretsEnv(ctx)...), nil
 }

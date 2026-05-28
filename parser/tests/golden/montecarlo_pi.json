@@ -20,7 +20,7 @@
     },
     {
       "entrypoint": "dag:estimate",
-      "params": {
+      "call_args": {
         "seed": 0
       },
       "task_id": "estimate",
@@ -28,7 +28,7 @@
     },
     {
       "entrypoint": "dag:estimate",
-      "params": {
+      "call_args": {
         "seed": 1
       },
       "task_id": "estimate__1",
@@ -36,7 +36,7 @@
     },
     {
       "entrypoint": "dag:estimate",
-      "params": {
+      "call_args": {
         "seed": 2
       },
       "task_id": "estimate__2",
@@ -44,7 +44,7 @@
     },
     {
       "entrypoint": "dag:estimate",
-      "params": {
+      "call_args": {
         "seed": 3
       },
       "task_id": "estimate__3",

@@ -14,17 +14,18 @@ DEFAULT_RETURN_VALUE_PATH = "/tmp/leoflow_return_value.json"  # noqa: S108
 _UNSET = object()
 
 
-def _load_params() -> dict:
-    """Decode LEOFLOW_PARAMS_JSON, the compile-time TaskFlow literals (#115).
+def _load_call_args() -> dict:
+    """Decode LEOFLOW_CALL_ARGS_JSON, the compile-time TaskFlow literals (#115).
 
     The parser captures literal call args of a ``@task`` invocation
     (``shard(n=0)`` → ``{"n": 0}``) and the agent stamps the result as the
-    LEOFLOW_PARAMS_JSON env var. Malformed JSON is silently dropped: the
+    LEOFLOW_CALL_ARGS_JSON env var. Malformed JSON is silently dropped: the
     parser's contract is to emit valid JSON, and dying with a JSON error the
     user did not write would be worse than running with the function's
-    defaults.
+    defaults. The env name is call_args (not params) to leave Airflow's
+    DAG-run params term free for a future feature (#148).
     """
-    raw = os.environ.get("LEOFLOW_PARAMS_JSON", "")
+    raw = os.environ.get("LEOFLOW_CALL_ARGS_JSON", "")
     if not raw:
         return {}
     try:
@@ -39,9 +40,9 @@ def _resolve_kwargs(fn) -> dict:
 
     Two injection paths are merged into the same kwargs map:
 
-    - **LEOFLOW_PARAMS_JSON** (#115): the literal args the user wrote at the
-      ``@task`` call site (``shard(n=0)``), captured by the parser at compile
-      time.
+    - **LEOFLOW_CALL_ARGS_JSON** (#115): the literal args the user wrote at
+      the ``@task`` call site (``shard(n=0)``), captured by the parser at
+      compile time.
     - **LEOFLOW_XCOM_<PARAM>**: an upstream task's ``return_value``, fetched
       by the agent at dispatch time. Takes precedence over a same-name
       literal so an explicit upstream binding always wins (in practice
@@ -52,13 +53,13 @@ def _resolve_kwargs(fn) -> dict:
     apply (or it raises TypeError if it has none — exactly Airflow's
     semantics).
     """
-    params = _load_params()
+    call_args = _load_call_args()
     kwargs: dict = {}
     for name, param in inspect.signature(fn).parameters.items():
         if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             continue
-        if name in params:
-            kwargs[name] = params[name]
+        if name in call_args:
+            kwargs[name] = call_args[name]
         value = xcom_pull(name, _UNSET)
         if value is not _UNSET:
             kwargs[name] = value

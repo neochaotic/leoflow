@@ -20,7 +20,7 @@
     },
     {
       "entrypoint": "dag:shard",
-      "params": {
+      "call_args": {
         "n": 0
       },
       "task_id": "shard",
@@ -28,7 +28,7 @@
     },
     {
       "entrypoint": "dag:shard",
-      "params": {
+      "call_args": {
         "n": 1
       },
       "task_id": "shard__1",
@@ -36,7 +36,7 @@
     },
     {
       "entrypoint": "dag:shard",
-      "params": {
+      "call_args": {
         "n": 2
       },
       "task_id": "shard__2",
@@ -44,7 +44,7 @@
     },
     {
       "entrypoint": "dag:shard",
-      "params": {
+      "call_args": {
         "n": 3
       },
       "task_id": "shard__3",

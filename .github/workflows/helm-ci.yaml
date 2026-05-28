@@ -90,25 +90,13 @@ jobs:
           kubectl -n leoflow apply -f .github/ci/kind-datastores.yaml
           kubectl -n leoflow rollout status deploy/postgres --timeout=120s
           kubectl -n leoflow rollout status deploy/redis --timeout=120s
-
-      # If the helm install / upgrade / smoke fails below, dump the cluster
-      # state so the cause is visible from the workflow logs (without this,
-      # `--wait` timeouts surface as "timed out waiting for the condition"
-      # with no pod-level signal). The step runs on the failure of any
-      # subsequent step in the job.
-      - name: Diagnostics on failure
-        if: failure()
-        run: |
-          set +e
-          echo "=== nodes ==="; kubectl get nodes -o wide
-          echo "=== all -n leoflow ==="; kubectl -n leoflow get all -o wide
-          echo "=== events -n leoflow (last 50) ==="; kubectl -n leoflow get events --sort-by=.lastTimestamp | tail -50
-          echo "=== pods describe -n leoflow ==="; kubectl -n leoflow describe pods
-          echo "=== jobs -n leoflow ==="; kubectl -n leoflow get jobs
-          echo "=== migrate job logs ==="; kubectl -n leoflow logs -l job-name -c migrate --tail=200 || true
-          echo "=== leoflow deploy logs ==="; kubectl -n leoflow logs deploy/leoflow --tail=200 || true
-          echo "=== postgres logs ==="; kubectl -n leoflow logs deploy/postgres --tail=100 || true
-          echo "=== redis logs ==="; kubectl -n leoflow logs deploy/redis --tail=50 || true
+          # rollout status returns when the readiness probe (pg_isready /
+          # redis-cli ping) has succeeded ONCE. Hold the workflow until the
+          # postmaster is steadily accepting connections so the migrate Job's
+          # first connection doesn't race the postmaster's auth-accepting
+          # state — the migrate binary does NOT retry on connection refused.
+          kubectl -n leoflow exec deploy/postgres -- pg_isready -U leoflow -d leoflow -t 60
+          kubectl -n leoflow exec deploy/redis -- redis-cli ping | grep -q PONG
 
       - name: helm install
         run: |
@@ -179,3 +167,50 @@ jobs:
             echo "/readyz never responded after helm upgrade" >&2
             exit 1
           fi
+
+      # If anything above failed (helm install, smoke, upgrade, post-upgrade
+      # smoke), dump the cluster + helm state so the cause is visible from
+      # the workflow log. Lives at the END of the job so `failure()` catches
+      # whichever earlier step tripped. set +e — we want a full snapshot
+      # even if a single kubectl invocation fails.
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          set +e
+          echo "::group::nodes"
+          kubectl get nodes -o wide
+          echo "::endgroup::"
+          echo "::group::all resources -n leoflow"
+          kubectl -n leoflow get all -o wide
+          echo "::endgroup::"
+          echo "::group::events -n leoflow (timestamp-sorted)"
+          kubectl -n leoflow get events --sort-by=.lastTimestamp | tail -80
+          echo "::endgroup::"
+          echo "::group::pod describes -n leoflow"
+          kubectl -n leoflow describe pods
+          echo "::endgroup::"
+          echo "::group::jobs -n leoflow"
+          kubectl -n leoflow get jobs -o yaml
+          echo "::endgroup::"
+          echo "::group::migrate Job pod logs"
+          kubectl -n leoflow logs job/leoflow-migrate -c migrate --tail=200
+          echo "::endgroup::"
+          echo "::group::leoflow Deployment logs"
+          kubectl -n leoflow logs deploy/leoflow --tail=200
+          echo "::endgroup::"
+          echo "::group::postgres logs"
+          kubectl -n leoflow logs deploy/postgres --tail=120
+          echo "::endgroup::"
+          echo "::group::redis logs"
+          kubectl -n leoflow logs deploy/redis --tail=60
+          echo "::endgroup::"
+          # Helm-side visibility: what did helm think the state was?
+          echo "::group::helm status"
+          helm -n leoflow status leoflow
+          echo "::endgroup::"
+          echo "::group::helm history"
+          helm -n leoflow history leoflow
+          echo "::endgroup::"
+          echo "::group::helm get manifest (rendered)"
+          helm -n leoflow get manifest leoflow | head -300
+          echo "::endgroup::"

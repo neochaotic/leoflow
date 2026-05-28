@@ -20,21 +20,33 @@
     },
     {
       "entrypoint": "dag:estimate",
+      "params": {
+        "seed": 0
+      },
       "task_id": "estimate",
       "type": "python"
     },
     {
       "entrypoint": "dag:estimate",
+      "params": {
+        "seed": 1
+      },
       "task_id": "estimate__1",
       "type": "python"
     },
     {
       "entrypoint": "dag:estimate",
+      "params": {
+        "seed": 2
+      },
       "task_id": "estimate__2",
       "type": "python"
     },
     {
       "entrypoint": "dag:estimate",
+      "params": {
+        "seed": 3
+      },
       "task_id": "estimate__3",
       "type": "python"
     }

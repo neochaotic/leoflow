@@ -20,21 +20,33 @@
     },
     {
       "entrypoint": "dag:shard",
+      "params": {
+        "n": 0
+      },
       "task_id": "shard",
       "type": "python"
     },
     {
       "entrypoint": "dag:shard",
+      "params": {
+        "n": 1
+      },
       "task_id": "shard__1",
       "type": "python"
     },
     {
       "entrypoint": "dag:shard",
+      "params": {
+        "n": 2
+      },
       "task_id": "shard__2",
       "type": "python"
     },
     {
       "entrypoint": "dag:shard",
+      "params": {
+        "n": 3
+      },
       "task_id": "shard__3",
       "type": "python"
     }

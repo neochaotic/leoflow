@@ -747,6 +747,14 @@ func preflightDevPorts(ctx context.Context, host string, port int) error {
 // devMigrate applies the embedded SQL migrations to the isolated dev database.
 // The migrations are compiled into the binary (no source tree or migrate CLI),
 // a step toward a binaries-only dev install (#60).
+//
+// Before applying anything, devMigrate refuses to start when the database's
+// schema_migrations.version is HIGHER than the highest version embedded in
+// this binary (#136). That shape means an older binary is being run against
+// a database that a newer binary already upgraded — proceeding silently would
+// let the older binary read/write rows under a schema it does not understand.
+// The user is told to upgrade the binary, or to run `leoflow uninstall --purge`
+// to start over.
 func devMigrate(cmd *cobra.Command) error {
 	devPrintln(cmd.OutOrStdout(), "▸ migrating "+devDBName+" (embedded) …")
 	src, err := iofs.New(migrations.Files, ".")
@@ -758,8 +766,54 @@ func devMigrate(cmd *cobra.Command) error {
 		return fmt.Errorf("initializing migrator: %w", err)
 	}
 	defer func() { _, _ = m.Close() }() //nolint:errcheck // best-effort close of source + db handles
+	if derr := checkDevSchemaDrift(m); derr != nil {
+		return derr
+	}
 	if uerr := m.Up(); uerr != nil && !errors.Is(uerr, migrate.ErrNoChange) {
 		return fmt.Errorf("applying migrations: %w", uerr)
+	}
+	return nil
+}
+
+// checkDevSchemaDrift compares the DB's current schema version against the
+// highest migration the binary embeds and refuses to start when the DB is
+// ahead. A fresh DB (no rows in schema_migrations, surfaced as
+// migrate.ErrNilVersion) is the expected first-run state and proceeds.
+func checkDevSchemaDrift(m *migrate.Migrate) error {
+	dbVersion, dirty, err := m.Version()
+	if errors.Is(err, migrate.ErrNilVersion) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading current schema version: %w", err)
+	}
+	embedded, lerr := migrations.Latest()
+	if lerr != nil {
+		return fmt.Errorf("checking embedded migrations: %w", lerr)
+	}
+	return decideSchemaDrift(dbVersion, dirty, embedded)
+}
+
+// decideSchemaDrift is the pure decision the drift check applies — split out
+// so it can be unit-tested without a real Postgres. dbVersion is the value in
+// the database's schema_migrations table; embedded is the highest version
+// the binary embeds (migrations.Latest()). A DB ahead of the binary is the
+// drift case (#136); a dirty marker is a separate operational failure.
+func decideSchemaDrift(dbVersion uint, dirty bool, embedded uint) error {
+	if dirty {
+		return fmt.Errorf(
+			"database schema is marked dirty at version %d (a prior migration was interrupted); "+
+				"run `leoflow uninstall --purge` to reset, or fix manually with `migrate force` if you know what you are doing",
+			dbVersion,
+		)
+	}
+	if dbVersion > embedded {
+		return fmt.Errorf(
+			"database is at schema version %d but this binary only knows up to %d; "+
+				"an older `leoflow` is being run against a newer database. "+
+				"Upgrade the binary, or run `leoflow uninstall --purge` to start over (this WIPES your data)",
+			dbVersion, embedded,
+		)
 	}
 	return nil
 }

@@ -45,6 +45,7 @@ func TestConnectionDeliveryChainOfCustodyIntegration(t *testing.T) {
 		{connType: "postgres", defaultPort: 5432, host: "warehouse.example.com", schema: "analytics"},
 		{connType: "mysql", defaultPort: 3306, host: "warehouse.example.com", schema: "analytics"},
 		{connType: "mariadb", defaultPort: 3306, host: "warehouse.example.com", schema: "analytics"},
+		{connType: "mssql", defaultPort: 1433, host: "warehouse.example.com", schema: "analytics"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.connType, func(t *testing.T) {

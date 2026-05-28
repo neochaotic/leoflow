@@ -109,6 +109,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.auth.existingSecret | default (include "leoflow.secretName" .) }}
                   key: jwtSecret
+            {{- if or .Values.secretKeyExistingSecret .Values.secretKey }}
+            # LEOFLOW_SECRET_KEY (ADR 0019) — Connection password / Extra
+            # encryption-at-rest key. Without it, the API refuses Connection
+            # writes (Variables still work). Optional so users who only use
+            # Variables can omit it; recommended for any real Pro install.
+            - name: LEOFLOW_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretKeyExistingSecret | default (include "leoflow.secretName" .) }}
+                  key: secretKey
+            {{- end }}
             {{- if or .Values.bootstrap.existingSecret .Values.bootstrap.password }}
             - name: LEOFLOW_BOOTSTRAP_PASSWORD
               valueFrom:

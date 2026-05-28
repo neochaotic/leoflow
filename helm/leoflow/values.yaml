@@ -64,6 +64,15 @@ auth:
   existingSecret: ""   # name of a Secret with key jwtSecret (overrides jwtSecret)
   tokenTtlSeconds: 3600
 
+# secretKey (LEOFLOW_SECRET_KEY) is the 32-byte key the control plane uses to
+# encrypt connection passwords + Extra blobs at rest (ADR 0019). Without it,
+# Connection management is disabled and the API rejects writes with 503
+# (Variables still work). Set it, or reference an existing secret.
+#
+# Generate one with:  openssl rand -base64 32   (must decode to 32 bytes)
+secretKey: ""
+secretKeyExistingSecret: ""   # name of a Secret with key secretKey (overrides secretKey)
+
 # bootstrap creates the initial admin user on first start when set.
 bootstrap:
   password: ""         # leave empty to skip; or reference existingSecret/key bootstrapPassword

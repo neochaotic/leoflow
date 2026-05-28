@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -14,30 +15,44 @@ type dsnSet struct {
 	migrate     string
 }
 
-// buildDSNs returns the Lite DSNs for the active datastore. With an empty
-// socketDir it returns the Docker datastore's TCP localhost:5432 connections
-// (the default). With a managed socketDir it returns Unix-socket DSNs
-// (host=<socketDir>, trust auth, no TCP) — so the managed cluster is reached
-// only through its own per-user socket and a foreign Postgres bound to 5432 can
-// never be connected to or mistaken for ours.
-func buildDSNs(socketDir string) dsnSet {
-	if socketDir == "" {
-		return dsnSet{database: devDatabaseURL, maintenance: devMaintenanceURL, migrate: devMigrateURL}
+// devDSNs resolves the Lite DSNs for the current run. A live managed cluster
+// (detected by its socket file under ~/.leoflow/pgdata) is reached over its Unix
+// socket; otherwise the Docker datastore is reached over TCP on the persisted
+// host port (ADR 0030 auto-selects which backend). Every entry point (the lite
+// runner, reset-password, db reset) calls this, so they connect consistently
+// without threading the choice through each.
+func devDSNs() dsnSet {
+	if sock := managedSocketDir(); sock != "" {
+		return socketDSNs(sock)
 	}
+	return tcpDSNs(devDBPort(liteDevDir()))
+}
+
+// tcpDSNs builds the Docker datastore DSNs for the given host port. The host port
+// is dynamic (Lite picks a free one when 5432 is taken — see resolveDevDBPort), so
+// the DSNs must track it rather than hard-code 5432.
+func tcpDSNs(port int) dsnSet {
+	url := func(db string) string {
+		return fmt.Sprintf("postgres://leoflow:leoflow@localhost:%d/%s?sslmode=disable", port, db)
+	}
+	return dsnSet{
+		database:    url(devDBName),
+		maintenance: url("postgres"),
+		migrate:     fmt.Sprintf("pgx5://leoflow:leoflow@localhost:%d/%s?sslmode=disable", port, devDBName),
+	}
+}
+
+// socketDSNs builds the managed-cluster DSNs over its per-user Unix socket
+// (host=<socketDir>, trust auth, no TCP) — so the managed cluster is reached only
+// through its own socket and a foreign Postgres bound to 5432 is never connected
+// to or mistaken for ours.
+func socketDSNs(socketDir string) dsnSet {
 	q := "?host=" + socketDir + "&sslmode=disable"
 	return dsnSet{
 		database:    "postgres://leoflow@/" + devDBName + q,
 		maintenance: "postgres://leoflow@/postgres" + q,
 		migrate:     "pgx5://leoflow@/" + devDBName + q,
 	}
-}
-
-// devDSNs resolves the Lite DSNs for the current run. It auto-detects a live
-// managed cluster by its socket file under ~/.leoflow/pgdata, so every entry
-// point (the lite runner, reset-password, db reset) connects consistently
-// without threading the --postgres choice through each of them.
-func devDSNs() dsnSet {
-	return buildDSNs(managedSocketDir())
 }
 
 // managedSocketDir returns the managed Postgres data dir when its Unix socket is

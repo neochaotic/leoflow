@@ -296,12 +296,20 @@ func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions)
 		//nolint:contextcheck // stop runs at shutdown with a fresh context; the run's ctx is already canceled
 		return func() { stopManagedPostgres(cmd) }, nil
 	}
-	// Docker datastore: only Postgres (Lite needs no Redis).
+	// Docker datastore: only Postgres (Lite needs no Redis). Pick a host port that
+	// is free (so a foreign Postgres on 5432 — system or another project — never
+	// conflicts; Lite stays isolated rather than adopting it). The port is
+	// persisted so reset-password / db reset agree with the running server.
+	port, perr := resolveDevDBPort(liteDevDir(), func() int { return firstFreePort(defaultDevDBPort) })
+	if perr != nil {
+		return noop, perr
+	}
 	cf, err := resolveComposeFile(o.composeFile)
 	if err != nil {
 		return noop, err
 	}
 	o.composeFile = cf
+	devPrintf(cmd.OutOrStdout(), "▸ Postgres (Docker) on localhost:%d  [project %s]\n", port, devProjectName())
 	return noop, devComposeUp(ctx, cmd, *o, "postgres")
 }
 
@@ -639,12 +647,15 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 
 // devComposeUp starts the named local datastore services via docker compose. Lite
 // brings up only Postgres (it is Redis-free — ADR 0026); the dev's own database
-// lives inside it, isolated by name.
+// lives inside it, isolated by name. The compose runs under a per-install project
+// name (so two users/installs never share or clobber a container/volume) and on
+// the resolved host port (LEOFLOW_DB_PORT, which the compose interpolates).
 func devComposeUp(ctx context.Context, cmd *cobra.Command, o devOptions, services ...string) error {
 	devPrintln(cmd.OutOrStdout(), "▸ starting dependencies (docker compose) …")
 	var captured bytes.Buffer
 	args := append([]string{"compose", "-f", o.composeFile, "up", "-d", "--wait"}, services...)
 	up := exec.CommandContext(ctx, "docker", args...) //nolint:gosec // operator-supplied compose file on the dev CLI
+	up.Env = composeEnv()
 	up.Stdout = cmd.OutOrStdout()
 	// Tee stderr so the user still sees compose progress while we inspect it to
 	// translate a port-allocation failure into an actionable message.

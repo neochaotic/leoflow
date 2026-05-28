@@ -5,21 +5,40 @@ import (
 	"testing"
 )
 
-// TestBuildDSNsDockerDefault: with no managed socket dir, the Lite DSNs are the
-// Docker datastore's TCP localhost:5432 connections (the default path, unchanged).
-func TestBuildDSNsDockerDefault(t *testing.T) {
-	d := buildDSNs("")
-	if d.database != devDatabaseURL || d.maintenance != devMaintenanceURL || d.migrate != devMigrateURL {
-		t.Fatalf("empty socket dir must yield the TCP DSN consts, got %+v", d)
+// TestTCPDSNsTrackThePort: the Docker DSNs are built on the given host port (Lite
+// picks a free one when 5432 is taken), targeting the dedicated dev database and
+// the maintenance "postgres" db, with the migrate DSN on the pgx5 scheme.
+func TestTCPDSNsTrackThePort(t *testing.T) {
+	d := tcpDSNs(5433)
+	for label, dsn := range map[string]string{"database": d.database, "maintenance": d.maintenance, "migrate": d.migrate} {
+		if !strings.Contains(dsn, "localhost:5433") {
+			t.Errorf("%s DSN %q must use the resolved host port 5433", label, dsn)
+		}
+	}
+	if !strings.HasPrefix(d.migrate, "pgx5://") {
+		t.Errorf("migrate DSN must keep the pgx5 scheme, got %q", d.migrate)
+	}
+	if !strings.Contains(d.database, "/leoflow_dev") || !strings.Contains(d.maintenance, "/postgres") {
+		t.Errorf("DSNs target the wrong databases: %+v", d)
 	}
 }
 
-// TestBuildDSNsManagedSocket: with a managed socket dir, every DSN connects over
-// that Unix socket (host=<dir>) and never over TCP localhost:5432 — so a foreign
+// TestTCPDSNsDefaultPortMatchesConsts pins the invariant that the default-port
+// (5432) DSNs equal the documented consts — so nothing regressed when the port
+// became dynamic.
+func TestTCPDSNsDefaultPortMatchesConsts(t *testing.T) {
+	d := tcpDSNs(defaultDevDBPort)
+	if d.database != devDatabaseURL || d.maintenance != devMaintenanceURL || d.migrate != devMigrateURL {
+		t.Fatalf("tcpDSNs(%d) must equal the 5432 consts, got %+v", defaultDevDBPort, d)
+	}
+}
+
+// TestSocketDSNsUseTheSocket: with a managed socket dir, every DSN connects over
+// that Unix socket (host=<dir>) and never over TCP localhost — so a foreign
 // Postgres bound to 5432 can never be reached or mistaken for ours.
-func TestBuildDSNsManagedSocket(t *testing.T) {
+func TestSocketDSNsUseTheSocket(t *testing.T) {
 	dir := "/home/u/.leoflow/pgdata"
-	d := buildDSNs(dir)
+	d := socketDSNs(dir)
 	for label, dsn := range map[string]string{"database": d.database, "maintenance": d.maintenance, "migrate": d.migrate} {
 		if !strings.Contains(dsn, "host="+dir) {
 			t.Errorf("%s DSN %q must select the unix socket via host=%s", label, dsn, dir)
@@ -30,8 +49,5 @@ func TestBuildDSNsManagedSocket(t *testing.T) {
 	}
 	if !strings.HasPrefix(d.migrate, "pgx5://") {
 		t.Errorf("migrate DSN must keep the pgx5 scheme, got %q", d.migrate)
-	}
-	if !strings.Contains(d.database, "/leoflow_dev") || !strings.Contains(d.maintenance, "/postgres") {
-		t.Errorf("DSNs target the wrong databases: %+v", d)
 	}
 }

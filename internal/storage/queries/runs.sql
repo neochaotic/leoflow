@@ -69,7 +69,10 @@ WHERE id = $1
 RETURNING *;
 
 -- name: ListScheduledDags :many
-SELECT d.dag_id, d.schedule,
+-- Returns each cron-scheduled DAG with the bits the scheduler needs to decide
+-- both "is there a slot due?" (schedule + last_logical) and "how many slots
+-- should I backfill on this tick?" (catchup + start_date, see #129).
+SELECT d.dag_id, d.schedule, d.catchup, d.start_date,
   (SELECT max(dr.logical_date) FROM dag_runs dr WHERE dr.dag_id = d.id) AS last_logical
 FROM dags d
 WHERE d.is_active = true AND d.is_paused = false

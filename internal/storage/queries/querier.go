@@ -93,6 +93,9 @@ type Querier interface {
 	// tick's reap work even after a multi-hour outage; the rest are picked up
 	// on the next tick (the reaper is a backstop, not a sprint).
 	ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error)
+	// Returns each cron-scheduled DAG with the bits the scheduler needs to decide
+	// both "is there a slot due?" (schedule + last_logical) and "how many slots
+	// should I backfill on this tick?" (catchup + start_date, see #129).
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)

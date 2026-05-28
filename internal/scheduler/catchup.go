@@ -1,0 +1,103 @@
+package scheduler
+
+import (
+	"time"
+
+	"github.com/robfig/cron/v3"
+)
+
+// dueScheduledSlots returns the logical dates for which the scheduler should
+// create runs on the current tick (#129). It is the pure planner-side
+// decision: given the cron expression, the latest run's logical date (nil
+// if the DAG has never run), the DAG's start_date floor (nil for "no floor"),
+// "now", a catchup flag, and a per-tick cap, return the chronological list
+// of due slots.
+//
+// Behavior mirrors Airflow:
+//   - catchup=true  → backfill every missed slot, capped at maxSlots.
+//   - catchup=false → fire exactly one run for the most recent missed slot.
+//
+// Two safety guards:
+//   - maxSlots bounds the per-tick work. A multi-hour outage that produced
+//     thousands of missed slots will not stall the tick; the remainder is
+//     picked up on the next interval (the scheduler is reconciliation-loop
+//     based, ADR 0031, so retry next tick is the correct shape).
+//   - The start_date floor prevents creating a run for a logical_date earlier
+//     than the DAG's official start (Airflow semantics).
+//
+// An unparseable cron expression yields nothing. nextScheduledRun + the
+// scheduleParseable backstop in createDueRuns already log the bad expression
+// once; this helper stays silent.
+func dueScheduledSlots(expr string, lastLogical, startDate *time.Time, now time.Time, catchup bool, maxSlots int) []time.Time {
+	schedule, err := cron.ParseStandard(expr)
+	if err != nil {
+		return nil
+	}
+	// Seed the iteration. For a first-ever sight (lastLogical == nil) we seed
+	// from one period before the start_date so the start_date slot itself can
+	// be emitted (cron.Next returns the strict next slot after the argument).
+	// If there is no start_date and no last_logical, fall back to the
+	// single-slot legacy semantics: emit the most recent slot at or before
+	// now (catchup=false equivalent), since backfilling all of history would
+	// be unsafe by default.
+	seed, ok := catchupSeed(schedule, lastLogical, startDate, now)
+	if !ok {
+		return nil
+	}
+
+	// Enumerate slots strictly after seed and at or before now. Skip any slot
+	// before start_date (the floor) — handles the case where lastLogical is
+	// older than start_date.
+	var slots []time.Time
+	cursor := seed
+	for {
+		cursor = schedule.Next(cursor)
+		if cursor.After(now) {
+			break
+		}
+		if startDate != nil && cursor.Before(*startDate) {
+			continue
+		}
+		slots = append(slots, cursor)
+		if len(slots) >= maxSlots {
+			break
+		}
+	}
+	if len(slots) == 0 {
+		return nil
+	}
+	if !catchup {
+		// Skip-ahead semantics: only fire the most recent missed slot.
+		return slots[len(slots)-1:]
+	}
+	return slots
+}
+
+// catchupSeed picks the time to feed schedule.Next from on the first
+// iteration. ok=false means "no slot can possibly be due" (no seed available).
+func catchupSeed(schedule cron.Schedule, lastLogical, startDate *time.Time, now time.Time) (time.Time, bool) {
+	if lastLogical != nil {
+		return *lastLogical, true
+	}
+	if startDate != nil {
+		// Step back one period so the start_date slot itself is emittable
+		// (Next is strict).
+		period := schedulePeriod(schedule, now)
+		if period <= 0 {
+			return time.Time{}, false
+		}
+		return startDate.Add(-period), true
+	}
+	// Fall back to "most recent slot at or before now" semantics: emit nothing
+	// from the catchup helper. createDueRuns will pick up the legacy
+	// nextScheduledRun path for this shape (see scheduler.go).
+	return time.Time{}, false
+}
+
+// schedulePeriod returns the period between two consecutive slots, estimated
+// from the next two slots after now. 0 means the schedule is degenerate.
+func schedulePeriod(schedule cron.Schedule, now time.Time) time.Duration {
+	a := schedule.Next(now)
+	b := schedule.Next(a)
+	return b.Sub(a)
+}

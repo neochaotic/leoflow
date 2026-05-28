@@ -168,6 +168,8 @@ func (s *SchedulerStore) ScheduledDAGs(ctx context.Context) ([]scheduler.Schedul
 			DagID:       r.DagID,
 			Schedule:    strOrEmpty(r.Schedule),
 			LastLogical: timeFromAny(r.LastLogical),
+			StartDate:   timePtr(r.StartDate),
+			Catchup:     r.Catchup,
 		})
 	}
 	return out, nil

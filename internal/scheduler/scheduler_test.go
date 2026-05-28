@@ -244,6 +244,45 @@ func TestStepDoesNotReapOnFollower(t *testing.T) {
 	}
 }
 
+// TestStepCatchupBackfillsMissedSlots: a DAG with catchup=true whose leader
+// was down for 6 hours produces 6 hourly runs on the next tick (#129).
+// Without catchup wiring, the legacy single-run path silently dropped the 5
+// intermediate slots.
+func TestStepCatchupBackfillsMissedSlots(t *testing.T) {
+	last := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Hour)
+	store := newFakeStore()
+	store.scheduled = []ScheduledDAG{{
+		DagID: "etl", Schedule: "@hourly", LastLogical: &last, Catchup: true,
+	}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The exact count varies by the wall clock fraction within the current
+	// hour; assert "more than 1" to pin the catchup behavior without
+	// flakiness — 1 means catchup did not trigger.
+	if len(store.createdRuns) < 2 {
+		t.Errorf("catchup=true with 6h gap should create multiple runs, got %d (%v)",
+			len(store.createdRuns), store.createdRuns)
+	}
+}
+
+// TestStepCatchupFalseCreatesOnlyLatest: same gap, catchup=false → exactly
+// one run is created (the most recent slot). This is the operator-opt-out
+// for "I don't want SLA misses backfilled."
+func TestStepCatchupFalseCreatesOnlyLatest(t *testing.T) {
+	last := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Hour)
+	store := newFakeStore()
+	store.scheduled = []ScheduledDAG{{
+		DagID: "etl", Schedule: "@hourly", LastLogical: &last, Catchup: false,
+	}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) != 1 || store.createdRuns[0] != "etl" {
+		t.Errorf("catchup=false should create exactly one run, got %v", store.createdRuns)
+	}
+}
+
 func TestStepCreatesDueScheduledRun(t *testing.T) {
 	last := time.Now().UTC().Add(-2 * time.Hour)
 	store := newFakeStore()

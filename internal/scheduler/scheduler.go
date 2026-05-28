@@ -27,10 +27,15 @@ type RunState struct {
 }
 
 // ScheduledDAG is a cron-scheduled DAG and the logical date of its latest run.
+// Catchup and StartDate drive the per-tick catchup decision (#129): when a
+// leader has been down across multiple slots, catchup=true backfills every
+// missed slot while catchup=false jumps straight to the most recent one.
 type ScheduledDAG struct {
 	DagID       string
 	Schedule    string
 	LastLogical *time.Time
+	StartDate   *time.Time
+	Catchup     bool
 }
 
 // Store is the scheduler's view of persistent state. The concrete
@@ -79,6 +84,14 @@ type Dispatcher interface {
 type InlineRunner interface {
 	Start(ctx context.Context, runID, dagID, tenantID string, tryNumber int, task domain.TaskSpec) (started bool, err error)
 }
+
+// maxCatchupSlotsPerTick caps how many missed cron slots are backfilled for
+// one DAG on a single scheduler tick (#129). After a leader has been down
+// across hundreds of slots, the catchup helper would produce that many runs;
+// the cap protects the tick from being stalled by a degenerate inputs and
+// the rest are picked up on the next interval (reconciliation-loop semantics,
+// ADR 0031).
+const maxCatchupSlotsPerTick = 100
 
 // defaultOrphanThreshold is how long a running dag run may stay quiet before
 // the reaper declares it orphaned. Five minutes is well above any healthy tick
@@ -326,11 +339,22 @@ func (s *Scheduler) createDueRuns(ctx context.Context) error {
 			}
 			continue
 		}
-		logical, due := nextScheduledRun(d.Schedule, d.LastLogical, now)
-		if !due {
+		// First-run with no start_date keeps the legacy single-slot semantics
+		// (most recent slot at or before now) — backfilling unbounded history
+		// for a fresh DAG would be unsafe by default. The catchup helper opts
+		// in only when there is either a last_logical or a start_date floor.
+		if d.LastLogical == nil && d.StartDate == nil {
+			logical, due := nextScheduledRun(d.Schedule, d.LastLogical, now)
+			if !due {
+				continue
+			}
+			s.createScheduledRun(ctx, d.DagID, logical)
 			continue
 		}
-		s.createScheduledRun(ctx, d.DagID, logical)
+		slots := dueScheduledSlots(d.Schedule, d.LastLogical, d.StartDate, now, d.Catchup, maxCatchupSlotsPerTick)
+		for _, logical := range slots {
+			s.createScheduledRun(ctx, d.DagID, logical)
+		}
 	}
 	return nil
 }

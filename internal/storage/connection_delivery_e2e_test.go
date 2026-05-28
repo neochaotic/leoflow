@@ -138,3 +138,76 @@ func mapKeys(m map[string]string) []string {
 	}
 	return out
 }
+
+// TestSQLiteConnectionURIShapeIntegration is the sqlite counterpart to the
+// SQL-family chain-of-custody test. sqlite has no host, no port, no login,
+// and no password — the **schema field carries the file path** and the
+// URI is `sqlite:///<absolute path>`. None of the percent-escape edge
+// cases apply, but the path round-trip and the no-host/no-user invariants
+// are real and broken by plausible refactors.
+//
+// A regression that would surface only here: the URI builder accidentally
+// emits `sqlite://<path>` (two slashes — wrong), drops the path, or
+// percent-escapes the path's `/` separators.
+func TestSQLiteConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 11)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	connID := fmt.Sprintf("e2e_sqlite_%d", time.Now().UnixNano())
+	const dbPath = "/var/lib/leoflow/warehouse.db"
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "sqlite",
+		Schema: dbPath, // sqlite convention: the "schema" field is the file path
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	uri, present := uris[connID]
+	if !present {
+		t.Fatalf("URI for %q missing from delivery map; got keys = %v",
+			connID, mapKeys(uris))
+	}
+
+	// The canonical sqlite URI is `sqlite:///<absolute path>` — three
+	// slashes (two for the scheme separator, one for the absolute path).
+	parsed, perr := url.Parse(uri)
+	if perr != nil {
+		t.Fatalf("URI is not parseable (the Python connector would fail): %q err=%v", uri, perr)
+	}
+	if parsed.Scheme != "sqlite" {
+		t.Errorf("scheme = %q, want sqlite", parsed.Scheme)
+	}
+	if parsed.Host != "" {
+		t.Errorf("host = %q, want empty (sqlite has no host)", parsed.Host)
+	}
+	if parsed.User != nil {
+		t.Errorf("user = %v, want nil (sqlite has no login/password)", parsed.User)
+	}
+	if parsed.Path != dbPath {
+		t.Errorf("path round-trip failed: got %q, want %q", parsed.Path, dbPath)
+	}
+	// The DAG's user code does `urlparse(uri).path` to extract the file
+	// path, then sqlite3.connect(path). Mirror that here so the contract
+	// the cookbook documents is exactly what the test asserts.
+	wantStringForm := "sqlite://" + dbPath
+	if uri != wantStringForm {
+		t.Errorf("uri = %q, want %q (the canonical 3-slash form)", uri, wantStringForm)
+	}
+}

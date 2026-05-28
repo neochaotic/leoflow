@@ -24,7 +24,7 @@ RENDERED=$(helm template leoflow-test "$CHART" \
   --set database.url='postgres://leoflow:p@db:5432/leoflow?sslmode=disable' \
   --set redis.url='redis://r:6379/0' \
   --set auth.jwtSecret='helm-template-check-jwt-fixture' \
-  --set secretKey='helm-template-check-secret-fixture-32B!!!')
+  --set secretKey='leoflow-tmpl-check-secret-key-32')
 
 fail=0
 expect_substring() {

@@ -1,0 +1,140 @@
+# Helm chart-test gate (#143). Mirrors the Lite install gate but for Kubernetes.
+#
+# Two jobs:
+#   lint     — fast, always-runnable: helm lint + helm-template-checks.sh +
+#              kubeconform schema validation. Catches typos / bad refs / missing
+#              env wiring on every PR touching the chart.
+#   kind-e2e — real cluster: bare PG + Redis on kind, helm install, smoke
+#              (readyz + RBAC), helm upgrade-in-place, smoke again. Catches
+#              breakage in the chart's runtime contract.
+#
+# Hardening toggles (autoscaling, PDB, NetworkPolicy, ServiceMonitor) are NOT
+# enabled here — those templates live on PR #96. When #96 lands the toggles
+# get added to the lint render and to the upgrade smoke.
+
+name: Helm CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "helm/**"
+      - "scripts/helm-template-checks.sh"
+      - ".github/workflows/helm-ci.yaml"
+      - ".github/ci/kind-datastores.yaml"
+      - "deploy/Dockerfile.server"
+      - "deploy/Dockerfile.migrate"
+      - "migrations/**"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: helm lint + template-checks + kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+        with:
+          version: v3.16.2
+
+      - name: helm lint
+        run: helm lint helm/leoflow
+
+      # Contract test: every required env entry + Secret key must be present
+      # in the rendered chart (covered by scripts/helm-template-checks.sh).
+      # This is the seed gate; failures here mean someone deleted or renamed
+      # a configuration key without updating the chart side.
+      - name: helm-template-checks (contract)
+        run: bash scripts/helm-template-checks.sh
+
+      - name: Render manifests + kubeconform schema
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+          helm template leoflow helm/leoflow \
+            --set database.url='postgres://x:x@x/x' \
+            --set redis.url='redis://x/0' \
+            --set auth.jwtSecret=x \
+            --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
+            | kubeconform -strict -summary -ignore-missing-schemas \
+                -schema-location default
+
+  kind-e2e:
+    name: kind install + upgrade smoke
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+        with:
+          version: v3.16.2
+
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: leoflow-ci
+
+      - name: Build + load images into kind
+        run: |
+          docker build -t leoflow-server:ci -f deploy/Dockerfile.server .
+          docker build -t leoflow-migrate:ci -f deploy/Dockerfile.migrate .
+          kind load docker-image leoflow-server:ci --name leoflow-ci
+          kind load docker-image leoflow-migrate:ci --name leoflow-ci
+
+      - name: Ephemeral Postgres + Redis
+        run: |
+          kubectl create namespace leoflow
+          kubectl -n leoflow apply -f .github/ci/kind-datastores.yaml
+          kubectl -n leoflow rollout status deploy/postgres --timeout=120s
+          kubectl -n leoflow rollout status deploy/redis --timeout=120s
+
+      - name: helm install
+        run: |
+          helm install leoflow helm/leoflow -n leoflow \
+            --set image.repository=leoflow-server --set image.tag=ci \
+            --set image.pullPolicy=IfNotPresent \
+            --set migrations.image.repository=leoflow-migrate --set migrations.image.tag=ci \
+            --set migrations.image.pullPolicy=IfNotPresent \
+            --set database.url='postgres://leoflow:leoflow@postgres:5432/leoflow?sslmode=disable' \
+            --set redis.url='redis://redis:6379/0' \
+            --set auth.jwtSecret=ci-jwt-secret \
+            --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
+            --set bootstrap.password=ci-admin \
+            --wait --timeout 240s
+          kubectl -n leoflow rollout status deploy/leoflow --timeout=120s
+
+      - name: Smoke — readyz + RBAC for pod-per-task
+        run: |
+          kubectl -n leoflow port-forward svc/leoflow 8080:8080 &
+          PF_PID=$!
+          # Wait for the port-forward to be up; do not race kubectl's start time.
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsS http://127.0.0.1:8080/readyz && break || sleep 2
+          done
+          # The control plane must be allowed to create task pods in its namespace.
+          kubectl -n leoflow auth can-i create pods \
+            --as=system:serviceaccount:leoflow:leoflow
+          kill "$PF_PID" || true
+
+      # Upgrade smoke: re-apply the same release with a bumped value (the loop
+      # interval) to prove rolling updates roll cleanly. When OCI chart
+      # publishing lands, this becomes "upgrade from previous tagged release"
+      # per #143's acceptance — a TODO marker in the chart README will track it.
+      - name: helm upgrade smoke (in-place)
+        run: |
+          helm upgrade leoflow helm/leoflow -n leoflow --reuse-values \
+            --set config.scheduler.loopIntervalMs=750 \
+            --wait --timeout 240s
+          kubectl -n leoflow rollout status deploy/leoflow --timeout=120s
+
+      - name: Smoke — readyz after upgrade
+        run: |
+          kubectl -n leoflow port-forward svc/leoflow 8080:8080 &
+          PF_PID=$!
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsS http://127.0.0.1:8080/readyz && break || sleep 2
+          done
+          kill "$PF_PID" || true

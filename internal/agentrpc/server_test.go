@@ -20,10 +20,12 @@ import (
 
 // fakeStore records ReportState calls and serves a fixed task spec.
 type fakeStore struct {
-	spec      TaskSpec
-	specErr   error
-	reported  []reportedState
-	reportErr error
+	spec         TaskSpec
+	specErr      error
+	reported     []reportedState
+	reportErr    error
+	heartbeats   []auth.AgentIdentity
+	heartbeatErr error
 }
 
 type reportedState struct {
@@ -40,6 +42,11 @@ func (s *fakeStore) TaskSpec(context.Context, auth.AgentIdentity) (TaskSpec, err
 func (s *fakeStore) ReportState(_ context.Context, id auth.AgentIdentity, st domain.TaskState, exit int, msg string) error {
 	s.reported = append(s.reported, reportedState{id, st, exit, msg})
 	return s.reportErr
+}
+
+func (s *fakeStore) RecordHeartbeat(_ context.Context, id auth.AgentIdentity) error {
+	s.heartbeats = append(s.heartbeats, id)
+	return s.heartbeatErr
 }
 
 func testIdentity() auth.AgentIdentity {
@@ -360,6 +367,40 @@ func (w *fakeSinkWriter) WriteEvent(ev logs.Event) error {
 	return nil
 }
 func (w *fakeSinkWriter) Close() error { return nil }
+
+// TestHeartbeatRecordsLivenessOnStore: the Heartbeat RPC stamps
+// last_heartbeat_at via store.RecordHeartbeat so the scheduler's heartbeat
+// reaper (#128) can distinguish live tasks from agent-lost ones. The RPC
+// must still succeed when the store stamp fails (transient DB blip) — see
+// the comment on Server.Heartbeat: failing the call would risk the agent
+// terminating itself unnecessarily.
+func TestHeartbeatRecordsLivenessOnStore(t *testing.T) {
+	store := &fakeStore{}
+	srv, authn := newServer(store)
+	if _, err := srv.Heartbeat(ctxWithToken(t, authn), &agentv1.HeartbeatRequest{}); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if len(store.heartbeats) != 1 {
+		t.Fatalf("heartbeats recorded = %d, want 1", len(store.heartbeats))
+	}
+	got := store.heartbeats[0]
+	if got.TaskInstanceID != "ti-1" || got.RunID != "run-1" || got.TaskID != "extract" {
+		t.Errorf("heartbeat identity = %+v, want the testIdentity", got)
+	}
+}
+
+// TestHeartbeatSucceedsWhenStoreFails pins the resilience contract: a
+// transient DB error inside RecordHeartbeat must not surface as an RPC error
+// to the agent. Otherwise the agent could terminate itself on a DB blip.
+// The scheduler reaper would in the worst case fail the TI as agent_lost on
+// the next tick — correct under "do no harm" (ADR 0031).
+func TestHeartbeatSucceedsWhenStoreFails(t *testing.T) {
+	store := &fakeStore{heartbeatErr: errors.New("db transient blip")}
+	srv, authn := newServer(store)
+	if _, err := srv.Heartbeat(ctxWithToken(t, authn), &agentv1.HeartbeatRequest{}); err != nil {
+		t.Errorf("Heartbeat must not surface a transient store error to the agent; got %v", err)
+	}
+}
 
 func TestRegisterAndHeartbeatReturnServerTime(t *testing.T) {
 	srv, a := newServer(&fakeStore{})

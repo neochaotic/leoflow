@@ -328,6 +328,7 @@ type TaskInstance struct {
 	Hostname        *string            `json:"hostname"`
 	Note            *string            `json:"note"`
 	ScheduledAt     pgtype.Timestamptz `json:"scheduled_at"`
+	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
 }
 
 type TaskStateHistory struct {

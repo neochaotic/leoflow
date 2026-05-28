@@ -62,6 +62,13 @@ type Querier interface {
 	// run_id is the dag_run's UUID (StagingClaimName uses it), so join on dag_runs.id,
 	// which is globally unique. run_state is NULL only when the run row is truly gone.
 	ListActiveStagingVolumes(ctx context.Context) ([]ListActiveStagingVolumesRow, error)
+	// Lists running TIs that have heartbeated at least once and whose latest
+	// heartbeat is non-null, alongside enough identity to log + observe.
+	// The "non-null" filter is the safety guarantee: a TI that never heartbeated
+	// is either inline (no agent ever exists) or fresh — out of scope for this
+	// reaper. The LIMIT bounds a single tick's reap work even after a large
+	// outage; the rest are picked up on the next tick.
+	ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostCandidatesRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
 	// All of a tenant's connections WITH the encrypted password, for delivering
 	// credentials to task pods (ADR 0021). Never use this for UI/API responses,
@@ -101,7 +108,18 @@ type Querier interface {
 	// parameter across an UPDATE-inside-WITH and the outer UPDATE.
 	MarkRunOrphanedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) error
 	MarkStagingDeleted(ctx context.Context, arg MarkStagingDeletedParams) error
+	// Fails a TI whose agent went silent. The WHERE state='running' guard
+	// prevents overwriting a TI the agent's last terminal report finally
+	// delivered between our list and our write (defense in depth — a late
+	// report wins over the reaper). Idempotent on a second call.
+	MarkTaskAgentLost(ctx context.Context, id pgtype.UUID) (int64, error)
 	RecordStagingVolume(ctx context.Context, arg RecordStagingVolumeParams) error
+	// Stamps last_heartbeat_at on the active TI of an attempt. Bounded by the
+	// (dag_run_id, task_id, try_number) tuple to match the agent's identity. The
+	// state IN guard avoids stamping a heartbeat on a TI the scheduler already
+	// transitioned to terminal between the agent's last heartbeat and now — a
+	// terminal TI must stay terminal even if a late heartbeat arrives.
+	RecordTaskHeartbeat(ctx context.Context, arg RecordTaskHeartbeatParams) error
 	RecordXCom(ctx context.Context, arg RecordXComParams) error
 	RemoveFavorite(ctx context.Context, arg RemoveFavoriteParams) error
 	// $3 is cast to task_state in every usage: without the cast Postgres deduces an

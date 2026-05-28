@@ -97,6 +97,10 @@ func (f *flakyStore) ListReapCandidates(context.Context) ([]ReapCandidate, error
 	return nil, nil
 }
 func (f *flakyStore) ReapRun(context.Context, string) error { return nil }
+func (f *flakyStore) ListAgentLostCandidates(context.Context) ([]AgentLostCandidate, error) {
+	return nil, nil
+}
+func (f *flakyStore) MarkTaskAgentLost(context.Context, string) error { return nil }
 
 func (f *flakyStore) snapshotMaterialized() []string {
 	f.mu.Lock()

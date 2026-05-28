@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -847,16 +848,66 @@ func ensureDevVenv(ctx context.Context, cmd *cobra.Command, home, runtimeSrc str
 			return "", fmt.Errorf("creating dev venv with %s (the managed CPython bundles venv; a system python3 may need its python3-venv package): %w", base, e)
 		}
 	}
+	// Runtime + Airflow SDK: install once, gated by the runtime being importable, so
+	// reruns are fast. (No project deps here — those are tracked separately below.)
 	check := exec.CommandContext(ctx, py, "-c", "import leoflow_runtime") //nolint:gosec // py is the managed venv interpreter
 	if check.Run() != nil {
 		devPrintln(cmd.OutOrStdout(), "▸ installing task runtime + Airflow SDK into the dev venv …")
-		install := exec.CommandContext(ctx, py, venvPipArgs(runtimeSrc, deps)...) //nolint:gosec // py is the managed venv interpreter
+		install := exec.CommandContext(ctx, py, venvPipArgs(runtimeSrc, nil)...) //nolint:gosec // py is the managed venv interpreter
 		install.Stdout, install.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 		if e := install.Run(); e != nil {
-			return "", fmt.Errorf("installing dev venv packages: %w", e)
+			return "", fmt.Errorf("installing dev venv runtime: %w", e)
+		}
+	}
+	// Project deps: (re)install when the active project's declared dependencies
+	// change — gating only on the runtime above meant switching projects, or
+	// editing `dependencies:`, never refreshed the venv (#116). Additive: extra
+	// packages from a previous project are harmless.
+	if len(deps) > 0 && !devDepsUpToDate(home, deps) {
+		devPrintln(cmd.OutOrStdout(), "▸ installing project dependencies into the dev venv …")
+		install := exec.CommandContext(ctx, py, venvDepsArgs(deps)...) //nolint:gosec // py is the managed venv interpreter
+		install.Stdout, install.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+		if e := install.Run(); e != nil {
+			return "", fmt.Errorf("installing project dependencies: %w", e)
+		}
+		if e := writeDevDepsMarker(home, deps); e != nil {
+			return "", fmt.Errorf("recording installed project deps: %w", e)
 		}
 	}
 	return py, nil
+}
+
+// venvDepsArgs is the pip invocation that installs just the project's declared
+// dependencies into the dev venv.
+func venvDepsArgs(deps []string) []string {
+	return append([]string{"-m", "pip", "install", "-q"}, deps...)
+}
+
+// devDepsMarkerPath is the file recording which project dependencies the dev venv
+// currently has installed.
+func devDepsMarkerPath(home string) string { return filepath.Join(home, "venv", ".leoflow-deps") }
+
+// devDepsSignature is an order-independent canonical form of a dependency list, so
+// reordering `dependencies:` does not force a needless reinstall.
+func devDepsSignature(deps []string) string {
+	s := append([]string(nil), deps...)
+	sort.Strings(s)
+	return strings.Join(s, "\n")
+}
+
+// devDepsUpToDate reports whether the dev venv already has exactly these project
+// deps installed (per the marker written by the last successful install).
+func devDepsUpToDate(home string, deps []string) bool {
+	b, err := os.ReadFile(devDepsMarkerPath(home)) //nolint:gosec // path derived from the per-user dev home
+	if err != nil {
+		return false
+	}
+	return string(b) == devDepsSignature(deps)
+}
+
+// writeDevDepsMarker records the project deps just installed into the dev venv.
+func writeDevDepsMarker(home string, deps []string) error {
+	return os.WriteFile(devDepsMarkerPath(home), []byte(devDepsSignature(deps)), 0o600)
 }
 
 // devRun and devOutput run external dev tools (k3d/docker/kubectl). They are

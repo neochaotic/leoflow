@@ -137,6 +137,9 @@ nav:
       - Examples: examples.md
       - "Case study: 1 GB ETL on staging": etl-staging-case-study.md
       - Variables & Connections: variables-connections.md
+      - Connections cookbook:
+          - Overview: connections/index.md
+          - Postgres: connections/postgres.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

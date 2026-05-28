@@ -1,0 +1,9 @@
+schema_version: "1.0"
+dag_id: mysql_load
+description: Compute rows and load them into an external MySQL/MariaDB via a managed Connection.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies:
+  - PyMySQL==1.1.1

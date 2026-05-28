@@ -140,6 +140,7 @@ nav:
       - Connections cookbook:
           - Overview: connections/index.md
           - Postgres: connections/postgres.md
+          - MySQL / MariaDB: connections/mysql.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

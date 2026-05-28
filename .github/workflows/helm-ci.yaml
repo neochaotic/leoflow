@@ -108,16 +108,28 @@ jobs:
 
       - name: Smoke — readyz + RBAC for pod-per-task
         run: |
+          set -euo pipefail
           kubectl -n leoflow port-forward svc/leoflow 8080:8080 &
           PF_PID=$!
-          # Wait for the port-forward to be up; do not race kubectl's start time.
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            curl -fsS http://127.0.0.1:8080/readyz && break || sleep 2
+          trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+          # Wait for the port-forward + /readyz to come up; do NOT mask failure
+          # in the loop (the previous form silently passed if every curl failed
+          # because the trailing `sleep 2` returned 0).
+          ready=0
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:8080/readyz; then
+              ready=1
+              break
+            fi
+            sleep 2
           done
+          if [ "$ready" -ne 1 ]; then
+            echo "/readyz never responded via port-forward" >&2
+            exit 1
+          fi
           # The control plane must be allowed to create task pods in its namespace.
           kubectl -n leoflow auth can-i create pods \
             --as=system:serviceaccount:leoflow:leoflow
-          kill "$PF_PID" || true
 
       # Upgrade smoke: re-apply the same release with a bumped value (the loop
       # interval) to prove rolling updates roll cleanly. When OCI chart
@@ -132,9 +144,19 @@ jobs:
 
       - name: Smoke — readyz after upgrade
         run: |
+          set -euo pipefail
           kubectl -n leoflow port-forward svc/leoflow 8080:8080 &
           PF_PID=$!
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            curl -fsS http://127.0.0.1:8080/readyz && break || sleep 2
+          trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+          ready=0
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:8080/readyz; then
+              ready=1
+              break
+            fi
+            sleep 2
           done
-          kill "$PF_PID" || true
+          if [ "$ready" -ne 1 ]; then
+            echo "/readyz never responded after helm upgrade" >&2
+            exit 1
+          fi

@@ -14,10 +14,17 @@ import (
 )
 
 // TestReapRunOrphanedRunIntegration pins the end-to-end contract of the orphan
-// reaper against a real Postgres: a `running` dag_run with a stuck `running`
-// task instance is transitioned to `failed`, the stuck task instance ends up
-// `failed` too, and a second reap on the same run is a no-op (idempotent).
-// This is the behavior the dashboard counter depends on (#120).
+// reaper against a real Postgres: a `running` dag_run whose TIs all settled
+// (success/failed/skipped) but whose run-level finalizer never fired is the
+// exact shape #120 targets (server died between the last TI report and the
+// next scheduler tick). The run is transitioned to `failed` with the
+// orphaned note, the never-started downstream `load` is left alone (it was
+// not "orphaned" — there was nothing to fail), and a second reap is a no-op
+// (idempotent). This is the behavior the dashboard counter depends on.
+//
+// The companion case — a TI stuck in `running` because the agent died — is
+// intentionally OUT OF SCOPE for this reaper to avoid killing legitimately
+// slow tasks; it is covered separately by issue #128 (TI heartbeat reaper).
 func TestReapRunOrphanedRunIntegration(t *testing.T) {
 	repo, sched, ctx := openRepo(t)
 	dagID := fmt.Sprintf("reap_run_%d", time.Now().UnixNano())
@@ -35,8 +42,10 @@ func TestReapRunOrphanedRunIntegration(t *testing.T) {
 	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
 		t.Fatalf("MaterializeTasks: %v", err)
 	}
-	// Pretend the agent dispatched extract: it is mid-run when the server dies.
-	if err := sched.ApplyTransition(ctx, runUUID, "extract", domain.TaskStateRunning); err != nil {
+	// Extract finished successfully but the scheduler crashed before the
+	// finalizer for the run could fire. `load` never even started (its upstream
+	// just settled). All TIs are terminal/none; only the dag_run is stuck.
+	if err := sched.ApplyTransition(ctx, runUUID, "extract", domain.TaskStateSuccess); err != nil {
 		t.Fatal(err)
 	}
 
@@ -45,7 +54,7 @@ func TestReapRunOrphanedRunIntegration(t *testing.T) {
 		t.Fatalf("ListReapCandidates: %v", err)
 	}
 	if findCandidate(cands, runUUID) == nil {
-		t.Fatalf("freshly-running run should appear as an orphan candidate, got %+v", cands)
+		t.Fatalf("a run with all TIs settled but state=running must be a candidate; got %+v", cands)
 	}
 
 	if err := sched.ReapRun(ctx, runUUID); err != nil {
@@ -61,16 +70,16 @@ func TestReapRunOrphanedRunIntegration(t *testing.T) {
 		}
 	}
 
-	// The stuck `running` task instance is failed; the never-started `load` is
-	// left in `none` (a not-yet-active task was not "orphaned" — there was
-	// nothing to fail).
+	// Settled TIs are not rewritten by the reap: `extract` stays success, and
+	// `load` stays `none` (a not-yet-active task was not "orphaned" — there was
+	// nothing to fail). The reaper's TI-side update only targets active states.
 	tis, _ := repo.TaskInstancesForRuns(ctx, "default", dagID, []string{"r1"})
 	states := map[string]domain.TaskState{}
 	for _, ti := range tis {
 		states[ti.TaskID] = ti.State
 	}
-	if states["extract"] != domain.TaskStateFailed {
-		t.Errorf("orphaned extract should be failed, got %q", states["extract"])
+	if states["extract"] != domain.TaskStateSuccess {
+		t.Errorf("already-settled extract should stay success, got %q", states["extract"])
 	}
 	if states["load"] != domain.TaskStateNone {
 		t.Errorf("never-active load should stay none, got %q", states["load"])

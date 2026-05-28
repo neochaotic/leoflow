@@ -62,9 +62,12 @@ func runResetPassword(cmd *cobra.Command, userEmail string) error {
 	}
 
 	// Keep config.yaml's hash in sync (used to bootstrap a fresh database).
+	// Preserve the per-install JWT secret (#121) — reset-password rotates the
+	// password, not the signing secret, so existing browser sessions are not
+	// invalidated by a password reset.
 	if cfg != nil && home != "" {
 		_ = writeLiteConfig(filepath.Join(home, ".leoflow"), cfg.ParserCmd, //nolint:errcheck // best-effort sync; the DB is the source of truth
-			liteSettings{Workspace: cfg.Workspace, Executor: cfg.LiteExecutor, AdminEmail: email, Port: cfg.LitePort}, hash)
+			liteSettings{Workspace: cfg.Workspace, Executor: cfg.LiteExecutor, AdminEmail: email, Port: cfg.LitePort}, hash, cfg.JWTSecret)
 	}
 
 	_, _ = fmt.Fprintf(out, "\n  password reset for %s\n  new password: %s\n  (shown once — save it)\n", email, pw) //nolint:errcheck // best-effort terminal output

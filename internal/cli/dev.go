@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -52,8 +54,12 @@ const (
 	// taskSDKVersion matches the task image (runtime/Dockerfile); the dev venv
 	// installs it so dag.py's `from airflow.sdk import ...` resolves.
 	taskSDKVersion = "apache-airflow-task-sdk==1.2.1"
-	devJWTSecret   = "dev-insecure-jwt-secret-change-me"
-	devSecretKey   = "dev-insecure-secret-key-32bytes!"
+	// devJWTSecret is the legacy/fallback Lite JWT signing secret used only when a
+	// pre-#121 install has no jwt_secret in its config.yaml. Modern setups write a
+	// random per-install secret (rotated on every fresh install), so tokens from a
+	// prior install fail verification and the SPA shows the login screen.
+	devJWTSecret = "dev-insecure-jwt-secret-change-me"
+	devSecretKey = "dev-insecure-secret-key-32bytes!"
 	// liteTokenTTLSeconds is the lite session lifetime: 30 days. Lite is a local
 	// single-user tool, so the server's 1-hour default just means surprise
 	// re-logins mid-session.
@@ -122,6 +128,10 @@ type devOptions struct {
 	// Resolved from ~/.leoflow/config.yaml (written by `leoflow setup`), not flags.
 	adminHash  string
 	adminEmail string
+	// jwtSecret is the per-install Lite JWT signing secret loaded from
+	// ~/.leoflow/config.yaml; empty on a legacy install (resolveLiteJWTSecret
+	// then falls back to devJWTSecret with a one-shot warning).
+	jwtSecret string
 }
 
 // resolveLiteProject picks the project dir for `leoflow lite`. With an explicit
@@ -274,6 +284,27 @@ func friendlyResolves() bool {
 	defer cancel()
 	addrs, err := net.DefaultResolver.LookupHost(ctx, friendlyHost)
 	return err == nil && len(addrs) > 0
+}
+
+// liteJWTFallbackOnce keeps the legacy-fallback warning to a single log line per
+// process (resolveLiteJWTSecret is called by both the token mint and the env
+// build, so without this we would log twice).
+var liteJWTFallbackOnce sync.Once
+
+// resolveLiteJWTSecret returns the per-install JWT signing secret — rotated on
+// every fresh install so a reinstall invalidates stale browser tokens (#121).
+// On a legacy install whose config.yaml has no jwt_secret, it falls back to the
+// dev-only constant once with a warning, so the upgrade does not break existing
+// setups. The input is a plain string (the loaded `jwt_secret`) to stay
+// independent of the surrounding cfg type at each call site.
+func resolveLiteJWTSecret(secret string) string {
+	if secret != "" {
+		return secret
+	}
+	liteJWTFallbackOnce.Do(func() {
+		slog.Warn("config jwt_secret is empty; falling back to the dev-only constant — run `leoflow setup` to rotate the per-install secret (#121)")
+	})
+	return devJWTSecret
 }
 
 // bringUpDependencies starts Lite's datastore and returns a cleanup func the
@@ -507,7 +538,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 
 	// The admin login is provisioned by `leoflow setup` (hash-only in config).
 	// With it, Lite enforces real auth; without it, fall back to no-auth + warn.
-	o.adminHash, o.adminEmail = resolveLiteAdmin(cmd, out)
+	o.adminHash, o.adminEmail, o.jwtSecret = resolveLiteAdmin(cmd, out)
 
 	ctx, stop := signal.NotifyContext(cmdContext(cmd), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -571,7 +602,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	// Mint an admin token in-process signed with the dev JWT secret; the control
 	// plane validates it by signature + claims, so no login or seeded user is
 	// needed (works against a fresh or pre-existing dev database).
-	token, terr := auth.MintUserToken(devJWTSecret, time.Hour, auth.User{
+	token, terr := auth.MintUserToken(resolveLiteJWTSecret(o.jwtSecret), time.Hour, auth.User{
 		ID: "leoflow-dev", TenantID: "default", Email: devAdminUser, Roles: []string{"admin"},
 	})
 	if terr != nil {
@@ -596,7 +627,7 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o d
 	if aerr != nil {
 		return nil, nil, fmt.Errorf("resolving project dir: %w", aerr)
 	}
-	env = subprocessServerEnv(o.host, o.port, agentBin, workDir, venvPy, o.adminHash, o.adminEmail)
+	env = subprocessServerEnv(o.host, o.port, agentBin, workDir, venvPy, o.adminHash, o.adminEmail, o.jwtSecret)
 	env = append(env, liteEditorEnv(workDir, filepath.Dir(home))...)
 	makeReload = func(token string) func() error {
 		base := func() error {
@@ -639,7 +670,7 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devO
 		}
 		return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))
 	}
-	env = clusterServerEnv(o.host, o.port, kubeconfig, o.adminHash, o.adminEmail)
+	env = clusterServerEnv(o.host, o.port, kubeconfig, o.adminHash, o.adminEmail, o.jwtSecret)
 	if wd, aerr := filepath.Abs(dir); aerr == nil {
 		env = append(env, liteEditorEnv(wd, filepath.Dir(home))...)
 	}
@@ -1038,7 +1069,7 @@ func resolveBinary(explicit, name string) (string, error) {
 // host is the bind address. It is honored only with real auth; a no-auth
 // fallback is ALWAYS forced to loopback so an unauthenticated control plane can
 // never be exposed to the network (resolveBindHost enforces this).
-func sharedServerEnv(host string, port int, adminHash, adminEmail string) []string {
+func sharedServerEnv(host string, port int, adminHash, adminEmail, jwtSecret string) []string {
 	env := []string{
 		fmt.Sprintf("LEOFLOW_SERVER_HTTP_ADDR=%s:%d", resolveBindHost(host, adminHash), port),
 		"LEOFLOW_SERVER_GRPC_ADDR=" + devGRPCBindAddr(port),
@@ -1058,7 +1089,7 @@ func sharedServerEnv(host string, port int, adminHash, adminEmail string) []stri
 		// No LEOFLOW_REDIS_URL: Lite runs Redis-free — XCom on Postgres and an
 		// in-process log tailer. The empty Redis URL is the signal the server uses
 		// to select the embedded backends (ADR 0026).
-		"LEOFLOW_AUTH_JWT_SECRET=" + devJWTSecret,
+		"LEOFLOW_AUTH_JWT_SECRET=" + resolveLiteJWTSecret(jwtSecret),
 		// Lite is a local, single-user tool: a 1-hour token (the server default)
 		// expires mid-session and silently bounces the user to a re-login they did
 		// not ask for. Mint 30-day sessions so signing in is a once-a-month event,
@@ -1131,35 +1162,37 @@ func mergeLiteDefaults(o *devOptions, c *config.Config, executorSet, portSet boo
 	}
 }
 
-// resolveLiteAdmin loads the configured admin credential and warns when none is
-// set (Lite then falls back to no-auth).
-func resolveLiteAdmin(cmd *cobra.Command, out io.Writer) (hash, email string) {
-	hash, email = loadLiteAdmin(cmd)
+// resolveLiteAdmin loads the configured admin credential + per-install JWT
+// secret, warning when no admin is set (Lite then falls back to no-auth).
+func resolveLiteAdmin(cmd *cobra.Command, out io.Writer) (hash, email, jwtSecret string) {
+	hash, email, jwtSecret = loadLiteAdmin(cmd)
 	if hash == "" {
 		devPrintln(out, "  WARNING: no admin configured — run `leoflow setup`. Falling back to no-auth (local only, insecure).")
 	}
-	return hash, email
+	return hash, email, jwtSecret
 }
 
-// loadLiteAdmin reads the admin credential the setup wizard persisted (hash only)
-// from ~/.leoflow/config.yaml. Returns an empty hash when none is configured.
-func loadLiteAdmin(cmd *cobra.Command) (hash, email string) {
+// loadLiteAdmin reads the Lite admin credential the setup wizard persisted (hash
+// only) and the per-install JWT secret (rotated by `leoflow setup` so a reinstall
+// invalidates the prior install's tokens — #121) from ~/.leoflow/config.yaml.
+// Returns an empty hash when no admin is configured.
+func loadLiteAdmin(cmd *cobra.Command) (hash, email, jwtSecret string) {
 	c, err := config.Load(configFilePath(cmd), nil)
 	if err != nil || c == nil {
-		return "", ""
+		return "", "", ""
 	}
 	email = c.AdminEmail
 	if email == "" {
 		email = "admin@leoflow.local"
 	}
-	return c.AdminPasswordHash, email
+	return c.AdminPasswordHash, email, c.JWTSecret
 }
 
 // subprocessServerEnv adds the subprocess-executor settings: the agent binary,
 // the project workdir (so dag.py imports), the venv Python, and a dialable
 // control-plane address (the server binds 0.0.0.0, which is not a dial target).
-func subprocessServerEnv(host string, port int, agentBin, workDir, venvPython, adminHash, adminEmail string) []string {
-	return append(sharedServerEnv(host, port, adminHash, adminEmail),
+func subprocessServerEnv(host string, port int, agentBin, workDir, venvPython, adminHash, adminEmail, jwtSecret string) []string {
+	return append(sharedServerEnv(host, port, adminHash, adminEmail, jwtSecret),
 		"LEOFLOW_EXECUTOR_TYPE=subprocess",
 		"LEOFLOW_EXECUTOR_AGENT_PATH="+agentBin,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1"+devGRPCBindAddr(port),
@@ -1171,8 +1204,8 @@ func subprocessServerEnv(host string, port int, agentBin, workDir, venvPython, a
 // clusterServerEnv adds the Kubernetes-executor settings: the isolated dev
 // cluster's kubeconfig (so the control plane targets leoflow-dev, never the
 // product cluster) and the host address task pods dial back for gRPC.
-func clusterServerEnv(host string, port int, kubeconfig, adminHash, adminEmail string) []string {
-	return append(sharedServerEnv(host, port, adminHash, adminEmail),
+func clusterServerEnv(host string, port int, kubeconfig, adminHash, adminEmail, jwtSecret string) []string {
+	return append(sharedServerEnv(host, port, adminHash, adminEmail, jwtSecret),
 		"LEOFLOW_EXECUTOR_TYPE=kubernetes",
 		"KUBECONFIG="+kubeconfig,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="+devHostGRPCAddr(port),

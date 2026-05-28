@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -279,7 +281,14 @@ func provisionLite(cmd *cobra.Command, out io.Writer, leoflowHome string, r setu
 		if herr != nil {
 			return "", herr
 		}
-		if wErr := writeLiteConfig(leoflowHome, parserCmd, lc, hash); wErr != nil {
+		// Per-install JWT secret: a reinstall (which rewrites this file) invalidates
+		// every token the previous install minted, so the SPA stops silently
+		// accepting a stale browser token and the fresh login screen appears (#121).
+		jwtSecret, jerr := generateJWTSecret()
+		if jerr != nil {
+			return "", jerr
+		}
+		if wErr := writeLiteConfig(leoflowHome, parserCmd, lc, hash, jwtSecret); wErr != nil {
 			return "", fmt.Errorf("writing config: %w", wErr)
 		}
 		generated = pw
@@ -377,8 +386,10 @@ func loadManifestSettings(leoflowHome string, def liteSettings) liteSettings {
 }
 
 // writeLiteConfig writes the Lite settings to ~/.leoflow/config.yaml (0600). Only
-// the bcrypt hash of the admin password is stored — never the plaintext.
-func writeLiteConfig(leoflowHome, parserCmd string, lc liteSettings, adminHash string) error {
+// the bcrypt hash of the admin password is stored — never the plaintext. The
+// per-install JWT secret rotates here (#121): a reinstall invalidates the prior
+// install's tokens, so the SPA stops auto-accepting a stale browser token.
+func writeLiteConfig(leoflowHome, parserCmd string, lc liteSettings, adminHash, jwtSecret string) error {
 	var b strings.Builder
 	_, _ = fmt.Fprintf(&b, "# Written by `leoflow setup` (Leoflow Lite).\n")
 	_, _ = fmt.Fprintf(&b, "parser_cmd: %q\n", parserCmd)
@@ -387,7 +398,19 @@ func writeLiteConfig(leoflowHome, parserCmd string, lc liteSettings, adminHash s
 	_, _ = fmt.Fprintf(&b, "lite_port: %d\n", lc.Port)
 	_, _ = fmt.Fprintf(&b, "admin_email: %q\n", lc.AdminEmail)
 	_, _ = fmt.Fprintf(&b, "admin_password_hash: %q\n", adminHash)
+	_, _ = fmt.Fprintf(&b, "jwt_secret: %q\n", jwtSecret)
 	return os.WriteFile(filepath.Join(leoflowHome, "config.yaml"), []byte(b.String()), 0o600)
+}
+
+// generateJWTSecret returns a fresh per-install JWT signing secret (32 random
+// bytes, hex-encoded). Persisted under ~/.leoflow/config.yaml at setup so a
+// reinstall rotates it and invalidates every token the previous install minted.
+func generateJWTSecret() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generating jwt secret: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // writeSetupManifest persists the provisioning manifest to ~/.leoflow/setup.json.

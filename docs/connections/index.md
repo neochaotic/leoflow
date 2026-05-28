@@ -20,7 +20,7 @@ URI shape, an example DAG, and how to test it.
 | `mysql` / `mariadb` | [mysql.md](mysql.md) | [examples/mysql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mysql_load) | ✅ documented + automated test (#69, table-driven via #138) |
 | `mssql` | [mssql.md](mssql.md) | [examples/mssql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mssql_load) | ✅ documented + automated test (#71, table-driven via #138) |
 | `sqlite` | [sqlite.md](sqlite.md) | [examples/sqlite_load](https://github.com/neochaotic/leoflow/tree/main/examples/sqlite_load) | ✅ documented + automated test (#70, dedicated test for file-path shape; Tier 1 — no service needed) |
-| `redis` | TBD (#73) | TBD | 📋 planned |
+| `redis` | [redis.md](redis.md) | [examples/redis_load](https://github.com/neochaotic/leoflow/tree/main/examples/redis_load) | ✅ documented + automated test (#73, table-driven via #138; Tier 1 — redis already in CI services) |
 | `http` | TBD (#75) | TBD | 📋 planned |
 
 ## Cloud (deferred past alpha)

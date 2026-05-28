@@ -46,6 +46,11 @@ func TestConnectionDeliveryChainOfCustodyIntegration(t *testing.T) {
 		{connType: "mysql", defaultPort: 3306, host: "warehouse.example.com", schema: "analytics"},
 		{connType: "mariadb", defaultPort: 3306, host: "warehouse.example.com", schema: "analytics"},
 		{connType: "mssql", defaultPort: 1433, host: "warehouse.example.com", schema: "analytics"},
+		// Redis fits the same shape: the Schema field carries the **db index**
+		// (Redis namespaces 0..15 by default). The URI redis-py parses is
+		// `redis://[user]:password@host:port/<db>`, identical in shape to the
+		// SQL family — only the semantics of Schema differ.
+		{connType: "redis", defaultPort: 6379, host: "warehouse.example.com", schema: "0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.connType, func(t *testing.T) {

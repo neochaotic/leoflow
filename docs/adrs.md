@@ -33,4 +33,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0028: Release & Versioning for the Two Editions (One Tag, Two Co-Versioned Artifacts)](adr/0028-release-versioning-two-editions.md)
 - [ADR 0029: Lite Datastore Default — Docker Postgres (Managed PG is the Opt-In)](adr/0029-lite-datastore-default-docker.md)
 - [ADR 0030: Lite Datastore Auto-Selects — Docker Postgres, or a Managed PG When Docker Is Absent](adr/0030-lite-datastore-auto-select.md)
+- [ADR 0031: Scheduler Architecture — Reconciliation Loop, Two-Phase Dispatch, Two-Layer Reaping](adr/0031-scheduler-architecture.md)
 <!-- END ADR INDEX -->

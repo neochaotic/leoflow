@@ -114,6 +114,10 @@ func handleRepoError(c *gin.Context, err error) {
 		AbortProblem(c, http.StatusNotFound, "not found", err.Error())
 		return
 	}
+	if errors.Is(err, domain.ErrConflict) {
+		AbortProblem(c, http.StatusConflict, "conflict", err.Error())
+		return
+	}
 	// A canceled/timed-out context means the client went away (the UI routinely
 	// supersedes in-flight grid requests). That is NOT a server error — mapping it
 	// to 500 produced spurious ti_summaries 500s under rapid refresh. Report 499 so

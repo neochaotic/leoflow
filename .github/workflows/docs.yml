@@ -35,7 +35,7 @@ jobs:
             ./internal/domain ./internal/scheduler ./internal/executor ./internal/dispatch \
             ./internal/agent ./internal/agentrpc ./internal/storage ./internal/auth \
             ./internal/config ./internal/cli ./internal/api
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       # Imaging libs for the Material social-cards plugin.
       - run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libfreetype6-dev libffi-dev libjpeg-dev libpng-dev libz-dev

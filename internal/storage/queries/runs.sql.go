@@ -551,7 +551,14 @@ FROM dag_runs dr
 JOIN dags d ON d.id = dr.dag_id
 LEFT JOIN task_instances ti ON ti.dag_run_id = dr.id
 WHERE dr.state = 'running'
+  AND NOT EXISTS (
+      SELECT 1 FROM task_instances ti2
+      WHERE ti2.dag_run_id = dr.id
+        AND ti2.state IN ('scheduled', 'queued', 'running')
+  )
 GROUP BY dr.id, d.dag_id, dr.started_at, dr.queued_at
+ORDER BY dr.queued_at
+LIMIT 100
 `
 
 type ListOrphanCandidatesRow struct {
@@ -560,14 +567,17 @@ type ListOrphanCandidatesRow struct {
 	LastActivity pgtype.Timestamptz `json:"last_activity"`
 }
 
-// Lists every dag_run currently in 'running' alongside the timestamp of its
-// most recent observable activity: the largest of the run's started_at, its
-// task instances' started_at and ended_at, the run's queued_at as a final
-// fallback. The scheduler reaper compares the gap from this stamp to "now"
-// against its orphan threshold. Returning a single denormalised row per run
-// (rather than relying on the caller to compute the max) keeps the decision
-// purely in Go and the query trivially indexable (state='running' partial
-// index plus the per-run-id TI lookup).
+// Lists dag_runs currently in 'running' whose task instances are ALL terminal
+// or never-started (no TI in scheduled/queued/running), alongside the
+// timestamp of their most recent observable activity. The "no active TI"
+// filter is the critical safety guarantee: a legitimately-active task (slow
+// image pull, long-running job) keeps its run out of the candidate set, so
+// the reaper can never kill a live execution. The shape this catches is the
+// post-crash one: TIs settled (success/failed/skipped/upstream_failed) but
+// FinalizeRun did not transition the dag_run — e.g. the server died between
+// the last TI report and the next scheduler tick. The LIMIT bounds a single
+// tick's reap work even after a multi-hour outage; the rest are picked up
+// on the next tick (the reaper is a backstop, not a sprint).
 func (q *Queries) ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error) {
 	rows, err := q.db.Query(ctx, listOrphanCandidates)
 	if err != nil {

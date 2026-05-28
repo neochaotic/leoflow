@@ -212,10 +212,13 @@ func (s *Scheduler) Heartbeat() (bool, time.Time) {
 }
 
 // Step runs one deterministic scheduling iteration over every active run. Each
-// run is advanced in isolation (see advanceSafely): a panic or error in one run
-// is contained, so it never blocks the other runs or new-run creation. Only a
-// failure to list runs or create due runs — infrastructure-level errors that
-// affect the whole tick — is returned.
+// run is advanced in isolation (see advanceSafely): a panic or error in one
+// run is contained, so it never blocks the other runs or new-run creation.
+// The reaper runs independently of createDueRuns success — they share no
+// dependency, and silencing the reaper when scheduling has a hiccup would let
+// orphans accumulate exactly when the operator is most likely to notice the
+// counter is wrong. The first non-nil infra-level error is returned (logged
+// by the caller); the later phases still execute.
 func (s *Scheduler) Step(ctx context.Context) error {
 	s.lastTick.Store(time.Now().UnixNano())
 	runs, err := s.store.ActiveRuns(ctx)
@@ -225,11 +228,9 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	for _, run := range runs {
 		s.advanceSafely(ctx, run)
 	}
-	if cerr := s.createDueRuns(ctx); cerr != nil {
-		return cerr
-	}
+	createErr := s.createDueRuns(ctx)
 	s.reapOrphansIfLeader(ctx)
-	return nil
+	return createErr
 }
 
 // reapOrphansIfLeader runs the orphan reaper exactly once per tick, only on the

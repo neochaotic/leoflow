@@ -252,11 +252,13 @@ func (s *SchedulerStore) ListReapCandidates(ctx context.Context) ([]scheduler.Re
 	return out, nil
 }
 
-// ReapRun fails an orphaned dag run and any of its still-active task instances
-// inside a single transaction so a half-applied reap cannot leave the run in
-// an inconsistent shape. Idempotent on the run side (the WHERE guard skips
-// runs already terminal) and on the TI side (the IN-active filter skips
-// already-terminal task instances).
+// ReapRun fails an orphaned dag run, then any of its still-active task
+// instances, inside a single transaction. The run UPDATE comes first and is
+// guarded by `state = 'running'`: if zero rows are touched, the run was no
+// longer running (a competing finalizer beat us) and we abort with a clean
+// rollback — the TI table is never touched. This guarantees we cannot leave a
+// run as `success`/`failed` while flipping its TIs to `failed (orphaned)`.
+// Idempotent: a second call on an already-failed run no-ops.
 func (s *SchedulerStore) ReapRun(ctx context.Context, runID string) error {
 	rid, err := parseUUID(runID)
 	if err != nil {
@@ -273,11 +275,19 @@ func (s *SchedulerStore) ReapRun(ctx context.Context, runID string) error {
 		_ = tx.Rollback(ctx) //nolint:errcheck // best-effort cleanup; commit path returns the meaningful error
 	}()
 	q := s.q.WithTx(tx)
+	rows, err := q.MarkRunOrphanedRun(ctx, rid)
+	if err != nil {
+		return fmt.Errorf("failing orphaned run: %w", err)
+	}
+	if rows == 0 {
+		// Not running any longer — the normal scheduler path finalized it between
+		// our list and our reap. Abort without touching task instances; the
+		// caller treats a no-op reap as success (the run is no longer an orphan
+		// either way).
+		return nil
+	}
 	if err := q.MarkRunOrphanedTaskInstances(ctx, rid); err != nil {
 		return fmt.Errorf("failing orphaned task instances: %w", err)
-	}
-	if _, err := q.MarkRunOrphanedRun(ctx, rid); err != nil {
-		return fmt.Errorf("failing orphaned run: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing reap tx: %w", err)

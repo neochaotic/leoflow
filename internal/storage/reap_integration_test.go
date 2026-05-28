@@ -85,6 +85,57 @@ func TestReapRunOrphanedRunIntegration(t *testing.T) {
 	}
 }
 
+// TestListReapCandidatesIgnoresActiveTaskInstancesIntegration is the critical
+// "do no harm" pin: a legitimately-active task instance (image pull, slow K8s
+// startup, long-running job) MUST NOT cause its run to appear as an orphan
+// candidate. The reaper only considers runs where every task instance is in a
+// terminal or never-started state — if anything is scheduled/queued/running,
+// execution is in flight and the scheduler/agent owns the next transition.
+func TestListReapCandidatesIgnoresActiveTaskInstancesIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+
+	// One DAG per scenario — easier to reason about than two runs in one DAG.
+	liveDag := fmt.Sprintf("reap_live_%d", time.Now().UnixNano())
+	stuckDag := fmt.Sprintf("reap_stuck_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}}
+	registerSpec(t, repo, ctx, liveDag, tasks)
+	registerSpec(t, repo, ctx, stuckDag, tasks)
+	for _, id := range []string{liveDag, stuckDag} {
+		if _, err := repo.CreateDagRun(ctx, "default", id, domain.DagRun{
+			RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	liveUUID := resolveRunUUID(t, sched, ctx, liveDag)
+	stuckUUID := resolveRunUUID(t, sched, ctx, stuckDag)
+	if err := sched.MaterializeTasks(ctx, liveUUID, tasks); err != nil {
+		t.Fatalf("Materialize live: %v", err)
+	}
+	if err := sched.MaterializeTasks(ctx, stuckUUID, tasks); err != nil {
+		t.Fatalf("Materialize stuck: %v", err)
+	}
+	// "live" — TI is `running` right now (slow K8s pull, mid-execution).
+	if err := sched.ApplyTransition(ctx, liveUUID, "t", domain.TaskStateRunning); err != nil {
+		t.Fatal(err)
+	}
+	// "stuck" — TI finished successfully, but FinalizeRun missed the run.
+	if err := sched.ApplyTransition(ctx, stuckUUID, "t", domain.TaskStateSuccess); err != nil {
+		t.Fatal(err)
+	}
+
+	cands, err := sched.ListReapCandidates(ctx)
+	if err != nil {
+		t.Fatalf("ListReapCandidates: %v", err)
+	}
+	if findCandidate(cands, liveUUID) != nil {
+		t.Errorf("live run with a `running` TI must NOT appear as a candidate")
+	}
+	if findCandidate(cands, stuckUUID) == nil {
+		t.Errorf("stuck run (all TIs terminal but state=running) must appear")
+	}
+}
+
 // TestReapRunIgnoresTerminalRunIntegration pins the safety guard: a run already
 // in a terminal state (success or failed) is never overwritten. The reap is a
 // safety net for stuck `running` runs, never a takeover.

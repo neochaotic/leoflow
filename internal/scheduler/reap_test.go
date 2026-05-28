@@ -99,6 +99,47 @@ func TestReapOrphans_ListErrorDoesNotPanic(t *testing.T) {
 	}
 }
 
+// panicReapStore panics on a configured method so resilience tests can drive a
+// panic through the reaper and assert the scheduler stays alive.
+type panicReapStore struct {
+	panicOnList bool
+	panicOnReap bool
+}
+
+func (p *panicReapStore) ListReapCandidates(context.Context) ([]ReapCandidate, error) {
+	if p.panicOnList {
+		panic("boom: ListReapCandidates")
+	}
+	return []ReapCandidate{{RunID: "doomed", LastActivity: time.Now().Add(-1 * time.Hour)}}, nil
+}
+func (p *panicReapStore) ReapRun(context.Context, string) error {
+	if p.panicOnReap {
+		panic("boom: ReapRun")
+	}
+	return nil
+}
+
+// TestReapOrphans_PanicInListDoesNotCrash is the most critical resilience pin:
+// a panic in the store layer (a runtime bug in pgx, a malformed row, anything)
+// must NOT kill the scheduler goroutine. The reaper recovers, logs, meters, and
+// returns nil so the next tick fires normally.
+func TestReapOrphans_PanicInListDoesNotCrash(t *testing.T) {
+	r := newOrphanReaper(&panicReapStore{panicOnList: true}, reapTestLogger(), 5*time.Minute, nil)
+	if err := r.run(context.Background()); err != nil {
+		t.Errorf("panic in list must be recovered; got error %v", err)
+	}
+}
+
+// TestReapOrphans_PanicInReapDoesNotCrash: same guarantee for the per-run reap.
+// One poison run that panics must not stall the rest of the candidate set in a
+// real tick, AND must not crash the scheduler.
+func TestReapOrphans_PanicInReapDoesNotCrash(t *testing.T) {
+	r := newOrphanReaper(&panicReapStore{panicOnReap: true}, reapTestLogger(), 5*time.Minute, nil)
+	if err := r.run(context.Background()); err != nil {
+		t.Errorf("panic in ReapRun must be recovered; got error %v", err)
+	}
+}
+
 // TestReapOrphans_ReapErrorIsPerRunIsolated: a failure reaping one run does not
 // block reaping the others — the tick is isolated per candidate just like the
 // main scheduler step (advanceSafely pattern).

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -28,6 +29,7 @@ type fakeStore struct {
 	notes       map[string]string
 	reapCands   []ReapCandidate
 	reaped      []string
+	createErr   bool
 }
 
 func newFakeStore(runs ...RunState) *fakeStore {
@@ -39,6 +41,9 @@ func (f *fakeStore) ScheduledDAGs(context.Context) ([]ScheduledDAG, error) {
 	return f.scheduled, nil
 }
 func (f *fakeStore) CreateScheduledRun(_ context.Context, dagID string, _ time.Time) error {
+	if f.createErr {
+		return errors.New("create scheduled run failed")
+	}
 	f.createdRuns = append(f.createdRuns, dagID)
 	return nil
 }
@@ -189,6 +194,27 @@ func TestStepReapsOrphanRunsOnLeader(t *testing.T) {
 	}
 	if len(store.reaped) != 1 || store.reaped[0] != "stuck" {
 		t.Errorf("reaped = %v, want [stuck]", store.reaped)
+	}
+}
+
+// TestStepReapsEvenIfCreateDueRunsFails covers an important resilience guard:
+// the reaper is a backstop, so it must run even when the rest of the tick is
+// degraded (a DB hiccup on createScheduledRun, for example). The reverse — a
+// sick DB hiding orphans precisely when you want to see them — would be a
+// silent failure mode the dashboard counter would never recover from.
+func TestStepReapsEvenIfCreateDueRunsFails(t *testing.T) {
+	store := newFakeStore()
+	store.reapCands = []ReapCandidate{
+		{RunID: "stuck", LastActivity: time.Now().UTC().Add(-1 * time.Hour)},
+	}
+	last := time.Now().UTC().Add(-2 * time.Hour)
+	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "@hourly", LastLogical: &last}}
+	store.createErr = true
+	s := newScheduler(store)
+	s.SetLeading(true)
+	_ = s.Step(context.Background())
+	if len(store.reaped) != 1 || store.reaped[0] != "stuck" {
+		t.Errorf("reaper must run even when createScheduledRun fails; reaped = %v", store.reaped)
 	}
 }
 

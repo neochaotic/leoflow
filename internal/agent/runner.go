@@ -115,6 +115,12 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		// collide on /tmp/leoflow_return_value.json.
 		env = append(env, "LEOFLOW_RETURN_VALUE_PATH="+r.ReturnPath)
 	}
+	if params := spec.GetParamsJson(); params != "" {
+		// TaskFlow literal call args (#115). The runtime decodes this and merges
+		// values into the user function's kwargs. XCom upstreams take precedence
+		// at runtime for any same-name parameter.
+		env = append(env, "LEOFLOW_PARAMS_JSON="+params)
+	}
 	return append(env, r.secretsEnv(ctx)...), nil
 }
 

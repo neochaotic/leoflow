@@ -97,6 +97,7 @@ message TaskSpec {
     map<string, string> xcom_input_mapping = 10;  // param_name -> upstream_task_id
     int32 execution_timeout_seconds = 11;
     google.protobuf.Struct extra = 12;            // operator-specific fields
+    string params_json = 13;                      // TaskFlow literal call args, JSON-encoded (#115)
 }
 
 message FetchXComRequest {

@@ -158,8 +158,25 @@ type JWTSection struct {
 
 // SchedulerSection configures the scheduler loop.
 type SchedulerSection struct {
-	LoopIntervalMS int  `mapstructure:"loop_interval_ms"`
-	Enabled        bool `mapstructure:"enabled"`
+	LoopIntervalMS int             `mapstructure:"loop_interval_ms"`
+	Enabled        bool            `mapstructure:"enabled"`
+	Dispatch       DispatchSection `mapstructure:"dispatch"`
+}
+
+// DispatchSection sizes the BufferedDispatcher (#127). BufferSize=0 keeps the
+// scheduler tick synchronous with the inner dispatcher — the right shape for
+// Lite (subprocess fork is microseconds). BufferSize>0 enables the worker
+// pool — the right shape for Pro (Kubernetes API calls add real latency).
+// The defaults are set per-edition by configsetup so the user does not have
+// to think about this; an operator can still tune the knobs.
+type DispatchSection struct {
+	// BufferSize is the depth of the queued-dispatches channel. 0 disables the
+	// pool (synchronous passthrough). A full channel returns ErrAtCapacity to
+	// the scheduler, which leaves the TI scheduled for the next tick.
+	BufferSize int `mapstructure:"buffer_size"`
+	// Workers is the number of goroutines draining the queue. Ignored when
+	// BufferSize <= 0; otherwise floored to 1.
+	Workers int `mapstructure:"workers"`
 }
 
 // ObservabilitySection configures logging, metrics, and tracing.
@@ -190,13 +207,18 @@ var serverDefaults = map[string]any{
 	// Empty by default: no Redis configured selects the embedded edition (Lite —
 	// XCom on Postgres, in-process log tailer, ADR 0026). Production sets this
 	// explicitly via the Helm chart (external Redis).
-	"redis.url":                                 "",
-	"auth.provider":                             "jwt",
-	"auth.jwt.secret":                           "",
-	"auth.jwt.token_ttl_seconds":                3600,
-	"auth.login_rate_limit_per_minute":          5,
-	"scheduler.loop_interval_ms":                1000,
-	"scheduler.enabled":                         true,
+	"redis.url":                        "",
+	"auth.provider":                    "jwt",
+	"auth.jwt.secret":                  "",
+	"auth.jwt.token_ttl_seconds":       3600,
+	"auth.login_rate_limit_per_minute": 5,
+	"scheduler.loop_interval_ms":       1000,
+	"scheduler.enabled":                true,
+	// Default: synchronous dispatch (BufferSize=0). Safe and zero-overhead for
+	// Lite. Pro deployments should set buffer_size>=1 + workers>=1 in their
+	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).
+	"scheduler.dispatch.buffer_size":            0,
+	"scheduler.dispatch.workers":                0,
 	"executor.http.inline_max_duration_seconds": 300,
 	"executor.http.inline_concurrency_limit":    256,
 	"executor.http.user_agent":                  "leoflow/0.1",

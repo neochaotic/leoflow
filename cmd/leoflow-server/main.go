@@ -587,7 +587,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		MaxSeconds:  cfg.Executor.HTTP.InlineMaxDurationSeconds,
 		UserAgent:   cfg.Executor.HTTP.UserAgent,
 	}))
-	podDispatch := setupDispatch(ctx, cfg, sched, execStore, authn, store, logger)
+	podDispatch := setupDispatch(ctx, cfg, sched, execStore, authn, store, logger, metrics)
 	leader := scheduler.NewLeader(leaderPool)
 	go func() {
 		defer leaderPool.Close()
@@ -721,11 +721,11 @@ func serve(s *http.Server, errCh chan<- error) {
 // setupDispatch wires the pod-path executor selected by executor.type onto the
 // scheduler and returns whether pod dispatch is active. "subprocess" runs the
 // agent on the host (dev only); "kubernetes" (default) launches task pods.
-func setupDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger) bool {
+func setupDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger, metrics *observability.Metrics) bool {
 	if cfg.Executor.Type == "subprocess" {
-		return setupSubprocessDispatch(cfg, sched, execStore, authn, logger)
+		return setupSubprocessDispatch(cfg, sched, execStore, authn, logger, store, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	}
-	return setupK8sDispatch(ctx, cfg, sched, execStore, authn, store, logger)
+	return setupK8sDispatch(ctx, cfg, sched, execStore, authn, store, logger, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 }
 
 // resolveAgentControlAddr returns the address task agents dial back, defaulting
@@ -739,19 +739,19 @@ func resolveAgentControlAddr(cfg *config.ServerConfig) string {
 
 // setupSubprocessDispatch wires the dev-only subprocess executor (ADR 0023): it
 // runs the agent on the host with no isolation, so it is gated to dev use.
-func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger) bool {
+func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger, sink dispatch.FailureSink, metrics *observability.Metrics) bool {
 	subExec := executor.NewSubprocessExecutor(cfg.Executor.AgentPath, logger)
 	subExec.SetWorkDir(cfg.Executor.SubprocessWorkDir)
 	dispatcher := dispatch.NewDispatcher(subExec, execStore, authn, resolveAgentControlAddr(cfg), agentTokenTTL)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
-	sched.SetDispatcher(dispatcher)
+	sched.SetDispatcher(wrapBuffered(dispatcher, sink, logger, metrics, cfg.Scheduler.Dispatch))
 	logger.Warn("subprocess dispatch enabled (dev only; user code runs unsandboxed)")
 	return true
 }
 
 // setupK8sDispatch wires the production pod-per-task executor; it is a no-op
 // (only inline http_api tasks run) when no Kubernetes client is available.
-func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger) bool {
+func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger, metrics *observability.Metrics) bool {
 	cs, perr := buildK8sClient()
 	if perr != nil {
 		logger.Warn("pod dispatch disabled; only inline http_api tasks will run", "error", perr)
@@ -763,11 +763,32 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
 	dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
-	sched.SetDispatcher(dispatcher)
+	sched.SetDispatcher(wrapBuffered(dispatcher, store, logger, metrics, cfg.Scheduler.Dispatch)) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	startReconciler(ctx, cs, execStore, logger)
 	startStagingGC(ctx, cs, store, logger)
 	logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
 	return true
+}
+
+// wrapBuffered returns the dispatcher to plug into the scheduler. When
+// BufferSize > 0 the inner dispatcher is fronted by the worker pool (#127);
+// when BufferSize == 0 the inner dispatcher is used directly (Lite). The
+// caller passes a FailureSink (typically the SchedulerStore) so worker-side
+// dispatch failures fail the TI with a clear reason instead of leaving it
+// stuck `queued`.
+func wrapBuffered(inner dispatch.Inner, sink dispatch.FailureSink, logger *slog.Logger, metrics *observability.Metrics, cfg config.DispatchSection) scheduler.Dispatcher {
+	if cfg.BufferSize <= 0 {
+		// Passthrough: keep the inner dispatcher exposed verbatim so the
+		// scheduler sees the same surface it always did in Lite.
+		return inner
+	}
+	bd := dispatch.NewBuffered(inner, sink, logger, metrics, dispatch.BufferConfig{
+		BufferSize: cfg.BufferSize,
+		Workers:    cfg.Workers,
+	})
+	logger.Info("buffered dispatch enabled (async pool)",
+		"buffer_size", cfg.BufferSize, "workers", cfg.Workers)
+	return bd
 }
 
 // platformDefaults maps the executor.defaults config (L0 task defaults, ADR

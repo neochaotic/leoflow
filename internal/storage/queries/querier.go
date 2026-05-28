@@ -113,6 +113,12 @@ type Querier interface {
 	// delivered between our list and our write (defense in depth — a late
 	// report wins over the reaper). Idempotent on a second call.
 	MarkTaskAgentLost(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Fails a TI whose asynchronous dispatch (BufferedDispatcher worker) errored
+	// inside the inner dispatcher. Targets the active row by (dag_run_id,
+	// task_id) and the active states (scheduled/queued) — a TI that already
+	// moved to running/terminal between the worker accepting the request and
+	// the dispatch failing is left alone (defense in depth).
+	MarkTaskDispatchFailed(ctx context.Context, arg MarkTaskDispatchFailedParams) error
 	RecordStagingVolume(ctx context.Context, arg RecordStagingVolumeParams) error
 	// Stamps last_heartbeat_at on the active TI of an attempt. Bounded by the
 	// (dag_run_id, task_id, try_number) tuple to match the agent's identity. The

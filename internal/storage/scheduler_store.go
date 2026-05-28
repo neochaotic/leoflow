@@ -320,6 +320,24 @@ func (s *SchedulerStore) ListAgentLostCandidates(ctx context.Context) ([]schedul
 	return out, nil
 }
 
+// MarkTaskDispatchFailed transitions a TI to `failed` after its asynchronous
+// dispatch failed inside the BufferedDispatcher worker (#127). The SQL guard
+// only targets scheduled/queued rows, so a TI that already moved to running
+// or terminal between the worker accepting the request and the dispatch
+// failing is left alone (defense in depth — the agent's late progress report
+// wins over the dispatcher's "I failed" claim).
+func (s *SchedulerStore) MarkTaskDispatchFailed(ctx context.Context, runID, taskID, reason string) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.MarkTaskDispatchFailed(ctx, queries.MarkTaskDispatchFailedParams{
+		DagRunID:     rid,
+		TaskID:       taskID,
+		ErrorMessage: &reason,
+	})
+}
+
 // MarkTaskAgentLost transitions one TI to `failed` with the agent_lost
 // reason. The WHERE state='running' guard makes this idempotent and prevents
 // a late terminal report being overwritten — if the row already moved, we

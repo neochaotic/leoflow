@@ -137,3 +137,47 @@ func TestUninstallWired(t *testing.T) {
 		t.Error("`leoflow uninstall` should be registered on the root command")
 	}
 }
+
+// TestRemoveHomeExceptPreservesDatastore: a plain uninstall keeps the datastore
+// (pgdata) for a reinstall while removing everything else under the home.
+func TestRemoveHomeExceptPreservesDatastore(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "pgdata", "PG_VERSION"), "16")
+	mustWrite(t, filepath.Join(root, "postgres", "bin", "postgres"), "x")
+	mustWrite(t, filepath.Join(root, "config.yaml"), "admin: x")
+	if err := removeHomeExcept(root, "pgdata"); err != nil {
+		t.Fatalf("removeHomeExcept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "pgdata", "PG_VERSION")); err != nil {
+		t.Errorf("pgdata must be preserved on a plain uninstall: %v", err)
+	}
+	for _, gone := range []string{"config.yaml", "postgres"} {
+		if _, err := os.Stat(filepath.Join(root, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s must be removed, stat err = %v", gone, err)
+		}
+	}
+}
+
+// TestRemoveHomeExceptRemovesRootWhenNoDatastore: a Docker-only install (no
+// managed pgdata) has its home removed entirely — its data lives in the Docker
+// volume, which a plain uninstall also leaves intact (it does not run down -v).
+func TestRemoveHomeExceptRemovesRootWhenNoDatastore(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".leoflow")
+	mustWrite(t, filepath.Join(root, "postgres", "bin", "postgres"), "x")
+	if err := removeHomeExcept(root, "pgdata"); err != nil {
+		t.Fatalf("removeHomeExcept: %v", err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("home must be removed entirely when there is no datastore to keep, stat err = %v", err)
+	}
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

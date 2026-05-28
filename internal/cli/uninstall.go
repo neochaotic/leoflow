@@ -25,9 +25,10 @@ func newUninstallCommand() *cobra.Command {
 		Short: "Remove the Leoflow installation (~/.leoflow).",
 		Long: "uninstall removes the managed Leoflow home (~/.leoflow): the binaries, config, " +
 			"managed Python, Monaco assets, and local dev state. It does NOT remove your DAG " +
-			"workspace or Docker datastore volumes unless you pass --purge. It asks for confirmation " +
-			"unless --yes is given. (To upgrade instead, just re-run install.sh — it replaces the " +
-			"binaries and keeps your config.)",
+			"workspace or your datastore (the managed Postgres data in ~/.leoflow/pgdata and this " +
+			"install's Docker volume) unless you pass --purge — so a reinstall keeps your data. It " +
+			"asks for confirmation unless --yes is given. (To upgrade instead, just re-run install.sh " +
+			"— it replaces the binaries and keeps your config.)",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runUninstall(cmd, yes, purge)
@@ -65,7 +66,9 @@ func runUninstall(cmd *cobra.Command, yes, purge bool) error {
 		if workspace != "" {
 			devPrintf(out, "  %s  (your DAG workspace)\n", workspace)
 		}
-		devPrintln(out, "  Docker datastore volume: leoflow_pgdata (and any legacy leoflow_redisdata)")
+		devPrintln(out, "  your datastore: the managed Postgres data (~/.leoflow/pgdata) AND this install's Docker volume")
+	} else {
+		devPrintln(out, "  (keeping your datastore — the managed pgdata and the Docker volume — and your DAG workspace; pass --purge to remove them)")
 	}
 
 	if !yes && !confirmUninstall(cmd) {
@@ -73,15 +76,13 @@ func runUninstall(cmd *cobra.Command, yes, purge bool) error {
 		return nil
 	}
 
-	if purge {
-		// Best-effort: stop datastores and drop their volumes before deleting the
-		// compose file that defines them.
-		composeDownVolumes(cmd, filepath.Join(root, "docker-compose.yaml"))
+	if rerr := removeLeoflowHome(cmd, root, purge); rerr != nil {
+		return rerr
 	}
-	if rerr := os.RemoveAll(root); rerr != nil {
-		return fmt.Errorf("removing %s: %w", root, rerr)
+	devPrintf(out, "✓ removed the Leoflow install at %s\n", root)
+	if !purge {
+		devPrintln(out, "  (kept your datastore for a future reinstall — `leoflow uninstall --purge` removes it)")
 	}
-	devPrintf(out, "✓ removed %s\n", root)
 	// Remove the binaries too — install.sh places them on a PATH dir (e.g.
 	// /usr/local/bin), NOT under ~/.leoflow, so removing the home alone left a
 	// working `leoflow` behind.
@@ -141,6 +142,53 @@ func confirmUninstall(cmd *cobra.Command) bool {
 	return answer == "yes" || answer == "y"
 }
 
+// removeLeoflowHome removes the Leoflow home, stopping a running managed Postgres
+// first (so no orphaned process points at a half-removed data dir). With purge it
+// also drops this install's Docker volume and removes the datastore; without it,
+// the datastore (managed pgdata / the Docker volume) is preserved for a reinstall.
+func removeLeoflowHome(cmd *cobra.Command, root string, purge bool) error {
+	stopManagedPostgres(cmd)
+	if purge {
+		// Best-effort: stop the Docker datastore and drop this install's volume
+		// before deleting the compose file that defines it.
+		composeDownVolumes(cmd, filepath.Join(root, "docker-compose.yaml"))
+		if err := os.RemoveAll(root); err != nil {
+			return fmt.Errorf("removing %s: %w", root, err)
+		}
+		return nil
+	}
+	if err := removeHomeExcept(root, "pgdata"); err != nil {
+		return fmt.Errorf("removing %s: %w", root, err)
+	}
+	return nil
+}
+
+// removeHomeExcept deletes everything under root except the entry named keep — the
+// datastore (managed pgdata), preserved on a plain uninstall so a reinstall at the
+// same HOME reconnects to its data (symmetric with the Docker volume, which a plain
+// uninstall also leaves intact). If keep is absent (e.g. a Docker-only install),
+// root is emptied and removed entirely.
+func removeHomeExcept(root, keep string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	kept := false
+	for _, e := range entries {
+		if e.Name() == keep {
+			kept = true
+			continue
+		}
+		if rerr := os.RemoveAll(filepath.Join(root, e.Name())); rerr != nil {
+			return rerr
+		}
+	}
+	if !kept {
+		return os.Remove(root)
+	}
+	return nil
+}
+
 // composeDownVolumes best-effort stops the datastores and removes their volumes
 // via the managed compose file, if both Docker and the file are present.
 func composeDownVolumes(cmd *cobra.Command, composeFile string) {
@@ -151,6 +199,9 @@ func composeDownVolumes(cmd *cobra.Command, composeFile string) {
 		return
 	}
 	c := exec.CommandContext(cmdContext(cmd), "docker", "compose", "-f", composeFile, "down", "-v") //nolint:gosec // fixed args, managed compose path
+	// Run under this install's project name so `down -v` removes exactly this
+	// install's container and volume, never a co-resident user's.
+	c.Env = composeEnv()
 	c.Stdout, c.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 	if err := c.Run(); err != nil {
 		// Best-effort: a missing/already-down stack is fine; the files are removed next.

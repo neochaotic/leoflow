@@ -64,15 +64,9 @@ datastore and workspace so a future reinstall picks up where you left off
 
 Before installing a new pre-alpha tag on a Lite install you depend on:
 
-1. **Back up first.** See [Backup and restore](backup-restore.md) (TODO — see
-   issue #137). Until that command lands, capture the datastore manually:
+1. **Back up first.** See [Backup and restore](backup-restore.md):
    ```sh
-   # managed-postgres install:
-   tar -czf leoflow-backup-$(date +%F).tar.gz \
-       ~/.leoflow/config.yaml \
-       ~/.leoflow/setup.json \
-       ~/.leoflow/managed-postgres/data \
-       ~/leoflow-projects   # or your workspace dir
+   leoflow lite backup --output ~/snap-before-upgrade.tar.gz
    ```
 2. Install the new version. The drift detector protects you from the worst
    downgrade case.

@@ -106,6 +106,7 @@ nav:
       - Quickstart: quickstart.md
       - Operating modes: operating-modes.md
       - Upgrades: upgrades.md
+      - Backup & restore: backup-restore.md
       - Concepts & glossary: concepts.md
       - Architecture: architecture.md
   - Authoring & deploy:

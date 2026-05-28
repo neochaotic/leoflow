@@ -74,10 +74,32 @@ type Querier interface {
 	ListDagsFiltered(ctx context.Context, arg ListDagsFilteredParams) ([]Dag, error)
 	ListFavoriteDagIDs(ctx context.Context, arg ListFavoriteDagIDsParams) ([]string, error)
 	ListImportErrors(ctx context.Context, tenant string) ([]ListImportErrorsRow, error)
+	// Lists dag_runs currently in 'running' whose task instances are ALL terminal
+	// or never-started (no TI in scheduled/queued/running), alongside the
+	// timestamp of their most recent observable activity. The "no active TI"
+	// filter is the critical safety guarantee: a legitimately-active task (slow
+	// image pull, long-running job) keeps its run out of the candidate set, so
+	// the reaper can never kill a live execution. The shape this catches is the
+	// post-crash one: TIs settled (success/failed/skipped/upstream_failed) but
+	// FinalizeRun did not transition the dag_run — e.g. the server died between
+	// the last TI report and the next scheduler tick. The LIMIT bounds a single
+	// tick's reap work even after a multi-hour outage; the rest are picked up
+	// on the next tick (the reaper is a backstop, not a sprint).
+	ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error)
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
+	// Fails an orphaned dag run. The `state = 'running'` guard makes the reap a
+	// safety net, never a takeover: a competing finalizer (the normal scheduler
+	// path) cannot be overwritten. Idempotent: a second call on a run already
+	// failed updates zero rows.
+	MarkRunOrphanedRun(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Fails any still-active task instance under an orphaned run. Called together
+	// with MarkRunOrphanedRun inside a single transaction (the repository owns the
+	// atomicity); split because sqlc cannot generate a CTE+UPDATE that reuses one
+	// parameter across an UPDATE-inside-WITH and the outer UPDATE.
+	MarkRunOrphanedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) error
 	MarkStagingDeleted(ctx context.Context, arg MarkStagingDeletedParams) error
 	RecordStagingVolume(ctx context.Context, arg RecordStagingVolumeParams) error
 	RecordXCom(ctx context.Context, arg RecordXComParams) error

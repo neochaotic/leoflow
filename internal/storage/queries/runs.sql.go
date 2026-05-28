@@ -538,6 +538,66 @@ func (q *Queries) ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagPara
 	return items, nil
 }
 
+const listOrphanCandidates = `-- name: ListOrphanCandidates :many
+SELECT dr.id AS id,
+       d.dag_id AS dag_id_text,
+       GREATEST(
+           COALESCE(MAX(ti.ended_at), 'epoch'::timestamptz),
+           COALESCE(MAX(ti.started_at), 'epoch'::timestamptz),
+           COALESCE(dr.started_at, 'epoch'::timestamptz),
+           dr.queued_at
+       )::timestamptz AS last_activity
+FROM dag_runs dr
+JOIN dags d ON d.id = dr.dag_id
+LEFT JOIN task_instances ti ON ti.dag_run_id = dr.id
+WHERE dr.state = 'running'
+  AND NOT EXISTS (
+      SELECT 1 FROM task_instances ti2
+      WHERE ti2.dag_run_id = dr.id
+        AND ti2.state IN ('scheduled', 'queued', 'running')
+  )
+GROUP BY dr.id, d.dag_id, dr.started_at, dr.queued_at
+ORDER BY dr.queued_at
+LIMIT 100
+`
+
+type ListOrphanCandidatesRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	DagIDText    string             `json:"dag_id_text"`
+	LastActivity pgtype.Timestamptz `json:"last_activity"`
+}
+
+// Lists dag_runs currently in 'running' whose task instances are ALL terminal
+// or never-started (no TI in scheduled/queued/running), alongside the
+// timestamp of their most recent observable activity. The "no active TI"
+// filter is the critical safety guarantee: a legitimately-active task (slow
+// image pull, long-running job) keeps its run out of the candidate set, so
+// the reaper can never kill a live execution. The shape this catches is the
+// post-crash one: TIs settled (success/failed/skipped/upstream_failed) but
+// FinalizeRun did not transition the dag_run — e.g. the server died between
+// the last TI report and the next scheduler tick. The LIMIT bounds a single
+// tick's reap work even after a multi-hour outage; the rest are picked up
+// on the next tick (the reaper is a backstop, not a sprint).
+func (q *Queries) ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listOrphanCandidates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrphanCandidatesRow{}
+	for rows.Next() {
+		var i ListOrphanCandidatesRow
+		if err := rows.Scan(&i.ID, &i.DagIDText, &i.LastActivity); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listScheduledDags = `-- name: ListScheduledDags :many
 SELECT d.dag_id, d.schedule,
   (SELECT max(dr.logical_date) FROM dag_runs dr WHERE dr.dag_id = d.id) AS last_logical
@@ -619,6 +679,44 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 		return nil, err
 	}
 	return items, nil
+}
+
+const markRunOrphanedRun = `-- name: MarkRunOrphanedRun :execrows
+UPDATE dag_runs
+SET state = 'failed',
+    ended_at = now(),
+    note = 'orphaned: no scheduler activity within the orphan window — see #120'
+WHERE id = $1 AND state = 'running'
+`
+
+// Fails an orphaned dag run. The `state = 'running'` guard makes the reap a
+// safety net, never a takeover: a competing finalizer (the normal scheduler
+// path) cannot be overwritten. Idempotent: a second call on a run already
+// failed updates zero rows.
+func (q *Queries) MarkRunOrphanedRun(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markRunOrphanedRun, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markRunOrphanedTaskInstances = `-- name: MarkRunOrphanedTaskInstances :exec
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'orphaned: scheduler restart left this task without a runner'
+WHERE dag_run_id = $1
+  AND state IN ('scheduled', 'queued', 'running')
+`
+
+// Fails any still-active task instance under an orphaned run. Called together
+// with MarkRunOrphanedRun inside a single transaction (the repository owns the
+// atomicity); split because sqlc cannot generate a CTE+UPDATE that reuses one
+// parameter across an UPDATE-inside-WITH and the outer UPDATE.
+func (q *Queries) MarkRunOrphanedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markRunOrphanedTaskInstances, dagRunID)
+	return err
 }
 
 const reportTaskResult = `-- name: ReportTaskResult :exec

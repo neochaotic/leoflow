@@ -198,3 +198,59 @@ WHERE dag_run_id = $1
 UPDATE task_instances
 SET note = $3
 WHERE dag_run_id = $1 AND task_id = $2;
+
+-- name: ListOrphanCandidates :many
+-- Lists dag_runs currently in 'running' whose task instances are ALL terminal
+-- or never-started (no TI in scheduled/queued/running), alongside the
+-- timestamp of their most recent observable activity. The "no active TI"
+-- filter is the critical safety guarantee: a legitimately-active task (slow
+-- image pull, long-running job) keeps its run out of the candidate set, so
+-- the reaper can never kill a live execution. The shape this catches is the
+-- post-crash one: TIs settled (success/failed/skipped/upstream_failed) but
+-- FinalizeRun did not transition the dag_run — e.g. the server died between
+-- the last TI report and the next scheduler tick. The LIMIT bounds a single
+-- tick's reap work even after a multi-hour outage; the rest are picked up
+-- on the next tick (the reaper is a backstop, not a sprint).
+SELECT dr.id AS id,
+       d.dag_id AS dag_id_text,
+       GREATEST(
+           COALESCE(MAX(ti.ended_at), 'epoch'::timestamptz),
+           COALESCE(MAX(ti.started_at), 'epoch'::timestamptz),
+           COALESCE(dr.started_at, 'epoch'::timestamptz),
+           dr.queued_at
+       )::timestamptz AS last_activity
+FROM dag_runs dr
+JOIN dags d ON d.id = dr.dag_id
+LEFT JOIN task_instances ti ON ti.dag_run_id = dr.id
+WHERE dr.state = 'running'
+  AND NOT EXISTS (
+      SELECT 1 FROM task_instances ti2
+      WHERE ti2.dag_run_id = dr.id
+        AND ti2.state IN ('scheduled', 'queued', 'running')
+  )
+GROUP BY dr.id, d.dag_id, dr.started_at, dr.queued_at
+ORDER BY dr.queued_at
+LIMIT 100;
+
+-- name: MarkRunOrphanedTaskInstances :exec
+-- Fails any still-active task instance under an orphaned run. Called together
+-- with MarkRunOrphanedRun inside a single transaction (the repository owns the
+-- atomicity); split because sqlc cannot generate a CTE+UPDATE that reuses one
+-- parameter across an UPDATE-inside-WITH and the outer UPDATE.
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'orphaned: scheduler restart left this task without a runner'
+WHERE dag_run_id = $1
+  AND state IN ('scheduled', 'queued', 'running');
+
+-- name: MarkRunOrphanedRun :execrows
+-- Fails an orphaned dag run. The `state = 'running'` guard makes the reap a
+-- safety net, never a takeover: a competing finalizer (the normal scheduler
+-- path) cannot be overwritten. Idempotent: a second call on a run already
+-- failed updates zero rows.
+UPDATE dag_runs
+SET state = 'failed',
+    ended_at = now(),
+    note = 'orphaned: no scheduler activity within the orphan window — see #120'
+WHERE id = $1 AND state = 'running';

@@ -48,6 +48,9 @@ type Store interface {
 	// SetTaskNote attaches operational context to a task instance (shown in the
 	// UI), e.g. why it is queued but not running.
 	SetTaskNote(ctx context.Context, runID, taskID, note string) error
+	// ReapStore methods drive the orphan reaper (#120): they list running runs
+	// that have gone quiet and fail them so the dashboard counter is correct.
+	ReapStore
 }
 
 // Recorder records scheduler metrics. observability.Metrics implements it.
@@ -73,17 +76,24 @@ type InlineRunner interface {
 	Start(ctx context.Context, runID, dagID, tenantID string, tryNumber int, task domain.TaskSpec) (started bool, err error)
 }
 
+// defaultOrphanThreshold is how long a running dag run may stay quiet before
+// the reaper declares it orphaned. Five minutes is well above any healthy tick
+// or task hand-off latency, so a live run is never reaped, but short enough
+// that a real orphan is reaped before the operator looks at the dashboard.
+const defaultOrphanThreshold = 5 * time.Minute
+
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
-	store       Store
-	logger      *slog.Logger
-	interval    time.Duration
-	stepTimeout time.Duration
-	recorder    Recorder
-	dispatcher  Dispatcher
-	inline      InlineRunner
-	lastTick    atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
-	leading     atomic.Bool  // true only while this instance holds leadership and ticks
+	store           Store
+	logger          *slog.Logger
+	interval        time.Duration
+	stepTimeout     time.Duration
+	recorder        Recorder
+	dispatcher      Dispatcher
+	inline          InlineRunner
+	orphanThreshold time.Duration
+	lastTick        atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	leading         atomic.Bool  // true only while this instance holds leadership and ticks
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
@@ -97,9 +107,15 @@ func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Sch
 		logger:          logger,
 		interval:        interval,
 		stepTimeout:     defaultStepTimeout(interval),
+		orphanThreshold: defaultOrphanThreshold,
 		warnedSchedules: map[string]string{},
 	}
 }
+
+// SetOrphanThreshold overrides the stall-detection window the reaper uses to
+// declare a running dag run orphaned (optional; mainly for tests). The default
+// is defaultOrphanThreshold.
+func (s *Scheduler) SetOrphanThreshold(d time.Duration) { s.orphanThreshold = d }
 
 // defaultStepTimeout bounds how long one scheduling tick may run before it is
 // canceled so the loop can recover, rather than hang forever on a stuck query.
@@ -196,10 +212,13 @@ func (s *Scheduler) Heartbeat() (bool, time.Time) {
 }
 
 // Step runs one deterministic scheduling iteration over every active run. Each
-// run is advanced in isolation (see advanceSafely): a panic or error in one run
-// is contained, so it never blocks the other runs or new-run creation. Only a
-// failure to list runs or create due runs — infrastructure-level errors that
-// affect the whole tick — is returned.
+// run is advanced in isolation (see advanceSafely): a panic or error in one
+// run is contained, so it never blocks the other runs or new-run creation.
+// The reaper runs independently of createDueRuns success — they share no
+// dependency, and silencing the reaper when scheduling has a hiccup would let
+// orphans accumulate exactly when the operator is most likely to notice the
+// counter is wrong. The first non-nil infra-level error is returned (logged
+// by the caller); the later phases still execute.
 func (s *Scheduler) Step(ctx context.Context) error {
 	s.lastTick.Store(time.Now().UnixNano())
 	runs, err := s.store.ActiveRuns(ctx)
@@ -209,7 +228,24 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	for _, run := range runs {
 		s.advanceSafely(ctx, run)
 	}
-	return s.createDueRuns(ctx)
+	createErr := s.createDueRuns(ctx)
+	s.reapOrphansIfLeader(ctx)
+	return createErr
+}
+
+// reapOrphansIfLeader runs the orphan reaper exactly once per tick, only on the
+// leader: reaping writes state and we want one writer at a time across the
+// fleet. A list error is logged (not returned) because it should not stall the
+// rest of the loop — the reaper is a backstop, not on the critical path.
+func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
+	if !s.leading.Load() {
+		return
+	}
+	r := newOrphanReaper(s.store, s.logger, s.orphanThreshold, s.recorder)
+	if err := r.run(ctx); err != nil {
+		s.logger.Error("orphan reaper", "error", err)
+		s.record("orphan_list_error")
+	}
 }
 
 // advanceSafely advances one run, isolating it: a panic or error in a single run

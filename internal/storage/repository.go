@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/neochaotic/leoflow/internal/auth"
@@ -49,6 +50,21 @@ func toInt32(n int) int32 {
 func mapNotFound(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound
+	}
+	return err
+}
+
+// pgUniqueViolation is the Postgres SQLSTATE for a unique-constraint violation.
+const pgUniqueViolation = "23505"
+
+// mapConflict translates a Postgres unique-constraint violation into
+// domain.ErrConflict (which the API maps to 409), leaving other errors as is — so
+// a duplicate write (e.g. a second dag run for the same logical date) surfaces as
+// a clean conflict rather than a raw 500.
+func mapConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		return domain.ErrConflict
 	}
 	return err
 }
@@ -213,7 +229,7 @@ func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run
 		Note:         strPtr(run.Note),
 	})
 	if err != nil {
-		return domain.DagRun{}, fmt.Errorf("creating dag run: %w", err)
+		return domain.DagRun{}, fmt.Errorf("creating dag run: %w", mapConflict(err))
 	}
 	// The trigger's audit entry is written by the API handler, where the acting
 	// user is known (so the Audit Log shows the owner).

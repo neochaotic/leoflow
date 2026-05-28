@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/neochaotic/leoflow/internal/domain"
@@ -15,12 +16,20 @@ import (
 
 // SchedulerStore is the sqlc-backed implementation of scheduler.Store.
 type SchedulerStore struct {
-	q *queries.Queries
+	q    *queries.Queries
+	pool poolBeginner
+}
+
+// poolBeginner is the slice of pgxpool.Pool the store uses to start the orphan
+// reap transaction. Kept as a tiny interface so tests can fake the pool without
+// pulling pgxpool into scheduler_store_test.go.
+type poolBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // NewSchedulerStore builds a SchedulerStore over the given Postgres connection.
 func NewSchedulerStore(pg *Postgres) *SchedulerStore {
-	return &SchedulerStore{q: pg.Queries}
+	return &SchedulerStore{q: pg.Queries, pool: pg.Pool}
 }
 
 // ActiveRuns returns every queued/running run with its topology and task states.
@@ -215,6 +224,73 @@ func (s *SchedulerStore) MarkStagingDeleted(ctx context.Context, pvcName, reason
 	}
 	if err := s.q.MarkStagingDeleted(ctx, queries.MarkStagingDeletedParams{PvcName: pvcName, Reason: rp}); err != nil {
 		return fmt.Errorf("marking staging volume deleted: %w", err)
+	}
+	return nil
+}
+
+// ListReapCandidates returns every dag_run currently in 'running' state with
+// the timestamp of its most recent activity, for the scheduler's orphan reaper.
+// The query (sqlc.runs.ListOrphanCandidates) is the authority on how to compute
+// the timestamp; the reaper only decides whether each one is past its threshold.
+func (s *SchedulerStore) ListReapCandidates(ctx context.Context) ([]scheduler.ReapCandidate, error) {
+	rows, err := s.q.ListOrphanCandidates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing orphan candidates: %w", err)
+	}
+	out := make([]scheduler.ReapCandidate, 0, len(rows))
+	for _, r := range rows {
+		var last time.Time
+		if r.LastActivity.Valid {
+			last = r.LastActivity.Time.UTC()
+		}
+		out = append(out, scheduler.ReapCandidate{
+			RunID:        uuidToString(r.ID),
+			DagID:        r.DagIDText,
+			LastActivity: last,
+		})
+	}
+	return out, nil
+}
+
+// ReapRun fails an orphaned dag run, then any of its still-active task
+// instances, inside a single transaction. The run UPDATE comes first and is
+// guarded by `state = 'running'`: if zero rows are touched, the run was no
+// longer running (a competing finalizer beat us) and we abort with a clean
+// rollback — the TI table is never touched. This guarantees we cannot leave a
+// run as `success`/`failed` while flipping its TIs to `failed (orphaned)`.
+// Idempotent: a second call on an already-failed run no-ops.
+func (s *SchedulerStore) ReapRun(ctx context.Context, runID string) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning reap tx: %w", err)
+	}
+	defer func() {
+		// Rollback after a successful commit is a no-op (tx is closed) and after
+		// a returned error there is no recovery to do — pgx logs it via the pool
+		// already. Silencing it keeps the lint happy without hiding a real bug.
+		_ = tx.Rollback(ctx) //nolint:errcheck // best-effort cleanup; commit path returns the meaningful error
+	}()
+	q := s.q.WithTx(tx)
+	rows, err := q.MarkRunOrphanedRun(ctx, rid)
+	if err != nil {
+		return fmt.Errorf("failing orphaned run: %w", err)
+	}
+	if rows == 0 {
+		// Not running any longer — the normal scheduler path finalized it between
+		// our list and our reap. Abort without touching task instances; the
+		// caller treats a no-op reap as success (the run is no longer an orphan
+		// either way).
+		return nil
+	}
+	if err := q.MarkRunOrphanedTaskInstances(ctx, rid); err != nil {
+		return fmt.Errorf("failing orphaned task instances: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing reap tx: %w", err)
 	}
 	return nil
 }

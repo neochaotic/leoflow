@@ -389,3 +389,12 @@ type XcomIndex struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 }
+
+type XcomStore struct {
+	XcomKey     string             `json:"xcom_key"`
+	Value       []byte             `json:"value"`
+	ContentType string             `json:"content_type"`
+	SizeBytes   int32              `json:"size_bytes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}

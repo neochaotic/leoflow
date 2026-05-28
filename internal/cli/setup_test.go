@@ -103,7 +103,7 @@ func TestRunSetupDryRun(t *testing.T) {
 func TestWriteLiteConfig(t *testing.T) {
 	home := t.TempDir()
 	lc := liteSettings{Workspace: "/ws", Executor: "subprocess", AdminEmail: "admin@leoflow.local", Port: 8088}
-	if err := writeLiteConfig(home, "env PYTHONPATH=/p python -m leoflow_parser", lc, "$2a$12$abcHASH"); err != nil {
+	if err := writeLiteConfig(home, "env PYTHONPATH=/p python -m leoflow_parser", lc, "$2a$12$abcHASH", "deadbeef-jwt-secret"); err != nil {
 		t.Fatalf("writeLiteConfig err = %v", err)
 	}
 	data, rerr := os.ReadFile(filepath.Join(home, "config.yaml"))
@@ -114,6 +114,9 @@ func TestWriteLiteConfig(t *testing.T) {
 	for _, want := range []string{
 		"parser_cmd:", "leoflow_parser", "workspace: \"/ws\"", "lite_executor: \"subprocess\"",
 		"lite_port: 8088", "admin_email: \"admin@leoflow.local\"", "admin_password_hash:",
+		// Per-install JWT secret rotates on every fresh install (#121); the marker
+		// must be persisted so the lite runner can pick it up.
+		"jwt_secret: \"deadbeef-jwt-secret\"",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("config missing %q\n---\n%s", want, s)

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -279,7 +281,14 @@ func provisionLite(cmd *cobra.Command, out io.Writer, leoflowHome string, r setu
 		if herr != nil {
 			return "", herr
 		}
-		if wErr := writeLiteConfig(leoflowHome, parserCmd, lc, hash); wErr != nil {
+		// Per-install JWT secret: a reinstall (which rewrites this file) invalidates
+		// every token the previous install minted, so the SPA stops silently
+		// accepting a stale browser token and the fresh login screen appears (#121).
+		jwtSecret, jerr := generateJWTSecret()
+		if jerr != nil {
+			return "", jerr
+		}
+		if wErr := writeLiteConfig(leoflowHome, parserCmd, lc, hash, jwtSecret); wErr != nil {
 			return "", fmt.Errorf("writing config: %w", wErr)
 		}
 		generated = pw
@@ -317,8 +326,19 @@ func generateAdminCredential() (plaintext, hash string, err error) {
 func printSetupSummary(out io.Writer, lc liteSettings, generatedPassword string) {
 	p := newPalette(colorEnabled(out))
 	if generatedPassword != "" {
-		_, _ = fmt.Fprintf(out, "\n  %s── Leoflow Lite admin (save this — it is shown only once) ──%s\n    user:     %s\n    password: %s%s%s\n", p.bold, p.reset, lc.AdminEmail, p.bold, generatedPassword, p.reset) //nolint:errcheck // best-effort terminal output
-		_, _ = fmt.Fprintln(out, "    (forgot it? `leoflow lite reset-password`)")                                                                                                                                    //nolint:errcheck // best-effort terminal output
+		// High-contrast credentials block — users reported losing the password in
+		// the install log ("fico buscando a info e nunca acho", #122). Horizontal
+		// dividers, an uppercased title, and a bold + colored password value make it
+		// unmissable. Stays readable on a non-TTY (palette empties to plain text).
+		const sep = "═══════════════════════════════════════════════════════════════"
+		_, _ = fmt.Fprintf(out, "\n  %s%s%s\n", p.bold, sep, p.reset)                                               //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "    %sLEOFLOW LITE ADMIN — SAVE NOW (shown only once)%s\n", p.bold, p.reset)       //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "  %s%s%s\n\n", p.bold, sep, p.reset)                                               //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "    user:      %s\n", lc.AdminEmail)                                               //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "    password:  %s%s%s%s%s\n", p.bold, p.cyan, generatedPassword, p.reset, p.reset) //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "    open:      %shttp://localhost:%d%s\n\n", p.cyan, lc.Port, p.reset)             //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintln(out, "    Forgot it? Run: leoflow lite reset-password")                                 //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "  %s%s%s\n", p.bold, sep, p.reset)                                                 //nolint:errcheck // best-effort terminal output
 	} else {
 		_, _ = fmt.Fprintln(out, "\n  admin already configured (~/.leoflow/config.yaml); reset with `leoflow lite reset-password`.") //nolint:errcheck // best-effort terminal output
 	}
@@ -366,8 +386,10 @@ func loadManifestSettings(leoflowHome string, def liteSettings) liteSettings {
 }
 
 // writeLiteConfig writes the Lite settings to ~/.leoflow/config.yaml (0600). Only
-// the bcrypt hash of the admin password is stored — never the plaintext.
-func writeLiteConfig(leoflowHome, parserCmd string, lc liteSettings, adminHash string) error {
+// the bcrypt hash of the admin password is stored — never the plaintext. The
+// per-install JWT secret rotates here (#121): a reinstall invalidates the prior
+// install's tokens, so the SPA stops auto-accepting a stale browser token.
+func writeLiteConfig(leoflowHome, parserCmd string, lc liteSettings, adminHash, jwtSecret string) error {
 	var b strings.Builder
 	_, _ = fmt.Fprintf(&b, "# Written by `leoflow setup` (Leoflow Lite).\n")
 	_, _ = fmt.Fprintf(&b, "parser_cmd: %q\n", parserCmd)
@@ -376,7 +398,19 @@ func writeLiteConfig(leoflowHome, parserCmd string, lc liteSettings, adminHash s
 	_, _ = fmt.Fprintf(&b, "lite_port: %d\n", lc.Port)
 	_, _ = fmt.Fprintf(&b, "admin_email: %q\n", lc.AdminEmail)
 	_, _ = fmt.Fprintf(&b, "admin_password_hash: %q\n", adminHash)
+	_, _ = fmt.Fprintf(&b, "jwt_secret: %q\n", jwtSecret)
 	return os.WriteFile(filepath.Join(leoflowHome, "config.yaml"), []byte(b.String()), 0o600)
+}
+
+// generateJWTSecret returns a fresh per-install JWT signing secret (32 random
+// bytes, hex-encoded). Persisted under ~/.leoflow/config.yaml at setup so a
+// reinstall rotates it and invalidates every token the previous install minted.
+func generateJWTSecret() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generating jwt secret: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // writeSetupManifest persists the provisioning manifest to ~/.leoflow/setup.json.

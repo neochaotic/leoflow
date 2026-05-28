@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -596,6 +597,8 @@ func TestHandleRepoErrorClientCancel(t *testing.T) {
 		{"deadline exceeded", context.DeadlineExceeded, statusClientClosedRequest},
 		{"wrapped cancel", errors.Join(errors.New("task instances for runs"), context.Canceled), statusClientClosedRequest},
 		{"not found", ErrNotFound, http.StatusNotFound},
+		{"conflict (duplicate run)", domain.ErrConflict, http.StatusConflict},
+		{"wrapped conflict", fmt.Errorf("creating dag run: %w", domain.ErrConflict), http.StatusConflict},
 		{"real server error", errors.New("db exploded"), http.StatusInternalServerError},
 	}
 	for _, tc := range cases {

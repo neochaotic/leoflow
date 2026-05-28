@@ -174,8 +174,17 @@ func TestRunnerHappyPath(t *testing.T) {
 	if !strings.Contains(je, "AIRFLOW_CONN_MY_DB=postgres://u:p@h/db") {
 		t.Errorf("env missing AIRFLOW_CONN_MY_DB: %v", env)
 	}
-	if len(sink.lines) != 2 || sink.lines[0] != "line one" {
-		t.Errorf("log lines = %v, want two captured lines", sink.lines)
+	// The agent frames a run with synthetic start/end events (#119) so a task
+	// with no print() still has visible logs, so the captured stream is:
+	//   ["▸ task started", "line one", "line two", "✓ task succeeded in <dur>"]
+	if len(sink.lines) != 4 || sink.lines[1] != "line one" || sink.lines[2] != "line two" {
+		t.Errorf("log lines = %v, want framing + 'line one' + 'line two' + framing", sink.lines)
+	}
+	if !strings.Contains(sink.lines[0], "task started") {
+		t.Errorf("first line must be the start framing, got %q", sink.lines[0])
+	}
+	if !strings.Contains(sink.lines[3], "succeeded") {
+		t.Errorf("last line must be the success framing, got %q", sink.lines[3])
 	}
 	if !sink.closed {
 		t.Error("log sink should be closed after the command exits")

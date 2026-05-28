@@ -155,9 +155,14 @@ func (r *Runner) execute(ctx context.Context, argv, env []string) error {
 		go r.heartbeat(runCtx, cancel)
 	}
 
+	// Frame the run so a task with no print() still has visible logs in the UI —
+	// matching real Airflow, which always emits start/end framing (#119).
+	start := time.Now()
+	emitTaskStarted(r.Sink)
 	exitCode, runErr := r.Cmd.Run(runCtx, argv, env, stdout, stderr)
 	stdout.flush()
 	stderr.flush()
+	emitTaskEnded(r.Sink, exitCode, runErr, time.Since(start))
 	if cerr := r.Sink.Close(); cerr != nil {
 		slog.Warn("closing log stream", "error", cerr)
 	}
@@ -309,6 +314,48 @@ func (w *logWriter) flush() {
 	if len(w.buf) > 0 {
 		w.emit(w.buf)
 		w.buf = nil
+	}
+}
+
+// emitTaskStarted writes a synthetic start-of-task event to the log sink, so the
+// UI's Logs panel always shows at least one line — even for a task that calls no
+// print(). Best-effort; a sink error is logged but not propagated (the task
+// itself is what matters).
+func emitTaskStarted(sink LogSink) {
+	if err := sink.Send(&agentv1.LogLine{
+		Time:    timestamppb.Now(),
+		Level:   agentv1.LogLevel_LOG_LEVEL_INFO,
+		Message: "▸ task started",
+		Stream:  "agent",
+	}); err != nil {
+		slog.Warn("emitting task-started log", "error", err)
+	}
+}
+
+// emitTaskEnded writes a synthetic end-of-task event with the run duration and
+// either a success marker or the exit code + cause. Pairs with emitTaskStarted to
+// guarantee the Logs panel is never empty for a completed task (#119).
+func emitTaskEnded(sink LogSink, exitCode int, cause error, duration time.Duration) {
+	d := duration.Round(time.Millisecond)
+	var msg string
+	level := agentv1.LogLevel_LOG_LEVEL_INFO
+	if cause == nil && exitCode == 0 {
+		msg = fmt.Sprintf("✓ task succeeded in %s", d)
+	} else {
+		level = agentv1.LogLevel_LOG_LEVEL_ERROR
+		if cause != nil {
+			msg = fmt.Sprintf("✗ task failed (exit %d) in %s: %s", exitCode, d, cause.Error())
+		} else {
+			msg = fmt.Sprintf("✗ task failed (exit %d) in %s", exitCode, d)
+		}
+	}
+	if err := sink.Send(&agentv1.LogLine{
+		Time:    timestamppb.Now(),
+		Level:   level,
+		Message: msg,
+		Stream:  "agent",
+	}); err != nil {
+		slog.Warn("emitting task-ended log", "error", err)
 	}
 }
 

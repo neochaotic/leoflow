@@ -15,13 +15,45 @@ import (
 	"github.com/neochaotic/leoflow/internal/setup"
 )
 
-// Datastore backends for Lite's Postgres. Managed (a relocatable PostgreSQL under
-// ~/.leoflow on a Unix socket, no Docker) is the default; Docker is opt-in via
-// --postgres docker.
+// Datastore backends for Lite's Postgres. The default is "auto": Docker Postgres
+// when Docker is present (the realistic case, since the k3d executor needs Docker
+// too), else a managed relocatable PostgreSQL under ~/.leoflow on a Unix socket —
+// so `leoflow lite` runs on a Docker-free host with nothing to install. Either can
+// be forced explicitly.
 const (
+	datastoreAuto    = "auto"
 	datastoreDocker  = "docker"
 	datastoreManaged = "managed"
 )
+
+// resolveDatastore maps the --postgres flag to a concrete backend: "auto" picks
+// the Docker Postgres when Docker is available, else the managed relocatable PG
+// (Docker-free); any explicit value is returned unchanged. It mirrors
+// resolveExecutor so the datastore and executor track the same host capability.
+func resolveDatastore(flag string, dockerOK bool) string {
+	if flag != datastoreAuto {
+		return flag
+	}
+	if dockerOK {
+		return datastoreDocker
+	}
+	return datastoreManaged
+}
+
+// autoDatastore resolves an "auto" --postgres at run time (detecting Docker) and
+// prints which backend it chose; a non-auto value is returned unchanged.
+func autoDatastore(cmd *cobra.Command, flag string) string {
+	if flag != datastoreAuto {
+		return flag
+	}
+	mode := resolveDatastore(datastoreAuto, dockerAvailable())
+	if mode == datastoreManaged {
+		devPrintln(cmd.OutOrStdout(), "▸ no Docker detected — using a managed Postgres (downloaded under ~/.leoflow, no Docker). Install Docker for the postgres:16 container instead.")
+	} else {
+		devPrintln(cmd.OutOrStdout(), "▸ Docker detected — using the Docker Postgres (postgres:16). Pass --postgres managed for a Docker-free Postgres.")
+	}
+	return mode
+}
 
 // managedPGPaths returns the managed Postgres bin dir and data dir, both per-user
 // under ~/.leoflow (so root and an unprivileged user never share a cluster).

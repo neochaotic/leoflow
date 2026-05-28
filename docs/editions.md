@@ -15,10 +15,10 @@ DAG once and it runs on either.
 | Install | one command (`curl … \| sh`) on one machine | Helm chart on your cluster |
 | Command | `leoflow lite` | the deployed control plane |
 | Auth | a single local **admin** login (password shown once at setup) | enterprise: SSO/OIDC, full RBAC, multi-tenant |
-| Executors | a local **k3d** mini-cluster (real pods) or **subprocess** (dev-only, unsandboxed) | **Kubernetes only**, at scale |
+| Executors | a local **k3d** mini-cluster (real pods, **requires Docker** to host the cluster) or **subprocess** (dev-only, unsandboxed, no Docker) | **Kubernetes only**, at scale |
 | Deploy | edit + hot-reload | GitOps: `leoflow compile` in CI → immutable image + `dag.json` |
 | Intended use | local, small, or **light production** projects on a **trusted/internal network** | teams and production workloads at scale |
-| Datastores | Postgres via Docker (default) or **embedded** managed (`--postgres managed`, Docker-free); **no Redis** | **external** managed Postgres + Redis |
+| Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis |
 
 ## Leoflow Lite
 
@@ -39,21 +39,29 @@ Lite also includes a small built-in **[web editor](lite-web-editor.md)** (Monaco
 with Python/YAML highlighting) so you can edit DAG projects from the browser — a
 Lite-only convenience; Production teams use their own editor and the GitOps flow.
 
-### No Docker, no Redis
+### Datastore (auto-selected), no Redis
 
-Lite runs its whole control plane on an **embedded managed Postgres** (a pinned,
-checksum-verified relocatable build under `~/.leoflow`, on a local Unix socket).
-It needs **no Redis** — scheduler locks use Postgres advisory locks and XCom is
-stored in Postgres — and **no Docker** for the datastore. The Postgres-backed
-XCom is *durable* (it survives a restart), which suits light production; very
-high XCom throughput is where you would move to the Production edition. (See
-[ADR 0026](adr/0026-lite-datastore-no-redis.md).)
+Lite's datastore is **Postgres, chosen automatically for the host**: when Docker is
+present it uses the `postgres:16` container; when it is not, it falls back to an
+**embedded managed Postgres** (a pinned, checksum-verified relocatable build
+downloaded under `~/.leoflow`, on a local Unix socket) — so `leoflow lite` runs on
+a **Docker-free host with nothing to install**, the same way `leoflow setup` already
+provisions a managed Python. (Force either with `--postgres docker|managed`; on a
+minimal host such as Alpine/musl the managed build may lack system libraries and
+fails loud, pointing at Docker.)
 
-For task isolation, Lite's container path is a local **k3d** mini-cluster, not
-the Docker socket: a Docker-socket executor is **equivalent to host root** (a DAG
-could escape to the machine), so it was rejected on security grounds. `subprocess`
-exists only as an explicitly unsandboxed, dev-only escape hatch. (See
-[ADR 0027](adr/0027-product-editions-executors-delivery.md).)
+Either way Lite needs **no Redis** — scheduler locks use Postgres advisory locks and
+XCom is stored in Postgres. The Postgres-backed XCom is *durable* (it survives a
+restart), which suits light production, and a single datastore is simpler to
+operate; Redis is a Production-scale concern (multi-node locking, high XCom
+throughput). (See [ADR 0026](adr/0026-lite-datastore-no-redis.md).)
+
+For task execution, the **k3d** path runs real pods and therefore **requires Docker
+to host the cluster** — but Docker is only the *substrate* of k3d, never an executor:
+Lite talks to the Kubernetes API, and a Docker-socket executor was rejected because
+it is **equivalent to host root** (a DAG could escape to the machine). `subprocess`
+runs tasks directly on the host (no Docker, no isolation) as an explicitly dev-only
+escape hatch. (See [ADR 0027](adr/0027-product-editions-executors-delivery.md).)
 
 Pre-alpha Lite builds also **expire** (~90 days) and refuse to run past it — a
 reminder that Lite is for iterating locally, not for durable deployments.

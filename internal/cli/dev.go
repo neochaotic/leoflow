@@ -117,7 +117,7 @@ type devOptions struct {
 	serverBin   string
 	agentBin    string
 	noUp        bool
-	postgres    string // "docker" (default) or "managed" (relocatable PG, no Docker)
+	postgres    string // "auto" (default), "docker", or "managed" (relocatable PG, no Docker)
 	// Resolved from ~/.leoflow/config.yaml (written by `leoflow setup`), not flags.
 	adminHash  string
 	adminEmail string
@@ -275,19 +275,17 @@ func friendlyResolves() bool {
 	return err == nil && len(addrs) > 0
 }
 
-// bringUpDependencies starts Lite's datastores and returns a cleanup func the
-// caller defers (a no-op for the Docker path, which leaves its containers up
-// across runs; a managed-Postgres stop for the managed path, which this run owns).
+// bringUpDependencies starts Lite's datastore and returns a cleanup func the
+// caller defers. It resolves the "auto" --postgres for the host first (Docker
+// Postgres when Docker is present, else a managed relocatable PG), then: the
+// Docker path is a no-op cleanup (its container is left up across runs); the
+// managed path returns a stop, since this run owns the cluster.
 func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions) (func(), error) {
 	noop := func() {}
 	if o.noUp {
 		return noop, nil
 	}
-	cf, err := resolveComposeFile(o.composeFile)
-	if err != nil {
-		return noop, err
-	}
-	o.composeFile = cf
+	o.postgres = autoDatastore(cmd, o.postgres)
 	if o.postgres == datastoreManaged {
 		// Managed relocatable Postgres, no Docker at all: Lite is Redis-free (XCom
 		// on Postgres, in-process log tailer — ADR 0026), so nothing comes up via
@@ -299,6 +297,11 @@ func bringUpDependencies(ctx context.Context, cmd *cobra.Command, o *devOptions)
 		return func() { stopManagedPostgres(cmd) }, nil
 	}
 	// Docker datastore: only Postgres (Lite needs no Redis).
+	cf, err := resolveComposeFile(o.composeFile)
+	if err != nil {
+		return noop, err
+	}
+	o.composeFile = cf
 	return noop, devComposeUp(ctx, cmd, *o, "postgres")
 }
 
@@ -363,7 +366,7 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
 	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres already running); the dev DB + venv are still provisioned")
-	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreDocker, "Postgres backend: 'docker' (default; postgres:16 via docker compose) or 'managed' (relocatable PG under ~/.leoflow on a Unix socket, no Docker — best on full distros; minimal hosts may lack its system libs)")
+	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreAuto, "Postgres backend: 'auto' (default; the Docker postgres:16 when Docker is present, else a managed relocatable PG under ~/.leoflow on a Unix socket, no Docker), 'docker', or 'managed' (best on full distros; minimal hosts may lack its system libs)")
 	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
 	return cmd

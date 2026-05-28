@@ -1,10 +1,17 @@
 # ADR 0029: Lite Datastore Default — Docker Postgres (Managed PG is the Opt-In)
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 0030](0030-lite-datastore-auto-select.md)
 **Date:** 2026-05-27
 **Deciders:** Project founder
 **Refines:** ADR 0027 (Product Editions), ADR 0026 (Lite Datastore — XCom on Postgres)
 **Relates:** ADR 0015 (Kubernetes as the sole container execution path)
+
+> **Superseded (2026-05-27):** this ADR made Docker the default and the managed PG
+> an explicit opt-in flag. ADR 0030 keeps both backends but makes the choice
+> **automatic** (`--postgres auto`): Docker Postgres when Docker is present, the
+> managed relocatable PG when it is absent — so the Docker-free path is the default
+> behavior on a Docker-free host, not a hidden flag. See
+> [ADR 0030](0030-lite-datastore-auto-select.md).
 
 ## Context
 

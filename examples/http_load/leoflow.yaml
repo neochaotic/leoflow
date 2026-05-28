@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: http_load
+description: POST a payload to an external HTTP endpoint via a managed Connection, assert the echo round-trips.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

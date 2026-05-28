@@ -21,7 +21,7 @@ URI shape, an example DAG, and how to test it.
 | `mssql` | [mssql.md](mssql.md) | [examples/mssql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mssql_load) | ✅ documented + automated test (#71, table-driven via #138) |
 | `sqlite` | [sqlite.md](sqlite.md) | [examples/sqlite_load](https://github.com/neochaotic/leoflow/tree/main/examples/sqlite_load) | ✅ documented + automated test (#70, dedicated test for file-path shape; Tier 1 — no service needed) |
 | `redis` | [redis.md](redis.md) | [examples/redis_load](https://github.com/neochaotic/leoflow/tree/main/examples/redis_load) | ✅ documented + automated test (#73, table-driven via #138; Tier 1 — redis already in CI services) |
-| `http` | TBD (#75) | TBD | 📋 planned |
+| `http` / `https` | [http.md](http.md) | [examples/http_load](https://github.com/neochaotic/leoflow/tree/main/examples/http_load) | ✅ documented + automated test (#75, dedicated test for `__extra__` round-trip; Tier 1 — no service needed) |
 
 ## Cloud (deferred past alpha)
 

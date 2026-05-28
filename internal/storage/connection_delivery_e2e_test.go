@@ -216,3 +216,89 @@ func TestSQLiteConnectionURIShapeIntegration(t *testing.T) {
 		t.Errorf("uri = %q, want %q (the canonical 3-slash form)", uri, wantStringForm)
 	}
 }
+
+// TestHTTPConnectionURIShapeIntegration is the http counterpart to the
+// SQL-family chain-of-custody test. The http conn type doesn't fit the
+// table because:
+//
+//   - There is no "schema" / db / namespace in HTTP — the Schema field is
+//     normally blank and the URI ends at the host (or host:port).
+//   - The high-value payload is in `Extra` (custom headers, including
+//     `Authorization: Bearer ...`) which the URI carries under `__extra__`.
+//
+// The contract this pins: a Connection POSTed in the UI with a password
+// containing URI-reserved characters AND an Extra JSON blob round-trips
+// end-to-end via `AIRFLOW_CONN_<ID>` — `url.Parse` recovers the password
+// unencoded and the Extra blob is recoverable from the `__extra__` query
+// parameter.
+func TestHTTPConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 13)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	const (
+		rawPassword = "p@ss/w0rd:!#$" //nolint:gosec // hardcoded test fixture, not a credential
+		rawExtra    = `{"Authorization":"Bearer abc.def","X-Tenant":"acme"}`
+	)
+	connID := fmt.Sprintf("e2e_http_%d", time.Now().UnixNano())
+	port := 443
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "http",
+		Host:     "api.example.com",
+		Login:    "etl_user",
+		Password: rawPassword,
+		Port:     &port,
+		Extra:    rawExtra,
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	uri, present := uris[connID]
+	if !present {
+		t.Fatalf("URI for %q missing from delivery map; got keys = %v",
+			connID, mapKeys(uris))
+	}
+
+	parsed, perr := url.Parse(uri)
+	if perr != nil {
+		t.Fatalf("URI is not parseable (Python requests would fail): %q err=%v", uri, perr)
+	}
+	if parsed.Scheme != "http" {
+		t.Errorf("scheme = %q, want http", parsed.Scheme)
+	}
+	if want := "api.example.com:443"; parsed.Host != want {
+		t.Errorf("host = %q, want %q", parsed.Host, want)
+	}
+	if parsed.User.Username() != "etl_user" {
+		t.Errorf("username = %q, want etl_user", parsed.User.Username())
+	}
+	gotPassword, _ := parsed.User.Password()
+	if gotPassword != rawPassword {
+		t.Errorf("password round-trip failed: got %q, want %q (the URI builder must percent-escape; net/url must un-escape on parse)",
+			gotPassword, rawPassword)
+	}
+	// The HTTP-specific edge: Extra (headers, including Bearer tokens) must
+	// survive the Repository -> SecretConnectionURIs -> agent env hop and
+	// be recoverable from `__extra__`. A regression here would silently drop
+	// the Authorization header — the request would 401 only at runtime.
+	gotExtra := parsed.Query().Get("__extra__")
+	if gotExtra != rawExtra {
+		t.Errorf("__extra__ round-trip failed: got %q, want %q", gotExtra, rawExtra)
+	}
+}

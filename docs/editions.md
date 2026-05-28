@@ -18,7 +18,7 @@ DAG once and it runs on either.
 | Executors | a local **k3d** mini-cluster (real pods) or **subprocess** (dev-only, unsandboxed) | **Kubernetes only**, at scale |
 | Deploy | edit + hot-reload | GitOps: `leoflow compile` in CI → immutable image + `dag.json` |
 | Intended use | local, small, or **light production** projects on a **trusted/internal network** | teams and production workloads at scale |
-| Datastores | **embedded** managed Postgres; **no Redis, no Docker** | **external** managed Postgres + Redis |
+| Datastores | Postgres via Docker (default) or **embedded** managed (`--postgres managed`, Docker-free); **no Redis** | **external** managed Postgres + Redis |
 
 ## Leoflow Lite
 

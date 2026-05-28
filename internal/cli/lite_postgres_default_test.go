@@ -2,16 +2,16 @@ package cli
 
 import "testing"
 
-// TestLitePostgresDefaultIsManaged pins the promoted default: `leoflow lite` uses
-// the managed relocatable Postgres (Docker-free datastore) unless --postgres
-// docker is passed. Promotion is safe now that managed PG is socket-only (no 5432
-// collision) and Lite is Redis-free (ADR 0026).
-func TestLitePostgresDefaultIsManaged(t *testing.T) {
+// TestLitePostgresDefaultIsDocker pins the default datastore: `leoflow lite` uses
+// the Docker postgres:16 (robust wherever Docker runs — and the default executor
+// already needs Docker), with the relocatable managed PG available as the
+// Docker-free opt-in via --postgres managed.
+func TestLitePostgresDefaultIsDocker(t *testing.T) {
 	f := newLiteCommand().Flags().Lookup("postgres")
 	if f == nil {
 		t.Fatal("--postgres flag not defined")
 	}
-	if f.DefValue != datastoreManaged {
-		t.Errorf("--postgres default = %q, want %q", f.DefValue, datastoreManaged)
+	if f.DefValue != datastoreDocker {
+		t.Errorf("--postgres default = %q, want %q", f.DefValue, datastoreDocker)
 	}
 }

@@ -31,4 +31,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0026: Lite Datastore — XCom on Postgres, No Redis](adr/0026-lite-datastore-no-redis.md)
 - [ADR 0027: Product Editions — Executors and Delivery](adr/0027-product-editions-executors-delivery.md)
 - [ADR 0028: Release & Versioning for the Two Editions (One Tag, Two Co-Versioned Artifacts)](adr/0028-release-versioning-two-editions.md)
+- [ADR 0029: Lite Datastore Default — Docker Postgres (Managed PG is the Opt-In)](adr/0029-lite-datastore-default-docker.md)
 <!-- END ADR INDEX -->

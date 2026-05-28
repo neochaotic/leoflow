@@ -277,6 +277,20 @@ WHERE ti.state = 'running'
 ORDER BY ti.last_heartbeat_at
 LIMIT 100;
 
+-- name: MarkTaskDispatchFailed :exec
+-- Fails a TI whose asynchronous dispatch (BufferedDispatcher worker) errored
+-- inside the inner dispatcher. Targets the active row by (dag_run_id,
+-- task_id) and the active states (scheduled/queued) — a TI that already
+-- moved to running/terminal between the worker accepting the request and
+-- the dispatch failing is left alone (defense in depth).
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = $3
+WHERE dag_run_id = $1
+  AND task_id = $2
+  AND state IN ('scheduled', 'queued');
+
 -- name: MarkTaskAgentLost :execrows
 -- Fails a TI whose agent went silent. The WHERE state='running' guard
 -- prevents overwriting a TI the agent's last terminal report finally

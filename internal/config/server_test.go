@@ -23,9 +23,12 @@ func TestLoadServerAppliesDefaults(t *testing.T) {
 		"token_ttl":         {c.Auth.JWT.TokenTTLSeconds, 3600},
 		"loop_interval_ms":  {c.Scheduler.LoopIntervalMS, 1000},
 		"scheduler.enabled": {c.Scheduler.Enabled, true},
-		"otel.enabled":      {c.Observability.OTel.Enabled, true},
-		"log_level":         {c.Observability.LogLevel, "info"},
-		"log_format":        {c.Observability.LogFormat, "json"},
+		// Default is sync passthrough (#127): Pro deployments opt in via values.yaml.
+		"scheduler.dispatch.buffer_size": {c.Scheduler.Dispatch.BufferSize, 0},
+		"scheduler.dispatch.workers":     {c.Scheduler.Dispatch.Workers, 0},
+		"otel.enabled":                   {c.Observability.OTel.Enabled, true},
+		"log_level":                      {c.Observability.LogLevel, "info"},
+		"log_format":                     {c.Observability.LogFormat, "json"},
 	}
 	for name, c := range checks {
 		if c.got != c.want {

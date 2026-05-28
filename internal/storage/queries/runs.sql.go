@@ -796,6 +796,32 @@ func (q *Queries) MarkTaskAgentLost(ctx context.Context, id pgtype.UUID) (int64,
 	return result.RowsAffected(), nil
 }
 
+const markTaskDispatchFailed = `-- name: MarkTaskDispatchFailed :exec
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = $3
+WHERE dag_run_id = $1
+  AND task_id = $2
+  AND state IN ('scheduled', 'queued')
+`
+
+type MarkTaskDispatchFailedParams struct {
+	DagRunID     pgtype.UUID `json:"dag_run_id"`
+	TaskID       string      `json:"task_id"`
+	ErrorMessage *string     `json:"error_message"`
+}
+
+// Fails a TI whose asynchronous dispatch (BufferedDispatcher worker) errored
+// inside the inner dispatcher. Targets the active row by (dag_run_id,
+// task_id) and the active states (scheduled/queued) — a TI that already
+// moved to running/terminal between the worker accepting the request and
+// the dispatch failing is left alone (defense in depth).
+func (q *Queries) MarkTaskDispatchFailed(ctx context.Context, arg MarkTaskDispatchFailedParams) error {
+	_, err := q.db.Exec(ctx, markTaskDispatchFailed, arg.DagRunID, arg.TaskID, arg.ErrorMessage)
+	return err
+}
+
 const recordTaskHeartbeat = `-- name: RecordTaskHeartbeat :exec
 UPDATE task_instances
 SET last_heartbeat_at = now()

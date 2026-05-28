@@ -42,6 +42,13 @@ type Metrics struct {
 	PodsRunning        prometheus.Gauge
 	PodPendingDuration prometheus.Histogram
 	KubernetesAPICalls *prometheus.CounterVec
+
+	// Dispatch pool (#127, ADR 0031): depth gauge, capacity-saturation counter,
+	// per-dispatch latency, inner-dispatcher error counter.
+	DispatchQueueDepth  prometheus.Gauge
+	DispatchAtCapacity  prometheus.Counter
+	DispatchLatency     prometheus.Histogram
+	DispatchInnerErrors prometheus.Counter
 }
 
 // NewMetrics registers every ADR 0010 collector with reg and returns the set.
@@ -119,6 +126,19 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		KubernetesAPICalls: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "leoflow_kubernetes_api_calls_total", Help: "Kubernetes API calls.",
 		}, []string{"operation", "result"}),
+
+		DispatchQueueDepth: f.NewGauge(prometheus.GaugeOpts{
+			Name: "leoflow_dispatch_queue_depth", Help: "Number of dispatch requests currently buffered.",
+		}),
+		DispatchAtCapacity: f.NewCounter(prometheus.CounterOpts{
+			Name: "leoflow_dispatch_at_capacity_total", Help: "Dispatch requests rejected because the buffer was full.",
+		}),
+		DispatchLatency: f.NewHistogram(prometheus.HistogramOpts{
+			Name: "leoflow_dispatch_latency_seconds", Help: "End-to-end latency of one buffered dispatch (enqueue to worker completion).",
+		}),
+		DispatchInnerErrors: f.NewCounter(prometheus.CounterOpts{
+			Name: "leoflow_dispatch_inner_errors_total", Help: "Errors returned by the inner dispatcher inside a worker.",
+		}),
 	}
 }
 
@@ -149,3 +169,25 @@ func (m *Metrics) RecordUndispatchable(reason string) {
 func (m *Metrics) RecordTaskDuration(dagID, taskID, taskType string, seconds float64) {
 	m.TaskDuration.WithLabelValues(dagID, taskID, taskType).Observe(seconds)
 }
+
+// RecordDispatchQueueDepth sets the current depth of the buffered dispatch
+// queue (#127). Sampled on every successful enqueue.
+func (m *Metrics) RecordDispatchQueueDepth(depth int) {
+	m.DispatchQueueDepth.Set(float64(depth))
+}
+
+// RecordDispatchAtCapacity counts one rejection because the buffered dispatch
+// queue was full. Each rejection means the scheduler will retry on the next
+// tick — a rising rate signals the pool needs more workers or a deeper queue.
+func (m *Metrics) RecordDispatchAtCapacity() { m.DispatchAtCapacity.Inc() }
+
+// RecordDispatchLatencySeconds observes one end-to-end dispatch latency, from
+// enqueue to the worker's inner-dispatcher return. Reserved for future use by
+// the BufferedDispatcher.
+func (m *Metrics) RecordDispatchLatencySeconds(seconds float64) {
+	m.DispatchLatency.Observe(seconds)
+}
+
+// RecordDispatchInnerError counts one error returned by the inner dispatcher
+// inside a worker — typically a Kubernetes API failure or pod-create rejection.
+func (m *Metrics) RecordDispatchInnerError() { m.DispatchInnerErrors.Inc() }

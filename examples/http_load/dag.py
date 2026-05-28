@@ -51,8 +51,12 @@ def _resolve_target() -> tuple[str, dict[str, str], tuple[str, str] | None]:
 @task
 def call() -> dict[str, str]:
     base, headers, auth = _resolve_target()
+    # The diagnostic prints only which delivery path was taken (Connection vs
+    # fallback) — never the URL itself, since the env var may carry basic-auth
+    # in `user:password@host` form. Operators can see the configured host in
+    # the Admin -> Connections UI.
     src = "managed Connection http_target" if os.environ.get("AIRFLOW_CONN_HTTP_TARGET") else "fallback URI"
-    print(f"call: base={base} via {src}")
+    print(f"call: via {src}")
     payload = {"name": "leoflow", "value": "42"}
     req = urllib.request.Request(
         f"{base}/anything",

@@ -409,6 +409,8 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreAuto, "Postgres backend: 'auto' (default; the Docker postgres:16 when Docker is present, else a managed relocatable PG under ~/.leoflow on a Unix socket, no Docker), 'docker', or 'managed' (best on full distros; minimal hosts may lack its system libs)")
 	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
+	cmd.AddCommand(newBackupCommand())
+	cmd.AddCommand(newRestoreCommand())
 	return cmd
 }
 

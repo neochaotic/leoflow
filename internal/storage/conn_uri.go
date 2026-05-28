@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
@@ -21,7 +22,17 @@ func airflowConnURI(c domain.Connection) string {
 	}
 	u.Host = host
 	if c.Schema != "" {
-		u.Path = "/" + c.Schema
+		// sqlite's canonical URI is `sqlite:///<absolute path>` (3 slashes).
+		// The operator may type the path with or without a leading slash; if
+		// we always prepend `/` we double up and emit `sqlite:////...` which
+		// SQLAlchemy and `urlparse(uri).path` parse incorrectly. Idempotent
+		// handling is a no-op for postgres/mysql/etc. (their schema names
+		// never start with `/`).
+		if strings.HasPrefix(c.Schema, "/") {
+			u.Path = c.Schema
+		} else {
+			u.Path = "/" + c.Schema
+		}
 	}
 	// Airflow carries the connection's extra (a JSON blob) in the URI under the
 	// __extra__ query param; without this, extra params (sslmode, etc.) are lost.

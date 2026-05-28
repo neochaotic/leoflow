@@ -102,7 +102,7 @@ sqlite is a library, not a service, so the Tier 1 cost is zero (see
 |---|---|---|
 | `OperationalError: unable to open database file` | Path missing or unwritable | Use an absolute path; ensure the pod / process can write to it. |
 | `urlparse(...).path` is empty | The Schema field was left blank, or the URI uses the 2-slash form | Use an absolute path in Schema (starts with `/`). |
-| `database is locked` | Multiple concurrent writers | Pick a different DB; sqlite serialises writes by design. |
+| `database is locked` | Multiple concurrent writers | Pick a different DB; sqlite serializes writes by design. |
 
 ## Related
 

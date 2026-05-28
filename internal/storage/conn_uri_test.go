@@ -27,3 +27,37 @@ func TestAirflowConnURI(t *testing.T) {
 		t.Errorf("uri = %q, want extra carried under __extra__", got)
 	}
 }
+
+// TestAirflowConnURISQLitePath pins the sqlite contract: the Schema field
+// carries the database file path, and the builder must render the canonical
+// 3-slash form `sqlite:///<absolute path>` whether the operator typed the path
+// with or without a leading slash. A double-prepend bug here produces 4
+// slashes and breaks SQLAlchemy / `urlparse(...).path` parsing in user DAGs.
+func TestAirflowConnURISQLitePath(t *testing.T) {
+	cases := []struct {
+		name   string
+		schema string
+		want   string
+	}{
+		{
+			name:   "absolute path with leading slash",
+			schema: "/var/lib/leoflow/warehouse.db",
+			want:   "sqlite:///var/lib/leoflow/warehouse.db",
+		},
+		{
+			name:   "relative path without leading slash",
+			schema: "var/lib/leoflow/warehouse.db",
+			want:   "sqlite:///var/lib/leoflow/warehouse.db",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := airflowConnURI(domain.Connection{
+				ConnID: "sqlite_target", ConnType: "sqlite", Schema: tc.schema,
+			})
+			if got != tc.want {
+				t.Errorf("uri = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

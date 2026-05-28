@@ -317,8 +317,19 @@ func generateAdminCredential() (plaintext, hash string, err error) {
 func printSetupSummary(out io.Writer, lc liteSettings, generatedPassword string) {
 	p := newPalette(colorEnabled(out))
 	if generatedPassword != "" {
-		_, _ = fmt.Fprintf(out, "\n  %s── Leoflow Lite admin (save this — it is shown only once) ──%s\n    user:     %s\n    password: %s%s%s\n", p.bold, p.reset, lc.AdminEmail, p.bold, generatedPassword, p.reset) //nolint:errcheck // best-effort terminal output
-		_, _ = fmt.Fprintln(out, "    (forgot it? `leoflow lite reset-password`)")                                                                                                                                    //nolint:errcheck // best-effort terminal output
+		// High-contrast credentials block — users reported losing the password in
+		// the install log ("fico buscando a info e nunca acho", #122). Horizontal
+		// dividers, an uppercased title, and a bold + colored password value make it
+		// unmissable. Stays readable on a non-TTY (palette empties to plain text).
+		const sep = "═══════════════════════════════════════════════════════════════"
+		_, _ = fmt.Fprintf(out, "\n  %s%s%s\n", p.bold, sep, p.reset)                                               //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "    %sLEOFLOW LITE ADMIN — SAVE NOW (shown only once)%s\n", p.bold, p.reset)       //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "  %s%s%s\n\n", p.bold, sep, p.reset)                                               //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "    user:      %s\n", lc.AdminEmail)                                               //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "    password:  %s%s%s%s%s\n", p.bold, p.cyan, generatedPassword, p.reset, p.reset) //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "    open:      %shttp://localhost:%d%s\n\n", p.cyan, lc.Port, p.reset)             //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintln(out, "    Forgot it? Run: leoflow lite reset-password")                                 //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintf(out, "  %s%s%s\n", p.bold, sep, p.reset)                                                 //nolint:errcheck // best-effort terminal output
 	} else {
 		_, _ = fmt.Fprintln(out, "\n  admin already configured (~/.leoflow/config.yaml); reset with `leoflow lite reset-password`.") //nolint:errcheck // best-effort terminal output
 	}

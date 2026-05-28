@@ -18,7 +18,7 @@ URI shape, an example DAG, and how to test it.
 |---|---|---|---|
 | `postgres` | [postgres.md](postgres.md) | [examples/postgres_load](https://github.com/neochaotic/leoflow/tree/main/examples/postgres_load) | ✅ documented + automated test (#138) |
 | `mysql` / `mariadb` | [mysql.md](mysql.md) | [examples/mysql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mysql_load) | ✅ documented + automated test (#69, table-driven via #138) |
-| `mssql` | TBD (#71) | TBD | 📋 planned |
+| `mssql` | [mssql.md](mssql.md) | [examples/mssql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mssql_load) | ✅ documented + automated test (#71, table-driven via #138) |
 | `sqlite` | TBD (#70) | TBD | 📋 planned |
 | `redis` | TBD (#73) | TBD | 📋 planned |
 | `http` | TBD (#75) | TBD | 📋 planned |

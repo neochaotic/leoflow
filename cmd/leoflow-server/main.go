@@ -437,7 +437,7 @@ func dirFreeBytes(dir string) (uint64, error) {
 	if err := syscall.Statfs(dir, &st); err != nil {
 		return 0, fmt.Errorf("statfs %s: %w", dir, err)
 	}
-	return st.Bavail * uint64(st.Bsize), nil
+	return st.Bavail * uint64(st.Bsize), nil //nolint:gosec // G115: a filesystem block size is never negative
 }
 
 // safeCycle runs one iteration of a periodic background loop, recovering any

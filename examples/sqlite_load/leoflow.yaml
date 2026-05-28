@@ -1,0 +1,9 @@
+schema_version: "1.0"
+dag_id: sqlite_load
+description: Compute rows and load them into a sqlite file via a managed Connection.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+# sqlite3 is part of the Python stdlib — no third-party dependency needed.
+dependencies: []

@@ -2,8 +2,16 @@ name: Docs
 
 # Build the MkDocs site and publish it to GitHub Pages.
 # Enable once: Settings → Pages → Build and deployment → Source: GitHub Actions.
+#
+# Build runs on PRs too (#155) so an ADR added without regenerating
+# docs/adrs.md, or a broken mkdocs link, fails the PR before merge instead
+# of breaking the published site post-merge. The deploy job only runs on
+# pushes to main — PR runs build + check, never publish.
 on:
   push:
+    branches: [main]
+    paths: ["docs/**", "mkdocs.yml", ".github/workflows/docs.yml", "internal/cli/**", "parser/**", "runtime/python/**"]
+  pull_request:
     branches: [main]
     paths: ["docs/**", "mkdocs.yml", ".github/workflows/docs.yml", "internal/cli/**", "parser/**", "runtime/python/**"]
   workflow_dispatch:
@@ -63,6 +71,9 @@ jobs:
         with: { path: site }
   deploy:
     needs: build
+    # Only publish on a real push to main, never on a PR run (#155). PR runs
+    # exist to gate the build; the published site is updated by main.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

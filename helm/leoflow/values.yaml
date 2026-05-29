@@ -132,11 +132,23 @@ ingress:
   tls: []
 
 podAnnotations: {}
+# podSecurityContext: K8s enforces `runAsNonRoot: true` by verifying the UID.
+# The control-plane image (deploy/Dockerfile.server) sets `USER nonroot:nonroot`
+# — a named user, not a numeric UID — so K8s cannot prove non-root and rejects
+# the pod with `CreateContainerConfigError: container has runAsNonRoot and
+# image has non-numeric user (nonroot)`. Pin `runAsUser` / `runAsGroup` to the
+# `nonroot` distroless UID (65532, the de-facto standard from Google's distroless
+# images) so the enforcement passes. Override if you bake your own image.
 podSecurityContext:
   runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 65532
   capabilities:
     drop: ["ALL"]
 

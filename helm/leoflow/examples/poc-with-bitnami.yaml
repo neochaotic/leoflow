@@ -1,0 +1,31 @@
+# Leoflow Helm values for evaluating the chart end-to-end on a single
+# Kubernetes cluster, using Bitnami's community Postgres + Redis charts as
+# ephemeral datastores.
+#
+# NOT FOR PRODUCTION. The Bitnami charts here are configured for evaluation
+# (no persistence guarantees, no replication, no auth on Redis). For real
+# deploys, point database.url / redis.url at managed services (RDS,
+# ElastiCache, CloudSQL, Memorystore, your own HA cluster, etc.) and remove
+# the Bitnami installs entirely.
+#
+# Companion recipe: helm/leoflow/examples/README.md walks through the three
+# helm installs and verification.
+
+# Datastore endpoints — must match the Bitnami release names + service
+# defaults documented in the companion README.
+database:
+  url: postgres://leoflow:leoflow-poc@pg-postgresql:5432/leoflow?sslmode=disable
+redis:
+  url: redis://redis-master:6379/0
+
+# Fixture credentials. Replace before any real use, even for a temporary
+# demo on a shared cluster. The secretKey must be exactly 32 bytes (AES-256).
+auth:
+  jwtSecret: leoflow-poc-jwt-please-replace-32B
+secretKey: leoflow-poc-32B-secret-key-replace
+bootstrap:
+  password: leoflow-poc-admin
+
+# Single replica for evaluation. The scheduler leader-elects, so replicaCount
+# > 1 is HA-safe in production — but a single replica keeps the PoC light.
+replicaCount: 1

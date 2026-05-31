@@ -1,9 +1,13 @@
 # Editions
 
 !!! warning "Pre-alpha"
-    Leoflow is **pre-alpha**. Only the **Lite** edition exists today, and it is for
-    local iteration on a trusted network — not durable or production use. The
-    Production (enterprise) edition is not released yet.
+    Leoflow is **pre-alpha**. Only the **Lite** edition is officially supported
+    today (local iteration on a trusted network — not durable or production
+    use). The **Production** chart is installable + chart-test gated, but not
+    cleared for official use until the v0.1.0-alpha cut.
+
+> See also [Operating modes](operating-modes.md) for the Demo/Dev/Production
+> runtime view (this page is the per-edition distribution + posture view).
 
 Leoflow is planned in two editions that share the same engine, the same
 Airflow-3.2.x UI, and the same DAG format (`dag.py` + `leoflow.yaml`). You author a
@@ -11,14 +15,14 @@ DAG once and it runs on either.
 
 | | **Lite** | **Production** |
 |---|---|---|
-| Status | **Available now** (pre-alpha) | Enterprise — *coming* |
-| Install | one command (`curl … \| sh`) on one machine | Helm chart on your cluster |
+| Status | **Available now** (pre-alpha) | **Chart installable** (gated); officially supported after v0.1.0-alpha |
+| Install | one command (`curl … \| sh`) on one machine | [Helm chart](helm-chart.md) on your cluster |
 | Command | `leoflow lite` | the deployed control plane |
 | Auth | a single local **admin** login (password shown once at setup) | enterprise: SSO/OIDC, full RBAC, multi-tenant |
 | Executors | a local **k3d** mini-cluster (real pods, **requires Docker** to host the cluster) or **subprocess** (dev-only, unsandboxed, no Docker) | **Kubernetes only**, at scale |
 | Deploy | edit + hot-reload | GitOps: `leoflow compile` in CI → immutable image + `dag.json` |
 | Intended use | local, small, or **light production** projects on a **trusted/internal network** | teams and production workloads at scale |
-| Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis |
+| Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis (see [chart docs](helm-chart.md#datastore-compatibility) for versions) |
 
 ## Leoflow Lite
 

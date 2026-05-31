@@ -25,6 +25,35 @@ SELECT count(*) FROM dag_runs WHERE dag_id = $1;
 SELECT count(*) FROM dag_runs
 WHERE dag_id = $1 AND state IN ('queued', 'running');
 
+-- name: ListStaleQueuedTaskInstances :many
+-- Lists every TI currently in `queued` alongside its queued_at timestamp for
+-- the dispatch-lost reaper (#202). The reaper applies the threshold per
+-- candidate so the SQL stays simple and the decision is purely in Go. The
+-- LIMIT bounds a tick's reap work after a long outage; the rest are picked
+-- up next tick (backstop, not sprint).
+SELECT ti.id AS task_instance_id,
+       ti.dag_run_id,
+       d.dag_id AS dag_id_text,
+       ti.task_id,
+       ti.queued_at
+FROM task_instances ti
+JOIN dag_runs dr ON dr.id = ti.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+WHERE ti.state = 'queued'
+ORDER BY ti.queued_at NULLS LAST
+LIMIT 100;
+
+-- name: MarkTaskDispatchLost :exec
+-- Fails one queued TI with a dispatch_lost error. The WHERE state='queued'
+-- guard makes the operation idempotent: a second call on a TI that has
+-- since transitioned (real dispatch landed, or already failed) is a no-op,
+-- never overwriting a more meaningful state.
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'dispatch_lost: scheduler crashed before dispatch landed; will be retried by the run reaper'
+WHERE id = $1 AND state = 'queued';
+
 -- name: ListActiveDagRuns :many
 SELECT * FROM dag_runs
 WHERE state IN ('queued', 'running')

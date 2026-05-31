@@ -101,6 +101,12 @@ type Querier interface {
 	// should I backfill on this tick?" (catchup + start_date, see #129), and
 	// "may this DAG take another active run?" (max_active_runs, see #200).
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
+	// Lists every TI currently in `queued` alongside its queued_at timestamp for
+	// the dispatch-lost reaper (#202). The reaper applies the threshold per
+	// candidate so the SQL stays simple and the decision is purely in Go. The
+	// LIMIT bounds a tick's reap work after a long outage; the rest are picked
+	// up next tick (backstop, not sprint).
+	ListStaleQueuedTaskInstances(ctx context.Context) ([]ListStaleQueuedTaskInstancesRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
@@ -126,6 +132,11 @@ type Querier interface {
 	// moved to running/terminal between the worker accepting the request and
 	// the dispatch failing is left alone (defense in depth).
 	MarkTaskDispatchFailed(ctx context.Context, arg MarkTaskDispatchFailedParams) error
+	// Fails one queued TI with a dispatch_lost error. The WHERE state='queued'
+	// guard makes the operation idempotent: a second call on a TI that has
+	// since transitioned (real dispatch landed, or already failed) is a no-op,
+	// never overwriting a more meaningful state.
+	MarkTaskDispatchLost(ctx context.Context, id pgtype.UUID) error
 	RecordStagingVolume(ctx context.Context, arg RecordStagingVolumeParams) error
 	// Stamps last_heartbeat_at on the active TI of an attempt. Bounded by the
 	// (dag_run_id, task_id, try_number) tuple to match the agent's identity. The

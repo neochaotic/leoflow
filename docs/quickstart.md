@@ -53,7 +53,7 @@ leoflow lite
 That's it. With no arguments, `leoflow lite`:
 
 1. scaffolds a starter DAG in your workspace (if it has none yet),
-2. brings up Postgres + Redis (Docker),
+2. brings up Postgres — Docker `postgres:16` when Docker is present, else an embedded managed Postgres (no Redis required, see [Editions](editions.md#leoflow-lite)),
 3. starts the control plane and prints where to go:
 
 ```

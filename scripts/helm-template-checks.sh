@@ -47,6 +47,32 @@ expect_substring 'name: LEOFLOW_SECRET_KEY'    "Connection encryption key env en
 expect_substring 'jwtSecret:'                  "jwtSecret key in chart-managed Secret"
 expect_substring 'secretKey:'                  "secretKey in chart-managed Secret (ADR 0019)"
 
+# Migration Job must be hardened the same way as the Deployment (#174):
+# restricted-PSA clusters require runAsNonRoot+numeric runAsUser on EVERY
+# pod, including pre-install hooks. Scope the rendering to just the Job
+# template so we don't accidentally validate the Deployment's hardening
+# here (that lives in the same rendered output but is asserted above by
+# proxy of the env contract).
+JOB_RENDERED=$(helm template leoflow-test "$CHART" \
+  --set database.url='postgres://leoflow:p@db:5432/leoflow?sslmode=disable' \
+  --set redis.url='redis://r:6379/0' \
+  --set auth.jwtSecret='helm-template-check-jwt-fixture' \
+  --set secretKey='leoflow-tmpl-check-secret-key-32' \
+  --show-only templates/migration-job.yaml)
+
+expect_in_job() {
+  local needle="$1"
+  local description="$2"
+  if ! grep -qF -- "$needle" <<<"$JOB_RENDERED"; then
+    echo "FAIL: migrate Job missing $description ($needle)" >&2
+    fail=1
+  else
+    echo "OK:   migrate Job has $description"
+  fi
+}
+expect_in_job 'runAsNonRoot: true' "runAsNonRoot:true (restricted PSA gate)"
+expect_in_job 'runAsUser: 65532'   "runAsUser:65532 (distroless nonroot UID)"
+
 if [ "$fail" -ne 0 ]; then
   echo
   echo "helm-template-checks: one or more contracts unmet (see FAIL lines above)" >&2

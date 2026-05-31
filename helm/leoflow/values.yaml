@@ -97,6 +97,28 @@ migrations:
     pullPolicy: IfNotPresent
   # path of the migrations dir inside the image.
   path: /migrations
+  # Pod security for the pre-install/pre-upgrade Job. K8s' restricted Pod
+  # Security Admission requires runAsNonRoot + a numeric runAsUser on
+  # every pod, including hook Jobs. The Deployment is hardened identically
+  # (top-level podSecurityContext); these defaults mirror that posture so
+  # restricted-PSA clusters accept the migration Job too.
+  #
+  # The migrate/migrate base image runs as root by default, but the binary
+  # is a static Go binary that works fine under any UID — verified locally
+  # via `docker run --rm -u 65532:65532 migrate/migrate -version` and
+  # `ls /migrations` (migrations are world-readable, mode 644).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    runAsNonRoot: true
+    runAsUser: 65532
+    capabilities:
+      drop: ["ALL"]
 
 # TLS for the agent <-> control plane gRPC channel (issue #58). Off by default
 # (the per-task token still authenticates each call). When enabled, the control

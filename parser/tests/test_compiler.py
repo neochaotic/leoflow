@@ -99,6 +99,23 @@ def test_mixed_operators(tmp_path, dag_schema):
     assert tasks["notify"]["depends_on"] == ["transform"]
 
 
+# Issue #225: BranchPythonOperator (and friends) were silently translated to a
+# plain `python` task by the legacy substring-match in _operator_type — the
+# parser would compile a branching DAG and every "skipped" branch would
+# execute at runtime. The fix refuses these at compile time with a clear
+# error; this test locks the contract.
+def test_branching_python_operator_is_rejected(tmp_path):
+    with pytest.raises(ValueError) as excinfo:
+        _compile(tmp_path, "branching_python_operator", "branching_python_operator")
+    msg = str(excinfo.value).lower()
+    assert "branchpythonoperator" in msg or "branching" in msg, (
+        f"the compile error must name branching so the user understands; got: {excinfo.value}"
+    )
+    assert "not supported" in msg or "supported" in msg, (
+        f"the compile error should point at the supported list; got: {excinfo.value}"
+    )
+
+
 def test_missing_dag_raises(tmp_path):
     empty = tmp_path / "empty.py"
     empty.write_text("x = 1\n")

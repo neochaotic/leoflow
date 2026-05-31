@@ -23,8 +23,51 @@ flowchart LR
 
 ## Prerequisites
 - The `leoflow` CLI on the runner (download the release binary, or `go install`).
+- **Python 3.11+ on the runner** (`leoflow compile` invokes the stdlib-only
+  parser shim — [ADR 0024](adr/0024-dag-parsing-structural-shim.md) — to turn `dag.py`
+  into `dag.json`). See [Python on the runner](#python-on-the-runner) below.
 - A container registry your cluster can pull from.
 - `LEOFLOW_SERVER` (control plane URL) and `LEOFLOW_TOKEN` (a push token) as CI secrets.
+
+## Python on the runner
+
+The `leoflow compile` step needs Python 3.11, 3.12, or 3.13 to parse `dag.py`.
+**Bring your own Python** on the runner — do not rely on `leoflow setup` to
+download a managed CPython in CI (that path is designed for first-touch on a
+developer laptop, not for build pipelines, where it adds ~50 MB to every run
+and bypasses your runner's pin/caching).
+
+The recommended path on each runner type:
+
+| Runner | Recipe |
+|---|---|
+| **GitHub Actions** | Add `actions/setup-python@v5` with `python-version: '3.12'` before installing leoflow. Cached automatically. |
+| **GitLab CI** | Use a `python:3.12-slim` (or `python:3.12-bookworm`) base image instead of a bare `alpine`/`ubuntu`. |
+| **Cloud Build / CodeBuild** | Use a `python:3.x-slim` build step, or one of the cloud-provider's "python3.12" images. |
+| **Self-hosted runners** | Pin Python via your image baseline (`apt install python3.12` or `pyenv`) and version-lock in your runner provisioning. |
+| **Generic Docker-in-Docker** | Base your build container on `python:3.12-slim` (gives you Python + a Debian userland for the `docker build` shell). |
+
+Older Python (≤3.10) fails the compile cleanly — `leoflow compile` errors out
+with the version requirement, not a confusing traceback. Newer Python (3.14+)
+is accepted by the upper end of the detection range; the range is bumped per
+release once the parser shim is re-verified against it.
+
+### One more step: `leoflow setup` extracts the parser
+
+After the `leoflow` binary lands on the runner and Python is in scope, run
+`leoflow setup` ONCE per runner. The CLI ships the parser source embedded;
+`setup` extracts it under `~/.leoflow/pysrc/parser/` and writes a config
+file pointing the `compile` command at the chosen interpreter. Without this
+step `leoflow compile` fails with `No module named leoflow_parser` (the
+runner's Python has no idea where the parser lives).
+
+The snippets below all show `leoflow setup` as the step after the install,
+before `leoflow compile`. The follow-up to make this implicit (auto-bootstrap
+on first compile, or embed the parser execution inside the Go binary) is
+tracked separately; for the alpha cut, calling it explicitly is the
+recommended path because it's the operation that decides whether managed
+CPython is downloaded, and that's a step CI operators should consciously opt
+into.
 
 ## Examples
 
@@ -42,6 +85,8 @@ flowchart LR
         permissions: { contents: read, packages: write }
         steps:
           - uses: actions/checkout@v4
+          - uses: actions/setup-python@v5     # BYO Python — see #python-on-the-runner
+            with: { python-version: '3.12' }
           - uses: docker/login-action@v3
             with:
               registry: ghcr.io
@@ -49,6 +94,8 @@ flowchart LR
               password: ${{ secrets.GITHUB_TOKEN }}
           - name: Install leoflow
             run: curl -fsSL https://github.com/neochaotic/leoflow/releases/latest/download/leoflow-linux-amd64 -o /usr/local/bin/leoflow && chmod +x /usr/local/bin/leoflow
+          - name: Bootstrap the parser (uses the BYO Python from above)
+            run: leoflow setup
           - name: Compile + build + push image
             run: |
               IMAGE=ghcr.io/${{ github.repository }}/my_pipeline:${{ github.sha }}
@@ -62,8 +109,13 @@ flowchart LR
 
     ```yaml title=".gitlab-ci.yml"
     deploy_dag:
+      # Default docker:27 is Alpine-based; install python3 before leoflow compile.
+      # Alternative: a custom base image that bakes Python+Docker together.
+      # See #python-on-the-runner for the rationale.
       image: docker:27
       services: [docker:27-dind]
+      before_script:
+        - apk add --no-cache python3   # 3.12 on Alpine 3.20+; see #python-on-the-runner
       rules:
         - if: $CI_COMMIT_BRANCH == "main"
           changes: ["dags/my_pipeline/**/*"]
@@ -72,6 +124,7 @@ flowchart LR
       script:
         - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
         - wget -qO /usr/local/bin/leoflow https://github.com/neochaotic/leoflow/releases/latest/download/leoflow-linux-amd64 && chmod +x /usr/local/bin/leoflow
+        - leoflow setup        # extracts the parser into ~/.leoflow/ using the python3 from before_script
         - leoflow compile dags/my_pipeline --image "$IMAGE" --build --push -o dag.json
         - leoflow push dag.json --server "$LEOFLOW_SERVER"   # LEOFLOW_TOKEN from CI vars
     ```
@@ -88,7 +141,11 @@ flowchart LR
         args:
           - -c
           - |
+            # BYO Python — Cloud Builders' docker image is Debian; install python3.
+            # See #python-on-the-runner for the rationale.
+            apt-get update -qq && apt-get install -y --no-install-recommends python3
             curl -fsSL https://github.com/neochaotic/leoflow/releases/latest/download/leoflow-linux-amd64 -o /usr/bin/leoflow && chmod +x /usr/bin/leoflow
+            leoflow setup    # extracts the parser into ~/.leoflow/ using the python3 just installed
             IMAGE="$_REGION-docker.pkg.dev/$PROJECT_ID/dags/my_pipeline:$SHORT_SHA"
             leoflow compile dags/my_pipeline --image "$$IMAGE" --build --push -o dag.json
             leoflow push dag.json --server "$_LEOFLOW_SERVER"
@@ -100,9 +157,11 @@ flowchart LR
 
 === "Generic / Makefile"
 
-    Any runner with Docker + the `leoflow` CLI:
+    Any runner with Docker, **Python 3.11+**, and the `leoflow` CLI
+    (see [Python on the runner](#python-on-the-runner)):
 
     ```bash
+    leoflow setup    # one-shot per runner: extracts the parser into ~/.leoflow/
     IMAGE="$REGISTRY/my_pipeline:$(git rev-parse --short HEAD)"
     leoflow compile dags/my_pipeline --image "$IMAGE" --build --push -o dag.json
     leoflow push dag.json --server "$LEOFLOW_SERVER" --token "$LEOFLOW_TOKEN"

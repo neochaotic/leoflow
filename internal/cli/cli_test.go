@@ -150,6 +150,65 @@ func TestValidateGracefulWithoutPython(t *testing.T) {
 	}
 }
 
+// TestCompileFailThenRecoverIsClean covers the out-of-order scenario surfaced
+// during the BYO-Python deploy-docs review: a CI user who runs
+// `leoflow compile` before `leoflow setup` (or before a working parser_cmd
+// is in scope) sees a clean failure, and a subsequent run with the parser
+// correctly wired succeeds — no partial dag.json, no stale state from the
+// failed attempt that would poison the recovery.
+//
+// The contract here is "fail early, leave nothing behind". We do not test
+// `leoflow setup` end-to-end (that path provisions a managed Python on disk,
+// which a unit test cannot afford); we simulate "fixed parser_cmd" by
+// swapping the failing parser command for a working fake on the second run.
+func TestCompileFailThenRecoverIsClean(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "proj")
+	if _, _, err := run(t, "init", dir); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "dag.json")
+
+	// Step 1 — broken parser command. compile must fail.
+	brokenParser := filepath.Join(t.TempDir(), "broken-parser.sh")
+	brokenScript := "#!/usr/bin/env bash\necho 'No module named leoflow_parser' >&2\nexit 1\n"
+	if err := os.WriteFile(brokenParser, []byte(brokenScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "compile", dir, "--output", out, "--image", "test:v1", "--parser-cmd", brokenParser); err == nil {
+		t.Fatal("compile with a broken parser-cmd should fail, but it succeeded")
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatalf("compile fail must NOT have written %s — found stale output that would mask the next run", out)
+	}
+
+	// Step 2 — supply a working parser_cmd (the recovery the user would do by
+	// running `leoflow setup` in real life). compile must succeed cleanly.
+	goodParser := filepath.Join(t.TempDir(), "good-parser.sh")
+	goodScript := "#!/usr/bin/env bash\n" +
+		"out=\"\"\n" +
+		"while [ $# -gt 0 ]; do case \"$1\" in --output) out=\"$2\"; shift 2;; *) shift;; esac; done\n" +
+		"cat > \"$out\" <<'JSON'\n" +
+		"{\"schema_version\":\"1.0\",\"dag_id\":\"proj\",\"dag_version\":\"dev\",\"image\":\"test:v1\",\"tasks\":[{\"task_id\":\"hello\",\"type\":\"python\",\"entrypoint\":\"dag:hello\"}]}\n" +
+		"JSON\n"
+	if err := os.WriteFile(goodParser, []byte(goodScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "compile", dir, "--output", out, "--image", "test:v1", "--parser-cmd", goodParser); err != nil {
+		t.Fatalf("compile with a working parser-cmd should recover after a prior failure, got %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("dag.json missing after recovery: %v", err)
+	}
+	var spec domain.DAGSpec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		t.Fatalf("dag.json from recovery is invalid: %v", err)
+	}
+	if err := spec.Validate(); err != nil {
+		t.Errorf("recovered dag.json does not pass schema validation: %v", err)
+	}
+}
+
 func TestCompileProducesValidDAGJSON(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "proj")
 	if _, _, err := run(t, "init", dir); err != nil {

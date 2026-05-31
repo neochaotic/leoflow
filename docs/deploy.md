@@ -52,6 +52,23 @@ with the version requirement, not a confusing traceback. Newer Python (3.14+)
 is accepted by the upper end of the detection range; the range is bumped per
 release once the parser shim is re-verified against it.
 
+### One more step: `leoflow setup` extracts the parser
+
+After the `leoflow` binary lands on the runner and Python is in scope, run
+`leoflow setup` ONCE per runner. The CLI ships the parser source embedded;
+`setup` extracts it under `~/.leoflow/pysrc/parser/` and writes a config
+file pointing the `compile` command at the chosen interpreter. Without this
+step `leoflow compile` fails with `No module named leoflow_parser` (the
+runner's Python has no idea where the parser lives).
+
+The snippets below all show `leoflow setup` as the step after the install,
+before `leoflow compile`. The follow-up to make this implicit (auto-bootstrap
+on first compile, or embed the parser execution inside the Go binary) is
+tracked separately; for the alpha cut, calling it explicitly is the
+recommended path because it's the operation that decides whether managed
+CPython is downloaded, and that's a step CI operators should consciously opt
+into.
+
 ## Examples
 
 === "GitHub Actions"
@@ -77,6 +94,8 @@ release once the parser shim is re-verified against it.
               password: ${{ secrets.GITHUB_TOKEN }}
           - name: Install leoflow
             run: curl -fsSL https://github.com/neochaotic/leoflow/releases/latest/download/leoflow-linux-amd64 -o /usr/local/bin/leoflow && chmod +x /usr/local/bin/leoflow
+          - name: Bootstrap the parser (uses the BYO Python from above)
+            run: leoflow setup
           - name: Compile + build + push image
             run: |
               IMAGE=ghcr.io/${{ github.repository }}/my_pipeline:${{ github.sha }}
@@ -105,6 +124,7 @@ release once the parser shim is re-verified against it.
       script:
         - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
         - wget -qO /usr/local/bin/leoflow https://github.com/neochaotic/leoflow/releases/latest/download/leoflow-linux-amd64 && chmod +x /usr/local/bin/leoflow
+        - leoflow setup        # extracts the parser into ~/.leoflow/ using the python3 from before_script
         - leoflow compile dags/my_pipeline --image "$IMAGE" --build --push -o dag.json
         - leoflow push dag.json --server "$LEOFLOW_SERVER"   # LEOFLOW_TOKEN from CI vars
     ```
@@ -125,6 +145,7 @@ release once the parser shim is re-verified against it.
             # See #python-on-the-runner for the rationale.
             apt-get update -qq && apt-get install -y --no-install-recommends python3
             curl -fsSL https://github.com/neochaotic/leoflow/releases/latest/download/leoflow-linux-amd64 -o /usr/bin/leoflow && chmod +x /usr/bin/leoflow
+            leoflow setup    # extracts the parser into ~/.leoflow/ using the python3 just installed
             IMAGE="$_REGION-docker.pkg.dev/$PROJECT_ID/dags/my_pipeline:$SHORT_SHA"
             leoflow compile dags/my_pipeline --image "$$IMAGE" --build --push -o dag.json
             leoflow push dag.json --server "$_LEOFLOW_SERVER"
@@ -140,6 +161,7 @@ release once the parser shim is re-verified against it.
     (see [Python on the runner](#python-on-the-runner)):
 
     ```bash
+    leoflow setup    # one-shot per runner: extracts the parser into ~/.leoflow/
     IMAGE="$REGISTRY/my_pipeline:$(git rev-parse --short HEAD)"
     leoflow compile dags/my_pipeline --image "$IMAGE" --build --push -o dag.json
     leoflow push dag.json --server "$LEOFLOW_SERVER" --token "$LEOFLOW_TOKEN"

@@ -373,6 +373,45 @@ func (s *SchedulerStore) MarkTaskAgentLost(ctx context.Context, taskInstanceID s
 	return nil
 }
 
+// ListStaleQueuedCandidates returns every `queued` TI with its queued_at, for
+// the dispatch-lost reaper (#202). The reaper applies the threshold per row
+// so the SQL stays simple.
+func (s *SchedulerStore) ListStaleQueuedCandidates(ctx context.Context) ([]scheduler.StaleQueuedCandidate, error) {
+	rows, err := s.q.ListStaleQueuedTaskInstances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing stale-queued candidates: %w", err)
+	}
+	out := make([]scheduler.StaleQueuedCandidate, 0, len(rows))
+	for _, r := range rows {
+		var qed time.Time
+		if r.QueuedAt.Valid {
+			qed = r.QueuedAt.Time.UTC()
+		}
+		out = append(out, scheduler.StaleQueuedCandidate{
+			TaskInstanceID: uuidToString(r.TaskInstanceID),
+			DagRunID:       uuidToString(r.DagRunID),
+			DagID:          r.DagIDText,
+			TaskID:         r.TaskID,
+			QueuedAt:       qed,
+		})
+	}
+	return out, nil
+}
+
+// MarkTaskDispatchLost transitions one TI to `failed` with the dispatch_lost
+// reason. The WHERE state='queued' guard makes this idempotent: a TI that
+// has since been dispatched (real progress landed) is left alone.
+func (s *SchedulerStore) MarkTaskDispatchLost(ctx context.Context, taskInstanceID string) error {
+	tid, err := parseUUID(taskInstanceID)
+	if err != nil {
+		return err
+	}
+	if err := s.q.MarkTaskDispatchLost(ctx, tid); err != nil {
+		return fmt.Errorf("marking task dispatch-lost: %w", err)
+	}
+	return nil
+}
+
 // ListActiveStagingVolumes returns active staging volumes joined with their DAG
 // run's state (empty when the run row is gone), for the GC (ADR 0022).
 func (s *SchedulerStore) ListActiveStagingVolumes(ctx context.Context) ([]domain.StagingVolumeState, error) {

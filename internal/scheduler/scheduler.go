@@ -76,6 +76,13 @@ type Store interface {
 	// list `running` task instances whose agent has gone silent and fail them
 	// as `agent_lost` so the dashboard counter recovers from agent-side crashes.
 	HeartbeatReapStore
+	// DispatchLostReapStore methods drive the dispatch-lost reaper (#202):
+	// they list `queued` task instances whose dispatch has been pending past
+	// the threshold and fail them as `dispatch_lost`. This unblocks the
+	// orphan-run reaper for runs stuck by a mid-tick scheduler crash, which
+	// would otherwise keep stuck queued TIs out of the candidate set forever
+	// (the orphan reaper's "no active TI" safety guard).
+	DispatchLostReapStore
 }
 
 // Recorder records scheduler metrics. observability.Metrics implements it.
@@ -121,19 +128,28 @@ const defaultOrphanThreshold = 5 * time.Minute
 // tolerating a handful of missed pings before failing the task.
 const defaultAgentLostThreshold = 90 * time.Second
 
+// defaultDispatchLostThreshold is how long a TI may stay `queued` before the
+// dispatch-lost reaper declares it dispatch-lost. 3 minutes is well above
+// any healthy dispatch latency on Lite (sub-millisecond passthrough) or Pro
+// (bounded pool, low single-digit seconds even under load), so a live
+// dispatch is never reaped, but short enough that a stuck queued TI from a
+// mid-tick scheduler crash is reaped before the operator notices (#202).
+const defaultDispatchLostThreshold = 3 * time.Minute
+
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
-	store              Store
-	logger             *slog.Logger
-	interval           time.Duration
-	stepTimeout        time.Duration
-	recorder           Recorder
-	dispatcher         Dispatcher
-	inline             InlineRunner
-	orphanThreshold    time.Duration
-	agentLostThreshold time.Duration
-	lastTick           atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
-	leading            atomic.Bool  // true only while this instance holds leadership and ticks
+	store                 Store
+	logger                *slog.Logger
+	interval              time.Duration
+	stepTimeout           time.Duration
+	recorder              Recorder
+	dispatcher            Dispatcher
+	inline                InlineRunner
+	orphanThreshold       time.Duration
+	agentLostThreshold    time.Duration
+	dispatchLostThreshold time.Duration
+	lastTick              atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	leading               atomic.Bool  // true only while this instance holds leadership and ticks
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
@@ -143,13 +159,14 @@ type Scheduler struct {
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
 func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Scheduler {
 	return &Scheduler{
-		store:              store,
-		logger:             logger,
-		interval:           interval,
-		stepTimeout:        defaultStepTimeout(interval),
-		orphanThreshold:    defaultOrphanThreshold,
-		agentLostThreshold: defaultAgentLostThreshold,
-		warnedSchedules:    map[string]string{},
+		store:                 store,
+		logger:                logger,
+		interval:              interval,
+		stepTimeout:           defaultStepTimeout(interval),
+		orphanThreshold:       defaultOrphanThreshold,
+		agentLostThreshold:    defaultAgentLostThreshold,
+		dispatchLostThreshold: defaultDispatchLostThreshold,
+		warnedSchedules:       map[string]string{},
 	}
 }
 
@@ -162,6 +179,11 @@ func (s *Scheduler) SetOrphanThreshold(d time.Duration) { s.orphanThreshold = d 
 // uses to declare a task's agent lost (optional; mainly for tests). The default
 // is defaultAgentLostThreshold.
 func (s *Scheduler) SetAgentLostThreshold(d time.Duration) { s.agentLostThreshold = d }
+
+// SetDispatchLostThreshold overrides the wait window the dispatch-lost reaper
+// uses to declare a queued task's dispatch lost (optional; mainly for tests).
+// The default is defaultDispatchLostThreshold.
+func (s *Scheduler) SetDispatchLostThreshold(d time.Duration) { s.dispatchLostThreshold = d }
 
 // defaultStepTimeout bounds how long one scheduling tick may run before it is
 // canceled so the loop can recover, rather than hang forever on a stuck query.
@@ -300,6 +322,17 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	if err := tiReaper.run(ctx); err != nil {
 		s.logger.Error("agent-lost reaper", "error", err)
 		s.record("agent_lost_list_error")
+	}
+	// The dispatch-lost reaper (#202) catches TIs left in `queued` after a
+	// scheduler crash mid-tick: the orphan-run reaper's "no active TI" guard
+	// would otherwise keep the stuck run alive forever. Running it AFTER the
+	// orphan-run reaper means a clean stuck-queued → failed → orphan-run-failed
+	// chain takes two ticks; running here in the same tick gives a one-tick
+	// chain once the threshold elapses.
+	dispatchReaper := newDispatchLostReaper(s.store, s.logger, s.dispatchLostThreshold, s.recorder)
+	if err := dispatchReaper.run(ctx); err != nil {
+		s.logger.Error("dispatch-lost reaper", "error", err)
+		s.record("dispatch_lost_list_error")
 	}
 }
 

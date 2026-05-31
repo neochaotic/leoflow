@@ -107,6 +107,7 @@ nav:
       - Operating modes: operating-modes.md
       - Upgrades: upgrades.md
       - Backup & restore: backup-restore.md
+      - Scheduler resilience: scheduler-resilience.md
       - Concepts & glossary: concepts.md
       - Architecture: architecture.md
   - Authoring & deploy:

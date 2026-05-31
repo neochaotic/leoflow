@@ -716,6 +716,59 @@ func (q *Queries) ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow
 	return items, nil
 }
 
+const listStaleQueuedTaskInstances = `-- name: ListStaleQueuedTaskInstances :many
+SELECT ti.id AS task_instance_id,
+       ti.dag_run_id,
+       d.dag_id AS dag_id_text,
+       ti.task_id,
+       ti.queued_at
+FROM task_instances ti
+JOIN dag_runs dr ON dr.id = ti.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+WHERE ti.state = 'queued'
+ORDER BY ti.queued_at NULLS LAST
+LIMIT 100
+`
+
+type ListStaleQueuedTaskInstancesRow struct {
+	TaskInstanceID pgtype.UUID        `json:"task_instance_id"`
+	DagRunID       pgtype.UUID        `json:"dag_run_id"`
+	DagIDText      string             `json:"dag_id_text"`
+	TaskID         string             `json:"task_id"`
+	QueuedAt       pgtype.Timestamptz `json:"queued_at"`
+}
+
+// Lists every TI currently in `queued` alongside its queued_at timestamp for
+// the dispatch-lost reaper (#202). The reaper applies the threshold per
+// candidate so the SQL stays simple and the decision is purely in Go. The
+// LIMIT bounds a tick's reap work after a long outage; the rest are picked
+// up next tick (backstop, not sprint).
+func (q *Queries) ListStaleQueuedTaskInstances(ctx context.Context) ([]ListStaleQueuedTaskInstancesRow, error) {
+	rows, err := q.db.Query(ctx, listStaleQueuedTaskInstances)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStaleQueuedTaskInstancesRow{}
+	for rows.Next() {
+		var i ListStaleQueuedTaskInstancesRow
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.DagRunID,
+			&i.DagIDText,
+			&i.TaskID,
+			&i.QueuedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
 SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at FROM task_instances
 WHERE dag_run_id = $1
@@ -847,6 +900,23 @@ type MarkTaskDispatchFailedParams struct {
 // the dispatch failing is left alone (defense in depth).
 func (q *Queries) MarkTaskDispatchFailed(ctx context.Context, arg MarkTaskDispatchFailedParams) error {
 	_, err := q.db.Exec(ctx, markTaskDispatchFailed, arg.DagRunID, arg.TaskID, arg.ErrorMessage)
+	return err
+}
+
+const markTaskDispatchLost = `-- name: MarkTaskDispatchLost :exec
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'dispatch_lost: scheduler crashed before dispatch landed; will be retried by the run reaper'
+WHERE id = $1 AND state = 'queued'
+`
+
+// Fails one queued TI with a dispatch_lost error. The WHERE state='queued'
+// guard makes the operation idempotent: a second call on a TI that has
+// since transitioned (real dispatch landed, or already failed) is a no-op,
+// never overwriting a more meaningful state.
+func (q *Queries) MarkTaskDispatchLost(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markTaskDispatchLost, id)
 	return err
 }
 

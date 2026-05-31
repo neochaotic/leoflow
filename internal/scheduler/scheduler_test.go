@@ -19,19 +19,21 @@ type transition struct {
 }
 
 type fakeStore struct {
-	runs            []RunState
-	materialize     []string
-	transitions     []transition
-	retried         []transition
-	runStates       map[string]domain.DagRunState
-	scheduled       []ScheduledDAG
-	createdRuns     []string
-	notes           map[string]string
-	reapCands       []ReapCandidate
-	reaped          []string
-	createErr       bool
-	agentLostCands  []AgentLostCandidate
-	agentLostMarked []string
+	runs               []RunState
+	materialize        []string
+	transitions        []transition
+	retried            []transition
+	runStates          map[string]domain.DagRunState
+	scheduled          []ScheduledDAG
+	createdRuns        []string
+	notes              map[string]string
+	reapCands          []ReapCandidate
+	reaped             []string
+	createErr          bool
+	agentLostCands     []AgentLostCandidate
+	agentLostMarked    []string
+	staleQueuedCands   []StaleQueuedCandidate
+	dispatchLostMarked []string
 }
 
 func newFakeStore(runs ...RunState) *fakeStore {
@@ -84,6 +86,13 @@ func (f *fakeStore) ListAgentLostCandidates(context.Context) ([]AgentLostCandida
 }
 func (f *fakeStore) MarkTaskAgentLost(_ context.Context, tiID string) error {
 	f.agentLostMarked = append(f.agentLostMarked, tiID)
+	return nil
+}
+func (f *fakeStore) ListStaleQueuedCandidates(context.Context) ([]StaleQueuedCandidate, error) {
+	return f.staleQueuedCands, nil
+}
+func (f *fakeStore) MarkTaskDispatchLost(_ context.Context, tiID string) error {
+	f.dispatchLostMarked = append(f.dispatchLostMarked, tiID)
 	return nil
 }
 

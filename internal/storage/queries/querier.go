@@ -94,8 +94,9 @@ type Querier interface {
 	// on the next tick (the reaper is a backstop, not a sprint).
 	ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error)
 	// Returns each cron-scheduled DAG with the bits the scheduler needs to decide
-	// both "is there a slot due?" (schedule + last_logical) and "how many slots
-	// should I backfill on this tick?" (catchup + start_date, see #129).
+	// both "is there a slot due?" (schedule + last_logical), "how many slots
+	// should I backfill on this tick?" (catchup + start_date, see #129), and
+	// "may this DAG take another active run?" (max_active_runs, see #200).
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)

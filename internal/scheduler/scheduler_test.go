@@ -334,6 +334,65 @@ func TestStepOnceScheduleFiresExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestStepRespectsMaxActiveRunsWhenAtCap: with max_active_runs=1 and one
+// already-active run for that DAG, even a backfill that would otherwise
+// produce many catchup slots must produce zero new runs — the cap is a
+// hard ceiling on concurrent active runs per DAG (Airflow #200).
+func TestStepRespectsMaxActiveRunsWhenAtCap(t *testing.T) {
+	last := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Hour)
+	store := newFakeStore(RunState{
+		RunID: "r-existing", DagID: "etl", State: domain.DagRunStateRunning,
+	})
+	store.scheduled = []ScheduledDAG{{
+		DagID: "etl", Schedule: "@hourly", LastLogical: &last,
+		Catchup: true, MaxActiveRuns: 1,
+	}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) != 0 {
+		t.Errorf("DAG already at max_active_runs cap must create no new run, got %v", store.createdRuns)
+	}
+}
+
+// TestStepRespectsMaxActiveRunsCapsBackfill: same backfill window but no
+// existing active runs and max_active_runs=1 — at most ONE new run should be
+// created this tick (the remaining slots are skipped, not queued).
+func TestStepRespectsMaxActiveRunsCapsBackfill(t *testing.T) {
+	last := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Hour)
+	store := newFakeStore()
+	store.scheduled = []ScheduledDAG{{
+		DagID: "etl", Schedule: "@hourly", LastLogical: &last,
+		Catchup: true, MaxActiveRuns: 1,
+	}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) != 1 {
+		t.Errorf("max_active_runs=1 should cap backfill at one new run, got %d (%v)",
+			len(store.createdRuns), store.createdRuns)
+	}
+}
+
+// TestStepMaxActiveRunsZeroMeansUnlimited: cap=0 preserves the legacy
+// behavior (Airflow-faithful: a missing limit is unlimited). Backfill
+// proceeds as if there were no cap.
+func TestStepMaxActiveRunsZeroMeansUnlimited(t *testing.T) {
+	last := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Hour)
+	store := newFakeStore()
+	store.scheduled = []ScheduledDAG{{
+		DagID: "etl", Schedule: "@hourly", LastLogical: &last,
+		Catchup: true, MaxActiveRuns: 0,
+	}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) < 2 {
+		t.Errorf("max_active_runs=0 (unlimited) should backfill the whole gap, got %d (%v)",
+			len(store.createdRuns), store.createdRuns)
+	}
+}
+
 func TestStepWarnsOnUnparseableScheduleAndCreatesNoRun(t *testing.T) {
 	store := newFakeStore()
 	// A 4-field cron (the real bug): the scheduler must not silently ignore it.

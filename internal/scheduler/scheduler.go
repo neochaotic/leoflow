@@ -46,6 +46,12 @@ type ScheduledDAG struct {
 	LastLogical *time.Time
 	StartDate   *time.Time
 	Catchup     bool
+	// MaxActiveRuns caps how many runs of this DAG may be active (queued or
+	// running) at once. Zero means "unlimited" (Airflow-faithful: a missing
+	// limit is unbounded). The scheduler enforces the cap in createDueRuns:
+	// once the active-run count reaches this value, additional due slots are
+	// skipped on this tick (issue #200).
+	MaxActiveRuns int
 }
 
 // Store is the scheduler's view of persistent state. The concrete
@@ -265,10 +271,12 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing active runs: %w", err)
 	}
+	activeByDAG := make(map[string]int, len(runs))
 	for _, run := range runs {
+		activeByDAG[run.DagID]++
 		s.advanceSafely(ctx, run)
 	}
-	createErr := s.createDueRuns(ctx)
+	createErr := s.createDueRuns(ctx, activeByDAG)
 	s.reapOrphansIfLeader(ctx)
 	return createErr
 }
@@ -315,19 +323,26 @@ func (s *Scheduler) advanceSafely(ctx context.Context, run RunState) {
 }
 
 // createDueRuns creates a new run for each scheduled DAG whose next cron slot
-// after its latest run has arrived.
-func (s *Scheduler) createDueRuns(ctx context.Context) error {
+// after its latest run has arrived. activeByDAG carries the count of already-
+// active runs per DAG so the per-DAG max_active_runs cap is honored (#200): a
+// DAG that has reached its cap is skipped this tick, and a backfill that would
+// exceed the cap is truncated to the remaining headroom. The local
+// `createdThisTick` map folds creations made in this same tick into the cap
+// so a single tick cannot itself breach the limit.
+func (s *Scheduler) createDueRuns(ctx context.Context, activeByDAG map[string]int) error {
 	dags, err := s.store.ScheduledDAGs(ctx)
 	if err != nil {
 		return fmt.Errorf("listing scheduled dags: %w", err)
 	}
 	now := time.Now().UTC()
+	createdThisTick := make(map[string]int, len(dags))
 	for _, d := range dags {
 		if domain.IsOnceSchedule(d.Schedule) {
 			// @once: fire exactly one run on first sight, then never again. Once the
 			// run exists, the DAG's LastLogical is non-nil and this is skipped.
-			if d.LastLogical == nil {
+			if d.LastLogical == nil && s.hasHeadroom(d, activeByDAG, createdThisTick) {
 				s.createScheduledRun(ctx, d.DagID, now)
+				createdThisTick[d.DagID]++
 			}
 			continue
 		}
@@ -358,15 +373,44 @@ func (s *Scheduler) createDueRuns(ctx context.Context) error {
 			if !due {
 				continue
 			}
+			if !s.hasHeadroom(d, activeByDAG, createdThisTick) {
+				s.recordCapSkip(d.DagID)
+				continue
+			}
 			s.createScheduledRun(ctx, d.DagID, logical)
+			createdThisTick[d.DagID]++
 			continue
 		}
 		slots := dueScheduledSlots(d.Schedule, d.LastLogical, d.StartDate, now, d.Catchup, maxCatchupSlotsPerTick)
 		for _, logical := range slots {
+			if !s.hasHeadroom(d, activeByDAG, createdThisTick) {
+				s.recordCapSkip(d.DagID)
+				break
+			}
 			s.createScheduledRun(ctx, d.DagID, logical)
+			createdThisTick[d.DagID]++
 		}
 	}
 	return nil
+}
+
+// hasHeadroom reports whether the DAG may take another active run without
+// exceeding its max_active_runs cap. A cap of zero means "unlimited"
+// (Airflow-faithful default for an unset limit).
+func (s *Scheduler) hasHeadroom(d ScheduledDAG, active map[string]int, justCreated map[string]int) bool {
+	if d.MaxActiveRuns <= 0 {
+		return true
+	}
+	return active[d.DagID]+justCreated[d.DagID] < d.MaxActiveRuns
+}
+
+// recordCapSkip logs (once per DAG between successful creations) and meters
+// that a due slot was skipped because the DAG is at its max_active_runs cap.
+// We use a single metric label so dashboards can see "is concurrency the
+// bottleneck right now?" without per-DAG cardinality.
+func (s *Scheduler) recordCapSkip(dagID string) {
+	s.logger.Debug("skipping due run; DAG is at max_active_runs cap", "dag", dagID)
+	s.record("max_active_runs_cap")
 }
 
 // createScheduledRun creates one scheduled run for a DAG, isolating per-DAG

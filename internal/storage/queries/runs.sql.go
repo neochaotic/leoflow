@@ -655,7 +655,7 @@ func (q *Queries) ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandida
 }
 
 const listScheduledDags = `-- name: ListScheduledDags :many
-SELECT d.dag_id, d.schedule, d.catchup, d.start_date,
+SELECT d.dag_id, d.schedule, d.catchup, d.start_date, d.max_active_runs,
   (SELECT max(dr.logical_date) FROM dag_runs dr WHERE dr.dag_id = d.id) AS last_logical
 FROM dags d
 WHERE d.is_active = true AND d.is_paused = false
@@ -663,16 +663,18 @@ WHERE d.is_active = true AND d.is_paused = false
 `
 
 type ListScheduledDagsRow struct {
-	DagID       string             `json:"dag_id"`
-	Schedule    *string            `json:"schedule"`
-	Catchup     bool               `json:"catchup"`
-	StartDate   pgtype.Timestamptz `json:"start_date"`
-	LastLogical interface{}        `json:"last_logical"`
+	DagID         string             `json:"dag_id"`
+	Schedule      *string            `json:"schedule"`
+	Catchup       bool               `json:"catchup"`
+	StartDate     pgtype.Timestamptz `json:"start_date"`
+	MaxActiveRuns int32              `json:"max_active_runs"`
+	LastLogical   interface{}        `json:"last_logical"`
 }
 
 // Returns each cron-scheduled DAG with the bits the scheduler needs to decide
-// both "is there a slot due?" (schedule + last_logical) and "how many slots
-// should I backfill on this tick?" (catchup + start_date, see #129).
+// both "is there a slot due?" (schedule + last_logical), "how many slots
+// should I backfill on this tick?" (catchup + start_date, see #129), and
+// "may this DAG take another active run?" (max_active_runs, see #200).
 func (q *Queries) ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error) {
 	rows, err := q.db.Query(ctx, listScheduledDags)
 	if err != nil {
@@ -687,6 +689,7 @@ func (q *Queries) ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow
 			&i.Schedule,
 			&i.Catchup,
 			&i.StartDate,
+			&i.MaxActiveRuns,
 			&i.LastLogical,
 		); err != nil {
 			return nil, err

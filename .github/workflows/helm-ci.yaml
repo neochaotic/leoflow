@@ -77,6 +77,10 @@ jobs:
       - name: helm-unittest (template logic)
         run: |
           set -euo pipefail
+          # Helm 3 doesn't have a `--verify` flag on `helm plugin install` (it's
+          # only on `helm install` for charts), so don't pass it. On Helm 4.x the
+          # default flips to strict and a `--verify=false` flag DOES exist —
+          # tracked in #187 for the Helm 3 → 4 bump, NOT this PR's scope.
           helm plugin install --version v1.1.0 https://github.com/helm-unittest/helm-unittest
           helm unittest helm/leoflow
 

@@ -175,3 +175,7 @@ dags/**/dag.json
 docs/openapi.yaml
 docs/cli/
 docs/go/
+# Helm chart README mirrored into the docs site by .github/workflows/docs.yml
+# (source-of-truth at helm/leoflow/README.md, auto-generated from values.yaml
+# by helm-docs). #183.
+docs/helm-chart.md

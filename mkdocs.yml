@@ -115,6 +115,7 @@ nav:
   - Reference:
       - reference.md
       - CLI reference: cli/leoflow.md
+      - Helm chart: helm-chart.md
       - Go packages (GoDocs):
           - Overview: go-api.md
           - internal/domain: go/internal/domain.md

@@ -91,7 +91,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      secretKey: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      secretKey: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  # gitleaks:allow — fixture, all-hex zeros pattern, not a credential
     asserts:
       - hasDocuments:
           count: 1

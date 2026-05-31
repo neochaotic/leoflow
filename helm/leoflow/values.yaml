@@ -1,12 +1,15 @@
 # Default values for the Leoflow control plane chart.
 
 image:
+  # -- Control-plane image. Published by `release.yaml` on every tag, signed with cosign.
   repository: ghcr.io/neochaotic/leoflow-server
-  tag: ""              # defaults to .Chart.appVersion when empty
+  # -- Image tag. Defaults to `.Chart.appVersion` when empty; pre-alpha installs should pin `--set image.tag=v0.0.1-prealpha.N`.
+  tag: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-replicaCount: 1        # the scheduler leader-elects, so >1 is safe (HA API + one active scheduler)
+# -- Number of control-plane replicas. The scheduler leader-elects (ADR 0009), so `>1` is HA-safe (active-passive scheduler, active-active API).
+replicaCount: 1
 
 # taskNamespace is where the control plane creates task pods. It MUST match the
 # namespace the server expects (the code currently targets "leoflow"); the chart
@@ -48,20 +51,25 @@ config:
 
 # Database (Postgres). Provide an external URL, or a pre-existing secret.
 database:
-  url: ""              # postgres://user:pass@host:5432/leoflow?sslmode=disable
-  existingSecret: ""   # name of a Secret with key databaseUrl (overrides url)
+  # -- External Postgres DSN. Required for Pro (the embedded datastore is Lite-only); the chart `fail`s the install if neither this nor `existingSecret` is set. Example: `postgres://user:pass@host:5432/leoflow?sslmode=disable`.
+  url: ""
+  # -- Name of a Secret with key `databaseUrl` (takes precedence over `url`).
+  existingSecret: ""
   maxOpenConns: 20
   maxIdleConns: 5
 
 # Redis (XCom + locks).
 redis:
-  url: ""              # redis://host:6379/0
-  existingSecret: ""   # name of a Secret with key redisUrl (overrides url)
+  # -- External Redis URI. Required for Pro (the embedded XCom is Lite-only). Example: `redis://host:6379/0`, or `rediss://host:6380/0` for TLS.
+  url: ""
+  # -- Name of a Secret with key `redisUrl` (takes precedence over `url`).
+  existingSecret: ""
 
 auth:
-  # jwtSecret signs API + agent tokens. Set it, or reference an existing secret.
+  # -- HMAC secret signing API + agent JWTs. Set inline OR reference an existing Secret via `existingSecret`. Generate with `openssl rand -base64 64`.
   jwtSecret: ""
-  existingSecret: ""   # name of a Secret with key jwtSecret (overrides jwtSecret)
+  # -- Name of a Secret with key `jwtSecret` (takes precedence over `jwtSecret`).
+  existingSecret: ""
   tokenTtlSeconds: 3600
 
 # secretKey (LEOFLOW_SECRET_KEY) is the 32-byte key the control plane uses to
@@ -69,13 +77,17 @@ auth:
 # Connection management is disabled and the API rejects writes with 503
 # (Variables still work). Set it, or reference an existing secret.
 #
-# Generate one with:  openssl rand -base64 32   (must decode to 32 bytes)
+# Generate one with:  openssl rand -hex 16   (64 hex chars = 32 bytes)
+# -- AES-256 key encrypting Connection passwords + Extra at rest (ADR 0019). MUST be exactly 32 raw bytes OR 64-char hex OR base64-of-32-bytes. Without it, Connection management is disabled (Variables still work).
 secretKey: ""
-secretKeyExistingSecret: ""   # name of a Secret with key secretKey (overrides secretKey)
+# -- Name of a Secret with key `secretKey` (takes precedence over `secretKey`).
+secretKeyExistingSecret: ""
 
 # bootstrap creates the initial admin user on first start when set.
 bootstrap:
-  password: ""         # leave empty to skip; or reference existingSecret/key bootstrapPassword
+  # -- Initial admin password (first install only). Leave empty to skip the bootstrap; the operator then creates the first admin out-of-band.
+  password: ""
+  # -- Name of a Secret with key `bootstrapPassword` (takes precedence over `password`).
   existingSecret: ""
 
 # migrations runs golang-migrate as a pre-install/pre-upgrade hook Job before the

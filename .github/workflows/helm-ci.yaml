@@ -49,6 +49,24 @@ jobs:
       - name: helm lint
         run: helm lint helm/leoflow
 
+      # helm-docs: ensure the chart README is in sync with values.yaml. If a
+      # contributor edits values.yaml (adds/removes keys, changes a `# --`
+      # description) without regenerating, this gate fails with the exact diff
+      # so they know to run `helm-docs -c helm/leoflow` locally and re-commit.
+      # Pinned to v1.14.2 per ADR 0014.
+      - name: helm-docs check (README in sync with values.yaml)
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Linux_x86_64.tar.gz \
+            | tar xz -C /usr/local/bin helm-docs
+          helm-docs --version
+          helm-docs --chart-search-root=helm/leoflow --dry-run > /tmp/rendered-README.md
+          if ! diff -u helm/leoflow/README.md /tmp/rendered-README.md; then
+            echo "::error::helm/leoflow/README.md is out of sync with values.yaml" >&2
+            echo "Run \`helm-docs -c helm/leoflow\` locally and commit the regenerated README." >&2
+            exit 1
+          fi
+
       # Contract test: every required env entry + Secret key must be present
       # in the rendered chart (covered by scripts/helm-template-checks.sh).
       # This is the seed gate; failures here mean someone deleted or renamed

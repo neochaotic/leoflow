@@ -7,11 +7,11 @@ is installable + gated, but not blessed until the v0.1.0-alpha cut).
 > See also [Editions](editions.md) for the Lite/Production distribution split
 > (this page is the runtime mode view; Editions is the packaging + posture view).
 
-| | **Demo** | **Dev** (`leoflow lite`) | **Production** *(coming soon)* |
+| | **Demo** | 🥈 **Dev** (`leoflow lite`) | 🥇 **Production** *(coming soon)* |
 |---|---|---|---|
 | Purpose | Production-like reference (UI-compatibility, showcasing) | Author + iterate on DAGs locally | Real workloads |
 | Auth | JWT login (real) | **Disabled** (loopback-only, dev bypass) | JWT + RBAC, TLS (#58), workload identity (#56) |
-| UI marker | none (`instance_name: Leoflow`) | **`Leoflow · DEV`** navbar + yellow `DEV` pill | none |
+| UI marker | none (`instance_name: Leoflow`) | **`Leoflow Lite`** navbar (silver edition badge) | **`Leoflow`** navbar (gold edition badge) |
 | HTTP / gRPC / metrics | 8080 / 9091 / 9090 | **8088 / 9099 / 9098** (distinct, coexists with Demo) | per Helm values |
 | Database | `leoflow` | **`leoflow_dev`** (isolated) | external Postgres |
 | Cluster | k3d `leoflow-demo` | **k3d `leoflow-dev`** (isolated) | real K8s (GKE/EKS) |
@@ -26,9 +26,9 @@ DAG you `leoflow compile` + `leoflow push`. Auth is on; log in normally.
 ## Dev — `leoflow lite`
 The authoring loop, fully **isolated** from Demo (own DB, own cluster, own ports)
 so there is no split brain. Edit `dags/<project>/dag.py` or `leoflow.yaml`, save,
-and it hot-reloads at <http://localhost:8088> (marked DEV, no login).
+and it hot-reloads at <http://localhost:8088> (marked **Leoflow Lite** in the navbar, login enabled).
 
-![Leoflow Dev — home dashboard, marked DEV](assets/screenshots/dev-graph.png)
+![Leoflow Lite — home dashboard](assets/screenshots/dev-graph.png)
 
 
 - `leoflow lite provision` — check + provision host deps (Docker/k3d/kubectl/python3),

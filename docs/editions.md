@@ -13,7 +13,7 @@ Leoflow is planned in two editions that share the same engine, the same
 Airflow-3.2.x UI, and the same DAG format (`dag.py` + `leoflow.yaml`). You author a
 DAG once and it runs on either.
 
-| | **Lite** | **Production** |
+| | 🥈 **Lite** | 🥇 **Production** |
 |---|---|---|
 | Status | **Available now** (pre-alpha) | **Chart installable** (gated); officially supported after v0.1.0-alpha |
 | Install | one command (`curl … \| sh`) on one machine | [Helm chart](helm-chart.md) on your cluster |
@@ -24,7 +24,7 @@ DAG once and it runs on either.
 | Intended use | local, small, or **light production** projects on a **trusted/internal network** | teams and production workloads at scale |
 | Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis (see [chart docs](helm-chart.md#datastore-compatibility) for versions) |
 
-## Leoflow Lite
+## 🥈 Leoflow Lite
 
 Lite is the whole control plane on your machine, scoped down for local use. One
 command installs it, [`leoflow setup`](installation.md#what-leoflow-setup-does)
@@ -73,7 +73,7 @@ reminder that Lite is for iterating locally, not for durable deployments.
 See the [Installation](installation.md) guide and the
 [`leoflow lite` workflow](dev-workflow.md).
 
-## Leoflow Production (coming)
+## 🥇 Leoflow Production (coming)
 
 Production is the enterprise control plane: enterprise authentication (SSO/OIDC),
 full role-based access control, multi-tenant isolation, the Kubernetes executor

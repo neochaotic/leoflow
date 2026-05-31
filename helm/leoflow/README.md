@@ -66,9 +66,22 @@ or set `migrations.enabled=false` to migrate out of band.
 | `migrations.enabled` | `true` | golang-migrate hook Job |
 | `ingress.enabled` | `false` | HTTP ingress |
 
+## Evaluating without a managed Postgres + Redis
+
+For a one-cluster evaluation (kind, minikube, k3d, scratch namespace), the
+chart deliberately won't fall back to embedded datastores — that's Lite's
+job, not Pro's (see `templates/deployment.yaml:8-13`). The supported PoC
+path is to install Bitnami's Postgres + Redis charts alongside Leoflow:
+
+- Recipe: [`examples/README.md`](examples/README.md)
+- Matching values file: [`examples/poc-with-bitnami.yaml`](examples/poc-with-bitnami.yaml)
+
+Three `helm install`s in total. **Not for production** — see the recipe for
+the production-shaped command.
+
 ## Validate
 
 ```bash
 helm lint ./helm/leoflow
-helm template lf ./helm/leoflow -n leoflow --set database.url=postgres://x --set auth.jwtSecret=s
+helm template lf ./helm/leoflow -n leoflow --set database.url=postgres://x --set auth.jwtSecret=s --set redis.url=redis://r/0 --set secretKey=$(openssl rand -hex 16)
 ```

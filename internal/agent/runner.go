@@ -77,7 +77,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return r.execute(ctx, argv, env)
+	return r.execute(ctx, argv, env, time.Duration(spec.GetExecutionTimeoutSeconds())*time.Second)
 }
 
 func (r *Runner) register(ctx context.Context) error {
@@ -149,7 +149,7 @@ func (r *Runner) secretsEnv(ctx context.Context) []string {
 	return out
 }
 
-func (r *Runner) execute(ctx context.Context, argv, env []string) error {
+func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.Duration) error {
 	if err := r.report(ctx, agentv1.TaskState_TASK_STATE_RUNNING, 0, ""); err != nil {
 		return err
 	}
@@ -162,11 +162,24 @@ func (r *Runner) execute(ctx context.Context, argv, env []string) error {
 		go r.heartbeat(runCtx, cancel)
 	}
 
+	// `execution_timeout_seconds` enforcement (#194): wrap the runCtx in a
+	// deadline so a wedged user process is interrupted at the boundary the user
+	// declared, not at the 90 s heartbeat reaper. Zero (unset) preserves the
+	// previous "no time bound" behavior. The deadline-fired vs heartbeat-canceled
+	// vs parent-canceled cases are disambiguated below by inspecting
+	// timeoutCtx.Err() after Cmd.Run returns.
+	timeoutCtx := runCtx
+	if timeout > 0 {
+		var timeoutCancel context.CancelFunc
+		timeoutCtx, timeoutCancel = context.WithTimeout(runCtx, timeout)
+		defer timeoutCancel()
+	}
+
 	// Frame the run so a task with no print() still has visible logs in the UI —
 	// matching real Airflow, which always emits start/end framing (#119).
 	start := time.Now()
 	emitTaskStarted(r.Sink)
-	exitCode, runErr := r.Cmd.Run(runCtx, argv, env, stdout, stderr)
+	exitCode, runErr := r.Cmd.Run(timeoutCtx, argv, env, stdout, stderr)
 	stdout.flush()
 	stderr.flush()
 	emitTaskEnded(r.Sink, exitCode, runErr, time.Since(start))
@@ -174,6 +187,13 @@ func (r *Runner) execute(ctx context.Context, argv, env []string) error {
 		slog.Warn("closing log stream", "error", cerr)
 	}
 
+	// Override the failure reason when the timeout fired. The check is on
+	// timeoutCtx (not runCtx or ctx) so a heartbeat-driven cancel or a
+	// parent SIGTERM still flows through the generic fail path.
+	if timeout > 0 && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+		msg := fmt.Sprintf("execution_timeout: task exceeded %s limit", timeout)
+		return r.failWithReason(ctx, exitCode, msg)
+	}
 	if runErr != nil || exitCode != 0 {
 		return r.fail(ctx, exitCode, runErr)
 	}
@@ -181,6 +201,16 @@ func (r *Runner) execute(ctx context.Context, argv, env []string) error {
 		return r.fail(ctx, 0, err)
 	}
 	return r.report(ctx, agentv1.TaskState_TASK_STATE_SUCCESS, 0, "")
+}
+
+// failWithReason is fail() but with a pre-built error message — used by the
+// execution_timeout path so the operator sees "timeout" rather than the
+// generic "task exited non-zero" or the raw context.DeadlineExceeded.
+func (r *Runner) failWithReason(ctx context.Context, exitCode int, msg string) error {
+	if rerr := r.report(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg); rerr != nil {
+		slog.Warn("reporting failed state", "error", rerr)
+	}
+	return errors.New(msg)
 }
 
 func (r *Runner) fail(ctx context.Context, exitCode int, cause error) error {

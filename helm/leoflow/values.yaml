@@ -164,6 +164,49 @@ resources:
     cpu: "1"
     memory: 512Mi
 
+# HorizontalPodAutoscaler for the control plane. Safe because the scheduler
+# leader-elects (ADR 0009) — scaling the Deployment adds API/UI replicas while
+# exactly one scheduler stays active. Disabled by default; flip `enabled: true`
+# in production after sizing replicas.
+autoscaling:
+  # -- Enable HPA for the leoflow-server Deployment. Requires metrics-server.
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: ""
+  behavior: {}
+
+# PodDisruptionBudget so voluntary disruptions (node drains, upgrades) keep
+# enough control-plane replicas serving the API. Disabled by default; set
+# `replicaCount > 1` (HA, leader-elected) before enabling.
+podDisruptionBudget:
+  # -- Enable PDB for the leoflow-server Deployment. Pair with replicaCount > 1.
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: ""
+
+# NetworkPolicy for the control plane (requires a CNI that enforces it). The
+# template defaults to permissive egress so enabling it doesn't silently break
+# DB/Redis/kube-apiserver access — tighten per environment after install.
+networkPolicy:
+  # -- Enable NetworkPolicy gating ingress + egress on the control-plane pods. Requires a CNI that enforces policies (Calico/Cilium/etc.).
+  enabled: false
+  ingressFrom: []   # e.g. [{namespaceSelector: {}}] to allow same-namespace clients + task pods
+  metricsFrom: []   # e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]
+  egress: []        # explicit egress rules; empty = allow-all besides DNS (always allowed)
+
+# Prometheus Operator ServiceMonitor for /metrics (ADR 0010). Requires the
+# monitoring.coreos.com CRDs (kube-prometheus-stack).
+metrics:
+  serviceMonitor:
+    # -- Enable ServiceMonitor for Prometheus scraping. Requires kube-prometheus-stack CRDs.
+    enabled: false
+    namespace: ""           # defaults to the release namespace
+    interval: 30s
+    scrapeTimeout: 10s
+    additionalLabels: {}    # e.g. {release: kube-prometheus-stack} to match the Prometheus selector
+
 ingress:
   enabled: false
   className: ""

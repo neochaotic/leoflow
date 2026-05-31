@@ -68,6 +68,82 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPIRES_AT: ${{ env.EXPIRES_AT }}
 
+  # ── Build + push leoflow-migrate (golang-migrate + Leoflow migrations)
+  # The Helm chart's migration Job (#34/#48) defaults to
+  # ghcr.io/neochaotic/leoflow-migrate:<tag>; this job publishes that image,
+  # multi-arch, on every release tag in parallel with install-smoke.
+  #
+  # Dockerfile.migrate is `FROM migrate/migrate + COPY migrations/` — no Go
+  # binary, so GoReleaser's dockers block (which expects a built artifact) is
+  # overkill. docker/build-push-action is the simpler shape here.
+  migrate-image:
+    name: Build + push leoflow-migrate image
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write       # keyless cosign signing
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.4.3
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/leoflow-migrate
+          # ref,event=tag stamps the tag verbatim (v0.0.1-prealpha.18); the
+          # semver pattern strips the leading `v` so users pinning by version
+          # (0.0.1-prealpha.18) work too. No `:latest` for pre-alpha tags —
+          # GoReleaser doesn't push `:latest` for leoflow-server either, so
+          # the two images stay in sync.
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+
+      - name: Build + push (multi-arch)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/Dockerfile.migrate
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # Mirror the supply-chain posture of leoflow-server: keyless cosign sign
+      # every published tag by digest (ADR 0014). Without `--yes` cosign would
+      # prompt for OIDC confirmation; CI passes the Sigstore challenge via the
+      # GH OIDC token from id-token: write.
+      - name: Sign image with cosign (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for tag in $TAGS; do
+            cosign sign --yes "${tag}@${DIGEST}"
+          done
+
   # ── Faithful install smoke: run the REAL `curl | sh` of the just-published
   # release in a clean container per distro and verify the binary plus the managed
   # CPython actually run. This catches install-path bugs (PATH, checksum, tar, the
@@ -110,25 +186,27 @@ jobs:
           leoflow version
           "$HOME/.leoflow/python/bin/python3.11" --version
 
-  # ── Release gate: if the install smoke failed on any distro, retract the
-  # pre-release to a draft so `curl | sh` (which resolves the newest public
-  # release) stops handing users a broken build. Runs always() so it can act on a
-  # smoke failure; on success it leaves the published pre-release untouched.
+  # ── Release gate: if the install smoke OR the migrate-image build failed,
+  # retract the pre-release to a draft so `curl | sh` (which resolves the
+  # newest public release) and the Helm chart (which references the migrate
+  # image by tag) stop handing users a broken build. Runs always() so it can
+  # act on either failure; on success it leaves the published pre-release
+  # untouched.
   gate:
-    name: Gate release on install smoke
-    needs: [release, install-smoke]
+    name: Gate release on install smoke + migrate image
+    needs: [release, install-smoke, migrate-image]
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Retract release to draft on smoke failure
-        if: needs.install-smoke.result != 'success'
+      - name: Retract release to draft on smoke or migrate-image failure
+        if: needs.install-smoke.result != 'success' || needs.migrate-image.result != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          echo "::error::install smoke failed on at least one distro; retracting ${GITHUB_REF_NAME} to a draft."
+          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} migrate-image=${{ needs.migrate-image.result }}; retracting ${GITHUB_REF_NAME} to a draft."
           gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft
           exit 1
-      - name: Confirm release passed the install gate
-        if: needs.install-smoke.result == 'success'
-        run: echo "install smoke passed on all distros; ${GITHUB_REF_NAME} stays published."
+      - name: Confirm release passed all gates
+        if: needs.install-smoke.result == 'success' && needs.migrate-image.result == 'success'
+        run: echo "install smoke + migrate-image passed; ${GITHUB_REF_NAME} stays published."

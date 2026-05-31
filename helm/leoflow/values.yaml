@@ -83,9 +83,15 @@ bootstrap:
 migrations:
   enabled: true
   image:
-    # leoflow-migrate bundles the Leoflow migrations + golang-migrate
-    # (deploy/Dockerfile.migrate, built by `make migrate-image`). Tag defaults to
-    # the chart appVersion.
+    # leoflow-migrate bundles the Leoflow SQL migrations on top of
+    # `migrate/migrate` (deploy/Dockerfile.migrate). Published by
+    # `.github/workflows/release.yaml` on every tag, signed with cosign,
+    # multi-arch (amd64 + arm64).
+    #
+    # Tag defaults to the chart's appVersion, which may not match the latest
+    # released image tag (the chart's appVersion currently lags the leoflow-
+    # server release cadence). For pre-alpha installs, explicitly pin:
+    #   --set migrations.image.tag=v0.0.1-prealpha.18
     repository: ghcr.io/neochaotic/leoflow-migrate
     tag: ""
     pullPolicy: IfNotPresent

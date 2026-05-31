@@ -60,6 +60,16 @@ restart), which suits light production, and a single datastore is simpler to
 operate; Redis is a Production-scale concern (multi-node locking, high XCom
 throughput). (See [ADR 0026](adr/0026-lite-datastore-no-redis.md).)
 
+!!! info "Task dispatch is serial on Lite (by design)"
+    Lite's [BufferedDispatcher](adr/0031-scheduler-architecture.md) uses
+    `BufferSize=0` — task dispatch runs synchronously on the scheduler tick, one
+    task at a time. A fan-out DAG with N parallel branches still **executes** in
+    parallel inside the cluster (real pods, or subprocesses), but the **launch**
+    of those tasks is serialized through one goroutine. This is what makes Lite
+    cheap to operate on a single machine. For higher launch throughput, Production
+    uses `BufferSize>0` + `Workers>1` (a bounded pool).
+    See [#203](https://github.com/neochaotic/leoflow/issues/203) for the rationale.
+
 For task execution, the **k3d** path runs real pods and therefore **requires Docker
 to host the cluster** — but Docker is only the *substrate* of k3d, never an executor:
 Lite talks to the Kubernetes API, and a Docker-socket executor was rejected because

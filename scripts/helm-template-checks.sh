@@ -73,6 +73,28 @@ expect_in_job() {
 expect_in_job 'runAsNonRoot: true' "runAsNonRoot:true (restricted PSA gate)"
 expect_in_job 'runAsUser: 65532'   "runAsUser:65532 (distroless nonroot UID)"
 
+# Regression guard for PR #171: the PoC values fixture (the recipe in
+# helm/leoflow/examples/) shipped with a 34-byte secretKey, which
+# silently broke ParseKey (AES-256 requires exactly 32 bytes) and made
+# Connection management 503 for anyone following the recipe verbatim.
+# Validate every YAML fixture under helm/leoflow/examples/ that sets
+# `secretKey:` so a future fixture edit can't repeat the same class of
+# bug. The check is plain bash — no python / yq dependency.
+for fixture in helm/leoflow/examples/*.yaml; do
+  [ -f "$fixture" ] || continue
+  fixture_key=$(grep -E '^secretKey: ' "$fixture" 2>/dev/null \
+    | head -1 \
+    | sed -E 's/^secretKey: *//; s/^["'\'']?//; s/["'\'']?$//; s/ *#.*$//')
+  if [ -n "$fixture_key" ]; then
+    if [ "${#fixture_key}" -eq 32 ]; then
+      echo "OK:   $(basename "$fixture") secretKey is exactly 32 bytes (AES-256)"
+    else
+      echo "FAIL: $(basename "$fixture") secretKey is ${#fixture_key} bytes, want 32 — ParseKey would reject this and the recipe would break Connection management" >&2
+      fail=1
+    fi
+  fi
+done
+
 if [ "$fail" -ne 0 ]; then
   echo
   echo "helm-template-checks: one or more contracts unmet (see FAIL lines above)" >&2

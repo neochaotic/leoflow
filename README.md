@@ -15,6 +15,9 @@
 [![Security](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/neochaotic/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/neochaotic/leoflow)
 
+[![Edition: Lite](https://img.shields.io/badge/edition-Lite-C0C0C0?labelColor=4a4a4a)](docs/editions.md#leoflow-lite)
+[![Edition: Pro](https://img.shields.io/badge/edition-Pro-FFD700?labelColor=4a4a4a)](docs/editions.md#leoflow-production)
+
 > The OpenSSF Best Practices badge will be added once the project is registered at [bestpractices.dev](https://www.bestpractices.dev) (post-v0.1.0 target, per ADR 0014).
 
 ---

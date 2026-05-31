@@ -21,7 +21,7 @@ The workflow orchestrator that ate Apache Airflow's lunch.<br>
 </div>
 <div class="home-hero__media" markdown>
 <div class="home-hero__window" markdown>
-<span class="home-hero__chrome"><i></i><i></i><i></i><em>Leoflow · DEV — localhost:8088</em></span>
+<span class="home-hero__chrome"><i></i><i></i><i></i><em>Leoflow Lite — localhost:8088</em></span>
 ![Leoflow Dev, the ETL graph (extract, transform, load) running on a local cluster](assets/screenshots/dev-graph.png){ .home-hero__shot }
 </div>
 </div>
@@ -84,8 +84,8 @@ SDK). They compile to one immutable artifact — `dag.json` + a container image.
 
 - :material-rocket-launch-outline: **A real dev loop**
 
-    `leoflow lite` — isolated cluster, hot reload, marked DEV. Edit, save, see it
-    run. [Operating modes →](operating-modes.md)
+    `leoflow lite` — isolated cluster, hot reload, silver Lite badge. Edit, save,
+    see it run. [Operating modes →](operating-modes.md)
 
 - :material-api: **Airflow-compatible API & UI**
 
@@ -98,7 +98,7 @@ SDK). They compile to one immutable artifact — `dag.json` + a container image.
 ```bash
 leoflow lite provision            # check + provision host deps (dev-only)
 leoflow init dags/my_dag     # scaffold a project
-leoflow lite dags/my_dag      # hot-reload at http://localhost:8088 (marked DEV)
+leoflow lite dags/my_dag      # hot-reload at http://localhost:8088 (Lite edition)
 ```
 
 The product **proves itself in Dev first**; **Production** is a near-term goal

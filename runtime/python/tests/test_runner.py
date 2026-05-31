@@ -43,6 +43,47 @@ def test_run_rejects_bad_entrypoint():
         runner.run("no_callable_here")
 
 
+def test_run_emits_pre_and_post_lifecycle_groups(tmp_path, monkeypatch, capsys):
+    """Stdout MUST carry ::group::Pre task execution ... ::endgroup:: around
+    the runtime's setup lines (loading, kwargs), and a matching Post group
+    around the return summary. The Airflow 3.2 SPA log viewer renders these
+    markers as collapsible sections; without them the log panel mixes
+    framework noise with user output. User print() lands BETWEEN the two
+    groups so it stays visible by default.
+    """
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    mod = _write_module(tmp_path, monkeypatch, (
+        "def task():\n"
+        "    print('USER_LINE_INSIDE_TASK')\n"
+        "    return {'rows': 7}\n"
+    ))
+
+    runner.run(f"{mod}:task")
+
+    stdout = capsys.readouterr().out
+    # The two group pairs MUST appear, in order, and the user print MUST land
+    # BETWEEN them (not inside either).
+    pre_open = stdout.find("::group::Pre task execution")
+    pre_close = stdout.find("::endgroup::", pre_open)
+    user_line = stdout.find("USER_LINE_INSIDE_TASK")
+    post_open = stdout.find("::group::Post task execution", pre_close)
+    post_close = stdout.find("::endgroup::", post_open)
+
+    assert pre_open != -1, f"missing Pre group open in:\n{stdout}"
+    assert pre_close != -1, f"missing Pre group close in:\n{stdout}"
+    assert user_line != -1, f"missing user print in:\n{stdout}"
+    assert post_open != -1, f"missing Post group open in:\n{stdout}"
+    assert post_close != -1, f"missing Post group close in:\n{stdout}"
+    assert pre_open < pre_close < user_line < post_open < post_close, (
+        f"ordering wrong: Pre {pre_open}-{pre_close}, user {user_line}, "
+        f"Post {post_open}-{post_close} in:\n{stdout}"
+    )
+    # The runtime's lifecycle prefix MUST be present in both groups.
+    assert "[leoflow] loading" in stdout
+    assert "[leoflow] returned" in stdout
+
+
 def test_run_propagates_user_exception(tmp_path, monkeypatch):
     mod = _write_module(tmp_path, monkeypatch, "def task():\n    raise RuntimeError('boom')\n")
     with pytest.raises(RuntimeError, match="boom"):

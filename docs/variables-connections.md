@@ -5,6 +5,11 @@ secrets encrypted at rest, AES-256-GCM — ADR 0019) and delivers them to task p
 at runtime as environment variables, so your task reads them with the **native
 Airflow APIs** *and* as plain env (ADR 0021).
 
+!!! note "Tenancy"
+    Tenancy is single-tenant on Lite; Pro adds multi-tenant isolation. The agent
+    injects the current tenant's Variables/Connections per
+    [ADR 0019](adr/0019-secret-encryption-at-rest.md).
+
 ## Manage them
 Via the Airflow-compatible UI (Admin → Variables / Connections) or the API:
 

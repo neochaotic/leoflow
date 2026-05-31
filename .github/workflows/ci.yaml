@@ -260,11 +260,19 @@ jobs:
         run: redocly lint docs/api/openapi.yaml
 
   # ─────────────────────────────────────────────────────────────────────
-  # Python parser tests
-  # ─────────────────────────────────────────────────────────────────────
+  # Python parser tests — matrix across every Python the host detector
+  # claims to support (`internal/setup/detect.go` pythonCandidates). If a
+  # new minor is added to that list, add it here too — otherwise the
+  # detector promises compatibility we never verified, which is exactly
+  # the silent-regression risk #220 (F2) flagged. Only 3.11/3.12/3.13 are
+  # generally available today; bump as 3.14+ ship and stabilise.
   python-parser:
-    name: Python parser tests
+    name: Python parser tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
         working-directory: parser
@@ -272,7 +280,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python-version }}
 
       - name: Install
         run: |

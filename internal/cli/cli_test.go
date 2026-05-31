@@ -150,6 +150,78 @@ func TestValidateGracefulWithoutPython(t *testing.T) {
 	}
 }
 
+// TestCompileRecoversAfterConfigUpdate covers the EXACT user scenario from
+// the BYO-Python docs review: run `leoflow compile` before `leoflow setup`
+// (so the default parser_cmd has no module to load), then "fix the state"
+// by writing a working parser_cmd into ~/.leoflow/config.yaml (which is
+// what `leoflow setup` does in real life), then re-run compile WITHOUT any
+// flag override and confirm it picks up the new config and succeeds.
+//
+// This is the file-state version of TestCompileFailThenRecoverIsClean
+// below — that one swaps the --parser-cmd flag between runs, which proves
+// flag overrides recover cleanly but does NOT prove that the config-file
+// read path picks up a fresh value after a previous failed invocation.
+func TestCompileRecoversAfterConfigUpdate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	leoflowDir := filepath.Join(home, ".leoflow")
+	if err := os.MkdirAll(leoflowDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(leoflowDir, "config.yaml")
+
+	dir := filepath.Join(t.TempDir(), "proj")
+	if _, _, err := run(t, "init", dir); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "dag.json")
+
+	brokenParser := filepath.Join(t.TempDir(), "broken-parser.sh")
+	if err := os.WriteFile(brokenParser, []byte("#!/usr/bin/env bash\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("parser_cmd: \""+brokenParser+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "compile", dir, "--output", out, "--image", "test:v1"); err == nil {
+		t.Fatal("compile should fail when config's parser_cmd is broken")
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatalf("compile fail left a stale %s — recovery via config update would be poisoned", out)
+	}
+
+	// Simulate `leoflow setup` having just landed: overwrite the config with
+	// a working parser_cmd. The next compile must pick up the new value
+	// (no in-process caching of the file content from the previous run).
+	goodParser := filepath.Join(t.TempDir(), "good-parser.sh")
+	goodScript := "#!/usr/bin/env bash\n" +
+		"out=\"\"\n" +
+		"while [ $# -gt 0 ]; do case \"$1\" in --output) out=\"$2\"; shift 2;; *) shift;; esac; done\n" +
+		"cat > \"$out\" <<'JSON'\n" +
+		"{\"schema_version\":\"1.0\",\"dag_id\":\"proj\",\"dag_version\":\"dev\",\"image\":\"test:v1\",\"tasks\":[{\"task_id\":\"hello\",\"type\":\"python\",\"entrypoint\":\"dag:hello\"}]}\n" +
+		"JSON\n"
+	if err := os.WriteFile(goodParser, []byte(goodScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("parser_cmd: \""+goodParser+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "compile", dir, "--output", out, "--image", "test:v1"); err != nil {
+		t.Fatalf("compile must recover after the config's parser_cmd is fixed, got %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("dag.json missing after config-update recovery: %v", err)
+	}
+	var spec domain.DAGSpec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		t.Fatalf("recovered dag.json is invalid JSON: %v", err)
+	}
+	if err := spec.Validate(); err != nil {
+		t.Errorf("recovered dag.json does not pass schema validation: %v", err)
+	}
+}
+
 // TestCompileFailThenRecoverIsClean covers the out-of-order scenario surfaced
 // during the BYO-Python deploy-docs review: a CI user who runs
 // `leoflow compile` before `leoflow setup` (or before a working parser_cmd

@@ -103,6 +103,21 @@ run_section "Fresh-runner contract" contract_check
 # ─── Section 2: Go unit tests ────────────────────────────────────────────────
 run_section "Go unit tests (go test ./...)" go test ./...
 
+# ─── Section 2b: chaos integration (failure injection) ──────────────────────
+# Phase 2b (#231): scheduler-restart recovery + future agent-lost / orphan-run
+# scenarios. The tests fast-forward reaper thresholds so they stay fast
+# (~1.5 s for the current single scenario) while still proving the contract.
+# Skipped when DATABASE_URL is absent (no PG reachable — the skip is
+# explicit so a green report is honest about what was exercised).
+run_chaos_integration() {
+  if [[ -z "${DATABASE_URL:-}" ]]; then
+    echo "  (skipped — DATABASE_URL not set; chaos integration needs a migrated test PG)"
+    return 0
+  fi
+  go test -tags integration -count=1 -run 'TestChaos' ./internal/storage/
+}
+run_section "Chaos integration (failure injection)" run_chaos_integration
+
 # ─── Section 3: golangci-lint ────────────────────────────────────────────────
 # CI-pinned version per [[lint-pin-ci-version]]; prefer ~/.go/bin (where
 # `go install` puts tools), else fall back to PATH.

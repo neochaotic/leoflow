@@ -23,15 +23,16 @@ The Dockerized run is the alpha-gate variant — every CI/release-gate
 invocation should use it because the host run can produce false greens if
 the host happens to be configured the same way the contract expects.
 
-## What's in Phase 1 (here today)
+## What's in the harness today
 
-| # | Section | What it checks |
-|---|---|---|
-| 1 | Fresh-runner contract | `~/.leoflow/` is absent, `leoflow_parser` is NOT pip-installed (catches contributor-machine state — F5/#96) |
-| 2 | Go unit tests | `go test ./...` |
-| 3 | Go lint | `golangci-lint run ./...` at the CI-pinned version |
-| 4 | Parser pytest | `cd parser && pytest` |
-| 5 | Runtime pytest | `cd runtime/python && pytest` (skipped if absent) |
+| # | Section | What it checks | Phase |
+|---|---|---|---|
+| 1 | Fresh-runner contract | `~/.leoflow/` absent + `leoflow_parser` NOT pip-installed (catches contributor-machine state — F5/#96) | 1 |
+| 2 | Go unit tests | `go test ./...` | 1 |
+| 2b | Chaos integration (failure injection) | `go test -tags integration -run TestChaos ./internal/storage/` — fast-forwards reaper thresholds and asserts the mid-tick-crash recovery contract end-to-end. Skipped when `DATABASE_URL` is absent. | 2b |
+| 3 | Go lint | `golangci-lint run ./...` at the CI-pinned version | 1 |
+| 4 | Parser pytest | `cd parser && pytest` | 1 |
+| 5 | Runtime pytest | `cd runtime/python && pytest` (skipped if absent) | 1 |
 
 ## What's in Phase 2a (here today)
 
@@ -42,15 +43,35 @@ the host happens to be configured the same way the contract expects.
 - Image tag includes the Go + golangci-lint versions so a toolchain bump
   busts the cache deterministically.
 
-## What's NOT in Phase 2a (next sub-phases)
+## What's in Phase 2b (here today)
 
-- **2b — Failure injection** — kill scheduler mid-tick, kill agent mid-task,
-  stop Postgres briefly; assert reapers fire on their declared SLAs
-  (`docs/scheduler-resilience.md`).
+- **Failure-injection integration test** — `internal/storage/chaos_integration_test.go`
+  exercises the mid-tick-crash recovery contract end-to-end: stages a
+  "scheduler died after marking TI queued" state, fast-forwards the
+  dispatch-lost + orphan-run reaper thresholds, and asserts both fire in
+  sequence (TI → `failed/dispatch_lost`, run → `failed/orphaned`). Runs
+  in ~1.5 s against a migrated test PG.
+- Harness `run.sh` now invokes `go test -tags integration -run TestChaos
+  ./internal/storage/` as a dedicated section, skipping it cleanly when
+  `DATABASE_URL` is absent so a host run still produces a useful report.
+
+Scope choice: full bash-driven kill-the-process orchestration is brittle
+(signal timing, file locking, port reuse). A Go integration test that
+drives the state machine through the same failure shape is deterministic,
+fast, and catches the contract regressions the bash version would. The
+real-process variant remains an option for 2c/2d if a scenario can't be
+expressed at the integration level.
+
+## What's NOT in Phase 2b (next sub-phases)
+
 - **2c — Connector cookbook DAGs** — postgres / mysql / mssql / sqlite /
   redis / http round-trips end-to-end inside the harness.
 - **2d — Recurring DAGs** — a `*/3 * * * *` print DAG + a DB-writer DAG
   running for ≥30 min so the scheduler tick is exercised under steady load.
+- **Additional chaos scenarios** — agent-lost recovery, PG-down recovery,
+  leader failover. The current single scenario is the one PR #215 (#202)
+  motivated; the others get their own `TestChaosX` tests as we identify
+  bugs they'd have caught.
 
 ## Why this exists
 

@@ -18,7 +18,7 @@ default**:
 
 | What | Where | Notes |
 |---|---|---|
-| **Workspace** | The path under `workspace:` in `~/.leoflow/config.yaml` (default `~/leoflow-projects`) | Your `dag.py`, `leoflow.yaml`, and any other project files. The installer does not touch this directory. |
+| **Workspace** | The path under `workspace:` in `~/.leoflow/config.yaml` (default `~/leoflow`) | Your `dag.py`, `leoflow.yaml`, and any other project files. The installer does not touch this directory. |
 | **Datastore** | `~/.leoflow/managed-postgres/data/` (managed Postgres) **or** the `leoflow-data-*` Docker volume (Docker Postgres) | Includes DAG history, runs, task instances, XCom, Variables, Connections. The new binary applies any pending SQL migrations on first start. |
 | **Admin login** | `~/.leoflow/config.yaml` (`admin_email`, `admin_password_hash`) | Your password is not regenerated. Use `leoflow lite reset-password` if you forgot it. |
 | **JWT signing secret** | `~/.leoflow/config.yaml` (`jwt_secret`) | Browser sessions survive the upgrade (no forced re-login). |

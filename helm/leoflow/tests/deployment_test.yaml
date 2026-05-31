@@ -39,7 +39,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      secretKey: leoflow-unittest-secret-key-32by!
+      secretKey: leoflow-unittest-secretkey-32by!
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -65,6 +65,47 @@ tests:
               secretKeyRef:
                 name: my-external-key
                 key: secretKey
+
+  - it: fails the install with a clear error when secretKey is set but wrong length (not 32 raw bytes / 64 hex chars)
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      secretKey: too-short-12345
+    asserts:
+      - failedTemplate:
+          errorMessage: "secretKey must be exactly 32 raw bytes or 64-char hex (got 15 chars). Generate with: openssl rand -hex 16. See ADR 0019."
+
+  - it: accepts 32-byte raw secretKey (AES-256)
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      secretKey: leoflow-unittest-secretkey-32by!
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: accepts 64-char hex secretKey (AES-256 encoded)
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      secretKey: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: skips length validation when secretKeyExistingSecret is set (chart can't validate an out-of-band Secret)
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      secretKey: too-short-12345          # would normally fail
+      secretKeyExistingSecret: my-key     # but the existingSecret takes precedence; chart can't validate it
+    asserts:
+      - hasDocuments:
+          count: 1
 
   - it: pod + container securityContext pin runAsNonRoot + UID 65532 (distroless nonroot)
     set:

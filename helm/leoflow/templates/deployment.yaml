@@ -11,6 +11,22 @@ not configured, rather than letting a misconfigured Pro deploy run embedded.
 {{- if and (not .Values.redis.existingSecret) (not .Values.redis.url) -}}
 {{- fail "redis.url or redis.existingSecret is required: the Production edition needs an external Redis (the embedded XCom + log tailer is Lite-only)." -}}
 {{- end -}}
+{{- /*
+Validate `secretKey` length up-front so a wrong key fails the install
+with a clear error, not at runtime with a silent 503 on the Connections
+API. The server's ParseKey (internal/secrets/cipher.go) accepts exactly
+32 raw bytes OR 64-char hex OR base64-of-32-bytes; for chart-time
+validation we cover the two unambiguous shapes (raw 32, hex 64) — the
+base64 forms vary in padding so we let the server fall through. When
+`secretKeyExistingSecret` is set, skip — the chart can't reach into an
+out-of-band Secret to validate its contents (operator's responsibility).
+*/ -}}
+{{- if and .Values.secretKey (not .Values.secretKeyExistingSecret) -}}
+{{- $len := len .Values.secretKey -}}
+{{- if and (ne $len 32) (ne $len 64) -}}
+{{- fail (printf "secretKey must be exactly 32 raw bytes or 64-char hex (got %d chars). Generate with: openssl rand -hex 16. See ADR 0019." $len) -}}
+{{- end -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

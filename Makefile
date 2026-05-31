@@ -61,6 +61,10 @@ build: ## Build all binaries into ./bin
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SERVER_BINARY) ./cmd/leoflow-server
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(AGENT_BINARY) ./cmd/leoflow-agent
 
+.PHONY: chaos-dogfood
+chaos-dogfood: ## Pre-Lima gate (#231) — run all suites under a shadowed HOME + emit a green/red report
+	@bash scripts/chaos/run.sh
+
 .PHONY: dev-install
 dev-install: ## Install the leoflow toolchain on PATH so `leoflow dev` runs from any project
 	go install -trimpath -ldflags="$(LDFLAGS)" ./cmd/leoflow ./cmd/leoflow-server ./cmd/leoflow-agent

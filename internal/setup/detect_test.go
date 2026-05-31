@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -50,11 +51,56 @@ func TestDetect(t *testing.T) {
 		if r.Tier != TierK8s {
 			t.Errorf("Tier = %v, want TierK8s (docker present)", r.Tier)
 		}
-		if !r.Docker || !r.Python311 {
-			t.Errorf("Docker=%v Python311=%v, want both true", r.Docker, r.Python311)
+		if !r.Docker || !r.PythonAvailable {
+			t.Errorf("Docker=%v PythonAvailable=%v, want both true", r.Docker, r.PythonAvailable)
 		}
 		if r.Libc != "glibc" {
 			t.Errorf("Libc = %q, want glibc (no musl loader)", r.Libc)
+		}
+	})
+
+	// TestDetectAcceptsNewerPythonOnPath covers #D4: the detector previously
+	// only recognized `python3.11` and forced a ~50 MB CPython download for
+	// users who already had a newer interpreter installed. It now accepts any
+	// `python3.11` / `python3.12` / `python3.13` on PATH (we trust the binary
+	// name convention; the parser shim is stdlib-only per ADR 0024 so any
+	// 3.11+ works).
+	t.Run("python3.12 alone is enough — no forced download", func(t *testing.T) {
+		r := Detect(Probe{
+			GOOS: "darwin", GOARCH: "arm64",
+			LookPath: presentPaths("python3.12"),
+			Stat:     statNone(),
+			Getwd:    func() (string, error) { return "/Users/u/proj", nil },
+		})
+		if !r.PythonAvailable {
+			t.Errorf("PythonAvailable=false, want true (python3.12 is on PATH)")
+		}
+		if !strings.HasSuffix(r.PythonPath, "python3.12") {
+			t.Errorf("PythonPath = %q, want a python3.12 path", r.PythonPath)
+		}
+	})
+
+	t.Run("python3.13 alone is enough", func(t *testing.T) {
+		r := Detect(Probe{
+			GOOS: "darwin", GOARCH: "arm64",
+			LookPath: presentPaths("python3.13"),
+			Stat:     statNone(),
+			Getwd:    func() (string, error) { return "/Users/u/proj", nil },
+		})
+		if !r.PythonAvailable || !strings.HasSuffix(r.PythonPath, "python3.13") {
+			t.Errorf("PythonAvailable=%v PythonPath=%q, want true/python3.13", r.PythonAvailable, r.PythonPath)
+		}
+	})
+
+	t.Run("python3.11 still wins when present alongside newer ones", func(t *testing.T) {
+		r := Detect(Probe{
+			GOOS: "darwin", GOARCH: "arm64",
+			LookPath: presentPaths("python3.11", "python3.12", "python3.13"),
+			Stat:     statNone(),
+			Getwd:    func() (string, error) { return "/Users/u/proj", nil },
+		})
+		if !strings.HasSuffix(r.PythonPath, "python3.11") {
+			t.Errorf("PythonPath = %q, want python3.11 (preferred when present)", r.PythonPath)
 		}
 	})
 

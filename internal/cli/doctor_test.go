@@ -44,7 +44,7 @@ func TestRenderDoctor(t *testing.T) {
 		var buf bytes.Buffer
 		renderDoctor(&buf, setup.Report{
 			OS: "linux", Arch: "amd64", Libc: "glibc",
-			Python311: true, PythonPath: "/usr/bin/python3.11",
+			PythonAvailable: true, PythonPath: "/usr/bin/python3.11",
 			Docker: true, Tier: setup.TierK8s,
 		})
 		out := buf.String()
@@ -64,8 +64,8 @@ func TestRenderDoctor(t *testing.T) {
 		var buf bytes.Buffer
 		renderDoctor(&buf, setup.Report{
 			OS: "linux", Arch: "arm64", Libc: "musl",
-			Python311: false,
-			Docker:    false, Tier: setup.TierSubprocess, UnderMnt: true,
+			PythonAvailable: false,
+			Docker:          false, Tier: setup.TierSubprocess, UnderMnt: true,
 		})
 		out := buf.String()
 		for _, want := range []string{

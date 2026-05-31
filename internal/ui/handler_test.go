@@ -13,7 +13,7 @@ import (
 
 func fixture() *Server {
 	return NewFromFS(fstest.MapFS{
-		"index.html":           {Data: []byte(`<base href="{{ backend_server_base_url }}" /><div id="root"></div>`)},
+		"index.html":           {Data: []byte(`<title>Airflow</title><base href="{{ backend_server_base_url }}" /><div id="root"></div>`)},
 		"assets/app-abc123.js": {Data: []byte("console.log('hi')")},
 		"sql_bg-xyz.wasm":      {Data: []byte("\x00asm")},
 		"VERSION":              {Data: []byte("3.2.1\n")},
@@ -43,6 +43,36 @@ func TestIndexDefaultsEmptyBasePathToRoot(t *testing.T) {
 	fixture().Index(rec, "")
 	if !strings.Contains(rec.Body.String(), `<base href="/" />`) {
 		t.Errorf("empty base path should default to /, got %q", rec.Body.String())
+	}
+}
+
+// TestIndexRewritesTitleToInstanceName covers #D15: the embedded SPA's
+// <title>Airflow</title> is rewritten to the configured instance name so the
+// browser tab brands as Leoflow, not as Airflow. Empty instance name falls
+// back to "Leoflow" (matching the default Airflow instance_name behavior).
+func TestIndexRewritesTitleToInstanceName(t *testing.T) {
+	cases := []struct {
+		name     string
+		instance string
+		wantTag  string
+	}{
+		{"default falls back to Leoflow", "", "<title>Leoflow</title>"},
+		{"custom Lite name", "Leoflow Lite", "<title>Leoflow Lite</title>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fixture()
+			s.SetInstanceName(tc.instance)
+			rec := httptest.NewRecorder()
+			s.Index(rec, "/")
+			body := rec.Body.String()
+			if strings.Contains(body, "<title>Airflow</title>") {
+				t.Errorf("stale <title>Airflow</title> not rewritten, body: %q", body)
+			}
+			if !strings.Contains(body, tc.wantTag) {
+				t.Errorf("expected %q in body, got %q", tc.wantTag, body)
+			}
+		})
 	}
 }
 

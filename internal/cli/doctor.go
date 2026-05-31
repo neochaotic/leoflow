@@ -50,7 +50,7 @@ func renderDoctor(w io.Writer, r setup.Report) {
 	}
 	p("leoflow doctor\n\n")
 	p("  platform      %s\n", plat)
-	p("  python 3.11   %s\n", found(r.Python311, r.PythonPath, "will download a relocatable CPython on `leoflow setup`"))
+	p("  python 3.11+  %s\n", found(r.PythonAvailable, r.PythonPath, "no python3.11/3.12/3.13 on PATH; will download a relocatable CPython 3.11 on `leoflow setup`"))
 	p("  docker        %s\n", found(r.Docker, "found", "not found"))
 	p("  k3d           %s\n", found(r.K3d, "found", "not found (fetched on demand for the k8s tier)"))
 	p("  kubectl       %s\n", found(r.Kubectl, "found", "not found (fetched on demand for the k8s tier)"))

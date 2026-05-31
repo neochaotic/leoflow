@@ -59,6 +59,7 @@ type Server struct {
 	version      string
 	liteBanner   bool
 	editorButton bool
+	instanceName string
 }
 
 // SetLiteBanner toggles injection of the LITE overlay into the served shell. It
@@ -69,6 +70,11 @@ func (s *Server) SetLiteBanner(on bool) { s.liteBanner = on }
 // SetEditorButton toggles injection of the "IDE" button that opens the Lite web
 // editor (/ide). It is enabled only when a workspace is configured (Lite).
 func (s *Server) SetEditorButton(on bool) { s.editorButton = on }
+
+// SetInstanceName overrides the value used to rewrite the embedded SPA's
+// `<title>` tag (issue #D15). Empty falls back to "Leoflow" so the browser
+// tab never shows the upstream "Airflow" string from the bundled fork.
+func (s *Server) SetInstanceName(name string) { s.instanceName = name }
 
 // New builds a Server over the embedded, pinned SPA bundle.
 func New() *Server { return NewFromFS(Assets(), Version()) }
@@ -191,6 +197,14 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 	// served /static/assets path so they resolve to JS instead of the index.html
 	// SPA fallback (a text/html MIME type that breaks module preloading).
 	body = strings.ReplaceAll(body, `"./assets/`, `"./static/assets/`)
+	// Rewrite the bundled "<title>Airflow</title>" to the configured instance
+	// name (issue #D15) so the browser tab brands as Leoflow on first touch.
+	// Empty falls back to "Leoflow".
+	title := s.instanceName
+	if title == "" {
+		title = "Leoflow"
+	}
+	body = strings.ReplaceAll(body, "<title>Airflow</title>", "<title>"+title+"</title>")
 	if s.liteBanner {
 		body = injectBeforeBodyEnd(body, liteBannerHTML)
 	}

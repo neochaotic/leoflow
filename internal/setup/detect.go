@@ -48,16 +48,34 @@ type Probe struct {
 // Report is the outcome of Detect: the platform, which tools are present, and
 // the highest achievable tier.
 type Report struct {
-	OS         string
-	Arch       string
-	Libc       string // "glibc" or "musl" on linux; empty on darwin
-	Python311  bool
-	PythonPath string
-	Docker     bool
-	K3d        bool
-	Kubectl    bool
-	UnderMnt   bool // cwd under /mnt (WSL 9p mount): inotify hot-reload is unreliable
-	Tier       Tier
+	OS              string
+	Arch            string
+	Libc            string // "glibc" or "musl" on linux; empty on darwin
+	PythonAvailable bool   // a usable Python 3.11+ interpreter is on PATH
+	PythonPath      string // path to the chosen interpreter; empty when none is on PATH
+	Docker          bool
+	K3d             bool
+	Kubectl         bool
+	UnderMnt        bool // cwd under /mnt (WSL 9p mount): inotify hot-reload is unreliable
+	Tier            Tier
+}
+
+// pythonCandidates lists the interpreter binary names Detect probes for, in
+// priority order. The Lite parser shim is stdlib-only (ADR 0024) so any
+// 3.11+ interpreter works; we trust the binary-name convention rather than
+// invoking `--version` on every candidate (issue #D4). 3.11 wins when
+// present because it's the version the managed CPython matches, keeping
+// dev/prod parity for users on the documented path.
+//
+// The forward-looking range (3.14–3.18) covers minors that haven't shipped
+// yet so users with a future system Python still skip the managed-CPython
+// download. Bump the upper bound when a new minor lands AND the parser
+// shim has been verified against it — the list is the deliberate gate
+// for "we know this version works", not a free-for-all (see follow-up
+// issue tracking the more general fallback via `python3 --version` exec).
+var pythonCandidates = []string{
+	"python3.11", "python3.12", "python3.13",
+	"python3.14", "python3.15", "python3.16", "python3.17", "python3.18",
 }
 
 // muslLoaders are the dynamic-loader paths that mark a musl-based distro (Alpine).
@@ -79,17 +97,20 @@ func Detect(p Probe) Report {
 		return err == nil
 	}
 	r := Report{
-		OS:        p.GOOS,
-		Arch:      p.GOARCH,
-		Libc:      detectLibc(p),
-		Docker:    has("docker"),
-		K3d:       has("k3d"),
-		Kubectl:   has("kubectl"),
-		Python311: has("python3.11"),
+		OS:      p.GOOS,
+		Arch:    p.GOARCH,
+		Libc:    detectLibc(p),
+		Docker:  has("docker"),
+		K3d:     has("k3d"),
+		Kubectl: has("kubectl"),
 	}
-	if r.Python311 && p.LookPath != nil {
-		if path, err := p.LookPath("python3.11"); err == nil {
-			r.PythonPath = path
+	if p.LookPath != nil {
+		for _, name := range pythonCandidates {
+			if path, err := p.LookPath(name); err == nil {
+				r.PythonAvailable = true
+				r.PythonPath = path
+				break
+			}
 		}
 	}
 	if p.Getwd != nil {

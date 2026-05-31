@@ -144,6 +144,7 @@ func run() error {
 	// also when the legacy dev auth bypass is on. The demo/production show neither.
 	uiSrv := ui.New()
 	uiSrv.SetLiteBanner(showLiteBadge(cfg))
+	uiSrv.SetInstanceName(cfg.UI.InstanceName)
 
 	editorFS := liteEditorFS(cfg, tel.Logger)
 	uiSrv.SetEditorButton(editorFS != nil)

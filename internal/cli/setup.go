@@ -213,10 +213,10 @@ func runSetup(cmd *cobra.Command, workspaceFlag string, dryRun bool) error {
 	}
 
 	_, _ = fmt.Fprintf(out, "\n  workspace  %s\n  executor   %s\n  port       %d\n  admin      %s\n", lc.Workspace, lc.Executor, lc.Port, lc.AdminEmail) //nolint:errcheck // best-effort terminal output
-	if r.Python311 {
+	if r.PythonAvailable {
 		_, _ = fmt.Fprintf(out, "  python     using system %s\n", r.PythonPath) //nolint:errcheck // best-effort terminal output
 	} else {
-		_, _ = fmt.Fprintln(out, "  python     none on PATH; will install a relocatable CPython 3.11 under ~/.leoflow/python") //nolint:errcheck // best-effort terminal output
+		_, _ = fmt.Fprintln(out, "  python     no python3.11/3.12/3.13 on PATH; will install a relocatable CPython 3.11 under ~/.leoflow/python") //nolint:errcheck // best-effort terminal output
 	}
 
 	if dryRun {

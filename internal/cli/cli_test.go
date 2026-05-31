@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,6 +93,60 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 	}
 	if _, _, err := run(t, "validate", dir); err == nil {
 		t.Error("validate should reject a bad dag_id")
+	}
+}
+
+// TestValidateRejectsBrokenDagPython covers issue #D8: today validate only
+// checks leoflow.yaml + that dag.py exists, so a syntactically broken dag.py
+// would pass validation and only blow up at compile/run time. validate must
+// catch Python-syntax errors so a user gets a real go/no-go before push.
+//
+// The check is best-effort: it requires a Python interpreter (managed or
+// system). When neither is available it surfaces a clear warning rather than
+// silently skipping — covered by TestValidateGracefulWithoutPython.
+func TestValidateRejectsBrokenDagPython(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH; the strict check needs an interpreter")
+	}
+	dir := filepath.Join(t.TempDir(), "proj")
+	if _, _, err := run(t, "init", dir); err != nil {
+		t.Fatal(err)
+	}
+	// Overwrite dag.py with invalid Python.
+	if err := os.WriteFile(filepath.Join(dir, "dag.py"), []byte("this is not valid python\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err := run(t, "validate", dir)
+	if err == nil {
+		t.Fatal("validate must reject a syntactically broken dag.py")
+	}
+	combined := err.Error() + "\n" + stderr
+	if !strings.Contains(combined, "dag.py") || !strings.Contains(strings.ToLower(combined), "syntax") {
+		t.Errorf("validate error should name dag.py and mention a syntax problem, got: %s", combined)
+	}
+}
+
+// TestValidateGracefulWithoutPython covers the fresh-install path: when no
+// Python interpreter is reachable (managed not yet installed via
+// `leoflow setup`, system python3 not on PATH), validate must still succeed
+// on a well-formed scaffold and surface a warning telling the user how to
+// enable the strict check — never silently passing without explanation.
+func TestValidateGracefulWithoutPython(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "proj")
+	if _, _, err := run(t, "init", dir); err != nil {
+		t.Fatal(err)
+	}
+	// Hide python3 from PATH; point HOME at an empty dir so the managed
+	// interpreter is also absent.
+	t.Setenv("PATH", "/nonexistent")
+	t.Setenv("HOME", t.TempDir())
+
+	_, stderr, err := run(t, "validate", dir)
+	if err != nil {
+		t.Fatalf("validate with no python should still succeed on a good scaffold, got %v (%s)", err, stderr)
+	}
+	if !strings.Contains(stderr, "skipping dag.py syntax check") || !strings.Contains(stderr, "leoflow setup") {
+		t.Errorf("expected a warning naming the skip and pointing to `leoflow setup`, got: %q", stderr)
 	}
 }
 

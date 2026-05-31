@@ -26,7 +26,15 @@
 set -uo pipefail   # NO set -e: every section must run even if earlier ones fail
 
 REPORT_FILE="${REPORT_FILE:-/tmp/chaos-report.md}"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Prefer cwd when it looks like the repo root (this is what the Makefile +
+# the Dockerized harness do — the script may not be co-located with the
+# checkout, e.g. it's COPYed into /chaos/ inside the container while the
+# repo bind-mounts at /workspace).
+if [[ -f "${PWD}/go.mod" ]]; then
+  REPO_ROOT="$PWD"
+else
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
 SUMMARY_FILE="$(mktemp -t chaos-summary.XXXXXX)"
 trap 'rm -f "$SUMMARY_FILE"' EXIT
 

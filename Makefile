@@ -62,8 +62,29 @@ build: ## Build all binaries into ./bin
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(AGENT_BINARY) ./cmd/leoflow-agent
 
 .PHONY: chaos-dogfood
-chaos-dogfood: ## Pre-Lima gate (#231) — run all suites under a shadowed HOME + emit a green/red report
+chaos-dogfood: ## Pre-Lima gate (#231) — Phase 1: run all suites on the host + emit a green/red report
 	@bash scripts/chaos/run.sh
+
+CHAOS_IMAGE          ?= leoflow-chaos:local
+CHAOS_GO_VERSION     ?= 1.26.3
+CHAOS_LINT_VERSION   ?= v2.12.2
+
+.PHONY: chaos-dogfood-docker
+chaos-dogfood-docker: ## Pre-Lima gate (#231) — Phase 2a: same harness inside a clean Docker container (no host contamination by construction)
+	@command -v docker >/dev/null || { echo "docker is required for the dockerized harness"; exit 2; }
+	@echo "building $(CHAOS_IMAGE) (go $(CHAOS_GO_VERSION), golangci-lint $(CHAOS_LINT_VERSION))"
+	@docker build \
+		--build-arg GO_VERSION=$(CHAOS_GO_VERSION) \
+		--build-arg GOLANGCI_LINT_VERSION=$(CHAOS_LINT_VERSION) \
+		-t $(CHAOS_IMAGE) \
+		-f scripts/chaos/Dockerfile scripts/chaos
+	@echo "running chaos dogfood inside $(CHAOS_IMAGE)"
+	@docker run --rm \
+		-v "$(PWD)":/workspace \
+		-e REPORT_FILE=/workspace/chaos-report.md \
+		$(CHAOS_IMAGE) \
+		|| { echo "report at $(PWD)/chaos-report.md"; exit 1; }
+	@echo "report at $(PWD)/chaos-report.md"
 
 .PHONY: dev-install
 dev-install: ## Install the leoflow toolchain on PATH so `leoflow dev` runs from any project

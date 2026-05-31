@@ -24,6 +24,16 @@ type RunState struct {
 	// driving retry decisions. Absent entries mean no retry budget.
 	Tries    map[string]int
 	MaxTries map[string]int
+	// EndedAt holds the failure timestamp per task (only meaningful for tasks
+	// currently in `up_for_retry`). Combined with RetryDelaySeconds + Now, it
+	// gates the `up_for_retry → none` transition so retries honor user-
+	// declared backoff (issue #201). Absent entries mean no cooldown applies.
+	EndedAt           map[string]*time.Time
+	RetryDelaySeconds map[string]int
+	// Now is the wall-clock value the planner compares against EndedAt. Zero
+	// means "skip the cooldown gate" so legacy callers + tests that don't set
+	// retry_delay get the previous (immediate-retry) behavior.
+	Now time.Time
 }
 
 // ScheduledDAG is a cron-scheduled DAG and the logical date of its latest run.

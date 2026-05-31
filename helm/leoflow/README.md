@@ -86,8 +86,8 @@ chart deliberately won't fall back to embedded datastores — that's Lite's
 job, not Pro's (see `templates/deployment.yaml:8-13`). The supported PoC
 path is to install Bitnami's Postgres + Redis charts alongside Leoflow:
 
-- Recipe: [`examples/README.md`](examples/README.md)
-- Matching values file: [`examples/poc-with-bitnami.yaml`](examples/poc-with-bitnami.yaml)
+- Recipe: [`helm/leoflow/examples/README.md`](https://github.com/neochaotic/leoflow/tree/main/helm/leoflow/examples/README.md)
+- Matching values file: [`helm/leoflow/examples/poc-with-bitnami.yaml`](https://github.com/neochaotic/leoflow/tree/main/helm/leoflow/examples/poc-with-bitnami.yaml)
 
 Three `helm install`s in total. **Not for production** — see the recipe for
 the production-shaped command.

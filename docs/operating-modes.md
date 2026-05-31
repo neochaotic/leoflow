@@ -1,7 +1,11 @@
 # Operating modes: Demo · Dev · Production
 
 Leoflow runs in three modes. **The product proves itself in Dev first**;
-Production is a near-term goal, not yet for testing.
+Production is a near-term goal, not yet officially for testing (the chart
+is installable + gated, but not blessed until the v0.1.0-alpha cut).
+
+> See also [Editions](editions.md) for the Lite/Production distribution split
+> (this page is the runtime mode view; Editions is the packaging + posture view).
 
 | | **Demo** | **Dev** (`leoflow lite`) | **Production** *(coming soon)* |
 |---|---|---|---|
@@ -37,7 +41,16 @@ Dev runs user code unsandboxed (subprocess) or in throwaway pods (k3d); it is fo
 local development only.
 
 ## Production *(coming soon)*
-Helm chart + published images (#48), real cluster, TLS on the agent channel
-(#58), keyless cloud auth via workload identity (#56), least-privilege secret
-scoping (#59). Not yet supported for testing — see the roadmap. We harden Dev
-until the product earns its way to Production.
+Real cluster install via the **[Helm chart](helm-chart.md)** (chart-test
+gated, multi-arch images published per release, signed with cosign).
+Hardening templates ship as opt-in toggles: HPA + PDB + NetworkPolicy +
+ServiceMonitor. Still **not officially supported for testing** until the
+v0.1.0-alpha cut clears the user's hands-on validation — but the chart is
+installable today against any K8s cluster with external Postgres + Redis.
+
+Pending Production work (tracked separately): TLS on the agent channel
+(#58), keyless cloud auth via workload identity (#56), least-privilege
+secret scoping (#59).
+
+> See [Editions](editions.md) for the Lite/Production split (same engine,
+> different distribution + posture).

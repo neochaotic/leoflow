@@ -25,9 +25,10 @@
 
 | | |
 |---|---|
-| [Operating modes](docs/operating-modes.md) | Demo · Dev · Production (coming soon) |
+| [Operating modes](docs/operating-modes.md) · [Editions](docs/editions.md) | Demo · Dev · Production · the Lite/Pro split |
 | [DAG authoring](docs/dag-authoring.md) | write a DAG; the dev → deploy lifecycle |
 | [CI/CD & deploy examples](docs/deploy.md) | GitHub Actions · GitLab · Cloud Build/Run · generic |
+| [Helm chart](helm/leoflow/README.md) | Production install: values reference, hardening, PoC recipe |
 | [HTTP API (Scalar)](docs/api-reference.md) · [Go packages](docs/go-api.md) | API references |
 | [Concepts & glossary](docs/concepts.md) · [Architecture](docs/architecture.md) | the model & the *why* |
 
@@ -176,7 +177,7 @@ control plane (capped); everything else runs pod-per-task. Read
 - **Execution** — real pod-per-task execution via the `leoflow-agent` over gRPC (Kubernetes, ADR 0015), plus inline `http_api` goroutines for short calls; orphaned-pod reconciliation and completed-pod garbage collection.
 - **Data flow** — XCom on Redis (256 KB limit, TTL, optional schema validation) passed between tasks; log shipping to disk with a read API and live tailing over Redis pub/sub.
 
-**Not yet implemented:** the Airflow 3.2.x UI integration (Phase 5); the Helm chart, load tests, and S3/GCS log sinks (Phase 6). Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).
+**Not yet implemented:** load tests (Phase 6) and S3/GCS log sinks. Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).
 
 ## Features in the MVP
 
@@ -248,9 +249,9 @@ TOKEN=$(./bin/leoflow auth create-token --username admin@leoflow.local --passwor
 ./bin/leoflow push my-dag/dag.json --token "$TOKEN"
 ```
 
-> **Two dev environments.** `make dev-up` runs Postgres + Redis as plain Docker containers on the host for a fast inner loop (control plane on the host). Full in-cluster execution — control plane and dependencies on a local Kubernetes cluster (k3d/kind) via the Helm chart, mirroring production and exercising real task pods — arrives with the e2e work in a later phase. Task execution is on Kubernetes only (ADR 0015); the host containers are dev dependencies, not the execution path.
+> **Two dev environments.** `make dev-up` runs Postgres + Redis as plain Docker containers on the host for a fast inner loop (control plane on the host). For full in-cluster execution (control plane and dependencies on a local Kubernetes cluster, mirroring production and exercising real task pods), the [Helm chart](helm/leoflow/README.md) is installable on any K8s cluster — chart-test CI gates every change with `helm lint` + `helm-unittest` (41 tests) + kind install/upgrade smoke. Task execution is on Kubernetes only (ADR 0015); the host containers are dev dependencies, not the execution path.
 
-> The Airflow 3.2.1 UI ships embedded in the server and is served at `/` (Phase 5; see the one-command demo above and `docs/ui-compatibility.md`). The Scalar API reference is at `/docs`. The Helm chart and load tests are the remaining Phase 6 work.
+> The Airflow 3.2.1 UI ships embedded in the server and is served at `/` (see the one-command demo above and `docs/ui-compatibility.md`). The Scalar API reference is at `/docs`. Load tests are the remaining Phase 6 work.
 
 ## Honest Comparison
 

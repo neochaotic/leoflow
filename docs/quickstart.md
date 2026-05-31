@@ -6,8 +6,11 @@ trusted internal network — see [Editions](editions.md).
 
 ## Prerequisites
 
-- **Docker** running — Lite brings up its own Postgres + Redis with it. (No
-  Docker? Point Lite at your own datastores with `--no-up`.)
+- **One of the following** for the datastores:
+    - **Docker** running (preferred — Lite spins up `postgres:16` automatically), OR
+    - **Nothing** — Lite falls back to an embedded managed Postgres downloaded
+      under `~/.leoflow` (no Docker, no system Postgres needed). See
+      [Editions § Datastores](editions.md) for the auto-selection logic.
 - Linux or macOS (incl. WSL2). No system Python needed — Lite installs a managed
   one. See [Installation](installation.md) for details.
 

@@ -19,10 +19,17 @@ redis:
   url: redis://redis-master:6379/0
 
 # Fixture credentials. Replace before any real use, even for a temporary
-# demo on a shared cluster. The secretKey must be exactly 32 bytes (AES-256).
+# demo on a shared cluster.
+#
+# secretKey: MUST be exactly 32 raw bytes (or 64-char hex / base64-encoded
+# 32 bytes). The string below is verified at exactly 32 bytes so the AES-
+# 256-GCM init in the server succeeds out-of-the-box; without that, the
+# server logs a warning and the Connections API returns 503 — the recipe's
+# Connection-management evaluation fails silently. Generate a real key
+# with `openssl rand -hex 16` (64 hex chars = 32 bytes).
 auth:
   jwtSecret: leoflow-poc-jwt-please-replace-32B
-secretKey: leoflow-poc-32B-secret-key-replace
+secretKey: leoflow-poc-replace-with-32B-key
 bootstrap:
   password: leoflow-poc-admin
 

@@ -24,7 +24,7 @@ covered by `TestConnectionDeliveryChainOfCustodyIntegration` — see #138.
 | Host | yes | DNS name or IP. From inside a k3d cluster use `host.k3d.internal` for a host-bound port. |
 | Schema | optional | The database name (Postgres calls it a "database"; Airflow calls it "schema" for historical reasons). Defaults vary by driver. |
 | Login | yes | The Postgres role. |
-| Password | yes | Stored encrypted at rest (ADR 0019). The UI never shows it again after save; use `leoflow lite reset-password` analogue is N/A — delete + recreate the Connection. |
+| Password | yes | Stored encrypted at rest (ADR 0019). The UI never shows the password again after save — to rotate it, edit the Connection and re-enter the password (or delete + recreate). |
 | Port | optional | Defaults to `5432`. |
 | Extra | optional | A JSON object — e.g. `{"sslmode":"require"}`. Stored encrypted at rest alongside the password. |
 

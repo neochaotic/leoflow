@@ -5,12 +5,11 @@
 | Symptom | Cause / fix |
 |---|---|
 | `command not found: leoflow` | Not on PATH — `go install …/cmd/leoflow@latest` and add `$(go env GOPATH)/bin` to PATH. |
-| `docker compose up … no such file` | Run `leoflow lite` from the leoflow source tree, or use `--no-up` with deps already running. |
 | Task pod `ErrImagePull` | The DAG's image isn't in the cluster — rebuild + import (cluster-mode rebuilds on save; for a manual push, `leoflow compile --build --push`). |
 | Run stuck at `queued` (subprocess) | The agent must reach the control plane — dev uses `127.0.0.1:<grpc>`; the executor launches async and the agent reports state over gRPC. |
 | `Invalid credentials` in the UI | Type the password manually (autofill may add a trailing space; usernames are trimmed, passwords are not). |
-| No `DEV` marker on `localhost:8080` | That's the **Demo** (production-like) — the DEV marker is on `leoflow lite` (`:8088`). See [operating modes](operating-modes.md). |
-| `provision incomplete: dev database` | Postgres isn't up — start deps (`leoflow lite provision`) or `--no-up` against a running Postgres. |
+| No **Lite** badge on `http://localhost:8088` | That's the **Demo** (production-like) — the **Lite** badge is on `leoflow lite` (`:8088`). See [operating modes](operating-modes.md). |
+| `provision incomplete: dev database` | Postgres isn't up — end-users run `leoflow setup` to bootstrap. (`leoflow lite provision` is the contributor variant for a source checkout.) |
 
 ## Logs
 Task logs stream from the agent over gRPC to the control plane's log sink and are

@@ -149,6 +149,8 @@ go install github.com/neochaotic/leoflow/cmd/leoflow-agent@latest
 leoflow setup
 ```
 
+The subsequent `leoflow setup` will download a managed Python under `~/.leoflow/` — the same managed runtime the install-script path uses, with no expiry.
+
 A source build is not stamped with an expiry, so it never expires.
 
 ## Uninstalling

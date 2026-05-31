@@ -11,42 +11,51 @@ imagePullSecrets: []
 # -- Number of control-plane replicas. The scheduler leader-elects (ADR 0009), so `>1` is HA-safe (active-passive scheduler, active-active API).
 replicaCount: 1
 
-# taskNamespace is where the control plane creates task pods. It MUST match the
-# namespace the server expects (the code currently targets "leoflow"); the chart
-# grants the control plane RBAC to manage pods here.
+# -- Namespace where the control plane creates task pods. MUST match the
+# namespace the server expects (server code currently targets `leoflow`).
+# The chart grants the control plane RBAC to manage pods here; if you
+# override this, the RBAC follows but the server still looks at `leoflow`.
 taskNamespace: leoflow
 
 serviceAccount:
+  # -- Create a dedicated ServiceAccount for the leoflow-server. Set `false` only if you bring your own via `name`.
   create: true
-  name: ""             # defaults to the fullname when empty
+  # -- Override the ServiceAccount name. Defaults to the chart fullname when empty.
+  name: ""
+  # -- ServiceAccount annotations (e.g. AWS IAM role: `eks.amazonaws.com/role-arn`).
   annotations: {}
 
 rbac:
-  # create a Role/RoleBinding letting the control plane create/watch/delete task
-  # pods (and read their logs) in taskNamespace — the pod-per-task executor.
+  # -- Create the Role + RoleBinding granting the control plane create/get/list/watch/delete on pods + get on pods/log in `taskNamespace`. Required for the pod-per-task executor.
   create: true
 
-# Ports the server listens on (must match server.*Addr below).
+# -- Ports the leoflow-server listens on. http: API + UI, metrics: Prometheus
+# /metrics, grpc: agent ↔ control plane channel (task pods dial back here).
 ports:
   http: 8080
   metrics: 9090
   grpc: 9091
 
 service:
+  # -- Service type. `ClusterIP` for internal-only; `LoadBalancer` to expose externally; `NodePort` for k3d/kind.
   type: ClusterIP
+  # -- Service annotations (e.g. cloud LB controller hints, ExternalDNS).
   annotations: {}
 
 # config maps to LEOFLOW_* env. Non-secret settings live here; secrets below.
 config:
+  # -- Directory inside the pod where task logs are written. Mounted as emptyDir.
   logsDir: /var/log/leoflow
   scheduler:
+    # -- Run the scheduler loop. Disable only for read-only API-only replicas (rare).
     enabled: true
+    # -- Scheduler loop interval in milliseconds. Lower = faster reactivity, higher CPU. 1000ms is the production-tested default.
     loopIntervalMs: 1000
   cors:
+    # -- CORS allowed origins for the API. `["*"]` is fine for Pro behind an authenticated ingress; tighten for public-facing deploys.
     allowedOrigins:
       - "*"
-  # agentControlPlaneAddr is what task pods dial back for gRPC. Defaults to the
-  # in-cluster Service DNS on the gRPC port when left empty.
+  # -- gRPC address task pods dial back to reach the control plane. Defaults to the in-cluster Service DNS on `ports.grpc` when empty. Override for cross-cluster or external task pods.
   agentControlPlaneAddr: ""
 
 # Database (Postgres). Provide an external URL, or a pre-existing secret.
@@ -55,7 +64,9 @@ database:
   url: ""
   # -- Name of a Secret with key `databaseUrl` (takes precedence over `url`).
   existingSecret: ""
+  # -- Max concurrent open DB connections (Postgres-side load gate). Increase for high-throughput Pro deployments.
   maxOpenConns: 20
+  # -- Max idle DB connections kept in the pool. Should be ≤ `maxOpenConns`.
   maxIdleConns: 5
 
 # Redis (XCom + locks).
@@ -70,6 +81,7 @@ auth:
   jwtSecret: ""
   # -- Name of a Secret with key `jwtSecret` (takes precedence over `jwtSecret`).
   existingSecret: ""
+  # -- API + agent JWT lifetime in seconds. Default 1h; raise for longer agent sessions.
   tokenTtlSeconds: 3600
 
 # secretKey (LEOFLOW_SECRET_KEY) is the 32-byte key the control plane uses to
@@ -95,19 +107,12 @@ bootstrap:
 migrations:
   enabled: true
   image:
-    # leoflow-migrate bundles the Leoflow SQL migrations on top of
-    # `migrate/migrate` (deploy/Dockerfile.migrate). Published by
-    # `.github/workflows/release.yaml` on every tag, signed with cosign,
-    # multi-arch (amd64 + arm64).
-    #
-    # Tag defaults to the chart's appVersion, which may not match the latest
-    # released image tag (the chart's appVersion currently lags the leoflow-
-    # server release cadence). For pre-alpha installs, explicitly pin:
-    #   --set migrations.image.tag=v0.0.1-prealpha.18
+    # -- leoflow-migrate image bundling Leoflow SQL migrations on top of `migrate/migrate`. Published per release by `release.yaml`, signed with cosign, multi-arch (amd64 + arm64).
     repository: ghcr.io/neochaotic/leoflow-migrate
+    # -- Migration image tag. Defaults to `.Chart.appVersion` when empty — currently lags the published prealpha cadence, so PIN EXPLICITLY: `--set migrations.image.tag=v0.0.1-prealpha.18` (or whatever tag matches your server image).
     tag: ""
     pullPolicy: IfNotPresent
-  # path of the migrations dir inside the image.
+  # -- Path inside the migrate image where the SQL files live. Must match the COPY destination in `deploy/Dockerfile.migrate`.
   path: /migrations
   # Pod security for the pre-install/pre-upgrade Job. K8s' restricted Pod
   # Security Admission requires runAsNonRoot + a numeric runAsUser on
@@ -142,20 +147,25 @@ migrations:
 # so the agent verifies the server cert. Typically both are produced by
 # cert-manager (a Certificate Secret + a trust-bundle/CA ConfigMap).
 agentTLS:
+  # -- Enable TLS on the agent ↔ control plane gRPC channel (#58). When false, the per-task JWT still authenticates each call but the channel is plaintext (acceptable in-cluster).
   enabled: false
-  # Secret (type kubernetes.io/tls) with tls.crt/tls.key for the gRPC server —
-  # e.g. created by a cert-manager Certificate. Required when enabled.
+  # -- Name of a `kubernetes.io/tls` Secret (with `tls.crt`/`tls.key`) for the gRPC server. Typically produced by a cert-manager `Certificate`. Required when `enabled: true`.
   serverCertSecret: ""
-  # ConfigMap with key ca.crt, mounted into task pods to verify the server cert.
+  # -- Name of a ConfigMap with key `ca.crt`. Mounted into task pods so the agent verifies the server cert. Typically a cert-manager trust-bundle.
   caConfigMap: ""
 
 observability:
   otel:
+    # -- Export OpenTelemetry traces. When false, internal spans are no-ops.
     enabled: false
+    # -- OTLP/gRPC endpoint URL, e.g. `otel-collector:4317`. Required when `otel.enabled: true`.
     endpoint: ""
+  # -- Log format: `json` (production / log aggregators) or `console` (dev / human-readable).
   logFormat: json
+  # -- Log level: `debug`, `info`, `warn`, `error`. Production default is `info`.
   logLevel: info
 
+# -- Resource requests + limits for the leoflow-server container. Defaults sized for a small Pro (50–500 DAGs); bump CPU+memory for larger deployments. The scheduler's main load is DB polling, not in-process compute.
 resources:
   requests:
     cpu: 100m
@@ -171,10 +181,15 @@ resources:
 autoscaling:
   # -- Enable HPA for the leoflow-server Deployment. Requires metrics-server.
   enabled: false
+  # -- Minimum replicas. HPA never scales below this.
   minReplicas: 2
+  # -- Maximum replicas. HPA never scales above this.
   maxReplicas: 6
+  # -- Target average CPU utilization across replicas (percent). HPA scales out when exceeded.
   targetCPUUtilizationPercentage: 70
+  # -- Target average memory utilization (percent). Empty = not used. Add only if your workload is memory-bound (rare for a control plane).
   targetMemoryUtilizationPercentage: ""
+  # -- HPA scaling behavior (scale-up/scale-down policies). See K8s docs for autoscaling/v2 `behavior` schema.
   behavior: {}
 
 # PodDisruptionBudget so voluntary disruptions (node drains, upgrades) keep
@@ -183,7 +198,9 @@ autoscaling:
 podDisruptionBudget:
   # -- Enable PDB for the leoflow-server Deployment. Pair with replicaCount > 1.
   enabled: false
+  # -- Minimum replicas that must remain up during voluntary disruption. Set only ONE of minAvailable / maxUnavailable.
   minAvailable: 1
+  # -- Maximum replicas allowed unavailable during voluntary disruption. Set only ONE of minAvailable / maxUnavailable.
   maxUnavailable: ""
 
 # NetworkPolicy for the control plane (requires a CNI that enforces it). The
@@ -192,9 +209,12 @@ podDisruptionBudget:
 networkPolicy:
   # -- Enable NetworkPolicy gating ingress + egress on the control-plane pods. Requires a CNI that enforces policies (Calico/Cilium/etc.).
   enabled: false
-  ingressFrom: []   # e.g. [{namespaceSelector: {}}] to allow same-namespace clients + task pods
-  metricsFrom: []   # e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]
-  egress: []        # explicit egress rules; empty = allow-all besides DNS (always allowed)
+  # -- NetworkPolicy `from` rules for HTTP + gRPC ingress (task pods dial back). Empty = allow from any pod in any namespace. Tighten with e.g. `[{namespaceSelector: {}}]` for same-namespace only.
+  ingressFrom: []
+  # -- NetworkPolicy `from` rules for the metrics port (Prometheus scrape). Empty = no separate rule; the metrics port is reachable from wherever `ingressFrom` allows. Set e.g. `[{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]` to restrict to a Prometheus namespace.
+  metricsFrom: []
+  # -- Explicit egress rules. Empty = allow-all (DNS is ALWAYS allowed regardless). Lock down to your DB/Redis/kube-apiserver endpoints in regulated environments.
+  egress: []
 
 # Prometheus Operator ServiceMonitor for /metrics (ADR 0010). Requires the
 # monitoring.coreos.com CRDs (kube-prometheus-stack).
@@ -202,20 +222,29 @@ metrics:
   serviceMonitor:
     # -- Enable ServiceMonitor for Prometheus scraping. Requires kube-prometheus-stack CRDs.
     enabled: false
-    namespace: ""           # defaults to the release namespace
+    # -- Namespace for the ServiceMonitor resource. Defaults to the release namespace; override when Prometheus expects ServiceMonitors in a dedicated namespace.
+    namespace: ""
+    # -- Prometheus scrape interval.
     interval: 30s
+    # -- Prometheus scrape timeout (must be ≤ interval).
     scrapeTimeout: 10s
-    additionalLabels: {}    # e.g. {release: kube-prometheus-stack} to match the Prometheus selector
+    # -- Extra labels on the ServiceMonitor. Required when the Prometheus instance has a `serviceMonitorSelector` filter (e.g. `{release: kube-prometheus-stack}`).
+    additionalLabels: {}
 
 ingress:
+  # -- Enable an Ingress resource exposing the control plane via HTTP/HTTPS. Requires an Ingress controller (nginx/traefik/etc.) in the cluster.
   enabled: false
+  # -- Ingress class name (e.g. `nginx`). Leave empty to use the cluster default.
   className: ""
+  # -- Ingress annotations (controller-specific: rewrites, TLS, auth, etc.).
   annotations: {}
+  # -- Host + path rules. Each host maps to one or more path entries routed to the leoflow-server's `http` port.
   hosts:
     - host: leoflow.local
       paths:
         - path: /
           pathType: Prefix
+  # -- TLS configuration. Each entry maps hosts to a TLS Secret (typically a cert-manager Certificate Secret).
   tls: []
 
 podAnnotations: {}
@@ -239,6 +268,9 @@ securityContext:
   capabilities:
     drop: ["ALL"]
 
+# -- Pod nodeSelector (standard K8s scheduling label match).
 nodeSelector: {}
+# -- Pod tolerations (standard K8s — allow scheduling on tainted nodes).
 tolerations: []
+# -- Pod affinity rules (standard K8s — co-locate or anti-affinity).
 affinity: {}

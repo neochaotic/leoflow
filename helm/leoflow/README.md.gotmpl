@@ -59,6 +59,26 @@ every tag), which bundles the Leoflow `migrations/` at `migrations.path`.
 Override `migrations.image` to use your own, or set `migrations.enabled=false`
 to migrate out of band.
 
+## Datastore compatibility
+
+The chart talks to external Postgres + Redis you provision. Versions
+we test against in CI and the minimums we support:
+
+| Datastore | Tested in CI | Recommended minimum | Notes |
+|---|---|---|---|
+| **PostgreSQL** | 16.x (`postgres:16-alpine`) | **PostgreSQL 13** (current LTS line) | Uses JSONB, `ON CONFLICT`, advisory locks, generated columns. Versions below 13 may work but are untested; CI doesn't validate them. |
+| **Redis** | 7.x (`redis:7-alpine`) | **Redis 6.0** | ACL is used for the per-tenant auth model; Redis 5 and below lack ACL. Streams aren't used today but may be in the future. |
+
+The PoC recipe pins Bitnami chart majors that bundle the tested
+versions (postgres chart 16 → PG 16; redis chart 20 → Redis 7). When
+pointing at managed cloud datastores (RDS, ElastiCache, CloudSQL,
+Memorystore), check that the engine version is at the recommended
+minimum or above.
+
+If you need to run against an older engine, please file an issue with
+the version + symptoms — we don't bench-test older majors but will
+investigate specific incompatibilities.
+
 ## Evaluating without a managed Postgres + Redis
 
 For a one-cluster evaluation (kind, minikube, k3d, scratch namespace), the

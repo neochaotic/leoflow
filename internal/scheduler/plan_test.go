@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"testing"
+	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
@@ -121,6 +122,67 @@ func TestFinalizeRun(t *testing.T) {
 	}
 	if state, done := FinalizeRun(st(tasks, map[string]domain.TaskState{"a": domain.TaskStateSuccess, "b": domain.TaskStateFailed})); !done || state != domain.DagRunStateFailed {
 		t.Errorf("one failed => (%q,%v), want (failed,true)", state, done)
+	}
+}
+
+// TestPlanRunHoldsUpForRetryDuringDelay pins issue #201: a task in up_for_retry
+// must NOT be released back to `none` until `retry_delay_seconds` have elapsed
+// since `ended_at`. Without this gate, retries fire on the next tick (~1s),
+// defeating the user-declared backoff that exists precisely to give transient
+// failure causes (rate limits, upstream blips) time to recover.
+func TestPlanRunHoldsUpForRetryDuringDelay(t *testing.T) {
+	endedAt := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	run := RunState{
+		Tasks:             linear(),
+		States:            map[string]domain.TaskState{"a": domain.TaskStateUpForRetry, "b": domain.TaskStateNone},
+		Tries:             map[string]int{"a": 2},
+		MaxTries:          map[string]int{"a": 3},
+		EndedAt:           map[string]*time.Time{"a": &endedAt},
+		RetryDelaySeconds: map[string]int{"a": 60}, // 1 minute cooldown
+		Now:               endedAt.Add(10 * time.Second),
+	}
+	got := planMap(run)
+	if _, ok := got["a"]; ok {
+		t.Errorf("a planned %q at 10s after failure; should remain up_for_retry until +60s", got["a"])
+	}
+}
+
+// TestPlanRunReleasesUpForRetryAfterDelay completes the contract: the same
+// task IS released to `none` (and then to `scheduled` via decideStart in the
+// same plan pass) once the cooldown has elapsed.
+func TestPlanRunReleasesUpForRetryAfterDelay(t *testing.T) {
+	endedAt := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	run := RunState{
+		Tasks:             linear(),
+		States:            map[string]domain.TaskState{"a": domain.TaskStateUpForRetry, "b": domain.TaskStateNone},
+		Tries:             map[string]int{"a": 2},
+		MaxTries:          map[string]int{"a": 3},
+		EndedAt:           map[string]*time.Time{"a": &endedAt},
+		RetryDelaySeconds: map[string]int{"a": 60},
+		Now:               endedAt.Add(61 * time.Second),
+	}
+	got := planMap(run)
+	// up_for_retry → none in this tick; subsequent tick handles none → scheduled
+	// (the existing TestPlanRunResetsUpForRetry pins the same single-step shape).
+	if got["a"] != domain.TaskStateNone {
+		t.Errorf("a = %q at 61s after failure; want none (cooldown elapsed, ready to reset)", got["a"])
+	}
+}
+
+// TestPlanRunBackwardsCompatNoRetryDelay confirms that when retry_delay_seconds
+// is 0 or absent (legacy behavior), the task transitions immediately — no
+// regression for DAGs that opted out of backoff.
+func TestPlanRunBackwardsCompatNoRetryDelay(t *testing.T) {
+	run := RunState{
+		Tasks:             linear(),
+		States:            map[string]domain.TaskState{"a": domain.TaskStateUpForRetry, "b": domain.TaskStateNone},
+		Tries:             map[string]int{"a": 2},
+		MaxTries:          map[string]int{"a": 3},
+		RetryDelaySeconds: map[string]int{"a": 0}, // no delay
+		// EndedAt absent, Now zero — neither matters when delay == 0
+	}
+	if got := planMap(run); got["a"] != domain.TaskStateNone {
+		t.Errorf("a = %q with no retry_delay; want none (immediate reset, same as existing behavior)", got["a"])
 	}
 }
 

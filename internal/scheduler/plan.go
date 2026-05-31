@@ -1,6 +1,10 @@
 package scheduler
 
-import "github.com/neochaotic/leoflow/internal/domain"
+import (
+	"time"
+
+	"github.com/neochaotic/leoflow/internal/domain"
+)
 
 // PlannedTransition is a decided state change for a task instance within a run.
 type PlannedTransition struct {
@@ -39,6 +43,14 @@ func PlanRun(run RunState) []PlannedTransition {
 				decided[t.TaskID] = true
 			}
 		case domain.TaskStateUpForRetry:
+			if !readyToRetry(run, t.TaskID) {
+				// Cooldown still active — keep the task in up_for_retry. Mark
+				// decided so the second loop also leaves it alone (otherwise
+				// decideStart would re-evaluate based on effective state and
+				// re-emit a transition).
+				decided[t.TaskID] = true
+				continue
+			}
 			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
 			effective[t.TaskID] = domain.TaskStateNone
 			decided[t.TaskID] = true
@@ -70,6 +82,31 @@ func PlanRun(run RunState) []PlannedTransition {
 // terminally by default.
 func retriable(run RunState, taskID string) bool {
 	return run.Tries[taskID] < run.MaxTries[taskID]
+}
+
+// readyToRetry reports whether the cooldown window from the user's declared
+// retry_delay_seconds has elapsed since the task ended. The check honors the
+// "absent data falls back to immediate retry" convention so legacy callers
+// (tests, in-flight DAGs predating issue #201) keep working unchanged.
+//
+// Returns true when:
+//   - delay is 0 (no cooldown declared), OR
+//   - the task's EndedAt is not recorded (can't compute, retry immediately), OR
+//   - run.Now is zero (no clock provided — test seam preserves old behavior), OR
+//   - run.Now >= EndedAt + delay (cooldown has elapsed)
+func readyToRetry(run RunState, taskID string) bool {
+	delay := run.RetryDelaySeconds[taskID]
+	if delay <= 0 {
+		return true
+	}
+	ended := run.EndedAt[taskID]
+	if ended == nil {
+		return true
+	}
+	if run.Now.IsZero() {
+		return true
+	}
+	return !run.Now.Before(ended.Add(time.Duration(delay) * time.Second))
 }
 
 func decideStart(t domain.TaskSpec, deps []string, states map[string]domain.TaskState) (domain.TaskState, bool) {

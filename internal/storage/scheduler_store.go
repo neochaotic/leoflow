@@ -56,20 +56,37 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		states := make(map[string]domain.TaskState, len(tis))
 		tries := make(map[string]int, len(tis))
 		maxTries := make(map[string]int, len(tis))
+		endedAt := make(map[string]*time.Time, len(tis))
 		for _, ti := range tis {
 			states[ti.TaskID] = domain.TaskState(ti.State)
 			tries[ti.TaskID] = int(ti.TryNumber)
 			maxTries[ti.TaskID] = int(ti.MaxTries)
+			if ti.EndedAt.Valid {
+				ts := ti.EndedAt.Time
+				endedAt[ti.TaskID] = &ts
+			}
+		}
+		// Build per-task retry_delay_seconds from the DAG spec so the planner
+		// can gate `up_for_retry → none` on the user-declared cooldown (#201).
+		// TaskSpec.RetryDelaySeconds is *int (omitempty); nil = no cooldown.
+		retryDelay := make(map[string]int, len(spec.Tasks))
+		for _, t := range spec.Tasks {
+			if t.RetryDelaySeconds != nil {
+				retryDelay[t.TaskID] = *t.RetryDelaySeconds
+			}
 		}
 		out = append(out, scheduler.RunState{
-			RunID:    uuidToString(run.ID),
-			DagID:    spec.DagID,
-			TenantID: uuidToString(run.TenantID),
-			State:    domain.DagRunState(run.State),
-			Tasks:    spec.Tasks,
-			States:   states,
-			Tries:    tries,
-			MaxTries: maxTries,
+			RunID:             uuidToString(run.ID),
+			DagID:             spec.DagID,
+			TenantID:          uuidToString(run.TenantID),
+			State:             domain.DagRunState(run.State),
+			Tasks:             spec.Tasks,
+			States:            states,
+			Tries:             tries,
+			MaxTries:          maxTries,
+			EndedAt:           endedAt,
+			RetryDelaySeconds: retryDelay,
+			Now:               time.Now(),
 		})
 	}
 	return out, nil

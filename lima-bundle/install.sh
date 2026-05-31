@@ -63,21 +63,39 @@ fi
 
 # ─── 3. Install the leoflow binary ───────────────────────────────────────────
 # Pick the latest prealpha release. The release workflow publishes
-# leoflow-${OS}-${ARCH} assets.
+# leoflow_<version>_<os>_<arch>.tar.gz tarballs (and matching checksums +
+# cosign signatures + SBOMs); we extract the binary from the tarball.
+# Override the release tag via LEOFLOW_RELEASE_TAG=v0.0.1-prealpha.N.
 echo
 echo "${BOLD}1. Installing leoflow binary${RESET}"
-RELEASE_API="https://api.github.com/repos/${BUNDLE_REPO}/releases/latest"
-DOWNLOAD_URL="$(curl -fsSL "$RELEASE_API" | grep -E "browser_download_url.*leoflow-${OS}-${ARCH}\"" | head -1 | sed -E 's/.*"(https[^"]+)".*/\1/')"
+RELEASE_TAG="${LEOFLOW_RELEASE_TAG:-latest}"
+if [[ "$RELEASE_TAG" == "latest" ]]; then
+  RELEASE_API="https://api.github.com/repos/${BUNDLE_REPO}/releases/latest"
+else
+  RELEASE_API="https://api.github.com/repos/${BUNDLE_REPO}/releases/tags/${RELEASE_TAG}"
+fi
+DOWNLOAD_URL="$(curl -fsSL "$RELEASE_API" \
+  | grep -E "browser_download_url.*_${OS}_${ARCH}\.tar\.gz\"" \
+  | head -1 \
+  | sed -E 's/.*"(https[^"]+)".*/\1/')"
 if [[ -z "${DOWNLOAD_URL}" ]]; then
-  echo "could not resolve latest leoflow-${OS}-${ARCH} release asset" >&2
+  echo "could not resolve a leoflow_*_${OS}_${ARCH}.tar.gz asset on ${RELEASE_TAG}" >&2
   echo "fallback: check https://github.com/${BUNDLE_REPO}/releases manually" >&2
   exit 1
 fi
 echo "  url: ${DOWNLOAD_URL}"
 INSTALL_DIR="${HOME}/.local/bin"
 mkdir -p "$INSTALL_DIR"
-curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/leoflow"
-chmod +x "$INSTALL_DIR/leoflow"
+INSTALL_TMP="$(mktemp -d)"
+trap 'rm -rf "$INSTALL_TMP" "${TMPDIR:-}" "${SETUP_LOG:-}"' EXIT
+curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_TMP/leoflow.tar.gz"
+tar -xz -C "$INSTALL_TMP" -f "$INSTALL_TMP/leoflow.tar.gz"
+BIN_PATH="$(find "$INSTALL_TMP" -type f -name leoflow -perm -u+x | head -1)"
+if [[ -z "$BIN_PATH" ]]; then
+  echo "tarball did not contain a leoflow binary" >&2
+  exit 1
+fi
+install -m 0755 "$BIN_PATH" "$INSTALL_DIR/leoflow"
 export PATH="$INSTALL_DIR:$PATH"
 echo "  installed: $(leoflow version 2>&1 | head -1)"
 

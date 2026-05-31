@@ -26,10 +26,14 @@ spec:
         {{- include "leoflow.selectorLabels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.migrations.podSecurityContext | nindent 8 }}
       containers:
         - name: migrate
           image: "{{ .Values.migrations.image.repository }}:{{ $migrateTag }}"
           imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.migrations.securityContext | nindent 12 }}
           args:
             - "-path={{ .Values.migrations.path }}"
             - "-database=$(LEOFLOW_DATABASE_URL)"

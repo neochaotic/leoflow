@@ -49,6 +49,14 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
+      # Migrate is a static Go binary that writes only to the DB (advisory
+      # lock for migration mutex). No /tmp writes. Read-only root FS is the
+      # tightest restricted-PSA posture and we can afford it here (verified
+      # locally with `docker run --read-only -u 65532:65532 leoflow-migrate
+      # -version` succeeding).
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
 
   - it: hook ordering — Secret hook (-5) precedes Job hook (0) so secretKeyRef resolves at Job start
     # This is the regression that PR #167 caught: without the Secret being a

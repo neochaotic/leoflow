@@ -33,6 +33,7 @@ kubectl create namespace leoflow-poc
 
 ```bash
 helm install pg oci://registry-1.docker.io/bitnamicharts/postgresql \
+  --version 16 \
   -n leoflow-poc \
   --set auth.username=leoflow \
   --set auth.password=leoflow-poc \
@@ -40,6 +41,10 @@ helm install pg oci://registry-1.docker.io/bitnamicharts/postgresql \
   --set primary.persistence.enabled=false
 ```
 
+- `--version 16` pins the chart major. Bitnami occasionally rewrites
+  service names + value keys across majors (e.g. redis chart v18 changed
+  defaults). The PoC values file (`poc-with-bitnami.yaml`) hard-codes
+  `pg-postgresql` as the service name; that holds for major 16.x.
 - Service name: `pg-postgresql` (release name `pg` + chart suffix).
 - `persistence.enabled=false` skips the PVC so the PoC tears down cleanly. Drop
   this flag if you want the data to survive pod restarts.
@@ -50,12 +55,15 @@ Wait for it: `kubectl -n leoflow-poc rollout status statefulset/pg-postgresql --
 
 ```bash
 helm install redis oci://registry-1.docker.io/bitnamicharts/redis \
+  --version 20 \
   -n leoflow-poc \
   --set auth.enabled=false \
   --set architecture=standalone \
   --set master.persistence.enabled=false
 ```
 
+- `--version 20` pins the chart major. The PoC values file hard-codes
+  `redis-master` as the service name; that holds for major 20.x.
 - `auth.enabled=false` matches the URI in `poc-with-bitnami.yaml`
   (`redis://redis-master:6379/0`). Set a password and update the URI in the
   values file for any shared cluster.

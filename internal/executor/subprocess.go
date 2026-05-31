@@ -51,6 +51,11 @@ func agentEnv(req Request) []string {
 // A non-zero exit is therefore NOT a synchronous error; only a failure to start
 // is. The process is reaped in the background.
 func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
+	// Entry log (Lima Bug 2 diagnostic, 2026-05-31): if a manual trigger sits
+	// in queued forever and this line is absent, the scheduler never reached
+	// Execute(); if present and the next line is absent, cmd.Start() failed.
+	e.logger.Info("spawning agent subprocess",
+		"task", req.TaskID, "run", req.RunID, "agent_path", e.agentPath, "work_dir", e.workDir)
 	// WithoutCancel detaches the agent from the dispatch context: like a pod, it
 	// must run to completion and report its own terminal state over gRPC. Binding
 	// it to ctx would SIGKILL the agent when the dispatch ctx is canceled (surfacing
@@ -63,13 +68,21 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
 	// shipped separately over gRPC.
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
+		e.logger.Error("agent subprocess failed to start",
+			"task", req.TaskID, "agent_path", e.agentPath, "error", err)
 		return fmt.Errorf("starting agent subprocess for task %s: %w", req.TaskID, err)
 	}
+	e.logger.Info("agent subprocess started",
+		"task", req.TaskID, "run", req.RunID, "pid", cmd.Process.Pid)
 	go func() {
-		if werr := cmd.Wait(); werr != nil {
+		werr := cmd.Wait()
+		if werr != nil {
 			e.logger.Warn("agent subprocess exited non-zero (the agent reports task state over gRPC)",
-				"task", req.TaskID, "error", werr)
+				"task", req.TaskID, "pid", cmd.Process.Pid, "error", werr)
+			return
 		}
+		e.logger.Debug("agent subprocess exited cleanly",
+			"task", req.TaskID, "pid", cmd.Process.Pid)
 	}()
 	return nil
 }

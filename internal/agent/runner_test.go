@@ -176,17 +176,27 @@ func TestRunnerHappyPath(t *testing.T) {
 	if !strings.Contains(je, "AIRFLOW_CONN_MY_DB=postgres://u:p@h/db") {
 		t.Errorf("env missing AIRFLOW_CONN_MY_DB: %v", env)
 	}
-	// The agent frames a run with synthetic start/end events (#119) so a task
-	// with no print() still has visible logs, so the captured stream is:
-	//   ["▸ task started", "line one", "line two", "✓ task succeeded in <dur>"]
-	if len(sink.lines) != 4 || sink.lines[1] != "line one" || sink.lines[2] != "line two" {
-		t.Errorf("log lines = %v, want framing + 'line one' + 'line two' + framing", sink.lines)
+	// The agent frames a run with synthetic start/end events (#119) and emits
+	// task-boot lifecycle lines (running:, injected ...). With the upstream
+	// XCom this fixture sets, the captured stream is:
+	//   ["▸ task started", "running: ...", "injected ...", "line one", "line two", "✓ task succeeded ..."]
+	if len(sink.lines) != 6 {
+		t.Fatalf("log lines = %v (len=%d), want 6 (framing+boot+2lifecycle+2 lines+ framing)", sink.lines, len(sink.lines))
 	}
 	if !strings.Contains(sink.lines[0], "task started") {
-		t.Errorf("first line must be the start framing, got %q", sink.lines[0])
+		t.Errorf("line[0] must be the start framing, got %q", sink.lines[0])
 	}
-	if !strings.Contains(sink.lines[3], "succeeded") {
-		t.Errorf("last line must be the success framing, got %q", sink.lines[3])
+	if !strings.HasPrefix(sink.lines[1], "running:") {
+		t.Errorf("line[1] must be the boot argv line, got %q", sink.lines[1])
+	}
+	if !strings.HasPrefix(sink.lines[2], "injected ") {
+		t.Errorf("line[2] must be the injected env line, got %q", sink.lines[2])
+	}
+	if sink.lines[3] != "line one" || sink.lines[4] != "line two" {
+		t.Errorf("lines[3..4] should be the user stdout 'line one' / 'line two', got %q / %q", sink.lines[3], sink.lines[4])
+	}
+	if !strings.Contains(sink.lines[5], "succeeded") {
+		t.Errorf("last line must be the success framing, got %q", sink.lines[5])
 	}
 	if !sink.closed {
 		t.Error("log sink should be closed after the command exits")

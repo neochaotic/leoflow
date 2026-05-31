@@ -12,7 +12,10 @@ func TestBuildCommandPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"python", "-m", "leoflow_runtime", "tasks.extract:run"}
+	// -u forces unbuffered stdout/stderr so print() bytes are not lost on
+	// SIGKILL/OOM before Python's atexit can flush. Companion env var
+	// PYTHONUNBUFFERED=1 (see runner.go buildEnv) covers re-execed children.
+	want := []string{"python", "-u", "-m", "leoflow_runtime", "tasks.extract:run"}
 	if len(argv) != len(want) {
 		t.Fatalf("unexpected argv: %v", argv)
 	}

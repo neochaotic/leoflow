@@ -109,6 +109,13 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		xcom = append(xcom, XComEnvVar(param, resp.GetValue()))
 	}
 	env := mergeEnv(r.Env, spec.GetEnvironment(), xcom)
+	// Force-unbuffered Python and explicit UTF-8 for every spawned subprocess
+	// — including any python re-execed by the user's task. The `-u` flag on
+	// argv (see BuildCommand) only covers the top-level interpreter; this env
+	// var also flows to children. Without it, a user's print() bytes may sit
+	// in Python's block buffer when the process is killed (SIGKILL/OOM/evict)
+	// and never reach the agent's pipe.
+	env = append(env, "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=UTF-8")
 	if r.ReturnPath != "" {
 		// Tell the runtime to write the return value to the agent's per-task path,
 		// not the shared global default — so concurrent tasks and other users never
@@ -179,6 +186,7 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	// matching real Airflow, which always emits start/end framing (#119).
 	start := time.Now()
 	emitTaskStarted(r.Sink)
+	emitTaskBoot(r.Sink, argv, env)
 	exitCode, runErr := r.Cmd.Run(timeoutCtx, argv, env, stdout, stderr)
 	stdout.flush()
 	stderr.flush()
@@ -366,6 +374,63 @@ func emitTaskStarted(sink LogSink) {
 		Stream:  "agent",
 	}); err != nil {
 		slog.Warn("emitting task-started log", "error", err)
+	}
+}
+
+// emitTaskBoot writes a lifecycle line summarizing what's about to run: the
+// interpreter argv and the names of injected AIRFLOW_CONN_*, AIRFLOW_VAR_*, and
+// LEOFLOW_XCOM_* env vars. Without this, a task with no print() shows only the
+// 2-line framing — leaving the user wondering whether their conns/vars were
+// injected or their kwargs resolved. Best-effort: a sink error is logged.
+func emitTaskBoot(sink LogSink, argv, env []string) {
+	if len(argv) == 0 {
+		return
+	}
+	var conns, vars, xcoms []string
+	for _, kv := range env {
+		switch {
+		case strings.HasPrefix(kv, "AIRFLOW_CONN_"):
+			if eq := strings.IndexByte(kv, '='); eq > 0 {
+				conns = append(conns, kv[:eq])
+			}
+		case strings.HasPrefix(kv, "AIRFLOW_VAR_"):
+			if eq := strings.IndexByte(kv, '='); eq > 0 {
+				vars = append(vars, kv[:eq])
+			}
+		case strings.HasPrefix(kv, "LEOFLOW_XCOM_"):
+			if eq := strings.IndexByte(kv, '='); eq > 0 {
+				xcoms = append(xcoms, kv[:eq])
+			}
+		}
+	}
+	sort.Strings(conns)
+	sort.Strings(vars)
+	sort.Strings(xcoms)
+	msg := fmt.Sprintf("running: %s", strings.Join(argv, " "))
+	if err := sink.Send(&agentv1.LogLine{
+		Time: timestamppb.Now(), Level: agentv1.LogLevel_LOG_LEVEL_INFO,
+		Message: msg, Stream: "agent",
+	}); err != nil {
+		slog.Warn("emitting task-boot log", "error", err)
+	}
+	if len(conns)+len(vars)+len(xcoms) == 0 {
+		return
+	}
+	parts := make([]string, 0, 3)
+	if len(conns) > 0 {
+		parts = append(parts, fmt.Sprintf("conns: %s", strings.Join(conns, ", ")))
+	}
+	if len(vars) > 0 {
+		parts = append(parts, fmt.Sprintf("vars: %s", strings.Join(vars, ", ")))
+	}
+	if len(xcoms) > 0 {
+		parts = append(parts, fmt.Sprintf("xcom inputs: %s", strings.Join(xcoms, ", ")))
+	}
+	if err := sink.Send(&agentv1.LogLine{
+		Time: timestamppb.Now(), Level: agentv1.LogLevel_LOG_LEVEL_INFO,
+		Message: "injected " + strings.Join(parts, " | "), Stream: "agent",
+	}); err != nil {
+		slog.Warn("emitting task-boot env log", "error", err)
 	}
 }
 

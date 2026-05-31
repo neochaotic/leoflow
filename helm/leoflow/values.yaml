@@ -126,7 +126,11 @@ migrations:
     fsGroup: 65532
   securityContext:
     allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: false
+    # migrate is a static Go binary writing only to the DB (advisory lock for
+    # migration mutex). No /tmp writes, no log files. Safe to lock the root
+    # FS read-only — tightest restricted-PSA posture. Verified locally with
+    # `docker run --rm --read-only -u 65532:65532 leoflow-migrate -version`.
+    readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 65532
     capabilities:

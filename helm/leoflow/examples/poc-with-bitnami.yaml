@@ -13,6 +13,11 @@
 
 # Datastore endpoints — must match the Bitnami release names + service
 # defaults documented in the companion README.
+#
+# Tested against:
+#   bitnami/postgresql chart major 16.x  (service: pg-postgresql)
+#   bitnami/redis      chart major 20.x  (service: redis-master)
+# If you bump these majors, verify the service names match the URIs below.
 database:
   url: postgres://leoflow:leoflow-poc@pg-postgresql:5432/leoflow?sslmode=disable
 redis:

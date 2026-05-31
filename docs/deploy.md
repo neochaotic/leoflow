@@ -69,6 +69,15 @@ recommended path because it's the operation that decides whether managed
 CPython is downloaded, and that's a step CI operators should consciously opt
 into.
 
+!!! tip "Cache `~/.leoflow/` between CI runs"
+    Ephemeral CI runners re-extract the parser on every build (~3-5 s).
+    Cache the directory keyed by the leoflow binary version (or the leoflow
+    release URL) to skip it on warm runs:
+    `actions/cache` on GitHub Actions, `cache:` keys on GitLab CI, the
+    workspace cache on Cloud Build. With Python on PATH, the cache hit makes
+    `leoflow setup` a near-no-op. Skip the cache if your runner image
+    already bakes `~/.leoflow/pysrc/` in (some self-hosted setups do).
+
 ## Examples
 
 === "GitHub Actions"

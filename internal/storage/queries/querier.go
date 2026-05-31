@@ -14,6 +14,9 @@ type Querier interface {
 	AddFavorite(ctx context.Context, arg AddFavoriteParams) error
 	AssignUserRole(ctx context.Context, arg AssignUserRoleParams) error
 	ClearDagRuns(ctx context.Context, dagID pgtype.UUID) (int64, error)
+	// Counts queued+running runs for a single DAG; used by the manual-trigger
+	// path to enforce max_active_runs (#200) before insert.
+	CountActiveDagRunsByDagID(ctx context.Context, dagID pgtype.UUID) (int64, error)
 	CountAuditLogs(ctx context.Context, arg CountAuditLogsParams) (int64, error)
 	CountConnections(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountDagRunStatesInWindow(ctx context.Context, arg CountDagRunStatesInWindowParams) ([]CountDagRunStatesInWindowRow, error)
@@ -94,8 +97,9 @@ type Querier interface {
 	// on the next tick (the reaper is a backstop, not a sprint).
 	ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error)
 	// Returns each cron-scheduled DAG with the bits the scheduler needs to decide
-	// both "is there a slot due?" (schedule + last_logical) and "how many slots
-	// should I backfill on this tick?" (catchup + start_date, see #129).
+	// both "is there a slot due?" (schedule + last_logical), "how many slots
+	// should I backfill on this tick?" (catchup + start_date, see #129), and
+	// "may this DAG take another active run?" (max_active_runs, see #200).
 	ListScheduledDags(ctx context.Context) ([]ListScheduledDagsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)

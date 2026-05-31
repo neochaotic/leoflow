@@ -182,11 +182,12 @@ func (s *SchedulerStore) ScheduledDAGs(ctx context.Context) ([]scheduler.Schedul
 	out := make([]scheduler.ScheduledDAG, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, scheduler.ScheduledDAG{
-			DagID:       r.DagID,
-			Schedule:    strOrEmpty(r.Schedule),
-			LastLogical: timeFromAny(r.LastLogical),
-			StartDate:   timePtr(r.StartDate),
-			Catchup:     r.Catchup,
+			DagID:         r.DagID,
+			Schedule:      strOrEmpty(r.Schedule),
+			LastLogical:   timeFromAny(r.LastLogical),
+			StartDate:     timePtr(r.StartDate),
+			Catchup:       r.Catchup,
+			MaxActiveRuns: int(r.MaxActiveRuns),
 		})
 	}
 	return out, nil

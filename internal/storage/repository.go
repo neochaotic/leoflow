@@ -212,11 +212,28 @@ func (r *Repository) DeleteDagRun(ctx context.Context, tenant, dagID, runID stri
 	return nil
 }
 
-// CreateDagRun inserts a new run for a DAG at its current version.
+// CreateDagRun inserts a new run for a DAG at its current version. The
+// per-DAG max_active_runs cap (#200) is enforced here for any caller that
+// goes through the repository — manual triggers via the API, scripted
+// backfills, and any future programmatic trigger path — so the contract
+// is honored in one place. A cap of zero is treated as "unlimited" to
+// match the scheduler path (see `Scheduler.hasHeadroom`). The check
+// races with concurrent inserts, but the small overshoot window is
+// bounded by the number of concurrent writers and lets us avoid an
+// advisory lock on the hot path.
 func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run domain.DagRun) (domain.DagRun, error) {
 	dag, err := r.resolveDag(ctx, tenant, dagID)
 	if err != nil {
 		return domain.DagRun{}, err
+	}
+	if maxActive := int(dag.MaxActiveRuns); maxActive > 0 {
+		active, countErr := r.q.CountActiveDagRunsByDagID(ctx, dag.ID)
+		if countErr != nil {
+			return domain.DagRun{}, fmt.Errorf("counting active runs: %w", countErr)
+		}
+		if int(active) >= maxActive {
+			return domain.DagRun{}, fmt.Errorf("dag %q is at max_active_runs cap of %d: %w", dagID, maxActive, domain.ErrConflict)
+		}
 	}
 	created, err := r.q.CreateDagRun(ctx, queries.CreateDagRunParams{
 		TenantID:     dag.TenantID,

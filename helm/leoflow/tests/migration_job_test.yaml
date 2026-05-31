@@ -1,0 +1,65 @@
+suite: pre-install migration Job hook + hardening
+templates:
+  - migration-job.yaml
+release:
+  name: leoflow
+tests:
+  - it: not rendered when migrations.enabled is false
+    set:
+      migrations.enabled: false
+      database.url: postgres://h/d
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rendered with pre-install/pre-upgrade hook + weight 0 + before-hook-creation,hook-succeeded
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: pod + container securityContext pin runAsNonRoot + UID 65532 (matches Deployment)
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 65532
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: hook ordering — Secret hook (-5) precedes Job hook (0) so secretKeyRef resolves at Job start
+    # This is the regression that PR #167 caught: without the Secret being a
+    # hook, the pre-install Job pod fails with `secret "leoflow-secrets" not
+    # found`. Unit-test the negative — the Job's hook weight MUST be > Secret's
+    # (helm-template-checks.sh asserts the Secret is at -5; here we assert the
+    # Job is at 0, so the ordering Secret → Job holds.).
+    set:
+      database.url: postgres://h/d
+      auth.jwtSecret: jwt   # forces the chart-managed Secret to render
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"   # Secret is at "-5"; Job at "0" → Secret runs first ✓

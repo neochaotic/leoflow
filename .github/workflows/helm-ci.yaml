@@ -67,6 +67,19 @@ jobs:
             exit 1
           fi
 
+      # helm-unittest: template-logic unit tests under helm/leoflow/tests/.
+      # Catches regressions the rendered-and-grep contract (helm-template-
+      # checks.sh) can't easily express — e.g. "fails install with the exact
+      # error message when redis.url is empty", "Secret omits keys when
+      # existingSecret is set", "Job hook-weight > Secret hook-weight". The
+      # plugin install is unverified (the upstream plugin isn't signed) but
+      # we pin the source repo + version explicitly.
+      - name: helm-unittest (template logic)
+        run: |
+          set -euo pipefail
+          helm plugin install --version v1.1.0 https://github.com/helm-unittest/helm-unittest
+          helm unittest helm/leoflow
+
       # Contract test: every required env entry + Secret key must be present
       # in the rendered chart (covered by scripts/helm-template-checks.sh).
       # This is the seed gate; failures here mean someone deleted or renamed

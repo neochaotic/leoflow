@@ -1,0 +1,89 @@
+suite: control-plane Deployment env + security context
+templates:
+  - deployment.yaml
+release:
+  name: leoflow
+tests:
+  - it: fails the install if database.url AND database.existingSecret are both empty
+    set:
+      redis.url: redis://host/0
+      auth.jwtSecret: jwt
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.url or database.existingSecret is required: the Production edition needs an external Postgres (the embedded datastore is Lite-only)."
+
+  - it: fails the install if redis.url AND redis.existingSecret are both empty
+    set:
+      database.url: postgres://h/d
+      auth.jwtSecret: jwt
+    asserts:
+      - failedTemplate:
+          errorMessage: "redis.url or redis.existingSecret is required: the Production edition needs an external Redis (the embedded XCom + log tailer is Lite-only)."
+
+  - it: omits LEOFLOW_SECRET_KEY env entry when neither secretKey nor secretKeyExistingSecret is set
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      # NOT setting secretKey / secretKeyExistingSecret
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SECRET_KEY
+
+  - it: wires LEOFLOW_SECRET_KEY from chart-managed Secret when secretKey is inline
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      secretKey: leoflow-unittest-secret-key-32by!
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: leoflow-secrets
+                key: secretKey
+
+  - it: wires LEOFLOW_SECRET_KEY from existingSecret when secretKeyExistingSecret is set
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      secretKeyExistingSecret: my-external-key
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-external-key
+                key: secretKey
+
+  - it: pod + container securityContext pin runAsNonRoot + UID 65532 (distroless nonroot)
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false

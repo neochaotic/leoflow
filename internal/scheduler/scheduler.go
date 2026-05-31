@@ -338,9 +338,11 @@ func (s *Scheduler) createDueRuns(ctx context.Context, activeByDAG map[string]in
 	createdThisTick := make(map[string]int, len(dags))
 	for _, d := range dags {
 		if domain.IsOnceSchedule(d.Schedule) {
-			// @once: fire exactly one run on first sight, then never again. Once the
-			// run exists, the DAG's LastLogical is non-nil and this is skipped.
-			if d.LastLogical == nil && s.hasHeadroom(d, activeByDAG, createdThisTick) {
+			// @once: fire exactly one run on first sight, then never again. Once
+			// the run exists, the DAG's LastLogical is non-nil and this is
+			// skipped — that single-shot semantic already prevents any cap
+			// breach, so no headroom check is needed here.
+			if d.LastLogical == nil {
 				s.createScheduledRun(ctx, d.DagID, now)
 				createdThisTick[d.DagID]++
 			}
@@ -395,8 +397,14 @@ func (s *Scheduler) createDueRuns(ctx context.Context, activeByDAG map[string]in
 }
 
 // hasHeadroom reports whether the DAG may take another active run without
-// exceeding its max_active_runs cap. A cap of zero means "unlimited"
-// (Airflow-faithful default for an unset limit).
+// exceeding its max_active_runs cap. A non-positive cap is treated as
+// "unlimited" — a defensive guard for hand-edited rows: the column is
+// `NOT NULL DEFAULT 16` (migration 002) and the repository upsert defaults
+// missing values to 16 (`repository.go:509`), so a zero only appears via a
+// direct DB write. Diverging from Airflow's "missing == default 16" makes
+// the scheduler fail open rather than locking the DAG out forever when a
+// bad row is encountered. Callers pass `justCreated` so a single tick
+// folds in its own creations and cannot itself breach the cap.
 func (s *Scheduler) hasHeadroom(d ScheduledDAG, active map[string]int, justCreated map[string]int) bool {
 	if d.MaxActiveRuns <= 0 {
 		return true

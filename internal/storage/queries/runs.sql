@@ -19,6 +19,12 @@ LIMIT $2 OFFSET $3;
 -- name: CountDagRunsByDag :one
 SELECT count(*) FROM dag_runs WHERE dag_id = $1;
 
+-- name: CountActiveDagRunsByDagID :one
+-- Counts queued+running runs for a single DAG; used by the manual-trigger
+-- path to enforce max_active_runs (#200) before insert.
+SELECT count(*) FROM dag_runs
+WHERE dag_id = $1 AND state IN ('queued', 'running');
+
 -- name: ListActiveDagRuns :many
 SELECT * FROM dag_runs
 WHERE state IN ('queued', 'running')

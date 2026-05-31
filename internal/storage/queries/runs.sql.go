@@ -11,6 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countActiveDagRunsByDagID = `-- name: CountActiveDagRunsByDagID :one
+SELECT count(*) FROM dag_runs
+WHERE dag_id = $1 AND state IN ('queued', 'running')
+`
+
+// Counts queued+running runs for a single DAG; used by the manual-trigger
+// path to enforce max_active_runs (#200) before insert.
+func (q *Queries) CountActiveDagRunsByDagID(ctx context.Context, dagID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveDagRunsByDagID, dagID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countDagRunStatesInWindow = `-- name: CountDagRunStatesInWindow :many
 SELECT r.state AS state, count(*) AS n
 FROM dag_runs r

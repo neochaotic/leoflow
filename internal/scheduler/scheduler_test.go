@@ -338,10 +338,16 @@ func TestStepOnceScheduleFiresExactlyOnce(t *testing.T) {
 // already-active run for that DAG, even a backfill that would otherwise
 // produce many catchup slots must produce zero new runs — the cap is a
 // hard ceiling on concurrent active runs per DAG (Airflow #200).
+//
+// The fake run carries Tasks so PlanRun/FinalizeRun see a non-terminal
+// topology and do not auto-finalize it during this tick (which would change
+// the snapshot the cap is checked against).
 func TestStepRespectsMaxActiveRunsWhenAtCap(t *testing.T) {
 	last := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Hour)
 	store := newFakeStore(RunState{
 		RunID: "r-existing", DagID: "etl", State: domain.DagRunStateRunning,
+		Tasks:  linearTasks(),
+		States: map[string]domain.TaskState{"a": domain.TaskStateRunning, "b": domain.TaskStateNone},
 	})
 	store.scheduled = []ScheduledDAG{{
 		DagID: "etl", Schedule: "@hourly", LastLogical: &last,
@@ -352,6 +358,24 @@ func TestStepRespectsMaxActiveRunsWhenAtCap(t *testing.T) {
 	}
 	if len(store.createdRuns) != 0 {
 		t.Errorf("DAG already at max_active_runs cap must create no new run, got %v", store.createdRuns)
+	}
+}
+
+// TestStepOnceScheduleIgnoresMaxActiveRuns covers the documented
+// invariant after dropping the dead headroom check on the @once branch:
+// @once is single-shot regardless of cap. LastLogical=nil means "never
+// fired"; the cap is irrelevant because @once will never compete with
+// itself.
+func TestStepOnceScheduleIgnoresMaxActiveRuns(t *testing.T) {
+	store := newFakeStore()
+	store.scheduled = []ScheduledDAG{{
+		DagID: "once_dag", Schedule: "@once", MaxActiveRuns: 1,
+	}}
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.createdRuns) != 1 || store.createdRuns[0] != "once_dag" {
+		t.Errorf("@once must fire its single run regardless of cap, got %v", store.createdRuns)
 	}
 }
 

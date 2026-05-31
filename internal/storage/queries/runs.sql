@@ -141,8 +141,18 @@ SET state = sqlc.arg(state)::task_state,
 WHERE dag_run_id = sqlc.arg(dag_run_id) AND task_id = sqlc.arg(task_id);
 
 -- name: ResetTaskInstanceToNone :exec
+-- Resets a TI for retry: state back to `none`, all per-attempt timestamps
+-- cleared (including queued_at), and try_number bumped. queued_at MUST be
+-- NULLed so the next TransitionTaskState(queued) stamps a fresh now() — without
+-- that, the dispatch-lost reaper sees the stale pre-clear timestamp and
+-- re-marks the TI dispatch_lost on every tick (Lima Bug 1, 2026-05-31).
 UPDATE task_instances
-SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    try_number = try_number + 1
 WHERE dag_run_id = $1 AND task_id = $2;
 
 -- name: FailTaskInstanceIfActive :exec
@@ -222,14 +232,26 @@ WHERE d.tenant_id = $1 AND r.logical_date >= $2 AND r.logical_date <= $3
 GROUP BY ti.state;
 
 -- name: ResetFailedTaskInstance :execrows
+-- See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
 UPDATE task_instances
-SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    try_number = try_number + 1
 WHERE dag_run_id = $1 AND task_id = $2
   AND state IN ('failed', 'upstream_failed', 'up_for_retry');
 
 -- name: ResetAllFailedTaskInstances :execrows
+-- See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
 UPDATE task_instances
-SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    try_number = try_number + 1
 WHERE dag_run_id = $1
   AND state IN ('failed', 'upstream_failed', 'up_for_retry');
 

@@ -151,13 +151,20 @@ type Querier interface {
 	// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
 	// agent path is the first to exercise this query end-to-end.
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
+	// See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
 	ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error)
 	// Clear re-binds the run to the DAG's current registered version (ADR 0020): a
 	// re-run after a code/yaml fix picks up the newest image and config — in dev that
 	// is the last hot-reload, in prod the last deploy — while everything within a
 	// version stays reproducible.
 	ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVersionParams) error
+	// See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
 	ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTaskInstanceParams) (int64, error)
+	// Resets a TI for retry: state back to `none`, all per-attempt timestamps
+	// cleared (including queued_at), and try_number bumped. queued_at MUST be
+	// NULLed so the next TransitionTaskState(queued) stamps a fresh now() — without
+	// that, the dispatch-lost reaper sees the stale pre-clear timestamp and
+	// re-marks the TI dispatch_lost on every tick (Lima Bug 1, 2026-05-31).
 	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
 	ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (ResolveRunRefRow, error)
 	SetCurrentDagVersion(ctx context.Context, arg SetCurrentDagVersionParams) error

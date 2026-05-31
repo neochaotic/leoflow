@@ -982,11 +982,17 @@ func (q *Queries) ReportTaskResult(ctx context.Context, arg ReportTaskResultPara
 
 const resetAllFailedTaskInstances = `-- name: ResetAllFailedTaskInstances :execrows
 UPDATE task_instances
-SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    try_number = try_number + 1
 WHERE dag_run_id = $1
   AND state IN ('failed', 'upstream_failed', 'up_for_retry')
 `
 
+// See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
 func (q *Queries) ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, resetAllFailedTaskInstances, dagRunID)
 	if err != nil {
@@ -1017,7 +1023,12 @@ func (q *Queries) ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVer
 
 const resetFailedTaskInstance = `-- name: ResetFailedTaskInstance :execrows
 UPDATE task_instances
-SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    try_number = try_number + 1
 WHERE dag_run_id = $1 AND task_id = $2
   AND state IN ('failed', 'upstream_failed', 'up_for_retry')
 `
@@ -1027,6 +1038,7 @@ type ResetFailedTaskInstanceParams struct {
 	TaskID   string      `json:"task_id"`
 }
 
+// See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
 func (q *Queries) ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTaskInstanceParams) (int64, error) {
 	result, err := q.db.Exec(ctx, resetFailedTaskInstance, arg.DagRunID, arg.TaskID)
 	if err != nil {
@@ -1037,7 +1049,12 @@ func (q *Queries) ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTa
 
 const resetTaskInstanceToNone = `-- name: ResetTaskInstanceToNone :exec
 UPDATE task_instances
-SET state = 'none', started_at = NULL, ended_at = NULL, try_number = try_number + 1
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    try_number = try_number + 1
 WHERE dag_run_id = $1 AND task_id = $2
 `
 
@@ -1046,6 +1063,11 @@ type ResetTaskInstanceToNoneParams struct {
 	TaskID   string      `json:"task_id"`
 }
 
+// Resets a TI for retry: state back to `none`, all per-attempt timestamps
+// cleared (including queued_at), and try_number bumped. queued_at MUST be
+// NULLed so the next TransitionTaskState(queued) stamps a fresh now() — without
+// that, the dispatch-lost reaper sees the stale pre-clear timestamp and
+// re-marks the TI dispatch_lost on every tick (Lima Bug 1, 2026-05-31).
 func (q *Queries) ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error {
 	_, err := q.db.Exec(ctx, resetTaskInstanceToNone, arg.DagRunID, arg.TaskID)
 	return err

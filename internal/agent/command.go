@@ -41,7 +41,12 @@ func BuildCommand(operator, entrypoint string) ([]string, error) {
 		// writes its return value for the agent to push as an XCom. The interpreter
 		// is configurable (LEOFLOW_PYTHON) because task images standardize on
 		// "python" while a dev host may only have "python3".
-		return []string{pythonInterpreter(), "-m", "leoflow_runtime", entrypoint}, nil
+		// `-u` forces unbuffered stdout/stderr so every print() lands in the
+		// agent's pipe immediately — critical when the process is SIGKILLed
+		// (pod evict, OOM) before atexit can flush Python's block buffer.
+		// PYTHONUNBUFFERED in the env (see runner.go buildEnv) covers re-execed
+		// children.
+		return []string{pythonInterpreter(), "-u", "-m", "leoflow_runtime", entrypoint}, nil
 	case "bash":
 		if entrypoint == "" {
 			return nil, errors.New("bash operator requires a command")

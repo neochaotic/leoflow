@@ -1,0 +1,60 @@
+{{- /*
+DRAFT (Production track) — NetworkPolicy for the control plane. In our scenario
+the trust boundary is: clients/ingress hit HTTP; Prometheus scrapes metrics; and
+TASK PODS dial the gRPC port back (the pod-per-task agent, ADR 0002/0004). Egress
+must reach Postgres, Redis, the Kubernetes API (to create task pods), and DNS.
+
+This is a STARTING POINT — NetworkPolicy is environment-specific (CNI must
+enforce it). Defaults are permissive on egress (DNS + all) so enabling it does not
+silently break the control plane; tighten `egress` per your cluster. Disabled by
+default.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "leoflow.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "leoflow.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # HTTP/UI + gRPC (task pods dial back). Restrict sources via networkPolicy.ingressFrom.
+    - ports:
+        - port: {{ .Values.ports.http }}
+          protocol: TCP
+        - port: {{ .Values.ports.grpc }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.ingressFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.networkPolicy.metricsFrom }}
+    # Metrics scrape (e.g. the Prometheus pods' namespace/labels).
+    - ports:
+        - port: {{ $.Values.ports.metrics }}
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+  egress:
+    # DNS is always required for service discovery.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- with .Values.networkPolicy.egress }}
+    {{- toYaml . | nindent 4 }}
+    {{- else }}
+    # Default: allow all other egress (Postgres, Redis, kube-apiserver). Tighten
+    # by setting networkPolicy.egress to explicit rules for your data stores + API.
+    - {}
+    {{- end }}
+{{- end }}

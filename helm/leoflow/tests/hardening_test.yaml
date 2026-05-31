@@ -1,0 +1,140 @@
+suite: production hardening toggles (HPA / PDB / NetworkPolicy / ServiceMonitor)
+release:
+  name: leoflow
+tests:
+  # ─── HPA ────────────────────────────────────────────────────────────────
+  - it: HPA not rendered when autoscaling.enabled is false (default)
+    templates: [hpa.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: HPA rendered with min/max replicas + CPU target when autoscaling.enabled
+    templates: [hpa.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      autoscaling.enabled: true
+      autoscaling.minReplicas: 3
+      autoscaling.maxReplicas: 9
+      autoscaling.targetCPUUtilizationPercentage: 80
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HorizontalPodAutoscaler
+      - equal:
+          path: spec.minReplicas
+          value: 3
+      - equal:
+          path: spec.maxReplicas
+          value: 9
+      - equal:
+          path: spec.metrics[0].resource.target.averageUtilization
+          value: 80
+
+  # ─── PDB ────────────────────────────────────────────────────────────────
+  - it: PDB not rendered when podDisruptionBudget.enabled is false (default)
+    templates: [pdb.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: PDB rendered with minAvailable when enabled
+    templates: [pdb.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      podDisruptionBudget.enabled: true
+      podDisruptionBudget.minAvailable: 2
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 2
+
+  # ─── NetworkPolicy ──────────────────────────────────────────────────────
+  - it: NetworkPolicy not rendered when networkPolicy.enabled is false (default)
+    templates: [networkpolicy.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: NetworkPolicy renders both Ingress and Egress + DNS egress when enabled
+    templates: [networkpolicy.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      networkPolicy.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: NetworkPolicy
+      - contains:
+          path: spec.policyTypes
+          content: Ingress
+      - contains:
+          path: spec.policyTypes
+          content: Egress
+      # DNS egress always allowed — the template's default that protects users
+      # from silently breaking service discovery on first enable.
+      - contains:
+          path: spec.egress
+          content:
+            ports:
+              - port: 53
+                protocol: UDP
+              - port: 53
+                protocol: TCP
+
+  # ─── ServiceMonitor ─────────────────────────────────────────────────────
+  - it: ServiceMonitor not rendered when metrics.serviceMonitor.enabled is false (default)
+    templates: [servicemonitor.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ServiceMonitor renders with metrics endpoint when enabled
+    templates: [servicemonitor.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      metrics.serviceMonitor.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s

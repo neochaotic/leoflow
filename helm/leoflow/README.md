@@ -111,6 +111,12 @@ differ from what's committed.
 | auth.existingSecret | string | `""` | Name of a Secret with key `jwtSecret` (takes precedence over `jwtSecret`). |
 | auth.jwtSecret | string | `""` | HMAC secret signing API + agent JWTs. Set inline OR reference an existing Secret via `existingSecret`. Generate with `openssl rand -base64 64`. |
 | auth.tokenTtlSeconds | int | `3600` |  |
+| autoscaling.behavior | object | `{}` |  |
+| autoscaling.enabled | bool | `false` | Enable HPA for the leoflow-server Deployment. Requires metrics-server. |
+| autoscaling.maxReplicas | int | `6` |  |
+| autoscaling.minReplicas | int | `2` |  |
+| autoscaling.targetCPUUtilizationPercentage | int | `70` |  |
+| autoscaling.targetMemoryUtilizationPercentage | string | `""` |  |
 | bootstrap.existingSecret | string | `""` | Name of a Secret with key `bootstrapPassword` (takes precedence over `password`). |
 | bootstrap.password | string | `""` | Initial admin password (first install only). Leave empty to skip the bootstrap; the operator then creates the first admin out-of-band. |
 | config.agentControlPlaneAddr | string | `""` |  |
@@ -133,6 +139,11 @@ differ from what's committed.
 | ingress.hosts[0].paths[0].path | string | `"/"` |  |
 | ingress.hosts[0].paths[0].pathType | string | `"Prefix"` |  |
 | ingress.tls | list | `[]` |  |
+| metrics.serviceMonitor.additionalLabels | object | `{}` |  |
+| metrics.serviceMonitor.enabled | bool | `false` | Enable ServiceMonitor for Prometheus scraping. Requires kube-prometheus-stack CRDs. |
+| metrics.serviceMonitor.interval | string | `"30s"` |  |
+| metrics.serviceMonitor.namespace | string | `""` |  |
+| metrics.serviceMonitor.scrapeTimeout | string | `"10s"` |  |
 | migrations.enabled | bool | `true` |  |
 | migrations.image.pullPolicy | string | `"IfNotPresent"` |  |
 | migrations.image.repository | string | `"ghcr.io/neochaotic/leoflow-migrate"` |  |
@@ -147,12 +158,19 @@ differ from what's committed.
 | migrations.securityContext.readOnlyRootFilesystem | bool | `true` |  |
 | migrations.securityContext.runAsNonRoot | bool | `true` |  |
 | migrations.securityContext.runAsUser | int | `65532` |  |
+| networkPolicy.egress | list | `[]` |  |
+| networkPolicy.enabled | bool | `false` | Enable NetworkPolicy gating ingress + egress on the control-plane pods. Requires a CNI that enforces policies (Calico/Cilium/etc.). |
+| networkPolicy.ingressFrom | list | `[]` |  |
+| networkPolicy.metricsFrom | list | `[]` |  |
 | nodeSelector | object | `{}` |  |
 | observability.logFormat | string | `"json"` |  |
 | observability.logLevel | string | `"info"` |  |
 | observability.otel.enabled | bool | `false` |  |
 | observability.otel.endpoint | string | `""` |  |
 | podAnnotations | object | `{}` |  |
+| podDisruptionBudget.enabled | bool | `false` | Enable PDB for the leoflow-server Deployment. Pair with replicaCount > 1. |
+| podDisruptionBudget.maxUnavailable | string | `""` |  |
+| podDisruptionBudget.minAvailable | int | `1` |  |
 | podSecurityContext.fsGroup | int | `65532` |  |
 | podSecurityContext.runAsGroup | int | `65532` |  |
 | podSecurityContext.runAsNonRoot | bool | `true` |  |

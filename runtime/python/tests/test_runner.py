@@ -43,6 +43,31 @@ def test_run_rejects_bad_entrypoint():
         runner.run("no_callable_here")
 
 
+def test_run_logs_xcom_pulls_with_size(tmp_path, monkeypatch, capsys):
+    """When an upstream XCom is consumed, the runtime MUST log it with the wire
+    size — invaluable when debugging "received None" in a downstream task
+    (was the upstream silent? did the name match? how big is the payload?).
+    The line goes inside the Pre task execution group with the [leoflow]
+    prefix.
+    """
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    # Two upstreams the function accepts as kwargs; agent would inject these.
+    monkeypatch.setenv("LEOFLOW_XCOM_RAW", '{"rows":3}')
+    monkeypatch.setenv("LEOFLOW_XCOM_SUMMARY", '"ok"')
+    mod = _write_module(tmp_path, monkeypatch, (
+        "def task(raw, summary):\n"
+        "    return {'r': raw, 's': summary}\n"
+    ))
+
+    runner.run(f"{mod}:task")
+
+    stdout = capsys.readouterr().out
+    # Each pulled XCom gets its own [leoflow] pulled line with byte size.
+    assert "[leoflow] pulled raw (10 B)" in stdout, f"missing raw pull line:\n{stdout}"
+    assert "[leoflow] pulled summary (4 B)" in stdout, f"missing summary pull line:\n{stdout}"
+
+
 def test_run_emits_pre_and_post_lifecycle_groups(tmp_path, monkeypatch, capsys):
     """Stdout MUST carry ::group::Pre task execution ... ::endgroup:: around
     the runtime's setup lines (loading, kwargs), and a matching Post group

@@ -8,7 +8,7 @@ import json
 import os
 import sys
 
-from leoflow_runtime.xcom import xcom_pull
+from leoflow_runtime.xcom import XCOM_ENV_PREFIX
 
 # Lifecycle messages are prefixed so the user can distinguish runtime-emitted
 # lines from their own print(). They go to stdout (not stderr) on purpose:
@@ -39,8 +39,6 @@ def _group_end() -> None:
     print("::endgroup::", flush=True)
 
 DEFAULT_RETURN_VALUE_PATH = "/tmp/leoflow_return_value.json"  # noqa: S108
-
-_UNSET = object()
 
 
 def _load_call_args() -> dict:
@@ -89,9 +87,15 @@ def _resolve_kwargs(fn) -> dict:
             continue
         if name in call_args:
             kwargs[name] = call_args[name]
-        value = xcom_pull(name, _UNSET)
-        if value is not _UNSET:
-            kwargs[name] = value
+        # Read the raw env var here (rather than via xcom_pull) so we can log
+        # the wire size when the pull succeeds — invaluable when debugging a
+        # task that "received None" because the upstream payload didn't arrive.
+        # XCom takes precedence over the literal call arg of the same name
+        # (matches the precedence comment above and prior behavior).
+        raw = os.environ.get(XCOM_ENV_PREFIX + name.upper())
+        if raw is not None:
+            kwargs[name] = json.loads(raw)
+            _lifecycle(f"pulled {name} ({len(raw)} B)")
     return kwargs
 
 

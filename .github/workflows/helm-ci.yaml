@@ -26,6 +26,12 @@ on:
       - "deploy/Dockerfile.server"
       - "deploy/Dockerfile.migrate"
       - "migrations/**"
+      # internal/config defines the LEOFLOW_* env contract (Viper struct
+      # tags) the chart wires through. Renaming an env name there without
+      # touching the chart would slip past helm-template-checks.sh unless
+      # this gate also runs on config changes. Small dir (4 files); the
+      # false-positive cost from test-only edits is bounded.
+      - "internal/config/**"
 
 permissions:
   contents: read

@@ -21,6 +21,7 @@ type fakeClient struct {
 	spec               *agentv1.TaskSpec
 	xcom               map[string]*agentv1.FetchXComResponse
 	states             []agentv1.TaskState
+	reports            []*agentv1.ReportStateRequest
 	pushed             []*agentv1.PushXComRequest
 	registered         bool
 	terminateAt        agentv1.TaskState // state for which ReportState returns should_terminate
@@ -72,6 +73,7 @@ func (f *fakeClient) StreamLogs(context.Context, ...grpc.CallOption) (grpc.BidiS
 
 func (f *fakeClient) ReportState(_ context.Context, in *agentv1.ReportStateRequest, _ ...grpc.CallOption) (*agentv1.ReportStateResponse, error) {
 	f.states = append(f.states, in.GetState())
+	f.reports = append(f.reports, in)
 	return &agentv1.ReportStateResponse{Acknowledged: true, ShouldTerminate: in.GetState() == f.terminateAt}, nil
 }
 
@@ -277,6 +279,61 @@ func TestRunnerHeartbeatCancelsOnTerminate(t *testing.T) {
 	}
 	if last := client.states[len(client.states)-1]; last != agentv1.TaskState_TASK_STATE_FAILED {
 		t.Errorf("final state = %v, want failed after termination", last)
+	}
+}
+
+// TestRunnerEnforcesExecutionTimeout covers issue #194: the pod-path agent must
+// stop a task that exceeds its declared execution_timeout_seconds, not rely on
+// the scheduler's 90 s heartbeat reaper (which leaves the wedged user code
+// running until the agent itself notices). When the timeout fires, the failure
+// is reported with a clear "execution_timeout" message so the operator can
+// distinguish it from a crash or an exit-code failure.
+func TestRunnerEnforcesExecutionTimeout(t *testing.T) {
+	client := &fakeClient{
+		spec: &agentv1.TaskSpec{
+			Operator:                "bash",
+			Entrypoint:              "sleep 1000",
+			ExecutionTimeoutSeconds: 1, // proto carries seconds; the implementation uses time.Duration
+		},
+	}
+	cmd := &fakeCmd{blockUntilCancel: true}
+	r := newRunner(client, cmd, &recordingSink{})
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a task that exceeds its execution_timeout_seconds must fail")
+	}
+	if last := client.states[len(client.states)-1]; last != agentv1.TaskState_TASK_STATE_FAILED {
+		t.Errorf("final state = %v, want failed after timeout", last)
+	}
+	// The terminal report must name the failure as a timeout (not "task exited
+	// non-zero"), so the user can tell a hang from a crash.
+	if n := len(client.reports); n > 0 {
+		got := client.reports[n-1].GetErrorMessage()
+		if !strings.Contains(got, "execution_timeout") {
+			t.Errorf("error message should name execution_timeout, got %q", got)
+		}
+	}
+}
+
+// TestRunnerHonorsZeroTimeout keeps the existing semantics for tasks with no
+// declared timeout (0): no time bound, the task runs until it finishes or the
+// agent process itself is canceled.
+func TestRunnerHonorsZeroTimeout(t *testing.T) {
+	client := &fakeClient{
+		spec: &agentv1.TaskSpec{
+			Operator:                "python",
+			Entrypoint:              "dag:fast",
+			ExecutionTimeoutSeconds: 0, // unset → no timeout applies
+		},
+	}
+	cmd := &fakeCmd{exitCode: 0}
+	r := newRunner(client, cmd, &recordingSink{})
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("zero execution_timeout_seconds must not interfere with a fast task: %v", err)
+	}
+	if last := client.states[len(client.states)-1]; last != agentv1.TaskState_TASK_STATE_SUCCESS {
+		t.Errorf("final state = %v, want success", last)
 	}
 }
 

@@ -44,17 +44,19 @@ with DAG("my_pipeline", schedule="@daily", catchup=False, tags=["etl"]):
 
 ### Not (yet) supported — limitations
 
-- **Branching** (`BranchPythonOperator`, `@task.branch`): currently treated as a
-  plain `python` task, **losing the branch semantics** — avoid for now (a future
-  release will make this a hard compile error rather than a silent mistranslation).
-- **Dynamic task mapping** (`.expand` / `.partial`), **sensors**,
+- **Branching** (`BranchPythonOperator`, `@task.branch`), **short-circuit**
+  (`@task.short_circuit`, `ShortCircuitOperator`), **virtualenv operators**
+  (`PythonVirtualenvOperator`), **sensors** — `leoflow compile` **rejects** any
+  of these with a clear error naming the construct ([#225](https://github.com/neochaotic/leoflow/issues/225)).
+  Refusing silent mistranslation is the contract: every "skipped" branch
+  would otherwise actually execute at runtime.
+- **Dynamic task mapping** (`.expand` / `.partial`),
   **KubernetesPodOperator**, **datasets/assets** triggers, **Jinja templating**.
 - **Provider operators** (S3, Postgres, …): do the work inside a `@task` instead
   (your image already has the libraries).
 - **Per-task `default_args` in `dag.py`** are ignored; use `leoflow.yaml`.
 
-> Anything not translated is a **hard compile error** (no silent drop) — except
-> branching, noted above.
+> Anything not translated is a **hard compile error** (no silent drop).
 
 ## leoflow.yaml — deploy config
 

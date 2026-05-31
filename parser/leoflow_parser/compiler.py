@@ -185,6 +185,25 @@ def _map_task(task, source: str) -> dict[str, Any]:
 
 def _operator_type(task) -> str:
     name = type(task).__name__
+    # Reject silent-wrong-execution shapes BEFORE the substring catch-alls below
+    # (issue #225). BranchPythonOperator / ShortCircuitOperator / @task.branch
+    # all carry "Python" in their class name, so the legacy substring match used
+    # to translate them to a plain `python` task — and every "skipped" branch
+    # would then actually execute. Refusing them at compile is the loud failure
+    # the parser owes; remove the gate when real translation lands.
+    for marker, feature in (
+        ("Branch", "branching (@task.branch / BranchPythonOperator)"),
+        ("ShortCircuit", "short-circuit (@task.short_circuit / ShortCircuitOperator)"),
+        ("Virtualenv", "virtualenv operators (PythonVirtualenvOperator)"),
+        ("Sensor", "sensors (BaseSensorOperator and subclasses)"),
+    ):
+        if marker in name:
+            raise ValueError(
+                f"unsupported operator {name!r} on task {task.task_id!r}: "
+                f"{feature} is not supported by Leoflow yet — refusing to "
+                "silently mistranslate. See docs/dag-authoring.md for the "
+                "current supported operator list."
+            )
     if "Bash" in name:
         return "bash"
     if "Http" in name:

@@ -109,19 +109,38 @@ func TestResolveBinaryExplicitAndFallback(t *testing.T) {
 	}
 }
 
-func TestDevWatchPaths(t *testing.T) {
-	cfg := &domain.LeoflowConfig{DagID: "p", DagSource: "flows/etl.py"}
-	got := devWatchPaths("proj", cfg)
-	want := map[string]bool{
-		filepath.Join("proj", "leoflow.yaml"):    true,
-		filepath.Join("proj", "flows", "etl.py"): true,
+// TestWorkspaceWatchPaths replaces the deleted TestDevWatchPaths. The
+// watcher now walks a workspace (Phase 3) instead of a single project pair,
+// so the contract is "every project's yaml+source + the workspace root".
+func TestWorkspaceWatchPaths(t *testing.T) {
+	ws := &WorkspaceSpec{
+		Path: "ws",
+		Projects: []Project{
+			{
+				Path:       filepath.Join("ws", "etl"),
+				DagID:      "etl",
+				ConfigPath: filepath.Join("ws", "etl", "leoflow.yaml"),
+				HasYAML:    true,
+				Config:     &domain.LeoflowConfig{DagSource: "dag.py"},
+			},
+		},
 	}
-	if len(got) != 2 {
-		t.Fatalf("watch paths = %v, want 2", got)
+	got := workspaceWatchPaths(ws)
+	want := []string{
+		filepath.Join("ws", "etl", "leoflow.yaml"),
+		filepath.Join("ws", "etl", "dag.py"),
+		"ws", // workspace root, so a new subdir nudges mtime
 	}
+	if len(got) != len(want) {
+		t.Fatalf("watch paths = %v, want %v", got, want)
+	}
+	seen := map[string]bool{}
 	for _, p := range got {
-		if !want[p] {
-			t.Errorf("unexpected watch path %q", p)
+		seen[p] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			t.Errorf("missing watched path %q (got %v)", w, got)
 		}
 	}
 }
@@ -227,10 +246,11 @@ func TestDevWatchLoopExitsOnCancel(t *testing.T) {
 	cancel() // already canceled: the loop must do its initial pass then return nil
 
 	dir := t.TempDir()
-	cfg := &domain.LeoflowConfig{DagID: "p"}
+	ws := &WorkspaceSpec{Path: dir, RootCfg: &domain.LeoflowConfig{}}
+	ws.RootCfg.ApplyDefaults()
 	reloads := 0
 	reload := func() error { reloads++; return nil }
-	if err := devWatchLoop(ctx, cmd, dir, cfg, reload); err != nil {
+	if err := devWatchLoop(ctx, cmd, ws, reload); err != nil {
 		t.Errorf("devWatchLoop on canceled ctx = %v, want nil", err)
 	}
 	if reloads != 1 {
@@ -449,8 +469,9 @@ func TestEnsureProjectDockerfile(t *testing.T) {
 func TestDevSubprocessSetupMissingAgent(t *testing.T) {
 	t.Chdir(t.TempDir()) // no agent on PATH or ./bin
 	cmd := devTestCmd()
-	cfg := &domain.LeoflowConfig{DagID: "p"}
-	if _, _, err := devSubprocessSetup(context.Background(), cmd, ".", devOptions{}, t.TempDir(), cfg); err == nil {
+	ws := &WorkspaceSpec{Path: ".", RootCfg: &domain.LeoflowConfig{DagID: "p"}}
+	ws.RootCfg.ApplyDefaults()
+	if _, _, err := devSubprocessSetup(context.Background(), cmd, ws, devOptions{}, t.TempDir()); err == nil {
 		t.Error("expected error when the agent binary is missing")
 	}
 }
@@ -506,7 +527,22 @@ func TestDevClusterSetupStubbed(t *testing.T) {
 
 	home, dir := t.TempDir(), t.TempDir()
 	cfg := &domain.LeoflowConfig{DagID: "etl", DagSource: "dag.py"}
-	env, makeReload, err := devClusterSetup(context.Background(), devTestCmd(), dir, devOptions{}, home, cfg)
+	cfg.ApplyDefaults()
+	// Cluster mode requires a single-project workspace (v1 scope); build one
+	// with just the cfg above. The dir holds the project (Dockerfile is
+	// written into it by ensureProjectDockerfile inside devClusterSetup).
+	ws := &WorkspaceSpec{
+		Path:    dir,
+		RootCfg: cfg,
+		Projects: []Project{{
+			Path:       dir,
+			DagID:      "etl",
+			ConfigPath: filepath.Join(dir, "leoflow.yaml"),
+			HasYAML:    true,
+			Config:     cfg,
+		}},
+	}
+	env, makeReload, err := devClusterSetup(context.Background(), devTestCmd(), ws, devOptions{}, home)
 	if err != nil {
 		t.Fatalf("devClusterSetup: %v", err)
 	}

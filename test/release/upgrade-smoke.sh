@@ -71,8 +71,12 @@ if [ -z "${INSTALLED}" ]; then
   echo "==> debug: PATH=${PATH}; which leoflow=$(command -v leoflow || echo missing)" >&2
   fail "leoflow version reported nothing after installing ${PREVIOUS}"
 fi
+# `gh release list` returns tag names with a leading `v` (e.g. v0.0.1-prealpha.23),
+# but `leoflow version` prints the tag without the v (e.g. "leoflow 0.0.1-prealpha.23").
+# Strip the v so the substring match against the version line actually fires.
+PREVIOUS_NUM="${PREVIOUS#v}"
 case "${INSTALLED}" in
-  *${PREVIOUS}*) pass "previous version installed (${INSTALLED})" ;;
+  *${PREVIOUS_NUM}*) pass "previous version installed (${INSTALLED})" ;;
   *) fail "expected ${PREVIOUS} after first install, got '${INSTALLED}'" ;;
 esac
 
@@ -81,8 +85,9 @@ echo "==> installing current version (${LEOFLOW_VERSION}) ON TOP of ${PREVIOUS}"
 sh -c "curl -fsSL \"${INSTALL_URL}\" | LEOFLOW_VERSION=\"${LEOFLOW_VERSION}\" sh"
 
 UPGRADED="$(command -v leoflow >/dev/null 2>&1 && leoflow version 2>&1 | head -1 || true)"
+LEOFLOW_VERSION_NUM="${LEOFLOW_VERSION#v}"
 case "${UPGRADED}" in
-  *${LEOFLOW_VERSION}*) pass "upgrade landed (${UPGRADED})" ;;
+  *${LEOFLOW_VERSION_NUM}*) pass "upgrade landed (${UPGRADED})" ;;
   *) fail "after upgrading, expected ${LEOFLOW_VERSION}, got '${UPGRADED}'" ;;
 esac
 

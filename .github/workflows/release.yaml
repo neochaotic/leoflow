@@ -195,33 +195,24 @@ jobs:
   # ── Cold-start smoke (#96): the actual user flow we cannot reproduce in
   # any other gate — install fresh, run `leoflow setup`, boot `leoflow lite`,
   # wait for /readyz to respond. Catches the class of bug where the binary
-  # is installed correctly but boot fails (Postgres race, managed-runtime
-  # missing libs, agent port collision, etc.). Uses `--postgres managed` so
-  # the smoke does NOT need Docker-in-Docker; the relocatable Postgres
-  # `leoflow setup` extracted is exercised here for real. Pinned to ubuntu
-  # (the most representative dev environment); the 7-distro install-smoke
-  # above still gates `--version` works on each distro. Extending the cold
-  # start to more distros lands as managed-runtime portability work (#97)
-  # validates each base.
+  # is installed correctly but boot fails (Postgres race / connection bugs /
+  # agent port collision / etc.).
+  #
+  # Uses `--postgres docker` (the user-facing default when Docker is present)
+  # rather than `--postgres managed`. The relocatable Postgres bundle links
+  # against system libs (libicuuc, libxml2, lz4, zstd, …) whose ABI varies
+  # by distro: we tried pinning ubuntu:22.04 + libicu70, but the bundle still
+  # failed at `postgres --version` because other unbundled deps were missing
+  # in the slim image. The Docker path side-steps the host-libs question
+  # entirely AND exercises the postgres-retry fix (the race that motivated
+  # this smoke in the first place: docker-compose health vs. TCP accept).
+  # Runs on the GitHub-hosted ubuntu-latest runner so Docker is already
+  # available — no `container:` field needed.
   lite-cold-start-smoke:
-    name: Lite cold-start (boot + /readyz, managed PG)
+    name: Lite cold-start (boot + /readyz, docker PG)
     needs: release
     runs-on: ubuntu-latest
-    # ubuntu:22.04 (libicu70) matches the libicu the bundled relocatable
-    # Postgres 16.13.0 was linked against. ubuntu:24.04 ships libicu74,
-    # which the bundled PG cannot dlopen → "system libraries missing" boot
-    # error (we saw this on prealpha.24/.25). The actual user environment
-    # this smoke is mimicking — a Lima-style Ubuntu LTS dev VM — is also
-    # 22.04, so this is the right base to pin.
-    container: ubuntu:22.04
     steps:
-      - name: Install prerequisites
-        run: |
-          apt-get update -qq
-          # libicu70 + krb5-libs are linked by the relocatable Postgres
-          # binary; the slim ubuntu:22.04 CI image is missing them so the
-          # managed-PG path needs them installed up-front (#96).
-          apt-get install -y -qq curl ca-certificates tar procps libicu70 libgssapi-krb5-2
       - name: Install Leoflow via the published install.sh
         env:
           LEOFLOW_VERSION: ${{ github.ref_name }}
@@ -237,7 +228,7 @@ jobs:
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
           # Background lite; capture stdout+stderr so we can dump on failure.
-          leoflow lite --postgres managed --port 8088 --host 127.0.0.1 >/tmp/lite.log 2>&1 &
+          leoflow lite --postgres docker --port 8088 --host 127.0.0.1 >/tmp/lite.log 2>&1 &
           LITE_PID=$!
           # Poll /readyz up to 60s. The Postgres-retry budget is 30s by
           # itself; budget here is loose enough that a managed-PG cold extract

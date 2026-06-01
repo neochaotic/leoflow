@@ -44,7 +44,7 @@ service:
 
 # config maps to LEOFLOW_* env. Non-secret settings live here; secrets below.
 config:
-  # -- Directory inside the pod where task logs are written. Mounted as emptyDir.
+  # -- Directory inside the pod where task logs are written. Mounted from `logs.persistence` (a PVC by default) so logs survive pod restarts. Set `logs.persistence.enabled: false` to fall back to an ephemeral emptyDir (dev only).
   logsDir: /var/log/leoflow
   scheduler:
     # -- Run the scheduler loop. Disable only for read-only API-only replicas (rare).
@@ -57,6 +57,24 @@ config:
       - "*"
   # -- gRPC address task pods dial back to reach the control plane. Defaults to the in-cluster Service DNS on `ports.grpc` when empty. Override for cross-cluster or external task pods.
   agentControlPlaneAddr: ""
+
+# Persistent log storage for the control plane (#227 — Pro alpha).
+# Task pods stream logs over gRPC to the control plane, which writes them under
+# `config.logsDir`. By default this directory lives on a PVC so logs survive
+# pod restarts. For multi-replica HA, set `accessMode: ReadWriteMany` and a
+# storage class that supports it (NFS, Longhorn-rwx, CephFS, EFS, Azure Files,
+# GCP Filestore). When you do not need durable logs (dev / throwaway clusters),
+# set `enabled: false` to use an emptyDir instead — logs vanish on pod restart.
+logs:
+  persistence:
+    # -- Persist control-plane logs in a PVC (default ON). Disable for ephemeral emptyDir (dev only — logs lost on pod restart).
+    enabled: true
+    # -- PVC size for control-plane logs. ~1 GB/day per ~1000 active task runs is a sane starting point.
+    size: 50Gi
+    # -- StorageClass for the PVC. Empty uses the cluster default. Specify an RWX class when `accessMode: ReadWriteMany`.
+    storageClass: ""
+    # -- PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments; `ReadWriteMany` is required when `replicaCount > 1`.
+    accessMode: ReadWriteOnce
 
 # Database (Postgres). Provide an external URL, or a pre-existing secret.
 database:

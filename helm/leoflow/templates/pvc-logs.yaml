@@ -1,0 +1,30 @@
+{{- /*
+PersistentVolumeClaim backing the control plane's log directory (#227).
+The pod-per-task executor streams task logs over gRPC into the control plane,
+which writes them under `config.logsDir`. Without a PVC those logs sit in an
+emptyDir and vanish on pod restart — operators replaying an incident or just
+clicking into an older run would lose the trail.
+
+Skipped when `logs.persistence.enabled: false` (deployment falls back to
+emptyDir, dev-only). When the chart's `replicaCount > 1`, the access mode
+must be `ReadWriteMany` (NFS, Longhorn-rwx, CephFS, EFS, Azure Files, GCP
+Filestore) so every replica can read+write the same volume.
+*/}}
+{{- if .Values.logs.persistence.enabled -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "leoflow.fullname" . }}-logs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.logs.persistence.accessMode | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.logs.persistence.size | quote }}
+  {{- with .Values.logs.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

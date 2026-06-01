@@ -212,7 +212,13 @@ jobs:
       - name: Install prerequisites
         run: |
           apt-get update -qq
-          apt-get install -y -qq curl ca-certificates tar procps
+          # libicu74 + krb5-libs are linked by the relocatable Postgres binary;
+          # a stock ubuntu:24.04 image ships without them so `leoflow lite
+          # --postgres managed` errors out at boot ("system libraries missing").
+          # Real Ubuntu desktops typically have these via libreoffice/curl,
+          # but a slim CI container does not — install them explicitly so the
+          # smoke job actually exercises the managed-PG path (#96).
+          apt-get install -y -qq curl ca-certificates tar procps libicu74 libgssapi-krb5-2
       - name: Install Leoflow via the published install.sh
         env:
           LEOFLOW_VERSION: ${{ github.ref_name }}

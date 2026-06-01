@@ -123,3 +123,32 @@ func TestDueScheduledSlots(t *testing.T) {
 		})
 	}
 }
+
+// TestDueScheduledSlotsRespectsUTCWhenSeedHasOffset reproduces the double-fire
+// observed on local Mac (-0300): a freshly registered @daily DAG creates ONE
+// run for the most recent UTC midnight, then the NEXT scheduler tick reads
+// back last_logical from Postgres in the connection's session TZ and the
+// cron's Next is called on that offset-bearing time. SpecSchedule.Next
+// evaluates "@daily = 0 0 * * *" in the argument's Location, so "next
+// midnight" becomes local midnight (03:00 UTC for -0300) instead of UTC
+// midnight — at-or-before `now`, so a SECOND run is created within the same
+// calendar day. With the fix, dueScheduledSlots normalises the seed to UTC
+// and emits nothing on the second tick (the real next slot is tomorrow
+// 00:00 UTC).
+func TestDueScheduledSlotsRespectsUTCWhenSeedHasOffset(t *testing.T) {
+	// "Now" is later the same UTC day as both candidate slots; without the
+	// fix, the local-midnight slot (03:00 UTC) is before `now` and gets
+	// emitted as a (wrong) second run.
+	now := time.Date(2026, 6, 1, 22, 55, 0, 0, time.UTC)
+	saoPaulo, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		t.Skipf("tz data unavailable: %v", err)
+	}
+	// Same instant as 2026-06-01T00:00:00Z but stamped in -0300, mirroring
+	// what pgx returns from a Postgres column read.
+	lastLogical := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC).In(saoPaulo)
+	got := dueScheduledSlots("@daily", &lastLogical, nil, now, false, 100)
+	if len(got) != 0 {
+		t.Fatalf("expected 0 slots (last run already covers today's UTC midnight), got %d: %v", len(got), got)
+	}
+}

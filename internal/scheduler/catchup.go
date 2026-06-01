@@ -33,6 +33,23 @@ func dueScheduledSlots(expr string, lastLogical, startDate *time.Time, now time.
 	if err != nil {
 		return nil
 	}
+	// Normalise all time inputs to UTC. SpecSchedule.Next evaluates the cron
+	// fields in the argument's Location, so a seed in -0300 would treat
+	// "@daily = 0 0 * * *" as "local midnight" (03:00 UTC) instead of UTC
+	// midnight. pgx returns timestamptz values in the session TZ, which on
+	// many Lite deployments is not UTC — that produced the post-delete
+	// double-fire (one run at 00:00Z, another at 03:00Z for -0300 hosts).
+	// All cron logic in this package speaks UTC; do the coercion at the
+	// boundary so the inner loop never has to think about it.
+	now = now.UTC()
+	if lastLogical != nil {
+		u := lastLogical.UTC()
+		lastLogical = &u
+	}
+	if startDate != nil {
+		u := startDate.UTC()
+		startDate = &u
+	}
 	// Seed the iteration. For a first-ever sight (lastLogical == nil) we seed
 	// from one period before the start_date so the start_date slot itself can
 	// be emitted (cron.Next returns the strict next slot after the argument).

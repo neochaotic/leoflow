@@ -3,9 +3,70 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+// TestLoadProjectConfigAppliesDefaults verifies that loading a minimal
+// leoflow.yaml fills in every schema default via LeoflowConfig.ApplyDefaults().
+// This is what lets a yaml that only declares `dag_id` still produce a working
+// build (python 3.11, dag.py source, default exclude paths, etc.) and is the
+// foundation for the multi-DAG workspace contract (a subdir without a yaml
+// gets the same treatment with dag_id synthesized later).
+func TestLoadProjectConfigAppliesDefaults(t *testing.T) {
+	dir := t.TempDir()
+	yaml := "dag_id: minimal\n"
+	if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := loadProjectConfig(dir)
+	if err != nil {
+		t.Fatalf("loadProjectConfig: %v", err)
+	}
+	if cfg.DagID != "minimal" {
+		t.Errorf("DagID: got %q, want %q", cfg.DagID, "minimal")
+	}
+	if cfg.SchemaVersion != "1.0" {
+		t.Errorf("SchemaVersion default not applied: got %q", cfg.SchemaVersion)
+	}
+	if cfg.PythonVersion != "3.11" {
+		t.Errorf("PythonVersion default not applied: got %q", cfg.PythonVersion)
+	}
+	if cfg.DagSource != "dag.py" {
+		t.Errorf("DagSource default not applied: got %q", cfg.DagSource)
+	}
+	if !reflect.DeepEqual(cfg.ExcludePaths, []string{".git", "__pycache__", "*.pyc", ".venv", "venv"}) {
+		t.Errorf("ExcludePaths default not applied: got %v", cfg.ExcludePaths)
+	}
+	if cfg.Build == nil || cfg.Build.Context != "." {
+		t.Errorf("Build.Context default not applied: got %+v", cfg.Build)
+	}
+	if cfg.Registry == nil || cfg.Registry.AuthMethod != "docker_config" {
+		t.Errorf("Registry default not applied: got %+v", cfg.Registry)
+	}
+}
+
+// TestDagSourcePathUsesAppliedDefault asserts that dagSourcePath relies on the
+// centralized default (DagSource set to "dag.py" by ApplyDefaults) instead of
+// its own inline fallback — keeping defaults in one place per
+// [[python-minimal-go-max]] / configuration-defaults-table doc.
+func TestDagSourcePathUsesAppliedDefault(t *testing.T) {
+	dir := t.TempDir()
+	yaml := "dag_id: minimal\n"
+	if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := loadProjectConfig(dir)
+	if err != nil {
+		t.Fatalf("loadProjectConfig: %v", err)
+	}
+	got := dagSourcePath(dir, cfg)
+	want := filepath.Join(dir, "dag.py")
+	if got != want {
+		t.Errorf("dagSourcePath: got %q, want %q", got, want)
+	}
+}
 
 // TestLoadProjectConfigRejectsDuplicateTaskID guards the YAML↔task binding: a
 // duplicated task_id key in the tasks block is a copy-paste hazard, so parsing

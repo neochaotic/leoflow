@@ -135,6 +135,7 @@ nav:
       - Configuration: configuration.md
   - Guides:
       - The leoflow dev workflow: dev-workflow.md
+      - Local deploy (the dev loop): local-deploy.md
       - The Lite web editor: lite-web-editor.md
       - Examples: examples.md
       - "Map-reduce for ML": cookbook/map-reduce.md

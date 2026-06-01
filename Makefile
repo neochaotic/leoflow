@@ -89,6 +89,10 @@ chaos-dogfood-docker: ## Pre-Lima gate (#231) — Phase 2a: same harness inside 
 .PHONY: dev-install
 dev-install: ## Install the leoflow toolchain on PATH so `leoflow dev` runs from any project
 	go install -trimpath -ldflags="$(LDFLAGS)" ./cmd/leoflow ./cmd/leoflow-server ./cmd/leoflow-agent
+
+.PHONY: lite-redeploy
+lite-redeploy: ## Local dev loop: rebuild + (re)start `leoflow lite` with the just-built binaries
+	@bash scripts/lite-redeploy.sh
 	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 	@echo "installed leoflow, leoflow-server, leoflow-agent, migrate to $$(go env GOPATH)/bin"
 	@echo "ensure that dir is on your PATH, then run: leoflow dev   (the dev DB + venv are auto-provisioned)"

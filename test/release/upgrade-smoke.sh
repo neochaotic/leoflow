@@ -52,8 +52,15 @@ LEOFLOW_VERSION="${PREVIOUS}" \
 # rc files but we cannot rely on those in a sh-only smoke runner.
 export PATH="${HOME}/.local/bin:${HOME}/.leoflow/bin:${PATH}"
 
-INSTALLED="$(leoflow version --output json 2>/dev/null | grep -oE 'v[0-9][^"]*' | head -1 || leoflow version 2>/dev/null | head -1)"
+# `leoflow version` prints a free-form line like:
+#   leoflow v0.0.1-prealpha.23 (commit abc, built ..., go1.26.3)
+# Earlier pipelines using `--output json | grep | head` silently returned
+# empty because `head -1` exits 0 even on empty input, so the `||` fallback
+# never fired (gate falsely failed against valid binaries). Capture the
+# whole line and let the case-match below assert the tag.
+INSTALLED="$(command -v leoflow >/dev/null 2>&1 && leoflow version 2>&1 | head -1 || true)"
 if [ -z "${INSTALLED}" ]; then
+  echo "==> debug: PATH=${PATH}; which leoflow=$(command -v leoflow || echo missing)" >&2
   fail "leoflow version reported nothing after installing ${PREVIOUS}"
 fi
 case "${INSTALLED}" in
@@ -65,7 +72,7 @@ echo "==> installing current version (${LEOFLOW_VERSION}) ON TOP of ${PREVIOUS}"
 LEOFLOW_VERSION="${LEOFLOW_VERSION}" \
   curl -fsSL "https://raw.githubusercontent.com/${LEOFLOW_REPO}/${LEOFLOW_VERSION}/install.sh" | sh
 
-UPGRADED="$(leoflow version --output json 2>/dev/null | grep -oE 'v[0-9][^"]*' | head -1 || leoflow version 2>/dev/null | head -1)"
+UPGRADED="$(command -v leoflow >/dev/null 2>&1 && leoflow version 2>&1 | head -1 || true)"
 case "${UPGRADED}" in
   *${LEOFLOW_VERSION}*) pass "upgrade landed (${UPGRADED})" ;;
   *) fail "after upgrading, expected ${LEOFLOW_VERSION}, got '${UPGRADED}'" ;;

@@ -18,9 +18,13 @@ def shard(n: int) -> dict:
 
 
 @task
-def aggregate(parts: list[dict]) -> None:
+def aggregate(parts: list[dict]) -> dict:
     grand = sum(p["total"] for p in parts)
     print(f"aggregate: combined {len(parts)} shards -> {grand}")
+    # Return the aggregated value so it lands in XCom — the whole point of a
+    # fan-in DAG is the reducer's result, and the UI's XCom tab is where the
+    # user expects to see it. Returning None would erase the demo's payoff.
+    return {"shards": len(parts), "grand_total": grand}
 
 
 with DAG("fan_out_aggregate", schedule=None, catchup=False, tags=["example"]):

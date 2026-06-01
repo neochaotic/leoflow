@@ -243,8 +243,15 @@ var serverDefaults = map[string]any{
 	"ui.edition":                                "",
 	"ui.workspace":                              "",
 	"ui.monaco_dir":                             "",
-	"auth.dev_no_auth":                          false,
-	"secret_key":                                "",
+	// Must appear here even though the zero value is meaningful (the handler
+	// falls back to api.DefaultUIAutoRefreshIntervalSeconds when ≤ 0): viper's
+	// AutomaticEnv only binds env vars for keys it has seen via SetDefault or
+	// SetConfigFile. Without this line LEOFLOW_UI_AUTO_REFRESH_INTERVAL_SECONDS
+	// was silently dropped, so `leoflow lite` (which exports the env var to
+	// poll every 1s) was actually running at the 30s production default.
+	"ui.auto_refresh_interval_seconds": 0,
+	"auth.dev_no_auth":                 false,
+	"secret_key":                       "",
 }
 
 // LoadServer assembles the server configuration from defaults, the given file,

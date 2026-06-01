@@ -125,6 +125,19 @@ type fakeTaskRepo struct {
 func (f *fakeTaskRepo) ListTaskInstances(context.Context, string, string, string, int, int) ([]domain.TaskInstance, int, error) {
 	return f.tis, len(f.tis), nil
 }
+
+// ListTaskInstanceAttempts returns the same TIs as ListTaskInstances filtered
+// to the requested task — the fake has no history awareness; integration
+// tests cover the multi-attempt UNION (see internal/storage TestLimaBug3).
+func (f *fakeTaskRepo) ListTaskInstanceAttempts(_ context.Context, _, _, _, taskID string) ([]domain.TaskInstance, error) {
+	out := make([]domain.TaskInstance, 0, len(f.tis))
+	for _, ti := range f.tis {
+		if ti.TaskID == taskID {
+			out = append(out, ti)
+		}
+	}
+	return out, nil
+}
 func (f *fakeTaskRepo) ClearTaskInstances(_ context.Context, _, _, _ string, _ []string, onlyFailed, _ bool) (int, error) {
 	f.gotOnlyFailed = onlyFailed
 	return len(f.tis), nil

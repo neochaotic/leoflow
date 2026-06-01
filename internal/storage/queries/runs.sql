@@ -97,6 +97,57 @@ SELECT * FROM task_instances
 WHERE dag_run_id = $1
 ORDER BY task_id;
 
+-- name: ListTaskInstanceAttempts :many
+-- Returns every attempt for (run, task), oldest first. UNIONs the current
+-- task_instances row with all archived task_instance_history rows so the UI's
+-- /tries endpoint can render one navigable tab per attempt (Lima bug #241).
+-- Each row carries the per-attempt fields PLUS the run-constant fields
+-- (operator, max_tries, map_index) copied from the current TI; archived rows
+-- get them via the JOIN.
+SELECT
+    ti.id AS task_instance_id,
+    ti.map_index,
+    ti.operator,
+    ti.max_tries,
+    h.try_number,
+    h.state,
+    h.queued_at,
+    h.scheduled_at,
+    h.started_at,
+    h.ended_at,
+    h.duration_seconds,
+    h.exit_code,
+    h.error_message,
+    h.hostname,
+    h.pod_name,
+    h.node_name,
+    h.note
+FROM task_instance_history h
+JOIN task_instances ti ON ti.id = h.task_instance_id
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
+UNION ALL
+SELECT
+    ti.id AS task_instance_id,
+    ti.map_index,
+    ti.operator,
+    ti.max_tries,
+    ti.try_number,
+    ti.state,
+    ti.queued_at,
+    ti.scheduled_at,
+    ti.started_at,
+    ti.ended_at,
+    ti.duration_seconds,
+    ti.exit_code,
+    ti.error_message,
+    ti.hostname,
+    ti.pod_name,
+    ti.node_name,
+    ti.note
+FROM task_instances ti
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
+ORDER BY try_number;
+
 -- name: UpdateTaskInstanceState :one
 UPDATE task_instances
 SET state = $2, started_at = $3, ended_at = $4
@@ -141,19 +192,36 @@ SET state = sqlc.arg(state)::task_state,
 WHERE dag_run_id = sqlc.arg(dag_run_id) AND task_id = sqlc.arg(task_id);
 
 -- name: ResetTaskInstanceToNone :exec
--- Resets a TI for retry: state back to `none`, all per-attempt timestamps
--- cleared (including queued_at), and try_number bumped. queued_at MUST be
--- NULLed so the next TransitionTaskState(queued) stamps a fresh now() — without
--- that, the dispatch-lost reaper sees the stale pre-clear timestamp and
--- re-marks the TI dispatch_lost on every tick (Lima Bug 1, 2026-05-31).
-UPDATE task_instances
+-- Resets a TI for retry: snapshot the current per-attempt state into
+-- task_instance_history (so the UI's /tries endpoint can render one tab per
+-- attempt, Lima bug #241), then state back to `none`, all per-attempt
+-- timestamps cleared (including queued_at), and try_number bumped. queued_at
+-- MUST be NULLed so the next TransitionTaskState(queued) stamps a fresh now()
+-- — without that, the dispatch-lost reaper sees the stale pre-clear timestamp
+-- and re-marks the TI dispatch_lost on every tick (Lima Bug 1).
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1 AND src.task_id = $2
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
 SET state = 'none',
     started_at = NULL,
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    try_number = try_number + 1
-WHERE dag_run_id = $1 AND task_id = $2;
+    try_number = ti.try_number + 1
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2;
 
 -- name: FailTaskInstanceIfActive :exec
 UPDATE task_instances
@@ -232,28 +300,62 @@ WHERE d.tenant_id = $1 AND r.logical_date >= $2 AND r.logical_date <= $3
 GROUP BY ti.state;
 
 -- name: ResetFailedTaskInstance :execrows
--- See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
-UPDATE task_instances
+-- Archives the current attempt into task_instance_history then resets the
+-- live row. See ResetTaskInstanceToNone for the per-attempt rationale.
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1 AND src.task_id = $2
+      AND src.state IN ('failed', 'upstream_failed', 'up_for_retry')
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
 SET state = 'none',
     started_at = NULL,
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    try_number = try_number + 1
-WHERE dag_run_id = $1 AND task_id = $2
-  AND state IN ('failed', 'upstream_failed', 'up_for_retry');
+    try_number = ti.try_number + 1
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
+  AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry');
 
 -- name: ResetAllFailedTaskInstances :execrows
--- See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
-UPDATE task_instances
+-- Archives every failed attempt in the run into task_instance_history then
+-- resets. See ResetTaskInstanceToNone for the per-attempt rationale.
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1
+      AND src.state IN ('failed', 'upstream_failed', 'up_for_retry')
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
 SET state = 'none',
     started_at = NULL,
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    try_number = try_number + 1
-WHERE dag_run_id = $1
-  AND state IN ('failed', 'upstream_failed', 'up_for_retry');
+    try_number = ti.try_number + 1
+WHERE ti.dag_run_id = $1
+  AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry');
 
 -- name: SetTaskInstanceNote :exec
 UPDATE task_instances

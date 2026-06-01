@@ -107,6 +107,13 @@ type Querier interface {
 	// LIMIT bounds a tick's reap work after a long outage; the rest are picked
 	// up next tick (backstop, not sprint).
 	ListStaleQueuedTaskInstances(ctx context.Context) ([]ListStaleQueuedTaskInstancesRow, error)
+	// Returns every attempt for (run, task), oldest first. UNIONs the current
+	// task_instances row with all archived task_instance_history rows so the UI's
+	// /tries endpoint can render one navigable tab per attempt (Lima bug #241).
+	// Each row carries the per-attempt fields PLUS the run-constant fields
+	// (operator, max_tries, map_index) copied from the current TI; archived rows
+	// get them via the JOIN.
+	ListTaskInstanceAttempts(ctx context.Context, arg ListTaskInstanceAttemptsParams) ([]ListTaskInstanceAttemptsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
@@ -151,20 +158,24 @@ type Querier interface {
 	// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
 	// agent path is the first to exercise this query end-to-end.
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
-	// See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
+	// Archives every failed attempt in the run into task_instance_history then
+	// resets. See ResetTaskInstanceToNone for the per-attempt rationale.
 	ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error)
 	// Clear re-binds the run to the DAG's current registered version (ADR 0020): a
 	// re-run after a code/yaml fix picks up the newest image and config — in dev that
 	// is the last hot-reload, in prod the last deploy — while everything within a
 	// version stays reproducible.
 	ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVersionParams) error
-	// See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
+	// Archives the current attempt into task_instance_history then resets the
+	// live row. See ResetTaskInstanceToNone for the per-attempt rationale.
 	ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTaskInstanceParams) (int64, error)
-	// Resets a TI for retry: state back to `none`, all per-attempt timestamps
-	// cleared (including queued_at), and try_number bumped. queued_at MUST be
-	// NULLed so the next TransitionTaskState(queued) stamps a fresh now() — without
-	// that, the dispatch-lost reaper sees the stale pre-clear timestamp and
-	// re-marks the TI dispatch_lost on every tick (Lima Bug 1, 2026-05-31).
+	// Resets a TI for retry: snapshot the current per-attempt state into
+	// task_instance_history (so the UI's /tries endpoint can render one tab per
+	// attempt, Lima bug #241), then state back to `none`, all per-attempt
+	// timestamps cleared (including queued_at), and try_number bumped. queued_at
+	// MUST be NULLed so the next TransitionTaskState(queued) stamps a fresh now()
+	// — without that, the dispatch-lost reaper sees the stale pre-clear timestamp
+	// and re-marks the TI dispatch_lost on every tick (Lima Bug 1).
 	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
 	ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (ResolveRunRefRow, error)
 	SetCurrentDagVersion(ctx context.Context, arg SetCurrentDagVersionParams) error

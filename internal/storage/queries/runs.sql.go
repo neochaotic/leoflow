@@ -769,6 +769,121 @@ func (q *Queries) ListStaleQueuedTaskInstances(ctx context.Context) ([]ListStale
 	return items, nil
 }
 
+const listTaskInstanceAttempts = `-- name: ListTaskInstanceAttempts :many
+SELECT
+    ti.id AS task_instance_id,
+    ti.map_index,
+    ti.operator,
+    ti.max_tries,
+    h.try_number,
+    h.state,
+    h.queued_at,
+    h.scheduled_at,
+    h.started_at,
+    h.ended_at,
+    h.duration_seconds,
+    h.exit_code,
+    h.error_message,
+    h.hostname,
+    h.pod_name,
+    h.node_name,
+    h.note
+FROM task_instance_history h
+JOIN task_instances ti ON ti.id = h.task_instance_id
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
+UNION ALL
+SELECT
+    ti.id AS task_instance_id,
+    ti.map_index,
+    ti.operator,
+    ti.max_tries,
+    ti.try_number,
+    ti.state,
+    ti.queued_at,
+    ti.scheduled_at,
+    ti.started_at,
+    ti.ended_at,
+    ti.duration_seconds,
+    ti.exit_code,
+    ti.error_message,
+    ti.hostname,
+    ti.pod_name,
+    ti.node_name,
+    ti.note
+FROM task_instances ti
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
+ORDER BY try_number
+`
+
+type ListTaskInstanceAttemptsParams struct {
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskID   string      `json:"task_id"`
+}
+
+type ListTaskInstanceAttemptsRow struct {
+	TaskInstanceID  pgtype.UUID        `json:"task_instance_id"`
+	MapIndex        int32              `json:"map_index"`
+	Operator        string             `json:"operator"`
+	MaxTries        int32              `json:"max_tries"`
+	TryNumber       int32              `json:"try_number"`
+	State           TaskState          `json:"state"`
+	QueuedAt        pgtype.Timestamptz `json:"queued_at"`
+	ScheduledAt     pgtype.Timestamptz `json:"scheduled_at"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	EndedAt         pgtype.Timestamptz `json:"ended_at"`
+	DurationSeconds *float64           `json:"duration_seconds"`
+	ExitCode        *int32             `json:"exit_code"`
+	ErrorMessage    *string            `json:"error_message"`
+	Hostname        *string            `json:"hostname"`
+	PodName         *string            `json:"pod_name"`
+	NodeName        *string            `json:"node_name"`
+	Note            *string            `json:"note"`
+}
+
+// Returns every attempt for (run, task), oldest first. UNIONs the current
+// task_instances row with all archived task_instance_history rows so the UI's
+// /tries endpoint can render one navigable tab per attempt (Lima bug #241).
+// Each row carries the per-attempt fields PLUS the run-constant fields
+// (operator, max_tries, map_index) copied from the current TI; archived rows
+// get them via the JOIN.
+func (q *Queries) ListTaskInstanceAttempts(ctx context.Context, arg ListTaskInstanceAttemptsParams) ([]ListTaskInstanceAttemptsRow, error) {
+	rows, err := q.db.Query(ctx, listTaskInstanceAttempts, arg.DagRunID, arg.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTaskInstanceAttemptsRow{}
+	for rows.Next() {
+		var i ListTaskInstanceAttemptsRow
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.MapIndex,
+			&i.Operator,
+			&i.MaxTries,
+			&i.TryNumber,
+			&i.State,
+			&i.QueuedAt,
+			&i.ScheduledAt,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.DurationSeconds,
+			&i.ExitCode,
+			&i.ErrorMessage,
+			&i.Hostname,
+			&i.PodName,
+			&i.NodeName,
+			&i.Note,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
 SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at FROM task_instances
 WHERE dag_run_id = $1
@@ -981,18 +1096,35 @@ func (q *Queries) ReportTaskResult(ctx context.Context, arg ReportTaskResultPara
 }
 
 const resetAllFailedTaskInstances = `-- name: ResetAllFailedTaskInstances :execrows
-UPDATE task_instances
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1
+      AND src.state IN ('failed', 'upstream_failed', 'up_for_retry')
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
 SET state = 'none',
     started_at = NULL,
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    try_number = try_number + 1
-WHERE dag_run_id = $1
-  AND state IN ('failed', 'upstream_failed', 'up_for_retry')
+    try_number = ti.try_number + 1
+WHERE ti.dag_run_id = $1
+  AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry')
 `
 
-// See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
+// Archives every failed attempt in the run into task_instance_history then
+// resets. See ResetTaskInstanceToNone for the per-attempt rationale.
 func (q *Queries) ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, resetAllFailedTaskInstances, dagRunID)
 	if err != nil {
@@ -1022,15 +1154,31 @@ func (q *Queries) ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVer
 }
 
 const resetFailedTaskInstance = `-- name: ResetFailedTaskInstance :execrows
-UPDATE task_instances
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1 AND src.task_id = $2
+      AND src.state IN ('failed', 'upstream_failed', 'up_for_retry')
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
 SET state = 'none',
     started_at = NULL,
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    try_number = try_number + 1
-WHERE dag_run_id = $1 AND task_id = $2
-  AND state IN ('failed', 'upstream_failed', 'up_for_retry')
+    try_number = ti.try_number + 1
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
+  AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry')
 `
 
 type ResetFailedTaskInstanceParams struct {
@@ -1038,7 +1186,8 @@ type ResetFailedTaskInstanceParams struct {
 	TaskID   string      `json:"task_id"`
 }
 
-// See ResetTaskInstanceToNone for the queued_at-NULL rationale (Lima Bug 1).
+// Archives the current attempt into task_instance_history then resets the
+// live row. See ResetTaskInstanceToNone for the per-attempt rationale.
 func (q *Queries) ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTaskInstanceParams) (int64, error) {
 	result, err := q.db.Exec(ctx, resetFailedTaskInstance, arg.DagRunID, arg.TaskID)
 	if err != nil {
@@ -1048,14 +1197,29 @@ func (q *Queries) ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTa
 }
 
 const resetTaskInstanceToNone = `-- name: ResetTaskInstanceToNone :exec
-UPDATE task_instances
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1 AND src.task_id = $2
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
 SET state = 'none',
     started_at = NULL,
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    try_number = try_number + 1
-WHERE dag_run_id = $1 AND task_id = $2
+    try_number = ti.try_number + 1
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
 `
 
 type ResetTaskInstanceToNoneParams struct {
@@ -1063,11 +1227,13 @@ type ResetTaskInstanceToNoneParams struct {
 	TaskID   string      `json:"task_id"`
 }
 
-// Resets a TI for retry: state back to `none`, all per-attempt timestamps
-// cleared (including queued_at), and try_number bumped. queued_at MUST be
-// NULLed so the next TransitionTaskState(queued) stamps a fresh now() — without
-// that, the dispatch-lost reaper sees the stale pre-clear timestamp and
-// re-marks the TI dispatch_lost on every tick (Lima Bug 1, 2026-05-31).
+// Resets a TI for retry: snapshot the current per-attempt state into
+// task_instance_history (so the UI's /tries endpoint can render one tab per
+// attempt, Lima bug #241), then state back to `none`, all per-attempt
+// timestamps cleared (including queued_at), and try_number bumped. queued_at
+// MUST be NULLed so the next TransitionTaskState(queued) stamps a fresh now()
+// — without that, the dispatch-lost reaper sees the stale pre-clear timestamp
+// and re-marks the TI dispatch_lost on every tick (Lima Bug 1).
 func (q *Queries) ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error {
 	_, err := q.db.Exec(ctx, resetTaskInstanceToNone, arg.DagRunID, arg.TaskID)
 	return err

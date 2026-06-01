@@ -331,6 +331,25 @@ type TaskInstance struct {
 	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
 }
 
+type TaskInstanceHistory struct {
+	HistoryID       int64              `json:"history_id"`
+	TaskInstanceID  pgtype.UUID        `json:"task_instance_id"`
+	TryNumber       int32              `json:"try_number"`
+	State           TaskState          `json:"state"`
+	QueuedAt        pgtype.Timestamptz `json:"queued_at"`
+	ScheduledAt     pgtype.Timestamptz `json:"scheduled_at"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	EndedAt         pgtype.Timestamptz `json:"ended_at"`
+	DurationSeconds *float64           `json:"duration_seconds"`
+	ExitCode        *int32             `json:"exit_code"`
+	ErrorMessage    *string            `json:"error_message"`
+	Hostname        *string            `json:"hostname"`
+	PodName         *string            `json:"pod_name"`
+	NodeName        *string            `json:"node_name"`
+	Note            *string            `json:"note"`
+	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
+}
+
 type TaskStateHistory struct {
 	ID             int64              `json:"id"`
 	TaskInstanceID pgtype.UUID        `json:"task_instance_id"`

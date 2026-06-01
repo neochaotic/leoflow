@@ -131,6 +131,92 @@ func TestLimaBug1_ClearResetsQueuedAtIntegration(t *testing.T) {
 	}
 }
 
+// TestLimaBug3_TaskTriesIncludesArchivedAttemptsIntegration reproduces the
+// "after Clear, only the latest attempt tab shows" symptom from Lima
+// 2026-05-31:
+//
+//	user clears a failed task 3x → disk has 1.log, 2.log, 3.log, 4.log
+//	UI's /tries endpoint returned 1 entry (the latest) → only one tab → user
+//	cannot navigate to the prior failures' logs.
+//
+// Root cause: the Reset* SQL queries updated the live task_instances row
+// in-place (bumping try_number), so the database remembered only the current
+// attempt. Fix: the queries now ARCHIVE the current per-attempt state into
+// task_instance_history before resetting, and Repository.ListTaskInstanceAttempts
+// UNIONs current + history so /tries returns all attempts oldest-first.
+//
+// Contract this test pins:
+//
+//  1. After N clears, ListTaskInstanceAttempts returns N+1 entries.
+//  2. try_number on the entries advances monotonically (1, 2, 3, ...).
+//  3. Each archived entry preserves the state it had at clear time (failed
+//     here), so the UI can render the right state badge per tab.
+//
+// Skips without DATABASE_URL.
+func TestLimaBug3_TaskTriesIncludesArchivedAttemptsIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+
+	dagID := fmt.Sprintf("lima_bug3_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{{TaskID: "hello", Type: domain.TaskTypePython}}
+	registerSpec(t, repo, ctx, dagID, tasks)
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual",
+		LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("CreateDagRun: %v", err)
+	}
+	runUUID := resolveRunUUID(t, sched, ctx, dagID)
+	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
+		t.Fatalf("MaterializeTasks: %v", err)
+	}
+
+	// Walk the failed→clear cycle 3 times so we end up with 4 attempts
+	// (try_number 1, 2, 3, 4 — the first ran initially, then 3 clears).
+	const clearCycles = 3
+	for i := 0; i < clearCycles; i++ {
+		// Fail the current attempt so Clear has something to reset.
+		if err := sched.ApplyTransition(ctx, runUUID, "hello", domain.TaskStateFailed); err != nil {
+			t.Fatalf("ApplyTransition to failed (cycle %d): %v", i, err)
+		}
+		if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1",
+			[]string{"hello"}, true /*onlyFailed*/, false); err != nil {
+			t.Fatalf("ClearTaskInstances (cycle %d): %v", i, err)
+		}
+	}
+
+	attempts, err := repo.ListTaskInstanceAttempts(ctx, "default", dagID, "r1", "hello")
+	if err != nil {
+		t.Fatalf("ListTaskInstanceAttempts: %v", err)
+	}
+	// Expect: 3 archived attempts (1 through 3, each "failed" at clear time) +
+	// 1 current row (try 4, state none after the final clear) = 4 total.
+	const wantAttempts = clearCycles + 1
+	if len(attempts) != wantAttempts {
+		t.Fatalf("Bug 3: ListTaskInstanceAttempts returned %d entries, want %d "+
+			"(N+1 = clearCycles+1, one row per attempt)\nentries: %+v",
+			len(attempts), wantAttempts, attempts)
+	}
+	// try_number must advance 1, 2, 3, 4 in order.
+	for i, a := range attempts {
+		wantTry := i + 1
+		if a.TryNumber != wantTry {
+			t.Errorf("attempts[%d].TryNumber = %d, want %d (monotonic 1..N)", i, a.TryNumber, wantTry)
+		}
+	}
+	// The N archived entries (all but the last) must record the failed state
+	// the TI had at clear time. The last is the current row, just reset.
+	for i := 0; i < clearCycles; i++ {
+		if attempts[i].State != domain.TaskStateFailed {
+			t.Errorf("attempts[%d].State = %q, want failed (archived snapshot of pre-clear state)",
+				i, attempts[i].State)
+		}
+	}
+	if attempts[clearCycles].State != domain.TaskStateNone {
+		t.Errorf("attempts[%d].State = %q, want none (the live row reset by the last clear)",
+			clearCycles, attempts[clearCycles].State)
+	}
+}
+
 // queuedAtOf returns the queued_at timestamp of the named TI in the run, or
 // zero if absent. Reads the raw task_instances row via the scheduler store's
 // list query.

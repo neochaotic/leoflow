@@ -42,6 +42,10 @@ type DagRunRepository interface {
 // their state directly (the UI's mark-success/failed actions).
 type TaskInstanceRepository interface {
 	ListTaskInstances(ctx context.Context, tenant, dagID, runID string, limit, offset int) ([]domain.TaskInstance, int, error)
+	// ListTaskInstanceAttempts returns every attempt for (run, task), oldest
+	// first — the current row UNIONed with the archived history. The UI's
+	// /tries endpoint needs all attempts to render its navigable tabs.
+	ListTaskInstanceAttempts(ctx context.Context, tenant, dagID, runID, taskID string) ([]domain.TaskInstance, error)
 	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed, resetDagRun bool) (int, error)
 	SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error
 }
@@ -812,28 +816,39 @@ func resolveRunContext(c *gin.Context, runs DagRunRepository, versions DagVersio
 
 // serveTaskTries answers the task try-history endpoints the UI's task Details
 // tab reads: "tries" returns the collection of attempts for the task, and
-// "tries/{n}" (suffix "/{n}") returns the single attempt. Leoflow keeps one row
-// per task (try_number advances in place), so the collection holds the current
-// attempt and "/{n}" returns it regardless of n.
+// "tries/{n}" (suffix "/{n}") returns a single attempt by try_number.
+//
+// Returns one entry per attempt: the current task_instances row plus every
+// archived task_instance_history row for the same (run, task), oldest first.
+// The UI renders one navigable tab per entry; clicking a tab loads the
+// matching <try_number>.log via the separate logs endpoint (Lima bug #241).
 func serveTaskTries(c *gin.Context, tasks TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, suffix string) {
-	tis, _, err := tasks.ListTaskInstances(c.Request.Context(), tenantOf(c),
-		c.Param("dag_id"), c.Param("dag_run_id"), 1000, 0)
+	tis, err := tasks.ListTaskInstanceAttempts(c.Request.Context(), tenantOf(c),
+		c.Param("dag_id"), c.Param("dag_run_id"), c.Param("task_id"))
 	if err != nil {
 		handleRepoError(c, err)
 		return
 	}
-	matches := make([]taskInstanceDTO, 0, 1)
+	matches := make([]taskInstanceDTO, 0, len(tis))
 	for _, ti := range tis {
-		if ti.TaskID == c.Param("task_id") {
-			dto := toTaskInstanceDTO(ti)
-			enrichTaskInstance(c, &dto, runs, versions)
-			matches = append(matches, dto)
-		}
+		dto := toTaskInstanceDTO(ti)
+		enrichTaskInstance(c, &dto, runs, versions)
+		matches = append(matches, dto)
 	}
 	if single := strings.TrimPrefix(suffix, "/"); single != "" {
 		if len(matches) == 0 {
 			AbortProblem(c, http.StatusNotFound, "not found", "task instance not found")
 			return
+		}
+		// Match by try_number when parseable; fall back to the latest attempt so
+		// a malformed suffix doesn't 404 (the UI sometimes lazily polls).
+		if n, perr := strconv.Atoi(single); perr == nil {
+			for _, m := range matches {
+				if m.TryNumber == n {
+					c.JSON(http.StatusOK, m)
+					return
+				}
+			}
 		}
 		c.JSON(http.StatusOK, matches[len(matches)-1])
 		return

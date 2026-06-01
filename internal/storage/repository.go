@@ -253,6 +253,49 @@ func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run
 	return mapDagRun(created, dagID), nil
 }
 
+// ListTaskInstanceAttempts returns every attempt for (run, task), oldest first —
+// the current task_instances row UNIONed with all archived task_instance_history
+// rows. The UI's /tries endpoint needs this to render one navigable tab per
+// attempt; without history, a cleared task shows only the latest attempt and the
+// user cannot inspect prior failures (Lima bug #241).
+func (r *Repository) ListTaskInstanceAttempts(ctx context.Context, tenant, dagID, runID, taskID string) ([]domain.TaskInstance, error) {
+	dag, err := r.resolveDag(ctx, tenant, dagID)
+	if err != nil {
+		return nil, err
+	}
+	run, err := r.q.GetDagRun(ctx, queries.GetDagRunParams{DagID: dag.ID, RunID: runID})
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	rows, err := r.q.ListTaskInstanceAttempts(ctx, queries.ListTaskInstanceAttemptsParams{
+		DagRunID: run.ID, TaskID: taskID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing task instance attempts: %w", err)
+	}
+	out := make([]domain.TaskInstance, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.TaskInstance{
+			DagID:       dagID,
+			RunID:       runID,
+			TaskID:      taskID,
+			MapIndex:    int(row.MapIndex),
+			TryNumber:   int(row.TryNumber),
+			MaxTries:    int(row.MaxTries),
+			State:       domain.TaskState(row.State),
+			Operator:    row.Operator,
+			ScheduledAt: timePtr(row.ScheduledAt),
+			QueuedAt:    timePtr(row.QueuedAt),
+			StartedAt:   timePtr(row.StartedAt),
+			EndedAt:     timePtr(row.EndedAt),
+			Duration:    row.DurationSeconds,
+			Hostname:    strOrEmpty(row.Hostname),
+			Note:        strOrEmpty(row.Note),
+		})
+	}
+	return out, nil
+}
+
 // ListTaskInstances returns the task instances of a run.
 func (r *Repository) ListTaskInstances(ctx context.Context, tenant, dagID, runID string, _, _ int) ([]domain.TaskInstance, int, error) {
 	dag, err := r.resolveDag(ctx, tenant, dagID)

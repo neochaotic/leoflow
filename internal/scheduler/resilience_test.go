@@ -154,7 +154,12 @@ func queuedEmptyRun(id string) RunState {
 }
 
 func newResilienceScheduler(store Store) *Scheduler {
-	return NewScheduler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+	s := NewScheduler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+	// Resilience suite exercises the writer path (panics inside the run loop,
+	// flaky stores, etc.). All Step() calls must execute past the leadership
+	// gate (#208) — default the helper to leader.
+	s.SetLeading(true)
+	return s
 }
 
 // TestStepIsolatesErroringRun asserts a per-run error does not block the other

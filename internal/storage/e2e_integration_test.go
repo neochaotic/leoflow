@@ -43,6 +43,7 @@ func TestEndToEndPushTriggerSchedule(t *testing.T) {
 	sched := scheduler.NewScheduler(storage.NewSchedulerStore(pg),
 		slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
 	sched.SetDispatcher(noopDispatcher{})
+	sched.SetLeading(true) // #208: Step() now gates on leader; e2e exercises the writer path.
 
 	dagID := fmt.Sprintf("e2e_%d", time.Now().UnixNano())
 	spec := domain.DAGSpec{

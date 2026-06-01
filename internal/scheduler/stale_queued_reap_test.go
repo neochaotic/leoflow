@@ -140,7 +140,7 @@ func TestStepSkipsDispatchLostReaperOnFollower(t *testing.T) {
 		{TaskInstanceID: "stuck-ti", QueuedAt: time.Now().UTC().Add(-10 * time.Minute)},
 	}
 	s := newScheduler(store)
-	// Default leading=false; explicitly assert that no reap happens.
+	s.SetLeading(false) // newScheduler defaults to leader; opt out for follower-mode test.
 	if err := s.Step(context.Background()); err != nil {
 		t.Fatal(err)
 	}

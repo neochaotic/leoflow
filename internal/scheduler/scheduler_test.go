@@ -34,13 +34,20 @@ type fakeStore struct {
 	agentLostMarked    []string
 	staleQueuedCands   []StaleQueuedCandidate
 	dispatchLostMarked []string
+	// activeRunsCalls counts ActiveRuns invocations so the follower-side gate
+	// can be asserted: a follower must NOT read run state (single-writer
+	// invariant, ADR 0031 / issue #208).
+	activeRunsCalls int
 }
 
 func newFakeStore(runs ...RunState) *fakeStore {
 	return &fakeStore{runs: runs, runStates: map[string]domain.DagRunState{}}
 }
 
-func (f *fakeStore) ActiveRuns(context.Context) ([]RunState, error) { return f.runs, nil }
+func (f *fakeStore) ActiveRuns(context.Context) ([]RunState, error) {
+	f.activeRunsCalls++
+	return f.runs, nil
+}
 func (f *fakeStore) ScheduledDAGs(context.Context) ([]ScheduledDAG, error) {
 	return f.scheduled, nil
 }
@@ -97,7 +104,13 @@ func (f *fakeStore) MarkTaskDispatchLost(_ context.Context, tiID string) error {
 }
 
 func newScheduler(store Store) *Scheduler {
-	return NewScheduler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+	s := NewScheduler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+	// Default tests to leader so the writer-path assertions (which is most of
+	// them) execute. Follower-mode tests opt out with `s.SetLeading(false)`.
+	// Without this default every Step() returns early at the leadership gate
+	// (#208) and the test asserts on a no-op tick.
+	s.SetLeading(true)
+	return s
 }
 
 func retriableRun(aState domain.TaskState, aTry int) *fakeStore {
@@ -244,12 +257,51 @@ func TestStepDoesNotReapOnFollower(t *testing.T) {
 	store := newFakeStore()
 	store.reapCands = []ReapCandidate{{RunID: "stuck", LastActivity: time.Now().UTC().Add(-1 * time.Hour)}}
 	s := newScheduler(store)
-	// SetLeading defaults to false; do not call it. A follower must not reap.
+	s.SetLeading(false) // newScheduler defaults to leader; this test wants follower.
 	if err := s.Step(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.reaped) != 0 {
 		t.Errorf("follower must not reap; got %v", store.reaped)
+	}
+}
+
+// TestStepFollowerSkipsAllWrites: a follower (no leadership lock) MUST NOT read
+// or write scheduler state. Today only the reaper is gated; ActiveRuns and
+// createDueRuns also run on every follower, violating the single-writer
+// invariant of ADR 0031. The fix lifts the leader gate to the top of Step()
+// after the heartbeat store (issue #208).
+func TestStepFollowerSkipsAllWrites(t *testing.T) {
+	store := newFakeStore(RunState{
+		RunID: "r1", DagID: "etl", State: domain.DagRunStateRunning, Tasks: linearTasks(),
+		States: map[string]domain.TaskState{"a": domain.TaskStateNone, "b": domain.TaskStateNone},
+		Tries:  map[string]int{"a": 1, "b": 1}, MaxTries: map[string]int{"a": 3, "b": 3},
+	})
+	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "@hourly"}}
+	store.reapCands = []ReapCandidate{{RunID: "stuck", LastActivity: time.Now().UTC().Add(-1 * time.Hour)}}
+	s := newScheduler(store)
+	s.SetLeading(false) // newScheduler defaults to leader; opt out for this follower-mode test.
+
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatalf("Step on follower must not return infra-level error: %v", err)
+	}
+	if store.activeRunsCalls != 0 {
+		t.Errorf("follower must not read ActiveRuns; got %d calls", store.activeRunsCalls)
+	}
+	if len(store.transitions) != 0 {
+		t.Errorf("follower must not write transitions; got %d", len(store.transitions))
+	}
+	if len(store.createdRuns) != 0 {
+		t.Errorf("follower must not create scheduled runs; got %v", store.createdRuns)
+	}
+	if len(store.reaped) != 0 {
+		t.Errorf("follower must not reap; got %v", store.reaped)
+	}
+	// Heartbeat MUST still fire — the leadership check sits AFTER lastTick.Store
+	// so the orchestrator can prove the instance is alive without granting it
+	// the writer role.
+	if s.lastTick.Load() == 0 {
+		t.Errorf("follower must still update lastTick (heartbeat); got 0")
 	}
 }
 
@@ -432,6 +484,7 @@ func TestStepWarnsOnUnparseableScheduleAndCreatesNoRun(t *testing.T) {
 	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "*/3 * * *"}}
 	var buf bytes.Buffer
 	s := NewScheduler(store, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})), time.Millisecond)
+	s.SetLeading(true) // direct NewScheduler call — needs explicit leader so createDueRuns runs (#208 gate).
 
 	if err := s.Step(context.Background()); err != nil {
 		t.Fatal(err)

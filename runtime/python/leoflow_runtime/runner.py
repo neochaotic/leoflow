@@ -130,7 +130,11 @@ def run(entrypoint: str) -> None:
         fn = fn.function
     kwargs = _resolve_kwargs(fn)
     if kwargs:
-        _lifecycle(f"resolved kwargs: {kwargs}")
+        # Log keys only — the values can carry XCom-pulled secrets or any
+        # user payload; per ADR 0032 they belong in the XCom tab, not in the
+        # log file. The pulled lines above already report each XCom source
+        # and its wire size so the operator can correlate.
+        _lifecycle(f"resolved kwargs: {sorted(kwargs.keys())}")
 
     try:
         result = fn(**kwargs)

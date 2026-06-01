@@ -24,7 +24,8 @@ RENDERED=$(helm template leoflow-test "$CHART" \
   --set database.url='postgres://leoflow:p@db:5432/leoflow?sslmode=disable' \
   --set redis.url='redis://r:6379/0' \
   --set auth.jwtSecret='helm-template-check-jwt-fixture' \
-  --set secretKey='leoflow-tmpl-check-secret-key-32')
+  --set secretKey='leoflow-tmpl-check-secret-key-32' \
+  --set agentTLS.serverCertSecret='leoflow-agent-tls-fixture')
 
 fail=0
 expect_substring() {
@@ -58,6 +59,7 @@ JOB_RENDERED=$(helm template leoflow-test "$CHART" \
   --set redis.url='redis://r:6379/0' \
   --set auth.jwtSecret='helm-template-check-jwt-fixture' \
   --set secretKey='leoflow-tmpl-check-secret-key-32' \
+  --set agentTLS.serverCertSecret='leoflow-agent-tls-fixture' \
   --show-only templates/migration-job.yaml)
 
 expect_in_job() {

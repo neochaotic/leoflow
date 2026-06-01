@@ -48,7 +48,11 @@ func TestResolveLiteProjectExplicitArg(t *testing.T) {
 	}
 }
 
-func TestResolveLiteProjectNoArgScaffoldsWorkspace(t *testing.T) {
+// TestResolveLiteProjectNoArgReturnsWorkspace asserts the post-Phase-3
+// contract: no-arg resolve returns the configured workspace and ensures the
+// directory exists. Scaffolding now happens as a subdir inside runDev (not
+// at the workspace root) — see docs/dag-authoring.md (Workspace layout).
+func TestResolveLiteProjectNoArgReturnsWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home) // no config -> defaultWorkspace falls back to $HOME/leoflow
 	got, err := resolveLiteProject(bareCmd(), nil)
@@ -59,8 +63,9 @@ func TestResolveLiteProjectNoArgScaffoldsWorkspace(t *testing.T) {
 	if got != want {
 		t.Errorf("no-arg dir = %q, want %q", got, want)
 	}
-	if _, err := os.Stat(filepath.Join(want, "leoflow.yaml")); err != nil {
-		t.Errorf("no-arg run should scaffold a starter project: %v", err)
+	info, serr := os.Stat(want)
+	if serr != nil || !info.IsDir() {
+		t.Errorf("workspace dir should be created: stat err=%v", serr)
 	}
 }
 

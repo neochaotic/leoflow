@@ -137,18 +137,60 @@ type devOptions struct {
 	jwtSecret string
 }
 
-// resolveLiteProject picks the project dir for `leoflow lite`. With an explicit
-// path argument it uses that. With no argument it uses the configured workspace
-// (the directory `leoflow setup` chose), scaffolding a starter DAG there if it
-// has no project yet — so a fresh install runs with a bare `leoflow lite`.
+// prepareWorkspace resolves the workspace, scaffolds a starter subdir when it
+// is empty, and validates every yaml-bearing project's config. Extracted from
+// runDev to keep its cyclomatic complexity under the gocyclo limit.
+func prepareWorkspace(cmd *cobra.Command, out io.Writer, dir string) (*WorkspaceSpec, error) {
+	ws, err := ResolveWorkspace(dir)
+	if err != nil {
+		return nil, err
+	}
+	// Empty workspace → scaffold a starter as a subdir (multi-DAG model). The
+	// older single-DAG layout (workspace itself IS the project) is still
+	// auto-detected by ResolveWorkspace via the root-back-compat path, so
+	// existing setups keep working without migration.
+	if len(ws.Projects) == 0 {
+		starterDir := filepath.Join(ws.Path, "hello")
+		dagID, serr := scaffoldProject(starterDir)
+		if serr != nil {
+			return nil, serr
+		}
+		devPrintf(out, "▸ no DAGs yet — scaffolded a starter project %q in %s (edit it in the web editor)\n", dagID, starterDir)
+		ws, err = ResolveWorkspace(dir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Validate every project's config so an invalid yaml fails the boot, not the
+	// first reload. Yaml-less projects (auto-defaults) skip validation; their
+	// synthesized config is already schema-clean.
+	for _, p := range ws.Projects {
+		if !p.HasYAML {
+			continue
+		}
+		if verr := p.Config.Validate(); verr != nil {
+			return nil, fmt.Errorf("invalid %s: %w", p.ConfigPath, verr)
+		}
+	}
+	return ws, nil
+}
+
+// resolveLiteProject picks the workspace dir for `leoflow lite`. With an
+// explicit path argument it uses that — must exist as a directory; the path
+// can be either a single-DAG project (back-compat: root holds leoflow.yaml +
+// dag.py) or a multi-DAG workspace (subdirs each with their own pair). With
+// no argument it uses the configured workspace (the directory `leoflow setup`
+// chose). Scaffolding of an empty workspace is the caller's responsibility —
+// it now creates a subdir (`<workspace>/hello/`), not a root project.
 func resolveLiteProject(cmd *cobra.Command, args []string) (string, error) {
 	if len(args) == 1 {
 		p := args[0]
-		// An explicit argument must be an existing project dir. Without this check a
+		// An explicit argument must be an existing directory. Without this check a
 		// typo like `leoflow lite uninstall` was swallowed as a project path and
 		// failed later with a cryptic "open uninstall/leoflow.yaml". Fail clearly.
-		if _, err := os.Stat(filepath.Join(p, "leoflow.yaml")); err != nil {
-			return "", fmt.Errorf("no Leoflow project at %q (no leoflow.yaml).\n"+
+		info, err := os.Stat(p)
+		if err != nil || !info.IsDir() {
+			return "", fmt.Errorf("workspace path %q does not exist or is not a directory.\n"+
 				"  - run `leoflow lite` with no argument to use your workspace (%s)\n"+
 				"  - run `leoflow init %s` to create a project there\n"+
 				"  - for other actions see `leoflow --help` (e.g. `leoflow uninstall`)",
@@ -157,12 +199,8 @@ func resolveLiteProject(cmd *cobra.Command, args []string) (string, error) {
 		return p, nil
 	}
 	dir := defaultWorkspace(cmd)
-	if _, err := os.Stat(filepath.Join(dir, "leoflow.yaml")); errors.Is(err, os.ErrNotExist) {
-		dagID, serr := scaffoldProject(dir)
-		if serr != nil {
-			return "", serr
-		}
-		devPrintf(cmd.OutOrStdout(), "▸ no DAG yet — scaffolded a starter project %q in %s (edit it in the web editor)\n", dagID, dir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", fmt.Errorf("creating workspace %s: %w", dir, err)
 	}
 	return dir, nil
 }
@@ -523,12 +561,10 @@ func mtimesChanged(prev, cur map[string]time.Time) bool {
 // runDev orchestrates the all-in-one local loop: deps, control plane (subprocess
 // executor), DAG registration, and hot reload on save.
 func runDev(cmd *cobra.Command, dir string, o devOptions) error {
-	cfg, err := loadProjectConfig(dir)
+	out := cmd.OutOrStdout()
+	ws, err := prepareWorkspace(cmd, out, dir)
 	if err != nil {
 		return err
-	}
-	if verr := cfg.Validate(); verr != nil {
-		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
 	}
 	// Apply the executor/port chosen in `leoflow setup` (stored in config) as the
 	// defaults, unless overridden on the command line. This honors the wizard's
@@ -538,7 +574,6 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 		o.port = devDefaultPort
 	}
 	uiURL := devURL(o.port)
-	out := cmd.OutOrStdout()
 	devPrintln(out, liteBanner(uiURL))
 
 	// The admin login is provisioned by `leoflow setup` (hash-only in config).
@@ -586,9 +621,9 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	var serverEnv []string
 	var makeReload func(token string) func() error
 	if o.executor == "subprocess" {
-		serverEnv, makeReload, err = devSubprocessSetup(ctx, cmd, dir, o, home, cfg)
+		serverEnv, makeReload, err = devSubprocessSetup(ctx, cmd, ws, o, home)
 	} else {
-		serverEnv, makeReload, err = devClusterSetup(ctx, cmd, dir, o, home, cfg)
+		serverEnv, makeReload, err = devClusterSetup(ctx, cmd, ws, o, home)
 	}
 	if err != nil {
 		return err
@@ -603,7 +638,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if werr := waitForReady(ctx, uiURL); werr != nil {
 		return werr
 	}
-	announceReady(out, o.host, o.port, o.adminEmail, dir)
+	announceReady(out, o.host, o.port, o.adminEmail, ws.Path)
 	// Mint an admin token in-process signed with the dev JWT secret; the control
 	// plane validates it by signature + claims, so no login or seeded user is
 	// needed (works against a fresh or pre-existing dev database).
@@ -613,32 +648,37 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if terr != nil {
 		return fmt.Errorf("minting dev token: %w", terr)
 	}
-	return devWatchLoop(ctx, cmd, dir, cfg, makeReload(token))
+	return devWatchLoop(ctx, cmd, ws, makeReload(token))
 }
 
 // devSubprocessSetup provisions the isolated venv and returns the subprocess
-// server env plus a reload that compiles + registers (no image build) — the fast
-// inner loop, but user code runs unsandboxed on the host.
-func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o devOptions, home string, cfg *domain.LeoflowConfig) (env []string, makeReload func(string) func() error, err error) {
+// server env plus a reload that re-discovers + recompiles + registers every
+// project in the workspace (no image build) — the fast multi-DAG inner loop,
+// with user code running unsandboxed on the host. The venv is shared across
+// projects and uses the dependency-union from WorkspaceSpec.RootCfg so every
+// DAG's imports resolve from a single virtualenv.
+func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, o devOptions, home string) (env []string, makeReload func(string) func() error, err error) {
 	agentBin, err := resolveBinary(o.agentBin, "leoflow-agent")
 	if err != nil {
 		return nil, nil, err
 	}
-	venvPy, verr := ensureDevVenv(ctx, cmd, home, resolveRuntimeSrc(o.runtimeSrc, home), cfg.Dependencies)
+	venvPy, verr := ensureDevVenv(ctx, cmd, home, resolveRuntimeSrc(o.runtimeSrc, home), ws.RootCfg.Dependencies)
 	if verr != nil {
 		return nil, nil, verr
 	}
-	workDir, aerr := filepath.Abs(dir)
-	if aerr != nil {
-		return nil, nil, fmt.Errorf("resolving project dir: %w", aerr)
-	}
-	env = subprocessServerEnv(o.host, o.port, agentBin, workDir, venvPy, o.adminHash, o.adminEmail, o.jwtSecret)
-	env = append(env, liteEditorEnv(workDir, filepath.Dir(home))...)
+	env = subprocessServerEnv(o.host, o.port, agentBin, ws.Path, venvPy, o.adminHash, o.adminEmail, o.jwtSecret)
+	env = append(env, liteEditorEnv(ws.Path, filepath.Dir(home))...)
 	makeReload = func(token string) func() error {
-		base := func() error {
-			return devCompileAndRegister(ctx, cmd, dir, compileOptions{image: o.image}, token, nil, devURL(o.port))
+		return func() error {
+			// Re-resolve the workspace on every reload so DAGs added or removed
+			// since boot are picked up (no need to restart lite to register a new
+			// subdir).
+			curWs, rerr := ResolveWorkspace(ws.Path)
+			if rerr != nil {
+				return rerr
+			}
+			return devCompileAndRegisterAll(ctx, cmd, curWs, compileOptions{image: o.image}, token, nil, devURL(o.port))
 		}
-		return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))
 	}
 	return env, makeReload, nil
 }
@@ -646,9 +686,28 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, dir string, o d
 // devClusterSetup ensures the task base image, the dedicated k3d cluster, its
 // namespace, and an isolated kubeconfig, then returns the Kubernetes-executor
 // server env plus a reload that builds the DAG image, imports it into the
-// cluster, and registers — real pod-per-task, fully isolated, at the cost of an
-// image build per change.
-func devClusterSetup(ctx context.Context, cmd *cobra.Command, dir string, o devOptions, home string, cfg *domain.LeoflowConfig) (env []string, makeReload func(string) func() error, err error) {
+// cluster, and registers — real pod-per-task, fully isolated, at the cost of
+// an image build per change.
+//
+// Multi-DAG workspaces are NOT supported in cluster mode for v1: every save
+// would rebuild N images and re-import each into k3d (~15-30s per save with
+// BuildKit cache; far worse cold). The function fails loud with a hint to use
+// --executor=subprocess. Cluster-mode multi-DAG is tracked as a follow-up
+// (the "Stage" mode design conversation).
+func devClusterSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, o devOptions, home string) (env []string, makeReload func(string) func() error, err error) {
+	if len(ws.Projects) != 1 {
+		paths := make([]string, 0, len(ws.Projects))
+		for _, p := range ws.Projects {
+			paths = append(paths, p.Path)
+		}
+		return nil, nil, fmt.Errorf("cluster mode (--executor=k8s) does not support multi-DAG workspaces in v1 (got %d projects: %v)\n"+
+			"  - use --executor=subprocess for multi-DAG dev (the default, no Docker needed)\n"+
+			"  - or point lite at a single project: `leoflow lite <project-dir>`",
+			len(ws.Projects), paths)
+	}
+	project := ws.Projects[0]
+	dir := project.Path
+	cfg := project.Config
 	if berr := ensureBaseImage(ctx, cmd); berr != nil {
 		return nil, nil, berr
 	}
@@ -1440,14 +1499,16 @@ func devReadyOnce(ctx context.Context, baseURL string) bool {
 
 // devWatchLoop runs reload once, then again on every save of a watched file
 // until the context is canceled (Ctrl-C). reload encapsulates the mode-specific
-// build/register step.
-func devWatchLoop(ctx context.Context, cmd *cobra.Command, dir string, cfg *domain.LeoflowConfig, reload func() error) error {
-	watched := devWatchPaths(dir, cfg)
+// build/register step. The set of watched files is re-derived from the
+// workspace on every tick so a new project subdir added at runtime is picked
+// up without restart.
+func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, reload func() error) error {
 	if rerr := reload(); rerr != nil {
 		devPrintf(cmd.ErrOrStderr(), "✗ %v\n", rerr)
 	}
+	watched := workspaceWatchPaths(ws)
 	snap := projectMtimes(watched)
-	devPrintf(cmd.OutOrStdout(), "👀 watching %s — edit and save to reload (Ctrl-C to stop)\n", dir)
+	devPrintf(cmd.OutOrStdout(), "👀 watching %s — edit and save to reload (Ctrl-C to stop)\n", ws.Path)
 	ticker := time.NewTicker(devPollInterval)
 	defer ticker.Stop()
 	for {
@@ -1456,6 +1517,16 @@ func devWatchLoop(ctx context.Context, cmd *cobra.Command, dir string, cfg *doma
 			devPrintln(cmd.OutOrStdout(), "\nstopping dev environment …")
 			return nil
 		case <-ticker.C:
+			// Re-resolve the workspace each tick so newly-added or removed
+			// projects are detected. Discovery errors (e.g. a fresh
+			// duplicate-dag_id collision) surface here so the user sees them
+			// immediately.
+			curWs, derr := ResolveWorkspace(ws.Path)
+			if derr != nil {
+				devPrintf(cmd.ErrOrStderr(), "✗ workspace discovery: %v\n", derr)
+				continue
+			}
+			watched = workspaceWatchPaths(curWs)
 			cur := projectMtimes(watched)
 			if !mtimesChanged(snap, cur) {
 				continue
@@ -1469,9 +1540,20 @@ func devWatchLoop(ctx context.Context, cmd *cobra.Command, dir string, cfg *doma
 	}
 }
 
-// devWatchPaths lists the project files whose edits should trigger a reload.
-func devWatchPaths(dir string, cfg *domain.LeoflowConfig) []string {
-	return []string{projectConfigPath(dir), dagSourcePath(dir, cfg)}
+// workspaceWatchPaths returns the paths the mtime poller should track for a
+// given workspace: every project's leoflow.yaml (when present) and dag.py,
+// PLUS the workspace root itself so a new subdir appearing nudges the mtime
+// signal. Lite re-discovers projects on every reload, so a new subdir's files
+// will start being watched at the next tick after it's noticed.
+func workspaceWatchPaths(ws *WorkspaceSpec) []string {
+	if ws == nil {
+		return nil
+	}
+	paths := ws.WatchedPaths()
+	// Workspace root mtime catches "a new subdir was just created" before any
+	// of its files exist — fsnotify would be cleaner, but mtime-poll is the
+	// existing primitive.
+	return append(paths, ws.Path)
 }
 
 // devCompileAndRegister compiles the project (parser + overlay + guardrails),
@@ -1510,11 +1592,55 @@ func devCompileAndRegister(ctx context.Context, cmd *cobra.Command, dir string, 
 	return nil
 }
 
+// devCompileAndRegisterAll compiles + registers every project in the workspace.
+// Each project is processed independently — one bad DAG does not stop the
+// others — and per-project errors are reported through the Airflow import-
+// errors UI (keyed by the project's dag.py path) so the SPA banner names the
+// culprit. The pre-compile log line names the resolved config source for each
+// DAG (yaml path or "auto-defaults: <subdir>") so "which config did it use?"
+// is greppable.
+//
+// Returns nil when every project compiled OR when at least one succeeded
+// (transient single-DAG failures don't block the loop). Returns the last
+// error when ALL projects failed.
+func devCompileAndRegisterAll(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, baseOpts compileOptions, token string, afterCompile func() error, uiURL string) error {
+	if ws == nil || len(ws.Projects) == 0 {
+		devPrintf(cmd.OutOrStdout(), "▸ no DAGs in workspace %s — drop a `dag.py` into a subdirectory and save\n", ws.Path)
+		return nil
+	}
+	var lastErr error
+	successes := 0
+	for _, p := range ws.Projects {
+		cfgSource := p.ConfigPath
+		if cfgSource == "" {
+			cfgSource = "auto-defaults: " + filepath.Base(p.Path)
+		}
+		devPrintf(cmd.OutOrStdout(), "▸ compiling %q (config: %s)\n", p.DagID, cfgSource)
+		dagPyPath := filepath.Join(p.Path, p.Config.DagSource)
+		if err := devCompileAndRegister(ctx, cmd, p.Path, baseOpts, token, afterCompile, uiURL); err != nil {
+			devPrintf(cmd.ErrOrStderr(), "✗ %s: %v\n", p.DagID, err)
+			_ = reportImportError(ctx, uiURL, token, dagPyPath, err.Error()) //nolint:errcheck // best-effort UI hint; user already sees the terminal error
+			lastErr = err
+			continue
+		}
+		_ = clearImportError(ctx, uiURL, token, dagPyPath) //nolint:errcheck // best-effort: clears the banner on a good compile
+		successes++
+	}
+	if successes == 0 {
+		return lastErr
+	}
+	return nil
+}
+
 // devReportingReload wraps a reload so a failed compile is published to the
 // control plane as an import error — lighting the Airflow home's native "Import
 // Errors" banner so the failure is visible in the UI, not only the terminal — and
 // a good compile clears it. Reporting is best-effort and never masks the reload's
 // own result.
+//
+// Multi-DAG callers should use devCompileAndRegisterAll instead, which reports
+// import errors per-project. devReportingReload is the single-project path
+// (cluster mode for v1).
 func devReportingReload(ctx context.Context, reload func() error, serverURL, token, filename string) func() error {
 	return func() error {
 		if err := reload(); err != nil {

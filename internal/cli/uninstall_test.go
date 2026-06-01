@@ -42,7 +42,12 @@ func TestResolveLiteProjectRejectsNonProjectArg(t *testing.T) {
 
 	if _, err := resolveLiteProject(cmd, []string{"uninstall"}); err == nil {
 		t.Fatal("a non-project argument should error")
-	} else if !strings.Contains(err.Error(), "no Leoflow project") || !strings.Contains(err.Error(), "leoflow uninstall") {
+	} else if !strings.Contains(err.Error(), "workspace path") || !strings.Contains(err.Error(), "leoflow uninstall") {
+		// The error must name the typo (so the user sees what was misparsed)
+		// and hint at the actual `leoflow uninstall` command so they recover
+		// quickly. Post-Phase-3 wording shifted from "no Leoflow project" to
+		// "workspace path" since the canonical model is a workspace, not a
+		// single project.
 		t.Errorf("error should be actionable, got: %v", err)
 	}
 

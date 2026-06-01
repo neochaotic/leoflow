@@ -254,29 +254,61 @@ jobs:
           kill -TERM "$LITE_PID"
           wait "$LITE_PID" 2>/dev/null || true
 
-  # ── Release gate: if the install smoke OR the migrate-image build failed,
-  # retract the pre-release to a draft so `curl | sh` (which resolves the
-  # newest public release) and the Helm chart (which references the migrate
-  # image by tag) stop handing users a broken build. Runs always() so it can
-  # act on either failure; on success it leaves the published pre-release
+  # ── Upgrade-in-place smoke (#150): install the previous non-draft prerelease,
+  # then install THIS tag on top, asserting the new version is in place. Catches
+  # the install.sh bug class where a fresh box succeeds but layering over an
+  # existing ~/.leoflow/ breaks. The gate retracts the release to a draft on
+  # failure, same as install-smoke. Skipped automatically when there is no
+  # previous non-draft release to upgrade from (the first published tag).
+  upgrade-smoke:
+    name: Upgrade smoke (previous → ${{ github.ref_name }})
+    needs: release
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - name: Install prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq curl ca-certificates tar git
+          # gh CLI for release listing
+          mkdir -p /etc/apt/keyrings
+          chmod 755 /etc/apt/keyrings
+          out=$(mktemp) && curl -sL https://cli.github.com/packages/githubcli-archive-keyring.gpg > "$out" && cat "$out" > /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+          apt-get update -qq
+          apt-get install -y -qq gh
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run upgrade smoke
+        env:
+          LEOFLOW_REPO: ${{ github.repository }}
+          LEOFLOW_VERSION: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: sh test/release/upgrade-smoke.sh
+
+  # ── Release gate: if any of the smoke jobs OR the migrate-image build
+  # failed, retract the pre-release to a draft so `curl | sh` (which resolves
+  # the newest public release) and the Helm chart (which references the
+  # migrate image by tag) stop handing users a broken build. Runs always() so
+  # it can act on any failure; on success it leaves the published pre-release
   # untouched.
   gate:
-    name: Gate release on install + lite-cold-start + migrate image
-    needs: [release, install-smoke, lite-cold-start-smoke, migrate-image]
+    name: Gate release on install + lite-cold-start + upgrade + migrate image
+    needs: [release, install-smoke, lite-cold-start-smoke, upgrade-smoke, migrate-image]
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # Edit the published release back to a draft on failure.
     steps:
       - name: Retract release to draft on smoke or migrate-image failure
-        if: needs.install-smoke.result != 'success' || needs.lite-cold-start-smoke.result != 'success' || needs.migrate-image.result != 'success'
+        if: needs.install-smoke.result != 'success' || needs.lite-cold-start-smoke.result != 'success' || needs.upgrade-smoke.result != 'success' || needs.migrate-image.result != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} migrate-image=${{ needs.migrate-image.result }}; retracting ${GITHUB_REF_NAME} to a draft."
+          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} upgrade-smoke=${{ needs.upgrade-smoke.result }} migrate-image=${{ needs.migrate-image.result }}; retracting ${GITHUB_REF_NAME} to a draft."
           gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft
           exit 1
       - name: Confirm release passed all gates
-        if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.migrate-image.result == 'success'
-        run: echo "install smoke + lite cold-start + migrate-image passed; ${GITHUB_REF_NAME} stays published."
+        if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.upgrade-smoke.result == 'success' && needs.migrate-image.result == 'success'
+        run: echo "install smoke + lite cold-start + upgrade smoke + migrate-image passed; ${GITHUB_REF_NAME} stays published."

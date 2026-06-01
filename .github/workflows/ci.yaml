@@ -180,7 +180,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: Lite happy path (setup → login)
-        run: bash scripts/e2e-lite-login.sh
+        run: bash test/e2e/login.sh
 
   # ─────────────────────────────────────────────────────────────────────
   # TDD discipline check: every new exported function in production code

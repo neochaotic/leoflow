@@ -68,13 +68,16 @@ def test_run_logs_xcom_pulls_with_size(tmp_path, monkeypatch, capsys):
     assert "[leoflow] pulled summary (4 B)" in stdout, f"missing summary pull line:\n{stdout}"
 
 
-def test_run_emits_pre_and_post_lifecycle_groups(tmp_path, monkeypatch, capsys):
-    """Stdout MUST carry ::group::Pre task execution ... ::endgroup:: around
-    the runtime's setup lines (loading, kwargs), and a matching Post group
-    around the return summary. The Airflow 3.2 SPA log viewer renders these
-    markers as collapsible sections; without them the log panel mixes
-    framework noise with user output. User print() lands BETWEEN the two
-    groups so it stays visible by default.
+def test_run_emits_flat_lifecycle_lines(tmp_path, monkeypatch, capsys):
+    """The runtime MUST emit lifecycle lines as plain log lines, NOT wrapped in
+    ``::group::``/``::endgroup::`` markers.
+
+    The Airflow 3.2 SPA recognizes the markers but renders them as
+    <details open={hash-only}> elements whose controlled-component toggle does
+    not respond to clicks — so wrapping our lifecycle in groups made them
+    invisible by default with no reliable way to expand. This test pins the
+    flat layout (loading / kwargs / returned all visible by default) until the
+    SPA-side toggle bug is addressed.
     """
     out = tmp_path / "rv.json"
     monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
@@ -87,26 +90,20 @@ def test_run_emits_pre_and_post_lifecycle_groups(tmp_path, monkeypatch, capsys):
     runner.run(f"{mod}:task")
 
     stdout = capsys.readouterr().out
-    # The two group pairs MUST appear, in order, and the user print MUST land
-    # BETWEEN them (not inside either).
-    pre_open = stdout.find("::group::Pre task execution")
-    pre_close = stdout.find("::endgroup::", pre_open)
+    # No drill-down markers should be emitted.
+    assert "::group::" not in stdout, f"::group:: marker leaked into stdout:\n{stdout}"
+    assert "::endgroup::" not in stdout, f"::endgroup:: marker leaked into stdout:\n{stdout}"
+    # All three lifecycle lines and the user print MUST be present, in order.
+    loading = stdout.find("[leoflow] loading")
     user_line = stdout.find("USER_LINE_INSIDE_TASK")
-    post_open = stdout.find("::group::Post task execution", pre_close)
-    post_close = stdout.find("::endgroup::", post_open)
-
-    assert pre_open != -1, f"missing Pre group open in:\n{stdout}"
-    assert pre_close != -1, f"missing Pre group close in:\n{stdout}"
+    returned = stdout.find("[leoflow] returned")
+    assert loading != -1, f"missing loading line in:\n{stdout}"
     assert user_line != -1, f"missing user print in:\n{stdout}"
-    assert post_open != -1, f"missing Post group open in:\n{stdout}"
-    assert post_close != -1, f"missing Post group close in:\n{stdout}"
-    assert pre_open < pre_close < user_line < post_open < post_close, (
-        f"ordering wrong: Pre {pre_open}-{pre_close}, user {user_line}, "
-        f"Post {post_open}-{post_close} in:\n{stdout}"
+    assert returned != -1, f"missing returned line in:\n{stdout}"
+    assert loading < user_line < returned, (
+        f"ordering wrong: loading at {loading}, user at {user_line}, "
+        f"returned at {returned} in:\n{stdout}"
     )
-    # The runtime's lifecycle prefix MUST be present in both groups.
-    assert "[leoflow] loading" in stdout
-    assert "[leoflow] returned" in stdout
 
 
 def test_run_propagates_user_exception(tmp_path, monkeypatch):

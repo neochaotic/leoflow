@@ -22,21 +22,17 @@ def _lifecycle(msg: str) -> None:
     print(f"{_LIFECYCLE_PREFIX} {msg}", flush=True)
 
 
-def _group_start(title: str) -> None:
-    """Open a collapsible log group in the Airflow 3.2 SPA log viewer.
-
-    The SPA renders ``::group::TITLE`` and ``::endgroup::`` markers as
-    expandable sections in the log panel, matching Airflow's own
-    Pre/Post-task execution grouping. We wrap our lifecycle lines so a
-    real task's log isn't dominated by setup noise — the user's print()
-    output stays out of any group, visible by default.
-    """
-    print(f"::group::{title}", flush=True)
-
-
-def _group_end() -> None:
-    """Close the most recently opened log group."""
-    print("::endgroup::", flush=True)
+# NOTE: an earlier iteration wrapped the runtime lifecycle in
+# ``::group::Pre task execution`` / ``::group::Post task execution`` markers
+# the Airflow 3.2 SPA's log viewer recognizes as drill-down sections. In
+# practice the SPA renders our markers as <details open={hash-only}> elements
+# that default to COLLAPSED (no hash → open=false) and the controlled-component
+# toggle does not respond to clicks, so users could not expand the groups to
+# see their print() / lifecycle output. The net effect was the OPPOSITE of the
+# intent: lifecycle info was hidden by default with no reliable way to reveal
+# it. Until the SPA-side toggle bug is addressed, we emit lifecycle lines flat
+# — Airflow's standard "no groups → everything visible" layout. The Pre/Post
+# drill-down can be reintroduced once the SPA renders them correctly.
 
 DEFAULT_RETURN_VALUE_PATH = "/tmp/leoflow_return_value.json"  # noqa: S108
 
@@ -123,10 +119,6 @@ def run(entrypoint: str) -> None:
     if not sep or not module_name or not fn_name:
         raise ValueError(f"entrypoint must be 'module:callable', got {entrypoint!r}")
 
-    # Pre task execution group: setup that happens BEFORE the user function
-    # runs. Collapsed by default in the UI so the user's print() output is the
-    # focus; expand to see what the runtime did to prepare.
-    _group_start("Pre task execution")
     _lifecycle(f"loading {entrypoint}")
     module = importlib.import_module(module_name)
     fn = getattr(module, fn_name)
@@ -139,32 +131,21 @@ def run(entrypoint: str) -> None:
     kwargs = _resolve_kwargs(fn)
     if kwargs:
         _lifecycle(f"resolved kwargs: {kwargs}")
-    _group_end()
 
     try:
         result = fn(**kwargs)
     except Exception as exc:  # noqa: BLE001 — surface user errors to the log
-        # Wrap the failure summary + traceback in a Post group too — same
-        # collapse semantics, makes the panel scannable even on failure.
-        _group_start("Post task execution")
         _lifecycle(f"user function {fn_name} raised {type(exc).__name__}: {exc}")
         # Stdout is line-buffered or `-u` unbuffered; flush stderr too so the
         # ordering in the log panel matches the wall-clock order.
         sys.stdout.flush()
         sys.stderr.flush()
         # Re-raise so Python's default handler emits the traceback to stderr —
-        # the agent captures it. The Post group stays open across the
-        # traceback so it's all one collapsible block; the group is closed
-        # only on success (below) since on failure the process exits and the
-        # UI auto-closes any open group at end-of-stream.
+        # the agent captures it.
         raise
 
-    # Post task execution group: wraps the return-value handling so the user's
-    # output ends cleanly, then the lifecycle epilogue is collapsible.
-    _group_start("Post task execution")
     if result is None:
         _lifecycle("returned None (no XCom pushed)")
-        _group_end()
         return
     # Mention the type + payload size so the user can confirm the right value
     # is leaving the task without dumping huge return values into the log.
@@ -172,4 +153,3 @@ def run(entrypoint: str) -> None:
     _lifecycle(f"returned {type(result).__name__} ({len(payload)} B XCom)")
     with open(return_value_path(), "w", encoding="utf-8") as f:
         f.write(payload)
-    _group_end()

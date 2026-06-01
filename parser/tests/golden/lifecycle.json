@@ -20,7 +20,9 @@
       "task_id": "load",
       "type": "python",
       "xcom_input": {
-        "result": "transform"
+        "result": [
+          "transform"
+        ]
       }
     },
     {
@@ -31,7 +33,9 @@
       "task_id": "transform",
       "type": "python",
       "xcom_input": {
-        "data": "extract"
+        "data": [
+          "extract"
+        ]
       }
     }
   ]

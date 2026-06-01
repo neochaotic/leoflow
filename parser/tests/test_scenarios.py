@@ -81,7 +81,13 @@ def test_duplicate_task_id_is_suffixed(tmp_path):
     assert {t["task_id"] for t in spec["tasks"]} == {"w", "w__1", "w__2"}
 
 
-def test_fan_in_list_adds_all_upstream(tmp_path):
+def test_fan_in_list_captures_all_upstream_in_xcom_input(tmp_path):
+    """Fan-in: `combine([part() for _ in range(3)])` binds a list of upstream
+    XCom outputs to `combine.xs`. The parser MUST capture every upstream in
+    xcom_input so the agent fetches each value and the runtime delivers the
+    list to the function. (Single-upstream params still emit a 1-element list,
+    keeping the schema uniform.)
+    """
     spec = _compile(tmp_path, """
         from airflow.sdk import DAG, task
         @task
@@ -91,7 +97,9 @@ def test_fan_in_list_adds_all_upstream(tmp_path):
         with DAG("g"):
             combine([part() for _ in range(3)])
     """)
-    assert _task(spec, "combine")["depends_on"] == ["part", "part__1", "part__2"]
+    combine_task = _task(spec, "combine")
+    assert combine_task["depends_on"] == ["part", "part__1", "part__2"]
+    assert combine_task["xcom_input"] == {"xs": ["part", "part__1", "part__2"]}
 
 
 def test_dag_id_selection_with_multiple_dags(tmp_path):

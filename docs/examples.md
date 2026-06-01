@@ -15,8 +15,9 @@ leoflow lite examples/<name>      # hot-reload at http://localhost:8088, then Tr
 |---|---|---|---|
 | `taskflow_sales` | TaskFlow ETL, data via XCom | python | — |
 | `xcom_typed` | typed XCom payloads + validation | python | — |
-| `fan_out_aggregate` | fan-out to parallel pods → fan-in | python | — |
-| `montecarlo_pi` | parallel compute (estimate π) | python | — |
+| `ml_hparam_search` | **map-reduce** ML pattern: parallel trials → pick best | python | — |
+| `fan_out_aggregate` | fan-out to N shards → fan-in aggregate (map-reduce) | python | — |
+| `montecarlo_pi` | parallel π estimate (Monte Carlo map-reduce) | python | — |
 | `http_jsonplaceholder` | call a public JSON API | python | requests |
 | `weather_open_meteo` | public weather API (no key) | python | requests |
 | `api_chain` | chain two API calls | python | requests |

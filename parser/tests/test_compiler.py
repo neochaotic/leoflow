@@ -41,7 +41,9 @@ def test_simple_linear(tmp_path, dag_schema):
     assert tasks["load"]["depends_on"] == ["extract"]
     # load(extract()) binds load's 'value' param to extract's output (TaskFlow
     # value passing) — the parser must record it so the agent injects the XCom.
-    assert tasks["load"]["xcom_input"] == {"value": "extract"}
+    # Single-upstream still emits a 1-element list (uniform schema; fan-in is
+    # `{param: [a, b, c]}`, single is `{param: [a]}`).
+    assert tasks["load"]["xcom_input"] == {"value": ["extract"]}
     assert "xcom_input" not in tasks["extract"]
 
 

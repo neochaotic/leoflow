@@ -61,7 +61,7 @@ func TestToTaskInstanceDTO(t *testing.T) {
 func TestRenderedFieldsFor(t *testing.T) {
 	spec := domain.DAGSpec{Tasks: []domain.TaskSpec{
 		{TaskID: "transform", Type: domain.TaskTypePython, Entrypoint: "dag:transform",
-			XComInput: map[string]string{"data": "extract"}},
+			XComInput: map[string][]string{"data": {"extract"}}},
 	}}
 	got := string(renderedFieldsFor(spec, "transform"))
 	if !strings.Contains(got, `"entrypoint":"dag:transform"`) || !strings.Contains(got, `"xcom_input"`) {

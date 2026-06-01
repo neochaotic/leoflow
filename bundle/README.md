@@ -38,9 +38,10 @@ host (SSH, VM, container) expose the UI with `leoflow lite --host 0.0.0.0`.
 | `recurring_print` | `*/3 * * * *` | scheduler tick loop, dispatch happy path |
 | `recurring_parallel` | `*/5 * * * *` | parallel fan-out under steady load |
 | `lifecycle` | manual | 3-task ETL with XCom |
-| `montecarlo_pi` | manual | parallel + XCom aggregation |
-| `fan_out_aggregate` | manual | fan-out + collect |
 | `taskflow_sales` | manual | TaskFlow patterns |
+| `ml_hparam_search` | manual | **Map-reduce for ML** — parallel hyperparameter search ➜ pick best |
+| `fan_out_aggregate` | manual | map-reduce — fan-out + aggregate |
+| `montecarlo_pi` | manual | map-reduce — parallel Monte Carlo π |
 
 Connector DAGs (postgres / mysql / mssql / sqlite / redis / http) are NOT
 bundled by default — they need a Connection set up first via the UI
@@ -68,8 +69,8 @@ Specifically:
 - Does parallelism actually parallelise? Look at `recurring_parallel`'s
   task durations: the 4 workers should finish within ~7 s of each other
   (max sleep is 6 s), NOT take 18 s in sequence.
-- Trigger `lifecycle` / `montecarlo_pi` / `fan_out_aggregate` from the UI.
-  Logs visible? Status transitions correct? XCom values flow?
+- Trigger `lifecycle` from the UI. Logs visible? Status transitions correct?
+  XCom values flow between the 3 tasks?
 - Try to break it — restart the host mid-run; kill the leoflow process
   with `pkill -9 leoflow`; pull the network briefly. Recovery contract is
   in `docs/scheduler-resilience.md`.

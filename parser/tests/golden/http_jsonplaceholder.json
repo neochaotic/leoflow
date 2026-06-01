@@ -20,7 +20,9 @@
       "task_id": "summarize",
       "type": "python",
       "xcom_input": {
-        "posts": "fetch"
+        "posts": [
+          "fetch"
+        ]
       }
     }
   ]

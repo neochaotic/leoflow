@@ -96,22 +96,22 @@ type DefaultArgs struct {
 
 // TaskSpec describes a single unit of work within a DAG.
 type TaskSpec struct {
-	TaskID                  string            `json:"task_id"`
-	Type                    TaskType          `json:"type"`
-	DependsOn               []string          `json:"depends_on,omitempty"`
-	TriggerRule             TriggerRule       `json:"trigger_rule,omitempty"`
-	Retries                 *int              `json:"retries,omitempty"`
-	RetryDelaySeconds       *int              `json:"retry_delay_seconds,omitempty"`
-	ExecutionTimeoutSeconds *int              `json:"execution_timeout_seconds,omitempty"`
-	ExecutionMode           ExecutionMode     `json:"execution_mode,omitempty"`
-	Entrypoint              string            `json:"entrypoint,omitempty"`
-	HTTPRequest             *HTTPRequest      `json:"http_request,omitempty"`
-	Env                     map[string]string `json:"env,omitempty"`
-	Secrets                 []Secret          `json:"secrets,omitempty"`
-	Resources               *Resources        `json:"resources,omitempty"`
-	Execution               *Execution        `json:"execution,omitempty"`
-	XComInput               map[string]string `json:"xcom_input,omitempty"`
-	XComSchema              map[string]any    `json:"xcom_schema,omitempty"`
+	TaskID                  string              `json:"task_id"`
+	Type                    TaskType            `json:"type"`
+	DependsOn               []string            `json:"depends_on,omitempty"`
+	TriggerRule             TriggerRule         `json:"trigger_rule,omitempty"`
+	Retries                 *int                `json:"retries,omitempty"`
+	RetryDelaySeconds       *int                `json:"retry_delay_seconds,omitempty"`
+	ExecutionTimeoutSeconds *int                `json:"execution_timeout_seconds,omitempty"`
+	ExecutionMode           ExecutionMode       `json:"execution_mode,omitempty"`
+	Entrypoint              string              `json:"entrypoint,omitempty"`
+	HTTPRequest             *HTTPRequest        `json:"http_request,omitempty"`
+	Env                     map[string]string   `json:"env,omitempty"`
+	Secrets                 []Secret            `json:"secrets,omitempty"`
+	Resources               *Resources          `json:"resources,omitempty"`
+	Execution               *Execution          `json:"execution,omitempty"`
+	XComInput               map[string][]string `json:"xcom_input,omitempty"`
+	XComSchema              map[string]any      `json:"xcom_schema,omitempty"`
 	// CallArgs carries TaskFlow literal call arguments captured at compile time
 	// (#115). The agent serializes the whole map as a single env var
 	// LEOFLOW_CALL_ARGS_JSON; the runtime decodes and delivers each value to

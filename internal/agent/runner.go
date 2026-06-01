@@ -92,21 +92,38 @@ func (r *Runner) register(ctx context.Context) error {
 
 func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string, error) {
 	var xcom []string
-	for param, upstream := range spec.GetXcomInputMapping() {
-		resp, err := r.Client.FetchXCom(ctx, &agentv1.FetchXComRequest{
-			UpstreamTaskId: upstream,
-			Key:            "return_value",
-		})
-		if status.Code(err) == codes.NotFound {
-			// Airflow semantics: a missing XCom resolves to None, so skip the
-			// input rather than failing the task.
-			slog.Debug("declared xcom input is absent; leaving it unset", "param", param, "upstream", upstream)
+	for param, upstreams := range spec.GetXcomInputMapping() {
+		taskIDs := upstreams.GetTaskIds()
+		switch len(taskIDs) {
+		case 0:
+			// Empty upstream list — parser invariant prevents this, but guard anyway.
 			continue
+		case 1:
+			// Single upstream: deliver the raw return_value JSON as-is, so a task
+			// declaring `def f(x: dict)` receives the upstream's dict (not a
+			// 1-element list wrapping it). Matches Airflow's TaskFlow semantics.
+			resp, err := r.Client.FetchXCom(ctx, &agentv1.FetchXComRequest{
+				UpstreamTaskId: taskIDs[0],
+				Key:            "return_value",
+			})
+			if status.Code(err) == codes.NotFound {
+				slog.Debug("declared xcom input is absent; leaving it unset", "param", param, "upstream", taskIDs[0])
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("fetching xcom %q from %q: %w", param, taskIDs[0], err)
+			}
+			xcom = append(xcom, XComEnvVar(param, resp.GetValue()))
+		default:
+			// Fan-in: each upstream's return_value becomes one element of a JSON
+			// array, in declaration order. An absent upstream contributes `null`
+			// so the function still receives len(upstreams) elements.
+			collected, err := fetchFanInValues(ctx, r.Client, param, taskIDs)
+			if err != nil {
+				return nil, err
+			}
+			xcom = append(xcom, XComEnvVar(param, collected))
 		}
-		if err != nil {
-			return nil, fmt.Errorf("fetching xcom %q from %q: %w", param, upstream, err)
-		}
-		xcom = append(xcom, XComEnvVar(param, resp.GetValue()))
 	}
 	env := mergeEnv(r.Env, spec.GetEnvironment(), xcom)
 	// Force-unbuffered Python and explicit UTF-8 for every spawned subprocess
@@ -154,6 +171,40 @@ func (r *Runner) secretsEnv(ctx context.Context) []string {
 		}
 	}
 	return out
+}
+
+// fetchFanInValues fetches each upstream's return_value and assembles them into
+// a JSON array, in declaration order. Each element is the raw JSON of that
+// upstream's return value, or `null` if the upstream produced no XCom (Airflow
+// semantics: missing XCom is None). The function the runtime calls receives
+// this as `list[T]` — len(upstreams) elements, never fewer.
+func fetchFanInValues(ctx context.Context, client agentv1.AgentServiceClient, param string, upstreams []string) ([]byte, error) {
+	pieces := make([][]byte, 0, len(upstreams))
+	for _, upstream := range upstreams {
+		resp, err := client.FetchXCom(ctx, &agentv1.FetchXComRequest{
+			UpstreamTaskId: upstream,
+			Key:            "return_value",
+		})
+		if status.Code(err) == codes.NotFound {
+			pieces = append(pieces, []byte("null"))
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("fan-in: fetching xcom %q from %q: %w", param, upstream, err)
+		}
+		// Each upstream's payload is already JSON; concat with commas inside `[…]`.
+		pieces = append(pieces, resp.GetValue())
+	}
+	var b []byte
+	b = append(b, '[')
+	for i, p := range pieces {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = append(b, p...)
+	}
+	b = append(b, ']')
+	return b, nil
 }
 
 func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.Duration) error {

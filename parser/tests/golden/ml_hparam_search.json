@@ -1,0 +1,74 @@
+{
+  "dag_id": "ml_hparam_search",
+  "dag_version": "v1",
+  "owner": "examples",
+  "schema_version": "1.0",
+  "tags": [
+    "example",
+    "ml",
+    "map-reduce"
+  ],
+  "tasks": [
+    {
+      "depends_on": [
+        "trial",
+        "trial__1",
+        "trial__2",
+        "trial__3",
+        "trial__4"
+      ],
+      "entrypoint": "dag:select_best",
+      "task_id": "select_best",
+      "type": "python",
+      "xcom_input": {
+        "trials": [
+          "trial",
+          "trial__1",
+          "trial__2",
+          "trial__3",
+          "trial__4"
+        ]
+      }
+    },
+    {
+      "call_args": {
+        "lr": 0.001
+      },
+      "entrypoint": "dag:trial",
+      "task_id": "trial",
+      "type": "python"
+    },
+    {
+      "call_args": {
+        "lr": 0.01
+      },
+      "entrypoint": "dag:trial",
+      "task_id": "trial__1",
+      "type": "python"
+    },
+    {
+      "call_args": {
+        "lr": 0.05
+      },
+      "entrypoint": "dag:trial",
+      "task_id": "trial__2",
+      "type": "python"
+    },
+    {
+      "call_args": {
+        "lr": 0.1
+      },
+      "entrypoint": "dag:trial",
+      "task_id": "trial__3",
+      "type": "python"
+    },
+    {
+      "call_args": {
+        "lr": 0.5
+      },
+      "entrypoint": "dag:trial",
+      "task_id": "trial__4",
+      "type": "python"
+    }
+  ]
+}

@@ -123,3 +123,31 @@ func TestTISummariesConditionalGET(t *testing.T) {
 		t.Errorf("matching If-None-Match = %d, want 304", rec.Code)
 	}
 }
+
+// TestTISummariesETagInvalidatesOnStateChange pins #289: the mark-state PATCH
+// flips a finished task's state but leaves its StartedAt/EndedAt timestamps
+// untouched. The original ETag formula (count + max(started, ended)) was
+// therefore identical before and after the mutation, so the grid view kept
+// receiving 304 with no body and the SPA showed the OLD state until a manual
+// reload. The ETag must include a fingerprint of the per-task states so any
+// state change invalidates it.
+func TestTISummariesETagInvalidatesOnStateChange(t *testing.T) {
+	// Same TI fixture but with a different state — only the state field
+	// changes between the two reads.
+	started := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	ended := time.Date(2026, 6, 1, 10, 0, 5, 0, time.UTC)
+	before := &fakeTaskSummary{tis: []domain.TaskInstance{
+		{RunID: "r1", TaskID: "x", State: domain.TaskStateSuccess, StartedAt: &started, EndedAt: &ended, TryNumber: 1},
+	}}
+	after := &fakeTaskSummary{tis: []domain.TaskInstance{
+		{RunID: "r1", TaskID: "x", State: domain.TaskStateFailed, StartedAt: &started, EndedAt: &ended, TryNumber: 1},
+	}}
+	etagBefore := authGet(summariesServer(before), http.MethodGet, "/ui/grid/ti_summaries/etl?run_ids=r1", "").Header().Get("ETag")
+	etagAfter := authGet(summariesServer(after), http.MethodGet, "/ui/grid/ti_summaries/etl?run_ids=r1", "").Header().Get("ETag")
+	if etagBefore == "" || etagAfter == "" {
+		t.Fatalf("missing ETag (before=%q after=%q)", etagBefore, etagAfter)
+	}
+	if etagBefore == etagAfter {
+		t.Errorf("ETag must differ when a TI's state changes (timestamps unchanged); both = %q — grid keeps stale data (#289)", etagBefore)
+	}
+}

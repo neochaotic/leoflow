@@ -1538,7 +1538,15 @@ func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, re
 			}
 			snap = cur
 			devPrintf(cmd.OutOrStdout(), "[%s] change detected → reloading …\n", time.Now().Format("15:04:05"))
-			if rerr := reload(); rerr != nil {
+			// Time the reload — a broken DAG's reload should still finish in
+			// ~1s. Anything multi-second is a red flag (parser hang, lock
+			// contention with the running control plane, slow registration
+			// retry). Log it so the user can grep for slow reloads when they
+			// notice the UI freezing on save (#217 diagnostic).
+			reloadStart := time.Now()
+			rerr := reload()
+			devPrintf(cmd.OutOrStdout(), "[%s] reload finished in %s\n", time.Now().Format("15:04:05"), time.Since(reloadStart).Truncate(time.Millisecond))
+			if rerr != nil {
 				devPrintf(cmd.ErrOrStderr(), "✗ %v\n", rerr)
 			}
 		}

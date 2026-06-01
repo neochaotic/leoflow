@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -148,6 +150,12 @@ func strPtrOrNil(s string) *string {
 // runs query), never per-DAG.
 func uiDagsHandler(dags DagRepository, latest DagLatestRunsReader, favorites FavoriteStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// #217 diagnostic: the SPA polls this every 1s on Lite and reportedly
+		// freezes when a DAG breaks. If a single slow ListDagsFiltered or
+		// LatestRunsForDags lights up here while the watcher is reloading the
+		// workspace, that's the contention point. Two timings: per-query +
+		// total. Grep the log for "duration_ms" outliers.
+		t0 := time.Now()
 		limit, offset := pagination(c)
 		tenant := tenantOf(c)
 		ds, total, err := dags.ListDagsFiltered(c.Request.Context(), tenant,
@@ -156,6 +164,7 @@ func uiDagsHandler(dags DagRepository, latest DagLatestRunsReader, favorites Fav
 			handleRepoError(c, err)
 			return
 		}
+		listMs := time.Since(t0).Milliseconds()
 		runsLimit := defaultDagRunsLimit
 		if n, perr := strconv.Atoi(c.Query("dag_runs_limit")); perr == nil && n > 0 {
 			runsLimit = n
@@ -164,11 +173,16 @@ func uiDagsHandler(dags DagRepository, latest DagLatestRunsReader, favorites Fav
 		for i, d := range ds {
 			ids[i] = d.DagID
 		}
+		t1 := time.Now()
 		runsByDag, err := latest.LatestRunsForDags(c.Request.Context(), tenant, ids, runsLimit)
 		if err != nil {
 			handleRepoError(c, err)
 			return
 		}
+		runsMs := time.Since(t1).Milliseconds()
+		slog.Info("/ui/dags",
+			"tenant", tenant, "total", total, "list_ms", listMs, "runs_ms", runsMs,
+			"total_ms", time.Since(t0).Milliseconds())
 		// Resolve the user's favorites once so each DAG can report is_favorite (the
 		// star). Best-effort: a lookup failure just leaves every star unset.
 		var favs map[string]bool

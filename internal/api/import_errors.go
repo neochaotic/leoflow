@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"hash/crc32"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -56,11 +57,19 @@ type importErrorBody struct {
 
 func listImportErrorsHandler(store ImportErrorStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Trace timing: a save in the workspace lights up the SPA's
+		// import-error banner; if this read becomes slow when DAGs break,
+		// it shows up in the log next to /ui/dashboard/dag_stats so the
+		// freeze pattern (#217) is greppable: "slow handler + concurrent
+		// watcher reload" is the signature we are looking for.
+		start := time.Now()
 		errs, err := store.ListImportErrors(c.Request.Context(), tenantOf(c))
 		if err != nil {
 			handleRepoError(c, err)
 			return
 		}
+		slog.Info("/api/v2/importErrors GET",
+			"tenant", tenantOf(c), "count", len(errs), "duration_ms", time.Since(start).Milliseconds())
 		out := importErrorCollectionDTO{ImportErrors: make([]importErrorDTO, 0, len(errs)), TotalEntries: len(errs)}
 		for _, e := range errs {
 			out.ImportErrors = append(out.ImportErrors, toImportErrorDTO(e))

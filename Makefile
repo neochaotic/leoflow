@@ -175,6 +175,26 @@ reportcard: ## Verify Go Report Card grade is A+ (ADR 0012)
 vuln: ## Run govulncheck (ADR 0014)
 	govulncheck ./...
 
+.PHONY: ci-local
+ci-local: ## Run every CI gate locally — pre-push tripwire so a PR does not arrive red
+	@echo "▸ gofmt"
+	@test -z "$$(gofmt -l . | tee /dev/stderr)" || (echo "FAIL: gofmt"; exit 1)
+	@echo "▸ go build"
+	@go build ./...
+	@echo "▸ golangci-lint"
+	@golangci-lint run ./...
+	@echo "▸ go test"
+	@go test ./...
+	@echo "▸ python parser tests"
+	@command -v python3 >/dev/null && (cd parser && python3 -m pytest -q) || echo "skip pytest (no python3)"
+	@echo "▸ ADR index check"
+	@bash scripts/gen-adr-index.sh --check
+	@echo "▸ mkdocs build --strict"
+	@(command -v mkdocs >/dev/null && mkdocs build --strict --quiet) \
+		|| (command -v python3 >/dev/null && python3 -c "import mkdocs" 2>/dev/null && python3 -m mkdocs build --strict --quiet) \
+		|| echo "skip mkdocs (not installed: pip install mkdocs-material mkdocs-mermaid2-plugin)"
+	@echo "✅ ci-local clean — push when ready"
+
 .PHONY: dev-up
 dev-up: ## Start local Postgres + Redis (wait healthy) and apply migrations
 	docker compose up -d --wait

@@ -194,6 +194,12 @@ jobs:
   e2e-lite-multidag:
     name: E2E Lite (multi-DAG materialization gate)
     runs-on: ubuntu-latest
+    env:
+      # The script runs `leoflow compile`, which spawns the parser via
+      # `python3 -m leoflow_parser`. The repo ships the parser source under
+      # parser/leoflow_parser; export PYTHONPATH so the import resolves on a
+      # bare runner (no pip install, no venv, no extra setup-python action).
+      PYTHONPATH: parser
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5

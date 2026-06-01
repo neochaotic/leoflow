@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Lima alpha bundle installer.
+# Leoflow Lite bundle installer.
 #
-# One-shot installer for the Leoflow Lite hands-on validation on a Lima VM
-# (or any clean Linux box). Downloads the latest prealpha binary, runs
+# One-shot installer for the Leoflow Lite hands-on validation flow. Downloads
+# the latest pre-release binary (via the canonical install.sh), runs `leoflow setup`
 # `leoflow setup` (which generates the admin password — printed in CYAN on
 # the terminal, save it), drops the curated DAG bundle into the workspace,
 # and prints the next-step commands.
 #
-# Usage on the Lima VM:
-#   curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/lima-bundle/install.sh | bash
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/bundle/install.sh | bash
 # or, if you cloned the repo:
-#   bash lima-bundle/install.sh
+#   bash bundle/install.sh
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ else
   CYAN=''; YELLOW=''; GREEN=''; BOLD=''; RESET=''
 fi
 
-echo "${BOLD}Leoflow Lima alpha bundle installer${RESET}"
+echo "${BOLD}Leoflow Lite bundle installer${RESET}"
 echo
 
 # ─── 1. Detect OS / arch ────────────────────────────────────────────────────
@@ -33,12 +33,12 @@ case "$ARCH" in
   *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
-  echo "unsupported OS: $OS (Lima alpha targets linux; macOS works for spot-checks)" >&2
+  echo "unsupported OS: $OS (Lite targets linux; macOS works for spot-checks)" >&2
   exit 1
 fi
 
 # ─── 2. Resolve the source dir for the DAGs ─────────────────────────────────
-# When this script is run via `bash lima-bundle/install.sh` from a checkout,
+# When this script is run via `bash bundle/install.sh` from a checkout,
 # the DAGs sit next to it. When piped from curl, we re-fetch them from the
 # same repo+commit the script came from (BUNDLE_REPO + BUNDLE_REF defaults
 # below; override via env if you're testing a branch).
@@ -54,10 +54,10 @@ else
   echo "Fetching DAG bundle from github.com/${BUNDLE_REPO}@${BUNDLE_REF}..."
   curl -fsSL "https://codeload.github.com/${BUNDLE_REPO}/tar.gz/${BUNDLE_REF}" \
     | tar -xz -C "$TMPDIR" --strip-components=1 \
-    "$(basename "$BUNDLE_REPO")-${BUNDLE_REF}/lima-bundle/dags" \
+    "$(basename "$BUNDLE_REPO")-${BUNDLE_REF}/bundle/dags" \
     "$(basename "$BUNDLE_REPO")-${BUNDLE_REF}/examples" 2>/dev/null \
     || { echo "could not fetch DAG bundle"; exit 1; }
-  DAG_SOURCE="$TMPDIR/lima-bundle/dags"
+  DAG_SOURCE="$TMPDIR/bundle/dags"
   EXAMPLES_SOURCE="$TMPDIR/examples"
 fi
 
@@ -66,7 +66,7 @@ fi
 # smoked installer. This wrapper used to re-implement the release resolution
 # inline and shipped the bug "404 on /releases/latest when every release is a
 # pre-release" (2026-06-01). Calling install.sh keeps one source of truth so a
-# future fix benefits both `curl … install.sh | sh` and this Lima bundle path.
+# future fix benefits both `curl … install.sh | sh` and this bundle path.
 echo
 echo "${BOLD}1. Installing leoflow binary${RESET}"
 INSTALL_SH_URL="https://raw.githubusercontent.com/${BUNDLE_REPO}/${BUNDLE_REF}/install.sh"
@@ -105,7 +105,7 @@ mkdir -p "$WORKSPACE"
 echo
 echo "${BOLD}3. Copying the DAG bundle into ${WORKSPACE}${RESET}"
 cp -R "$DAG_SOURCE/." "$WORKSPACE/"
-echo "  Lima-bundle DAGs ($(ls "$DAG_SOURCE" | wc -l | tr -d ' ')) copied"
+echo "  bundled DAGs ($(ls "$DAG_SOURCE" | wc -l | tr -d ' ')) copied"
 
 # Curate a useful subset of /examples too. Skip the connector DAGs that
 # need external services pre-configured (the user can copy those by hand
@@ -144,4 +144,4 @@ echo "${BOLD}Start Leoflow Lite:${RESET}"
 echo "  ${CYAN}leoflow lite${RESET}"
 echo
 echo "  (then open http://localhost:8088 — or from your Mac host:"
-echo "   http://<lima-vm-ip>:8088 with Lima port-forwarding configured)"
+echo "   http://<host-ip>:8088 (use `leoflow lite --host 0.0.0.0`))"

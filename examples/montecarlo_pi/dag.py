@@ -18,11 +18,14 @@ def estimate(seed: int) -> dict:
 
 
 @task
-def combine(parts: list[dict]) -> None:
+def combine(parts: list[dict]) -> dict:
     inside = sum(p["inside"] for p in parts)
     total = sum(p["total"] for p in parts)
     pi = 4 * inside / total
     print(f"combine: {len(parts)} workers, {total:,} samples -> pi ≈ {pi:.5f}")
+    # Return the estimate so it lands in XCom (the UI's XCom tab is where the
+    # user expects to see the headline number; returning None hides it).
+    return {"workers": len(parts), "samples": total, "pi": pi}
 
 
 with DAG("montecarlo_pi", schedule=None, catchup=False, tags=["example"]):

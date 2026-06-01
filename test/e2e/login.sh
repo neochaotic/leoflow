@@ -4,7 +4,7 @@
 # provisions actually works, and that a wrong password is rejected.
 #
 # Requires a local Postgres + Redis (docker-compose.dev.yaml). DESTRUCTIVE: it
-# resets the leoflow_dev database. Run from the repo root:  bash scripts/e2e-lite-login.sh
+# resets the leoflow_dev database. Run from the repo root:  bash test/e2e/login.sh
 set -euo pipefail
 
 PORT=18099

@@ -73,6 +73,52 @@ type DefaultResources struct {
 	Memory string `json:"memory,omitempty" yaml:"memory,omitempty"`
 }
 
+// ApplyDefaults fills zero-valued fields with the defaults declared in the
+// canonical JSON Schema (internal/domain/schemas/leoflow-yaml-schema.json).
+// Explicit user-set values are preserved; nested structs (Build, Registry)
+// are instantiated when nil so their own defaults can be applied. The method
+// is idempotent: a second call after the first is a no-op.
+//
+// Centralizing defaults here (instead of scattered `if x == ""` fallbacks at
+// each consumer) is what lets the multi-DAG workspace synthesize a working
+// config when a subdir ships no leoflow.yaml, while keeping the resolved
+// values debuggable from one place.
+func (c *LeoflowConfig) ApplyDefaults() {
+	if c.SchemaVersion == "" {
+		c.SchemaVersion = "1.0"
+	}
+	if c.PythonVersion == "" {
+		c.PythonVersion = "3.11"
+	}
+	if c.DagSource == "" {
+		c.DagSource = "dag.py"
+	}
+	if c.IncludePaths == nil {
+		c.IncludePaths = []string{"."}
+	}
+	if c.ExcludePaths == nil {
+		c.ExcludePaths = []string{".git", "__pycache__", "*.pyc", ".venv", "venv"}
+	}
+	if c.Build == nil {
+		c.Build = &BuildConfig{}
+	}
+	if c.Build.Context == "" {
+		c.Build.Context = "."
+	}
+	if c.Build.Platforms == nil {
+		c.Build.Platforms = []string{"linux/amd64"}
+	}
+	if c.Registry == nil {
+		c.Registry = &RegistryConfig{}
+	}
+	if c.Registry.AuthMethod == "" {
+		c.Registry.AuthMethod = "docker_config"
+	}
+	if c.Registry.TagStrategy == "" {
+		c.Registry.TagStrategy = "version"
+	}
+}
+
 // Validate checks the LeoflowConfig against the canonical leoflow.yaml schema
 // and returns a joined error describing every violation, or nil when valid.
 func (c *LeoflowConfig) Validate() error {

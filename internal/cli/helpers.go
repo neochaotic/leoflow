@@ -17,7 +17,11 @@ func projectConfigPath(dir string) string {
 	return filepath.Join(dir, "leoflow.yaml")
 }
 
-// loadProjectConfig reads and parses the leoflow.yaml in dir.
+// loadProjectConfig reads and parses the leoflow.yaml in dir, then applies the
+// canonical schema defaults so every downstream consumer sees a fully-populated
+// config (DagSource, PythonVersion, exclude paths, Build/Registry defaults).
+// Centralizing the defaults here is what lets the multi-DAG workspace synthesize
+// a working config from a sparse yaml (or none at all — see DiscoverProjects).
 func loadProjectConfig(dir string) (*domain.LeoflowConfig, error) {
 	p := projectConfigPath(dir)
 	data, err := os.ReadFile(p) //nolint:gosec // G304: project path is supplied by the operator on the CLI.
@@ -28,16 +32,15 @@ func loadProjectConfig(dir string) (*domain.LeoflowConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", p, err)
 	}
+	cfg.ApplyDefaults()
 	return &cfg, nil
 }
 
-// dagSourcePath resolves the DAG source file for a project, defaulting to dag.py.
+// dagSourcePath resolves the DAG source file for a project. The caller is
+// expected to have applied schema defaults (cfg.ApplyDefaults), so cfg.DagSource
+// is always populated — loadProjectConfig does this automatically.
 func dagSourcePath(dir string, cfg *domain.LeoflowConfig) string {
-	src := cfg.DagSource
-	if src == "" {
-		src = "dag.py"
-	}
-	return filepath.Join(dir, src)
+	return filepath.Join(dir, cfg.DagSource)
 }
 
 // configFilePath returns the config file to load: the --config flag when set,

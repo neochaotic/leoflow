@@ -11,6 +11,64 @@ dags/my_pipeline/
 
 Scaffold one with `leoflow init dags/my_pipeline`.
 
+## Workspace layout (multi-DAG, Lite only)
+
+> **Lite-specific.** Multi-DAG workspace discovery and the hot-reload watcher
+> exist only in `leoflow lite` — the developer-mode loop. **Pro** does not have
+> a "workspace"; in Pro every DAG ships as its own image-and-`dag.json` pair,
+> built by CI and registered via `leoflow push dag.json`. See
+> [The development → deploy lifecycle](#the-development--deploy-lifecycle).
+
+`leoflow lite` watches a **workspace** that can hold many DAGs as sibling
+subdirectories. The default workspace is `~/leoflow/` (set by `leoflow setup`).
+
+```
+~/leoflow/                       # workspace root
+  recurring_print/               # one DAG project per subdir
+    leoflow.yaml
+    dag.py
+  recurring_parallel/
+    leoflow.yaml
+    dag.py
+  ml/
+    train/                       # nested subdirs are scanned too
+      leoflow.yaml
+      dag.py
+```
+
+**Recommended layout (best practice, not enforced)**: name the subdirectory the
+same as the `dag_id`. The binding is by `dag_id` (yaml field, or the subdir
+basename when no yaml is present — see below), but matching names make the
+workspace navigable by humans and grep-friendly. `~/leoflow/sales_etl/` for a
+DAG named `sales_etl`.
+
+### Discovery rules
+
+`leoflow lite` walks the workspace and treats every subdirectory containing a
+`dag.py` (with or without a `leoflow.yaml`) as a project. The scan:
+
+- Goes **at most 5 levels deep** from the workspace root. A DAG at
+  `<ws>/a/b/c/d/dag.py` is the deepest valid case. Deeper paths are skipped.
+- Skips the `exclude_paths` defaults: `.git`, `__pycache__`, `*.pyc`, `.venv`,
+  `venv`, and any other hidden directory (`.*`).
+- Fails **loud** on a duplicate `dag_id`: if two subdirs resolve to the same
+  id, lite refuses to compile any of them and prints both paths so you can
+  rename one. There is no last-write-wins.
+
+Every compile log line names the resolved config source — either the absolute
+path of the `leoflow.yaml` that was loaded, or `auto-defaults: <subdir>` when
+none exists. This is the one line to grep when "which config did it pick up?"
+is the debugging question.
+
+### `leoflow.yaml` is optional
+
+A subdir with just a `dag.py` is a valid project. Leoflow synthesizes a config
+with `dag_id = <subdir-basename>` and every other field filled from the schema
+defaults (see [Configuration → Defaults](configuration.md#defaults)). Add a
+`leoflow.yaml` when you need to pin a Python version, declare dependencies, set
+per-task overrides, or change the `dag_id` to something other than the subdir
+name.
+
 ## dag.py — the Airflow dialect
 
 `dag.py` is **real Airflow SDK 3.2.x** code, imported by the Python parser via the
@@ -33,14 +91,25 @@ with DAG("my_pipeline", schedule="@daily", catchup=False, tags=["etl"]):
 
 ### Supported
 
-- **Task types** (detected by operator class name): `Python` (incl. TaskFlow
-  `@task`), `Bash`, `Http`.
+Leoflow accepts a **closed set of three task types** today. Anything outside
+the set is a hard compile error (see [Not supported](#not-yet-supported--limitations)).
+
+| Task type | Airflow operator | Where it runs | Notes |
+|---|---|---|---|
+| `python` | `@task` (TaskFlow) **or** `PythonOperator` | agent in a pod (Pro) / subprocess (Lite) | The general-purpose escape hatch — any provider library you `pip install` is callable from inside a `@task`. |
+| `bash` | `BashOperator` | agent | Executes a shell command. |
+| `http_api` | `HttpOperator` (`airflow.providers.http`) | **inline in the control plane** (no pod, no agent) | Synchronous outbound HTTP. Use it for lightweight webhooks/probes; for anything with retries, throughput, or auth headers you control, prefer `@task` + `requests` in `python`. |
+
 - **Trigger rules**: `all_success`, `all_failed`, `all_done`, `one_success`,
   `one_failed`.
 - **XCom**: TaskFlow data-flow (`transform(extract())`) is resolved automatically
   into typed inputs (`xcom_input`).
 - **Schedule**: cron strings and presets (`@daily`, `0 * * * *`).
 - **Dependencies**: linear ordering via TaskFlow calls or `a >> b`.
+
+> Connector cookbooks (postgres, mysql, sqlite, redis, http) are all `python`
+> tasks that read a managed Connection (`AIRFLOW_CONN_*`) injected as an env
+> var — they are **not** new operator types.
 
 ### Not (yet) supported — limitations
 

@@ -22,6 +22,32 @@ Two surfaces: **`leoflow.yaml`** (per-DAG, authoring) and **server environment**
 
 See [DAG authoring](dag-authoring.md) for the override layers.
 
+### Defaults
+
+Every field in `leoflow.yaml` is optional. Zero-valued fields are filled by
+`LeoflowConfig.ApplyDefaults()` (`internal/domain/config.go`) from the values
+declared in [`leoflow-yaml-schema.json`](https://github.com/neochaotic/leoflow/blob/main/docs/api/leoflow-yaml-schema.json).
+Defaults are hardcoded for v1; making them workspace-configurable is a v2
+roadmap item.
+
+| Field | Default | Notes |
+|---|---|---|
+| `schema_version` | `"1.0"` | Stamps every artifact for forward-compat. |
+| `dag_id` | *subdir basename* | If `leoflow.yaml` is absent, the parent directory name is used. Two subdirs resolving to the same `dag_id` is a hard error — see [Discovery rules](dag-authoring.md#discovery-rules). |
+| `python_version` | `"3.11"` | Pick `3.10`, `3.11`, or `3.12`. |
+| `dag_source` | `"dag.py"` | DAG file relative to the project. |
+| `dependencies` | `[]` | pip specifiers baked into the image. |
+| `system_packages` | `[]` | apt packages. |
+| `include_paths` | `["."]` | Files copied into the image. |
+| `exclude_paths` | `[".git", "__pycache__", "*.pyc", ".venv", "venv"]` | Skipped both in image build **and** workspace discovery. Hidden directories (`.*`) are skipped as well. |
+| `build.context` | `"."` | Docker build context. |
+| `build.platforms` | `["linux/amd64"]` | Multi-arch via `["linux/amd64","linux/arm64"]`. |
+| `registry.auth_method` | `"docker_config"` | Credential source for `compile --push`. |
+| `registry.tag_strategy` | `"version"` | How `dag_version` is mapped to image tag. |
+| `staging.enabled` | `false` | Opt-in per-run RWX volume — ADR 0022. |
+| `defaults.*` | *unset* | DAG-level task defaults; layered under task overrides — ADR 0023. |
+| `tasks.<id>` | *unset* | Per-task overrides; must reference a `task_id` present in the compiled DAG. |
+
 ## Server environment (`LEOFLOW_*`)
 
 | Variable | Default | Edition | Purpose |

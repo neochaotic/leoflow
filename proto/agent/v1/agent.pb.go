@@ -452,20 +452,20 @@ func (*GetTaskSpecRequest) Descriptor() ([]byte, []int) {
 }
 
 type TaskSpec struct {
-	state                   protoimpl.MessageState `protogen:"open.v1"`
-	TenantId                string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	DagId                   string                 `protobuf:"bytes,2,opt,name=dag_id,json=dagId,proto3" json:"dag_id,omitempty"`
-	DagVersion              string                 `protobuf:"bytes,3,opt,name=dag_version,json=dagVersion,proto3" json:"dag_version,omitempty"`
-	RunId                   string                 `protobuf:"bytes,4,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	TaskId                  string                 `protobuf:"bytes,5,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	TryNumber               int32                  `protobuf:"varint,6,opt,name=try_number,json=tryNumber,proto3" json:"try_number,omitempty"`
-	Operator                string                 `protobuf:"bytes,7,opt,name=operator,proto3" json:"operator,omitempty"` // 'python', 'bash', 'http_api'
-	Entrypoint              string                 `protobuf:"bytes,8,opt,name=entrypoint,proto3" json:"entrypoint,omitempty"`
-	Environment             map[string]string      `protobuf:"bytes,9,rep,name=environment,proto3" json:"environment,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	XcomInputMapping        map[string]string      `protobuf:"bytes,10,rep,name=xcom_input_mapping,json=xcomInputMapping,proto3" json:"xcom_input_mapping,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // param_name -> upstream_task_id
-	ExecutionTimeoutSeconds int32                  `protobuf:"varint,11,opt,name=execution_timeout_seconds,json=executionTimeoutSeconds,proto3" json:"execution_timeout_seconds,omitempty"`
-	Extra                   *structpb.Struct       `protobuf:"bytes,12,opt,name=extra,proto3" json:"extra,omitempty"`                                     // operator-specific fields
-	CallArgsJson            string                 `protobuf:"bytes,13,opt,name=call_args_json,json=callArgsJson,proto3" json:"call_args_json,omitempty"` // TaskFlow literal call args, JSON-encoded (#115). Named call_args to leave 'params' free for Airflow's DAG-run params (#148).
+	state                   protoimpl.MessageState    `protogen:"open.v1"`
+	TenantId                string                    `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	DagId                   string                    `protobuf:"bytes,2,opt,name=dag_id,json=dagId,proto3" json:"dag_id,omitempty"`
+	DagVersion              string                    `protobuf:"bytes,3,opt,name=dag_version,json=dagVersion,proto3" json:"dag_version,omitempty"`
+	RunId                   string                    `protobuf:"bytes,4,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	TaskId                  string                    `protobuf:"bytes,5,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	TryNumber               int32                     `protobuf:"varint,6,opt,name=try_number,json=tryNumber,proto3" json:"try_number,omitempty"`
+	Operator                string                    `protobuf:"bytes,7,opt,name=operator,proto3" json:"operator,omitempty"` // 'python', 'bash', 'http_api'
+	Entrypoint              string                    `protobuf:"bytes,8,opt,name=entrypoint,proto3" json:"entrypoint,omitempty"`
+	Environment             map[string]string         `protobuf:"bytes,9,rep,name=environment,proto3" json:"environment,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	XcomInputMapping        map[string]*XComUpstreams `protobuf:"bytes,10,rep,name=xcom_input_mapping,json=xcomInputMapping,proto3" json:"xcom_input_mapping,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // param_name -> ordered list of upstream task_ids (1 = single, N = fan-in)
+	ExecutionTimeoutSeconds int32                     `protobuf:"varint,11,opt,name=execution_timeout_seconds,json=executionTimeoutSeconds,proto3" json:"execution_timeout_seconds,omitempty"`
+	Extra                   *structpb.Struct          `protobuf:"bytes,12,opt,name=extra,proto3" json:"extra,omitempty"`                                     // operator-specific fields
+	CallArgsJson            string                    `protobuf:"bytes,13,opt,name=call_args_json,json=callArgsJson,proto3" json:"call_args_json,omitempty"` // TaskFlow literal call args, JSON-encoded (#115). Named call_args to leave 'params' free for Airflow's DAG-run params (#148).
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -563,7 +563,7 @@ func (x *TaskSpec) GetEnvironment() map[string]string {
 	return nil
 }
 
-func (x *TaskSpec) GetXcomInputMapping() map[string]string {
+func (x *TaskSpec) GetXcomInputMapping() map[string]*XComUpstreams {
 	if x != nil {
 		return x.XcomInputMapping
 	}
@@ -591,6 +591,55 @@ func (x *TaskSpec) GetCallArgsJson() string {
 	return ""
 }
 
+// XComUpstreams is the list of upstream task_ids whose return_values feed one
+// parameter. A single upstream is `task_ids: ["extract"]`; fan-in (binding a
+// list of upstreams to a parameter) is `task_ids: ["a", "b", "c"]`. The runtime
+// receives a JSON array when len > 1, and a single value when len == 1 — so a
+// fan-in parameter is delivered as a list, a normal parameter as the value.
+type XComUpstreams struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskIds       []string               `protobuf:"bytes,1,rep,name=task_ids,json=taskIds,proto3" json:"task_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *XComUpstreams) Reset() {
+	*x = XComUpstreams{}
+	mi := &file_agent_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *XComUpstreams) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*XComUpstreams) ProtoMessage() {}
+
+func (x *XComUpstreams) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use XComUpstreams.ProtoReflect.Descriptor instead.
+func (*XComUpstreams) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *XComUpstreams) GetTaskIds() []string {
+	if x != nil {
+		return x.TaskIds
+	}
+	return nil
+}
+
 type FetchXComRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	UpstreamTaskId string                 `protobuf:"bytes,1,opt,name=upstream_task_id,json=upstreamTaskId,proto3" json:"upstream_task_id,omitempty"`
@@ -601,7 +650,7 @@ type FetchXComRequest struct {
 
 func (x *FetchXComRequest) Reset() {
 	*x = FetchXComRequest{}
-	mi := &file_agent_proto_msgTypes[8]
+	mi := &file_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -613,7 +662,7 @@ func (x *FetchXComRequest) String() string {
 func (*FetchXComRequest) ProtoMessage() {}
 
 func (x *FetchXComRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[8]
+	mi := &file_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -626,7 +675,7 @@ func (x *FetchXComRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchXComRequest.ProtoReflect.Descriptor instead.
 func (*FetchXComRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{8}
+	return file_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *FetchXComRequest) GetUpstreamTaskId() string {
@@ -655,7 +704,7 @@ type FetchXComResponse struct {
 
 func (x *FetchXComResponse) Reset() {
 	*x = FetchXComResponse{}
-	mi := &file_agent_proto_msgTypes[9]
+	mi := &file_agent_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -667,7 +716,7 @@ func (x *FetchXComResponse) String() string {
 func (*FetchXComResponse) ProtoMessage() {}
 
 func (x *FetchXComResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[9]
+	mi := &file_agent_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -680,7 +729,7 @@ func (x *FetchXComResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchXComResponse.ProtoReflect.Descriptor instead.
 func (*FetchXComResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{9}
+	return file_agent_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *FetchXComResponse) GetValue() []byte {
@@ -722,7 +771,7 @@ type PushXComRequest struct {
 
 func (x *PushXComRequest) Reset() {
 	*x = PushXComRequest{}
-	mi := &file_agent_proto_msgTypes[10]
+	mi := &file_agent_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -734,7 +783,7 @@ func (x *PushXComRequest) String() string {
 func (*PushXComRequest) ProtoMessage() {}
 
 func (x *PushXComRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[10]
+	mi := &file_agent_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -747,7 +796,7 @@ func (x *PushXComRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushXComRequest.ProtoReflect.Descriptor instead.
 func (*PushXComRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{10}
+	return file_agent_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PushXComRequest) GetKey() string {
@@ -782,7 +831,7 @@ type PushXComResponse struct {
 
 func (x *PushXComResponse) Reset() {
 	*x = PushXComResponse{}
-	mi := &file_agent_proto_msgTypes[11]
+	mi := &file_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -794,7 +843,7 @@ func (x *PushXComResponse) String() string {
 func (*PushXComResponse) ProtoMessage() {}
 
 func (x *PushXComResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[11]
+	mi := &file_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -807,7 +856,7 @@ func (x *PushXComResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushXComResponse.ProtoReflect.Descriptor instead.
 func (*PushXComResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{11}
+	return file_agent_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *PushXComResponse) GetAccepted() bool {
@@ -844,7 +893,7 @@ type LogLine struct {
 
 func (x *LogLine) Reset() {
 	*x = LogLine{}
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -856,7 +905,7 @@ func (x *LogLine) String() string {
 func (*LogLine) ProtoMessage() {}
 
 func (x *LogLine) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -869,7 +918,7 @@ func (x *LogLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogLine.ProtoReflect.Descriptor instead.
 func (*LogLine) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{12}
+	return file_agent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *LogLine) GetTime() *timestamppb.Timestamp {
@@ -916,7 +965,7 @@ type LogAck struct {
 
 func (x *LogAck) Reset() {
 	*x = LogAck{}
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -928,7 +977,7 @@ func (x *LogAck) String() string {
 func (*LogAck) ProtoMessage() {}
 
 func (x *LogAck) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -941,7 +990,7 @@ func (x *LogAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogAck.ProtoReflect.Descriptor instead.
 func (*LogAck) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{13}
+	return file_agent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *LogAck) GetAcknowledgedThroughLine() int64 {
@@ -963,7 +1012,7 @@ type ReportStateRequest struct {
 
 func (x *ReportStateRequest) Reset() {
 	*x = ReportStateRequest{}
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -975,7 +1024,7 @@ func (x *ReportStateRequest) String() string {
 func (*ReportStateRequest) ProtoMessage() {}
 
 func (x *ReportStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -988,7 +1037,7 @@ func (x *ReportStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportStateRequest.ProtoReflect.Descriptor instead.
 func (*ReportStateRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{14}
+	return file_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ReportStateRequest) GetState() TaskState {
@@ -1030,7 +1079,7 @@ type ReportStateResponse struct {
 
 func (x *ReportStateResponse) Reset() {
 	*x = ReportStateResponse{}
-	mi := &file_agent_proto_msgTypes[15]
+	mi := &file_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1042,7 +1091,7 @@ func (x *ReportStateResponse) String() string {
 func (*ReportStateResponse) ProtoMessage() {}
 
 func (x *ReportStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[15]
+	mi := &file_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1055,7 +1104,7 @@ func (x *ReportStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportStateResponse.ProtoReflect.Descriptor instead.
 func (*ReportStateResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{15}
+	return file_agent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ReportStateResponse) GetAcknowledged() bool {
@@ -1082,7 +1131,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_agent_proto_msgTypes[16]
+	mi := &file_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1094,7 +1143,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[16]
+	mi := &file_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1107,7 +1156,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{16}
+	return file_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *HeartbeatRequest) GetSentAt() *timestamppb.Timestamp {
@@ -1134,7 +1183,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_agent_proto_msgTypes[17]
+	mi := &file_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1146,7 +1195,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[17]
+	mi := &file_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1159,7 +1208,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{17}
+	return file_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *HeartbeatResponse) GetShouldTerminate() bool {
@@ -1205,7 +1254,7 @@ const file_agent_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\"\x14\n" +
-	"\x12GetTaskSpecRequest\"\xaf\x05\n" +
+	"\x12GetTaskSpecRequest\"\xd0\x05\n" +
 	"\bTaskSpec\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06dag_id\x18\x02 \x01(\tR\x05dagId\x12\x1f\n" +
@@ -1227,10 +1276,12 @@ const file_agent_proto_rawDesc = "" +
 	"\x0ecall_args_json\x18\r \x01(\tR\fcallArgsJson\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aC\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ad\n" +
 	"\x15XcomInputMappingEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"N\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
+	"\x05value\x18\x02 \x01(\v2\x1f.leoflow.agent.v1.XComUpstreamsR\x05value:\x028\x01\"*\n" +
+	"\rXComUpstreams\x12\x19\n" +
+	"\btask_ids\x18\x01 \x03(\tR\ataskIds\"N\n" +
 	"\x10FetchXComRequest\x12(\n" +
 	"\x10upstream_task_id\x18\x01 \x01(\tR\x0eupstreamTaskId\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\"\xa6\x01\n" +
@@ -1315,7 +1366,7 @@ func file_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_agent_proto_goTypes = []any{
 	(LogLevel)(0),                  // 0: leoflow.agent.v1.LogLevel
 	(TaskState)(0),                 // 1: leoflow.agent.v1.TaskState
@@ -1327,64 +1378,66 @@ var file_agent_proto_goTypes = []any{
 	(*RegisterResponse)(nil),       // 7: leoflow.agent.v1.RegisterResponse
 	(*GetTaskSpecRequest)(nil),     // 8: leoflow.agent.v1.GetTaskSpecRequest
 	(*TaskSpec)(nil),               // 9: leoflow.agent.v1.TaskSpec
-	(*FetchXComRequest)(nil),       // 10: leoflow.agent.v1.FetchXComRequest
-	(*FetchXComResponse)(nil),      // 11: leoflow.agent.v1.FetchXComResponse
-	(*PushXComRequest)(nil),        // 12: leoflow.agent.v1.PushXComRequest
-	(*PushXComResponse)(nil),       // 13: leoflow.agent.v1.PushXComResponse
-	(*LogLine)(nil),                // 14: leoflow.agent.v1.LogLine
-	(*LogAck)(nil),                 // 15: leoflow.agent.v1.LogAck
-	(*ReportStateRequest)(nil),     // 16: leoflow.agent.v1.ReportStateRequest
-	(*ReportStateResponse)(nil),    // 17: leoflow.agent.v1.ReportStateResponse
-	(*HeartbeatRequest)(nil),       // 18: leoflow.agent.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),      // 19: leoflow.agent.v1.HeartbeatResponse
-	nil,                            // 20: leoflow.agent.v1.GetVariablesResponse.VariablesEntry
-	nil,                            // 21: leoflow.agent.v1.GetConnectionsResponse.ConnectionUrisEntry
-	nil,                            // 22: leoflow.agent.v1.RegisterRequest.EnvironmentEntry
-	nil,                            // 23: leoflow.agent.v1.TaskSpec.EnvironmentEntry
-	nil,                            // 24: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry
-	nil,                            // 25: leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
-	(*timestamppb.Timestamp)(nil),  // 26: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),        // 27: google.protobuf.Struct
+	(*XComUpstreams)(nil),          // 10: leoflow.agent.v1.XComUpstreams
+	(*FetchXComRequest)(nil),       // 11: leoflow.agent.v1.FetchXComRequest
+	(*FetchXComResponse)(nil),      // 12: leoflow.agent.v1.FetchXComResponse
+	(*PushXComRequest)(nil),        // 13: leoflow.agent.v1.PushXComRequest
+	(*PushXComResponse)(nil),       // 14: leoflow.agent.v1.PushXComResponse
+	(*LogLine)(nil),                // 15: leoflow.agent.v1.LogLine
+	(*LogAck)(nil),                 // 16: leoflow.agent.v1.LogAck
+	(*ReportStateRequest)(nil),     // 17: leoflow.agent.v1.ReportStateRequest
+	(*ReportStateResponse)(nil),    // 18: leoflow.agent.v1.ReportStateResponse
+	(*HeartbeatRequest)(nil),       // 19: leoflow.agent.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),      // 20: leoflow.agent.v1.HeartbeatResponse
+	nil,                            // 21: leoflow.agent.v1.GetVariablesResponse.VariablesEntry
+	nil,                            // 22: leoflow.agent.v1.GetConnectionsResponse.ConnectionUrisEntry
+	nil,                            // 23: leoflow.agent.v1.RegisterRequest.EnvironmentEntry
+	nil,                            // 24: leoflow.agent.v1.TaskSpec.EnvironmentEntry
+	nil,                            // 25: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry
+	nil,                            // 26: leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
+	(*timestamppb.Timestamp)(nil),  // 27: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),        // 28: google.protobuf.Struct
 }
 var file_agent_proto_depIdxs = []int32{
-	20, // 0: leoflow.agent.v1.GetVariablesResponse.variables:type_name -> leoflow.agent.v1.GetVariablesResponse.VariablesEntry
-	21, // 1: leoflow.agent.v1.GetConnectionsResponse.connection_uris:type_name -> leoflow.agent.v1.GetConnectionsResponse.ConnectionUrisEntry
-	22, // 2: leoflow.agent.v1.RegisterRequest.environment:type_name -> leoflow.agent.v1.RegisterRequest.EnvironmentEntry
-	26, // 3: leoflow.agent.v1.RegisterResponse.server_time:type_name -> google.protobuf.Timestamp
-	23, // 4: leoflow.agent.v1.TaskSpec.environment:type_name -> leoflow.agent.v1.TaskSpec.EnvironmentEntry
-	24, // 5: leoflow.agent.v1.TaskSpec.xcom_input_mapping:type_name -> leoflow.agent.v1.TaskSpec.XcomInputMappingEntry
-	27, // 6: leoflow.agent.v1.TaskSpec.extra:type_name -> google.protobuf.Struct
-	26, // 7: leoflow.agent.v1.FetchXComResponse.created_at:type_name -> google.protobuf.Timestamp
-	26, // 8: leoflow.agent.v1.LogLine.time:type_name -> google.protobuf.Timestamp
+	21, // 0: leoflow.agent.v1.GetVariablesResponse.variables:type_name -> leoflow.agent.v1.GetVariablesResponse.VariablesEntry
+	22, // 1: leoflow.agent.v1.GetConnectionsResponse.connection_uris:type_name -> leoflow.agent.v1.GetConnectionsResponse.ConnectionUrisEntry
+	23, // 2: leoflow.agent.v1.RegisterRequest.environment:type_name -> leoflow.agent.v1.RegisterRequest.EnvironmentEntry
+	27, // 3: leoflow.agent.v1.RegisterResponse.server_time:type_name -> google.protobuf.Timestamp
+	24, // 4: leoflow.agent.v1.TaskSpec.environment:type_name -> leoflow.agent.v1.TaskSpec.EnvironmentEntry
+	25, // 5: leoflow.agent.v1.TaskSpec.xcom_input_mapping:type_name -> leoflow.agent.v1.TaskSpec.XcomInputMappingEntry
+	28, // 6: leoflow.agent.v1.TaskSpec.extra:type_name -> google.protobuf.Struct
+	27, // 7: leoflow.agent.v1.FetchXComResponse.created_at:type_name -> google.protobuf.Timestamp
+	27, // 8: leoflow.agent.v1.LogLine.time:type_name -> google.protobuf.Timestamp
 	0,  // 9: leoflow.agent.v1.LogLine.level:type_name -> leoflow.agent.v1.LogLevel
 	1,  // 10: leoflow.agent.v1.ReportStateRequest.state:type_name -> leoflow.agent.v1.TaskState
-	26, // 11: leoflow.agent.v1.ReportStateRequest.occurred_at:type_name -> google.protobuf.Timestamp
-	26, // 12: leoflow.agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
-	25, // 13: leoflow.agent.v1.HeartbeatRequest.custom_metrics:type_name -> leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
-	26, // 14: leoflow.agent.v1.HeartbeatResponse.server_time:type_name -> google.protobuf.Timestamp
-	6,  // 15: leoflow.agent.v1.AgentService.Register:input_type -> leoflow.agent.v1.RegisterRequest
-	8,  // 16: leoflow.agent.v1.AgentService.GetTaskSpec:input_type -> leoflow.agent.v1.GetTaskSpecRequest
-	10, // 17: leoflow.agent.v1.AgentService.FetchXCom:input_type -> leoflow.agent.v1.FetchXComRequest
-	12, // 18: leoflow.agent.v1.AgentService.PushXCom:input_type -> leoflow.agent.v1.PushXComRequest
-	14, // 19: leoflow.agent.v1.AgentService.StreamLogs:input_type -> leoflow.agent.v1.LogLine
-	16, // 20: leoflow.agent.v1.AgentService.ReportState:input_type -> leoflow.agent.v1.ReportStateRequest
-	18, // 21: leoflow.agent.v1.AgentService.Heartbeat:input_type -> leoflow.agent.v1.HeartbeatRequest
-	2,  // 22: leoflow.agent.v1.AgentService.GetVariables:input_type -> leoflow.agent.v1.GetVariablesRequest
-	4,  // 23: leoflow.agent.v1.AgentService.GetConnections:input_type -> leoflow.agent.v1.GetConnectionsRequest
-	7,  // 24: leoflow.agent.v1.AgentService.Register:output_type -> leoflow.agent.v1.RegisterResponse
-	9,  // 25: leoflow.agent.v1.AgentService.GetTaskSpec:output_type -> leoflow.agent.v1.TaskSpec
-	11, // 26: leoflow.agent.v1.AgentService.FetchXCom:output_type -> leoflow.agent.v1.FetchXComResponse
-	13, // 27: leoflow.agent.v1.AgentService.PushXCom:output_type -> leoflow.agent.v1.PushXComResponse
-	15, // 28: leoflow.agent.v1.AgentService.StreamLogs:output_type -> leoflow.agent.v1.LogAck
-	17, // 29: leoflow.agent.v1.AgentService.ReportState:output_type -> leoflow.agent.v1.ReportStateResponse
-	19, // 30: leoflow.agent.v1.AgentService.Heartbeat:output_type -> leoflow.agent.v1.HeartbeatResponse
-	3,  // 31: leoflow.agent.v1.AgentService.GetVariables:output_type -> leoflow.agent.v1.GetVariablesResponse
-	5,  // 32: leoflow.agent.v1.AgentService.GetConnections:output_type -> leoflow.agent.v1.GetConnectionsResponse
-	24, // [24:33] is the sub-list for method output_type
-	15, // [15:24] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	27, // 11: leoflow.agent.v1.ReportStateRequest.occurred_at:type_name -> google.protobuf.Timestamp
+	27, // 12: leoflow.agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
+	26, // 13: leoflow.agent.v1.HeartbeatRequest.custom_metrics:type_name -> leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
+	27, // 14: leoflow.agent.v1.HeartbeatResponse.server_time:type_name -> google.protobuf.Timestamp
+	10, // 15: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry.value:type_name -> leoflow.agent.v1.XComUpstreams
+	6,  // 16: leoflow.agent.v1.AgentService.Register:input_type -> leoflow.agent.v1.RegisterRequest
+	8,  // 17: leoflow.agent.v1.AgentService.GetTaskSpec:input_type -> leoflow.agent.v1.GetTaskSpecRequest
+	11, // 18: leoflow.agent.v1.AgentService.FetchXCom:input_type -> leoflow.agent.v1.FetchXComRequest
+	13, // 19: leoflow.agent.v1.AgentService.PushXCom:input_type -> leoflow.agent.v1.PushXComRequest
+	15, // 20: leoflow.agent.v1.AgentService.StreamLogs:input_type -> leoflow.agent.v1.LogLine
+	17, // 21: leoflow.agent.v1.AgentService.ReportState:input_type -> leoflow.agent.v1.ReportStateRequest
+	19, // 22: leoflow.agent.v1.AgentService.Heartbeat:input_type -> leoflow.agent.v1.HeartbeatRequest
+	2,  // 23: leoflow.agent.v1.AgentService.GetVariables:input_type -> leoflow.agent.v1.GetVariablesRequest
+	4,  // 24: leoflow.agent.v1.AgentService.GetConnections:input_type -> leoflow.agent.v1.GetConnectionsRequest
+	7,  // 25: leoflow.agent.v1.AgentService.Register:output_type -> leoflow.agent.v1.RegisterResponse
+	9,  // 26: leoflow.agent.v1.AgentService.GetTaskSpec:output_type -> leoflow.agent.v1.TaskSpec
+	12, // 27: leoflow.agent.v1.AgentService.FetchXCom:output_type -> leoflow.agent.v1.FetchXComResponse
+	14, // 28: leoflow.agent.v1.AgentService.PushXCom:output_type -> leoflow.agent.v1.PushXComResponse
+	16, // 29: leoflow.agent.v1.AgentService.StreamLogs:output_type -> leoflow.agent.v1.LogAck
+	18, // 30: leoflow.agent.v1.AgentService.ReportState:output_type -> leoflow.agent.v1.ReportStateResponse
+	20, // 31: leoflow.agent.v1.AgentService.Heartbeat:output_type -> leoflow.agent.v1.HeartbeatResponse
+	3,  // 32: leoflow.agent.v1.AgentService.GetVariables:output_type -> leoflow.agent.v1.GetVariablesResponse
+	5,  // 33: leoflow.agent.v1.AgentService.GetConnections:output_type -> leoflow.agent.v1.GetConnectionsResponse
+	25, // [25:34] is the sub-list for method output_type
+	16, // [16:25] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -1398,7 +1451,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   24,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

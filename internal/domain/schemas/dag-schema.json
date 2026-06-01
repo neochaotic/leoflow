@@ -310,9 +310,11 @@
         },
         "xcom_input": {
           "type": "object",
-          "description": "Map of parameter name to upstream task_id whose return value to inject.",
+          "description": "Map of parameter name to ordered list of upstream task_ids whose return values to inject. A 1-element list is the common single-upstream case; longer lists are fan-in (the runtime delivers a JSON array, in declaration order).",
           "additionalProperties": {
-            "type": "string"
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1
           }
         },
         "call_args": {

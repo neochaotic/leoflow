@@ -15,7 +15,9 @@
       "task_id": "fetch_detail",
       "type": "python",
       "xcom_input": {
-        "user_id": "pick_user"
+        "user_id": [
+          "pick_user"
+        ]
       }
     },
     {

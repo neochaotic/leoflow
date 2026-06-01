@@ -1,0 +1,10 @@
+schema_version: "1.0"
+dag_id: ml_hparam_search
+description: Parallel hyperparameter search with map-reduce aggregation (toy ML).
+owner: examples
+tags:
+  - example
+  - ml
+  - map-reduce
+python_version: "3.11"
+dependencies: []

@@ -28,7 +28,7 @@ type TaskSpec struct {
 	Entrypoint       string
 	DagVersion       string
 	Environment      map[string]string
-	XComInputMapping map[string]string
+	XComInputMapping map[string][]string
 	XComSchema       map[string]any
 	TimeoutSeconds   int
 	// CallArgsJSON carries TaskFlow literal call args captured by the parser
@@ -130,7 +130,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		Operator:                spec.Operator,
 		Entrypoint:              spec.Entrypoint,
 		Environment:             spec.Environment,
-		XcomInputMapping:        spec.XComInputMapping,
+		XcomInputMapping:        toXComUpstreamsMap(spec.XComInputMapping),
 		ExecutionTimeoutSeconds: clampInt32(spec.TimeoutSeconds),
 		CallArgsJson:            spec.CallArgsJSON,
 	}, nil
@@ -318,14 +318,31 @@ func xcomKey(id auth.AgentIdentity, taskID, name string) xcom.Key {
 	return xcom.Key{TenantID: id.TenantID, DagID: id.DagID, RunID: id.RunID, TaskID: taskID, Name: name}
 }
 
-// declaresUpstream reports whether the task declared upstreamTaskID as an input.
-func declaresUpstream(mapping map[string]string, upstreamTaskID string) bool {
-	for _, declared := range mapping {
-		if declared == upstreamTaskID {
-			return true
+// declaresUpstream reports whether the task declared upstreamTaskID as an input
+// to any parameter. A fan-in parameter (`combine([a(), b(), c()])`) declares
+// each upstream in the list, so a FetchXCom from any of them is authorized.
+func declaresUpstream(mapping map[string][]string, upstreamTaskID string) bool {
+	for _, upstreams := range mapping {
+		for _, declared := range upstreams {
+			if declared == upstreamTaskID {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// toXComUpstreamsMap converts the domain map[string][]string into the proto
+// shape map[string]*XComUpstreams the agent receives over the wire.
+func toXComUpstreamsMap(in map[string][]string) map[string]*agentv1.XComUpstreams {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]*agentv1.XComUpstreams, len(in))
+	for param, upstreams := range in {
+		out[param] = &agentv1.XComUpstreams{TaskIds: append([]string(nil), upstreams...)}
+	}
+	return out
 }
 
 // identify extracts and verifies the agent token from the request metadata.

@@ -16,37 +16,45 @@
       ],
       "entrypoint": "dag:aggregate",
       "task_id": "aggregate",
-      "type": "python"
+      "type": "python",
+      "xcom_input": {
+        "parts": [
+          "shard",
+          "shard__1",
+          "shard__2",
+          "shard__3"
+        ]
+      }
     },
     {
-      "entrypoint": "dag:shard",
       "call_args": {
         "n": 0
       },
+      "entrypoint": "dag:shard",
       "task_id": "shard",
       "type": "python"
     },
     {
-      "entrypoint": "dag:shard",
       "call_args": {
         "n": 1
       },
+      "entrypoint": "dag:shard",
       "task_id": "shard__1",
       "type": "python"
     },
     {
-      "entrypoint": "dag:shard",
       "call_args": {
         "n": 2
       },
+      "entrypoint": "dag:shard",
       "task_id": "shard__2",
       "type": "python"
     },
     {
-      "entrypoint": "dag:shard",
       "call_args": {
         "n": 3
       },
+      "entrypoint": "dag:shard",
       "task_id": "shard__3",
       "type": "python"
     }

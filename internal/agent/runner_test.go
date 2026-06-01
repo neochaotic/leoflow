@@ -131,7 +131,7 @@ func TestRunnerHappyPath(t *testing.T) {
 			Operator:         "python",
 			Entrypoint:       "dag:hello",
 			Environment:      map[string]string{"FOO": "bar"},
-			XcomInputMapping: map[string]string{"upstream_val": "extract"},
+			XcomInputMapping: map[string]*agentv1.XComUpstreams{"upstream_val": {TaskIds: []string{"extract"}}},
 		},
 		xcom: map[string]*agentv1.FetchXComResponse{
 			"extract": {Value: []byte(`{"n":1}`)},
@@ -350,7 +350,7 @@ func TestRunnerHonorsZeroTimeout(t *testing.T) {
 func TestRunnerSkipsAbsentXComInput(t *testing.T) {
 	client := &fakeClient{spec: &agentv1.TaskSpec{
 		Operator: "python", Entrypoint: "dag:f",
-		XcomInputMapping: map[string]string{"maybe": "upstream"}, // upstream pushed nothing
+		XcomInputMapping: map[string]*agentv1.XComUpstreams{"maybe": {TaskIds: []string{"upstream"}}}, // upstream pushed nothing
 	}}
 	cmd := &fakeCmd{}
 	r := newRunner(client, cmd, &recordingSink{})
@@ -360,6 +360,76 @@ func TestRunnerSkipsAbsentXComInput(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(cmd.env, "\n"), "LEOFLOW_XCOM_MAYBE") {
 		t.Errorf("absent xcom input should be skipped (None), not set: %v", cmd.env)
+	}
+}
+
+func TestRunnerFanInCollectsUpstreamsIntoJSONArray(t *testing.T) {
+	// Fan-in: `combine([part() for _ in range(3)])` declares 3 upstreams under
+	// one parameter. The agent must fetch each and assemble a JSON array, in
+	// declaration order, for the runtime to deliver as the function's list arg.
+	client := &fakeClient{
+		spec: &agentv1.TaskSpec{
+			Operator: "python", Entrypoint: "dag:combine",
+			XcomInputMapping: map[string]*agentv1.XComUpstreams{
+				"parts": {TaskIds: []string{"part", "part__1", "part__2"}},
+			},
+		},
+		xcom: map[string]*agentv1.FetchXComResponse{
+			"part":    {Value: []byte(`{"i":0}`)},
+			"part__1": {Value: []byte(`{"i":1}`)},
+			"part__2": {Value: []byte(`{"i":2}`)},
+		},
+	}
+	cmd := &fakeCmd{}
+	r := newRunner(client, cmd, &recordingSink{})
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var got string
+	for _, kv := range cmd.env {
+		if strings.HasPrefix(kv, "LEOFLOW_XCOM_PARTS=") {
+			got = strings.TrimPrefix(kv, "LEOFLOW_XCOM_PARTS=")
+		}
+	}
+	want := `[{"i":0},{"i":1},{"i":2}]`
+	if got != want {
+		t.Errorf("fan-in PARTS env: got %q, want %q", got, want)
+	}
+}
+
+func TestRunnerFanInAbsentUpstreamGetsNull(t *testing.T) {
+	// A missing upstream contributes `null` so the function still receives the
+	// right element count — matches Airflow's "missing XCom resolves to None"
+	// semantics without dropping the index.
+	client := &fakeClient{
+		spec: &agentv1.TaskSpec{
+			Operator: "python", Entrypoint: "dag:combine",
+			XcomInputMapping: map[string]*agentv1.XComUpstreams{
+				"parts": {TaskIds: []string{"a", "b", "c"}},
+			},
+		},
+		xcom: map[string]*agentv1.FetchXComResponse{
+			"a": {Value: []byte(`1`)},
+			"c": {Value: []byte(`3`)},
+			// b is missing — agent should emit null in slot 1.
+		},
+	}
+	cmd := &fakeCmd{}
+	r := newRunner(client, cmd, &recordingSink{})
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var got string
+	for _, kv := range cmd.env {
+		if strings.HasPrefix(kv, "LEOFLOW_XCOM_PARTS=") {
+			got = strings.TrimPrefix(kv, "LEOFLOW_XCOM_PARTS=")
+		}
+	}
+	want := `[1,null,3]`
+	if got != want {
+		t.Errorf("fan-in PARTS env with one absent upstream: got %q, want %q", got, want)
 	}
 }
 

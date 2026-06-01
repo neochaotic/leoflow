@@ -226,15 +226,19 @@ def _python_entrypoint(task, source: str) -> str:
     return f"{Path(source).stem}:{name}"
 
 
-def _bind_call_arguments(task) -> tuple[dict[str, str], dict[str, Any]]:
+def _bind_call_arguments(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
     """Split a TaskFlow task's bound arguments into XCom inputs and literal call args.
 
     For ``transform(extract())`` the operator stores ``extract``'s XComArg as
-    one argument; for ``shard(0)`` it stores the literal ``0``. Binding both
-    against the callable's signature lets us split them by type:
+    one argument; for ``shard(0)`` it stores the literal ``0``; for
+    ``combine([a(), b(), c()])`` it stores a list of XComArgs (fan-in).
+    Binding all of them against the callable's signature lets us split by type:
 
-    - **xcom_input**: ``param_name → upstream_task_id``. The agent fetches each
-      upstream's ``return_value`` at dispatch time.
+    - **xcom_input**: ``param_name → [upstream_task_ids…]``. ALWAYS a list,
+      even for a single upstream (uniform schema). The agent fetches every
+      upstream's ``return_value`` at dispatch time; for fan-in (len > 1)
+      the runtime receives a JSON array, so the function parameter is the
+      list of upstream values, in declaration order.
     - **call_args** (#115): ``param_name → JSON-serialisable literal``. The
       agent stamps the whole map as LEOFLOW_CALL_ARGS_JSON; the runtime
       decodes and delivers it to the function. Named call_args (not params)
@@ -254,13 +258,23 @@ def _bind_call_arguments(task) -> tuple[dict[str, str], dict[str, Any]]:
         bound = inspect.signature(callable_obj).bind_partial(*op_args, **op_kwargs)
     except (TypeError, ValueError):
         return {}, {}
-    xcom: dict[str, str] = {}
+    xcom: dict[str, list[str]] = {}
     call_args: dict[str, Any] = {}
     for name, value in bound.arguments.items():
         operator = getattr(value, "operator", None)
-        upstream = getattr(operator, "task_id", None)
-        if upstream:
-            xcom[name] = upstream
+        single_upstream = getattr(operator, "task_id", None)
+        if single_upstream:
+            xcom[name] = [single_upstream]
+            continue
+        # Fan-in: `combine([a(), b(), c()])` binds a list of XComArgs to one
+        # parameter. The agent fetches each upstream and the runtime receives
+        # them as a JSON array (in declaration order). A mixed list with any
+        # non-XComArg item is ambiguous (literal vs. upstream) — fall through
+        # to the literal path so json.dumps rejects it cleanly.
+        if isinstance(value, (list, tuple)) and value and all(
+                getattr(getattr(item, "operator", None), "task_id", None)
+                for item in value):
+            xcom[name] = [item.operator.task_id for item in value]
             continue
         if _is_json_literal(value):
             call_args[name] = value

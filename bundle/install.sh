@@ -112,7 +112,7 @@ echo "  bundled DAGs ($(ls "$DAG_SOURCE" | wc -l | tr -d ' ')) copied"
 # after creating Connections in the UI).
 if [[ -n "${EXAMPLES_SOURCE:-}" ]] || [[ -d "$SCRIPT_DIR/../examples" ]]; then
   EX_SRC="${EXAMPLES_SOURCE:-$SCRIPT_DIR/../examples}"
-  for dag in lifecycle montecarlo_pi fan_out_aggregate taskflow_sales; do
+  for dag in lifecycle montecarlo_pi fan_out_aggregate ml_hparam_search taskflow_sales; do
     if [[ -d "$EX_SRC/$dag" ]]; then
       cp -R "$EX_SRC/$dag" "$WORKSPACE/"
       echo "  example DAG copied: $dag"

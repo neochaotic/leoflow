@@ -137,6 +137,7 @@ nav:
       - The leoflow dev workflow: dev-workflow.md
       - The Lite web editor: lite-web-editor.md
       - Examples: examples.md
+      - "Map-reduce for ML": cookbook/map-reduce.md
       - "Case study: 1 GB ETL on staging": etl-staging-case-study.md
       - Variables & Connections: variables-connections.md
       - Connections cookbook:

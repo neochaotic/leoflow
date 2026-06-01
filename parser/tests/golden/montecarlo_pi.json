@@ -16,37 +16,45 @@
       ],
       "entrypoint": "dag:combine",
       "task_id": "combine",
-      "type": "python"
+      "type": "python",
+      "xcom_input": {
+        "parts": [
+          "estimate",
+          "estimate__1",
+          "estimate__2",
+          "estimate__3"
+        ]
+      }
     },
     {
-      "entrypoint": "dag:estimate",
       "call_args": {
         "seed": 0
       },
+      "entrypoint": "dag:estimate",
       "task_id": "estimate",
       "type": "python"
     },
     {
-      "entrypoint": "dag:estimate",
       "call_args": {
         "seed": 1
       },
+      "entrypoint": "dag:estimate",
       "task_id": "estimate__1",
       "type": "python"
     },
     {
-      "entrypoint": "dag:estimate",
       "call_args": {
         "seed": 2
       },
+      "entrypoint": "dag:estimate",
       "task_id": "estimate__2",
       "type": "python"
     },
     {
-      "entrypoint": "dag:estimate",
       "call_args": {
         "seed": 3
       },
+      "entrypoint": "dag:estimate",
       "task_id": "estimate__3",
       "type": "python"
     }

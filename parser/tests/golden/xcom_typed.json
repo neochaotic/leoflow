@@ -20,7 +20,9 @@
       "task_id": "sink",
       "type": "python",
       "xcom_input": {
-        "checked": "validate"
+        "checked": [
+          "validate"
+        ]
       }
     },
     {
@@ -31,7 +33,9 @@
       "task_id": "validate",
       "type": "python",
       "xcom_input": {
-        "batch": "produce"
+        "batch": [
+          "produce"
+        ]
       }
     }
   ]

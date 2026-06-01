@@ -103,7 +103,7 @@ func TestGetTaskSpecMapsStoreData(t *testing.T) {
 	store := &fakeStore{spec: TaskSpec{
 		Operator: "python", Entrypoint: "dag:hello", DagVersion: "v1",
 		Environment:      map[string]string{"FOO": "bar"},
-		XComInputMapping: map[string]string{"val": "upstream"},
+		XComInputMapping: map[string][]string{"val": {"upstream"}},
 		TimeoutSeconds:   300,
 	}}
 	srv, a := newServer(store)
@@ -121,7 +121,7 @@ func TestGetTaskSpecMapsStoreData(t *testing.T) {
 	if spec.GetEnvironment()["FOO"] != "bar" {
 		t.Errorf("environment not mapped: %v", spec.GetEnvironment())
 	}
-	if spec.GetXcomInputMapping()["val"] != "upstream" {
+	if upstreams := spec.GetXcomInputMapping()["val"]; upstreams == nil || len(upstreams.GetTaskIds()) != 1 || upstreams.GetTaskIds()[0] != "upstream" {
 		t.Errorf("xcom mapping not mapped: %v", spec.GetXcomInputMapping())
 	}
 	if spec.GetExecutionTimeoutSeconds() != 300 {
@@ -220,7 +220,7 @@ func TestFetchXComReturnsDeclaredUpstream(t *testing.T) {
 	x := &fakeXCom{entries: map[string]xcom.Entry{
 		"xcom:acme:etl:run-1:upstream:return_value": {Value: []byte(`{"n":9}`), ContentType: "application/json"},
 	}}
-	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string]string{"val": "upstream"}}}
+	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string][]string{"val": {"upstream"}}}}
 	srv, a := newServerX(store, x)
 
 	resp, err := srv.FetchXCom(ctxWithToken(t, a), &agentv1.FetchXComRequest{UpstreamTaskId: "upstream"})
@@ -233,7 +233,7 @@ func TestFetchXComReturnsDeclaredUpstream(t *testing.T) {
 }
 
 func TestFetchXComDeniesUndeclaredUpstream(t *testing.T) {
-	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string]string{"val": "other"}}}
+	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string][]string{"val": {"other"}}}}
 	srv, a := newServerX(store, &fakeXCom{})
 	_, err := srv.FetchXCom(ctxWithToken(t, a), &agentv1.FetchXComRequest{UpstreamTaskId: "secret"})
 	if status.Code(err) != codes.PermissionDenied {
@@ -242,7 +242,7 @@ func TestFetchXComDeniesUndeclaredUpstream(t *testing.T) {
 }
 
 func TestFetchXComNotFound(t *testing.T) {
-	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string]string{"val": "upstream"}}}
+	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string][]string{"val": {"upstream"}}}}
 	srv, a := newServerX(store, &fakeXCom{})
 	_, err := srv.FetchXCom(ctxWithToken(t, a), &agentv1.FetchXComRequest{UpstreamTaskId: "upstream"})
 	if status.Code(err) != codes.NotFound {

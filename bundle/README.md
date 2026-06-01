@@ -1,20 +1,22 @@
-# Lima alpha bundle
+# Leoflow Lite bundle
 
-One-shot install script + DAG bundle for the Leoflow Lite hands-on validation
-on a Lima VM (or any clean Linux box). This is the package the project lead
-runs on their Lima machine to stress-test the alpha before tagging
-`v0.1.0-alpha.1`.
+One-shot install script + curated DAG bundle for the Leoflow Lite hands-on
+validation. The installer wraps the canonical [`install.sh`](../install.sh)
+with the extra steps a fresh box needs to be productive: `leoflow setup`,
+the sample DAGs, and a credentials block. Works on any Linux host (VMs,
+containers, bare metal) — the alpha-validation flow runs against this same
+bundle.
 
-## On the Lima VM (single command)
+## Single command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/lima-bundle/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/bundle/install.sh | bash
 ```
 
 The script will:
 
-1. Detect Linux/arch and download the latest prealpha `leoflow` binary into
-   `~/.local/bin/`.
+1. Detect Linux/arch and delegate to the canonical `install.sh` to download
+   the latest pre-release `leoflow` binary into `~/.local/bin/`.
 2. Run `leoflow setup` — which **generates the admin password and prints it
    once in cyan**. SAVE IT.
 3. Drop the curated DAG bundle into `~/leoflow/` (the workspace).
@@ -26,9 +28,8 @@ After it finishes, run:
 leoflow lite
 ```
 
-…and open `http://localhost:8088` in your browser. If you're accessing from
-the Mac host instead of inside the VM, either set up Lima port forwarding or
-use `http://<lima-ip>:8088`.
+…and open `http://localhost:8088` in your browser. If you're on a remote
+host (SSH, VM, container) expose the UI with `leoflow lite --host 0.0.0.0`.
 
 ## What's bundled
 
@@ -56,10 +57,10 @@ Default email is `admin@leoflow.local` (override at install time with
 `leoflow setup --admin-email you@example.com`; the bundle script doesn't
 do that — re-run `setup` after if you want a different email).
 
-## What to look for during the hands-on
+## What to look for during a hands-on validation
 
-The point of running this on Lima is to **catch bugs that survived all the
-unit/integration tests**. Specifically:
+The point is to **catch bugs that survived all the unit/integration tests**.
+Specifically:
 
 - Are recurring runs steady? Run for 1 h, count completed runs of
   `recurring_print` — expect 20. Any gaps, stuck `queued` states, missed
@@ -69,12 +70,11 @@ unit/integration tests**. Specifically:
   (max sleep is 6 s), NOT take 18 s in sequence.
 - Trigger `lifecycle` / `montecarlo_pi` / `fan_out_aggregate` from the UI.
   Logs visible? Status transitions correct? XCom values flow?
-- Try to break it — restart the Lima VM mid-run; kill the leoflow process
+- Try to break it — restart the host mid-run; kill the leoflow process
   with `pkill -9 leoflow`; pull the network briefly. Recovery contract is
   in `docs/scheduler-resilience.md`.
 
-Findings → comments on the alpha-prep issues, severity per
-[[alpha-prep-bug-policy]].
+Findings → comments on the alpha-prep issues.
 
 ## What this is NOT
 
@@ -82,8 +82,8 @@ Findings → comments on the alpha-prep issues, severity per
   hands-on pass.
 - Not a multi-user install — Lite is single-admin by design (see
   `docs/editions.md`).
-- Not a Pro install — Pro is the Helm chart (`helm/leoflow/`), separate
-  rollout per [[pro-alpha-blockers-decisions]].
+- Not a Pro install — Pro is the Helm chart (`helm/leoflow/`), a separate
+  rollout.
 
 ## Re-running
 
@@ -95,6 +95,3 @@ The install script is **idempotent** for everything except the password:
   into `~/leoflow/` at any time.
 - To start from a clean slate: `leoflow uninstall` (removes
   `~/.leoflow/`, KEEPS `~/leoflow/` workspace), then re-run this script.
-
-References: post-helm-polish-plan memory item 3 (Lima stress-test build),
-[[simple-reliable-then-grow]], #231 (chaos dogfood gate).

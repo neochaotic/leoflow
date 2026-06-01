@@ -192,6 +192,68 @@ jobs:
           leoflow version
           "$HOME/.leoflow/python/bin/python3.11" --version
 
+  # ── Cold-start smoke (#96): the actual user flow we cannot reproduce in
+  # any other gate — install fresh, run `leoflow setup`, boot `leoflow lite`,
+  # wait for /readyz to respond. Catches the class of bug where the binary
+  # is installed correctly but boot fails (Postgres race, managed-runtime
+  # missing libs, agent port collision, etc.). Uses `--postgres managed` so
+  # the smoke does NOT need Docker-in-Docker; the relocatable Postgres
+  # `leoflow setup` extracted is exercised here for real. Pinned to ubuntu
+  # (the most representative dev environment); the 7-distro install-smoke
+  # above still gates `--version` works on each distro. Extending the cold
+  # start to more distros lands as managed-runtime portability work (#97)
+  # validates each base.
+  lite-cold-start-smoke:
+    name: Lite cold-start (boot + /readyz, managed PG)
+    needs: release
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - name: Install prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq curl ca-certificates tar procps
+      - name: Install Leoflow via the published install.sh
+        env:
+          LEOFLOW_VERSION: ${{ github.ref_name }}
+        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" | sh
+      - name: leoflow setup (non-interactive, defaults)
+        run: |
+          set -eu
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p /tmp/ws
+          leoflow setup --workspace /tmp/ws </dev/null
+      - name: Boot leoflow lite and wait for /readyz
+        run: |
+          set -eu
+          export PATH="$HOME/.local/bin:$PATH"
+          # Background lite; capture stdout+stderr so we can dump on failure.
+          leoflow lite --postgres managed --port 8088 --host 127.0.0.1 >/tmp/lite.log 2>&1 &
+          LITE_PID=$!
+          # Poll /readyz up to 60s. The Postgres-retry budget is 30s by
+          # itself; budget here is loose enough that a managed-PG cold extract
+          # is not penalized while still catching real hangs.
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8088/readyz >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::/readyz never responded after 60s"
+            echo "--- lite log (tail) ---"
+            tail -200 /tmp/lite.log || true
+            kill -TERM "$LITE_PID" 2>/dev/null || true
+            exit 1
+          fi
+          echo "✓ /readyz responded"
+          # Graceful shutdown; assert SIGTERM is honored (otherwise the
+          # process becomes a CI zombie and future runs leak).
+          kill -TERM "$LITE_PID"
+          wait "$LITE_PID" 2>/dev/null || true
+
   # ── Release gate: if the install smoke OR the migrate-image build failed,
   # retract the pre-release to a draft so `curl | sh` (which resolves the
   # newest public release) and the Helm chart (which references the migrate
@@ -199,22 +261,22 @@ jobs:
   # act on either failure; on success it leaves the published pre-release
   # untouched.
   gate:
-    name: Gate release on install smoke + migrate image
-    needs: [release, install-smoke, migrate-image]
+    name: Gate release on install + lite-cold-start + migrate image
+    needs: [release, install-smoke, lite-cold-start-smoke, migrate-image]
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # Edit the published release back to a draft on failure.
     steps:
       - name: Retract release to draft on smoke or migrate-image failure
-        if: needs.install-smoke.result != 'success' || needs.migrate-image.result != 'success'
+        if: needs.install-smoke.result != 'success' || needs.lite-cold-start-smoke.result != 'success' || needs.migrate-image.result != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} migrate-image=${{ needs.migrate-image.result }}; retracting ${GITHUB_REF_NAME} to a draft."
+          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} migrate-image=${{ needs.migrate-image.result }}; retracting ${GITHUB_REF_NAME} to a draft."
           gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft
           exit 1
       - name: Confirm release passed all gates
-        if: needs.install-smoke.result == 'success' && needs.migrate-image.result == 'success'
-        run: echo "install smoke + migrate-image passed; ${GITHUB_REF_NAME} stays published."
+        if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.migrate-image.result == 'success'
+        run: echo "install smoke + lite cold-start + migrate-image passed; ${GITHUB_REF_NAME} stays published."

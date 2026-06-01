@@ -610,6 +610,13 @@ type markStateRequest struct {
 // changing state. It returns the (would-be) updated task instance.
 func patchTaskInstanceHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, audit AuditWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// #271 diagnostic: timing the mark-state mutation so we can prove the
+		// backend write is instant when the user reports "marking a task as
+		// failed takes forever". The wall-clock here is the server's share
+		// of the latency; anything slower than ~50ms here is a real server
+		// regression, while anything beyond that on the UX side belongs to
+		// the SPA's cache invalidation (see #271 update).
+		t0 := time.Now()
 		action := strings.Trim(c.Param("action"), "/")
 		dryRun := action == "dry_run" || strings.HasSuffix(action, "/dry_run")
 		var body markStateRequest
@@ -628,6 +635,7 @@ func patchTaskInstanceHandler(repo TaskInstanceRepository, runs DagRunRepository
 				return
 			}
 		}
+		writeMs := time.Since(t0).Milliseconds()
 		dto, ok := findTaskInstanceDTO(c, repo, runs, versions, runID, taskID)
 		if !ok {
 			AbortProblem(c, http.StatusNotFound, "not found", "task instance not found")
@@ -639,6 +647,10 @@ func patchTaskInstanceHandler(repo TaskInstanceRepository, runs DagRunRepository
 		} else {
 			recordTaskAudit(c, audit, "taskinstance.mark."+body.NewState, runID, taskID, dto.TryNumber)
 		}
+		slog.Info("PATCH /taskInstances mark-state",
+			"tenant", tenantOf(c), "dag", dagID, "run", runID, "task", taskID,
+			"new_state", body.NewState, "dry_run", dryRun,
+			"write_ms", writeMs, "total_ms", time.Since(t0).Milliseconds())
 		c.JSON(http.StatusOK, dto)
 	}
 }

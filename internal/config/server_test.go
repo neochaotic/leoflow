@@ -184,3 +184,21 @@ func TestValidateRejectsDevNoAuthOnNonLoopback(t *testing.T) {
 		t.Errorf("non-dev config should validate, got %v", err)
 	}
 }
+
+// TestLoadServerReadsUIAutoRefreshIntervalFromEnv pins the bug that broke #247:
+// `leoflow lite` exports LEOFLOW_UI_AUTO_REFRESH_INTERVAL_SECONDS=1 so the SPA
+// polls fast in the dev loop, but the server returned 30 (the handler fallback)
+// because `ui.auto_refresh_interval_seconds` was missing from serverDefaults —
+// without an entry there, viper's AutomaticEnv never bound the env key, so the
+// value silently fell back to the zero default. Users had to reload the page
+// to see state changes (observed locally 2026-06-01).
+func TestLoadServerReadsUIAutoRefreshIntervalFromEnv(t *testing.T) {
+	t.Setenv("LEOFLOW_UI_AUTO_REFRESH_INTERVAL_SECONDS", "1")
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if c.UI.AutoRefreshIntervalSeconds != 1 {
+		t.Errorf("UI.AutoRefreshIntervalSeconds = %d, want 1 (env var must override default)", c.UI.AutoRefreshIntervalSeconds)
+	}
+}

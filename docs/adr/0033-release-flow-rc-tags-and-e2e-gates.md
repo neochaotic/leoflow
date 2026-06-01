@@ -163,7 +163,7 @@ gates run on the direct tag and catch regressions either way.
 - [ADR 0014 — Supply-chain security](0014-supply-chain-security.md): the
   Cosign + SBOM + Trivy + govulncheck gates that already protect the
   artifact. This ADR adds the *functional* gates on top.
-- [Memory — alpha-release-policy](../../README.md): "first `v0.1.0-alpha.1`
+- Memory note `alpha-release-policy`: "first `v0.1.0-alpha.1`
   cut only after user hands-on testing." This ADR formalises that ritual
   via the `-rc.N` convention.
 - [PR #251](https://github.com/neochaotic/leoflow/pull/251) — the

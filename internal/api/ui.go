@@ -39,11 +39,20 @@ var uiConfigRequiredFields = []string{
 	"theme", "multi_team",
 }
 
+// DefaultUIAutoRefreshIntervalSeconds is the production-safe value returned by
+// /ui/config when no explicit override is configured. Lite overrides this to a
+// smaller value (typically 5s) for a snappy inner-loop dev experience; Pro
+// keeps 30s so the SPA's polling does not hammer a shared metadata DB.
+const DefaultUIAutoRefreshIntervalSeconds = 30
+
 // registerUI mounts the Airflow 3.2.1 internal UI API (/ui/*) that the bundled
 // React app calls. Unimplemented /ui paths degrade gracefully via uiNoRoute.
-// tokenTTLSecs feeds the expires_in_seconds field of /ui/auth/token.
-func registerUI(r gin.IRouter, tokenTTLSecs int, instanceName string) {
-	r.GET("/ui/config", uiConfigHandler(instanceName))
+// tokenTTLSecs feeds the expires_in_seconds field of /ui/auth/token, and
+// autoRefreshIntervalSecs is the SPA's polling cadence for DAG / DagRun /
+// task-instance state refresh (non-positive values fall back to the
+// production default).
+func registerUI(r gin.IRouter, tokenTTLSecs int, instanceName string, autoRefreshIntervalSecs int) {
+	r.GET("/ui/config", uiConfigHandler(instanceName, autoRefreshIntervalSecs))
 	r.GET("/ui/auth/me", uiMeHandler())
 	r.GET("/ui/auth/menus", uiMenusHandler())
 	r.POST("/ui/auth/token", uiTokenHandler(tokenTTLSecs))
@@ -54,14 +63,22 @@ func registerUI(r gin.IRouter, tokenTTLSecs int, instanceName string) {
 // tunes them). theme is null — required-but-nullable in the spec — meaning "no
 // custom Chakra theme". is_db_isolation_mode is intentionally absent: it is not
 // part of the 3.2.1 ConfigResponse.
-func uiConfigHandler(instanceName string) gin.HandlerFunc {
+//
+// autoRefreshIntervalSecs controls the SPA's polling cadence for DAG / DagRun
+// state. A non-positive value falls back to DefaultUIAutoRefreshIntervalSeconds
+// so a misconfigured env var cannot accidentally drop it to 0 (which would
+// hammer the DB). See docs/configuration.md.
+func uiConfigHandler(instanceName string, autoRefreshIntervalSecs int) gin.HandlerFunc {
 	if instanceName == "" {
 		instanceName = "Leoflow"
+	}
+	if autoRefreshIntervalSecs <= 0 {
+		autoRefreshIntervalSecs = DefaultUIAutoRefreshIntervalSeconds
 	}
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"fallback_page_limit":             50,
-			"auto_refresh_interval":           30,
+			"auto_refresh_interval":           autoRefreshIntervalSecs,
 			"hide_paused_dags_by_default":     false,
 			"instance_name":                   instanceName,
 			"enable_swagger_ui":               true,

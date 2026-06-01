@@ -83,6 +83,12 @@ type UISection struct {
 	// InstanceName is shown in the UI navbar (Airflow's instance_name). Empty
 	// falls back to "Leoflow"; `leoflow lite` sets it to mark the environment.
 	InstanceName string `mapstructure:"instance_name"`
+	// AutoRefreshIntervalSeconds is the SPA's polling cadence for DAG /
+	// DagRun / task-instance state refresh (Airflow's auto_refresh_interval).
+	// Zero (the default) falls back to api.DefaultUIAutoRefreshIntervalSeconds
+	// (30s, production-safe). `leoflow lite` sets it to 1s for a snappy inner
+	// loop so the SPA reflects state changes almost immediately during dev.
+	AutoRefreshIntervalSeconds int `mapstructure:"auto_refresh_interval_seconds"`
 	// Edition marks the running edition; "lite" shows the LITE badge in the UI
 	// shell (independent of the auth mode). Empty/"production" shows no badge.
 	Edition string `mapstructure:"edition"`

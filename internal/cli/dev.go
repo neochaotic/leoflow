@@ -1264,6 +1264,11 @@ func sharedServerEnv(host string, port int, adminHash, adminEmail, jwtSecret str
 		"LEOFLOW_LOGS_DIR=" + filepath.Join(liteDevDir(), "logs"),
 		"LEOFLOW_UI_INSTANCE_NAME=" + devInstanceName,
 		"LEOFLOW_UI_EDITION=lite",
+		// Dial the SPA's auto-refresh down hard for the inner-dev loop: a save
+		// should feel near-instant on screen. Pro keeps the 30s production
+		// default. User decision 2026-06-01: start at 1s for testing, raise to
+		// 5s later if it proves too aggressive.
+		"LEOFLOW_UI_AUTO_REFRESH_INTERVAL_SECONDS=1",
 		"LEOFLOW_DATABASE_URL=" + devDSNs().database,
 		// No LEOFLOW_REDIS_URL: Lite runs Redis-free — XCom on Postgres and an
 		// in-process log tailer. The empty Redis URL is the signal the server uses

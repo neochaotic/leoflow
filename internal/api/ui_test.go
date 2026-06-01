@@ -32,7 +32,7 @@ func TestUIConfigInstanceNameConfigurable(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ui/config", http.NoBody)
-		uiConfigHandler(in)(c)
+		uiConfigHandler(in, 30)(c)
 		var cfg map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
 			t.Fatalf("unmarshal: %v", err)
@@ -40,6 +40,42 @@ func TestUIConfigInstanceNameConfigurable(t *testing.T) {
 		if cfg["instance_name"] != want {
 			t.Errorf("instance_name for %q = %v, want %v", in, cfg["instance_name"], want)
 		}
+	}
+}
+
+// TestUIConfigAutoRefreshIntervalConfigurable pins the contract behind the
+// "UI tasks finished but tela not updated" Lima feedback: the SPA's auto-
+// refresh interval (in seconds) MUST be a server-side setting so Lite can dial
+// it down to ~5s for the dev inner loop while Pro keeps the 30s production
+// default. A non-positive input falls back to the production default so a
+// misconfigured env var cannot accidentally drop the value to 0 (which would
+// hammer the DB).
+func TestUIConfigAutoRefreshIntervalConfigurable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cases := []struct {
+		name string
+		in   int
+		want float64 // JSON numbers come back as float64
+	}{
+		{"lite dev loop", 5, 5},
+		{"production default", 30, 30},
+		{"non-positive falls back to 30", 0, 30},
+		{"negative falls back to 30", -1, 30},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ui/config", http.NoBody)
+			uiConfigHandler("Leoflow", tc.in)(c)
+			var cfg map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if cfg["auto_refresh_interval"] != tc.want {
+				t.Errorf("auto_refresh_interval (in=%d) = %v, want %v", tc.in, cfg["auto_refresh_interval"], tc.want)
+			}
+		})
 	}
 }
 

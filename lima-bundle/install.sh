@@ -62,41 +62,26 @@ else
 fi
 
 # ─── 3. Install the leoflow binary ───────────────────────────────────────────
-# Pick the latest prealpha release. The release workflow publishes
-# leoflow_<version>_<os>_<arch>.tar.gz tarballs (and matching checksums +
-# cosign signatures + SBOMs); we extract the binary from the tarball.
-# Override the release tag via LEOFLOW_RELEASE_TAG=v0.0.1-prealpha.N.
+# Delegate to the top-level install.sh — the canonical, tested, hostile-locale-
+# smoked installer. This wrapper used to re-implement the release resolution
+# inline and shipped the bug "404 on /releases/latest when every release is a
+# pre-release" (2026-06-01). Calling install.sh keeps one source of truth so a
+# future fix benefits both `curl … install.sh | sh` and this Lima bundle path.
 echo
 echo "${BOLD}1. Installing leoflow binary${RESET}"
-RELEASE_TAG="${LEOFLOW_RELEASE_TAG:-latest}"
-if [[ "$RELEASE_TAG" == "latest" ]]; then
-  RELEASE_API="https://api.github.com/repos/${BUNDLE_REPO}/releases/latest"
+INSTALL_SH_URL="https://raw.githubusercontent.com/${BUNDLE_REPO}/${BUNDLE_REF}/install.sh"
+# Pass-through env vars: LEOFLOW_VERSION pins the release tag (the upstream
+# script's name for what we used to call LEOFLOW_RELEASE_TAG).
+LEOFLOW_VERSION_PASS="${LEOFLOW_RELEASE_TAG:-${LEOFLOW_VERSION:-}}"
+if [[ -n "$LEOFLOW_VERSION_PASS" ]]; then
+  curl -fsSL "$INSTALL_SH_URL" | LEOFLOW_VERSION="$LEOFLOW_VERSION_PASS" sh
 else
-  RELEASE_API="https://api.github.com/repos/${BUNDLE_REPO}/releases/tags/${RELEASE_TAG}"
+  curl -fsSL "$INSTALL_SH_URL" | sh
 fi
-DOWNLOAD_URL="$(curl -fsSL "$RELEASE_API" \
-  | grep -E "browser_download_url.*_${OS}_${ARCH}\.tar\.gz\"" \
-  | head -1 \
-  | sed -E 's/.*"(https[^"]+)".*/\1/')"
-if [[ -z "${DOWNLOAD_URL}" ]]; then
-  echo "could not resolve a leoflow_*_${OS}_${ARCH}.tar.gz asset on ${RELEASE_TAG}" >&2
-  echo "fallback: check https://github.com/${BUNDLE_REPO}/releases manually" >&2
-  exit 1
-fi
-echo "  url: ${DOWNLOAD_URL}"
-INSTALL_DIR="${HOME}/.local/bin"
-mkdir -p "$INSTALL_DIR"
-INSTALL_TMP="$(mktemp -d)"
-trap 'rm -rf "$INSTALL_TMP" "${TMPDIR:-}" "${SETUP_LOG:-}"' EXIT
-curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_TMP/leoflow.tar.gz"
-tar -xz -C "$INSTALL_TMP" -f "$INSTALL_TMP/leoflow.tar.gz"
-BIN_PATH="$(find "$INSTALL_TMP" -type f -name leoflow -perm -u+x | head -1)"
-if [[ -z "$BIN_PATH" ]]; then
-  echo "tarball did not contain a leoflow binary" >&2
-  exit 1
-fi
-install -m 0755 "$BIN_PATH" "$INSTALL_DIR/leoflow"
-export PATH="$INSTALL_DIR:$PATH"
+# install.sh drops the binary into ~/.local/bin (or /usr/local/bin via PATH
+# probe); make it discoverable in this shell session so the setup step below
+# finds it.
+export PATH="${HOME}/.local/bin:/usr/local/bin:$PATH"
 echo "  installed: $(leoflow version 2>&1 | head -1)"
 
 # ─── 4. Run setup (generates admin password — captured in setup's output) ───

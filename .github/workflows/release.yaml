@@ -207,18 +207,21 @@ jobs:
     name: Lite cold-start (boot + /readyz, managed PG)
     needs: release
     runs-on: ubuntu-latest
-    container: ubuntu:24.04
+    # ubuntu:22.04 (libicu70) matches the libicu the bundled relocatable
+    # Postgres 16.13.0 was linked against. ubuntu:24.04 ships libicu74,
+    # which the bundled PG cannot dlopen → "system libraries missing" boot
+    # error (we saw this on prealpha.24/.25). The actual user environment
+    # this smoke is mimicking — a Lima-style Ubuntu LTS dev VM — is also
+    # 22.04, so this is the right base to pin.
+    container: ubuntu:22.04
     steps:
       - name: Install prerequisites
         run: |
           apt-get update -qq
-          # libicu74 + krb5-libs are linked by the relocatable Postgres binary;
-          # a stock ubuntu:24.04 image ships without them so `leoflow lite
-          # --postgres managed` errors out at boot ("system libraries missing").
-          # Real Ubuntu desktops typically have these via libreoffice/curl,
-          # but a slim CI container does not — install them explicitly so the
-          # smoke job actually exercises the managed-PG path (#96).
-          apt-get install -y -qq curl ca-certificates tar procps libicu74 libgssapi-krb5-2
+          # libicu70 + krb5-libs are linked by the relocatable Postgres
+          # binary; the slim ubuntu:22.04 CI image is missing them so the
+          # managed-PG path needs them installed up-front (#96).
+          apt-get install -y -qq curl ca-certificates tar procps libicu70 libgssapi-krb5-2
       - name: Install Leoflow via the published install.sh
         env:
           LEOFLOW_VERSION: ${{ github.ref_name }}

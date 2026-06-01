@@ -45,8 +45,16 @@ fi
 echo "==> upgrading from ${PREVIOUS} → ${LEOFLOW_VERSION}"
 
 echo "==> installing previous version (${PREVIOUS})"
-LEOFLOW_VERSION="${PREVIOUS}" \
-  curl -fsSL "https://raw.githubusercontent.com/${LEOFLOW_REPO}/${LEOFLOW_VERSION}/install.sh" | sh
+# `VAR=value cmd1 | cmd2` only exports VAR to cmd1 — the piped sh runs
+# without LEOFLOW_VERSION and install.sh falls back to "latest", which is
+# the just-cut tag we are testing AGAINST, not the previous one. Export
+# explicitly so install.sh inside the `| sh` pipeline sees it. (Previous
+# silent breakage: prealpha.24 coincidentally matched because "latest"
+# resolved to the previous tag at that moment.)
+INSTALL_URL="https://raw.githubusercontent.com/${LEOFLOW_REPO}/${LEOFLOW_VERSION}/install.sh"
+export LEOFLOW_VERSION_FOR_INSTALL="${PREVIOUS}"
+LEOFLOW_VERSION="${LEOFLOW_VERSION_FOR_INSTALL}" \
+  sh -c "curl -fsSL \"${INSTALL_URL}\" | LEOFLOW_VERSION=\"${LEOFLOW_VERSION_FOR_INSTALL}\" sh"
 
 # Make the binary discoverable on this shell — install.sh writes a hint to
 # rc files but we cannot rely on those in a sh-only smoke runner.
@@ -69,8 +77,8 @@ case "${INSTALLED}" in
 esac
 
 echo "==> installing current version (${LEOFLOW_VERSION}) ON TOP of ${PREVIOUS}"
-LEOFLOW_VERSION="${LEOFLOW_VERSION}" \
-  curl -fsSL "https://raw.githubusercontent.com/${LEOFLOW_REPO}/${LEOFLOW_VERSION}/install.sh" | sh
+# Same env-propagation guard as the previous install (see above).
+sh -c "curl -fsSL \"${INSTALL_URL}\" | LEOFLOW_VERSION=\"${LEOFLOW_VERSION}\" sh"
 
 UPGRADED="$(command -v leoflow >/dev/null 2>&1 && leoflow version 2>&1 | head -1 || true)"
 case "${UPGRADED}" in

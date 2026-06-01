@@ -43,6 +43,37 @@ def test_run_rejects_bad_entrypoint():
         runner.run("no_callable_here")
 
 
+def test_run_lifecycle_never_logs_kwargs_values(tmp_path, monkeypatch, capsys):
+    """ADR 0032: the runtime MUST NOT dump kwargs values to stdout — only the
+    keys. Values can carry XCom-pulled secrets or any user payload; they
+    belong in the XCom tab, not in the log file. Regression guard for the Lima
+    leak found 2026-06-01 where `resolved kwargs: {'raw': 'SECRET'}` was
+    bleeding the pulled XCom value straight into the log.
+    """
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    secret = "UPSTREAM_SECRET_VALUE_42"  # noqa: S105 — synthetic test marker, not a real secret
+    monkeypatch.setenv("LEOFLOW_XCOM_RAW", f'"{secret}"')
+    mod = _write_module(tmp_path, monkeypatch, (
+        "def consumer(raw):\n"
+        "    return len(raw)\n"
+    ))
+
+    runner.run(f"{mod}:consumer")
+    stdout = capsys.readouterr().out
+
+    # The kwargs lifecycle line MUST list keys but NEVER include the value.
+    assert secret not in stdout, (
+        f"ADR 0032 violation: pulled XCom value leaked into stdout:\n{stdout}"
+    )
+    assert "resolved kwargs: ['raw']" in stdout, (
+        f"expected the keys-only kwargs line in:\n{stdout}"
+    )
+    # The pulled metadata line is still expected (size only).
+    assert "[leoflow] pulled raw" in stdout
+    assert "(26 B)" in stdout  # the JSON-encoded secret has 26 bytes
+
+
 def test_run_logs_xcom_pulls_with_size(tmp_path, monkeypatch, capsys):
     """When an upstream XCom is consumed, the runtime MUST log it with the wire
     size — invaluable when debugging "received None" in a downstream task

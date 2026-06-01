@@ -126,7 +126,7 @@ differ from what's committed.
 |-----|------|---------|-------------|
 | affinity | object | `{}` | Pod affinity rules (standard K8s — co-locate or anti-affinity). |
 | agentTLS.caConfigMap | string | `""` | Name of a ConfigMap with key `ca.crt`. Mounted into task pods so the agent verifies the server cert. Typically a cert-manager trust-bundle. |
-| agentTLS.enabled | bool | `false` | Enable TLS on the agent ↔ control plane gRPC channel (#58). When false, the per-task JWT still authenticates each call but the channel is plaintext (acceptable in-cluster). |
+| agentTLS.enabled | bool | `true` | Enable TLS on the agent ↔ control plane gRPC channel (#58). Default ON for the Pro alpha: the chart marks this deployment as the production edition, and the server refuses to boot with `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true` so secrets cannot accidentally travel a plaintext channel. Disable only for an isolated, in-cluster test where the threat model accepts plaintext. |
 | agentTLS.serverCertSecret | string | `""` | Name of a `kubernetes.io/tls` Secret (with `tls.crt`/`tls.key`) for the gRPC server. Typically produced by a cert-manager `Certificate`. Required when `enabled: true`. |
 | auth.existingSecret | string | `""` | Name of a Secret with key `jwtSecret` (takes precedence over `jwtSecret`). |
 | auth.jwtSecret | string | `""` | HMAC secret signing API + agent JWTs. Set inline OR reference an existing Secret via `existingSecret`. Generate with `openssl rand -base64 64`. |

@@ -4,10 +4,12 @@ on:
   push:
     tags: ["v*"]
 
+# Least-privilege default: read-only at the top level. Each job that needs to
+# write (the release publish, the migrate image push, the gate's draft-edit)
+# opts in explicitly. OpenSSF Scorecard Token-Permissions check penalises any
+# write that lives at the workflow scope.
 permissions:
-  contents: write       # For creating releases
-  packages: write       # For pushing images to GHCR
-  id-token: write       # For cosign keyless signing
+  contents: read
 
 env:
   GO_VERSION: "1.26.3"
@@ -17,6 +19,10 @@ jobs:
   release:
     name: Build, sign, publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # GoReleaser creates the GitHub release.
+      packages: write   # Push the leoflow-server image to GHCR.
+      id-token: write   # Cosign keyless signing via Sigstore OIDC.
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -197,6 +203,8 @@ jobs:
     needs: [release, install-smoke, migrate-image]
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Edit the published release back to a draft on failure.
     steps:
       - name: Retract release to draft on smoke or migrate-image failure
         if: needs.install-smoke.result != 'success' || needs.migrate-image.result != 'success'

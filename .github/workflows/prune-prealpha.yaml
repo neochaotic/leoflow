@@ -28,13 +28,18 @@ on:
         type: string
         default: "90"
 
+# Least-privilege default: the workflow itself reads only; the prune job below
+# elevates to contents:write to delete releases + tags. Scoping the write per
+# job keeps OpenSSF Scorecard's Token-Permissions check happy.
 permissions:
-  contents: write # delete releases and tags
+  contents: read
 
 jobs:
   prune:
     name: Prune stale pre-alpha releases
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Delete pre-alpha releases and their tags.
     steps:
       - name: Prune
         env:

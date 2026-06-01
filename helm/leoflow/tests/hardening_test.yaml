@@ -9,6 +9,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
+      agentTLS.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -19,6 +20,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
+      agentTLS.enabled: false
       autoscaling.enabled: true
       autoscaling.minReplicas: 3
       autoscaling.maxReplicas: 9
@@ -45,6 +47,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
+      agentTLS.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -55,6 +58,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
+      agentTLS.enabled: false
       podDisruptionBudget.enabled: true
       podDisruptionBudget.minAvailable: 2
     asserts:
@@ -73,6 +77,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
+      agentTLS.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -83,6 +88,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
+      agentTLS.enabled: false
       networkPolicy.enabled: true
     asserts:
       - hasDocuments:
@@ -113,6 +119,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
+      agentTLS.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -123,6 +130,7 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
+      agentTLS.enabled: false
       metrics.serviceMonitor.enabled: true
     asserts:
       - hasDocuments:

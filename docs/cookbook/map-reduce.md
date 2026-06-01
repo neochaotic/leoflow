@@ -37,6 +37,65 @@ At runtime:
    declaration order), and stamps it as `LEOFLOW_XCOM_TRIALS`.
 4. The runtime delivers the list directly to your function.
 
+## When fan-in activates
+
+The parser activates fan-in based on the **shape of the argument** at the
+call site, nothing else. Three forms are equivalent:
+
+```python
+# 1. List comprehension — the common form, scales to N
+select_best([trial(lr) for lr in [0.001, 0.01, 0.05, 0.1, 0.5]])
+
+# 2. Explicit list of task calls
+combine([estimate(0), estimate(1), estimate(2)])
+
+# 3. Tuple instead of list — also works
+report((extract_a(), extract_b()))
+```
+
+All three produce the same `xcom_input[param] = [task_id_1, …, task_id_N]`
+in `dag.json`.
+
+What does **not** activate fan-in:
+
+| Code | What happens |
+|---|---|
+| `transform(extract())` | Single upstream. The parser captures one task_id (a 1-element list internally) — the function's parameter receives the value directly, not a list. |
+| `shard(n=0)` | Literal kwarg. Captured as `call_args.n = 0` and delivered via `LEOFLOW_CALL_ARGS_JSON`. No XCom, no upstream. |
+| `start >> [a, b, c]` | Dependency edge only. No argument binding — downstream gets no list. |
+| `f(items=[1, 2, 3])` | Plain literal list. JSON-serialised into `call_args.items`, not fan-in. |
+| `aggregate([shard(0), 42, foo()])` | Mixed list (XComArg + literal). Currently silently dropped; intended to become a hard error. |
+
+The rule: **every element of the list must be a task call** for the parser to
+treat the whole argument as fan-in.
+
+## Guarantees and limits
+
+- **Scope.** Fan-in is always *N upstreams in the same DagRun → one
+  downstream*. It never crosses DAGs or runs. The XCom lookup is keyed by
+  `(tenant, dag_id, run_id, upstream_task_id)`.
+- **N is compile-time.** Both `range(SHARDS)` examples below produce
+  exactly `SHARDS` tasks; the count is fixed when the DAG is compiled, not
+  discovered at runtime. Dynamic mapping (Airflow's `.expand()`) is **not
+  supported yet** — the parser refuses it loudly so you do not get a
+  silent partial run.
+- **N == 1 also flows through the fan-in path.** The schema is uniform
+  (always a list), but a 1-element list looks identical to a normal
+  single-upstream call from the user's perspective. There is no special
+  case to remember.
+- **Order is declaration-order, not finish-order.** Trial 3 that finishes
+  first stays at index 3 in the list the reducer receives. This is what
+  most ML code expects (you can pair indices with hyperparameters).
+- **An absent upstream contributes `null`.** If `estimate__2` failed and
+  pushed no XCom, the reducer sees `[v0, v1, null, v3]`. Your reducer
+  decides what `null` means; the default `trigger_rule="all_success"`
+  means a failed upstream blocks the reducer entirely, so you only hit
+  `null` when you opt into `trigger_rule="all_done"` (or similar).
+- **The XCom 256 KB ceiling applies per upstream**, and the assembled
+  array is also subject to it on the wire — keep return values small
+  (metrics dicts, paths to artifacts), not full models or dataframes.
+  Tracking issue for spill-to-storage is on the roadmap.
+
 ## Why this matters for ML
 
 Most ML workloads are map-reduce: independent work per shard, then one

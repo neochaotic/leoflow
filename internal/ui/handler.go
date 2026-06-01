@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io/fs"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -102,6 +103,16 @@ func (s *Server) StaticHandler() http.Handler {
 		}
 		data, err := fs.ReadFile(s.fsys, name)
 		if err != nil {
+			// Lima Bug #11 / 2026-06-01: occasional 404 on /static/* paths whose
+			// exact name we never captured. Logging the resolved name + the SPA
+			// referrer + user-agent surfaces it on the next reproduction so we
+			// either add the missing asset or fix the rewrite that produced it.
+			slog.Info("ui static 404",
+				"resolved_name", name,
+				"raw_path", r.URL.Path,
+				"referer", r.Referer(),
+				"user_agent", r.UserAgent(),
+			)
 			http.NotFound(w, r)
 			return
 		}

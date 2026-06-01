@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -42,14 +43,25 @@ var tiStateOrder = []string{
 	"upstream_failed", "skipped", "deferred",
 }
 
-// dagStatsHandler implements GET /ui/dashboard/dag_stats.
+// dagStatsHandler implements GET /ui/dashboard/dag_stats. The result is logged
+// at INFO level (with tenant + the four counts) so Lima debugging — "the
+// dashboard shows 0 failed but I see 2 failed DAGs" — has a server-side trail
+// to compare against the DB. Lima Bug #3 / 2026-06-01.
 func dagStatsHandler(reader DashboardStatsReader) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		s, err := reader.DagStats(c.Request.Context(), tenantOf(c))
+		tenant := tenantOf(c)
+		s, err := reader.DagStats(c.Request.Context(), tenant)
 		if err != nil {
 			handleRepoError(c, err)
 			return
 		}
+		slog.Info("/ui/dashboard/dag_stats",
+			"tenant", tenant,
+			"active_dag_count", s.Active,
+			"failed_dag_count", s.Failed,
+			"running_dag_count", s.Running,
+			"queued_dag_count", s.Queued,
+		)
 		c.JSON(http.StatusOK, gin.H{
 			"active_dag_count":  s.Active,
 			"failed_dag_count":  s.Failed,

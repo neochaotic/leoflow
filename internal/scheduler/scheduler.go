@@ -289,6 +289,17 @@ func (s *Scheduler) Heartbeat() (bool, time.Time) {
 // by the caller); the later phases still execute.
 func (s *Scheduler) Step(ctx context.Context) error {
 	s.lastTick.Store(time.Now().UnixNano())
+	// Single-writer invariant (ADR 0031 / issue #208): a follower MUST NOT
+	// read or write scheduler state. The lastTick.Store above keeps the
+	// follower's heartbeat live so the orchestrator can prove the instance
+	// is alive without granting it the writer role. Lifting the gate here
+	// (instead of only inside reapOrphansIfLeader) removes the wasted reads,
+	// the duplicate ApplyTransition / CreateScheduledRun attempts that ON
+	// CONFLICT used to swallow, and the "what does a follower's count drift
+	// mean?" puzzle.
+	if !s.leading.Load() {
+		return nil
+	}
 	runs, err := s.store.ActiveRuns(ctx)
 	if err != nil {
 		return fmt.Errorf("listing active runs: %w", err)

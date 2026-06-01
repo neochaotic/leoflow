@@ -69,6 +69,12 @@ spec:
             - name: grpc
               containerPort: {{ .Values.ports.grpc }}
           env:
+            # Mark this deployment as the Pro edition. The control plane uses
+            # this signal to refuse the LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true
+            # dev escape hatch at boot (#58 / ADR 0014), so a Pro install cannot
+            # accidentally ship secrets over a plaintext gRPC channel.
+            - name: LEOFLOW_UI_EDITION
+              value: "production"
             - name: LEOFLOW_SERVER_HTTP_ADDR
               value: ":{{ .Values.ports.http }}"
             - name: LEOFLOW_SERVER_METRICS_ADDR

@@ -100,6 +100,7 @@ jobs:
             --set redis.url='redis://x/0' \
             --set auth.jwtSecret=x \
             --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
+            --set agentTLS.serverCertSecret=leoflow-agent-tls-ci \
             | kubeconform -strict -summary -ignore-missing-schemas \
                 -schema-location default
 
@@ -150,6 +151,7 @@ jobs:
             --set redis.url='redis://redis:6379/0' \
             --set auth.jwtSecret=ci-jwt-secret \
             --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
+            --set agentTLS.enabled=false \
             --set bootstrap.password=ci-admin \
             --wait --timeout 240s
           kubectl -n leoflow rollout status deploy/leoflow --timeout=120s

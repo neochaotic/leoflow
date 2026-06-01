@@ -173,7 +173,14 @@ spec:
             {{- end }}
       volumes:
         - name: logs
+          {{- if .Values.logs.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "leoflow.fullname" . }}-logs
+          {{- else }}
+          # Dev-only fallback: logs vanish on pod restart. Enable
+          # `logs.persistence.enabled` for durable storage (#227).
           emptyDir: {}
+          {{- end }}
         {{- if .Values.agentTLS.enabled }}
         - name: grpc-tls
           secret:

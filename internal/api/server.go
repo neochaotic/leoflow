@@ -97,6 +97,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	r.Use(Observe(deps.Metrics, deps.Tracer))
 	r.Use(StructuredLogger(deps.Logger))
 	r.Use(CORS(deps.CORSOrigins))
+	r.Use(NoStoreOnVolatileRoutes())
 	if deps.DevNoAuth {
 		r.Use(DevBypassAuth())
 	} else {

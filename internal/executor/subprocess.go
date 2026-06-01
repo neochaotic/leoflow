@@ -6,7 +6,43 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
+
+// materializeWorkDir stages req.Source into a per-task-instance temp dir as a
+// `dag.py` file, so the spawned agent's `python -m leoflow_runtime dag:<task>`
+// can importlib it without depending on a globally-correct CWD. Used by the
+// SubprocessExecutor (Lite). An empty source returns ("", no-op cleanup, nil)
+// so the executor falls back to its configured global workdir — preserving the
+// Pro/K8s path where the source lives inside the container image.
+//
+// The dir name embeds the task_instance_id so concurrent dispatches do not
+// collide and an operator inspecting /tmp can map a leftover dir back to its
+// run. Caller MUST defer cleanup() so dirs don't pile up across tasks.
+func materializeWorkDir(source, taskInstanceID string) (workDir string, cleanup func(), err error) {
+	noop := func() {}
+	if source == "" {
+		return "", noop, nil
+	}
+	prefix := fmt.Sprintf("leoflow-%s-", taskInstanceID)
+	dir, mkErr := os.MkdirTemp("", prefix)
+	if mkErr != nil {
+		return "", noop, fmt.Errorf("staging task workdir: %w", mkErr)
+	}
+	dagPath := filepath.Join(dir, "dag.py")
+	if werr := os.WriteFile(dagPath, []byte(source), 0o600); werr != nil {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			slog.Warn("cleaning up partial workdir after write error", "dir", dir, "error", rmErr)
+		}
+		return "", noop, fmt.Errorf("writing materialized dag.py: %w", werr)
+	}
+	cleanup = func() {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			slog.Warn("removing task workdir", "dir", dir, "error", rmErr)
+		}
+	}
+	return dir, cleanup, nil
+}
 
 // SubprocessExecutor runs the agent as a host subprocess with no isolation. It
 // is for dev mode only and logs a prominent warning on construction.
@@ -51,23 +87,39 @@ func agentEnv(req Request) []string {
 // A non-zero exit is therefore NOT a synchronous error; only a failure to start
 // is. The process is reaped in the background.
 func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
+	// Materialize the DAG's source into a per-TI temp dir so `python -m
+	// leoflow_runtime dag:<task>` can importlib it. Mirrors the Pro container's
+	// "source is staged at the worker's CWD" contract — but without Docker.
+	// Empty source falls back to the configured global workdir for backwards
+	// compatibility with the scaffolded single-DAG Lite layout.
+	workDir, cleanupWorkDir, err := materializeWorkDir(req.Source, req.TaskInstanceID)
+	if err != nil {
+		e.logger.Error("staging task workdir failed",
+			"task", req.TaskID, "task_instance_id", req.TaskInstanceID, "error", err)
+		return err
+	}
+	if workDir == "" {
+		workDir = e.workDir
+	}
 	// Entry log (Lima Bug 2 diagnostic, 2026-05-31): if a manual trigger sits
 	// in queued forever and this line is absent, the scheduler never reached
 	// Execute(); if present and the next line is absent, cmd.Start() failed.
 	e.logger.Info("spawning agent subprocess",
-		"task", req.TaskID, "run", req.RunID, "agent_path", e.agentPath, "work_dir", e.workDir)
+		"task", req.TaskID, "run", req.RunID, "agent_path", e.agentPath, "work_dir", workDir,
+		"materialized_source", req.Source != "")
 	// WithoutCancel detaches the agent from the dispatch context: like a pod, it
 	// must run to completion and report its own terminal state over gRPC. Binding
 	// it to ctx would SIGKILL the agent when the dispatch ctx is canceled (surfacing
 	// as "signal: killed" and a falsely failed task), mirroring the inline runner.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), e.agentPath) //nolint:gosec // dev-only executor running the trusted agent binary
 	cmd.Env = append(os.Environ(), agentEnv(req)...)
-	cmd.Dir = e.workDir
+	cmd.Dir = workDir
 	// Surface the agent's own diagnostics (it logs to stderr); otherwise an agent
 	// that fails to start or connect fails silently. The task's stdout/stderr are
 	// shipped separately over gRPC.
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
+		cleanupWorkDir()
 		e.logger.Error("agent subprocess failed to start",
 			"task", req.TaskID, "agent_path", e.agentPath, "error", err)
 		return fmt.Errorf("starting agent subprocess for task %s: %w", req.TaskID, err)
@@ -75,6 +127,7 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
 	e.logger.Info("agent subprocess started",
 		"task", req.TaskID, "run", req.RunID, "pid", cmd.Process.Pid)
 	go func() {
+		defer cleanupWorkDir()
 		werr := cmd.Wait()
 		if werr != nil {
 			e.logger.Warn("agent subprocess exited non-zero (the agent reports task state over gRPC)",

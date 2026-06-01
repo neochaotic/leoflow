@@ -103,6 +103,104 @@ func TestResolveWorkspace_RootCfgUnionsDependencies(t *testing.T) {
 	}
 }
 
+// TestPythonVersionLess_NumericNotLexicographic catches the bug the original
+// implementation shipped: naive string compare puts "3.10" BELOW "3.9"
+// because '1' < '9'. Python 3.10 is the newer release, so the workspace
+// would have targeted the wrong venv. Per-component numeric compare fixes
+// it; this test pins the contract.
+func TestPythonVersionLess_NumericNotLexicographic(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool // want a < b
+	}{
+		{"3.9", "3.10", true},  // <-- the original bug
+		{"3.10", "3.9", false}, // <-- reverse direction
+		{"3.10", "3.11", true},
+		{"3.11", "3.12", true},
+		{"3.10", "3.10", false}, // equal
+		{"3.10", "3.10.1", true},
+		{"3.10.1", "3.10", false},
+	}
+	for _, tc := range cases {
+		if got := pythonVersionLess(tc.a, tc.b); got != tc.want {
+			t.Errorf("pythonVersionLess(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// TestResolveWorkspace_DependencyConflictIsError asserts the multi-DAG venv
+// invariant: two projects that pin the same pip package to different
+// versions cannot share a venv, so the workspace must fail loud at resolve
+// time with the package name + colliding specs + the projects that declared
+// them. Silent merging would let pip install one version and break the other
+// DAG at runtime with a confusing ImportError.
+func TestResolveWorkspace_DependencyConflictIsError(t *testing.T) {
+	ws := t.TempDir()
+	for _, p := range []struct {
+		dir, dep string
+	}{
+		{"etl", "pandas==2.1.0"},
+		{"ml", "pandas==2.2.0"}, // conflict
+		{"web", "requests"},     // unrelated, must not show in error
+	} {
+		full := filepath.Join(ws, p.dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		yaml := "dag_id: " + p.dir + "\ndependencies:\n  - " + p.dep + "\n"
+		if err := os.WriteFile(filepath.Join(full, "leoflow.yaml"), []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(full, "dag.py"), []byte("x=1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := ResolveWorkspace(ws)
+	if err == nil {
+		t.Fatal("expected dependency conflict error, got nil")
+	}
+	msg := err.Error()
+	for _, must := range []string{"pandas", "2.1.0", "2.2.0", "etl", "ml"} {
+		if !strings.Contains(msg, must) {
+			t.Errorf("error %q should mention %q", msg, must)
+		}
+	}
+	if strings.Contains(msg, "requests") || strings.Contains(msg, "web") {
+		t.Errorf("error %q should NOT list unrelated package 'requests' or project 'web'", msg)
+	}
+}
+
+// TestResolveWorkspace_DependencyCaseInsensitive asserts PEP 503 normalisation:
+// "Pandas==2.1.0" and "pandas==2.1.0" are the same package, NOT a conflict.
+func TestResolveWorkspace_DependencyCaseInsensitive(t *testing.T) {
+	ws := t.TempDir()
+	for _, p := range []struct {
+		dir, dep string
+	}{
+		{"a", "Pandas==2.1.0"},
+		{"b", "pandas==2.1.0"}, // same package, same version, just different case
+	} {
+		full := filepath.Join(ws, p.dir)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		yaml := "dag_id: " + p.dir + "\ndependencies:\n  - " + p.dep + "\n"
+		if err := os.WriteFile(filepath.Join(full, "leoflow.yaml"), []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(full, "dag.py"), []byte("x=1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := ResolveWorkspace(ws)
+	if err != nil {
+		t.Fatalf("case-insensitive dedup should not error: %v", err)
+	}
+	if len(got.RootCfg.Dependencies) != 1 {
+		t.Errorf("expected 1 merged dependency, got %v", got.RootCfg.Dependencies)
+	}
+}
+
 // TestResolveWorkspace_RootCfgPicksHighestPythonVersion asserts the pragmatic
 // venv-shared rule: when projects disagree on python_version, the workspace
 // venv targets the highest declared version (newest features available; older

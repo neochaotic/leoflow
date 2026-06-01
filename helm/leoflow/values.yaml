@@ -147,8 +147,8 @@ migrations:
 # so the agent verifies the server cert. Typically both are produced by
 # cert-manager (a Certificate Secret + a trust-bundle/CA ConfigMap).
 agentTLS:
-  # -- Enable TLS on the agent ↔ control plane gRPC channel (#58). When false, the per-task JWT still authenticates each call but the channel is plaintext (acceptable in-cluster).
-  enabled: false
+  # -- Enable TLS on the agent ↔ control plane gRPC channel (#58). Default ON for the Pro alpha: the chart marks this deployment as the production edition, and the server refuses to boot with `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true` so secrets cannot accidentally travel a plaintext channel. Disable only for an isolated, in-cluster test where the threat model accepts plaintext.
+  enabled: true
   # -- Name of a `kubernetes.io/tls` Secret (with `tls.crt`/`tls.key`) for the gRPC server. Typically produced by a cert-manager `Certificate`. Required when `enabled: true`.
   serverCertSecret: ""
   # -- Name of a ConfigMap with key `ca.crt`. Mounted into task pods so the agent verifies the server cert. Typically a cert-manager trust-bundle.

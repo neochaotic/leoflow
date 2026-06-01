@@ -108,6 +108,14 @@ func run() error {
 	// insecure (dev) until gRPC TLS lands (issue #58); otherwise the handlers
 	// fail closed on a plaintext channel.
 	allowInsecureSecrets := os.Getenv("LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS") == "true"
+	// Pro alpha blocker (#58): a production-edition deployment MUST NOT ship
+	// secrets over a plaintext channel. The chart's deployment template stamps
+	// LEOFLOW_UI_EDITION=production; refuse to boot if the insecure escape
+	// hatch is set alongside it. Lite (edition=lite) and the unmarked default
+	// (edition="") still tolerate the flag for the dev inner loop.
+	if err := guardInsecureSecretsForEdition(cfg.UI.Edition, allowInsecureSecrets); err != nil {
+		return err
+	}
 	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, tel.Logger)
 	if gerr != nil {
 		return gerr

@@ -23,6 +23,11 @@ type Resolved struct {
 	// Staging carries the DAG's opt-in staging-volume config (ADR 0022); nil or
 	// disabled means no per-run volume.
 	Staging *domain.StagingConfig
+	// Source is the dag.py text captured at compile time, threaded to the
+	// SubprocessExecutor so Lite tasks can importlib their DAG without relying
+	// on a globally-correct workdir. Empty for Pro (the container image carries
+	// the source) and ignored by the KubernetesExecutor.
+	Source string
 }
 
 // Resolver loads a task instance's execution context from storage.
@@ -106,6 +111,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 		TryNumber:        r.TryNumber,
 		Image:            r.Image,
 		ImagePullPolicy:  r.ImagePullPolicy,
+		Source:           r.Source,
 		Operator:         string(task.Type),
 		Entrypoint:       task.Entrypoint,
 		Env:              task.Env,

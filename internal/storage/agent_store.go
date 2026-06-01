@@ -142,6 +142,8 @@ func (s *ExecutionStore) ResolveTask(ctx context.Context, runID, taskID string) 
 		ImagePullPolicy: pullPolicy,
 		TryNumber:       int(ti.TryNumber),
 		Staging:         spec.Staging,
+		// Materialize source on the executor side (Lite only); Pro ignores it.
+		Source: spec.Source,
 	}, nil
 }
 

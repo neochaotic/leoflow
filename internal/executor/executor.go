@@ -26,6 +26,14 @@ type Request struct {
 	Execution       domain.Execution
 	TimeoutSeconds  int
 
+	// Source is the dag.py text captured at compile time. The SubprocessExecutor
+	// materializes it to a per-TI temp dir so `python -m leoflow_runtime
+	// dag:<task>` can importlib it from there — this is how multi-DAG Lite setups
+	// avoid the ModuleNotFoundError that hit Lima 2026-06-01 when the agent's
+	// global workdir didn't carry the user's dag.py. Empty for Pro (the
+	// container image already carries the source); ignored by the K8s executor.
+	Source string
+
 	// HTTPRequest is set for http_api tasks (run by InlineHTTPExecutor).
 	HTTPRequest *domain.HTTPRequest
 

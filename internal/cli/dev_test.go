@@ -360,9 +360,14 @@ func TestServerEnvBuilders(t *testing.T) {
 			t.Errorf("--port 8090 should offset gRPC/metrics, missing %q", must)
 		}
 	}
-	// Both carry the shared settings (isolated DB + LITE badge).
-	if !strings.Contains(clu, "LEOFLOW_DATABASE_URL="+devDatabaseURL) || !strings.Contains(clu, "LEOFLOW_UI_EDITION=lite") {
-		t.Error("clusterServerEnv missing shared settings")
+	// Both carry the shared settings (isolated DB + LITE badge). The DSN
+	// itself is resolved at runtime (devDSNs() detects managed-socket vs
+	// docker-tcp + reads the persisted db-port), so assert the key prefix and
+	// the database name, not the full URL — otherwise the test couples to the
+	// caller's filesystem state and fails on CI runners that have a stale
+	// managed-socket fixture from a sibling test.
+	if !strings.Contains(clu, "LEOFLOW_DATABASE_URL=") || !strings.Contains(clu, "/"+devDBName) || !strings.Contains(clu, "LEOFLOW_UI_EDITION=lite") {
+		t.Error("clusterServerEnv missing shared settings (LEOFLOW_DATABASE_URL pointing at the dev DB + LITE badge)")
 	}
 }
 

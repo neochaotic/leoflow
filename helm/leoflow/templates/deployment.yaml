@@ -183,6 +183,14 @@ spec:
               mountPath: /etc/leoflow/grpc-tls
               readOnly: true
             {{- end }}
+            {{- if .Values.database.caConfigMap }}
+            # Managed-Postgres CA bundle (#315). The DSN references this path
+            # via `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` —
+            # pgx reads sslrootcert natively, so no Go-side wiring is needed.
+            - name: db-ca
+              mountPath: /etc/leoflow/db-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: logs
           {{- if .Values.logs.persistence.enabled }}
@@ -197,6 +205,14 @@ spec:
         - name: grpc-tls
           secret:
             secretName: {{ required "agentTLS.serverCertSecret is required when agentTLS.enabled" .Values.agentTLS.serverCertSecret }}
+        {{- end }}
+        {{- if .Values.database.caConfigMap }}
+        - name: db-ca
+          configMap:
+            name: {{ .Values.database.caConfigMap }}
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

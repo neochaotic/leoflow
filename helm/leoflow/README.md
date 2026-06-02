@@ -58,6 +58,45 @@ its own.
 > the chart's visibility**: rotating them requires a manual
 > `kubectl rollout restart deployment/leoflow` for the change to take effect.
 
+## Verified TLS to managed Postgres (#315)
+
+Managed Postgres (Cloud SQL, RDS, Azure DB) presents a server cert signed by
+a provider / per-instance CA that is **not** in the container's system roots.
+Without the CA bundle mounted, the strongest TLS posture you can pin is
+`sslmode=require` — encrypted but the server cert is **not verified**
+(MITM-vulnerable). To upgrade to `sslmode=verify-full`:
+
+1. Create a ConfigMap holding the CA bundle as `ca.crt`:
+
+   ```bash
+   kubectl create configmap managed-pg-ca \
+     -n leoflow --from-file=ca.crt=server-ca.pem
+   ```
+
+2. Reference it from `database.caConfigMap` and point the DSN at the mounted
+   path:
+
+   ```bash
+   helm upgrade --install leoflow ./helm/leoflow -n leoflow \
+     --set database.caConfigMap=managed-pg-ca \
+     --set database.url='postgres://user:pass@cloudsql-private-ip:5432/leoflow?sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt'
+   ```
+
+The chart mounts the ConfigMap readonly at `/etc/leoflow/db-ca/ca.crt`. pgx
+reads `sslrootcert` from the DSN natively, so no extra Go-side configuration
+is required.
+
+> **Rotation note.** Kubernetes auto-updates the mounted file when the
+> ConfigMap changes, but the pgx pool keeps its existing connections until
+> they cycle. Cert rotation that invalidates the old chain may break in-flight
+> connections; rolling the pod (`kubectl rollout restart deploy/leoflow`)
+> guarantees a clean cutover.
+
+> **Redis sibling — coming next** (#312). The same pattern lands for Redis in
+> a follow-up PR: a `redis.caConfigMap` knob mounts the bundle and the Go
+> client overrides its `TLSConfig.RootCAs` from the file (go-redis does not
+> read CA paths from the URL the way pgx does).
+
 ## Migrations
 
 The pre-install/pre-upgrade Job runs `migrate -path <path> -database <url> up`
@@ -152,6 +191,7 @@ differ from what's committed.
 | config.logsDir | string | `"/var/log/leoflow"` | Directory inside the pod where task logs are written. Mounted from `logs.persistence` (a PVC by default) so logs survive pod restarts. Set `logs.persistence.enabled: false` to fall back to an ephemeral emptyDir (dev only). |
 | config.scheduler.enabled | bool | `true` | Run the scheduler loop. Disable only for read-only API-only replicas (rare). |
 | config.scheduler.loopIntervalMs | int | `1000` | Scheduler loop interval in milliseconds. Lower = faster reactivity, higher CPU. 1000ms is the production-tested default. |
+| database.caConfigMap | string | `""` | Name of a ConfigMap with key `ca.crt` holding the managed-Postgres CA bundle (#315). When set, the chart mounts it at `/etc/leoflow/db-ca/ca.crt` so the operator can pin `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` in the DSN. Empty (default) means TLS still works via `sslmode=require`, but the server cert is NOT verified — the connection is encrypted but MITM-vulnerable, the standard managed-DB posture before this knob. |
 | database.existingSecret | string | `""` | Name of a Secret with key `databaseUrl` (takes precedence over `url`). |
 | database.maxIdleConns | int | `5` | Max idle DB connections kept in the pool. Should be ≤ `maxOpenConns`. |
 | database.maxOpenConns | int | `20` | Max concurrent open DB connections (Postgres-side load gate). Increase for high-throughput Pro deployments. |

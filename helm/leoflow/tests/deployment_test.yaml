@@ -168,6 +168,52 @@ tests:
           # and `helm upgrade` would silently leave the old credentials live.
           pattern: "^[a-f0-9]{64}$"
 
+  # #315 — Postgres CA injection knob. When database.caConfigMap is set, the
+  # podTemplate gains a `db-ca` ConfigMap volume + a volumeMount at
+  # /etc/leoflow/db-ca. Operators then pin
+  # `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` on the DSN —
+  # pgx reads sslrootcert natively, so no Go-side wiring is needed.
+  - it: "#315 — no db-ca volume rendered when database.caConfigMap is unset (regression guard)"
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes[?(@.name == 'db-ca')]
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts[?(@.name == 'db-ca')]
+
+  - it: "#315 — database.caConfigMap mounts /etc/leoflow/db-ca/ca.crt readonly"
+    template: deployment.yaml
+    set:
+      database.url: "postgres://h/d?sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt"
+      database.caConfigMap: managed-pg-ca
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+    asserts:
+      # Volume: a ConfigMap named after the operator's ConfigMap, exposing
+      # just the ca.crt key.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: db-ca
+            configMap:
+              name: managed-pg-ca
+              items:
+                - key: ca.crt
+                  path: ca.crt
+      # VolumeMount: mounted readonly at the well-known path the DSN expects.
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: db-ca
+            mountPath: /etc/leoflow/db-ca
+            readOnly: true
+
   - it: pod + container securityContext pin runAsNonRoot + UID 65532 (distroless nonroot)
     template: deployment.yaml
     set:

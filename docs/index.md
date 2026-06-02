@@ -11,7 +11,8 @@ hide:
 
 <p class="home-hero__lead">
 The workflow orchestrator that ate Apache Airflow's lunch.<br>
-<strong>Same UI. Same vocabulary. A Go control plane instead of Python's. Zero of the pain.</strong>
+<strong>Same UI. Same vocabulary. A Go control plane instead of Python's. Zero of the pain.</strong><br>
+<em>Native map-reduce for ML/AI — fan-out + reduce as a Python list comprehension.</em>
 </p>
 
 [Get started](quickstart.md){ .md-button .md-button--primary }
@@ -91,7 +92,39 @@ SDK). They compile to one immutable artifact — `dag.json` + a container image.
 
     `/api/v2/*` and `/ui/*`, pinned to Airflow 3.2.x. [HTTP API →](api-reference.html)
 
+- :material-graph-outline: **Native map-reduce for ML/AI**
+
+    Fan-out + reduce as a Python list comprehension. No XCom plumbing, no
+    broker, no special operator. [Map-reduce for ML →](cookbook/map-reduce.md)
+
 </div>
+
+## Map-reduce in two lines of Python
+
+Every parallel ML workload — hyperparameter search, k-fold CV, ensemble
+training, batch inference, Monte Carlo — is the same pattern. Leoflow expresses
+it as a list comprehension:
+
+```python
+from airflow.sdk import DAG, task
+
+@task
+def trial(lr: float) -> dict:
+    return train_one(lr)                            # map
+
+@task
+def select_best(trials: list[dict]) -> dict:
+    return max(trials, key=lambda r: r["score"])    # reduce
+
+with DAG("hparam_search", schedule=None):
+    select_best([trial(lr) for lr in [0.001, 0.01, 0.05, 0.1, 0.5]])
+```
+
+The parser captures the list shape at compile time; the runtime assembles the
+upstream XComs in declaration order and delivers them as a real Python list —
+with per-trial isolation, per-trial retry, and a `null` slot for any upstream
+that legitimately produced no result. See **[Map-reduce for ML →](cookbook/map-reduce.md)**
+for the guarantees, limits, and the `dag.json` shape.
 
 ## The dev loop
 

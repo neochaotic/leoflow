@@ -30,7 +30,7 @@ func TestPoolConfigInvalidURL(t *testing.T) {
 }
 
 func TestRedisOptionsParsesAddr(t *testing.T) {
-	opts, err := redisOptions("redis://localhost:6379/0")
+	opts, err := redisOptions("redis://localhost:6379/0", "")
 	if err != nil {
 		t.Fatalf("redisOptions: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestRedisOptionsParsesAddr(t *testing.T) {
 }
 
 func TestRedisOptionsInvalidURL(t *testing.T) {
-	if _, err := redisOptions("not-a-redis-url"); err == nil {
+	if _, err := redisOptions("not-a-redis-url", ""); err == nil {
 		t.Error("expected error for invalid redis url")
 	}
 }

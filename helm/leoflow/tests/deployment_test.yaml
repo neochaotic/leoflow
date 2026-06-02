@@ -214,6 +214,61 @@ tests:
             mountPath: /etc/leoflow/db-ca
             readOnly: true
 
+  # #312 — managed-Redis verified TLS requires an operator-supplied CA bundle.
+  # Without `redis.caConfigMap` set, NOTHING about the CA injection appears on
+  # the rendered pod: no LEOFLOW_REDIS_CA_FILE env var, no volume, no
+  # volumeMount. That is the regression guard — an unrelated chart change must
+  # not start silently mounting an unconfigured CA path.
+  - it: "#312 — Redis CA wiring is absent when redis.caConfigMap is unset (default)"
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: rediss://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_REDIS_CA_FILE
+            value: /etc/leoflow/redis-ca/ca.crt
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: redis-ca
+            mountPath: /etc/leoflow/redis-ca
+            readOnly: true
+
+  # #312 — When redis.caConfigMap is set, all three pieces must appear together:
+  # env var pointing at the mount path, container volumeMount at that path,
+  # and a pod-level volume sourcing the named ConfigMap.
+  - it: "#312 — redis.caConfigMap wires env + volumeMount + volume in one go"
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: rediss://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+      redis.caConfigMap: redis-ca-bundle
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_REDIS_CA_FILE
+            value: /etc/leoflow/redis-ca/ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: redis-ca
+            mountPath: /etc/leoflow/redis-ca
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: redis-ca
+            configMap:
+              name: redis-ca-bundle
+
   - it: pod + container securityContext pin runAsNonRoot + UID 65532 (distroless nonroot)
     template: deployment.yaml
     set:

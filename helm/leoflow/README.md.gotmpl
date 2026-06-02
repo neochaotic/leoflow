@@ -126,6 +126,43 @@ If you need to run against an older engine, please file an issue with
 the version + symptoms — we don't bench-test older majors but will
 investigate specific incompatibilities.
 
+## Verified TLS to managed Redis (#312)
+
+Managed Redis offerings — Memorystore SERVER_AUTHENTICATION, ElastiCache
+in-transit encryption, Azure Cache for Redis — sign their TLS server cert
+with a provider or per-instance CA that is **not** in the container's
+system roots. Without telling the client which CA to trust, the only
+working postures are "plaintext `redis://`" (unacceptable across the
+internet) or "skip verification" (we don't expose that knob; it strips
+TLS to a noise channel).
+
+Set `redis.caConfigMap` to a ConfigMap holding the provider CA as
+`ca.crt`:
+
+```bash
+kubectl create configmap leoflow-redis-ca \
+  --from-file=ca.crt=./memorystore-server-ca.pem -n leoflow
+```
+
+```yaml
+redis:
+  url: rediss://10.0.0.5:6378/0
+  caConfigMap: leoflow-redis-ca
+```
+
+The chart then:
+
+1. Mounts the ConfigMap read-only at `/etc/leoflow/redis-ca/ca.crt`.
+2. Sets `LEOFLOW_REDIS_CA_FILE=/etc/leoflow/redis-ca/ca.crt` so the
+   server overrides `tls.Config.RootCAs` instead of falling back to
+   system roots.
+3. Refuses to boot if the file is missing or malformed (clear error
+   instead of a confusing "x509: certificate signed by unknown
+   authority" at first Ping).
+
+Leave `caConfigMap` empty for plaintext `redis://` or for managed
+TLS that uses a public CA (rare).
+
 ## Evaluating without a managed Postgres + Redis
 
 For a one-cluster evaluation (kind, minikube, k3d, scratch namespace), the

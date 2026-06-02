@@ -287,6 +287,23 @@ jobs:
         run: redocly lint docs/api/openapi.yaml
 
   # ─────────────────────────────────────────────────────────────────────
+  # Examples Dockerfile drift check (#318). The Dockerfile in each
+  # examples/<name>/ is generated from leoflow.yaml by
+  # scripts/sync-example-dockerfiles.sh. If a contributor changes the
+  # YAML (python_version or dependencies) and forgets to regenerate, the
+  # checked-in Dockerfile lies about what the image will run. Catch
+  # that drift here so a Pro operator copying the Dockerfile out as a
+  # template gets the same image Lite would have produced.
+  # ─────────────────────────────────────────────────────────────────────
+  examples-dockerfile-drift:
+    name: Examples Dockerfile drift (#318)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Check Dockerfiles are in sync with leoflow.yaml
+        run: bash scripts/sync-example-dockerfiles.sh --check
+
+  # ─────────────────────────────────────────────────────────────────────
   # Python parser tests — matrix across every Python the host detector
   # claims to support (`internal/setup/detect.go` pythonCandidates). If a
   # new minor is added to that list, add it here too — otherwise the

@@ -638,16 +638,27 @@ type leadershipChecker interface {
 func campaignAndRun(ctx context.Context, leader *scheduler.Leader, sched *scheduler.Scheduler, logger *slog.Logger) {
 	ticker := time.NewTicker(leaderCheckInterval)
 	defer ticker.Stop()
+	// stepDownAt is the wall-clock the previous runAsLeader returned at (i.e.
+	// when we transitioned out of leadership). Zero means "no prior step-down
+	// in this process" — the first acquisition at boot doesn't record a
+	// re-acquire latency (no churn happened yet).
+	var stepDownAt time.Time
 	for {
 		acquired, err := leader.TryAcquire(ctx)
 		switch {
 		case err != nil:
 			logger.Error("acquiring leadership", "error", err)
 		case acquired:
+			// Record the time we spent stepped down (#311 observability). A
+			// growing P99 here surfaces leader churn that affects scheduling
+			// latency — operators alert on the histogram, not log content.
+			sched.RecordReacquireSince(stepDownAt)
+			sched.ClearSteppingDown()
 			runAsLeader(ctx, leader, sched, logger)
 			if ctx.Err() != nil {
 				return // shutting down, not a leadership loss
 			}
+			stepDownAt = time.Now()
 			logger.Warn("stepped down as scheduler leader; re-campaigning")
 		default:
 			logger.Info("scheduler follower; retrying for leadership")
@@ -676,7 +687,12 @@ func runAsLeader(ctx context.Context, leader *scheduler.Leader, sched *scheduler
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		watchLeadership(runCtx, leader, leaderCheckInterval, cancel, logger)
+		// The watch passes the step-down reason to the scheduler BEFORE
+		// canceling the run-context, so the reapers/Step that are about to
+		// return ctx-canceled log at WARN ("expected during step-down") not
+		// ERROR (#311). A nil scheduler is tolerated by tests.
+		watchLeadership(runCtx, leader, leaderCheckInterval, cancel, logger,
+			func(reason string) { sched.MarkSteppingDown(reason) })
 	}()
 
 	if runErr := sched.Run(runCtx); runErr != nil && !errors.Is(runErr, context.Canceled) {
@@ -690,11 +706,19 @@ func runAsLeader(ctx context.Context, leader *scheduler.Leader, sched *scheduler
 // watchLeadership cancels the run when leadership is lost: a definitive "not
 // held" steps down immediately, while transient check errors are tolerated up to
 // maxLeaderCheckFailures (a connection blip should not churn leadership). It
-// returns when the run context is canceled.
-func watchLeadership(ctx context.Context, chk leadershipChecker, interval time.Duration, cancel context.CancelFunc, logger *slog.Logger) {
+// returns when the run context is canceled. The onStepDown callback fires
+// once, BEFORE cancel(), with the step-down reason so the scheduler can
+// classify the cancel fanout (#311) and increment the per-reason counter.
+func watchLeadership(ctx context.Context, chk leadershipChecker, interval time.Duration, cancel context.CancelFunc, logger *slog.Logger, onStepDown func(reason string)) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	failures := 0
+	stepDown := func(reason string) {
+		if onStepDown != nil {
+			onStepDown(reason)
+		}
+		cancel()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -709,13 +733,15 @@ func watchLeadership(ctx context.Context, chk leadershipChecker, interval time.D
 				failures++
 				logger.Warn("leadership check failed", "error", err, "consecutive", failures)
 				if failures >= maxLeaderCheckFailures {
-					logger.Warn("too many failed leadership checks; stepping down")
-					cancel()
+					logger.Warn("too many failed leadership checks; stepping down",
+						"reason", "check_timeout", "consecutive_failures", failures)
+					stepDown("check_timeout")
 					return
 				}
 			case !held:
-				logger.Warn("lost scheduler advisory lock; stepping down")
-				cancel()
+				logger.Warn("lost scheduler advisory lock; stepping down",
+					"reason", "lock_released")
+				stepDown("lock_released")
 				return
 			default:
 				failures = 0

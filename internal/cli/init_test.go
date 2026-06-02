@@ -1,0 +1,32 @@
+package cli
+
+import (
+	"bytes"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestInitCommandPrintsNextStep covers #D6 from the Lite dogfood audit (#212):
+// after scaffolding a project, the user has no idea what command to run next.
+// The success message must surface at least one concrete next-step hint
+// (typically `leoflow lite <path>` or `leoflow validate <path>`) so the
+// onboarding loop terminates at a useful instruction rather than dead air.
+func TestInitCommandPrintsNextStep(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "myproj")
+	cmd := newInitCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{target})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	got := stdout.String()
+	if !strings.Contains(got, "Initialized Leoflow project") {
+		t.Errorf("missing success line; got: %q", got)
+	}
+	if !strings.Contains(got, "leoflow lite") && !strings.Contains(got, "leoflow validate") {
+		t.Errorf("D6: expected a next-step suggestion (leoflow lite / leoflow validate); got: %q", got)
+	}
+}

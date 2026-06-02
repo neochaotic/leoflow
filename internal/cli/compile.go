@@ -104,8 +104,19 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 			return perr
 		}
 	}
-	_, werr := fmt.Fprintf(cmd.OutOrStdout(), "Compiled %s -> %s (image %s, version %s)\n", dagSourcePath(dir, cfg), o.output, o.image, o.dagVersion)
+	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(dagSourcePath(dir, cfg), o.output, o.image, o.dagVersion))
 	return werr
+}
+
+// compileSummary formats the success line for `leoflow compile`. When image is
+// empty it renders `no image` instead of `image ` to avoid the dangling-comma
+// artifact reported as #D10 in the dogfood audit (#212).
+func compileSummary(src, out, image, version string) string {
+	imageField := "image " + image
+	if image == "" {
+		imageField = "no image"
+	}
+	return fmt.Sprintf("Compiled %s -> %s (%s, version %s)\n", src, out, imageField, version)
 }
 
 // checkImageFlags enforces the --build/--image relationship and notes when an

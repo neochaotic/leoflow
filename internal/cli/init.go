@@ -40,7 +40,12 @@ func newInitCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Initialized Leoflow project %q in %s\n", dagID, args[0])
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"Initialized Leoflow project %q in %s\n"+
+					"\nNext steps:\n"+
+					"  leoflow validate %s    # quick syntax check\n"+
+					"  leoflow lite %s        # run it locally with the embedded scheduler\n",
+				dagID, args[0], args[0], args[0])
 			return err
 		},
 	}

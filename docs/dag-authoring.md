@@ -89,10 +89,12 @@ with DAG("my_pipeline", schedule="@daily", catchup=False, tags=["etl"]):
     transform(extract())
 ```
 
-### Supported
+### Supported task types
 
 Leoflow accepts a **closed set of three task types** today. Anything outside
-the set is a hard compile error (see [Not supported](#not-yet-supported--limitations)).
+the set is a hard compile error — never silently dropped, never silently
+translated. The list is deliberately small so what runs in production
+matches what you wrote.
 
 | Task type | Airflow operator | Where it runs | Notes |
 |---|---|---|---|
@@ -100,10 +102,10 @@ the set is a hard compile error (see [Not supported](#not-yet-supported--limitat
 | `bash` | `BashOperator` | agent | Executes a shell command. |
 | `http_api` | `HttpOperator` (`airflow.providers.http`) | **inline in the control plane** (no pod, no agent) | Synchronous outbound HTTP. Use it for lightweight webhooks/probes; for anything with retries, throughput, or auth headers you control, prefer `@task` + `requests` in `python`. |
 
-- **Trigger rules**: `all_success`, `all_failed`, `all_done`, `one_success`,
-  `one_failed`.
-- **XCom**: TaskFlow data-flow (`transform(extract())`) is resolved automatically
-  into typed inputs (`xcom_input`).
+Also supported:
+
+- **Trigger rules**: `all_success`, `all_failed`, `all_done`, `one_success`, `one_failed`.
+- **XCom**: TaskFlow data-flow (`transform(extract())`) is resolved automatically into typed inputs (`xcom_input`).
 - **Schedule**: cron strings and presets (`@daily`, `0 * * * *`).
 - **Dependencies**: linear ordering via TaskFlow calls or `a >> b`.
 
@@ -111,21 +113,49 @@ the set is a hard compile error (see [Not supported](#not-yet-supported--limitat
 > tasks that read a managed Connection (`AIRFLOW_CONN_*`) injected as an env
 > var — they are **not** new operator types.
 
-### Not (yet) supported — limitations
+### Not supported — `leoflow compile` rejects these
 
-- **Branching** (`BranchPythonOperator`, `@task.branch`), **short-circuit**
-  (`@task.short_circuit`, `ShortCircuitOperator`), **virtualenv operators**
-  (`PythonVirtualenvOperator`), **sensors** — `leoflow compile` **rejects** any
-  of these with a clear error naming the construct ([#225](https://github.com/neochaotic/leoflow/issues/225)).
-  Refusing silent mistranslation is the contract: every "skipped" branch
-  would otherwise actually execute at runtime.
-- **Dynamic task mapping** (`.expand` / `.partial`),
-  **KubernetesPodOperator**, **datasets/assets** triggers, **Jinja templating**.
-- **Provider operators** (S3, Postgres, …): do the work inside a `@task` instead
-  (your image already has the libraries).
-- **Per-task `default_args` in `dag.py`** are ignored; use `leoflow.yaml`.
+!!! danger "If your DAG uses any of these, compile fails — by design"
+    The contract is **loud rejection, not silent mistranslation**: every
+    "skipped" branch would otherwise actually execute at runtime, so a
+    DAG that imports a sensor or interpolates a Jinja template is
+    refused at compile with a clear error naming the construct
+    ([#225](https://github.com/neochaotic/leoflow/issues/225)).
 
-> Anything not translated is a **hard compile error** (no silent drop).
+The unsupported set, with the things Airflow users most often expect to
+"just work" called out first:
+
+- **Sensors** — `FileSensor`, `S3KeySensor`, `ExternalTaskSensor`, every
+  custom `BaseSensorOperator` subclass. Pre-alpha Leoflow has **no
+  sensor runtime**; an async/sensor scheduler is post-alpha work.
+  Workaround: poll inside a `@task` and let the run drive itself.
+- **Jinja templating** — `{{ ds }}`, `{{ ti }}`, `{{ var.value.x }}`,
+  every `templates_dict=` knob. The control plane never re-parses
+  Python and the templating step is intentionally not implemented.
+  Workaround: build the values inside the `@task` from `airflow.sdk`
+  context.
+- **Branching** (`BranchPythonOperator`, `@task.branch`) and
+  **short-circuit** (`@task.short_circuit`, `ShortCircuitOperator`) —
+  refused for now: the current scheduler does not model
+  skipped-vs-executed downstream paths. On the post-alpha backlog if
+  user demand justifies the scheduler change.
+- **Virtualenv operators** (`PythonVirtualenvOperator`,
+  `@task.virtualenv`) — refused because each DAG already ships as its
+  own image with its own dependencies; spinning up a venv at runtime
+  is the problem Leoflow's one-image-per-DAG model already solved.
+- **Dynamic task mapping** (`.expand` / `.partial`) — refused;
+  map-reduce fan-out is on the post-alpha roadmap, tracked separately.
+- **KubernetesPodOperator** — refused; the pod is the *runtime
+  substrate* for every Leoflow task already, so wrapping a user task
+  in another pod is redundant and adds an isolation hole.
+- **Datasets / Assets triggers** — not implemented yet; the asset
+  graph is a 3.x Airflow feature on the post-alpha backlog.
+- **Provider operators** (S3, Postgres, Snowflake, …) — refused. Do
+  the work inside a `@task` instead; your DAG's image already has
+  the libraries (declare them in `leoflow.yaml`'s `dependencies`).
+- **Per-task `default_args` in `dag.py`** are ignored at the parser
+  level — use `leoflow.yaml`'s `tasks.<id>:` override block instead,
+  which is checked at compile time.
 
 ## leoflow.yaml — deploy config
 

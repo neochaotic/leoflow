@@ -3,8 +3,10 @@ package api
 import (
 	_ "embed"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"path"
 	"path/filepath"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +28,7 @@ type WorkspaceFS interface {
 	Read(rel string) ([]byte, error)
 	Write(rel string, data []byte) error
 	Create(rel string, dir bool) error
+	Move(from, to string) error
 	Delete(rel string) error
 }
 
@@ -52,13 +55,34 @@ type ideCreateBody struct {
 	Dir  bool   `json:"dir"`
 }
 
+// ideMoveBody is the POST payload for /ide/move, the rename / drag-drop op.
+type ideMoveBody struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// ideInstallExamplesBody picks the target subdir under the workspace where the
+// embedded example DAGs get materialized. Empty means "examples".
+type ideInstallExamplesBody struct {
+	Dir string `json:"dir"`
+}
+
+// ideInstallExamplesResp reports what was written so the IDE can refresh its
+// tree and the user can see what they got.
+type ideInstallExamplesResp struct {
+	Installed []string `json:"installed"`
+	Skipped   []string `json:"skipped"`
+}
+
 // registerIDE mounts the Lite web editor: the workspace filesystem API, the
 // editor page, and the Monaco assets. When fs is nil — Production, or Lite
 // without a workspace configured — nothing is registered, so the editor is
 // unavailable (404). Reads require read:dag and mutations write:dag, since the
 // workspace holds DAG source. monacoDir is where `leoflow setup` placed the
 // pinned Monaco bundle; when empty or absent the page shows a setup hint.
-func registerIDE(r gin.IRouter, store WorkspaceFS, monacoDir string) {
+// examples, when non-nil, backs the "Download examples" button — typically the
+// embedded examples.FS shipped by package leoflow.
+func registerIDE(r gin.IRouter, store WorkspaceFS, monacoDir string, examples fs.FS) {
 	if store == nil {
 		return
 	}
@@ -66,7 +90,11 @@ func registerIDE(r gin.IRouter, store WorkspaceFS, monacoDir string) {
 	r.GET("/api/v2/ide/file", RequirePermission("read", "dag"), ideReadHandler(store))
 	r.PUT("/api/v2/ide/file", RequirePermission("write", "dag"), ideWriteHandler(store))
 	r.POST("/api/v2/ide/file", RequirePermission("write", "dag"), ideCreateHandler(store))
+	r.POST("/api/v2/ide/move", RequirePermission("write", "dag"), ideMoveHandler(store))
 	r.DELETE("/api/v2/ide/file", RequirePermission("write", "dag"), ideDeleteHandler(store))
+	if examples != nil {
+		r.POST("/api/v2/ide/examples/install", RequirePermission("write", "dag"), ideInstallExamplesHandler(store, examples))
+	}
 
 	r.GET("/ide", idePageHandler())
 	r.HEAD("/ide/vs/*filepath", monacoHandler(monacoDir))
@@ -114,17 +142,17 @@ func ideTreeHandler(store WorkspaceFS) gin.HandlerFunc {
 
 func ideReadHandler(store WorkspaceFS) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		path := c.Query("path")
-		if path == "" {
+		rel := c.Query("path")
+		if rel == "" {
 			AbortProblem(c, http.StatusBadRequest, "invalid_request", "query parameter 'path' is required")
 			return
 		}
-		data, err := store.Read(path)
+		data, err := store.Read(rel)
 		if err != nil {
 			abortIDEError(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, ideFileDTO{Path: path, Content: string(data)})
+		c.JSON(http.StatusOK, ideFileDTO{Path: rel, Content: string(data)})
 	}
 }
 
@@ -158,14 +186,76 @@ func ideCreateHandler(store WorkspaceFS) gin.HandlerFunc {
 	}
 }
 
+func ideMoveHandler(store WorkspaceFS) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body ideMoveBody
+		if err := c.ShouldBindJSON(&body); err != nil || body.From == "" || body.To == "" {
+			AbortProblem(c, http.StatusBadRequest, "invalid_request", "a JSON body with non-empty 'from' and 'to' is required")
+			return
+		}
+		if err := store.Move(body.From, body.To); err != nil {
+			abortIDEError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, body)
+	}
+}
+
+// ideInstallExamplesHandler materializes the embedded example DAGs (one
+// subdir per DAG) under `<dir>/<dag>/` inside the workspace. Files that
+// already exist on disk are skipped so a re-install doesn't clobber edits.
+func ideInstallExamplesHandler(store WorkspaceFS, examples fs.FS) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body ideInstallExamplesBody
+		// Body is optional; default target is "examples".
+		_ = c.ShouldBindJSON(&body) //nolint:errcheck // body is optional
+		target := body.Dir
+		if target == "" {
+			target = "examples"
+		}
+		resp := ideInstallExamplesResp{Installed: []string{}, Skipped: []string{}}
+		// Walk the embedded examples FS. Embedded root is "examples" (matches
+		// the source tree), so we strip that prefix and re-anchor under target.
+		walkErr := fs.WalkDir(examples, "examples", func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if p == "examples" || d.IsDir() {
+				return nil
+			}
+			rel := path.Join(target, p[len("examples/"):])
+			data, rerr := fs.ReadFile(examples, p)
+			if rerr != nil {
+				return fmt.Errorf("reading embedded %q: %w", p, rerr)
+			}
+			// Skip if the file already exists on disk — Read returns nil error
+			// when the file is found.
+			if _, sterr := store.Read(rel); sterr == nil {
+				resp.Skipped = append(resp.Skipped, rel)
+				return nil
+			}
+			if werr := store.Write(rel, data); werr != nil {
+				return fmt.Errorf("writing %q: %w", rel, werr)
+			}
+			resp.Installed = append(resp.Installed, rel)
+			return nil
+		})
+		if walkErr != nil {
+			AbortProblem(c, http.StatusInternalServerError, "ide_error", walkErr.Error())
+			return
+		}
+		c.JSON(http.StatusOK, resp)
+	}
+}
+
 func ideDeleteHandler(store WorkspaceFS) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		path := c.Query("path")
-		if path == "" {
+		rel := c.Query("path")
+		if rel == "" {
 			AbortProblem(c, http.StatusBadRequest, "invalid_request", "query parameter 'path' is required")
 			return
 		}
-		if err := store.Delete(path); err != nil {
+		if err := store.Delete(rel); err != nil {
 			abortIDEError(c, err)
 			return
 		}

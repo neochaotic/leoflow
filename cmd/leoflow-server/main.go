@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	leoflow "github.com/neochaotic/leoflow"
 	"github.com/neochaotic/leoflow/internal/agentrpc"
 	"github.com/neochaotic/leoflow/internal/api"
 	"github.com/neochaotic/leoflow/internal/auth"
@@ -194,6 +195,7 @@ func run() error {
 		UI:                           uiSrv,
 		Workspace:                    editorFS,
 		MonacoDir:                    cfg.UI.MonacoDir,
+		ExamplesFS:                   leoflow.ExampleDAGs(),
 	})
 
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io/fs"
 	"log/slog"
 	"net/http"
 
@@ -79,6 +80,10 @@ type Dependencies struct {
 	// missing makes the page show a setup hint instead of a broken editor.
 	MonacoDir string
 
+	// ExamplesFS backs the IDE's "Download examples" button — typically the
+	// `embed.FS` shipped from the leoflow root package. Nil disables the button.
+	ExamplesFS fs.FS
+
 	// SchedulerHealth reports the scheduler's heartbeat for /monitor/health.
 	// When nil the component reports healthy (single-process role assumption).
 	SchedulerHealth Heartbeater
@@ -135,7 +140,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIConnections(r, deps.Connections, deps.ConnectionTest)
 	registerUIFavorites(r, deps.Favorites)
 	registerImportErrors(r, deps.ImportErrors)
-	registerIDE(r, deps.Workspace, deps.MonacoDir)
+	registerIDE(r, deps.Workspace, deps.MonacoDir, deps.ExamplesFS)
 	registerUIStubs(r)
 	registerAPIStubs(r)
 	if deps.UI != nil {

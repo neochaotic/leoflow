@@ -30,6 +30,14 @@ func nextScheduledRun(expr string, last *time.Time, now time.Time) (logical time
 	if err != nil {
 		return time.Time{}, false
 	}
+	// SpecSchedule.Next evaluates cron fields in the argument's Location;
+	// any non-UTC time.Time would skew "@daily = 0 0 * * *" by the offset.
+	// Coerce both inputs to UTC at the boundary (mirrors dueScheduledSlots).
+	now = now.UTC()
+	if last != nil {
+		u := last.UTC()
+		last = &u
+	}
 	if last == nil {
 		return mostRecentSlot(schedule, now)
 	}

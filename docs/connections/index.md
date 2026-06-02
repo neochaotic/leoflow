@@ -23,21 +23,20 @@ URI shape, an example DAG, and how to test it.
 | `redis` | [redis.md](redis.md) | [examples/redis_load](https://github.com/neochaotic/leoflow/tree/main/examples/redis_load) | ✅ documented + automated test (#73, table-driven via #138; Tier 1 — redis already in CI services) |
 | `http` / `https` | [http.md](http.md) | [examples/http_load](https://github.com/neochaotic/leoflow/tree/main/examples/http_load) | ✅ documented + automated test (#75, dedicated test for `__extra__` round-trip; Tier 1 — no service needed) |
 
+## Cloud (documented)
+
+| Type | Doc | Example DAG | Status |
+|---|---|---|---|
+| `google_cloud_platform` | [google_cloud_platform.md](google_cloud_platform.md) | [examples/gcp_gcs_load](https://github.com/neochaotic/leoflow/tree/main/examples/gcp_gcs_load) | ✅ documented — **key + keyless (Workload Identity)** (#77, #56); delivery test with a synthetic key; real-cloud e2e is manual |
+
 ## Cloud (deferred past alpha)
 
 These need provider accounts to test end-to-end; the umbrella issues are
 filed but the cookbook entries are not part of the first alpha cut.
 
-- `aws` (#76), `google_cloud_platform` (#77), `snowflake` (#78),
+- `aws` (#76), `snowflake` (#78),
   `oracle` (#72), `kafka` (#82), `ssh` (#79), `ftp` (#80), `sftp` (#81),
   `mongo` (#74)
-
-!!! note "`google_cloud_platform` is planned for the Pro/GKE track (Phase 2)"
-    GCP is the first cloud connector targeted once Pro internal testing on GKE
-    matures: a real `google_cloud_platform` connection (#77) supporting **both**
-    a service-account JSON key **and** keyless **Workload Identity** (#56). The
-    UI metadata exists today; the probe, example DAG, and integration test land
-    with that phase. See the [Roadmap](../roadmap-to-release.md).
 
 ## Contract every entry honours
 

@@ -149,6 +149,7 @@ nav:
           - SQLite: connections/sqlite.md
           - Redis: connections/redis.md
           - HTTP / HTTPS: connections/http.md
+          - Google Cloud: connections/google_cloud_platform.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

@@ -51,7 +51,7 @@ left alone.
 
 ## 🥇 Pro *(in validation)*
 
-Real cluster install via the **[Helm chart](../helm/leoflow/README.md)** (chart-test
+Real cluster install via the **[Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md)** (chart-test
 gated, multi-arch images published per release, signed with cosign).
 Hardening templates ship as opt-in toggles: HPA + PDB + NetworkPolicy +
 ServiceMonitor. Still **in validation** before the

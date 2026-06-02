@@ -16,13 +16,13 @@ DAG once and it runs on either.
 | | 🥈 **Lite** | 🥇 **Pro** |
 |---|---|---|
 | Status | **Available now** (pre-alpha) | **Chart installable** (gated); officially supported after v0.1.0-alpha |
-| Install | one command (`curl … \| sh`) on one machine | [Helm chart](../helm/leoflow/README.md) on your cluster |
+| Install | one command (`curl … \| sh`) on one machine | [Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md) on your cluster |
 | Command | `leoflow lite` | the deployed control plane |
 | Auth | a single local **admin** login (password shown once at setup) | enterprise: SSO/OIDC, full RBAC, multi-tenant |
 | Executors | a local **k3d** mini-cluster (real pods, **requires Docker** to host the cluster) or **subprocess** (dev-only, unsandboxed, no Docker) | **Kubernetes only**, at scale |
 | Deploy | edit + hot-reload | GitOps: `leoflow compile` in CI → immutable image + `dag.json` |
 | Intended use | local, small, or **light production** projects on a **trusted/internal network** | teams and production workloads at scale |
-| Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis (see [chart docs](../helm/leoflow/README.md#datastore-compatibility) for versions) |
+| Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis (see [chart docs](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md#datastore-compatibility) for versions) |
 
 ## 🥈 Leoflow Lite
 

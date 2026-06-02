@@ -58,7 +58,7 @@ picks the highest path available**; without Docker it uses subprocess. Run
    and UI port. Run non-interactively (e.g. `curl | sh`) it uses sensible defaults.
 5. **Creates the Lite admin** (`admin@leoflow.local`) with a generated,
    human-friendly password, **shown once** at the end (only its hash is stored).
-   Recover it with `sudo leoflow lite reset-password`.
+   Recover it with `leoflow lite reset-password`.
 
 !!! warning "Lite is for trusted networks"
     The admin password is short by design and there is no SSO/RBAC — run Lite on

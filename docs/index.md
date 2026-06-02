@@ -22,7 +22,7 @@ The workflow orchestrator that ate Apache Airflow's lunch.<br>
 <div class="home-hero__media" markdown>
 <div class="home-hero__window" markdown>
 <span class="home-hero__chrome"><i></i><i></i><i></i><em>Leoflow Lite — localhost:8088</em></span>
-![Leoflow Dev, the ETL graph (extract, transform, load) running on a local cluster](assets/screenshots/dev-graph.png){ .home-hero__shot }
+![Leoflow Lite, the ETL graph (extract, transform, load) running on a local cluster](assets/screenshots/dev-graph.png){ .home-hero__shot }
 </div>
 </div>
 </div>
@@ -101,5 +101,6 @@ leoflow init dags/my_dag     # scaffold a project
 leoflow lite dags/my_dag      # hot-reload at http://localhost:8088 (Lite edition)
 ```
 
-The product **proves itself in Dev first**; **Production** is a near-term goal
-([roadmap](roadmap-to-release.md)).
+**Lite** ships today (pre-alpha, local on a trusted network); **Production**
+(the Kubernetes edition) is a near-term goal — see the
+[roadmap](roadmap-to-release.md) and [Editions](editions.md) for the split.

@@ -31,7 +31,7 @@ each `[default]`:
 - **Admin email** — default `admin@leoflow.local`
 
 It then fetches a managed Python + the editor, creates your workspace, and prints
-your **admin password once** (`sudo leoflow lite reset-password` resets it):
+your **admin password once** (`leoflow lite reset-password` resets it):
 
 ```
 ── Leoflow Lite admin (save this — it is shown only once) ──
@@ -85,7 +85,7 @@ changes; run state auto-refreshes.) Details: [the Lite web editor](lite-web-edit
 ```bash
 leoflow doctor                       # check platform, deps, and what's achievable
 leoflow lite --host 0.0.0.0          # reachable from your internal network
-sudo leoflow lite reset-password     # set a new admin password (after first run)
+leoflow lite reset-password     # set a new admin password (after first run)
 leoflow uninstall                    # remove the install (--purge for workspace + volumes)
 ```
 

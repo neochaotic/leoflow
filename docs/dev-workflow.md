@@ -18,7 +18,7 @@ leoflow lite dags/my_dag    # hot-reload at http://localhost:8088 (marked LITE)
 !!! note "Login"
     If you ran [`leoflow setup`](installation.md#what-leoflow-setup-does) (the
     end-user installer does), Lite enforces a real **admin login** — recover it
-    with `sudo leoflow lite reset-password`. A bare source checkout without that
+    with `leoflow lite reset-password`. A bare source checkout without that
     config falls back to no-auth (loopback only) with a warning, for a quick loop.
 
 (End users install Lite with one command — see [Installation](installation.md).)

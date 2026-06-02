@@ -56,6 +56,13 @@ type Request struct {
 	// (key ca.crt) the agent uses to verify the control plane's gRPC TLS cert
 	// (issue #58). It is mounted into the task pod and selects TLS for the agent.
 	AgentTLSCAConfigMap string
+
+	// TaskSecretName, when set, is a Kubernetes Secret mounted read-only into the
+	// task pod at TaskSecretMountPath. It carries a credential a task references by
+	// path (e.g. a GCP service-account key via the connection's key_path), keeping
+	// the key in the cluster's secret store rather than in Leoflow (ADR 0035).
+	TaskSecretName      string
+	TaskSecretMountPath string
 }
 
 // Executor runs or dispatches a task. For synchronous executors (inline HTTP)

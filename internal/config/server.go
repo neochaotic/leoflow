@@ -55,6 +55,14 @@ type ExecutorSection struct {
 	// the agent verifies the control plane's gRPC TLS cert (issue #58). Empty =
 	// agents use the insecure channel (dev).
 	AgentTLSCAConfigMap string `mapstructure:"agent_tls_ca_configmap"`
+	// TaskSecretName names a Kubernetes Secret mounted (read-only) into every task
+	// pod at TaskSecretMountPath. It lets a task read a credential that lives in
+	// the cluster's secret store (e.g. a GCP service-account key) referenced by a
+	// connection's key_path — so Leoflow never stores the key itself (ADR 0035).
+	// Empty = no secret mounted.
+	TaskSecretName string `mapstructure:"task_secret_name"`
+	// TaskSecretMountPath is where TaskSecretName is mounted in the task pod.
+	TaskSecretMountPath string `mapstructure:"task_secret_mount_path"`
 	// Defaults holds per-cluster task defaults applied at dispatch to fill gaps the
 	// DAG artifact left empty (ADR 0023, layer L0). They never override a value
 	// baked into dag.json, keeping the artifact portable across clusters.
@@ -235,6 +243,8 @@ var serverDefaults = map[string]any{
 	"executor.subprocess_workdir":               "",
 	"executor.agent_control_plane_addr":         "",
 	"executor.agent_tls_ca_configmap":           "",
+	"executor.task_secret_name":                 "",
+	"executor.task_secret_mount_path":           "/etc/leoflow/secrets",
 	"executor.defaults.staging_access_mode":     "ReadWriteMany",
 	"logs.dir":                                  "/var/log/leoflow",
 	"observability.otel.enabled":                true,

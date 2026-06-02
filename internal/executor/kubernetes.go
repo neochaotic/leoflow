@@ -95,7 +95,33 @@ func BuildPod(req Request) *corev1.Pod {
 	}
 	mountStagingVolume(pod, req)
 	mountAgentTLSCA(pod, req)
+	mountTaskSecret(pod, req)
 	return pod
+}
+
+// taskSecretVolumeName is the pod volume name for the operator-supplied task
+// credential Secret.
+const taskSecretVolumeName = "leoflow-task-secret"
+
+// mountTaskSecret mounts an operator-configured Kubernetes Secret (when set)
+// read-only into the task pod at req.TaskSecretMountPath. This is how a task
+// reads a credential that lives in the cluster's secret store — e.g. a GCP
+// service-account key a connection references by key_path — so Leoflow never
+// stores the key itself (ADR 0035).
+func mountTaskSecret(pod *corev1.Pod, req Request) {
+	if req.TaskSecretName == "" || req.TaskSecretMountPath == "" {
+		return
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name: taskSecretVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{SecretName: req.TaskSecretName},
+		},
+	})
+	c := &pod.Spec.Containers[0]
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+		Name: taskSecretVolumeName, MountPath: req.TaskSecretMountPath, ReadOnly: true,
+	})
 }
 
 // agentCAVolumeName / agentCADir / agentCAFile place the CA the agent uses to

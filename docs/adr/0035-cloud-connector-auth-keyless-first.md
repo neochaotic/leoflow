@@ -60,19 +60,21 @@ cloud key.
    keep it as a documented escape hatch (dev / low-criticality), never the
    recommended path — and org policy often forbids creating such keys anyway.
 
-4. **Resolution order in the task:** `keyfile_dict` → `key_path` → ADC. Field
-   names are clean short names (`keyfile_dict`, `key_path`, `project`, `scopes`,
-   `num_retries`); the legacy `extra__google_cloud_platform__<name>` names are
-   accepted as a migration fallback only. `scopes` takes a list **or** a comma
-   string (Airflow takes only the string).
+4. **Resolution order in the task:** `keyfile_dict` → `key_path` →
+   `key_secret_name` → ADC. Field names are clean short names (`keyfile_dict`,
+   `key_path`, `key_secret_name`, `project`, `scopes`, `num_retries`); the legacy
+   `extra__google_cloud_platform__<name>` names are accepted as a migration
+   fallback only. `scopes` takes a list **or** a comma string (Airflow takes only
+   the string).
 
 5. **No cloud SDK in the Go control plane.** Connection validation is
    **structural only** (check the key shape, or report keyless); the token
    exchange happens in the task. Keeps core connector-agnostic and avoids a Go
    cloud-SDK supply-chain surface (consistent with ADR 0014).
 
-6. **v1 scope.** Handle `keyfile_dict`, `key_path`, `project`/`project_id`,
-   `scopes`/`scope`, `num_retries`. Defer `key_secret_name`,
+6. **v1 scope.** Handle `keyfile_dict`, `key_path` (mounted K8s Secret via the
+   chart's `taskSecret`), `key_secret_name` (GCP Secret Manager, fetched in the
+   task via ADC), `project`/`project_id`, `scopes`/`scope`, `num_retries`. Defer
    `key_secret_project_id`, `credential_config_file`, `impersonation_chain`,
    `quota_project_id`.
 

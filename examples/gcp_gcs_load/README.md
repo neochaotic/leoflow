@@ -76,6 +76,27 @@ server, so keyless isn't available there — use key mode under k3d.)
    (The JSON is encrypted at rest — ADR 0019.)
 3. Run the DAG. Works on Lite (subprocess or k3d) and Pro alike.
 
+## Key from a Kubernetes Secret (`key_path`) — preferred when not keyless
+
+The key stays in the cluster's secret store; Leoflow only mounts it.
+
+```bash
+kubectl -n leoflow create secret generic gcp-sa-key --from-file=key.json=/path/to/key.json
+helm upgrade leoflow ./helm/leoflow -n leoflow --reuse-values \
+  --set taskSecret.name=gcp-sa-key --set taskSecret.mountPath=/etc/leoflow/secrets
+```
+Then the Connection's Extra: `{ "key_path": "/etc/leoflow/secrets/key.json", "project": "my-project" }`.
+
+## Key from GCP Secret Manager (`key_secret_name`)
+
+Store the JSON key in Secret Manager; the task fetches it via ADC (so the task's
+identity — typically Workload Identity — needs `roles/secretmanager.secretAccessor`).
+
+```bash
+gcloud secrets create leoflow-gcp-key --data-file=/path/to/key.json
+```
+Then the Connection's Extra: `{ "key_secret_name": "leoflow-gcp-key", "project": "my-project" }`.
+
 ## Run + verify
 
 ```bash

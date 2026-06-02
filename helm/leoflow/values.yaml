@@ -172,6 +172,18 @@ agentTLS:
   # -- Name of a ConfigMap with key `ca.crt`. Mounted into task pods so the agent verifies the server cert. Typically a cert-manager trust-bundle.
   caConfigMap: ""
 
+# Mount a Kubernetes Secret read-only into every task pod, so a task can read a
+# credential that lives in the cluster's secret store — e.g. a GCP service-account
+# key a `google_cloud_platform` connection references by `key_path` — instead of
+# storing the key in Leoflow (ADR 0035; Leoflow is not a key manager). You create
+# the Secret (`kubectl create secret generic ...`); the chart only mounts it.
+# Prefer keyless (Workload Identity) over this; use it when keyless is unavailable.
+taskSecret:
+  # -- Name of an existing Kubernetes Secret to mount into task pods. Empty = none.
+  name: ""
+  # -- Read-only mount path in the task pod. A connection's `key_path` points here, e.g. `/etc/leoflow/secrets/key.json`.
+  mountPath: /etc/leoflow/secrets
+
 observability:
   otel:
     # -- Export OpenTelemetry traces. When false, internal spans are no-ops.

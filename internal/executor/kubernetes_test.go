@@ -138,6 +138,55 @@ func TestBuildPodMountsAgentTLSCA(t *testing.T) {
 	}
 }
 
+func TestBuildPodMountsTaskSecret(t *testing.T) {
+	// No task secret -> no extra volume/mount.
+	base := BuildPod(sampleReq())
+	for _, v := range base.Spec.Volumes {
+		if v.Name == taskSecretVolumeName {
+			t.Fatalf("no task secret configured should not mount a volume: %+v", base.Spec.Volumes)
+		}
+	}
+	// With a task secret, mount it read-only at the configured path so a task can
+	// read a credential by key_path (ADR 0035 — Leoflow does not store the key).
+	req := sampleReq()
+	req.TaskSecretName = "gcp-sa-key"
+	req.TaskSecretMountPath = "/var/secrets/gcp"
+	pod := BuildPod(req)
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Secret != nil && pod.Spec.Volumes[i].Secret.SecretName == "gcp-sa-key" {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatalf("task secret not mounted as a volume: %+v", pod.Spec.Volumes)
+	}
+	c := pod.Spec.Containers[0]
+	mounted := false
+	for _, m := range c.VolumeMounts {
+		if m.Name == vol.Name {
+			if m.MountPath != "/var/secrets/gcp" {
+				t.Errorf("mount path = %q, want /var/secrets/gcp", m.MountPath)
+			}
+			if !m.ReadOnly {
+				t.Error("task secret must be mounted read-only")
+			}
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Errorf("task secret volume not mounted: %+v", c.VolumeMounts)
+	}
+	// A name without a mount path mounts nothing (both are required).
+	req2 := sampleReq()
+	req2.TaskSecretName = "gcp-sa-key"
+	for _, v := range BuildPod(req2).Spec.Volumes {
+		if v.Name == taskSecretVolumeName {
+			t.Error("a task secret without a mount path should not mount")
+		}
+	}
+}
+
 func TestBuildPodSanitizesName(t *testing.T) {
 	req := sampleReq()
 	req.DagID = "ETL Vendas"

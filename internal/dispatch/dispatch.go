@@ -65,6 +65,8 @@ type Dispatcher struct {
 	controlAddr    string
 	tokenTTL       time.Duration
 	tlsCAConfigMap string
+	taskSecret     string
+	taskSecretPath string
 	defaults       PlatformDefaults
 }
 
@@ -79,6 +81,14 @@ func NewDispatcher(exec executor.Executor, resolver Resolver, issuer TokenIssuer
 // agents verify the control plane's gRPC TLS cert (issue #58). Empty = the agent
 // stays on the insecure channel (dev).
 func (d *Dispatcher) SetAgentTLSCAConfigMap(name string) { d.tlsCAConfigMap = name }
+
+// SetTaskSecret configures a Kubernetes Secret mounted read-only into every task
+// pod at mountPath, so tasks can read a credential (e.g. a GCP service-account
+// key referenced by a connection's key_path) from the cluster's secret store
+// rather than from Leoflow (ADR 0035). Empty name = nothing mounted.
+func (d *Dispatcher) SetTaskSecret(name, mountPath string) {
+	d.taskSecret, d.taskSecretPath = name, mountPath
+}
 
 // SetPlatformDefaults configures the per-cluster task defaults applied at
 // dispatch to fill gaps the DAG artifact left empty (ADR 0023, layer L0).
@@ -143,6 +153,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 		req.StagingAccessMode = d.defaults.StagingAccessMode
 	}
 	req.AgentTLSCAConfigMap = d.tlsCAConfigMap
+	req.TaskSecretName = d.taskSecret
+	req.TaskSecretMountPath = d.taskSecretPath
 	return d.exec.Execute(ctx, req)
 }
 

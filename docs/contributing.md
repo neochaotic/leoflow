@@ -34,7 +34,7 @@ Then open **<http://localhost:8080>** and log in as **`admin@leoflow.local`** /
 !!! tip "What you're looking at"
     One process serves the API (`/api/v2`), the internal UI API (`/ui/*`), and the
     React UI (ADR 0017). It auto-applies migrations and seeds the admin user on
-    first boot. The three operating modes (Demo · Dev · Pro-soon) are
+    first boot. The three operating modes (Lite · Pro-soon · Demo) are
     described in [Operating modes](operating-modes.md).
 
 ## 2. Set up for development
@@ -93,7 +93,7 @@ merge. They are not bureaucracy; they are why the codebase stays an A+.
 
     Open a [new issue](https://github.com/neochaotic/leoflow/issues/new/choose) and
     pick **Bug report**. The form asks for repro steps, how you're running Leoflow
-    (Demo / Dev / local server), and environment — fill it in fully so we can
+    (Lite / Pro / Demo), and environment — fill it in fully so we can
     reproduce.
 
 === "Propose a feature"

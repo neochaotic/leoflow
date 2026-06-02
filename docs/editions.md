@@ -6,7 +6,7 @@
     use). The **Pro** chart is installable + chart-test gated, but not
     cleared for official use until the v0.1.0-alpha cut.
 
-> See also [Operating modes](operating-modes.md) for the Demo/Dev/Pro
+> See also [Operating modes](operating-modes.md) for the Lite/Pro/Demo
 > runtime view (this page is the per-edition distribution + posture view).
 
 Leoflow is planned in two editions that share the same engine, the same

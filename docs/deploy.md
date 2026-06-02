@@ -181,6 +181,6 @@ into.
 Deploying the control plane itself (Helm chart, published `leoflow-server`/
 `leoflow-migrate` images, TLS on the agent channel, keyless cloud auth) is the
 **Pro** track — see [Operating modes](operating-modes.md) and the
-[Roadmap](roadmap-to-release.md). The product proves itself in **Dev** first.
+[Roadmap](roadmap-to-release.md). The product proves itself in **Lite** first.
 
 See also: [DAG authoring](dag-authoring.md) · [Operating modes](operating-modes.md).

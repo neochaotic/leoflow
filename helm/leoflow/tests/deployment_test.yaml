@@ -11,7 +11,7 @@ tests:
       agentTLS.enabled: false
     asserts:
       - failedTemplate:
-          errorMessage: "database.url or database.existingSecret is required: the Production edition needs an external Postgres (the embedded datastore is Lite-only)."
+          errorMessage: "database.url or database.existingSecret is required: the Pro edition needs an external Postgres (the embedded datastore is Lite-only)."
 
   - it: fails the install if redis.url AND redis.existingSecret are both empty
     set:
@@ -20,7 +20,7 @@ tests:
       agentTLS.enabled: false
     asserts:
       - failedTemplate:
-          errorMessage: "redis.url or redis.existingSecret is required: the Production edition needs an external Redis (the embedded XCom + log tailer is Lite-only)."
+          errorMessage: "redis.url or redis.existingSecret is required: the Pro edition needs an external Redis (the embedded XCom + log tailer is Lite-only)."
 
   - it: omits LEOFLOW_SECRET_KEY env entry when neither secretKey nor secretKeyExistingSecret is set
     set:

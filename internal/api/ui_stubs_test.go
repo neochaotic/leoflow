@@ -84,6 +84,40 @@ func TestUIStubsReturnSchemaValidEmpties(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &graph); err != nil {
 		t.Fatalf("dependencies: %v (%s)", err, rec.Body.String())
 	}
+
+	// next_run_assets is the emptyObject() endpoint — pinning the bare `{}`
+	// shape the SPA expects for the "asset triggers" widget (returning an
+	// empty array instead would break the SPA's typed parser).
+	rec = authGet(srv, http.MethodGet, "/ui/next_run_assets/etl", "")
+	if rec.Code != http.StatusOK {
+		t.Errorf("next_run_assets = %d, want 200", rec.Code)
+	}
+	if rec.Body.String() != "{}" {
+		t.Errorf("next_run_assets body = %q, want '{}' (bare object, not collection)", rec.Body.String())
+	}
+}
+
+// TestZeroTaskInstanceStateCount asserts the helper returns every Airflow
+// 3.2.1 state name at zero. The dashboard's "states by count" widget breaks
+// silently if a state name is renamed or dropped (the front end iterates
+// known keys).
+func TestZeroTaskInstanceStateCount(t *testing.T) {
+	got := zeroTaskInstanceStateCount()
+	required := []string{
+		"no_status", "removed", "scheduled", "queued", "running", "success",
+		"restarting", "failed", "up_for_retry", "up_for_reschedule",
+		"upstream_failed", "skipped", "deferred",
+	}
+	for _, k := range required {
+		v, ok := got[k]
+		if !ok {
+			t.Errorf("missing state counter %q", k)
+			continue
+		}
+		if v != 0 {
+			t.Errorf("counter %q = %v, want 0", k, v)
+		}
+	}
 }
 
 func TestUIStubWritesStill501(t *testing.T) {

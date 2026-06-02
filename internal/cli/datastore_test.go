@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/hex"
 	"net"
 	"os"
 	"path/filepath"
@@ -59,6 +60,69 @@ func TestResolveDevDBPortPersistsAndReuses(t *testing.T) {
 func TestDevDBPortDefault(t *testing.T) {
 	if p := devDBPort(t.TempDir()); p != defaultDevDBPort {
 		t.Errorf("devDBPort with no db-port = %d, want %d", p, defaultDevDBPort)
+	}
+}
+
+// TestLeoflowHomeUnderUserHome anchors leoflowHome() to $HOME/.leoflow. A
+// regression would break the docker compose project name (datastore
+// reconnection) and the uninstall target on every machine.
+func TestLeoflowHomeUnderUserHome(t *testing.T) {
+	got, err := leoflowHome()
+	if err != nil {
+		t.Fatalf("leoflowHome: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("UserHomeDir unavailable: %v", err)
+	}
+	want := filepath.Join(home, ".leoflow")
+	if got != want {
+		t.Errorf("leoflowHome() = %q, want %q", got, want)
+	}
+}
+
+// TestDevProjectNameStableAndShaped asserts devProjectName() returns the
+// `leoflow-<12hex>` shape projectName() produces for the leoflowHome() output.
+// The string is the docker-compose project name; drift here would orphan the
+// Postgres volume of every existing install.
+func TestDevProjectNameStableAndShaped(t *testing.T) {
+	got := devProjectName()
+	if !strings.HasPrefix(got, "leoflow-") {
+		t.Errorf("devProjectName() = %q, must start with 'leoflow-'", got)
+	}
+	rest := strings.TrimPrefix(got, "leoflow-")
+	if len(rest) != 12 {
+		t.Errorf("devProjectName() suffix = %q, want 12 hex chars", rest)
+	}
+	if _, err := hex.DecodeString(rest); err != nil {
+		t.Errorf("devProjectName() suffix %q is not hex: %v", rest, err)
+	}
+	// Stability: calling again returns the same string.
+	if again := devProjectName(); again != got {
+		t.Errorf("devProjectName() is not stable across calls: %q != %q", again, got)
+	}
+}
+
+// TestComposeEnvCarriesProjectAndPort: composeEnv() must publish both the
+// per-install COMPOSE_PROJECT_NAME (so docker compose targets this install's
+// resources) and the LEOFLOW_DB_PORT the compose file interpolates. A missing
+// either silently re-binds to the default port or clobbers another install.
+func TestComposeEnvCarriesProjectAndPort(t *testing.T) {
+	env := composeEnv()
+	var sawProject, sawPort bool
+	for _, kv := range env {
+		switch {
+		case strings.HasPrefix(kv, "COMPOSE_PROJECT_NAME=leoflow-"):
+			sawProject = true
+		case strings.HasPrefix(kv, "LEOFLOW_DB_PORT="):
+			sawPort = true
+		}
+	}
+	if !sawProject {
+		t.Error("composeEnv() missing COMPOSE_PROJECT_NAME=leoflow-*")
+	}
+	if !sawPort {
+		t.Error("composeEnv() missing LEOFLOW_DB_PORT=<n>")
 	}
 }
 

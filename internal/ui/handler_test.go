@@ -201,6 +201,40 @@ func TestIndexInjectsDevBannerOnlyInDevMode(t *testing.T) {
 	}
 }
 
+func TestIndexInjectsProBannerOnlyInProMode(t *testing.T) {
+	fsys := fstest.MapFS{"index.html": {Data: []byte(`<body><div id="root"></div></body>`)}}
+
+	pro := NewFromFS(fsys, "v")
+	pro.SetProBanner(true)
+	rec := httptest.NewRecorder()
+	pro.Index(rec, "/")
+	body := rec.Body.String()
+	if !strings.Contains(body, "leoflow-pro-banner") || !strings.Contains(body, ">PRO<") {
+		t.Errorf("pro mode must inject the PRO overlay, got:\n%s", body)
+	}
+	if strings.Index(body, "leoflow-pro-banner") > strings.Index(body, "</body>") {
+		t.Error("PRO overlay should be injected before </body>")
+	}
+
+	off := NewFromFS(fsys, "v") // pro banner not set → demo/lite
+	rec2 := httptest.NewRecorder()
+	off.Index(rec2, "/")
+	if strings.Contains(rec2.Body.String(), "leoflow-pro-banner") {
+		t.Error("non-pro mode must NOT inject the PRO overlay")
+	}
+
+	// Defensive: the two badges are mutually exclusive; the server should never
+	// flip both on at the same time, but if it did, neither should silently win.
+	both := NewFromFS(fsys, "v")
+	both.SetLiteBanner(true)
+	both.SetProBanner(true)
+	rec3 := httptest.NewRecorder()
+	both.Index(rec3, "/")
+	if !strings.Contains(rec3.Body.String(), ">LITE<") || !strings.Contains(rec3.Body.String(), ">PRO<") {
+		t.Error("both banners enabled: both pills should be in the body (server is the source of truth)")
+	}
+}
+
 func TestIndexInjectsEditorButtonOnlyWhenEnabled(t *testing.T) {
 	fsys := fstest.MapFS{"index.html": {Data: []byte(`<body><div id="root"></div></body>`)}}
 

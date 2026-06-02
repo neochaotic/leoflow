@@ -10,11 +10,39 @@ import (
 )
 
 // linesSink captures whole LogLine values so a framing test can assert message,
-// level, and stream (capSink only records the message + line number).
-type linesSink struct{ ls []*agentv1.LogLine }
+// level, and stream (capSink only records the message + line number). When err
+// is non-nil Send returns it (so the framing helpers' "log-and-continue" error
+// path is exercised).
+type linesSink struct {
+	ls  []*agentv1.LogLine
+	err error
+}
 
-func (s *linesSink) Send(l *agentv1.LogLine) error { s.ls = append(s.ls, l); return nil }
-func (s *linesSink) Close() error                  { return nil }
+func (s *linesSink) Send(l *agentv1.LogLine) error {
+	s.ls = append(s.ls, l)
+	return s.err
+}
+func (s *linesSink) Close() error { return nil }
+
+// TestFramingSurvivesSinkErrors exercises the log-and-continue branch on the
+// three framing helpers. A sink returning an error must NOT propagate — the
+// framing is purely cosmetic, and propagating would mean a flaky log shipper
+// could make a task that succeeded look as if it failed. This locks that
+// behavior; the runtime can keep going on a degraded sink (the comment on
+// each helper spells it out).
+func TestFramingSurvivesSinkErrors(t *testing.T) {
+	want := errors.New("sink briefly unreachable")
+	s := &linesSink{err: want}
+	// All three helpers swallow the error.
+	emitTaskStarted(s)
+	emitTaskEnded(s, 0, nil, time.Second)
+	emitTaskBoot(s, []string{"python3", "-u", "task.py"}, []string{"AIRFLOW_VAR_GREETING=hi"})
+	// Each helper appended its line via the recorder BEFORE Send returned the
+	// error; the count proves no helper short-circuited on its own.
+	if got := len(s.ls); got < 3 {
+		t.Errorf("framing helpers did not all attempt a Send (got %d, want >= 3)", got)
+	}
+}
 
 // TestEmitTaskStarted writes a synthetic "▸ task started" line at INFO with
 // stream "agent" — so the UI's Logs panel is never empty even for a task that

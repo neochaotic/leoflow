@@ -1,15 +1,15 @@
 {{- /*
-The Production edition (this chart) must use EXTERNAL managed datastores and must
+The Pro edition (this chart) must use EXTERNAL managed datastores and must
 never fall back to Lite's embedded backends (embedded Postgres / in-process XCom
 + tailer — ADR 0026/0027). The server selects embedded backends when no Redis URL
 is set, so fail the install loudly with a clear message if Postgres or Redis is
 not configured, rather than letting a misconfigured Pro deploy run embedded.
 */}}
 {{- if and (not .Values.database.existingSecret) (not .Values.database.url) -}}
-{{- fail "database.url or database.existingSecret is required: the Production edition needs an external Postgres (the embedded datastore is Lite-only)." -}}
+{{- fail "database.url or database.existingSecret is required: the Pro edition needs an external Postgres (the embedded datastore is Lite-only)." -}}
 {{- end -}}
 {{- if and (not .Values.redis.existingSecret) (not .Values.redis.url) -}}
-{{- fail "redis.url or redis.existingSecret is required: the Production edition needs an external Redis (the embedded XCom + log tailer is Lite-only)." -}}
+{{- fail "redis.url or redis.existingSecret is required: the Pro edition needs an external Redis (the embedded XCom + log tailer is Lite-only)." -}}
 {{- end -}}
 {{- /*
 Validate `secretKey` length up-front so a wrong key fails the install
@@ -70,11 +70,13 @@ spec:
               containerPort: {{ .Values.ports.grpc }}
           env:
             # Mark this deployment as the Pro edition. The control plane uses
-            # this signal to refuse the LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true
-            # dev escape hatch at boot (#58 / ADR 0014), so a Pro install cannot
-            # accidentally ship secrets over a plaintext gRPC channel.
+            # this signal for two things: (a) refuse the
+            # LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true dev escape hatch at boot
+            # (#58 / ADR 0014) so a Pro install cannot accidentally ship secrets
+            # over a plaintext gRPC channel; (b) inject the gold PRO badge into
+            # the served SPA shell, mirroring Lite's silver LITE pill.
             - name: LEOFLOW_UI_EDITION
-              value: "production"
+              value: "pro"
             - name: LEOFLOW_SERVER_HTTP_ADDR
               value: ":{{ .Values.ports.http }}"
             - name: LEOFLOW_SERVER_METRICS_ADDR

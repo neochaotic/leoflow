@@ -177,6 +177,72 @@ func TestBuffered_Async_WorkerFailureMarksTIFailed(t *testing.T) {
 	}
 }
 
+// TestBuffered_Async_FailureReportToSinkSurvivesSinkError covers the
+// reportFailure error path (the comment on it spells the contract out: "A sink
+// error is logged but cannot itself be propagated — the worker has already
+// done all it can"). The combination — inner dispatch fails AND the failure
+// report itself fails — is a realistic outage shape (the K8s API hiccups on
+// the dispatch, then the metadata DB is briefly unreachable when marking the
+// TI failed). The worker must keep draining instead of getting stuck or
+// crashing. Without this test the path was only exercised at 50%.
+func TestBuffered_Async_FailureReportToSinkSurvivesSinkError(t *testing.T) {
+	innerErr := errors.New("kube apiserver timeout")
+	sinkErr := errors.New("postgres briefly unreachable")
+	inner := &recordingInner{err: innerErr}
+	sink := &recordingSink{failErr: sinkErr}
+	d := dispatch.NewBuffered(inner, sink, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 4, Workers: 1})
+	defer d.Close()
+
+	// Two tasks: both will fail to dispatch, both will fail to report. The
+	// second task only drains if the worker stayed alive after the first
+	// double-failure — that is the regression this guards against.
+	for _, taskID := range []string{"first", "second"} {
+		if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: taskID}); err != nil {
+			t.Fatalf("Dispatch(%s): %v", taskID, err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(sink.snapshot()) < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	got := sink.snapshot()
+	if len(got) != 2 {
+		t.Fatalf("worker stalled after sink error: failures = %+v (want 2)", got)
+	}
+	if got[0].taskID != "first" || got[1].taskID != "second" {
+		t.Errorf("unexpected failure order: %+v", got)
+	}
+}
+
+// TestBuffered_Async_FailureSilentlyDroppedWithoutSink: if there is no sink at
+// all (NewBuffered called with nil), an inner dispatch error must NOT crash
+// the worker; the failure is simply lost — the scheduler's reaper picks the TI
+// up later. This pins the nil-sink early-return half of reportFailure.
+func TestBuffered_Async_FailureSilentlyDroppedWithoutSink(t *testing.T) {
+	innerErr := errors.New("kube apiserver timeout")
+	inner := &recordingInner{err: innerErr}
+	d := dispatch.NewBuffered(inner, nil, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 2, Workers: 1})
+	defer d.Close()
+
+	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "lost"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	// The inner dispatcher records every call (success or error), so we use
+	// that as the drain signal — sink is nil so we cannot observe via it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(inner.seen()) == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := inner.seen(); len(got) != 1 || got[0] != "lost" {
+		t.Errorf("worker did not invoke inner; calls = %+v", got)
+	}
+	// If we get here without panic the early-return path is exercised. The
+	// next Dispatch keeps draining, confirming the worker survived.
+	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "alive"}); err != nil {
+		t.Fatalf("second Dispatch: %v", err)
+	}
+}
+
 // TestBuffered_Async_PanicInInnerDoesNotCrash is the resilience pin: a panic
 // in the wrapped dispatcher (a bug, a malformed task, anything) must not
 // crash the worker goroutine. The worker recovers, the failure is reported

@@ -13,15 +13,22 @@ import (
 )
 
 // logSchedulerError logs an error from the scheduler loop or one of its
-// reapers, downgrading to WARN when the error wraps context.Canceled. That
-// cancellation is the expected fan-out of a graceful leader step-down (the
-// scheduler cancels its run-context when it loses the Postgres advisory lock,
-// and every in-flight loop returns "context canceled" milliseconds later).
-// Surfacing those as ERROR pages on a non-event (#311). DeadlineExceeded is
-// kept at ERROR — a deadline IS a real stall worth seeing.
-func logSchedulerError(logger *slog.Logger, msg string, err error) {
-	if errors.Is(err, context.Canceled) {
-		logger.Warn(msg+" canceled (likely leader step-down)", "error", err)
+// reapers, downgrading to WARN ONLY when (a) the error wraps context.Canceled
+// AND (b) the caller is currently in the step-down window. Both conditions
+// together identify the expected cancel-fanout of a graceful leader step-down
+// (the scheduler cancels its run-context when it loses the Postgres advisory
+// lock, and every in-flight loop returns "context canceled" milliseconds
+// later). Surfacing those as ERROR pages on a non-event (#311).
+//
+// When context.Canceled appears OUTSIDE a known step-down (someone else
+// canceled the loop — a bug, a misconfig, a shutdown race), we KEEP it at
+// ERROR. The tripwire is what catches an unexpected cancel that the downgrade
+// would otherwise have silently swallowed. DeadlineExceeded is also kept at
+// ERROR — a deadline IS a real stall worth seeing, not a deliberate cancel.
+func logSchedulerError(logger *slog.Logger, msg string, err error, inStepDown bool) {
+	if inStepDown && errors.Is(err, context.Canceled) {
+		logger.Warn(msg+" canceled (leader step-down in progress)",
+			"error", err, "expected", true)
 		return
 	}
 	logger.Error(msg, "error", err)
@@ -107,6 +114,14 @@ type Recorder interface {
 	RecordTaskTransition(from, to, dagID string)
 	// RecordUndispatchable counts tasks queued with no executor to launch them.
 	RecordUndispatchable(reason string)
+	// RecordSchedulerStepDown counts a leader step-down by reason — the rate
+	// of this counter is the operator-facing SLI for leader-churn (#311). A
+	// nil Recorder is tolerated by the scheduler so tests need not stub it.
+	RecordSchedulerStepDown(reason string)
+	// ObserveSchedulerReacquire records the wall-clock duration of a step-down
+	// → re-acquire cycle (#311). Operators alert on P99 to spot churn that
+	// starts to delay scheduling latency.
+	ObserveSchedulerReacquire(d time.Duration)
 }
 
 // Dispatcher launches a task instance for execution. The scheduler dispatches a
@@ -166,6 +181,7 @@ type Scheduler struct {
 	dispatchLostThreshold time.Duration
 	lastTick              atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
 	leading               atomic.Bool  // true only while this instance holds leadership and ticks
+	steppingDown          atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
@@ -226,6 +242,41 @@ func (s *Scheduler) SetLeading(on bool) {
 	s.leading.Store(on)
 }
 
+// MarkSteppingDown records that a graceful step-down has begun. The campaign
+// loop calls this BEFORE canceling the scheduler's run-context, so any
+// in-flight reaper/Step that returns "context canceled" inside the window logs
+// at WARN (expected) instead of ERROR. It also increments the step-down
+// counter labeled by reason, so operators can alert on the *rate* of churn
+// (rate(...[5m])) instead of grep'ing log content. ClearSteppingDown closes
+// the window; outside it, context.Canceled stays ERROR — the tripwire that
+// catches an unexpected cancel a flat downgrade would silently swallow.
+func (s *Scheduler) MarkSteppingDown(reason string) {
+	s.steppingDown.Store(true)
+	if s.recorder != nil {
+		s.recorder.RecordSchedulerStepDown(reason)
+	}
+}
+
+// ClearSteppingDown ends the step-down window opened by MarkSteppingDown.
+// Idempotent — calling it when no step-down is active is a no-op.
+func (s *Scheduler) ClearSteppingDown() { s.steppingDown.Store(false) }
+
+// RecordReacquireSince records the time spent stepped down (#311). It is
+// called by the campaign loop immediately after a successful re-acquire, with
+// the timestamp captured at the moment of step-down. A zero stepDownAt (no
+// prior step-down — first acquisition at boot) is ignored.
+func (s *Scheduler) RecordReacquireSince(stepDownAt time.Time) {
+	if stepDownAt.IsZero() || s.recorder == nil {
+		return
+	}
+	s.recorder.ObserveSchedulerReacquire(time.Since(stepDownAt))
+}
+
+// SteppingDown exposes the current step-down state for tests and callers that
+// want to classify an error themselves (the four scheduler.go log sites call
+// logSchedulerError with this value).
+func (s *Scheduler) SteppingDown() bool { return s.steppingDown.Load() }
+
 // SetRecorder attaches a metrics recorder (optional).
 func (s *Scheduler) SetRecorder(r Recorder) { s.recorder = r }
 
@@ -266,7 +317,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 	stepCtx, cancel := context.WithTimeout(ctx, s.stepTimeout)
 	defer cancel()
 	if err := s.Step(stepCtx); err != nil {
-		logSchedulerError(s.logger, "scheduler step", err)
+		logSchedulerError(s.logger, "scheduler step", err, s.steppingDown.Load())
 	}
 }
 
@@ -342,12 +393,12 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	}
 	runReaper := newOrphanReaper(s.store, s.logger, s.orphanThreshold, s.recorder)
 	if err := runReaper.run(ctx); err != nil {
-		logSchedulerError(s.logger, "orphan reaper", err)
+		logSchedulerError(s.logger, "orphan reaper", err, s.steppingDown.Load())
 		s.record("orphan_list_error")
 	}
 	tiReaper := newAgentLostReaper(s.store, s.logger, s.agentLostThreshold, s.recorder)
 	if err := tiReaper.run(ctx); err != nil {
-		logSchedulerError(s.logger, "agent-lost reaper", err)
+		logSchedulerError(s.logger, "agent-lost reaper", err, s.steppingDown.Load())
 		s.record("agent_lost_list_error")
 	}
 	// The dispatch-lost reaper (#202) catches TIs left in `queued` after a
@@ -358,7 +409,7 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	// chain once the threshold elapses.
 	dispatchReaper := newDispatchLostReaper(s.store, s.logger, s.dispatchLostThreshold, s.recorder)
 	if err := dispatchReaper.run(ctx); err != nil {
-		logSchedulerError(s.logger, "dispatch-lost reaper", err)
+		logSchedulerError(s.logger, "dispatch-lost reaper", err, s.steppingDown.Load())
 		s.record("dispatch_lost_list_error")
 	}
 }

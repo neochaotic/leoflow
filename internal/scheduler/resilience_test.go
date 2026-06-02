@@ -123,8 +123,10 @@ func (r *capturingRecorder) RecordSchedulerDecision(d string) {
 	defer r.mu.Unlock()
 	r.decisions = append(r.decisions, d)
 }
-func (r *capturingRecorder) RecordTaskTransition(_, _, _ string) {}
-func (r *capturingRecorder) RecordUndispatchable(string)         {}
+func (r *capturingRecorder) RecordTaskTransition(_, _, _ string)       {}
+func (r *capturingRecorder) RecordUndispatchable(string)               {}
+func (r *capturingRecorder) RecordSchedulerStepDown(string)            {}
+func (r *capturingRecorder) ObserveSchedulerReacquire(_ time.Duration) {}
 
 func (r *capturingRecorder) count(decision string) int {
 	r.mu.Lock()

@@ -569,12 +569,25 @@ func TestHeartbeatIsLeadershipAware(t *testing.T) {
 	}
 }
 
-type fakeRecorder struct{ undispatchable []string }
+type fakeRecorder struct {
+	undispatchable   []string
+	stepDowns        map[string]int
+	reacquireSamples []time.Duration
+}
 
 func (r *fakeRecorder) RecordSchedulerDecision(string)      {}
 func (r *fakeRecorder) RecordTaskTransition(_, _, _ string) {}
 func (r *fakeRecorder) RecordUndispatchable(reason string) {
 	r.undispatchable = append(r.undispatchable, reason)
+}
+func (r *fakeRecorder) RecordSchedulerStepDown(reason string) {
+	if r.stepDowns == nil {
+		r.stepDowns = map[string]int{}
+	}
+	r.stepDowns[reason]++
+}
+func (r *fakeRecorder) ObserveSchedulerReacquire(d time.Duration) {
+	r.reacquireSamples = append(r.reacquireSamples, d)
 }
 
 func freshRun() *fakeStore {

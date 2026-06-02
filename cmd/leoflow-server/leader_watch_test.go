@@ -40,7 +40,7 @@ func TestWatchLeadershipStepsDownOnLostLock(t *testing.T) {
 	defer cancel()
 	chk := &fakeChecker{held: false}
 	done := make(chan struct{})
-	go func() { watchLeadership(ctx, chk, time.Millisecond, cancel, discardLog()); close(done) }()
+	go func() { watchLeadership(ctx, chk, time.Millisecond, cancel, discardLog(), nil); close(done) }()
 
 	select {
 	case <-ctx.Done(): // stepped down
@@ -58,7 +58,7 @@ func TestWatchLeadershipToleratesTransientErrors(t *testing.T) {
 	chk := &fakeChecker{err: errors.New("connection blip")}
 	start := time.Now()
 	done := make(chan struct{})
-	go func() { watchLeadership(ctx, chk, 10*time.Millisecond, cancel, discardLog()); close(done) }()
+	go func() { watchLeadership(ctx, chk, 10*time.Millisecond, cancel, discardLog(), nil); close(done) }()
 
 	select {
 	case <-ctx.Done():
@@ -74,13 +74,69 @@ func TestWatchLeadershipToleratesTransientErrors(t *testing.T) {
 	}
 }
 
+// TestWatchLeadershipFiresOnStepDownWithReason: when leadership is lost the
+// callback fires EXACTLY ONCE with the structured reason, BEFORE cancel().
+// Operators alert on the per-reason counter, so a miscount here would mask
+// leader-churn alerts (#311).
+func TestWatchLeadershipFiresOnStepDownWithReason(t *testing.T) {
+	cases := []struct {
+		name       string
+		chk        *fakeChecker
+		wantReason string
+		interval   time.Duration
+	}{
+		{name: "lock_released", chk: &fakeChecker{held: false}, wantReason: "lock_released", interval: time.Millisecond},
+		{name: "check_timeout", chk: &fakeChecker{err: errors.New("blip")}, wantReason: "check_timeout", interval: 5 * time.Millisecond},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var (
+				mu              sync.Mutex
+				reasons         []string
+				cancelledBefore bool
+			)
+			tracker := func(reason string) {
+				mu.Lock()
+				reasons = append(reasons, reason)
+				// Contract: onStepDown fires BEFORE cancel() — the scheduler
+				// must have time to flip its steppingDown flag before the
+				// reapers see ctx-canceled. Capture ctx.Err() inside the
+				// callback to assert that ordering.
+				cancelledBefore = ctx.Err() != nil
+				mu.Unlock()
+			}
+			done := make(chan struct{})
+			go func() {
+				watchLeadership(ctx, tc.chk, tc.interval, cancel, discardLog(), tracker)
+				close(done)
+			}()
+			select {
+			case <-ctx.Done():
+			case <-time.After(2 * time.Second):
+				t.Fatal("did not step down")
+			}
+			<-done
+			mu.Lock()
+			defer mu.Unlock()
+			if len(reasons) != 1 || reasons[0] != tc.wantReason {
+				t.Errorf("reasons = %v, want exactly [%q]", reasons, tc.wantReason)
+			}
+			if cancelledBefore {
+				t.Error("onStepDown fired AFTER cancel(); must fire before so the scheduler tags the cancel-fanout as expected (#311)")
+			}
+		})
+	}
+}
+
 // TestWatchLeadershipStaysWhileHolding: while the lock is held, the watchdog
 // never cancels the run.
 func TestWatchLeadershipStaysWhileHolding(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	chk := &fakeChecker{held: true}
 	done := make(chan struct{})
-	go func() { watchLeadership(ctx, chk, time.Millisecond, cancel, discardLog()); close(done) }()
+	go func() { watchLeadership(ctx, chk, time.Millisecond, cancel, discardLog(), nil); close(done) }()
 
 	time.Sleep(40 * time.Millisecond)
 	select {

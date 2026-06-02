@@ -18,6 +18,8 @@ type Metrics struct {
 	ActiveDAGRuns         *prometheus.GaugeVec
 	QueuedTasks           *prometheus.GaugeVec
 	TasksUndispatchable   *prometheus.CounterVec
+	SchedulerStepDowns    *prometheus.CounterVec // #311 leader churn observability
+	SchedulerReacquire    prometheus.Histogram   // #311 step-down → re-acquire latency
 
 	// Task lifecycle
 	TaskStateTransitions    *prometheus.CounterVec
@@ -68,6 +70,20 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		SchedulerLeader: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "leoflow_scheduler_leader", Help: "1 when this replica is the scheduler leader.",
 		}, []string{"replica_id"}),
+		SchedulerStepDowns: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "leoflow_scheduler_step_downs_total",
+			Help: "Scheduler leadership step-downs by reason (lock_released, check_timeout, shutdown). " +
+				"Operators alert on rate(...[5m]); a sudden uptick usually indicates a Postgres connection-stability issue (#311).",
+		}, []string{"reason"}),
+		SchedulerReacquire: f.NewHistogram(prometheus.HistogramOpts{
+			Name: "leoflow_scheduler_reacquire_seconds",
+			Help: "Wall-clock seconds between a leader step-down and the same replica reacquiring leadership. " +
+				"A growing P99 signals leader churn that affects scheduling latency (#311).",
+			// Buckets span ~10ms (transient blip) to ~5min (extended outage); the
+			// issue body reports observed re-acquire ~10ms, so the low end is the
+			// reportable distribution.
+			Buckets: []float64{0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60, 300},
+		}),
 		ActiveDAGRuns: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "leoflow_active_dag_runs", Help: "Active dag runs by dag and state.",
 		}, []string{"dag_id", "state"}),
@@ -151,6 +167,22 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, dur time.Du
 // RecordSchedulerDecision records one scheduler decision by type.
 func (m *Metrics) RecordSchedulerDecision(decisionType string) {
 	m.SchedulerDecisions.WithLabelValues(decisionType).Inc()
+}
+
+// RecordSchedulerStepDown increments the leader step-down counter (#311). The
+// reason label lets operators distinguish a transient lock_released (pgx blip)
+// from a check_timeout (the lock-check failed repeatedly) or a clean shutdown,
+// so they can alert on the rate of the noisy reasons without paging on
+// expected shutdowns.
+func (m *Metrics) RecordSchedulerStepDown(reason string) {
+	m.SchedulerStepDowns.WithLabelValues(reason).Inc()
+}
+
+// ObserveSchedulerReacquire records the wall-clock duration of a step-down →
+// re-acquire cycle (#311). Use the histogram's P99 in alerts: a P99 growing
+// past a second indicates churn that is starting to delay scheduling.
+func (m *Metrics) ObserveSchedulerReacquire(d time.Duration) {
+	m.SchedulerReacquire.Observe(d.Seconds())
 }
 
 // RecordTaskTransition records a task instance state transition.

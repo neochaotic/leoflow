@@ -149,17 +149,26 @@ go install github.com/neochaotic/leoflow/cmd/leoflow-agent@latest
 leoflow setup
 ```
 
-The subsequent `leoflow setup` will download a managed Python under `~/.leoflow/` — the same managed runtime the install-script path uses, with no expiry.
-
-A source build is not stamped with an expiry, so it never expires.
+The subsequent `leoflow setup` provisions the same managed runtime the
+install-script path uses (managed CPython under `~/.leoflow/`). A source build
+is **not stamped with an expiry**, so unlike a pre-alpha release binary it never
+refuses to run after 90 days.
 
 ## Uninstalling
 
-Everything is self-contained:
+Use the built-in command — it removes the install directory and (with `--purge`)
+your workspace too:
 
 ```bash
-rm -rf ~/.leoflow      # binaries, managed Python, parser sources, config
-rm -rf ~/leoflow       # your workspace (only if you want to remove your DAGs too)
+leoflow uninstall              # removes ~/.leoflow (binaries, managed Python, parser, config)
+leoflow uninstall --purge      # also removes ~/leoflow (your DAGs!)
+```
+
+If the `leoflow` binary is gone or broken, fall back to the same paths by hand:
+
+```bash
+rm -rf ~/.leoflow              # what `leoflow uninstall` would have removed
+rm -rf ~/leoflow               # what `--purge` adds (your workspace)
 ```
 
 ## Next

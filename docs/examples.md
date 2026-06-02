@@ -50,7 +50,7 @@ distinct actions (ADR 0020).
 But deregister alone is **not permanent while the source exists** — it gets
 re-registered:
 
-- **Dev (`leoflow lite`):** the watcher re-registers the DAG on the next reload.
+- **Lite (`leoflow lite`):** the watcher re-registers the DAG on the next reload.
   To remove it for good, **delete the DAG's file** (or stop/point `leoflow lite`
   elsewhere).
 - **Pro (CI deploy):** the next deploy that still includes the DAG

@@ -134,8 +134,8 @@ nav:
       - HTTP API (Scalar): api-reference.html
       - Configuration: configuration.md
   - Guides:
-      - The leoflow dev workflow: dev-workflow.md
-      - Local deploy (the dev loop): local-deploy.md
+      - The leoflow lite workflow: dev-workflow.md
+      - Local deploy (the Lite loop): local-deploy.md
       - The Lite web editor: lite-web-editor.md
       - Examples: examples.md
       - "Map-reduce for ML": cookbook/map-reduce.md

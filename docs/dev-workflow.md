@@ -133,11 +133,11 @@ Open it to see the offending file, its bundle, and the full traceback:
 Fix the file and save — the watcher registers the next good version and the banner
 **clears automatically** (~2 s). No restart, no manual cleanup.
 
-!!! note "Dev vs production"
+!!! note "Lite vs Pro"
     This banner is driven by a control-plane feed (`GET /api/v2/importErrors`) and
-    works in any environment. In **production** you rarely see it: DAGs are
+    works in any environment. In **Pro** you rarely see it: DAGs are
     immutable artifacts and a broken DAG fails `leoflow compile` in **CI** before it
-    is ever deployed — CI is the safety net there. In **dev**, where you edit live,
+    is ever deployed — CI is the safety net there. In **Lite**, where you edit live,
     the `leoflow lite` watcher publishes the error so you catch it in the UI, not
     only the terminal.
 

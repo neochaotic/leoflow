@@ -9,17 +9,17 @@ This consolidates the open work after the audit + reverse analysis
 
 ## Release phases — Alpha · Beta · GA
 
-The product **proves itself in Dev first**; Pro matures behind it.
+The product **proves itself in Lite first**; Pro matures behind it.
 
 ```mermaid
 flowchart LR
-  A["Alpha — Dev<br/>(now)"] --> B["Beta — Pro track"] --> G["GA — hardened"]
+  A["Alpha — Lite<br/>(now)"] --> B["Beta — Pro track"] --> G["GA — hardened"]
 ```
 
 ### 🟡 Alpha — Developer experience (current focus)
 A data engineer can author, run, and iterate on DAGs locally with confidence.
 
-- `leoflow lite` (isolated k3d/subprocess), `leoflow lite provision`, `leoflow db`, hot reload, DEV marker.
+- `leoflow lite` (isolated k3d/subprocess), `leoflow lite provision`, `leoflow db`, hot reload, LITE marker.
 - DAG authoring + binding/overrides (ADR 0023), guardrails, embedded migrations.
 - Documentation site, examples, the `dags/` convention.
 - **Exit:** the dev loop is reliable end-to-end; the authoring model is documented and tested.

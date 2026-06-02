@@ -5,7 +5,7 @@
     (unmodified Airflow UI on `/api/v2` alone) was not viable. **That realistic path
     was taken and it works:** Leoflow serves the unmodified Apache Airflow 3.2.1
     React SPA **and** implements the internal `/ui/*` API (ADR 0017 / ADR 0018). The
-    grid, graph, dashboard, and run views run against Leoflow today (Demo + Dev,
+    grid, graph, dashboard, and run views run against Leoflow today (Demo + Lite,
     browser-verified). The standing risk below is real and accepted: `/ui/*` is
     internal/unstable (AIP-84), so a new Airflow UI version can break a screen — we
     pin to 3.2.1 and guard with a browser contract sweep.

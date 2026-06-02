@@ -85,7 +85,7 @@ func run() error {
 	// Datastore for XCom + live-log tailing: Redis when configured (production,
 	// ADR 0006), or the embedded Postgres/in-process backends when no Redis is
 	// set (Lite — ADR 0026). The signal is the presence of a Redis URL.
-	xcomBackend, logTailer, redisHealth, dsCleanup, err := selectDatastore(ctx, cfg, pg, tel.Logger)
+	xcomBackend, logTailer, redisHealth, dsCleanup, err := selectDatastore(ctx, cfg, pg, tel.Logger, tel.Metrics)
 	if err != nil {
 		return err
 	}
@@ -482,7 +482,7 @@ const xcomSweepInterval = 10 * time.Minute
 // no Redis configured it uses the embedded backends — XCom on Postgres and an
 // in-process tailer — so Lite needs no Redis (ADR 0026). It returns a health
 // checker for Redis (nil when embedded) and a cleanup to defer.
-func selectDatastore(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger) (xcom.Backend, logs.Tailer, api.HealthChecker, func(), error) {
+func selectDatastore(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, logger *slog.Logger, metrics *observability.Metrics) (xcom.Backend, logs.Tailer, api.HealthChecker, func(), error) {
 	if cfg.Redis.URL == "" {
 		logger.Info("embedded datastore: XCom on Postgres, in-process log tailer (no Redis)")
 		backend := xcom.NewPostgresBackend(pg.Pool)
@@ -493,7 +493,15 @@ func selectDatastore(ctx context.Context, cfg *config.ServerConfig, pg *storage.
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("redis: %w", err)
 	}
+	// Attach the per-reason error counter, dial-latency histogram, and pool
+	// gauges (#312 sibling — same shape as the #311 step-down observability).
+	// 5s scrape interval is comfortably under the default 15s Prometheus
+	// scrape, so a P99 spike never reaches the dashboard from missing data.
+	// Lite already returned above (no Redis), so metrics is always non-nil
+	// here on the Pro path.
+	stopObs := storage.AttachRedisObservability(ctx, rd, metrics, 5*time.Second)
 	cleanup := func() {
+		stopObs()
 		if cerr := rd.Close(); cerr != nil {
 			logger.Error("closing redis", "error", cerr)
 		}

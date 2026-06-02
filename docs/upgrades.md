@@ -28,7 +28,7 @@ default**:
 
 | What | Why |
 |---|---|
-| The `leoflow` / `leoflow-server` / `leoflow-agent` binaries on `PATH` | Replaced by `install.sh`. The pre-alpha expiry on the previous build is what nudged you to upgrade. |
+| The `leoflow` / `leoflow-server` / `leoflow-agent` binaries on `PATH` | Replaced by `install.sh`. |
 | `~/.leoflow/python/` (managed CPython) | Pinned per release; replaced if the new release pins a different version. |
 | The SQL schema | The new binary applies any missing migrations on first start. |
 

@@ -1,8 +1,9 @@
 name: Prune pre-alpha releases
 
-# Lifecycle cleanup for #89: pre-alpha builds expire locally (the in-binary
-# expiresAt gate), but their GitHub releases linger as downloadable. This prunes
-# stale pre-alpha releases (and their tags) so expired artifacts do not pile up.
+# Lifecycle cleanup for #89: pre-alpha tags accumulate as we iterate (one per
+# prealpha cut). Keeping every one of them forever clutters the releases page
+# and grows the storage bill. This workflow prunes stale pre-alpha releases
+# (and their tags) on a weekly cadence so only the recent ones remain.
 #
 # Safety:
 #   - Only touches PRE-RELEASES whose tag matches *-prealpha.* — never stable.

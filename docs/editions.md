@@ -77,9 +77,6 @@ it is **equivalent to host root** (a DAG could escape to the machine). `subproce
 runs tasks directly on the host (no Docker, no isolation) as an explicitly dev-only
 escape hatch. (See [ADR 0027](adr/0027-product-editions-executors-delivery.md).)
 
-Pre-alpha Lite builds also **expire** (~90 days) and refuse to run past it — a
-reminder that Lite is for iterating locally, not for durable deployments.
-
 See the [Installation](installation.md) guide and the
 [`leoflow lite` workflow](dev-workflow.md).
 

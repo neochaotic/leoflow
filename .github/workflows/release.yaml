@@ -55,15 +55,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Bake the pre-alpha expiry: build time + 90 days (UTC, RFC3339) ──
-      # internal/version reads this via the expiresAt ldflag. Only pre-alpha tags
-      # (v*-prealpha.*) carry an expiry; for stable tags this step is skipped, so
-      # env.EXPIRES_AT stays empty and GoReleaser bakes an empty value = no expiry.
-      # Must run before GoReleaser.
-      - name: Compute alpha expiry
-        if: contains(github.ref_name, '-prealpha.')
-        run: echo "EXPIRES_AT=$(date -u -d '+90 days' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
-
       # ── GoReleaser handles the build, packaging, signing, and release ──
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
@@ -72,7 +63,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EXPIRES_AT: ${{ env.EXPIRES_AT }}
 
   # ── Build + push leoflow-migrate (golang-migrate + Leoflow migrations)
   # The Helm chart's migration Job (#34/#48) defaults to

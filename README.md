@@ -6,7 +6,8 @@
 
 <p align="center">
   <em>The workflow orchestrator that ate Apache Airflow's lunch.<br>
-  Same UI. Same vocabulary. Ten times the speed. Zero of the pain.</em>
+  Same UI. Same vocabulary. Ten times the speed. Zero of the pain.<br>
+  <strong>Native map-reduce for ML/AI</strong> — fan-out + reduce as a Python list comprehension, no XCom plumbing, no broker, no special operator.</em>
 </p>
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -17,7 +18,7 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13068/badge)](https://www.bestpractices.dev/projects/13068)
 
 [![Edition: Lite](https://img.shields.io/badge/edition-Lite-C0C0C0?labelColor=4a4a4a)](docs/editions.md#leoflow-lite)
-[![Edition: Pro](https://img.shields.io/badge/edition-Pro-FFD700?labelColor=4a4a4a)](docs/editions.md#leoflow-production)
+[![Edition: Pro](https://img.shields.io/badge/edition-Pro-FFD700?labelColor=4a4a4a)](docs/editions.md#leoflow-pro-coming)
 
 ---
 
@@ -27,10 +28,11 @@
 
 | | |
 |---|---|
-| [Operating modes](docs/operating-modes.md) · [Editions](docs/editions.md) | Demo · Dev · Production · the Lite/Pro split |
-| [DAG authoring](docs/dag-authoring.md) | write a DAG; the dev → deploy lifecycle |
+| [Operating modes](docs/operating-modes.md) · [Editions](docs/editions.md) | Lite · Pro · Demo — the runtime split and the packaging split |
+| [DAG authoring](docs/dag-authoring.md) | write a DAG; the Lite → deploy lifecycle |
+| [**Map-reduce for ML**](docs/cookbook/map-reduce.md) | fan-out + reduce as a Python list comprehension |
 | [CI/CD & deploy examples](docs/deploy.md) | GitHub Actions · GitLab · Cloud Build/Run · generic |
-| [Helm chart](helm/leoflow/README.md) | Production install: values reference, hardening, PoC recipe |
+| [Helm chart](helm/leoflow/README.md) | Pro install: values reference, hardening, PoC recipe |
 | [HTTP API (Scalar)](docs/api-reference.md) · [Go packages](docs/go-api.md) | API references |
 | [Concepts & glossary](docs/concepts.md) · [Architecture](docs/architecture.md) | the model & the *why* |
 
@@ -127,6 +129,50 @@ leoflow push ./dag.json        # registers with the control plane
 ```
 
 That is the entire developer surface. The CLI builds the image against an official base (`leoflow/python-runtime:3.11`), pushes to your registry, and registers a versioned DAG. The Airflow UI shows it at the next refresh.
+
+## Native map-reduce for ML/AI
+
+Hyperparameter search, k-fold cross-validation, ensemble training, batch
+inference, sharded preprocessing, Monte Carlo — **every parallel ML workload
+is map-reduce**. Most orchestrators make you build it: an operator per fan-out,
+a broker for the intermediate values, shared storage for the artifacts, and a
+custom reducer that knows how to find them all. Leoflow expresses the whole
+pattern in **two lines of Python**:
+
+```python
+from airflow.sdk import DAG, task
+
+@task
+def trial(lr: float) -> dict:
+    return train_one(lr)                            # map
+
+@task
+def select_best(trials: list[dict]) -> dict:
+    return max(trials, key=lambda r: r["score"])    # reduce
+
+with DAG("hparam_search", schedule=None):
+    select_best([trial(lr) for lr in [0.001, 0.01, 0.05, 0.1, 0.5]])
+```
+
+That `[trial(lr) for lr in …]` is the whole map. `trials: list[dict]` is the
+whole reduce. **No XCom plumbing, no broker setup, no shared filesystem, no
+special operator** — the parser captures the list shape at compile time; the
+runtime assembles the upstream XComs in declaration order and delivers them
+as a real Python list. Per-trial isolation (own pod / own process), per-trial
+retry, deterministic ordering, and a 256 KB cap per upstream — and a
+`null` slot for any upstream that legitimately produced no result.
+
+| ML pattern | Map | Reduce |
+|---|---|---|
+| Hyperparameter search | one task per `(lr, batch, seed)` triple | pick the best metric |
+| K-fold cross-validation | one task per fold | average the metrics |
+| Ensemble training | one task per base model | combine predictions / stack |
+| Batch inference | one task per partition | collect predictions to a sink |
+| Monte Carlo | one task per worker | average / sum results |
+
+Runnable example: `examples/ml_hparam_search/`. Full reference:
+**[Map-reduce for ML](docs/cookbook/map-reduce.md)** — guarantees, limits, what
+activates fan-in vs what does not, and the on-disk `dag.json` shape.
 
 ## Architecture
 
@@ -275,10 +321,11 @@ We borrow from Argo Workflows (container-native), from Prefect (modern developer
 ## Documentation
 
 - [Architecture overview](docs/architecture.md)
-- [Architecture Decision Records (14 ADRs)](docs/adr/) — every major decision, with its reasoning
-- [API reference](docs/api/) — OpenAPI spec, also rendered as interactive docs at `/docs` in the running server
-- [Developer guide](docs/developer-guide.md) — writing your first DAG, migration from Airflow
-- [Operator guide](docs/operator-guide.md) — production deployment, monitoring, backup
+- [Architecture Decision Records](docs/adr/) — every major decision, with its reasoning
+- [HTTP API reference (Scalar)](docs/api-reference.md) — also rendered interactively at `/docs` in the running server
+- [DAG authoring](docs/dag-authoring.md) — writing your first DAG, the Lite → deploy lifecycle
+- [Quickstart](docs/quickstart.md) and [Installation](docs/installation.md) — getting Leoflow running locally
+- [Map-reduce for ML](docs/cookbook/map-reduce.md) · [Variables & Connections](docs/variables-connections.md) · [Troubleshooting](docs/troubleshooting.md)
 - [Security policy](SECURITY.md) — how to report vulnerabilities
 
 ## Engineering Discipline

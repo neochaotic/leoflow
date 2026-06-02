@@ -31,9 +31,12 @@ against that:
   `pd-standard` boot disk — near-zero idle cost.
 - **Dataplane V2** (Cilium) — so the chart's NetworkPolicy template is enforced.
 - **Workload Identity** enabled — for future keyless cloud auth (#56).
-- **Datastores: in-cluster Bitnami Postgres + Redis** (Pro requires both) — the
-  cheapest way to iterate on the chart. Managed (Cloud SQL + Memorystore) is the
-  realistic-prod path we can switch to for the load test.
+- **Datastores: in-cluster plain official Postgres + Redis** (Pro requires both)
+  — ephemeral emptyDir, cheapest way to iterate on the chart. (We use the
+  upstream `postgres`/`redis` images rather than the Bitnami charts: Bitnami
+  moved versioned images to `docker.io/bitnamilegacy` / behind a paywall in
+  Aug 2025, breaking pinned chart installs.) Managed (Cloud SQL + Memorystore)
+  is the realistic-prod path we switch to for the load test.
 
 ## Prerequisites
 
@@ -54,7 +57,7 @@ cd deploy/gke
 # 2. Install cluster add-ons (cert-manager — required by the Pro agent-TLS channel)
 ./01-install-addons.sh
 
-# 3. Install Leoflow Pro (Bitnami Postgres + Redis, agent-TLS, generated secrets)
+# 3. Install Leoflow Pro (official Postgres + Redis, agent-TLS, generated secrets)
 ./02-install-leoflow.sh
 ```
 
@@ -84,8 +87,8 @@ With the cluster + cert-manager up, the Pro install:
    `bootstrap.password` into a **gitignored** `values.local.yaml`
    (created once; re-runs reuse it so creds stay stable). The initial admin
    password is printed and stored there.
-2. Installs **Bitnami Postgres + Redis** (ephemeral, no persistence) into the
-   `leoflow` namespace.
+2. Deploys **official Postgres + Redis** (ephemeral emptyDir, no persistence)
+   into the `leoflow` namespace.
 3. Issues the agent gRPC server cert via **cert-manager** (self-signed root CA →
    server leaf, SANs for `leoflow.leoflow.svc.cluster.local`), and publishes the
    CA as a `ConfigMap` for `agentTLS.caConfigMap`.
@@ -101,15 +104,26 @@ kubectl -n leoflow port-forward svc/leoflow 8080:8080
 
 ## 03 — managed datastores (Cloud SQL + Memorystore)
 
-The realistic-prod path, used for the **load test** once the Bitnami run passes.
-Not scripted yet; the shape:
+The realistic-prod path, used for the **load test** once the in-cluster run
+passes. Not scripted yet; the shape:
 
 1. Cloud SQL for Postgres (start `db-f1-micro` / `db-g1-small`) + Memorystore for
    Redis (Basic, 1 GB), both in `us-central1`, on the cluster's VPC (private IP).
-2. Point the chart at them — drop the Bitnami installs, set `database.url` /
-   `redis.url` to the managed endpoints (use `sslmode=require` / `rediss://`).
+2. Point the chart at them — drop the in-cluster Postgres/Redis, set
+   `database.url` / `redis.url` to the managed endpoints.
 3. Prefer **Workload Identity** over inline credentials where the connector
    supports it (the cluster already has the workload pool enabled).
+
+> ⚠️ **Hardening checklist for `03-managed.sh` (do NOT inherit the test posture).**
+> The in-cluster test runs Redis with **no auth** and Postgres with
+> `sslmode=disable` — fine for a namespace-isolated smoke test, **never** for
+> managed/shared services. The managed path MUST:
+> - **Redis AUTH required** — Memorystore AUTH enabled; URI `rediss://:<token>@…`.
+> - **TLS in transit** — Memorystore in-transit encryption on (`rediss://`),
+>   Postgres `sslmode=require` (or `verify-full`).
+> - **Private IP only** — no public IP on either datastore.
+> - **No secrets in git** — endpoints/tokens via generated local values or
+>   Secret Manager, same as the test flow.
 
 ## Scaling up later (load test)
 

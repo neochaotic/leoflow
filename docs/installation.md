@@ -13,12 +13,6 @@ editions share the same Go control plane and the same Airflow-compatible
 HTTP API — Pro adds the K8s executor, HA scheduler, and external-datastore
 expectations; Lite bundles everything in one host process.
 
-!!! warning "Pre-alpha builds expire"
-    Pre-alpha binaries and images carry a baked-in expiry (~90 days) and
-    refuse to run past it — `leoflow version` shows `[expires …]`. When one
-    expires, re-install (Lite) or `helm upgrade` to a newer tag (Pro).
-    `LEOFLOW_IGNORE_EXPIRY=1` overrides in a pinch.
-
 ---
 
 ## Install Lite
@@ -168,9 +162,7 @@ leoflow setup
 ```
 
 The subsequent `leoflow setup` provisions the same managed runtime the
-install-script path uses (managed CPython under `~/.leoflow/`). A source
-build is **not stamped with an expiry**, so unlike a pre-alpha release binary
-it never refuses to run after 90 days.
+install-script path uses (managed CPython under `~/.leoflow/`).
 
 ### Uninstalling Lite
 

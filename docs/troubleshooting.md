@@ -7,7 +7,7 @@ issues are one `leoflow doctor` away from a clear cause.
 
 ```bash
 leoflow doctor                          # host check (OS, python, docker, k3d, kubectl, recommended tier)
-leoflow version                         # version + commit + expiry (pre-alpha builds expire)
+leoflow version                         # version + commit + build date
 tail -f /tmp/leoflow-lite.log           # the live boot log when you ran `leoflow lite` via lite-redeploy
 journalctl -u leoflow-server -f         # Pro / systemd hosts
 ```
@@ -17,7 +17,6 @@ journalctl -u leoflow-server -f         # Pro / systemd hosts
 | Symptom | Cause / fix |
 |---|---|
 | `command not found: leoflow` | The binary is not on `PATH` — re-run `curl … \| sh`, or open a fresh shell to pick up the install-script's PATH line. Building from source? `go install .../cmd/leoflow@latest` and add `$(go env GOPATH)/bin` to `PATH`. |
-| `leoflow version` shows `[expires …]` and refuses to run | Pre-alpha builds carry a baked-in ~90-day expiry. Re-run the install command for a fresh build. `LEOFLOW_IGNORE_EXPIRY=1` overrides in a pinch. |
 | `leoflow setup` says "python: none on PATH" but you have `python3.12` | Older Leoflow versions only matched literal `python3.11`. Update to the latest pre-alpha — `setup` now accepts any `python3.11`+ that's on `PATH`. |
 | Install on Alpine / musl fails fetching CPython | The musl-libc relocatable CPython build can be missing system libs. `leoflow lite --postgres docker` falls back to the Docker Postgres path instead of the embedded managed one. |
 

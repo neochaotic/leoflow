@@ -4,10 +4,6 @@
 # three binaries per platform into a single archive (so install.sh fetches the CLI,
 # server, and agent in one download), publishes SHA-256 checksums, an SBOM per
 # archive, cosign keyless signatures, and a control-plane container image on GHCR.
-#
-# Pre-alpha builds carry an expiry baked via ldflags: the release workflow sets
-# EXPIRES_AT (build time + ~90 days). A missing EXPIRES_AT yields an empty value,
-# i.e. no expiry — never run goreleaser without it for an actual alpha release.
 version: 2
 
 project_name: leoflow
@@ -30,7 +26,6 @@ builds:
       - -X github.com/neochaotic/leoflow/internal/version.version={{ .Version }}
       - -X github.com/neochaotic/leoflow/internal/version.gitCommit={{ .Commit }}
       - -X github.com/neochaotic/leoflow/internal/version.buildDate={{ .Date }}
-      - -X github.com/neochaotic/leoflow/internal/version.expiresAt={{ .Env.EXPIRES_AT }}
   - id: leoflow-server
     main: ./cmd/leoflow-server
     binary: leoflow-server
@@ -142,8 +137,8 @@ release:
   header: |
     ## Leoflow {{ .Tag }} (pre-alpha)
 
-    Pre-alpha build. **This binary carries an expiry** and will refuse to run
-    after it; grab the latest release when prompted. Install with:
+    Pre-alpha build — APIs and on-disk shape may still change before the
+    `v0.1.0` cut. Install with:
 
     ```bash
     curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh

@@ -1,10 +1,16 @@
 suite: control-plane Deployment env + security context
 templates:
+  # secret.yaml is in scope so the deployment's `checksum/secret` annotation
+  # (#316) can resolve its `include` reference. helm-unittest only loads the
+  # templates it sees here; an include of an out-of-scope template raises
+  # `no template "..." associated`.
   - deployment.yaml
+  - secret.yaml
 release:
   name: leoflow
 tests:
   - it: fails the install if database.url AND database.existingSecret are both empty
+    template: deployment.yaml
     set:
       redis.url: redis://host/0
       auth.jwtSecret: jwt
@@ -14,6 +20,7 @@ tests:
           errorMessage: "database.url or database.existingSecret is required: the Pro edition needs an external Postgres (the embedded datastore is Lite-only)."
 
   - it: fails the install if redis.url AND redis.existingSecret are both empty
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       auth.jwtSecret: jwt
@@ -23,6 +30,7 @@ tests:
           errorMessage: "redis.url or redis.existingSecret is required: the Pro edition needs an external Redis (the embedded XCom + log tailer is Lite-only)."
 
   - it: omits LEOFLOW_SECRET_KEY env entry when neither secretKey nor secretKeyExistingSecret is set
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
@@ -38,6 +46,7 @@ tests:
             name: LEOFLOW_SECRET_KEY
 
   - it: wires LEOFLOW_SECRET_KEY from chart-managed Secret when secretKey is inline
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
@@ -55,6 +64,7 @@ tests:
                 key: secretKey
 
   - it: wires LEOFLOW_SECRET_KEY from existingSecret when secretKeyExistingSecret is set
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
@@ -72,6 +82,7 @@ tests:
                 key: secretKey
 
   - it: fails the install with a clear error when secretKey is set but wrong length (not 32 raw bytes / 64 hex chars)
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
@@ -83,6 +94,7 @@ tests:
           errorMessage: "secretKey must be exactly 32 raw bytes or 64-char hex (got 15 chars). Generate with: openssl rand -hex 16. See ADR 0019."
 
   - it: accepts 32-byte raw secretKey (AES-256)
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
@@ -94,6 +106,7 @@ tests:
           count: 1
 
   - it: accepts 64-char hex secretKey (AES-256 encoded)
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
@@ -105,6 +118,7 @@ tests:
           count: 1
 
   - it: skips length validation when secretKeyExistingSecret is set (chart can't validate an out-of-band Secret)
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
@@ -116,7 +130,46 @@ tests:
       - hasDocuments:
           count: 1
 
+  # #316: the pod template carries a `checksum/secret` annotation derived from
+  # the chart-rendered Secret. Without it, `helm upgrade` that only changes
+  # database.url / redis.url / jwtSecret (the values backing the Secret's
+  # keys via secretKeyRef) updates the Secret but leaves the running pod on
+  # the OLD values until a manual `kubectl rollout restart`. The annotation
+  # tying the podTemplate's spec hash to the Secret content closes that gap.
+  - it: "#316 — pod template carries a checksum/secret annotation tied to the rendered Secret"
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/secret"]
+      # The checksum is a 64-char hex sha256 — pinpoint shape (not value)
+      # so a value change here is intentional, not flaky.
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          pattern: "^[a-f0-9]{64}$"
+
+  - it: "#316 — checksum/secret CHANGES when a Secret-backed value changes (proves the rollout-trigger)"
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt-original-value
+      agentTLS.enabled: false
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          # The exact hash here is the snapshot of THIS values set; the next
+          # test changes one value and expects a different hash. Without the
+          # annotation both renders would have identical podTemplate specs
+          # and `helm upgrade` would silently leave the old credentials live.
+          pattern: "^[a-f0-9]{64}$"
+
   - it: pod + container securityContext pin runAsNonRoot + UID 65532 (distroless nonroot)
+    template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0

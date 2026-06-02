@@ -50,6 +50,14 @@ Instead of inline values, reference existing Secrets:
 When all credentials come from existing Secrets, the chart creates no Secret of
 its own.
 
+> **Upgrades + secret rotation.** The pod template carries a `checksum/secret`
+> annotation hashed over the **chart-rendered** Secret (#316), so `helm upgrade`
+> rolls the pod whenever an **inline** value backing it changes
+> (`database.url`, `redis.url`, `auth.jwtSecret`, `secretKey`,
+> `bootstrap.password`). Credentials wired via `*.existingSecret` are **outside
+> the chart's visibility**: rotating them requires a manual
+> `kubectl rollout restart deployment/leoflow` for the change to take effect.
+
 ## Migrations
 
 The pre-install/pre-upgrade Job runs `migrate -path <path> -database <url> up`

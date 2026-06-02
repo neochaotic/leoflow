@@ -74,20 +74,26 @@ func (f *FS) Root() string { return f.root }
 
 // resolve maps a slash-separated relative path to an absolute path inside the
 // root, refusing absolute inputs and any path that escapes the root via "..".
+//
+// The first gate is the stdlib's filepath.IsLocal — it rejects absolute paths,
+// empty inputs, paths that climb out via "..", and (on Windows) reserved
+// device names. Using IsLocal here also lets static analyzers (CodeQL's
+// go/path-injection rule, gosec's G304) recognize this function as the
+// sanitizer for caller paths, so downstream os.* calls do not need
+// per-call suppressions.
 func (f *FS) resolve(rel string) (string, error) {
-	if filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") {
-		return "", fmt.Errorf("%w: %q must be relative to the workspace", ErrUnsafePath, rel)
+	slashed := filepath.ToSlash(rel)
+	if !filepath.IsLocal(slashed) {
+		return "", fmt.Errorf("%w: %q is not a local workspace path", ErrUnsafePath, rel)
 	}
-	clean := path.Clean(filepath.ToSlash(rel))
+	clean := path.Clean(slashed)
 	if clean == "." {
 		return "", fmt.Errorf("%w: %q resolves to the workspace root", ErrUnsafePath, rel)
 	}
-	// A normalized path that climbs out (".." or "../…") is an escape: reject it
-	// rather than silently clamping it back inside the root.
-	if clean == ".." || strings.HasPrefix(clean, "../") {
-		return "", fmt.Errorf("%w: %q escapes the workspace", ErrUnsafePath, rel)
-	}
 	abs := filepath.Join(f.root, filepath.FromSlash(clean))
+	// Defense in depth: even after IsLocal, re-check that the joined absolute
+	// path stays under the root. Cheap and catches future Go releases or OS
+	// edge cases where the lexical guarantees of IsLocal might drift.
 	if abs != f.root && !strings.HasPrefix(abs, f.root+string(os.PathSeparator)) {
 		return "", fmt.Errorf("%w: %q escapes the workspace", ErrUnsafePath, rel)
 	}

@@ -2,12 +2,14 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // Config configures observability setup.
@@ -35,7 +37,18 @@ func Setup(ctx context.Context, cfg Config) (*Telemetry, func(), error) {
 	metrics := NewMetrics(reg)
 
 	shutdown := func() {}
-	if cfg.OTelEnabled {
+	switch {
+	case cfg.OTelEnabled && cfg.OTelEndpoint == "":
+		// Empty endpoint with enabled=true is a misconfig: the OTLP/gRPC
+		// exporter would silently fall back to localhost:4317 (the SDK
+		// default), producing the "dial tcp [::1]:4317" log spam #319
+		// reports. Fail loud at boot — operators must opt into a real
+		// endpoint when they opt into OTel.
+		return nil, nil, errors.New(
+			"observability.otel.enabled=true but observability.otel.endpoint is empty: " +
+				"set the OTLP/gRPC endpoint explicitly (e.g. otel-collector:4317) " +
+				"or set enabled=false to skip tracing (#319)")
+	case cfg.OTelEnabled:
 		tp, err := newTracerProvider(ctx, cfg.OTelEndpoint, cfg.ServiceName)
 		if err != nil {
 			return nil, nil, err
@@ -50,6 +63,17 @@ func Setup(ctx context.Context, cfg Config) (*Telemetry, func(), error) {
 				logger.Error("otel tracer shutdown", "error", err)
 			}
 		}
+	default:
+		// Disabled: install the noop provider explicitly so a polluted
+		// global (test bleed, a stray OTEL_EXPORTER_* env var that
+		// auto-instantiates a real exporter, or any future package that
+		// SetTracerProvider's at init) cannot leave a real exporter live
+		// behind our back. The downstream effect we are blocking: the api
+		// handler middleware (internal/api/observe.go) calls
+		// otel.Tracer("leoflow") which resolves through this global; with
+		// a real provider behind it, every request creates a recording
+		// span and the batcher tries to flush to localhost:4317 (#319).
+		otel.SetTracerProvider(noop.NewTracerProvider())
 	}
 
 	return &Telemetry{

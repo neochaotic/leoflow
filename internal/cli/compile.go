@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -218,7 +219,18 @@ func runParser(cmd *cobra.Command, command string, a parserArgs) error {
 	var stderr bytes.Buffer
 	pc.Stderr = io.MultiWriter(cmd.ErrOrStderr(), &stderr)
 	if err := pc.Run(); err != nil {
-		if detail := lastLines(strings.TrimSpace(stderr.String()), 20); detail != "" {
+		raw := strings.TrimSpace(stderr.String())
+		detail := lastLines(raw, 20)
+		// Lead with the user-actionable summary line (e.g. `SyntaxError: ...`)
+		// when present, so the cause is visible above the bounded traceback
+		// instead of buried under our internal parser file paths (#D9).
+		if summary := parserErrorSummary(raw); summary != "" {
+			if detail != "" {
+				return fmt.Errorf("%s\n\n%s", summary, detail)
+			}
+			return errors.New(summary)
+		}
+		if detail != "" {
 			return fmt.Errorf("running parser %q: %w\n%s", command, err, detail)
 		}
 		return fmt.Errorf("running parser %q: %w", command, err)
@@ -237,6 +249,29 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// pythonErrorRe matches a single Python exception-summary line of the form
+// `<CamelCaseName>Error: <message>` — the canonical last line of a traceback.
+// The leading-uppercase + ending-in-Error shape filters out the noisy
+// `File "..."` and code-snippet lines that surround it.
+var pythonErrorRe = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*Error: .+$`)
+
+// parserErrorSummary extracts the deepest Python exception summary
+// (`*Error: message`) from a parser traceback. The deepest line is the
+// actual cause; intermediate "During handling of the above exception ..."
+// wrappers are skipped. Returns "" when no error line is present so callers
+// can fall back to the raw traceback. Closes #D9 from the dogfood audit
+// (#212): users see a one-line cause instead of an internal-paths dump.
+func parserErrorSummary(stderr string) string {
+	var last string
+	for _, raw := range strings.Split(stderr, "\n") {
+		ln := strings.TrimSpace(raw)
+		if pythonErrorRe.MatchString(ln) {
+			last = ln
+		}
+	}
+	return last
 }
 
 // overlayProject writes the leoflow.yaml Leoflow-specific config (staging and

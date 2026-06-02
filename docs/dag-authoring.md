@@ -136,8 +136,9 @@ The unsupported set, with the things Airflow users most often expect to
   context.
 - **Branching** (`BranchPythonOperator`, `@task.branch`) and
   **short-circuit** (`@task.short_circuit`, `ShortCircuitOperator`) —
-  refused because the current scheduler does not model
-  skipped-vs-executed downstream paths.
+  refused for now: the current scheduler does not model
+  skipped-vs-executed downstream paths. On the post-alpha backlog if
+  user demand justifies the scheduler change.
 - **Virtualenv operators** (`PythonVirtualenvOperator`,
   `@task.virtualenv`) — refused because each DAG already ships as its
   own image with its own dependencies; spinning up a venv at runtime
@@ -147,8 +148,8 @@ The unsupported set, with the things Airflow users most often expect to
 - **KubernetesPodOperator** — refused; the pod is the *runtime
   substrate* for every Leoflow task already, so wrapping a user task
   in another pod is redundant and adds an isolation hole.
-- **Datasets / Assets triggers** — refused; the asset graph is a 3.x
-  Airflow feature Leoflow has not implemented yet.
+- **Datasets / Assets triggers** — not implemented yet; the asset
+  graph is a 3.x Airflow feature on the post-alpha backlog.
 - **Provider operators** (S3, Postgres, Snowflake, …) — refused. Do
   the work inside a `@task` instead; your DAG's image already has
   the libraries (declare them in `leoflow.yaml`'s `dependencies`).

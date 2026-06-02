@@ -37,4 +37,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0032: Task Return Values Are Not Logged — Only Their Metadata Is](adr/0032-return-values-not-logged.md)
 - [ADR 0033: Release Flow — RC Tags, E2E Gates, and Immutable Versions](adr/0033-release-flow-rc-tags-and-e2e-gates.md)
 - [ADR 0034: Fan-in / map-reduce — list-of-upstream parameter binding](adr/0034-fan-in-map-reduce-binding.md)
+- [ADR 0035: Cloud connector auth — keyless-first; Leoflow is not a key manager](adr/0035-cloud-connector-auth-keyless-first.md)
 <!-- END ADR INDEX -->

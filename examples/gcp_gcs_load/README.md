@@ -62,6 +62,11 @@ server, so keyless isn't available there — use key mode under k3d.)
 
 ## Key mode (service-account JSON)
 
+> **Discouraged — Leoflow is not a key manager** ([ADR 0035](../../docs/adr/0035-cloud-connector-auth-keyless-first.md)).
+> Prefer keyless, or `key_path` pointing at a mounted Kubernetes Secret (the key
+> stays in the cluster's secret store, not in Leoflow). Use `keyfile_dict` only
+> for dev / low-criticality.
+
 1. Admin → Connections → **+**, Conn Id `google_cloud_default`, type
    **Google Cloud**.
 2. In **Extra**, paste:

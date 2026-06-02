@@ -59,12 +59,23 @@ Paste the SA JSON into Extra as `keyfile_dict` (encrypted at rest), or point
 | Keyless (ADC) | ✅ host ADC | ❌ (no metadata server) | ✅ Workload Identity |
 | Key (`keyfile_dict` / `key_path`) | ✅ | ✅ | ✅ |
 
-## Security
+## Security — Leoflow is not a key manager
 
-Prefer **keyless** in Pro — no long-lived key to store or rotate. When you must
-use a key, `keyfile_dict` is encrypted at rest with the control plane's
-`LEOFLOW_SECRET_KEY` (ADR 0019) and delivered only over the TLS agent channel
-(ADR 0021).
+Credentials should come from the **runtime identity** (keyless) or from a
+**secret the platform manages**, which the connection only *references*. Leoflow
+does not aspire to store cloud keys (see [ADR 0035](../adr/0035-cloud-connector-auth-keyless-first.md)).
+In order of preference:
+
+1. **Keyless (Workload Identity / ADC)** — recommended. No key anywhere.
+2. **`key_path` + a mounted Kubernetes Secret** — the key lives in the cluster's
+   secret store; the connection holds only the path. The key never enters
+   Leoflow's DB/API/UI.
+3. **`keyfile_dict`** — **discouraged.** It stores the key inside the connection
+   (encrypted at rest with `LEOFLOW_SECRET_KEY`, ADR 0019; delivered only over
+   the TLS agent channel, ADR 0021). It is the cloud-key analog of how
+   connections store a database user/password — pragmatic and Airflow-compatible,
+   but **not** the desired posture. Use only for dev / low-criticality; many orgs
+   forbid creating such keys anyway.
 
 ## Example DAG + test
 

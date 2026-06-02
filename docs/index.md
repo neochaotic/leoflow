@@ -101,6 +101,6 @@ leoflow init dags/my_dag     # scaffold a project
 leoflow lite dags/my_dag      # hot-reload at http://localhost:8088 (Lite edition)
 ```
 
-**Lite** ships today (pre-alpha, local on a trusted network); **Production**
+**Lite** ships today (pre-alpha, local on a trusted network); **Pro**
 (the Kubernetes edition) is a near-term goal — see the
 [roadmap](roadmap-to-release.md) and [Editions](editions.md) for the split.

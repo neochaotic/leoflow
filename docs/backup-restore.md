@@ -104,10 +104,10 @@ leoflow lite restore --input ~/snap-before-upgrade.tar.gz
 leoflow lite
 ```
 
-## Production (Pro)
+## Pro (Pro)
 
 The Helm-installed Pro control plane does **not** ship its own
-backup/restore commands. Production operators own the Postgres backup story
+backup/restore commands. Pro operators own the Postgres backup story
 via standard tooling:
 
 - Managed Postgres providers (RDS, Cloud SQL, etc.) offer point-in-time

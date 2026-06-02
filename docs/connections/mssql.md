@@ -116,7 +116,7 @@ containing `@`), and verification.
 | `Login failed for user 'sa'` with the right password | The password contains `@` (or other reserved chars) and you did NOT call `unquote` | Wrap with `urllib.parse.unquote(url.password)`. |
 | `Adaptive Server connection failed` | Network/DNS issue or wrong port | From the task's pod / host, try `sqlcmd -S host,port` with the same coords. |
 | `Cannot open database "warehouse" requested by the login` | The database does not exist | Create it: `sqlcmd -Q "CREATE DATABASE warehouse"`. |
-| `SSL provider: The certificate chain was issued by an authority that is not trusted` | TLS with a self-signed cert + verify-on | For local dev only, set `TrustServerCertificate=yes`. Production: trust the CA. |
+| `SSL provider: The certificate chain was issued by an authority that is not trusted` | TLS with a self-signed cert + verify-on | For local dev only, set `TrustServerCertificate=yes`. Pro: trust the CA. |
 
 ## Related
 

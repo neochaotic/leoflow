@@ -1,7 +1,7 @@
 # Quickstart
 
 Get Leoflow **Lite** running locally in two commands. Lite is the local edition
-(Production is [coming soon](operating-modes.md)); run it on your machine or a
+(Pro is [coming soon](operating-modes.md)); run it on your machine or a
 trusted internal network — see [Editions](editions.md).
 
 ## Prerequisites
@@ -27,7 +27,7 @@ each `[default]`:
 - **Where your DAGs live** (workspace) — default `~/leoflow`
 - **How tasks run**: `local` (each task as a process on this machine — simple, no
   Docker, recommended) or `cluster` (real pod-per-task on a local mini-Kubernetes
-  — mirrors Production, needs Docker)
+  — mirrors Pro, needs Docker)
 - **Admin email** — default `admin@leoflow.local`
 
 It then fetches a managed Python + the editor, creates your workspace, and prints
@@ -94,4 +94,4 @@ leoflow uninstall                    # remove the install (--purge for workspace
 - [DAG authoring](dag-authoring.md) — the dialect, `leoflow.yaml`, overrides.
 - [The `leoflow lite` workflow](dev-workflow.md) — the edit→reload loop, executors.
 - [CI/CD & deploy examples](deploy.md) — ship it.
-- [Editions](editions.md) — Lite (now) vs Production (coming).
+- [Editions](editions.md) — Lite (now) vs Pro (coming).

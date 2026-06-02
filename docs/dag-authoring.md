@@ -204,7 +204,7 @@ and re-registers. A bad binding prints an error in the terminal **immediately**:
 ✗ leoflow.yaml tasks: unknown task_id "transfrom"; the DAG defines [extract load transform]
 ```
 
-Dev is fully isolated from Demo/Production (own database, cluster, and ports) —
+Dev is fully isolated from Demo/Pro (own database, cluster, and ports) —
 **no split brain**. See [Operating modes](operating-modes.md).
 
 ### 2 · Deploy (authoritative, immutable)

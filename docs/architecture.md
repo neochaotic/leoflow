@@ -14,7 +14,7 @@ flowchart LR
   EXR -->|dev| SUB[Subprocess]
   K8S --> POD[Worker pod<br/>agent ⇄ gRPC ⇄ user code]
   CP --- PG[(Postgres<br/>metadata + Lite XCom/locks)]
-  CP -. Production only .- RD[(Redis<br/>XCom + locks)]
+  CP -. Pro only .- RD[(Redis<br/>XCom + locks)]
 ```
 
 **Control plane (Go).** Gin HTTP serving the Airflow-compatible `/api/v2/*` and
@@ -29,7 +29,7 @@ runs the user code, streams logs, pushes XCom, reports state.
 
 **State.** Postgres holds metadata for every edition; on **Lite** it also holds
 XCom and the scheduler's advisory locks (no Redis required — [ADR 0026](adr/0026-lite-datastore-no-redis.md)).
-On **Production**, Redis stores XCom (≤256 KB) and the multi-node locks.
+On **Pro**, Redis stores XCom (≤256 KB) and the multi-node locks.
 
 **Stack:** Go 1.26 · Gin · sqlc/pgx · golang-migrate · client-go · gRPC ·
 log/slog · Prometheus · OpenTelemetry · Cobra · Viper. Python only in the DAG

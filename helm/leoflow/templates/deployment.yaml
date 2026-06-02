@@ -148,6 +148,15 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.redis.existingSecret | default (include "leoflow.secretName" .) }}
                   key: redisUrl
+            {{- if .Values.redis.caConfigMap }}
+            # #312 — Verified TLS to managed Redis (Memorystore
+            # SERVER_AUTHENTICATION, ElastiCache in-transit, Azure Cache).
+            # The CA bundle from the named ConfigMap is mounted read-only at
+            # /etc/leoflow/redis-ca/ca.crt and the server is told where to
+            # find it via LEOFLOW_REDIS_CA_FILE.
+            - name: LEOFLOW_REDIS_CA_FILE
+              value: /etc/leoflow/redis-ca/ca.crt
+            {{- end }}
             - name: LEOFLOW_AUTH_JWT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -201,6 +210,11 @@ spec:
               mountPath: /etc/leoflow/db-ca
               readOnly: true
             {{- end }}
+            {{- if .Values.redis.caConfigMap }}
+            - name: redis-ca
+              mountPath: /etc/leoflow/redis-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: logs
           {{- if .Values.logs.persistence.enabled }}
@@ -223,6 +237,11 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
+        {{- end }}
+        {{- if .Values.redis.caConfigMap }}
+        - name: redis-ca
+          configMap:
+            name: {{ .Values.redis.caConfigMap }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

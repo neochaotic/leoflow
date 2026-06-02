@@ -126,6 +126,43 @@ If you need to run against an older engine, please file an issue with
 the version + symptoms — we don't bench-test older majors but will
 investigate specific incompatibilities.
 
+## Verified TLS to managed Redis (#312)
+
+Managed Redis offerings — Memorystore SERVER_AUTHENTICATION, ElastiCache
+in-transit encryption, Azure Cache for Redis — sign their TLS server cert
+with a provider or per-instance CA that is **not** in the container's
+system roots. Without telling the client which CA to trust, the only
+working postures are "plaintext `redis://`" (unacceptable across the
+internet) or "skip verification" (we don't expose that knob; it strips
+TLS to a noise channel).
+
+Set `redis.caConfigMap` to a ConfigMap holding the provider CA as
+`ca.crt`:
+
+```bash
+kubectl create configmap leoflow-redis-ca \
+  --from-file=ca.crt=./memorystore-server-ca.pem -n leoflow
+```
+
+```yaml
+redis:
+  url: rediss://10.0.0.5:6378/0
+  caConfigMap: leoflow-redis-ca
+```
+
+The chart then:
+
+1. Mounts the ConfigMap read-only at `/etc/leoflow/redis-ca/ca.crt`.
+2. Sets `LEOFLOW_REDIS_CA_FILE=/etc/leoflow/redis-ca/ca.crt` so the
+   server overrides `tls.Config.RootCAs` instead of falling back to
+   system roots.
+3. Refuses to boot if the file is missing or malformed (clear error
+   instead of a confusing "x509: certificate signed by unknown
+   authority" at first Ping).
+
+Leave `caConfigMap` empty for plaintext `redis://` or for managed
+TLS that uses a public CA (rare).
+
 ## Evaluating without a managed Postgres + Redis
 
 For a one-cluster evaluation (kind, minikube, k3d, scratch namespace), the
@@ -247,6 +284,7 @@ differ from what's committed.
 | podSecurityContext.runAsUser | int | `65532` |  |
 | ports | object | `{"grpc":9091,"http":8080,"metrics":9090}` | Ports the leoflow-server listens on. http: API + UI, metrics: Prometheus /metrics, grpc: agent ↔ control plane channel (task pods dial back here). |
 | rbac.create | bool | `true` | Create the Role + RoleBinding granting the control plane create/get/list/watch/delete on pods + get on pods/log in `taskNamespace`. Required for the pod-per-task executor. |
+| redis.caConfigMap | string | `""` | Name of a ConfigMap with a `ca.crt` key containing the PEM CA bundle the client trusts when negotiating TLS to a `rediss://` URL (#312). Required when the managed-Redis server cert is signed by a provider / per-instance CA that is not in the system roots — Memorystore SERVER_AUTHENTICATION, ElastiCache in-transit encryption, Azure Cache for Redis. Mounted read-only at `/etc/leoflow/redis-ca` and exposed to the server via `LEOFLOW_REDIS_CA_FILE`. Leave empty when Redis uses a public CA or no TLS. |
 | redis.existingSecret | string | `""` | Name of a Secret with key `redisUrl` (takes precedence over `url`). |
 | redis.url | string | `""` | External Redis URI. Required for Pro (the embedded XCom is Lite-only). Example: `redis://host:6379/0`, or `rediss://host:6380/0` for TLS. |
 | replicaCount | int | `1` | Number of control-plane replicas. The scheduler leader-elects (ADR 0009), so `>1` is HA-safe (active-passive scheduler, active-active API). |

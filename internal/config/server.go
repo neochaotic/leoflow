@@ -148,6 +148,15 @@ type DatabaseSection struct {
 // RedisSection configures the Redis connection.
 type RedisSection struct {
 	URL string `mapstructure:"url"`
+	// CAFile is the absolute path to a PEM CA bundle the client trusts when
+	// negotiating TLS to a `rediss://` URL (#312). Required to reach managed
+	// Redis (Memorystore SERVER_AUTHENTICATION, ElastiCache in-transit
+	// encryption, Azure Cache for Redis) whose server cert is signed by a
+	// provider / per-instance CA that is not in the container's system
+	// roots. Empty falls back to the SDK default — system roots only.
+	// The Helm chart sets this via LEOFLOW_REDIS_CA_FILE when
+	// `redis.caConfigMap` is configured, pointing at the mounted ConfigMap.
+	CAFile string `mapstructure:"ca_file"`
 }
 
 // AuthSection configures authentication.

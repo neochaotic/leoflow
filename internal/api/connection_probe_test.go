@@ -67,6 +67,45 @@ func TestConnectionTestEndpoint(t *testing.T) {
 	}
 }
 
+// The GCP probe is structural (no cloud call): a well-formed service-account key
+// validates, a malformed/incomplete one fails with a clear message, and an empty
+// (keyless) connection reports ADC/Workload Identity as ok.
+func TestGCPConnectionProbe(t *testing.T) {
+	validKey := `{"type":"service_account","client_email":"x@p.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n","project_id":"p"}`
+	for _, tc := range []struct {
+		name    string
+		extra   string
+		wantOK  bool
+		wantSub string // substring expected in the message
+	}{
+		{"keyfile_dict object", `{"keyfile_dict":` + validKey + `}`, true, "service-account key looks valid"},
+		{"keyfile_dict stringified", `{"keyfile_dict":` + jsonString(validKey) + `}`, true, "service-account key looks valid"},
+		{"legacy extra name", `{"extra__google_cloud_platform__keyfile_dict":` + validKey + `}`, true, "looks valid"},
+		{"invalid extra json", `{not json`, false, "invalid Extra JSON"},
+		{"missing field", `{"keyfile_dict":{"type":"service_account","client_email":"x","project_id":"p"}}`, false, "missing required field: private_key"},
+		{"wrong type", `{"keyfile_dict":{"type":"user","client_email":"x","private_key":"k","project_id":"p"}}`, false, `must be "service_account"`},
+		{"key_path", `{"key_path":"/etc/gcp/key.json"}`, true, "key_path set"},
+		{"keyless empty", ``, true, "keyless"},
+		{"keyless explicit", `{"project":"p","scopes":["https://www.googleapis.com/auth/cloud-platform"]}`, true, "keyless"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, msg := testGCPConnection(domain.Connection{ConnType: "google_cloud_platform", Extra: tc.extra})
+			if ok != tc.wantOK {
+				t.Errorf("ok = %v, want %v (msg %q)", ok, tc.wantOK, msg)
+			}
+			if !strings.Contains(msg, tc.wantSub) {
+				t.Errorf("msg = %q, want substring %q", msg, tc.wantSub)
+			}
+		})
+	}
+}
+
+// jsonString returns s as a JSON string literal (quoted + escaped).
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 // The built-in tester reports reachable for a listening port and unreachable for
 // a closed one (TCP-dial reachability).
 func TestDefaultConnectionTesterReachability(t *testing.T) {

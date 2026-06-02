@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 
@@ -25,6 +26,34 @@ func TestAirflowConnURI(t *testing.T) {
 	got = airflowConnURI(domain.Connection{ConnID: "p", ConnType: "postgres", Host: "h", Extra: `{"sslmode":"require"}`})
 	if !strings.Contains(got, "__extra__=") || !strings.Contains(got, "sslmode") {
 		t.Errorf("uri = %q, want extra carried under __extra__", got)
+	}
+}
+
+// TestAirflowConnURIGCP pins the google_cloud_platform contract: GCP carries no
+// host/login/password — everything (incl. an inline service-account key) rides
+// in Extra under __extra__. The service-account private_key contains embedded
+// newlines (PEM), a real round-trip edge case; this asserts they survive intact.
+func TestAirflowConnURIGCP(t *testing.T) {
+	extra := `{"keyfile_dict":{"type":"service_account","client_email":"x@p.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\nABC\nDEF\n-----END PRIVATE KEY-----\n","project_id":"p"},"project":"p"}`
+	got := airflowConnURI(domain.Connection{ConnID: "google_cloud_default", ConnType: "google_cloud_platform", Extra: extra})
+
+	// No host/login/password → the conn_type is the scheme and there is no
+	// authority component (no "//", no "@" userinfo). The client_email's "@" is
+	// percent-encoded inside __extra__, so a literal "@" must not appear.
+	const prefix = "google_cloud_platform:?"
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("uri = %q, want %q prefix", got, prefix)
+	}
+	if strings.Contains(got, "@") {
+		t.Errorf("uri = %q, should carry no userinfo (@) for GCP", got)
+	}
+	// The Extra (with the newline-bearing PEM private_key) round-trips exactly.
+	q, err := url.ParseQuery(strings.TrimPrefix(got, prefix))
+	if err != nil {
+		t.Fatalf("parsing query: %v", err)
+	}
+	if q.Get("__extra__") != extra {
+		t.Errorf("__extra__ = %q, want exact round-trip %q", q.Get("__extra__"), extra)
 	}
 }
 

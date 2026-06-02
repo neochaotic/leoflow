@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 from jsonschema.validators import Draft202012Validator
 
 from leoflow_parser.compiler import compile_dag
@@ -19,18 +18,25 @@ def dag_schema() -> dict:
     return json.loads(SCHEMA_PATH.read_text())
 
 
-def _compile(tmp_path: Path, fixture: str, dag_id: str) -> dict:
-    config = tmp_path / "leoflow.yaml"
-    config.write_text(yaml.safe_dump({"dag_id": dag_id, "python_version": "3.11"}))
-    return compile_dag(str(FIXTURES / f"{fixture}.py"), str(config), "test:v1")
+def _compile(monkeypatch, tmp_path: Path, fixture: str, dag_id: str) -> dict:
+    # Post-migration: config rides on LEOFLOW_PROJECT_CONFIG_JSON (the Go CLI
+    # sets this in production). The path arg is preserved for error messages
+    # but no longer read when the env var is set.
+    monkeypatch.setenv(
+        "LEOFLOW_PROJECT_CONFIG_JSON",
+        json.dumps({"dag_id": dag_id, "python_version": "3.11"}),
+    )
+    return compile_dag(
+        str(FIXTURES / f"{fixture}.py"), str(tmp_path / "ignored.json"), "test:v1"
+    )
 
 
 def _tasks_by_id(spec: dict) -> dict:
     return {task["task_id"]: task for task in spec["tasks"]}
 
 
-def test_simple_linear(tmp_path, dag_schema):
-    spec = _compile(tmp_path, "simple_linear", "simple_linear")
+def test_simple_linear(monkeypatch, tmp_path, dag_schema):
+    spec = _compile(monkeypatch, tmp_path,"simple_linear", "simple_linear")
     Draft202012Validator(dag_schema).validate(spec)
 
     assert spec["dag_id"] == "simple_linear"
@@ -47,7 +53,7 @@ def test_simple_linear(tmp_path, dag_schema):
     assert "xcom_input" not in tasks["extract"]
 
 
-def test_taskflow_literal_call_args_are_captured(tmp_path, dag_schema):
+def test_taskflow_literal_call_args_are_captured(monkeypatch, tmp_path, dag_schema):
     """#115: shard(0), shard(1) bind literal kwargs at DAG-build time.
 
     The compiler captures them into the per-task ``call_args`` map. The
@@ -58,7 +64,7 @@ def test_taskflow_literal_call_args_are_captured(tmp_path, dag_schema):
     (see test_run_xcom_wins_over_literal_call_arg). The field is named
     call_args (not params) to leave Airflow's DAG-run params term free (#148).
     """
-    spec = _compile(tmp_path, "literal_params", "literal_params")
+    spec = _compile(monkeypatch, tmp_path,"literal_params", "literal_params")
     Draft202012Validator(dag_schema).validate(spec)
 
     tasks = _tasks_by_id(spec)
@@ -75,8 +81,8 @@ def test_taskflow_literal_call_args_are_captured(tmp_path, dag_schema):
         assert "xcom_input" not in tasks[s], f"{s} should have no xcom_input"
 
 
-def test_branching(tmp_path, dag_schema):
-    spec = _compile(tmp_path, "branching", "branching")
+def test_branching(monkeypatch, tmp_path, dag_schema):
+    spec = _compile(monkeypatch, tmp_path,"branching", "branching")
     Draft202012Validator(dag_schema).validate(spec)
 
     tasks = _tasks_by_id(spec)
@@ -86,8 +92,8 @@ def test_branching(tmp_path, dag_schema):
     assert "depends_on" not in tasks["start"]
 
 
-def test_mixed_operators(tmp_path, dag_schema):
-    spec = _compile(tmp_path, "mixed_operators", "mixed_operators")
+def test_mixed_operators(monkeypatch, tmp_path, dag_schema):
+    spec = _compile(monkeypatch, tmp_path,"mixed_operators", "mixed_operators")
     Draft202012Validator(dag_schema).validate(spec)
 
     tasks = _tasks_by_id(spec)
@@ -106,9 +112,9 @@ def test_mixed_operators(tmp_path, dag_schema):
 # parser would compile a branching DAG and every "skipped" branch would
 # execute at runtime. The fix refuses these at compile time with a clear
 # error; this test locks the contract.
-def test_branching_python_operator_is_rejected(tmp_path):
+def test_branching_python_operator_is_rejected(monkeypatch, tmp_path):
     with pytest.raises(ValueError) as excinfo:
-        _compile(tmp_path, "branching_python_operator", "branching_python_operator")
+        _compile(monkeypatch, tmp_path, "branching_python_operator", "branching_python_operator")
     msg = str(excinfo.value).lower()
     assert "branchpythonoperator" in msg or "branching" in msg, (
         f"the compile error must name branching so the user understands; got: {excinfo.value}"
@@ -118,10 +124,9 @@ def test_branching_python_operator_is_rejected(tmp_path):
     )
 
 
-def test_missing_dag_raises(tmp_path):
+def test_missing_dag_raises(monkeypatch, tmp_path):
     empty = tmp_path / "empty.py"
     empty.write_text("x = 1\n")
-    config = tmp_path / "leoflow.yaml"
-    config.write_text(yaml.safe_dump({"dag_id": "nope"}))
+    monkeypatch.setenv("LEOFLOW_PROJECT_CONFIG_JSON", json.dumps({"dag_id": "nope"}))
     with pytest.raises(ValueError):
-        compile_dag(str(empty), str(config), "test:v1")
+        compile_dag(str(empty), str(tmp_path / "ignored.json"), "test:v1")

@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 from jsonschema.validators import Draft202012Validator
 
 from leoflow_parser.cli import main
@@ -14,9 +13,12 @@ FIXTURES = Path(__file__).parent / "fixtures"
 SCHEMA_PATH = Path(__file__).parents[2] / "docs" / "api" / "dag-schema.json"
 
 
-def test_cli_compile_writes_valid_dag_json(tmp_path):
-    config = tmp_path / "leoflow.yaml"
-    config.write_text(yaml.safe_dump({"dag_id": "simple_linear"}))
+def test_cli_compile_writes_valid_dag_json(monkeypatch, tmp_path):
+    # The Leoflow Go CLI sets LEOFLOW_PROJECT_CONFIG_JSON when invoking the
+    # parser. The --config path is preserved for error messages but is no
+    # longer parsed here.
+    monkeypatch.setenv("LEOFLOW_PROJECT_CONFIG_JSON", json.dumps({"dag_id": "simple_linear"}))
+    config = tmp_path / "ignored.json"
     output = tmp_path / "dag.json"
 
     code = main(

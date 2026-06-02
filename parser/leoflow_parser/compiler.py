@@ -15,7 +15,11 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-import yaml
+# Per-project config arrives from the Go CLI via this env var. The CLI parses
+# leoflow.yaml with gopkg.in/yaml.v3 and hands the resolved (defaults
+# applied) struct here as JSON — so the parser has zero third-party deps and
+# the Go side stays the single source of truth for the config schema.
+_CONFIG_ENV = "LEOFLOW_PROJECT_CONFIG_JSON"
 
 _SUPPORTED_TRIGGER_RULES = {
     "all_success",
@@ -59,8 +63,47 @@ def compile_dag(
 
 
 def _load_config(path: str) -> dict[str, Any]:
-    with open(path) as handle:
-        return yaml.safe_load(handle) or {}
+    """Resolve the project config, preferring the Go-marshalled JSON in
+    ``LEOFLOW_PROJECT_CONFIG_JSON`` (production path: the CLI parses the
+    YAML and hands us the result). Falls back to reading ``path`` as JSON
+    when the env var is unset — kept for direct test invocation. We do NOT
+    fall back to YAML on disk: PyYAML was vendored solely to bridge this
+    handshake and was removed at the alpha cut; pointing at a ``.yaml``
+    path without the env var yields a clear actionable error rather than
+    a silent ImportError."""
+    raw = os.environ.get(_CONFIG_ENV)
+    if raw is not None:
+        if raw.strip() == "":
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:  # pragma: no cover - operator error
+            raise ValueError(
+                f"{_CONFIG_ENV} is set but does not contain valid JSON: {exc}"
+            ) from exc
+        return data or {}
+    if not path:
+        raise ValueError(
+            f"no project config available: set {_CONFIG_ENV} (the Leoflow CLI "
+            "does this automatically) or pass a JSON config file path"
+        )
+    if not os.path.isfile(path):
+        raise ValueError(
+            f"no project config available: {_CONFIG_ENV} is unset and "
+            f"{path!r} does not exist. The Leoflow CLI normally sets the "
+            "env var; if you are invoking the parser directly, set it or "
+            "pass a path to a JSON config file."
+        )
+    suffix = os.path.splitext(path)[1].lower()
+    if suffix in (".yaml", ".yml"):
+        raise ValueError(
+            f"YAML config files are no longer parsed in-process (PyYAML was "
+            f"removed at the alpha cut). Set {_CONFIG_ENV} to the JSON "
+            f"output of `leoflow compile` config resolution, or convert "
+            f"{path!r} to JSON."
+        )
+    with open(path, encoding="utf-8") as handle:
+        return json.loads(handle.read() or "{}") or {}
 
 
 def _load_dag(source: str, dag_id: str | None):

@@ -76,6 +76,25 @@ func TestIndexRewritesTitleToInstanceName(t *testing.T) {
 	}
 }
 
+// TestIndexInjectsClipboardFallback covers #242: the Airflow SPA's copy
+// buttons (logs, run IDs, etc.) call navigator.clipboard.writeText, which
+// throws on plain http:// LAN origins because the Clipboard API requires a
+// secure context. The Leoflow shell injects a tiny polyfill so the copy
+// button still works when users access Lite over `http://<host-lan-ip>:8080`.
+// The polyfill is a no-op when the native API is available, so it is always
+// injected.
+func TestIndexInjectsClipboardFallback(t *testing.T) {
+	rec := httptest.NewRecorder()
+	fixture().Index(rec, "/")
+	body := rec.Body.String()
+	if !strings.Contains(body, "navigator.clipboard") {
+		t.Errorf("polyfill missing — body should reference navigator.clipboard; got %q", body)
+	}
+	if !strings.Contains(body, "execCommand('copy')") {
+		t.Errorf("polyfill missing — body should fall back to document.execCommand('copy'); got %q", body)
+	}
+}
+
 func TestStaticServesHashedAssetImmutable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/assets/app-abc123.js", http.NoBody)

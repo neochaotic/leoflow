@@ -92,6 +92,11 @@ type Dependencies struct {
 func NewServer(deps Dependencies) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// Disable auto-redirect on trailing slash (#291): the 301 it writes
+	// bypasses NoStoreOnVolatileRoutes, so the browser can cache the bare
+	// 301 and short-circuit the next request. Bare paths register explicit
+	// routes alongside their *action wildcards.
+	r.RedirectTrailingSlash = false
 	r.Use(gin.Recovery())
 	r.Use(RequestID())
 	r.Use(Observe(deps.Metrics, deps.Tracer))

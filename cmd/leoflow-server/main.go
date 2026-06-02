@@ -153,6 +153,7 @@ func run() error {
 	// also when the legacy dev auth bypass is on. The demo/production show neither.
 	uiSrv := ui.New()
 	uiSrv.SetLiteBanner(showLiteBadge(cfg))
+	uiSrv.SetProBanner(showProBadge(cfg))
 	uiSrv.SetInstanceName(cfg.UI.InstanceName)
 
 	editorFS := liteEditorFS(cfg, tel.Logger)
@@ -229,10 +230,17 @@ func awaitShutdown(ctx context.Context, errCh <-chan error, logger *slog.Logger,
 	}
 }
 
-// showLiteBadge reports whether the served UI shows the LITE badge: the Lite
-// edition, or the legacy dev auth bypass.
+// showLiteBadge reports whether the served UI shows the silver LITE badge: the
+// Lite edition, or the legacy dev auth bypass.
 func showLiteBadge(cfg *config.ServerConfig) bool {
 	return cfg.UI.Edition == "lite" || cfg.Auth.DevNoAuth
+}
+
+// showProBadge reports whether the served UI shows the gold PRO badge — the
+// Pro edition, set explicitly by the Helm chart (values.yaml: ui.edition=pro).
+// Demo and empty editions show no badge.
+func showProBadge(cfg *config.ServerConfig) bool {
+	return cfg.UI.Edition == "pro"
 }
 
 // liteEditorFS builds the workspace filesystem backing the Lite web editor when

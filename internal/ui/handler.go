@@ -50,6 +50,18 @@ const liteBannerHTML = `<div id="leoflow-lite-banner">LITE</div>` +
 	`font:600 11px/1.7 system-ui,-apple-system,sans-serif;padding:1px 16px;` +
 	`border-radius:0 0 6px 6px;letter-spacing:3px;pointer-events:none}</style>`
 
+// proBannerHTML is the gold counterpart to liteBannerHTML, injected when the
+// running edition is "pro". Same shape and placement as the Lite pill so
+// operators get a consistent visual anchor across editions; only the color
+// shifts (gold #FFD700 with dark text), matching the gold edition badge in
+// docs/editions.md and the README's edition shield. pointer-events:none keeps
+// it click-through.
+const proBannerHTML = `<div id="leoflow-pro-banner">PRO</div>` +
+	`<style>#leoflow-pro-banner{position:fixed;top:0;left:50%;transform:translateX(-50%);` +
+	`z-index:2147483647;background:#FFD700;color:#1a1a1a;` +
+	`font:600 11px/1.7 system-ui,-apple-system,sans-serif;padding:1px 16px;` +
+	`border-radius:0 0 6px 6px;letter-spacing:3px;pointer-events:none}</style>`
+
 // ideButtonHTML is a discreet floating "IDE" button (bottom-right) injected into
 // the served shell when the Lite web editor is enabled (ADR 0025). It opens the
 // editor at /ide in a new tab, so the SPA is untouched.
@@ -81,6 +93,7 @@ type Server struct {
 	fsys         fs.FS
 	version      string
 	liteBanner   bool
+	proBanner    bool
 	editorButton bool
 	instanceName string
 }
@@ -89,6 +102,12 @@ type Server struct {
 // is enabled by the Lite edition (`leoflow lite`); the demo and production never
 // set it.
 func (s *Server) SetLiteBanner(on bool) { s.liteBanner = on }
+
+// SetProBanner toggles injection of the gold PRO overlay into the served shell.
+// It is enabled by the Pro edition (Helm install); Lite and Demo never set it.
+// The two edition pills are mutually exclusive in practice, but the server does
+// not enforce that — it trusts the edition resolved upstream.
+func (s *Server) SetProBanner(on bool) { s.proBanner = on }
 
 // SetEditorButton toggles injection of the "IDE" button that opens the Lite web
 // editor (/ide). It is enabled only when a workspace is configured (Lite).
@@ -243,6 +262,9 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 	body = injectBeforeBodyEnd(body, clipboardFallbackHTML)
 	if s.liteBanner {
 		body = injectBeforeBodyEnd(body, liteBannerHTML)
+	}
+	if s.proBanner {
+		body = injectBeforeBodyEnd(body, proBannerHTML)
 	}
 	if s.editorButton {
 		body = injectBeforeBodyEnd(body, ideButtonHTML)

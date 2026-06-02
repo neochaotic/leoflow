@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestRefuseInsecureSecretsInProd: a Pro chart deployment (edition=production)
+// TestRefuseInsecureSecretsInProd: a Pro chart deployment (edition=pro)
 // MUST NOT boot with LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true. The dev-only
 // escape hatch is fine on Lite, but inside a real cluster shipping secrets over
 // a plaintext gRPC channel is the kind of mistake that should be loud (#58).
@@ -21,9 +21,9 @@ func TestRefuseInsecureSecretsInProd(t *testing.T) {
 	}{
 		{name: "lite + insecure: allowed (dev/inner loop)", edition: "lite", allowInsecure: true},
 		{name: "empty edition + insecure: allowed (dev fallback)", edition: "", allowInsecure: true},
-		{name: "production + insecure: REFUSED", edition: "production", allowInsecure: true,
+		{name: "pro + insecure: REFUSED", edition: "pro", allowInsecure: true,
 			wantErrSubstring: "LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS"},
-		{name: "production + NO insecure: allowed (default secure)", edition: "production", allowInsecure: false},
+		{name: "pro + NO insecure: allowed (default secure)", edition: "pro", allowInsecure: false},
 		{name: "lite + NO insecure: allowed", edition: "lite", allowInsecure: false},
 	}
 	for _, tc := range cases {

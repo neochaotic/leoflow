@@ -195,6 +195,75 @@ func TestClearIncludePastFutureFansAcrossRuns(t *testing.T) {
 	}
 }
 
+// TestExpandClearTasksDispatch covers the wrapper that decides whether to
+// expand seed task_ids along the DAG topology when the UI's Clear dialog has
+// "include upstream/downstream" ticked. It is the gate between the public
+// clear handler and expandTaskIDs; a regression here silently drops the flags
+// or fails open into expanding when the spec lookup hiccups, both of which
+// surface to the user as confusing partial clears.
+func TestExpandClearTasksDispatch(t *testing.T) {
+	tasks := []domain.TaskSpec{
+		{TaskID: "a"},
+		{TaskID: "b", DependsOn: []string{"a"}},
+		{TaskID: "c", DependsOn: []string{"b"}},
+	}
+	specs := &fakeSpecReader{spec: domain.DAGSpec{Tasks: tasks}}
+	mkCtx := func() *gin.Context {
+		c := &gin.Context{}
+		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/dags/etl/clearTaskInstances", http.NoBody)
+		c.Params = gin.Params{{Key: "dag_id", Value: "etl"}}
+		return c
+	}
+
+	t.Run("specs nil → seeds untouched", func(t *testing.T) {
+		got := expandClearTasks(mkCtx(), nil, clearRequest{
+			TaskIDs: clearTaskIDs{"b"}, IncludeUpstream: true, IncludeDownstream: true,
+		})
+		if len(got) != 1 || got[0] != "b" {
+			t.Errorf("specs=nil: got %v, want [b]", got)
+		}
+	})
+
+	t.Run("empty seeds → empty seeds (clear-whole-run)", func(t *testing.T) {
+		got := expandClearTasks(mkCtx(), specs, clearRequest{IncludeUpstream: true, IncludeDownstream: true})
+		if len(got) != 0 {
+			t.Errorf("empty seeds: got %v, want []", got)
+		}
+	})
+
+	t.Run("no flags → seeds returned unchanged (no DAG lookup)", func(t *testing.T) {
+		got := expandClearTasks(mkCtx(), specs, clearRequest{TaskIDs: []string{"b"}})
+		if len(got) != 1 || got[0] != "b" {
+			t.Errorf("no flags: got %v, want [b]", got)
+		}
+	})
+
+	t.Run("spec lookup error → seeds untouched (fail safe)", func(t *testing.T) {
+		broken := &fakeSpecReader{err: errors.New("postgres briefly unreachable")}
+		got := expandClearTasks(mkCtx(), broken, clearRequest{
+			TaskIDs: []string{"b"}, IncludeDownstream: true,
+		})
+		if len(got) != 1 || got[0] != "b" {
+			t.Errorf("spec error: got %v, want [b] (fail-safe seed-only)", got)
+		}
+	})
+
+	t.Run("happy path → fans out downstream of seed", func(t *testing.T) {
+		got := expandClearTasks(mkCtx(), specs, clearRequest{
+			TaskIDs: []string{"a"}, IncludeDownstream: true,
+		})
+		set := map[string]bool{}
+		for _, id := range got {
+			set[id] = true
+		}
+		for _, id := range []string{"a", "b", "c"} {
+			if !set[id] {
+				t.Errorf("downstream(a) missing %s: %v", id, got)
+			}
+		}
+	})
+}
+
 func TestExpandTaskIDs(t *testing.T) {
 	// a -> b -> c (c depends on b, b depends on a), plus a sibling d off a.
 	tasks := []domain.TaskSpec{

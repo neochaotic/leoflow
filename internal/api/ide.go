@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -72,6 +73,15 @@ type ideInstallExamplesBody struct {
 type ideInstallExamplesResp struct {
 	Installed []string `json:"installed"`
 	Skipped   []string `json:"skipped"`
+	// SkippedExamples lists example project names that were not materialized
+	// because a workspace root project of the same name already exists.
+	// Lite's multi-DAG discovery refuses duplicate dag_ids at boot, so
+	// installing the colliding example would silently produce a workspace
+	// that the next `leoflow lite` boot rejects. Reporting this lets the
+	// IDE surface a "Skipped: bash_pipeline (already exists)" hint
+	// instead of leaving the user to discover the collision at startup.
+	// See alpha-prep issue #298 (sub-item: IDE dup-detect).
+	SkippedExamples []string `json:"skipped_examples"`
 }
 
 // registerIDE mounts the Lite web editor: the workspace filesystem API, the
@@ -213,17 +223,53 @@ func ideInstallExamplesHandler(store WorkspaceFS, examples fs.FS) gin.HandlerFun
 		if target == "" {
 			target = "examples"
 		}
-		resp := ideInstallExamplesResp{Installed: []string{}, Skipped: []string{}}
+		resp := ideInstallExamplesResp{
+			Installed:       []string{},
+			Skipped:         []string{},
+			SkippedExamples: []string{},
+		}
+
+		// Gather workspace top-level directories so the install can skip any
+		// example whose dir-name collides with an existing project — Lite's
+		// multi-DAG discovery (internal/cli/discover) treats every top-level
+		// directory as a candidate project and refuses duplicate dag_ids on
+		// boot, so installing the collision would silently break the next
+		// startup (alpha-prep #298, observed during prealpha.28 smoke).
+		rootProjects := make(map[string]bool)
+		if entries, terr := store.Tree(); terr == nil {
+			for _, e := range entries {
+				if e.IsDir && !strings.Contains(e.Path, "/") {
+					rootProjects[e.Name] = true
+				}
+			}
+		}
+
 		// Walk the embedded examples FS. Embedded root is "examples" (matches
 		// the source tree), so we strip that prefix and re-anchor under target.
 		walkErr := fs.WalkDir(examples, "examples", func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if p == "examples" || d.IsDir() {
+			if p == "examples" {
 				return nil
 			}
-			rel := path.Join(target, p[len("examples/"):])
+			// First path segment under "examples/" is the example's project
+			// name (e.g. "bash_pipeline"). When the user already has a
+			// top-level project with that name, skip the whole subtree.
+			relUnder := p[len("examples/"):]
+			projectName := relUnder
+			if i := strings.Index(relUnder, "/"); i > 0 {
+				projectName = relUnder[:i]
+			}
+			if d.IsDir() {
+				if rootProjects[projectName] {
+					resp.SkippedExamples = append(resp.SkippedExamples, projectName)
+					return fs.SkipDir
+				}
+				return nil
+			}
+
+			rel := path.Join(target, relUnder)
 			data, rerr := fs.ReadFile(examples, p)
 			if rerr != nil {
 				return fmt.Errorf("reading embedded %q: %w", p, rerr)

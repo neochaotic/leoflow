@@ -1,0 +1,19 @@
+schema_version: "1.0"
+dag_id: gcp_gcs_load
+description: Write + read a GCS object via a managed google_cloud_platform Connection (key or keyless/ADC).
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies:
+  - google-auth==2.35.0
+  - google-cloud-storage==2.18.2
+
+# Keyless on Pro/GKE: run the task pod as a Kubernetes ServiceAccount bound to a
+# GCP service account via Workload Identity, so credentials come from the
+# metadata server (no key). Create/annotate the KSA per the README, or drop this
+# block and use key mode (keyfile_dict) / host ADC on Lite subprocess.
+tasks:
+  gcs_roundtrip:
+    execution:
+      service_account: leoflow-gcs

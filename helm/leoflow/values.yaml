@@ -95,6 +95,8 @@ database:
   url: ""
   # -- Name of a Secret with key `databaseUrl` (takes precedence over `url`).
   existingSecret: ""
+  # -- Name of a ConfigMap with key `ca.crt` holding the managed-Postgres CA bundle (#315). When set, the chart mounts it at `/etc/leoflow/db-ca/ca.crt` so the operator can pin `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` in the DSN. Empty (default) means TLS still works via `sslmode=require`, but the server cert is NOT verified — the connection is encrypted but MITM-vulnerable, the standard managed-DB posture before this knob.
+  caConfigMap: ""
   # -- Max concurrent open DB connections (Postgres-side load gate). Increase for high-throughput Pro deployments.
   maxOpenConns: 20
   # -- Max idle DB connections kept in the pool. Should be ≤ `maxOpenConns`.

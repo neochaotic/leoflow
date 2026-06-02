@@ -1,8 +1,8 @@
 # Quickstart
 
 Get Leoflow **Lite** running locally in two commands. Lite is the local edition
-(Pro is [coming soon](operating-modes.md)); run it on your machine or a
-trusted internal network — see [Editions](editions.md).
+(Pro is chart-installable and in validation — see [Operating modes](operating-modes.md));
+run it on your machine or a trusted internal network — see [Editions](editions.md).
 
 ## Prerequisites
 

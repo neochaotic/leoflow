@@ -32,6 +32,13 @@ filed but the cookbook entries are not part of the first alpha cut.
   `oracle` (#72), `kafka` (#82), `ssh` (#79), `ftp` (#80), `sftp` (#81),
   `mongo` (#74)
 
+!!! note "`google_cloud_platform` is planned for the Pro/GKE track (Phase 2)"
+    GCP is the first cloud connector targeted once Pro internal testing on GKE
+    matures: a real `google_cloud_platform` connection (#77) supporting **both**
+    a service-account JSON key **and** keyless **Workload Identity** (#56). The
+    UI metadata exists today; the probe, example DAG, and integration test land
+    with that phase. See the [Roadmap](../roadmap-to-release.md).
+
 ## Contract every entry honours
 
 Every entry in this cookbook ships with all three of:

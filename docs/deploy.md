@@ -176,11 +176,13 @@ into.
     leoflow push dag.json --server "$LEOFLOW_SERVER" --token "$LEOFLOW_TOKEN"
     ```
 
-## Control-plane deployment *(coming soon)*
+## Control-plane deployment (Helm chart, in validation)
 
 Deploying the control plane itself (Helm chart, published `leoflow-server`/
 `leoflow-migrate` images, TLS on the agent channel, keyless cloud auth) is the
-**Pro** track — see [Operating modes](operating-modes.md) and the
-[Roadmap](roadmap-to-release.md). The product proves itself in **Lite** first.
+**Pro** track. The chart is installable today and in validation against GKE —
+see the [Helm chart](../helm/leoflow/README.md), the reproducible
+[GKE test setup](../deploy/gke/README.md), [Operating modes](operating-modes.md),
+and the [Roadmap](roadmap-to-release.md). The product proves itself in **Lite** first.
 
 See also: [DAG authoring](dag-authoring.md) · [Operating modes](operating-modes.md).

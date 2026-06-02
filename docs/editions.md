@@ -16,13 +16,13 @@ DAG once and it runs on either.
 | | 🥈 **Lite** | 🥇 **Pro** |
 |---|---|---|
 | Status | **Available now** (pre-alpha) | **Chart installable** (gated); officially supported after v0.1.0-alpha |
-| Install | one command (`curl … \| sh`) on one machine | [Helm chart](helm-chart.md) on your cluster |
+| Install | one command (`curl … \| sh`) on one machine | [Helm chart](../helm/leoflow/README.md) on your cluster |
 | Command | `leoflow lite` | the deployed control plane |
 | Auth | a single local **admin** login (password shown once at setup) | enterprise: SSO/OIDC, full RBAC, multi-tenant |
 | Executors | a local **k3d** mini-cluster (real pods, **requires Docker** to host the cluster) or **subprocess** (dev-only, unsandboxed, no Docker) | **Kubernetes only**, at scale |
 | Deploy | edit + hot-reload | GitOps: `leoflow compile` in CI → immutable image + `dag.json` |
 | Intended use | local, small, or **light production** projects on a **trusted/internal network** | teams and production workloads at scale |
-| Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis (see [chart docs](helm-chart.md#datastore-compatibility) for versions) |
+| Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis (see [chart docs](../helm/leoflow/README.md#datastore-compatibility) for versions) |
 
 ## 🥈 Leoflow Lite
 
@@ -83,14 +83,16 @@ reminder that Lite is for iterating locally, not for durable deployments.
 See the [Installation](installation.md) guide and the
 [`leoflow lite` workflow](dev-workflow.md).
 
-## 🥇 Leoflow Pro (coming)
+## 🥇 Leoflow Pro (chart-installable)
 
 Pro is the enterprise control plane: enterprise authentication (SSO/OIDC),
 full role-based access control, multi-tenant isolation, the Kubernetes executor
 at scale, first-class observability, and the GitOps deploy flow (DAGs as immutable
-images + `dag.json`, shipped from CI). It is not yet released; this site documents
-Lite today, and the production surfaces (the `/api/v2/` Airflow-compatible API,
-the executor, observability) are built with that target in mind.
+images + `dag.json`, shipped from CI). The Helm chart is installable and in
+validation (tested against GKE; not yet cleared for official use); this site
+documents Lite today, and the production surfaces (the `/api/v2/`
+Airflow-compatible API, the executor, observability) are built with that target
+in mind.
 
 ## Which one? (recommendation)
 

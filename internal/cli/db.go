@@ -9,24 +9,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newDBCommand groups dev-database management commands, mirroring Airflow's
-// `airflow db ...`. They operate ONLY on the isolated local dev database
-// (leoflow_dev); the demo/production database is managed via migrations + Helm.
+// newDBCommand groups Lite-database management commands, mirroring Airflow's
+// `airflow db ...`. They operate ONLY on the isolated local Lite database (the
+// schema name is still `leoflow_dev` for upgrade-in-place safety with installs
+// from before the Dev→Lite product rename); the production database is managed
+// via migrations + Helm.
 func newDBCommand() *cobra.Command {
 	db := &cobra.Command{
 		Use:   "db",
-		Short: "Manage the local dev database (leoflow_dev).",
+		Short: "Manage the local Lite database (schema name leoflow_dev for upgrade safety).",
 	}
 	db.AddCommand(newDBMigrateCommand(), newDBResetCommand())
 	return db
 }
 
-// newDBMigrateCommand creates the dev database if needed and applies the embedded
-// migrations (like `airflow db migrate`).
+// newDBMigrateCommand creates the Lite database if needed and applies the
+// embedded migrations (like `airflow db migrate`).
 func newDBMigrateCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "migrate",
-		Short: "Create (if needed) and migrate the dev database to the latest schema.",
+		Short: "Create (if needed) and migrate the Lite database to the latest schema.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := ensureDevDatabase(cmdContext(cmd), cmd); err != nil {
@@ -37,13 +39,13 @@ func newDBMigrateCommand() *cobra.Command {
 	}
 }
 
-// newDBResetCommand drops, recreates, and migrates the dev database (like
+// newDBResetCommand drops, recreates, and migrates the Lite database (like
 // `airflow db reset`). Destructive, so it requires --yes.
 func newDBResetCommand() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "reset",
-		Short: "Drop, recreate, and migrate the dev database (DESTRUCTIVE).",
+		Short: "Drop, recreate, and migrate the Lite database (DESTRUCTIVE).",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !yes {

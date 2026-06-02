@@ -23,7 +23,9 @@ func TestSelectDatastoreEmbeddedWhenNoRedis(t *testing.T) {
 	cfg := &config.ServerConfig{} // zero value: Redis.URL == ""
 	pg := &storage.Postgres{}     // nil pool; the embedded path does not dial it here
 
-	backend, tailer, redisHealth, cleanup, err := selectDatastore(ctx, cfg, pg, slog.Default())
+	// Lite path takes the embedded branch BEFORE touching metrics, so a nil
+	// Metrics is safe here (and lets the test avoid registering Prometheus).
+	backend, tailer, redisHealth, cleanup, err := selectDatastore(ctx, cfg, pg, slog.Default(), nil)
 	if err != nil {
 		t.Fatalf("selectDatastore: %v", err)
 	}

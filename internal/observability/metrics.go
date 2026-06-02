@@ -51,6 +51,21 @@ type Metrics struct {
 	DispatchAtCapacity  prometheus.Counter
 	DispatchLatency     prometheus.Histogram
 	DispatchInnerErrors prometheus.Counter
+
+	// Redis observability — port of the #311 step-down pattern for Redis (Pro
+	// only; Lite uses Postgres + in-process tailer per ADR 0026, so these
+	// gauges stay at 0). Operators alert on the per-reason rate, not on log
+	// content: a sudden rate spike on RedisCommandFailures{reason="timeout"}
+	// or RedisDialFailures{reason="tls_handshake"} catches an outage before
+	// the surrounding components (XCom, log tailer) start surfacing tail
+	// errors to users.
+	RedisCommandFailures *prometheus.CounterVec
+	RedisDialFailures    *prometheus.CounterVec
+	RedisDialDuration    prometheus.Histogram
+	RedisPoolActive      prometheus.Gauge
+	RedisPoolIdle        prometheus.Gauge
+	RedisPoolTotalConns  prometheus.Gauge
+	RedisPoolTimeouts    prometheus.Counter
 }
 
 // NewMetrics registers every ADR 0010 collector with reg and returns the set.
@@ -155,8 +170,70 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		DispatchInnerErrors: f.NewCounter(prometheus.CounterOpts{
 			Name: "leoflow_dispatch_inner_errors_total", Help: "Errors returned by the inner dispatcher inside a worker.",
 		}),
+
+		RedisCommandFailures: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "leoflow_redis_command_failures_total",
+			Help: "Redis command failures classified by reason (timeout, connection_refused, auth, canceled, other). " +
+				"Alert on rate(...[5m]) to surface a degrading client-side path before user-visible XCom errors (#312 sibling).",
+		}, []string{"reason"}),
+		RedisDialFailures: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "leoflow_redis_dial_failures_total",
+			Help: "Failures at TCP/TLS dial time to Redis, classified by reason (tls_handshake, connection_refused, dns, timeout, other).",
+		}, []string{"reason"}),
+		RedisDialDuration: f.NewHistogram(prometheus.HistogramOpts{
+			Name:    "leoflow_redis_dial_duration_seconds",
+			Help:    "Wall-clock time per Redis dial — TCP connect + (when rediss://) TLS handshake.",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
+		}),
+		RedisPoolActive: f.NewGauge(prometheus.GaugeOpts{
+			Name: "leoflow_redis_pool_active_conns", Help: "Redis pool: connections currently checked out for a command.",
+		}),
+		RedisPoolIdle: f.NewGauge(prometheus.GaugeOpts{
+			Name: "leoflow_redis_pool_idle_conns", Help: "Redis pool: idle connections available for the next command.",
+		}),
+		RedisPoolTotalConns: f.NewGauge(prometheus.GaugeOpts{
+			Name: "leoflow_redis_pool_total_conns", Help: "Redis pool: total connections (active + idle). Saturating against PoolSize is the leading indicator of throughput issues.",
+		}),
+		RedisPoolTimeouts: f.NewCounter(prometheus.CounterOpts{
+			Name: "leoflow_redis_pool_timeouts_total", Help: "Redis pool checkout timeouts — a caller waited PoolTimeout for an idle connection. A non-zero rate means the pool is too small or commands are too slow.",
+		}),
 	}
 }
+
+// RecordRedisCommandFailure increments the per-reason command failure counter
+// (#312 sibling, paralleling #311's step-down reason). Caller is the go-redis
+// hook's ProcessHook — it classifies the error before incrementing so the
+// label cardinality stays bounded.
+func (m *Metrics) RecordRedisCommandFailure(reason string) {
+	m.RedisCommandFailures.WithLabelValues(reason).Inc()
+}
+
+// RecordRedisDialFailure increments the per-reason dial failure counter.
+// Separated from command failures because a dial failure means we never even
+// reached the Redis instance — the cause is upstream (DNS, TLS, network),
+// not Redis itself.
+func (m *Metrics) RecordRedisDialFailure(reason string) {
+	m.RedisDialFailures.WithLabelValues(reason).Inc()
+}
+
+// ObserveRedisDialDuration records one TCP/TLS dial latency sample.
+func (m *Metrics) ObserveRedisDialDuration(d time.Duration) {
+	m.RedisDialDuration.Observe(d.Seconds())
+}
+
+// UpdateRedisPoolStats refreshes the three pool gauges. The cmd/leoflow-server
+// goroutine that calls this scrapes go-redis's PoolStats every N seconds.
+func (m *Metrics) UpdateRedisPoolStats(active, idle, total uint32) {
+	m.RedisPoolActive.Set(float64(active))
+	m.RedisPoolIdle.Set(float64(idle))
+	m.RedisPoolTotalConns.Set(float64(total))
+}
+
+// RecordRedisPoolTimeout increments the pool-checkout timeout counter. The
+// go-redis hook fires this when a caller waited PoolTimeout for an idle
+// connection — the leading indicator that the pool is too small for the
+// command rate.
+func (m *Metrics) RecordRedisPoolTimeout() { m.RedisPoolTimeouts.Inc() }
 
 // RecordHTTPRequest records a completed HTTP request (count + duration).
 func (m *Metrics) RecordHTTPRequest(method, path string, status int, dur time.Duration) {

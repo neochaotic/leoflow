@@ -17,7 +17,7 @@ Scaffold one with `leoflow init dags/my_pipeline`.
 > exist only in `leoflow lite` — the developer-mode loop. **Pro** does not have
 > a "workspace"; in Pro every DAG ships as its own image-and-`dag.json` pair,
 > built by CI and registered via `leoflow push dag.json`. See
-> [The development → deploy lifecycle](#the-development--deploy-lifecycle).
+> [The development → deploy lifecycle](#the-development-deploy-lifecycle).
 
 `leoflow lite` watches a **workspace** that can hold many DAGs as sibling
 subdirectories. The default workspace is `~/leoflow/` (set by `leoflow setup`).

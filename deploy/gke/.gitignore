@@ -14,3 +14,4 @@ secret*.yaml
 *.crt
 values.local.yaml
 *.local.yaml
+.managed-pgpw

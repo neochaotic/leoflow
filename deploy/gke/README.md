@@ -106,15 +106,37 @@ kubectl -n leoflow port-forward svc/leoflow 8080:8080
 
 ## 03 — managed datastores (Cloud SQL + Memorystore)
 
-The realistic-prod path, used for the **load test** once the in-cluster run
-passes. Not scripted yet; the shape:
+The realistic-prod path — **scripted** as `03-managed.sh` (run after `02`):
 
-1. Cloud SQL for Postgres (start `db-f1-micro` / `db-g1-small`) + Memorystore for
-   Redis (Basic, 1 GB), both in `us-central1`, on the cluster's VPC (private IP).
-2. Point the chart at them — drop the in-cluster Postgres/Redis, set
-   `database.url` / `redis.url` to the managed endpoints.
-3. Prefer **Workload Identity** over inline credentials where the connector
-   supports it (the cluster already has the workload pool enabled).
+```bash
+./03-managed.sh    # enables APIs, sets up VPC peering, creates Cloud SQL +
+                   # Memorystore (private IP), repoints the release, rolls the pod
+```
+
+What it does:
+
+1. Enables `servicenetworking` / `sqladmin` / `redis` APIs and sets up **Private
+   Services Access** (allocated range + VPC peering) on the cluster's VPC.
+2. Creates **Cloud SQL** Postgres (`db-f1-micro`, `--edition=ENTERPRISE`, private
+   IP) + database `leoflow`, and **Memorystore** Redis (Basic 1 GB, `--enable-auth`,
+   private), both in `us-central1`.
+3. Writes a gitignored `values.managed.local.yaml` (reusing `02`'s secrets +
+   agent-TLS) and `helm upgrade`s the release at the managed endpoints, then
+   `kubectl rollout restart`s the Deployment.
+
+Validated end-to-end on GKE: python / bash / http_api + map-reduce + cron
+scheduler all `success` against Cloud SQL + Memorystore, and the scheduler showed
+no advisory-lock step-down on managed Postgres.
+
+**Known limitations (tracked upstream):**
+- Redis runs **AUTH + TLS-off** — the client can't verify Memorystore's CA
+  (issue #312). Security = private-IP VPC + AUTH.
+- Postgres uses `sslmode=require` (encrypted, not cert-verified); `verify-full`
+  needs a mounted CA the chart doesn't expose yet (issue #315).
+- The pod is rolled manually because the chart lacks a `checksum/secret`
+  annotation (issue #316).
+- Prefer **Workload Identity** over inline credentials once the connector
+  supports it (the cluster already has the workload pool enabled — issue #56).
 
 > ⚠️ **Hardening checklist for `03-managed.sh` (do NOT inherit the test posture).**
 > The in-cluster test runs Redis with **no auth** and Postgres with

@@ -56,7 +56,10 @@
   <strong>Leoflow</strong> Editor
   <span class="path" id="current-path"></span>
   <span class="spacer"></span>
+  <button id="btn-examples" title="Materialize the bundled DAG examples under /examples">Download examples</button>
+  <button id="btn-newdir" title="Create a new folder at the workspace root or under the current selection">New folder</button>
   <button id="btn-new">New file</button>
+  <button id="btn-rename" title="Rename or move the selected file/folder">Rename</button>
   <button id="btn-delete">Delete</button>
   <button id="btn-save">Save (⌘S)</button>
 </header>
@@ -79,8 +82,18 @@ const api = {
   create: (p, dir) => fetch("/api/v2/ide/file", { method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ path: p, dir: !!dir }) }),
+  move:   (from, to) => fetch("/api/v2/ide/move", { method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ from, to }) }),
+  installExamples: (dir) => fetch("/api/v2/ide/examples/install", { method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ dir: dir || "examples" }) }).then(r => r.json()),
   remove: (p) => fetch("/api/v2/ide/file?path=" + encodeURIComponent(p), { method: "DELETE" }),
 };
+
+// Currently selected tree node — used as the parent for "New folder/file" and
+// as the source for drag operations. May be a file or a directory.
+let selected = null;
 
 const statusEl = document.getElementById("status");
 const pathEl = document.getElementById("current-path");
@@ -106,12 +119,66 @@ async function refreshTree() {
       div.style.paddingLeft = (10 + e.path.split("/").length * 12) + "px";
       div.textContent = (e.is_dir ? "▸ " : "") + e.name;
       div.dataset.path = e.path;
-      if (!e.is_dir) div.onclick = () => openFile(e.path);
+      div.dataset.isDir = e.is_dir ? "1" : "";
+      div.draggable = true;
+      div.onclick = (ev) => {
+        ev.stopPropagation();
+        selected = { path: e.path, isDir: e.is_dir };
+        document.querySelectorAll("#tree .node").forEach((n) =>
+          n.classList.toggle("active", n.dataset.path === e.path));
+        if (!e.is_dir) openFile(e.path);
+      };
+      // Drag source: stash the source path on the dataTransfer object.
+      div.ondragstart = (ev) => {
+        ev.dataTransfer.setData("text/plain", e.path);
+        ev.dataTransfer.effectAllowed = "move";
+      };
+      // Drop target: dirs only. Drop a file/dir into the target dir.
+      if (e.is_dir) {
+        div.ondragover = (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; };
+        div.ondrop = async (ev) => {
+          ev.preventDefault();
+          const from = ev.dataTransfer.getData("text/plain");
+          if (!from || from === e.path) return;
+          // Block drop into self/descendant — Move would fail at the server but
+          // the early check keeps the UX snappy.
+          if (e.path.startsWith(from + "/")) {
+            setStatus("cannot move a folder into itself");
+            return;
+          }
+          const name = from.split("/").pop();
+          await doMove(from, e.path + "/" + name);
+        };
+      }
       if (e.path === current) div.classList.add("active");
       treeEl.appendChild(div);
     });
     if (!entries || entries.length === 0) treeEl.textContent = "empty workspace";
+    // Root-level drop target: drop onto the empty area moves to workspace root.
+    treeEl.ondragover = (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; };
+    treeEl.ondrop = async (ev) => {
+      if (ev.target !== treeEl) return; // only when dropped on the bg, not on a node
+      ev.preventDefault();
+      const from = ev.dataTransfer.getData("text/plain");
+      if (!from) return;
+      const name = from.split("/").pop();
+      if (name === from) return; // already at root
+      await doMove(from, name);
+    };
   } catch (err) { setStatus("tree error: " + err); }
+}
+
+async function doMove(from, to) {
+  const res = await api.move(from, to);
+  if (res.ok) {
+    if (current === from) { current = to; pathEl.textContent = to; }
+    setStatus("moved " + from + " → " + to);
+    await refreshTree();
+  } else {
+    let detail = "";
+    try { detail = (await res.json()).detail || ""; } catch { /* ignore */ }
+    setStatus("move failed (" + res.status + ")" + (detail ? ": " + detail : ""));
+  }
 }
 
 async function openFile(path) {
@@ -140,12 +207,52 @@ async function save() {
   setStatus(res.ok ? "saved " + current : "save failed (" + res.status + ")");
 }
 
+// parentPath returns the directory the new file/folder should live in, based on
+// the current selection: a selected directory is used as-is, a selected file's
+// parent directory is used, and no selection means the workspace root.
+function parentPath() {
+  if (!selected) return "";
+  if (selected.isDir) return selected.path;
+  const slash = selected.path.lastIndexOf("/");
+  return slash < 0 ? "" : selected.path.slice(0, slash);
+}
+
 async function newFile() {
-  const p = prompt("New file path (relative to workspace):");
-  if (!p) return;
+  const base = parentPath();
+  const prompted = prompt("New file name" + (base ? ` (inside ${base}/)` : " (at workspace root)") + ":");
+  if (!prompted) return;
+  const p = base ? base + "/" + prompted : prompted;
   const res = await api.create(p, false);
   if (res.ok) { await refreshTree(); openFile(p); }
   else setStatus("create failed (" + res.status + ")");
+}
+
+async function newDir() {
+  const base = parentPath();
+  const prompted = prompt("New folder name" + (base ? ` (inside ${base}/)` : " (at workspace root)") + ":");
+  if (!prompted) return;
+  const p = base ? base + "/" + prompted : prompted;
+  const res = await api.create(p, true);
+  if (res.ok) { await refreshTree(); setStatus("created folder " + p); }
+  else setStatus("create folder failed (" + res.status + ")");
+}
+
+async function renameSelected() {
+  if (!selected) { setStatus("select a file or folder to rename"); return; }
+  const proposed = prompt("Rename " + selected.path + " to:", selected.path);
+  if (!proposed || proposed === selected.path) return;
+  await doMove(selected.path, proposed);
+}
+
+async function downloadExamples() {
+  setStatus("installing examples…");
+  try {
+    const r = await api.installExamples("examples");
+    const installed = (r.installed || []).length;
+    const skipped = (r.skipped || []).length;
+    setStatus(`examples: ${installed} installed, ${skipped} skipped (existed)`);
+    await refreshTree();
+  } catch (err) { setStatus("install error: " + err); }
 }
 
 async function deleteCurrent() {
@@ -168,7 +275,10 @@ function bootEditor() {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, save);
     document.getElementById("btn-save").onclick = save;
     document.getElementById("btn-new").onclick = newFile;
+    document.getElementById("btn-newdir").onclick = newDir;
+    document.getElementById("btn-rename").onclick = renameSelected;
     document.getElementById("btn-delete").onclick = deleteCurrent;
+    document.getElementById("btn-examples").onclick = downloadExamples;
     refreshTree();
     // Deep-link: /ide?open=<path> opens a file directly (shareable links).
     const open = new URLSearchParams(location.search).get("open");

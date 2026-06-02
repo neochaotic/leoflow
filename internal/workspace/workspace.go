@@ -145,6 +145,31 @@ func (f *FS) Create(rel string, dir bool) error {
 	return file.Close()
 }
 
+// Move renames or relocates a file or directory inside the workspace. It
+// auto-creates any missing parent directories on the destination side, and
+// refuses to clobber an existing destination — the IDE surface (drag-drop /
+// rename) asks the user to pick a fresh name on a collision.
+func (f *FS) Move(from, to string) error {
+	src, err := f.resolve(from)
+	if err != nil {
+		return err
+	}
+	dst, err := f.resolve(to)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("destination %q already exists", to)
+	}
+	if mkErr := os.MkdirAll(filepath.Dir(dst), 0o750); mkErr != nil {
+		return fmt.Errorf("creating parent of %q: %w", to, mkErr)
+	}
+	if rnErr := os.Rename(src, dst); rnErr != nil {
+		return fmt.Errorf("moving %q to %q: %w", from, to, rnErr)
+	}
+	return nil
+}
+
 // Delete removes the file or directory (recursively) at rel.
 func (f *FS) Delete(rel string) error {
 	abs, err := f.resolve(rel)

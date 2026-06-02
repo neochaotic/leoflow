@@ -29,3 +29,13 @@ var devCompose []byte
 // datastores up with `leoflow lite` alone — it is materialized under ~/.leoflow
 // on first run.
 func DevCompose() []byte { return devCompose }
+
+//go:embed all:examples
+var exampleDAGs embed.FS
+
+// ExampleDAGs returns the embedded DAG examples (one subdirectory per DAG,
+// each with dag.py + leoflow.yaml). The Lite IDE's "Download examples"
+// button materializes them into the user's workspace under examples/, so a
+// fresh install can try every operator without a separate git checkout.
+// Root is "examples/" — the same layout as the source tree.
+func ExampleDAGs() embed.FS { return exampleDAGs }

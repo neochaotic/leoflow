@@ -186,3 +186,94 @@ func TestReadMissingFile(t *testing.T) {
 		t.Fatal("Read of a missing file should error")
 	}
 }
+
+// TestMoveRenamesFiles pins the contract for the IDE's "rename / drag-drop"
+// surface: moving a file or directory updates the path, the source disappears,
+// the destination matches what was there before, and the operation is confined
+// to the workspace root just like Read/Write/Create.
+func TestMoveRenamesFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "old.py"), []byte("print('hi')"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o750); err != nil {
+		t.Fatalf("seed dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "inner.txt"), []byte("inner"), 0o600); err != nil {
+		t.Fatalf("seed inner: %v", err)
+	}
+	fs, ferr := New(root)
+	if ferr != nil {
+		t.Fatalf("New: %v", ferr)
+	}
+
+	// Rename a file in-place.
+	if mErr := fs.Move("old.py", "new.py"); mErr != nil {
+		t.Fatalf("rename file: %v", mErr)
+	}
+	if _, sErr := os.Stat(filepath.Join(root, "old.py")); !os.IsNotExist(sErr) {
+		t.Errorf("old.py should be gone, got err=%v", sErr)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "new.py"))
+	if err != nil || string(got) != "print('hi')" {
+		t.Errorf("new.py = (%q, %v), want (\"print('hi')\", nil)", got, err)
+	}
+
+	// Move a file into a different folder (auto-create parents).
+	if err := fs.Move("new.py", "scripts/new.py"); err != nil {
+		t.Fatalf("move into dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "scripts", "new.py")); err != nil {
+		t.Errorf("scripts/new.py missing: %v", err)
+	}
+
+	// Move a whole directory (file inside follows).
+	if err := fs.Move("sub", "moved_sub"); err != nil {
+		t.Fatalf("move dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "moved_sub", "inner.txt")); err != nil {
+		t.Errorf("moved_sub/inner.txt missing: %v", err)
+	}
+}
+
+// TestMoveRefusesUnsafePaths confines Move to the workspace, mirroring
+// Read/Write/Create. Without this, a drag-drop bug in the UI could overwrite
+// arbitrary files on the host.
+func TestMoveRefusesUnsafePaths(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	fs, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, p := range []string{"../escape.txt", "/etc/passwd", "../../host.txt"} {
+		if err := fs.Move("a.txt", p); err == nil {
+			t.Errorf("Move to %q must be rejected", p)
+		}
+		if err := fs.Move(p, "ok.txt"); err == nil {
+			t.Errorf("Move from %q must be rejected", p)
+		}
+	}
+}
+
+// TestMoveRefusesOverwriteExisting prevents silent data loss: a drag-drop
+// that lands on an existing file/folder must fail loudly rather than
+// clobber. The IDE surface should ask the user to confirm/rename instead.
+func TestMoveRefusesOverwriteExisting(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatalf("seed a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("b"), 0o600); err != nil {
+		t.Fatalf("seed b: %v", err)
+	}
+	fs, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := fs.Move("a.txt", "b.txt"); err == nil {
+		t.Errorf("Move onto existing path must fail")
+	}
+}

@@ -1,23 +1,23 @@
 # Leoflow Helm values for evaluating the chart end-to-end on a single
-# Kubernetes cluster, using Bitnami's community Postgres + Redis charts as
-# ephemeral datastores.
+# Kubernetes cluster, using PLAIN OFFICIAL postgres + redis images as
+# ephemeral datastores (kubectl apply, no Bitnami chart).
 #
-# NOT FOR PRODUCTION. The Bitnami charts here are configured for evaluation
-# (no persistence guarantees, no replication, no auth on Redis). For real
-# deploys, point database.url / redis.url at managed services (RDS,
-# ElastiCache, CloudSQL, Memorystore, your own HA cluster, etc.) and remove
-# the Bitnami installs entirely.
+# NOT FOR PRODUCTION. The minimal manifests in the companion README are
+# configured for evaluation (no persistence, no HA, no auth on Redis). For
+# real deploys, point database.url / redis.url at managed services (RDS,
+# ElastiCache, CloudSQL, Memorystore, your own HA cluster) and drop the
+# kubectl-apply step entirely.
 #
-# Companion recipe: helm/leoflow/examples/README.md walks through the three
-# helm installs and verification.
+# Companion recipe: helm/leoflow/examples/README.md walks through the
+# datastores + helm install + verification.
 
-# Datastore endpoints — must match the Bitnami release names + service
-# defaults documented in the companion README.
+# Datastore endpoints — must match the Service names declared in the
+# README's `kubectl apply` step (deliberately the same names the old
+# Bitnami recipe used so existing installs upgrade in place).
 #
 # Tested against:
-#   bitnami/postgresql chart major 16.x  (service: pg-postgresql)
-#   bitnami/redis      chart major 20.x  (service: redis-master)
-# If you bump these majors, verify the service names match the URIs below.
+#   postgres:16-alpine  (Service: pg-postgresql)
+#   redis:7-alpine      (Service: redis-master)
 database:
   url: postgres://leoflow:leoflow-poc@pg-postgresql:5432/leoflow?sslmode=disable
 redis:

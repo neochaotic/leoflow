@@ -1,25 +1,32 @@
-# PoC: Leoflow + Bitnami Postgres + Bitnami Redis on one cluster
+# PoC: Leoflow + plain Postgres + plain Redis on one cluster
 
 > [!WARNING]
 > **NOT FOR PRODUCTION.** This recipe is for evaluating Leoflow end-to-end on a
 > single Kubernetes cluster (kind, minikube, k3d, a scratch GKE/EKS namespace).
-> The Bitnami datastores below are configured for evaluation only: no
-> persistence guarantees, no HA, no auth on Redis. For real deploys, point
+> The datastores below run as plain unprotected pods with **emptyDir storage**:
+> no persistence, no HA, no auth on Redis. For real deploys, point
 > `database.url` / `redis.url` at managed services (RDS, ElastiCache, CloudSQL,
-> Memorystore, your own HA cluster) and skip the Bitnami installs.
+> Memorystore, your own HA cluster) and drop the datastore manifests below.
 
 The chart's `templates/deployment.yaml` deliberately fails the install when
 neither `database.url`/`existingSecret` nor `redis.url`/`existingSecret` is set
 — Pro Leoflow refuses to silently fall back to embedded datastores (those are
-a Lite-edition concept). This recipe satisfies that contract by installing
-external-looking Postgres + Redis from Bitnami first, then pointing the chart
-at them.
+a Lite-edition concept). This recipe satisfies that contract by deploying
+plain Postgres + Redis pods first, then pointing the chart at them.
+
+> **Why not the Bitnami charts?** Bitnami moved their versioned community
+> images to `docker.io/bitnamilegacy` / behind a paywall in August 2025,
+> breaking pinned chart installs (`FetchReference … not found`). Plain
+> `postgres:16-alpine` + `redis:7-alpine` pods cover the same evaluation
+> surface with no third-party chart dependency. Same Service names
+> (`pg-postgresql`, `redis-master`) so the values file is unchanged.
 
 ## Prerequisites
 
 - A Kubernetes cluster (`kubectl cluster-info` works).
 - `helm` v3.16+.
-- Outbound access to `registry-1.docker.io` for the Bitnami charts.
+- Outbound access to `docker.io` (or any mirror) for the official
+  `postgres:16-alpine` and `redis:7-alpine` images.
 
 ## Steps
 
@@ -29,58 +36,118 @@ at them.
 kubectl create namespace leoflow-poc
 ```
 
-### 2. Postgres (Bitnami)
+### 2. Postgres + Redis (plain official images, emptyDir)
 
 ```bash
-helm install pg oci://registry-1.docker.io/bitnamicharts/postgresql \
-  --version 16 \
-  -n leoflow-poc \
-  --set auth.username=leoflow \
-  --set auth.password=leoflow-poc \
-  --set auth.database=leoflow \
-  --set primary.persistence.enabled=false
+kubectl apply -n leoflow-poc -f - <<'EOF'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pg-postgresql
+type: Opaque
+stringData:
+  password: leoflow-poc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pg-postgresql
+  labels: { app: pg-postgresql }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: pg-postgresql } }
+  template:
+    metadata:
+      labels: { app: pg-postgresql }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER,     value: leoflow }
+            - { name: POSTGRES_DB,       value: leoflow }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: pg-postgresql, key: password } } }
+            - { name: PGDATA,            value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432 }]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "leoflow", "-d", "leoflow"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      volumes:
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: pg-postgresql }
+spec:
+  selector: { app: pg-postgresql }
+  ports: [{ port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-master
+  labels: { app: redis-master }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redis-master } }
+  template:
+    metadata:
+      labels: { app: redis-master }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["--save", "", "--appendonly", "no"]
+          ports: [{ containerPort: 6379 }]
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis-master }
+spec:
+  selector: { app: redis-master }
+  ports: [{ port: 6379, targetPort: 6379 }]
+EOF
 ```
 
-- `--version 16` pins the chart major. Bitnami occasionally rewrites
-  service names + value keys across majors (e.g. redis chart v18 changed
-  defaults). The PoC values file (`poc-with-bitnami.yaml`) hard-codes
-  `pg-postgresql` as the service name; that holds for major 16.x.
-- Service name: `pg-postgresql` (release name `pg` + chart suffix).
-- `persistence.enabled=false` skips the PVC so the PoC tears down cleanly. Drop
-  this flag if you want the data to survive pod restarts.
-
-Wait for it: `kubectl -n leoflow-poc rollout status statefulset/pg-postgresql --timeout=180s`.
-
-### 3. Redis (Bitnami)
+Wait for both to be ready:
 
 ```bash
-helm install redis oci://registry-1.docker.io/bitnamicharts/redis \
-  --version 20 \
-  -n leoflow-poc \
-  --set auth.enabled=false \
-  --set architecture=standalone \
-  --set master.persistence.enabled=false
+kubectl -n leoflow-poc rollout status deploy/pg-postgresql --timeout=180s
+kubectl -n leoflow-poc rollout status deploy/redis-master  --timeout=120s
 ```
 
-- `--version 20` pins the chart major. The PoC values file hard-codes
-  `redis-master` as the service name; that holds for major 20.x.
-- `auth.enabled=false` matches the URI in `poc-with-bitnami.yaml`
-  (`redis://redis-master:6379/0`). Set a password and update the URI in the
-  values file for any shared cluster.
-- `architecture=standalone` skips the replicas: one Redis pod, simpler PoC.
+- **Service names** `pg-postgresql` + `redis-master` deliberately match the
+  Bitnami release names the original recipe used, so the values file is
+  unchanged.
+- **Storage** is `emptyDir`: data evaporates when the Postgres pod restarts.
+  Swap for a PVC when you want survival across restarts.
+- **Redis runs without auth** — fine on a scratch namespace, never on a
+  shared cluster.
+- **Resource limits** are minimal (sized for evaluation, not load).
 
-Wait for it: `kubectl -n leoflow-poc rollout status deploy/redis-master --timeout=120s` (or `statefulset/redis-master` depending on chart version).
-
-### 4. Leoflow
+### 3. Leoflow
 
 ```bash
 helm install leoflow ./helm/leoflow \
   -n leoflow-poc \
-  -f helm/leoflow/examples/poc-with-bitnami.yaml
+  -f helm/leoflow/examples/poc.yaml
 ```
 
-The `poc-with-bitnami.yaml` file in this directory carries the matching
-`database.url` / `redis.url` plus fixture credentials.
+The `poc.yaml` file in this directory carries the matching `database.url` /
+`redis.url` plus fixture credentials.
 
 Wait for it: `kubectl -n leoflow-poc rollout status deploy/leoflow --timeout=240s`.
 
@@ -98,18 +165,17 @@ Open `http://127.0.0.1:8080/` for the UI. Log in with `admin` /
 
 ```bash
 helm uninstall -n leoflow-poc leoflow
-helm uninstall -n leoflow-poc redis
-helm uninstall -n leoflow-poc pg
+kubectl delete -n leoflow-poc deploy/pg-postgresql deploy/redis-master \
+                              svc/pg-postgresql   svc/redis-master    \
+                              secret/pg-postgresql
 kubectl delete namespace leoflow-poc
 ```
 
-`helm uninstall` on the Bitnami charts leaves PVCs behind by default unless
-you ran with `persistence.enabled=false` (recipe above did). Delete leftover
-PVCs with `kubectl -n leoflow-poc delete pvc --all` if anything sticks.
+No PVCs to clean up — emptyDir storage is per-pod.
 
 ## When you're ready for production
 
-Drop the Bitnami installs and the PoC values file. Point at managed
+Drop the kubectl-apply step and the PoC values file. Point at managed
 datastores via either inline values or existing Secrets:
 
 ```bash

@@ -99,7 +99,9 @@ Open the UI after install:
 
 ```bash
 kubectl -n leoflow port-forward svc/leoflow 8080:8080
-# http://127.0.0.1:8080/  — login: admin / (password in values.local.yaml)
+# http://127.0.0.1:8080/
+# login: admin@leoflow.local  (the bootstrap admin email — NOT "admin")
+# password: bootstrap.password in values.local.yaml
 ```
 
 ## 03 — managed datastores (Cloud SQL + Memorystore)

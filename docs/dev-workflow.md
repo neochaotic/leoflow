@@ -63,7 +63,7 @@ only the engine that hosts the local k3d cluster — never an executor.
 |---|---|---|
 | Speed (per task, reload) | fastest — host process, no build | slower — image build + pod schedule |
 | Isolation | **none** (shared host venv) | real pods (limits, RBAC) |
-| Production fidelity | low | **high** (identical path to prod) |
+| Pro fidelity | low | **high** (identical path to prod) |
 | Moving parts that can break | few (just the venv) | more (cluster, scheduler, registry, PVC) |
 | Shared `/staging` volume (ADR 0022) | **not provided** (`LEOFLOW_STAGING_DIR` unset; tasks have direct host-disk access instead) | **yes** — per-run PVC at `/staging`, `LEOFLOW_STAGING_DIR` set, GC'd |
 

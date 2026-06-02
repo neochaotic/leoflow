@@ -34,7 +34,7 @@ Then open **<http://localhost:8080>** and log in as **`admin@leoflow.local`** /
 !!! tip "What you're looking at"
     One process serves the API (`/api/v2`), the internal UI API (`/ui/*`), and the
     React UI (ADR 0017). It auto-applies migrations and seeds the admin user on
-    first boot. The three operating modes (Demo · Dev · Production-soon) are
+    first boot. The three operating modes (Demo · Dev · Pro-soon) are
     described in [Operating modes](operating-modes.md).
 
 ## 2. Set up for development

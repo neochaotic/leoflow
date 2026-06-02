@@ -166,4 +166,4 @@ rm -rf ~/leoflow       # your workspace (only if you want to remove your DAGs to
 
 - [Quickstart](quickstart.md) — run your first DAG.
 - [The `leoflow lite` workflow](dev-workflow.md) — the hot-reload inner loop.
-- [Editions](editions.md) — Lite (now) vs Production (coming).
+- [Editions](editions.md) — Lite (now) vs Pro (coming).

@@ -72,7 +72,7 @@ Before installing a new pre-alpha tag on a Lite install you depend on:
    downgrade case.
 3. If anything looks off, restore from the tarball.
 
-## Production (Pro) — coming soon
+## Pro (Pro) — coming soon
 
 The Helm chart's upgrade story is being built alongside the chart hardening
 (PR #96). The shape will be the standard Helm `upgrade --install` with the

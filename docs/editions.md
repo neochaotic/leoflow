@@ -3,17 +3,17 @@
 !!! warning "Pre-alpha"
     Leoflow is **pre-alpha**. Only the **Lite** edition is officially supported
     today (local iteration on a trusted network — not durable or production
-    use). The **Production** chart is installable + chart-test gated, but not
+    use). The **Pro** chart is installable + chart-test gated, but not
     cleared for official use until the v0.1.0-alpha cut.
 
-> See also [Operating modes](operating-modes.md) for the Demo/Dev/Production
+> See also [Operating modes](operating-modes.md) for the Demo/Dev/Pro
 > runtime view (this page is the per-edition distribution + posture view).
 
 Leoflow is planned in two editions that share the same engine, the same
 Airflow-3.2.x UI, and the same DAG format (`dag.py` + `leoflow.yaml`). You author a
 DAG once and it runs on either.
 
-| | 🥈 **Lite** | 🥇 **Production** |
+| | 🥈 **Lite** | 🥇 **Pro** |
 |---|---|---|
 | Status | **Available now** (pre-alpha) | **Chart installable** (gated); officially supported after v0.1.0-alpha |
 | Install | one command (`curl … \| sh`) on one machine | [Helm chart](helm-chart.md) on your cluster |
@@ -37,11 +37,11 @@ It is deliberately simple, which has security implications:
     Lite's admin password is short and human-friendly (easy to type), and it is a
     single local admin — there is no SSO/RBAC. Run Lite on **localhost, an
     internal network, or a VPN**. Do **not** expose a Lite instance to the public
-    internet. For team/production use, that is what the Production edition is for.
+    internet. For team/production use, that is what the Pro edition is for.
 
 Lite also includes a small built-in **[web editor](lite-web-editor.md)** (Monaco,
 with Python/YAML highlighting) so you can edit DAG projects from the browser — a
-Lite-only convenience; Production teams use their own editor and the GitOps flow.
+Lite-only convenience; Pro teams use their own editor and the GitOps flow.
 
 ### Datastore (auto-selected), no Redis
 
@@ -57,7 +57,7 @@ fails loud, pointing at Docker.)
 Either way Lite needs **no Redis** — scheduler locks use Postgres advisory locks and
 XCom is stored in Postgres. The Postgres-backed XCom is *durable* (it survives a
 restart), which suits light production, and a single datastore is simpler to
-operate; Redis is a Production-scale concern (multi-node locking, high XCom
+operate; Redis is a production-scale concern (multi-node locking, high XCom
 throughput). (See [ADR 0026](adr/0026-lite-datastore-no-redis.md).)
 
 !!! info "Task dispatch is serial on Lite (by design)"
@@ -66,7 +66,7 @@ throughput). (See [ADR 0026](adr/0026-lite-datastore-no-redis.md).)
     task at a time. A fan-out DAG with N parallel branches still **executes** in
     parallel inside the cluster (real pods, or subprocesses), but the **launch**
     of those tasks is serialized through one goroutine. This is what makes Lite
-    cheap to operate on a single machine. For higher launch throughput, Production
+    cheap to operate on a single machine. For higher launch throughput, Pro
     uses `BufferSize>0` + `Workers>1` (a bounded pool).
     See [#203](https://github.com/neochaotic/leoflow/issues/203) for the rationale.
 
@@ -83,9 +83,9 @@ reminder that Lite is for iterating locally, not for durable deployments.
 See the [Installation](installation.md) guide and the
 [`leoflow lite` workflow](dev-workflow.md).
 
-## 🥇 Leoflow Production (coming)
+## 🥇 Leoflow Pro (coming)
 
-Production is the enterprise control plane: enterprise authentication (SSO/OIDC),
+Pro is the enterprise control plane: enterprise authentication (SSO/OIDC),
 full role-based access control, multi-tenant isolation, the Kubernetes executor
 at scale, first-class observability, and the GitOps deploy flow (DAGs as immutable
 images + `dag.json`, shipped from CI). It is not yet released; this site documents
@@ -95,7 +95,7 @@ the executor, observability) are built with that target in mind.
 ## Which one? (recommendation)
 
 **Today:** there is only one thing to run — **Lite**, and it's **pre-alpha**, for
-local iteration on a trusted network. Production (the enterprise edition) is not
+local iteration on a trusted network. Pro (the enterprise edition) is not
 released yet.
 
 **When both ship, choose by deployment, not by feature checklist:**
@@ -105,14 +105,14 @@ released yet.
   is local development, a small project, or **light production** on a
   trusted/internal network. Lite goes from zero-dependency (`subprocess`) to
   real pod-per-task (`k3d`) on the same binary, with a durable embedded Postgres.
-- **Choose Production** when you need **Kubernetes at scale**, a team
+- **Choose Pro** when you need **Kubernetes at scale**, a team
   (SSO/OIDC + RBAC + multi-tenant), high XCom throughput, external managed
   datastores, and the GitOps deploy flow — delivered as the **Helm chart**.
 
 Rule of thumb: if it fits on one host and the network is trusted, Lite is enough;
-when you need a cluster, multiple users, or scale, that's Production.
+when you need a cluster, multiple users, or scale, that's Pro.
 
 Because both editions share the DAG format, the engine, and the UI, DAGs authored
-on Lite will carry straight over to Production when it ships — but there is
+on Lite will carry straight over to Pro when it ships — but there is
 **nothing to migrate today** (nobody is in production on Lite). The migration path
-will be documented when Production is available.
+will be documented when Pro is available.

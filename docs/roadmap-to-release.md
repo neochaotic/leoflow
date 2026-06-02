@@ -9,11 +9,11 @@ This consolidates the open work after the audit + reverse analysis
 
 ## Release phases — Alpha · Beta · GA
 
-The product **proves itself in Dev first**; Production matures behind it.
+The product **proves itself in Dev first**; Pro matures behind it.
 
 ```mermaid
 flowchart LR
-  A["Alpha — Dev<br/>(now)"] --> B["Beta — Production track"] --> G["GA — hardened"]
+  A["Alpha — Dev<br/>(now)"] --> B["Beta — Pro track"] --> G["GA — hardened"]
 ```
 
 ### 🟡 Alpha — Developer experience (current focus)
@@ -24,7 +24,7 @@ A data engineer can author, run, and iterate on DAGs locally with confidence.
 - Documentation site, examples, the `dags/` convention.
 - **Exit:** the dev loop is reliable end-to-end; the authoring model is documented and tested.
 
-### 🟠 Beta — Production track (next)
+### 🟠 Beta — Pro track (next)
 Run real workloads on a real cluster, deployed via CI.
 
 - Publish images + binaries: `leoflow-server`/`-agent`/`-migrate` + per-OS CLI (#48, #61).

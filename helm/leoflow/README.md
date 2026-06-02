@@ -224,4 +224,9 @@ differ from what's committed.
 | serviceAccount.create | bool | `true` | Create a dedicated ServiceAccount for the leoflow-server. Set `false` only if you bring your own via `name`. |
 | serviceAccount.name | string | `""` | Override the ServiceAccount name. Defaults to the chart fullname when empty. |
 | taskNamespace | string | `"leoflow"` | Namespace where the control plane creates task pods. MUST match the namespace the server expects (server code currently targets `leoflow`). The chart grants the control plane RBAC to manage pods here; if you override this, the RBAC follows but the server still looks at `leoflow`. |
+| taskSecret.mountPath | string | `"/etc/leoflow/secrets"` | Read-only mount path in the task pod. A connection references files here, e.g. `/etc/leoflow/secrets/key.json`. |
+| taskSecret.name | string | `""` | Name of an existing Kubernetes Secret to mount into task pods. Empty = none. |
+| taskServiceAccount.annotations | object | `{}` | Annotations. GKE Workload Identity: `iam.gke.io/gcp-service-account: GSA@PROJECT.iam.gserviceaccount.com`. EKS IRSA: `eks.amazonaws.com/role-arn: ...`. |
+| taskServiceAccount.create | bool | `false` | Create a ServiceAccount in taskNamespace for task pods to run as. |
+| taskServiceAccount.name | string | `"leoflow-task"` | Name of the task ServiceAccount (use this as `execution.service_account`). |
 | tolerations | list | `[]` | Pod tolerations (standard K8s — allow scheduling on tainted nodes). |

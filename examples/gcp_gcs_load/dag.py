@@ -47,7 +47,8 @@ def _field(extra: dict, name: str):
 def gcp_credentials(conn_id: str = GCP_CONN):
     """Resolve GCP credentials from a Leoflow Connection. Returns (creds, project, mode).
 
-    Resolution (first match wins): keyfile_dict -> key_path -> ADC (keyless).
+    Resolution (first match wins): keyfile_dict -> key_path (K8s Secret) ->
+    key_secret_name (GCP Secret Manager) -> ADC (keyless / Workload Identity).
     """
     import google.auth
     from google.oauth2 import service_account
@@ -67,7 +68,23 @@ def gcp_credentials(conn_id: str = GCP_CONN):
         return creds, project or info.get("project_id"), "key (keyfile_dict)"
     if key_path:
         creds = service_account.Credentials.from_service_account_file(key_path, scopes=scopes)
-        return creds, project, "key (key_path)"
+        return creds, project, "key (key_path / K8s Secret)"
+
+    key_secret_name = _field(extra, "key_secret_name")
+    if key_secret_name:
+        # Fetch the key from GCP Secret Manager using ADC (so the task still needs
+        # an ambient identity to *read* the secret — typically Workload Identity).
+        from google.cloud import secretmanager
+
+        sm = secretmanager.SecretManagerServiceClient()
+        name = key_secret_name
+        if not name.startswith("projects/"):
+            name = f"projects/{project}/secrets/{name}/versions/latest"
+        payload = sm.access_secret_version(name=name).payload.data.decode("utf-8")
+        info = json.loads(payload)
+        creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+        return creds, project or info.get("project_id"), "key (Secret Manager)"
+
     creds, adc_project = google.auth.default(scopes=scopes)
     return creds, project or adc_project, "keyless (ADC / Workload Identity)"
 

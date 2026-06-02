@@ -8,6 +8,7 @@ python_version: "3.11"
 dependencies:
   - google-auth==2.35.0
   - google-cloud-storage==2.18.2
+  - google-cloud-secret-manager==2.20.2
 
 # Keyless on Pro/GKE: run the task pod as a Kubernetes ServiceAccount bound to a
 # GCP service account via Workload Identity, so credentials come from the

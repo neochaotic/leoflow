@@ -816,6 +816,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	podExec.SetStagingStore(store) // record per-run staging volumes in the metadatabase (ADR 0022)
 	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
 	dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
+	dispatcher.SetTaskSecret(cfg.Executor.TaskSecretName, cfg.Executor.TaskSecretMountPath)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 	sched.SetDispatcher(wrapBuffered(dispatcher, store, logger, metrics, cfg.Scheduler.Dispatch)) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	startReconciler(ctx, cs, execStore, logger)

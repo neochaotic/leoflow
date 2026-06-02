@@ -24,17 +24,18 @@ form is also accepted.
 
 | Field | Meaning |
 |---|---|
-| `keyfile_dict` | Service-account JSON, inline (key mode). **Encrypted at rest** (ADR 0019). |
-| `key_path` | Path to a service-account JSON file mounted in the task (key mode). |
+| `keyfile_dict` | Service-account JSON, inline (key in the connection). **Encrypted at rest** (ADR 0019). Discouraged. |
+| `key_path` | Path to a service-account JSON **file mounted from a Kubernetes Secret** (the chart's `taskSecret`). |
+| `key_secret_name` | Name (or full resource path) of a **GCP Secret Manager** secret holding the JSON key; fetched in the task via ADC. |
 | `project` / `project_id` | GCP project (optional). |
 | `scopes` / `scope` | OAuth scopes — a list **or** a comma-separated string. |
 | `num_retries` | Pass-through to your GCP client (optional). |
 
 **Resolution order (first match wins):** `keyfile_dict` → `key_path` →
-**ADC (keyless)**. Leave all key fields empty for keyless.
+`key_secret_name` → **ADC (keyless)**. Leave all key fields empty for keyless.
 
-Not handled in v1: `key_secret_name`, `key_secret_project_id`,
-`credential_config_file`, `impersonation_chain`, `quota_project_id`.
+Not handled in v1: `key_secret_project_id`, `credential_config_file`,
+`impersonation_chain`, `quota_project_id`.
 
 ## Auth modes
 
@@ -48,16 +49,36 @@ No key in the Connection. Credentials come from Application Default Credentials:
   or `GOOGLE_APPLICATION_CREDENTIALS`).
 - **Lite (k3d):** no metadata server → keyless unavailable; use key mode.
 
-### Key (service-account JSON)
-Paste the SA JSON into Extra as `keyfile_dict` (encrypted at rest), or point
-`key_path` at a file mounted in the task. Works on every executor.
+### Key from a Kubernetes Secret (`key_path`) — preferred when not keyless
+The key lives in a **Kubernetes Secret**, mounted read-only into every task pod;
+the connection only references the file by `key_path`. The key never enters
+Leoflow's DB/API/UI. Wire it via the chart:
+
+```bash
+kubectl -n leoflow create secret generic gcp-sa-key --from-file=key.json=/path/to/key.json
+helm upgrade leoflow ./helm/leoflow -n leoflow --reuse-values \
+  --set taskSecret.name=gcp-sa-key --set taskSecret.mountPath=/etc/leoflow/secrets
+```
+Then set the connection's `key_path` to `/etc/leoflow/secrets/key.json`.
+
+### Key from GCP Secret Manager (`key_secret_name`)
+The connection references a Secret Manager secret name; the task fetches it at
+runtime via ADC (so the task still needs an ambient identity — typically
+Workload Identity — to *read* the secret). Grant the task's GSA
+`roles/secretmanager.secretAccessor`.
+
+### Key inline (`keyfile_dict`) — discouraged
+The SA JSON in the connection's Extra (encrypted at rest). Convenient for
+dev/low-criticality; **not** recommended (see Security below).
 
 ## Lite vs Pro
 
 | | Lite (subprocess) | Lite (k3d) | Pro (GKE) |
 |---|---|---|---|
 | Keyless (ADC) | ✅ host ADC | ❌ (no metadata server) | ✅ Workload Identity |
-| Key (`keyfile_dict` / `key_path`) | ✅ | ✅ | ✅ |
+| `key_path` (K8s Secret) | ✅ (mount a file) | ✅ (k3d Secret) | ✅ (chart `taskSecret`) |
+| `key_secret_name` (Secret Manager) | ✅ (needs ADC) | ⚠️ needs ADC | ✅ (WI + secretAccessor) |
+| `keyfile_dict` (inline) | ✅ | ✅ | ✅ |
 
 ## Security — Leoflow is not a key manager
 
@@ -67,9 +88,11 @@ does not aspire to store cloud keys (see [ADR 0035](../adr/0035-cloud-connector-
 In order of preference:
 
 1. **Keyless (Workload Identity / ADC)** — recommended. No key anywhere.
-2. **`key_path` + a mounted Kubernetes Secret** — the key lives in the cluster's
-   secret store; the connection holds only the path. The key never enters
-   Leoflow's DB/API/UI.
+2. **Reference a platform-managed secret** — the key lives in the cluster's or
+   cloud's secret store; the connection holds only a reference. The key never
+   enters Leoflow's DB/API/UI:
+   - **`key_path` + a mounted Kubernetes Secret** (chart `taskSecret`);
+   - **`key_secret_name` + GCP Secret Manager** (task fetches via ADC).
 3. **`keyfile_dict`** — **discouraged.** It stores the key inside the connection
    (encrypted at rest with `LEOFLOW_SECRET_KEY`, ADR 0019; delivered only over
    the TLS agent channel, ADR 0021). It is the cloud-key analog of how

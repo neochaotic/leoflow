@@ -128,6 +128,16 @@ spec:
             - name: LEOFLOW_EXECUTOR_AGENT_TLS_CA_CONFIGMAP
               value: {{ .Values.agentTLS.caConfigMap | quote }}
             {{- end }}
+            {{- if .Values.taskSecret.name }}
+            # Mount a Kubernetes Secret read-only into every task pod so a task can
+            # read a credential (e.g. a GCP service-account key referenced by a
+            # connection's key_path) from the cluster's secret store — Leoflow
+            # never stores the key itself (ADR 0035).
+            - name: LEOFLOW_EXECUTOR_TASK_SECRET_NAME
+              value: {{ .Values.taskSecret.name | quote }}
+            - name: LEOFLOW_EXECUTOR_TASK_SECRET_MOUNT_PATH
+              value: {{ .Values.taskSecret.mountPath | quote }}
+            {{- end }}
             - name: LEOFLOW_DATABASE_URL
               valueFrom:
                 secretKeyRef:

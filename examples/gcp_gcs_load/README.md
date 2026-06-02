@@ -40,15 +40,17 @@ No key in the Connection — credentials come from the ambient identity.
 ### Pro (GKE — Workload Identity)
 1. Create a GCP service account (GSA) with the needed roles (e.g.
    `roles/storage.objectAdmin` on the bucket).
-2. Bind the task pod's Kubernetes SA (KSA) to the GSA:
+2. Let the chart create + annotate the task KSA (cloud-agnostic knob):
    ```bash
+   helm upgrade leoflow ./helm/leoflow -n leoflow --reuse-values \
+     --set taskServiceAccount.create=true --set taskServiceAccount.name=leoflow-gcs \
+     --set 'taskServiceAccount.annotations.iam\.gke\.io/gcp-service-account=GSA@PROJECT.iam.gserviceaccount.com'
    gcloud iam service-accounts add-iam-policy-binding GSA@PROJECT.iam.gserviceaccount.com \
      --role roles/iam.workloadIdentityUser \
-     --member "serviceAccount:PROJECT.svc.id.goog[leoflow/KSA]"
-   kubectl -n leoflow annotate serviceaccount KSA \
-     iam.gke.io/gcp-service-account=GSA@PROJECT.iam.gserviceaccount.com
+     --member "serviceAccount:PROJECT.svc.id.goog[leoflow/leoflow-gcs]"
    ```
-   (The chart's task-ServiceAccount knob automates this — see the Helm values.)
+   Then set `execution.service_account: leoflow-gcs` in the DAG's `leoflow.yaml`
+   (already done in this example).
 3. Create the Connection `google_cloud_default` with **empty key fields** (just
    `project`/`scopes` if you want). Run the DAG — no key touches the cluster.
 
@@ -75,6 +77,27 @@ server, so keyless isn't available there — use key mode under k3d.)
    ```
    (The JSON is encrypted at rest — ADR 0019.)
 3. Run the DAG. Works on Lite (subprocess or k3d) and Pro alike.
+
+## Key from a Kubernetes Secret (`key_path`) — preferred when not keyless
+
+The key stays in the cluster's secret store; Leoflow only mounts it.
+
+```bash
+kubectl -n leoflow create secret generic gcp-sa-key --from-file=key.json=/path/to/key.json
+helm upgrade leoflow ./helm/leoflow -n leoflow --reuse-values \
+  --set taskSecret.name=gcp-sa-key --set taskSecret.mountPath=/etc/leoflow/secrets
+```
+Then the Connection's Extra: `{ "key_path": "/etc/leoflow/secrets/key.json", "project": "my-project" }`.
+
+## Key from GCP Secret Manager (`key_secret_name`)
+
+Store the JSON key in Secret Manager; the task fetches it via ADC (so the task's
+identity — typically Workload Identity — needs `roles/secretmanager.secretAccessor`).
+
+```bash
+gcloud secrets create leoflow-gcp-key --data-file=/path/to/key.json
+```
+Then the Connection's Extra: `{ "key_secret_name": "leoflow-gcp-key", "project": "my-project" }`.
 
 ## Run + verify
 

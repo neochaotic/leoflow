@@ -43,10 +43,20 @@ spec:
     metadata:
       labels:
         {{- include "leoflow.selectorLabels" . | nindent 8 }}
-      {{- with .Values.podAnnotations }}
       annotations:
+        # #316: tie the podTemplate hash to the rendered Secret so `helm
+        # upgrade` rolls the pod whenever a Secret-backed value
+        # (database.url, redis.url, auth.jwtSecret, secretKey,
+        # bootstrap.password) changes. Without this annotation the Secret
+        # is updated but K8s leaves the running pod on the OLD values
+        # until a manual `kubectl rollout restart`. Note: this only covers
+        # the chart-managed Secret; credentials wired via
+        # `*.existingSecret` are outside the chart's visibility and still
+        # require a manual restart on rotation (callout in chart README).
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "leoflow.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -146,7 +148,20 @@ func tiSummariesHandler(reader TaskSummaryReader) gin.HandlerFunc {
 		}
 		byRun, latest, count := aggregateSummaries(tis)
 
-		etag := fmt.Sprintf(`W/"%d-%d"`, count, latest.UnixNano())
+		// #289: mark-state PATCH changes a TI's state without moving its
+		// started/ended timestamps, so the original `count + latest` ETag
+		// was identical before and after the mutation and the SPA's
+		// TanStack Query kept serving the cached body. Fold a fingerprint
+		// of every (run, task, state) into the ETag so any state change
+		// invalidates it. Sort for stability (map iteration is random).
+		fingerprints := make([]string, 0, len(tis))
+		for _, ti := range tis {
+			fingerprints = append(fingerprints, ti.RunID+":"+ti.TaskID+":"+string(ti.State))
+		}
+		sort.Strings(fingerprints)
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(strings.Join(fingerprints, "|")))
+		etag := fmt.Sprintf(`W/"%d-%d-%x"`, count, latest.UnixNano(), h.Sum64())
 		c.Header("ETag", etag)
 		c.Header("Content-Type", "application/x-ndjson")
 		if match := c.GetHeader("If-None-Match"); match == etag {

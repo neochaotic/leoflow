@@ -149,8 +149,8 @@ differ from what's committed.
 | database.maxOpenConns | int | `20` | Max concurrent open DB connections (Postgres-side load gate). Increase for high-throughput Pro deployments. |
 | database.url | string | `""` | External Postgres DSN. Required for Pro (the embedded datastore is Lite-only); the chart `fail`s the install if neither this nor `existingSecret` is set. Example: `postgres://user:pass@host:5432/leoflow?sslmode=disable`. |
 | image.pullPolicy | string | `"IfNotPresent"` |  |
-| image.repository | string | `"ghcr.io/neochaotic/leoflow-server"` | Control-plane image. Published by `release.yaml` on every tag, signed with cosign. |
-| image.tag | string | `""` | Image tag. Defaults to `.Chart.appVersion` when empty; pre-alpha installs should pin `--set image.tag=v0.0.1-prealpha.N`. |
+| image.repository | string | `"ghcr.io/neochaotic/leoflow-server"` | Control-plane image. Published by GoReleaser on every tag, signed with cosign. |
+| image.tag | string | `""` | Image tag. Defaults to `.Chart.appVersion` when empty; pre-alpha installs should pin `--set image.tag=v0.0.1-prealpha.N` (the `v`-prefix and no-`v` forms are both published and resolve to the same digest, so either works). |
 | imagePullSecrets | list | `[]` |  |
 | ingress.annotations | object | `{}` | Ingress annotations (controller-specific: rewrites, TLS, auth, etc.). |
 | ingress.className | string | `""` | Ingress class name (e.g. `nginx`). Leave empty to use the cluster default. |
@@ -169,7 +169,7 @@ differ from what's committed.
 | migrations.enabled | bool | `true` |  |
 | migrations.image.pullPolicy | string | `"IfNotPresent"` |  |
 | migrations.image.repository | string | `"ghcr.io/neochaotic/leoflow-migrate"` | leoflow-migrate image bundling Leoflow SQL migrations on top of `migrate/migrate`. Published per release by `release.yaml`, signed with cosign, multi-arch (amd64 + arm64). |
-| migrations.image.tag | string | `""` | Migration image tag. Defaults to `.Chart.appVersion` when empty — currently lags the published prealpha cadence, so PIN EXPLICITLY: `--set migrations.image.tag=v0.0.1-prealpha.18` (or whatever tag matches your server image). |
+| migrations.image.tag | string | `""` | Migration image tag. Defaults to `.Chart.appVersion` when empty. Pin to the same tag as `image.tag` (both server and migrate publish both `v`-prefix and no-`v` forms — use whichever convention you prefer, they resolve to the same digest): `--set migrations.image.tag=v0.0.1-prealpha.N`. |
 | migrations.path | string | `"/migrations"` | Path inside the migrate image where the SQL files live. Must match the COPY destination in `deploy/Dockerfile.migrate`. |
 | migrations.podSecurityContext.fsGroup | int | `65532` |  |
 | migrations.podSecurityContext.runAsGroup | int | `65532` |  |

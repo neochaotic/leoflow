@@ -1,9 +1,9 @@
 # Default values for the Leoflow control plane chart.
 
 image:
-  # -- Control-plane image. Published by `release.yaml` on every tag, signed with cosign.
+  # -- Control-plane image. Published by GoReleaser on every tag, signed with cosign.
   repository: ghcr.io/neochaotic/leoflow-server
-  # -- Image tag. Defaults to `.Chart.appVersion` when empty; pre-alpha installs should pin `--set image.tag=v0.0.1-prealpha.N`.
+  # -- Image tag. Defaults to `.Chart.appVersion` when empty; pre-alpha installs should pin `--set image.tag=v0.0.1-prealpha.N` (the `v`-prefix and no-`v` forms are both published and resolve to the same digest, so either works).
   tag: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
@@ -127,7 +127,7 @@ migrations:
   image:
     # -- leoflow-migrate image bundling Leoflow SQL migrations on top of `migrate/migrate`. Published per release by `release.yaml`, signed with cosign, multi-arch (amd64 + arm64).
     repository: ghcr.io/neochaotic/leoflow-migrate
-    # -- Migration image tag. Defaults to `.Chart.appVersion` when empty — currently lags the published prealpha cadence, so PIN EXPLICITLY: `--set migrations.image.tag=v0.0.1-prealpha.18` (or whatever tag matches your server image).
+    # -- Migration image tag. Defaults to `.Chart.appVersion` when empty. Pin to the same tag as `image.tag` (both server and migrate publish both `v`-prefix and no-`v` forms — use whichever convention you prefer, they resolve to the same digest): `--set migrations.image.tag=v0.0.1-prealpha.N`.
     tag: ""
     pullPolicy: IfNotPresent
   # -- Path inside the migrate image where the SQL files live. Must match the COPY destination in `deploy/Dockerfile.migrate`.

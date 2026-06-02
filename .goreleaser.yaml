@@ -88,12 +88,19 @@ signs:
 # Control-plane container image (the binary embeds the UI). Built per arch and
 # joined into a multi-arch manifest.
 dockers:
+  # Each per-arch image gets BOTH tag forms — `{{ .Version }}` (no `v`, the
+  # GoReleaser default) AND `v{{ .Version }}` (the raw git tag). The migrate
+  # workflow already publishes both forms via docker/metadata-action; keeping
+  # server symmetric means a chart `--set image.tag=<X>` pin works no matter
+  # which convention the operator follows. Both shapes are signed by cosign
+  # below (cosign sign by digest, so duplicate tags share signatures).
   - id: server-amd64
     ids: [leoflow-server]
     goarch: amd64
     dockerfile: deploy/Dockerfile.server.release
     image_templates:
       - "ghcr.io/neochaotic/leoflow-server:{{ .Version }}-amd64"
+      - "ghcr.io/neochaotic/leoflow-server:v{{ .Version }}-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.version={{ .Version }}"
@@ -105,6 +112,7 @@ dockers:
     dockerfile: deploy/Dockerfile.server.release
     image_templates:
       - "ghcr.io/neochaotic/leoflow-server:{{ .Version }}-arm64"
+      - "ghcr.io/neochaotic/leoflow-server:v{{ .Version }}-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.version={{ .Version }}"
@@ -116,6 +124,12 @@ docker_manifests:
     image_templates:
       - "ghcr.io/neochaotic/leoflow-server:{{ .Version }}-amd64"
       - "ghcr.io/neochaotic/leoflow-server:{{ .Version }}-arm64"
+  # `v`-prefixed manifest pointing at the same per-arch images. Pulls of
+  # `:v0.0.1-prealpha.N` and `:0.0.1-prealpha.N` resolve to identical digests.
+  - name_template: "ghcr.io/neochaotic/leoflow-server:v{{ .Version }}"
+    image_templates:
+      - "ghcr.io/neochaotic/leoflow-server:v{{ .Version }}-amd64"
+      - "ghcr.io/neochaotic/leoflow-server:v{{ .Version }}-arm64"
 
 release:
   github:

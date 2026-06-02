@@ -112,11 +112,13 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/leoflow-migrate
-          # ref,event=tag stamps the tag verbatim (v0.0.1-prealpha.18); the
+          # ref,event=tag stamps the tag verbatim (v0.0.1-prealpha.N); the
           # semver pattern strips the leading `v` so users pinning by version
-          # (0.0.1-prealpha.18) work too. No `:latest` for pre-alpha tags —
-          # GoReleaser doesn't push `:latest` for leoflow-server either, so
-          # the two images stay in sync.
+          # (0.0.1-prealpha.N) work too. Server publishes BOTH forms from
+          # GoReleaser (one docker build, two manifest names), so any operator
+          # pin against either convention resolves to the same digest. No
+          # `:latest` for pre-alpha tags — GoReleaser doesn't push `:latest`
+          # for leoflow-server either, so the two images stay in sync.
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}

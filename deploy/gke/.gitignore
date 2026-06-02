@@ -1,0 +1,16 @@
+# Never commit anything environment-specific or sensitive from here.
+*.env
+*.env.*
+.env
+kubeconfig*
+*.kubeconfig
+*.tfstate
+*.tfstate.*
+*-secret.yaml
+*-secrets.yaml
+secret*.yaml
+*.key
+*.pem
+*.crt
+values.local.yaml
+*.local.yaml

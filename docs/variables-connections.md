@@ -67,4 +67,7 @@ def use_secrets():
 
 Scope is global (per tenant). Delivery requires a secure agent channel (TLS, #58)
 or, in dev, the explicit `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true` (set by
-`leoflow lite`). See [ADR 0021](adr/0021-exposing-variables-connections-to-pods.md).
+`leoflow lite`). Pro on Kubernetes (including GKE) **requires** TLS — the chart
+ships `agentTLS.enabled: true` by default and the server refuses the insecure
+bypass; the plaintext escape hatch is Lite-only, for local iteration. See
+[ADR 0021](adr/0021-exposing-variables-connections-to-pods.md).

@@ -28,7 +28,11 @@ A data engineer can author, run, and iterate on DAGs locally with confidence.
 Run real workloads on a real cluster, deployed via CI.
 
 - Publish images + binaries: `leoflow-server`/`-agent`/`-migrate` + per-OS CLI (#48, #61).
-- TLS on the agent channel (#58); keyless cloud auth / workload identity (#56).
+- TLS on the agent channel (#58); keyless cloud auth / workload identity (#56)
+  — control-plane → cloud-provider authentication.
+- GCP connector (#77): a user-facing `google_cloud_platform` Connection
+  supporting both a service-account key and keyless Workload Identity (builds
+  on #56).
 - Real-cluster verification of staging + pod-path on GKE (#57); least-privilege secret scoping (#59).
 - Self-contained dev: migrations via library (#60, done), single binary (#61), "runs liso" embedded deps (#62).
 - **Exit:** Helm install + CI deploy on a real cluster with auth + TLS.

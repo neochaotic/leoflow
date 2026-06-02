@@ -175,4 +175,4 @@ rm -rf ~/leoflow               # what `--purge` adds (your workspace)
 
 - [Quickstart](quickstart.md) — run your first DAG.
 - [The `leoflow lite` workflow](dev-workflow.md) — the hot-reload inner loop.
-- [Editions](editions.md) — Lite (now) vs Pro (coming).
+- [Editions](editions.md) — Lite (now) vs Pro (chart-installable).

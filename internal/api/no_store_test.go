@@ -68,3 +68,38 @@ func TestNoStoreOnVolatileRoutes(t *testing.T) {
 		})
 	}
 }
+
+// TestNoTrailingSlashRedirectOnVolatileRoutes pins #291: gin's auto trailing-
+// slash redirect writes a 301 without the Cache-Control header our middleware
+// stamps on every /api/v2/* and /ui/* response. Browsers can cache the bare
+// 301 and short-circuit the next request, so the destination 200 (which DOES
+// carry no-store) never even fires. The clean answer is to disable the
+// auto-redirect entirely on the server engine — routes match exactly.
+//
+// Symptom that drove the discovery (2026-06-01): mark-state PATCH succeeded
+// in the DB but the user's task-instance detail panel did not update without
+// a manual page reload.
+func TestNoTrailingSlashRedirectOnVolatileRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.RedirectTrailingSlash = false // disable the 301 that bypassed the middleware
+	r.Use(NoStoreOnVolatileRoutes())
+	// Mirror the production registration: bare path AND *action wildcard, both
+	// pointing at the same handler. Without the bare-path route, the bare URL
+	// 404s instead of redirecting (default would 301), and without the redirect
+	// the request never reaches the handler at all.
+	handler := func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"state": "failed"}) }
+	r.GET("/api/v2/dags/:dag_id/dagRuns/:run_id/taskInstances/:task_id", handler)
+	r.GET("/api/v2/dags/:dag_id/dagRuns/:run_id/taskInstances/:task_id/*action", handler)
+
+	// Bare path (no trailing slash) must return 200 + Cache-Control, NOT a 301.
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/api/v2/dags/hello/dagRuns/manual__X/taskInstances/hello", http.NoBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (a 301 means the redirect is back and the no-store hop is missing)", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store, must-revalidate" {
+		t.Errorf("Cache-Control = %q, want no-store, must-revalidate", got)
+	}
+}

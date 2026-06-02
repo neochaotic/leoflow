@@ -899,9 +899,19 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 			RequirePermission("read", "task_instance"), listTaskInstancesHandler(deps.Tasks, deps.DagRuns, deps.DagVersions))
 		// The "logs/:try_number" and ":map_index" routes share the :task_id
 		// parent; gin cannot mix a static and a wildcard child there, so one
-		// catch-all dispatches both (single task instance vs its logs).
+		// catch-all dispatches both (single task instance vs its logs). The
+		// bare-path twin is registered next to it (#291): the Airflow SPA
+		// fetches `/taskInstances/:task_id` (no trailing slash) and gin's
+		// auto-redirect would otherwise emit a 301 with no Cache-Control
+		// header, leaving a cacheable hop the browser can short-circuit. With
+		// RedirectTrailingSlash disabled in server.go and both routes
+		// registered, every hit reaches the handler through the no-store
+		// middleware.
+		actionH := taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms, deps.DagRuns, deps.DagVersions, deps.Specs)
+		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id",
+			RequirePermission("read", "task_instance"), actionH)
 		r.GET("/api/v2/dags/:dag_id/dagRuns/:dag_run_id/taskInstances/:task_id/*action",
-			RequirePermission("read", "task_instance"), taskInstanceActionHandler(deps.Tasks, deps.Logs, deps.Xcoms, deps.DagRuns, deps.DagVersions, deps.Specs))
+			RequirePermission("read", "task_instance"), actionH)
 		// Mark-success/failed: PATCH the task instance. The UI hits both the bare
 		// path and one carrying optional /{map_index} and /dry_run segments.
 		patchTI := patchTaskInstanceHandler(deps.Tasks, deps.DagRuns, deps.DagVersions, deps.Audit)

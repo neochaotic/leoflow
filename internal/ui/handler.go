@@ -18,6 +18,28 @@ import (
 // request time, mirroring Airflow's TemplateResponse.
 const baseHrefPlaceholder = "{{ backend_server_base_url }}"
 
+// clipboardFallbackHTML defines navigator.clipboard.writeText when the native
+// Clipboard API is unavailable. The API is gated behind a secure context, so
+// users hitting Lite over a plain http://<lan-ip>:8080 origin (a real Lima /
+// dogfood scenario) see the SPA's copy buttons silently fail (#242). The
+// fallback uses the legacy document.execCommand('copy') + offscreen textarea
+// trick. On https / localhost the native API is present and the polyfill is
+// a no-op, so it is always injected.
+const clipboardFallbackHTML = `<script>` +
+	`(function(){` +
+	`if(window.isSecureContext&&navigator.clipboard&&navigator.clipboard.writeText)return;` +
+	`var w=function(t){return new Promise(function(r,e){` +
+	`var ta=document.createElement('textarea');ta.value=t;` +
+	`ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';` +
+	`document.body.appendChild(ta);ta.select();` +
+	`try{document.execCommand('copy');r()}catch(x){e(x)}` +
+	`finally{document.body.removeChild(ta)}` +
+	`})};` +
+	`if(!navigator.clipboard)navigator.clipboard={writeText:w};` +
+	`else if(!navigator.clipboard.writeText)navigator.clipboard.writeText=w;` +
+	`})();` +
+	`</script>`
+
 // liteBannerHTML is a discreet, neutral-gray "LITE" pill fixed at top-center,
 // injected into the served shell in the Lite edition so the local environment is
 // never mistaken for production. The slate gray (with white text) reads well on
@@ -216,6 +238,9 @@ func (s *Server) Index(w http.ResponseWriter, basePath string) {
 		title = "Leoflow"
 	}
 	body = strings.ReplaceAll(body, "<title>Airflow</title>", "<title>"+title+"</title>")
+	// Always inject the clipboard polyfill — no-op on https / localhost, the
+	// only place it matters is plain http://<lan-ip>:port (#242).
+	body = injectBeforeBodyEnd(body, clipboardFallbackHTML)
 	if s.liteBanner {
 		body = injectBeforeBodyEnd(body, liteBannerHTML)
 	}

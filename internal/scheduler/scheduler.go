@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -10,6 +11,21 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
+
+// logSchedulerError logs an error from the scheduler loop or one of its
+// reapers, downgrading to WARN when the error wraps context.Canceled. That
+// cancellation is the expected fan-out of a graceful leader step-down (the
+// scheduler cancels its run-context when it loses the Postgres advisory lock,
+// and every in-flight loop returns "context canceled" milliseconds later).
+// Surfacing those as ERROR pages on a non-event (#311). DeadlineExceeded is
+// kept at ERROR — a deadline IS a real stall worth seeing.
+func logSchedulerError(logger *slog.Logger, msg string, err error) {
+	if errors.Is(err, context.Canceled) {
+		logger.Warn(msg+" canceled (likely leader step-down)", "error", err)
+		return
+	}
+	logger.Error(msg, "error", err)
+}
 
 // RunState is the scheduler's snapshot of a dag run: its topology and the
 // current state of each task.
@@ -250,7 +266,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 	stepCtx, cancel := context.WithTimeout(ctx, s.stepTimeout)
 	defer cancel()
 	if err := s.Step(stepCtx); err != nil {
-		s.logger.Error("scheduler step", "error", err)
+		logSchedulerError(s.logger, "scheduler step", err)
 	}
 }
 
@@ -326,12 +342,12 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	}
 	runReaper := newOrphanReaper(s.store, s.logger, s.orphanThreshold, s.recorder)
 	if err := runReaper.run(ctx); err != nil {
-		s.logger.Error("orphan reaper", "error", err)
+		logSchedulerError(s.logger, "orphan reaper", err)
 		s.record("orphan_list_error")
 	}
 	tiReaper := newAgentLostReaper(s.store, s.logger, s.agentLostThreshold, s.recorder)
 	if err := tiReaper.run(ctx); err != nil {
-		s.logger.Error("agent-lost reaper", "error", err)
+		logSchedulerError(s.logger, "agent-lost reaper", err)
 		s.record("agent_lost_list_error")
 	}
 	// The dispatch-lost reaper (#202) catches TIs left in `queued` after a
@@ -342,7 +358,7 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	// chain once the threshold elapses.
 	dispatchReaper := newDispatchLostReaper(s.store, s.logger, s.dispatchLostThreshold, s.recorder)
 	if err := dispatchReaper.run(ctx); err != nil {
-		s.logger.Error("dispatch-lost reaper", "error", err)
+		logSchedulerError(s.logger, "dispatch-lost reaper", err)
 		s.record("dispatch_lost_list_error")
 	}
 }

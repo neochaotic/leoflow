@@ -164,6 +164,87 @@ func TestObservabilityHookCountsCommandFailures(t *testing.T) {
 	}
 }
 
+// TestObservabilityHookSilentDuringShutdown pins the #311 tripwire ported
+// to Redis: once the stop function returned by AttachRedisObservability has
+// been called, every hook becomes a silent passthrough. Without this guard,
+// the cascade of ctx-canceled / client_closed errors that fan out the moment
+// rd.Close() runs spikes leoflow_redis_command_failures_total{reason="canceled"}
+// (false alarm — operators paged on a clean shutdown). Furo 5 from the joint
+// PG/Redis solution review.
+func TestObservabilityHookSilentDuringShutdown(t *testing.T) {
+	fm := newFakeRedisMetrics()
+	hook := newRedisObservabilityHook(fm)
+
+	// Sanity: a failure BEFORE shutdown is recorded.
+	failing := hook.ProcessHook(func(context.Context, redis.Cmder) error {
+		return context.Canceled
+	})
+	if err := failing(context.Background(), redis.NewCmd(context.Background(), "GET", "k")); err == nil {
+		t.Fatal("expected error to propagate")
+	}
+	if got := fm.cmdCount("canceled"); got != 1 {
+		t.Fatalf("pre-shutdown failure should count; canceled = %d", got)
+	}
+
+	// Trip the shutdown window.
+	hook.markShutdown()
+
+	// Same failure shape, post-shutdown: must NOT increment.
+	if err := failing(context.Background(), redis.NewCmd(context.Background(), "GET", "k")); err == nil {
+		t.Fatal("expected error to propagate during shutdown")
+	}
+	if got := fm.cmdCount("canceled"); got != 1 {
+		t.Errorf("shutdown window must silence the counter; canceled = %d (want still 1)", got)
+	}
+
+	// Dial during shutdown also silent — no extra latency sample, no failure count.
+	beforeSamples := len(fm.dialDurations)
+	beforeFailures := fm.dialCount("connection_refused")
+	dialing := hook.DialHook(func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("dial tcp 127.0.0.1:6379: connect: connection refused")
+	})
+	if _, err := dialing(context.Background(), "tcp", "redis:6379"); err == nil {
+		t.Fatal("expected error to propagate during shutdown")
+	}
+	if got := len(fm.dialDurations); got != beforeSamples {
+		t.Errorf("shutdown dial recorded a duration sample (%d → %d)", beforeSamples, got)
+	}
+	if got := fm.dialCount("connection_refused"); got != beforeFailures {
+		t.Errorf("shutdown dial bumped the failure counter (%d → %d)", beforeFailures, got)
+	}
+}
+
+// TestStopFunctionMarksShutdownBeforeClose pins the cleanup ordering: the
+// stop function MUST flip the tripwire before any teardown noise reaches the
+// hook. We can't run the real Close() path here (no live Redis), but we can
+// assert that after stop() runs the hook ignores subsequent failures —
+// proving the order is "mark first" rather than just "cancel scraper".
+func TestStopFunctionMarksShutdownBeforeClose(t *testing.T) {
+	fm := newFakeRedisMetrics()
+	rd := &Redis{Client: redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})}
+	defer rd.Close()
+	stop := AttachRedisObservability(context.Background(), rd, fm, time.Hour)
+
+	stop()
+
+	// AddHook attached our hook; retrieve it via a fresh execution.
+	// Find the hook on the client.
+	// We can't directly read it back from the client, but we can trigger a
+	// failure on a fresh command and assert it's NOT counted.
+	// (Hook order: our hook → built-in. A no-op return path means we counted
+	// nothing.)
+	if got := len(fm.cmdFailures); got != 0 {
+		t.Fatalf("no commands ran yet; cmdFailures should be empty, got %v", fm.cmdFailures)
+	}
+
+	// Run a doomed command on the (offline) client. It will fail, but the
+	// hook has been tripped to silent — so no counter increment.
+	_ = rd.Client.Get(context.Background(), "any-key").Err()
+	if got := fm.cmdFailures["canceled"] + fm.cmdFailures["other"] + fm.cmdFailures["connection_refused"]; got != 0 {
+		t.Errorf("post-stop command incremented the counter: %v", fm.cmdFailures)
+	}
+}
+
 // TestAttachRedisObservabilityNilSafe pins the Lite contract: with no Redis
 // configured selectDatastore returns rd=nil, and the cleanup chain MUST tolerate
 // that without panic. Similarly a nil metrics target is a no-op (defensive — the

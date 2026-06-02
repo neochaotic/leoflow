@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -25,18 +26,42 @@ type RedisMetrics interface {
 // observabilityHook implements redis.Hook. It runs *around* every command and
 // every dial, classifying any error into one of a small bounded label set so
 // alerts can be keyed by reason without unbounded cardinality.
+//
+// inShutdown is the tripwire mirror of the scheduler's steppingDown flag
+// (#311). Graceful shutdown cascades context cancellation through every
+// in-flight command, which would otherwise spike the failures counter with
+// false positives ({reason="canceled"} burst right when the operator stopped
+// the process). When the flag is true the hook is a silent no-op for the
+// rest of the shutdown window; AttachRedisObservability flips it inside the
+// stop function returned to the caller's cleanup chain.
 type observabilityHook struct {
-	metrics RedisMetrics
+	metrics    RedisMetrics
+	inShutdown atomic.Bool
 }
 
-func newRedisObservabilityHook(m RedisMetrics) redis.Hook { return &observabilityHook{metrics: m} }
+func newRedisObservabilityHook(m RedisMetrics) *observabilityHook {
+	return &observabilityHook{metrics: m}
+}
+
+// markShutdown opens the shutdown window — every subsequent ProcessHook /
+// DialHook becomes a silent no-op for the rest of the process lifetime. The
+// terminal-state simplification means we never need to flip it back. The
+// cleanup chain in main.go calls this BEFORE rd.Close() so the cascade of
+// ctx-canceled / client_closed errors from in-flight commands doesn't spike
+// the per-reason failures counter (#311 tripwire pattern).
+func (h *observabilityHook) markShutdown() { h.inShutdown.Store(true) }
 
 // DialHook wraps go-redis's net.Dial. A failure here means we never reached
 // Redis — the root cause is upstream (DNS, TLS, firewall). The latency
 // observation covers both the TCP handshake and (for rediss://) the TLS
-// handshake.
+// handshake. During shutdown the hook is silent: no dial happens once we
+// start closing, and a dial that races shutdown is by definition not a
+// signal worth alerting on.
 func (h *observabilityHook) DialHook(next redis.DialHook) redis.DialHook {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if h.inShutdown.Load() {
+			return next(ctx, network, addr)
+		}
 		start := time.Now()
 		conn, err := next(ctx, network, addr)
 		h.metrics.ObserveRedisDialDuration(time.Since(start))
@@ -49,9 +74,15 @@ func (h *observabilityHook) DialHook(next redis.DialHook) redis.DialHook {
 
 // ProcessHook wraps every individual command. We see the post-retry final
 // outcome go-redis returns to the caller; transient retries inside the client
-// are invisible by design.
+// are invisible by design. During shutdown the hook becomes a silent passthrough
+// so the cascade of expected ctx-canceled / client_closed errors from
+// in-flight commands does NOT spike the failures counter (false alarm shape
+// that motivated #311).
 func (h *observabilityHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
+		if h.inShutdown.Load() {
+			return next(ctx, cmd)
+		}
 		err := next(ctx, cmd)
 		if err != nil {
 			h.metrics.RecordRedisCommandFailure(classifyCommandError(err))
@@ -64,9 +95,12 @@ func (h *observabilityHook) ProcessHook(next redis.ProcessHook) redis.ProcessHoo
 // the pipeline-level error the same way; per-command errors inside the
 // pipeline are surfaced by go-redis through individual Cmder.Err() values
 // the caller inspects, but the pipeline-level error captures "the network
-// died" cases that affect the whole batch.
+// died" cases that affect the whole batch. Same shutdown short-circuit.
 func (h *observabilityHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
+		if h.inShutdown.Load() {
+			return next(ctx, cmds)
+		}
 		err := next(ctx, cmds)
 		if err != nil {
 			h.metrics.RecordRedisCommandFailure(classifyCommandError(err))
@@ -152,7 +186,8 @@ func AttachRedisObservability(ctx context.Context, r *Redis, m RedisMetrics, int
 	if r == nil || m == nil {
 		return func() {}
 	}
-	r.Client.AddHook(newRedisObservabilityHook(m))
+	hook := newRedisObservabilityHook(m)
+	r.Client.AddHook(hook)
 	var lastTimeouts uint32
 	scrape := func() { lastTimeouts = updateRedisPool(r, m, lastTimeouts) }
 	// One initial snapshot so the gauges are populated from t=0 instead of
@@ -171,7 +206,14 @@ func AttachRedisObservability(ctx context.Context, r *Redis, m RedisMetrics, int
 			}
 		}
 	}()
-	return cancel
+	// Returned stop: flip the shutdown tripwire BEFORE canceling the scraper.
+	// Callers chain this before rd.Close() so the in-flight commands that
+	// fan out ctx-canceled / client_closed during Close() hit a silent hook
+	// instead of spiking the failure counter — Furo 5 from the joint review.
+	return func() {
+		hook.markShutdown()
+		cancel()
+	}
 }
 
 // updateRedisPool snapshots go-redis's PoolStats into the gauge set and

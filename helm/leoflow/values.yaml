@@ -17,6 +17,19 @@ replicaCount: 1
 # override this, the RBAC follows but the server still looks at `leoflow`.
 taskNamespace: leoflow
 
+# ServiceAccount that TASK pods run as (distinct from the control-plane
+# serviceAccount above). On GKE, annotate it for Workload Identity so tasks reach
+# GCP keylessly — the google_cloud_platform connector's recommended auth (ADR
+# 0035). Reference it per-task via `execution.service_account: <name>` in
+# leoflow.yaml. Created in `taskNamespace`.
+taskServiceAccount:
+  # -- Create a ServiceAccount in taskNamespace for task pods to run as.
+  create: false
+  # -- Name of the task ServiceAccount (use this as `execution.service_account`).
+  name: leoflow-task
+  # -- Annotations. GKE Workload Identity: `iam.gke.io/gcp-service-account: GSA@PROJECT.iam.gserviceaccount.com`. EKS IRSA: `eks.amazonaws.com/role-arn: ...`.
+  annotations: {}
+
 serviceAccount:
   # -- Create a dedicated ServiceAccount for the leoflow-server. Set `false` only if you bring your own via `name`.
   create: true
@@ -172,16 +185,17 @@ agentTLS:
   # -- Name of a ConfigMap with key `ca.crt`. Mounted into task pods so the agent verifies the server cert. Typically a cert-manager trust-bundle.
   caConfigMap: ""
 
-# Mount a Kubernetes Secret read-only into every task pod, so a task can read a
-# credential that lives in the cluster's secret store — e.g. a GCP service-account
-# key a `google_cloud_platform` connection references by `key_path` — instead of
-# storing the key in Leoflow (ADR 0035; Leoflow is not a key manager). You create
+# Mount a Kubernetes Secret read-only into every task pod (cloud-agnostic), so a
+# task can read ANY credential that lives in the cluster's secret store — a GCP
+# service-account key, an AWS credentials file, an Azure cert, a private CA, etc.
+# — referenced by a connection (e.g. the google_cloud_platform `key_path`) instead
+# of being stored in Leoflow (ADR 0035; Leoflow is not a key manager). You create
 # the Secret (`kubectl create secret generic ...`); the chart only mounts it.
 # Prefer keyless (Workload Identity) over this; use it when keyless is unavailable.
 taskSecret:
   # -- Name of an existing Kubernetes Secret to mount into task pods. Empty = none.
   name: ""
-  # -- Read-only mount path in the task pod. A connection's `key_path` points here, e.g. `/etc/leoflow/secrets/key.json`.
+  # -- Read-only mount path in the task pod. A connection references files here, e.g. `/etc/leoflow/secrets/key.json`.
   mountPath: /etc/leoflow/secrets
 
 observability:

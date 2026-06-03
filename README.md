@@ -40,17 +40,47 @@
 
 ## ⚡ Install
 
+Leoflow ships in two editions. Pick the track that matches your target:
+
+### 🥈 Lite — local laptop, single VM, internal demo
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
+leoflow lite                # hot-reload at http://localhost:8088 (LITE badge)
 ```
 
 Installs the binaries and runs `leoflow setup` (ensures Python, provisions the
-parser, creates your workspace) — **no sudo, no system Python, no package
-manager**. Docker is optional and only unlocks the higher tiers. Linux + macOS,
-amd64 + arm64 (Windows via WSL2). See **[Installation](docs/installation.md)**.
+parser, creates your workspace at `~/leoflow/`) — **no sudo, no system Python,
+no package manager**. Docker is optional and only unlocks the Kubernetes
+executor for higher-fidelity local runs. Linux + macOS, amd64 + arm64
+(Windows via WSL2). Each DAG gets its own per-DAG venv under
+`~/.leoflow/dev/venvs/<dag_id>/` so conflicting dependencies between DAGs
+coexist out of the box.
 
-> **Pre-alpha:** builds carry a ~90-day expiry and refuse to run past it (this
-> version is not durable). Re-run the installer for a fresh build.
+### 🥇 Pro — Kubernetes cluster (Helm)
+
+```bash
+helm repo add leoflow https://neochaotic.github.io/leoflow   # (charts published per release)
+kubectl create namespace leoflow
+helm install lf leoflow/leoflow -n leoflow \
+  --set image.tag=v0.0.1 \
+  --set migrations.image.tag=v0.0.1 \
+  --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
+  --set redis.url='rediss://HOST:6380/0' \
+  --set auth.jwtSecret="$(openssl rand -base64 64)" \
+  --set secretKey="$(openssl rand -hex 16)" \
+  --set bootstrap.password='change-me'
+```
+
+Pro deploys the control plane on a real cluster (`leoflow-server` Deployment
++ RBAC for the pod-per-task executor + a pre-install migrations Job). **External**
+Postgres 13+ and Redis 6+ are required (the chart fails the install otherwise —
+embedded datastores are Lite-only). Managed datastores work out of the box
+(Cloud SQL / RDS / Memorystore / ElastiCache / Azure Cache), with optional
+`caConfigMap` knobs for verified TLS. See the
+**[chart docs](docs/helm-chart.md)**.
+
+Full guide for both tracks → **[Installation](docs/installation.md)**.
 
 ---
 
@@ -216,7 +246,16 @@ control plane (capped); everything else runs pod-per-task. Read
 
 ## Status
 
-🚧 **Pre-alpha, under active development. Not production-ready.**
+🧪 **Experimental — pre-1.0.** The HTTP API (`/api/v2`), CLI, and Helm chart
+values may change between minor versions until **v1.0.0** locks them. Production
+Pro deployments are supported by the Helm chart today, with the usual caveats
+that come with a pre-1.0 codebase: pin to a specific tag, read the
+[upgrades guide](docs/upgrades.md) before bumping, and exercise
+[backup/restore](docs/backup-restore.md) before you need to.
+
+Versioning follows [ADR 0037](docs/adr/0037-release-version-scheme.md):
+`v0.0.1` ends the pre-alpha series; every release after is
+`vX.Y.Z-rc.N → vX.Y.Z`.
 
 **Implemented today (Phases 1–4):**
 
@@ -256,24 +295,25 @@ control plane (capped); everything else runs pod-per-task. Read
 
 ## Getting Started
 
-### Try it with the UI (one command)
+### Try it locally (one command)
 
-The full stack — Postgres, Redis, and the control plane with the **embedded
-Airflow 3.2.1 UI** — runs from a single Compose profile:
+After the Lite install above, just run:
 
 ```bash
-git clone https://github.com/neochaotic/leoflow
-cd leoflow
-docker compose --profile demo up --build
+leoflow lite
 ```
 
-Then open **http://localhost:8080** and log in as **`admin@leoflow.local` / `admin`**.
-The server applies migrations, seeds the admin user, and serves the API (`/api/v2`),
-the internal UI API (`/ui/*`), and the React UI from one process (ADR 0017). Stop
-with `docker compose --profile demo down` (add `-v` to wipe data).
+…then open **http://localhost:8088** (the **LITE** badge confirms you're on the
+Lite instance). The first run provisions a managed Postgres + admin login, drops
+example DAGs in `~/leoflow/examples/`, and hot-reloads every save. Recover the
+admin password any time with `leoflow lite reset-password`.
 
-> The pinned Airflow UI is a tactical MVP choice; a purpose-built Leoflow UI is
-> the long-term direction (ADR 0018). See `docs/ui-compatibility.md`.
+> Lite is the primary local path. The legacy Docker-Compose demo profile
+> (`docker compose --profile demo up --build`, login `admin@leoflow.local` /
+> `admin`) still works for CI / containerized-only environments — see
+> [docs/local-deploy.md](docs/local-deploy.md). The pinned Airflow 3.2.x UI is a
+> tactical MVP choice; a purpose-built Leoflow UI is the long-term direction
+> (ADR 0018).
 
 ### Local development
 
@@ -354,5 +394,5 @@ We also studied the source of Argo Workflows, Prefect, and Dagster carefully. Ea
 ---
 
 > **Star the repo if you have ever waited five seconds for an Airflow task to start.**
-> **Watch the repo if you want to be notified when the MVP ships.**
-> **Open an issue if you have a chronic Airflow pain we have not addressed yet — there is still time to fix it before v0.1.0.**
+> **Watch the repo if you want a heads-up on every release.**
+> **Open an issue if you have a chronic Airflow pain we have not addressed yet — pre-1.0 is the time to shape the API.**

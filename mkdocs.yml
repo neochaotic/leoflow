@@ -159,6 +159,7 @@ nav:
       - Architecture decisions (ADRs): adrs.md
       - Planning:
           - "Airflow 3.X connector compatibility": planning/airflow-connector-compatibility.md
+          - "Connectors — two-tier model (ADR 0035 + shim)": planning/connectors-two-tier-model.md
       - Background:
           - MVP reverse analysis: reverse-analysis-mvp.md
           - UI walk report: ui-walk-report.md

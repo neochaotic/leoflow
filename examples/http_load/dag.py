@@ -25,8 +25,14 @@ def _resolve_target() -> tuple[str, dict[str, str], tuple[str, str] | None]:
     Strip __extra__ (it is delivery metadata, not part of the request URL),
     pull headers out of it, and surface basic auth separately.
     """
+    # The fallback targets `localhost:58080` because that's where the README
+    # tells operators to run go-httpbin on Lite/subprocess (the quick-demo
+    # path). On k3d, port-forward into the cluster or — preferred — create the
+    # AIRFLOW_CONN_HTTP_TARGET Connection. The previous default
+    # (`host.k3d.internal:58080`) only resolved *inside* k3d networking and
+    # surfaced as `gaierror Errno 8` on Lite/macOS — see #348.
     raw = os.environ.get("AIRFLOW_CONN_HTTP_TARGET") or os.environ.get(
-        "HTTP_TARGET_URI", "http://host.k3d.internal:58080"
+        "HTTP_TARGET_URI", "http://localhost:58080"
     )
     parsed = urlparse(raw)
     qs = parse_qs(parsed.query)
@@ -73,7 +79,16 @@ def call() -> dict[str, str]:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 - example DAG
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as err:
-        raise RuntimeError(f"http call failed: {err}") from err
+        # Most common cause in a quick demo: nothing is listening on
+        # localhost:58080. Point operators at the README's setup steps
+        # (docker run mccutchen/go-httpbin) and at the optional Connection.
+        hint = (
+            "is anything listening on the target? "
+            "Start the echo server (`docker run --rm -d --name leoflow-httpbin "
+            "-p 58080:8080 mccutchen/go-httpbin`) or configure the "
+            "`http_target` Connection — see examples/http_load/README.md"
+        )
+        raise RuntimeError(f"http call failed ({base}/anything): {err} — {hint}") from err
     echoed = body.get("json")
     if echoed != payload:
         raise AssertionError(f"echo mismatch: sent={payload}, echoed={echoed}")

@@ -33,8 +33,10 @@ docker run --rm -d --name leoflow-httpbin \
   mccutchen/go-httpbin
 ```
 
-The DAG defaults to `http://host.k3d.internal:58080` (works inside k3d).
-From the host or via subprocess, use `localhost:58080`.
+The DAG's built-in fallback is `http://localhost:58080`, so the quick demo
+on Lite/subprocess works out-of-the-box with the command above. Inside k3d,
+either port-forward into the cluster or create the `http_target` Connection
+(below) — the in-cluster hostname is no longer the default.
 
 ### 2. Create the Connection in the UI
 

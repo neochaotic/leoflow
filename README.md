@@ -40,6 +40,10 @@
 
 ## ⚡ Install
 
+Leoflow ships in two editions — pick the install path that matches:
+
+### Lite — local laptop / single VM
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
 ```
@@ -47,10 +51,28 @@ curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh 
 Installs the binaries and runs `leoflow setup` (ensures Python, provisions the
 parser, creates your workspace) — **no sudo, no system Python, no package
 manager**. Docker is optional and only unlocks the higher tiers. Linux + macOS,
-amd64 + arm64 (Windows via WSL2). See **[Installation](docs/installation.md)**.
+amd64 + arm64 (Windows via WSL2). Then `leoflow lite` to start a local control
+plane with managed Postgres + admin login.
 
-> **Pre-alpha:** builds carry a ~90-day expiry and refuse to run past it (this
-> version is not durable). Re-run the installer for a fresh build.
+### Pro — Kubernetes cluster (Helm)
+
+```bash
+git clone --depth 1 --branch <latest-prealpha> https://github.com/neochaotic/leoflow
+cd leoflow
+kubectl create namespace leoflow
+helm install lf ./helm/leoflow -n leoflow \
+  --set image.tag=<latest-prealpha> \
+  --set migrations.image.tag=<latest-prealpha> \
+  --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
+  --set redis.url='rediss://HOST:6380/0' \
+  --set auth.jwtSecret="$(openssl rand -base64 64)" \
+  --set secretKey="$(openssl rand -hex 16)" \
+  --set bootstrap.password='change-me'
+```
+
+Pro deploys the control plane on a real cluster (`leoflow-server` Deployment + RBAC for the pod-per-task executor + a pre-install migrations Job). External Postgres 13+ and Redis 6+ are required (the chart fails the install otherwise — embedded datastores are Lite-only). Managed datastores (Cloud SQL / RDS, Memorystore / ElastiCache / Azure Cache) work out of the box, with optional `caConfigMap` knobs for verified TLS. See the **[chart docs](docs/helm-chart.md)** for every value.
+
+Full guide for both tracks: **[Installation](docs/installation.md)**.
 
 ---
 

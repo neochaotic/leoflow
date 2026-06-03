@@ -157,6 +157,8 @@ nav:
       - Roadmap: roadmap-to-release.md
       - Contributing: contributing.md
       - Architecture decisions (ADRs): adrs.md
+      - Planning:
+          - "Airflow 3.X connector compatibility": planning/airflow-connector-compatibility.md
       - Background:
           - MVP reverse analysis: reverse-analysis-mvp.md
           - UI walk report: ui-walk-report.md

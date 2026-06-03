@@ -39,4 +39,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0034: Fan-in / map-reduce — list-of-upstream parameter binding](adr/0034-fan-in-map-reduce-binding.md)
 - [ADR 0035: Cloud connector auth — keyless-first; Leoflow is not a key manager](adr/0035-cloud-connector-auth-keyless-first.md)
 - [ADR 0036: Airflow 3.X runtime compatibility shim — one model, one policy seam](adr/0036-airflow-runtime-compat-shim.md)
+- [ADR 0037: Release version scheme — skip alpha/beta, RC discipline from `v0.0.1`](adr/0037-release-version-scheme.md)
 <!-- END ADR INDEX -->

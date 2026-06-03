@@ -36,6 +36,21 @@ leoflow lite dags/my_dag    # hot-reload at http://localhost:8088 (marked LITE)
     tree) — click the **IDE** button in the UI, or open `/ide`. See
     [The Lite web editor](lite-web-editor.md).
 
+!!! note "Removing a DAG"
+    Two ways to deregister a DAG from the Lite registry:
+
+    - **Delete the project directory** — the watcher's per-tick set-diff
+      notices the project vanished from disk and calls the control plane's
+      hard-delete endpoint (cascades versions, runs, task instances, XCom).
+      Logged on stderr: `✗ removed dag "my_dag" from registry (folder gone)`.
+    - **`leoflow lite forget <dag_id>`** — explicit deregister via the Lite
+      DB. Use it to remove a DAG without touching the source files (e.g.
+      paused work on an example you'll come back to). Flags: `--all`
+      (deregister everything), `--dry-run` (print what would be removed).
+
+    Both paths go through the same FK cascade — versions, runs, TIs, XCom
+    are all dropped atomically with the `dags` row.
+
 ## Two executors
 
 | `--executor` | What it does | Reload to a new version |

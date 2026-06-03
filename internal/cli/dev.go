@@ -450,6 +450,7 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreAuto, "Postgres backend: 'auto' (default; the Docker postgres:16 when Docker is present, else a managed relocatable PG under ~/.leoflow on a Unix socket, no Docker), 'docker', or 'managed' (best on full distros; minimal hosts may lack its system libs)")
 	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
+	cmd.AddCommand(newForgetCommand())
 	cmd.AddCommand(newBackupCommand())
 	cmd.AddCommand(newRestoreCommand())
 	return cmd
@@ -648,7 +649,20 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if terr != nil {
 		return fmt.Errorf("minting dev token: %w", terr)
 	}
-	return devWatchLoop(ctx, cmd, ws, makeReload(token))
+	return devWatchLoop(ctx, cmd, ws, makeReload(token), makeDeleteDag(token, uiURL))
+}
+
+// makeDeleteDag returns a callback the Lite watcher calls when it notices a
+// project disappeared from disk (issue #345). The callback hits the control
+// plane's DELETE /api/v2/dags/<id>?deregister=true endpoint — the
+// hard-delete variant (cascades versions/runs/TIs/XCom via the schema's
+// ON DELETE CASCADE) — because the user's intent in deleting the project
+// folder is to fully forget the DAG, not just clear its run history.
+func makeDeleteDag(token, uiURL string) func(dagID string) error {
+	return func(dagID string) error {
+		reqURL := fmt.Sprintf("%s/api/v2/dags/%s?deregister=true", uiURL, url.PathEscape(dagID))
+		return devImportErrorRequest(context.Background(), http.MethodDelete, reqURL, token, nil)
+	}
 }
 
 // devSubprocessSetup provisions the isolated venv and returns the subprocess
@@ -1507,12 +1521,18 @@ func devReadyOnce(ctx context.Context, baseURL string) bool {
 // build/register step. The set of watched files is re-derived from the
 // workspace on every tick so a new project subdir added at runtime is picked
 // up without restart.
-func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, reload func() error) error {
+func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, reload func() error, deleteDag func(dagID string) error) error {
 	if rerr := reload(); rerr != nil {
 		devPrintf(cmd.ErrOrStderr(), "✗ %v\n", rerr)
 	}
 	watched := workspaceWatchPaths(ws)
 	snap := projectMtimes(watched)
+	// lastSeenDagIDs holds the set of DAG IDs the watcher registered in the
+	// previous tick. On every tick we set-diff against the current workspace
+	// scan; any DAG in lastSeen but not in current was deleted from disk and
+	// must be deregistered (issue #345). Seeded from the initial reload by
+	// re-resolving the workspace one more time below.
+	lastSeenDagIDs := projectDagIDs(ws)
 	devPrintf(cmd.OutOrStdout(), "👀 watching %s — edit and save to reload (Ctrl-C to stop)\n", ws.Path)
 	ticker := time.NewTicker(devPollInterval)
 	defer ticker.Stop()
@@ -1537,6 +1557,16 @@ func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, re
 				continue
 			}
 			snap = cur
+			// Set-diff lastSeen vs current: any DAG present last tick but
+			// missing now was removed from disk and needs to be deregistered
+			// from the control plane (issue #345). Logged to stderr so the
+			// user sees what the watcher did.
+			if deleteDag != nil {
+				logf := func(format string, args ...any) {
+					devPrintf(cmd.OutOrStdout(), format+"\n", args...)
+				}
+				lastSeenDagIDs = removeMissingDags(lastSeenDagIDs, projectDagIDs(curWs), deleteDag, logf)
+			}
 			devPrintf(cmd.OutOrStdout(), "[%s] change detected → reloading …\n", time.Now().Format("15:04:05"))
 			// Time the reload — a broken DAG's reload should still finish in
 			// ~1s. Anything multi-second is a red flag (parser hang, lock
@@ -1551,6 +1581,23 @@ func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, re
 			}
 		}
 	}
+}
+
+// projectDagIDs returns the set of DAG IDs the workspace currently exposes.
+// It powers the watcher's "what disappeared since last tick" set-diff
+// (issue #345). Returns a map so set-membership checks stay O(1) and the
+// pure-function removeMissingDags can mutate it without aliasing.
+func projectDagIDs(ws *WorkspaceSpec) map[string]struct{} {
+	if ws == nil {
+		return map[string]struct{}{}
+	}
+	out := make(map[string]struct{}, len(ws.Projects))
+	for _, p := range ws.Projects {
+		if p.Config != nil && p.Config.DagID != "" {
+			out[p.Config.DagID] = struct{}{}
+		}
+	}
+	return out
 }
 
 // workspaceWatchPaths returns the paths the mtime poller should track for a

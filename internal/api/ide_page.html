@@ -18,6 +18,13 @@
     letter-spacing: 2px; font-size: 10px; padding: 1px 8px; border-radius: 4px;
   }
   header .path { color: #94a3b8; font-family: ui-monospace, monospace; font-size: 12px; }
+  /* The create-target chip tells the user where "New file" and "New folder"
+     will land — the workspace root, or under the currently selected dir. It
+     persists across refresh so the user is never surprised. */
+  header .ctx {
+    background: rgba(59,130,246,.20); color: #bfdbfe; border: 1px solid rgba(59,130,246,.45);
+    border-radius: 4px; padding: 1px 8px; font-family: ui-monospace, monospace; font-size: 11px;
+  }
   header .spacer { flex: 1; }
   header button {
     background: #334155; color: #e2e8f0; border: 1px solid #475569;
@@ -26,7 +33,7 @@
   header button:hover { background: #475569; }
   #main { display: flex; flex: 1; min-height: 0; }
   #tree {
-    width: 240px; flex: 0 0 auto; overflow: auto; padding: 6px 0;
+    width: 260px; flex: 0 0 auto; overflow: auto; padding: 6px 0;
     background: #f8fafc; border-right: 1px solid #e2e8f0;
   }
   @media (prefers-color-scheme: dark) {
@@ -39,6 +46,16 @@
   #tree .node:hover { background: rgba(100,116,139,.15); }
   #tree .node.active { background: rgba(59,130,246,.20); }
   #tree .node.dir { color: #64748b; }
+  /* The caret toggles open/closed. A 1ch fixed slot keeps file rows aligned
+     with their sibling folders even though files have no caret of their own. */
+  #tree .caret {
+    display: inline-block; width: 1ch; text-align: center; color: #64748b;
+    margin-right: 2px; cursor: pointer; user-select: none;
+  }
+  #tree .caret:hover { color: #0f172a; }
+  @media (prefers-color-scheme: dark) {
+    #tree .caret:hover { color: #e2e8f0; }
+  }
   #editor { flex: 1; min-width: 0; }
   #status {
     flex: 0 0 auto; padding: 3px 12px; font-size: 11px;
@@ -55,12 +72,13 @@
   <span class="badge">LITE</span>
   <strong>Leoflow</strong> Editor
   <span class="path" id="current-path"></span>
+  <span class="ctx" id="ctx" title="Where 'New file' / 'New folder' will land. Click a folder in the tree to change this; click empty space to reset.">@ workspace root</span>
   <span class="spacer"></span>
   <button id="btn-examples" title="Materialize the bundled DAG examples under /examples">Download examples</button>
   <button id="btn-newdir" title="Create a new folder at the workspace root or under the current selection">New folder</button>
   <button id="btn-new">New file</button>
   <button id="btn-rename" title="Rename or move the selected file/folder">Rename</button>
-  <button id="btn-delete">Delete</button>
+  <button id="btn-delete" title="Delete the selected file or folder (recursive for folders)">Delete</button>
   <button id="btn-save">Save (⌘S)</button>
 </header>
 <div id="main">
@@ -91,12 +109,27 @@ const api = {
   remove: (p) => fetch("/api/v2/ide/file?path=" + encodeURIComponent(p), { method: "DELETE" }),
 };
 
-// Currently selected tree node — used as the parent for "New folder/file" and
-// as the source for drag operations. May be a file or a directory.
+// Currently selected tree node — used as the parent for "New folder/file",
+// as the drag source, and as the delete target. May be a file or a directory.
+// Persisted across refreshes so the visual "Create target" chip never goes
+// stale; cleared by clicking the empty tree background.
 let selected = null;
+
+// Expanded-folder paths, persisted in localStorage so a refresh — or a
+// reopened tab — restores the user's tree shape. A Set of dir paths.
+const EXPANDED_KEY = "leoflow.ide.expanded";
+const expanded = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(EXPANDED_KEY) || "[]")); }
+  catch { return new Set(); }
+})();
+function persistExpanded() {
+  try { localStorage.setItem(EXPANDED_KEY, JSON.stringify([...expanded])); }
+  catch { /* private mode / quota — fall through; runtime state still applies */ }
+}
 
 const statusEl = document.getElementById("status");
 const pathEl = document.getElementById("current-path");
+const ctxEl = document.getElementById("ctx");
 const setStatus = (m) => { statusEl.textContent = m; };
 let current = null, editor = null;
 
@@ -108,52 +141,65 @@ function languageFor(path) {
             dockerfile: "dockerfile" })[ext] || "plaintext";
 }
 
+// parentOf returns "" for root-level paths, else the directory portion.
+function parentOf(p) {
+  const i = p.lastIndexOf("/");
+  return i < 0 ? "" : p.slice(0, i);
+}
+
+// updateCtx reflects the current selection into the header chip — the user
+// can SEE where "New file" / "New folder" will land before clicking.
+function updateCtx() {
+  const base = parentPath();
+  ctxEl.textContent = base ? ("@ " + base + "/") : "@ workspace root";
+}
+
+// parentPath returns the directory the new file/folder should live in, based
+// on the current selection: a selected directory is used as-is, a selected
+// file's parent directory is used, and no selection means the workspace root.
+function parentPath() {
+  if (!selected) return "";
+  if (selected.isDir) return selected.path;
+  return parentOf(selected.path);
+}
+
 async function refreshTree() {
   const treeEl = document.getElementById("tree");
   try {
     const { entries } = await api.tree();
     treeEl.innerHTML = "";
-    (entries || []).forEach((e) => {
-      const div = document.createElement("div");
-      div.className = "node" + (e.is_dir ? " dir" : "");
-      div.style.paddingLeft = (10 + e.path.split("/").length * 12) + "px";
-      div.textContent = (e.is_dir ? "▸ " : "") + e.name;
-      div.dataset.path = e.path;
-      div.dataset.isDir = e.is_dir ? "1" : "";
-      div.draggable = true;
-      div.onclick = (ev) => {
-        ev.stopPropagation();
-        selected = { path: e.path, isDir: e.is_dir };
-        document.querySelectorAll("#tree .node").forEach((n) =>
-          n.classList.toggle("active", n.dataset.path === e.path));
-        if (!e.is_dir) openFile(e.path);
-      };
-      // Drag source: stash the source path on the dataTransfer object.
-      div.ondragstart = (ev) => {
-        ev.dataTransfer.setData("text/plain", e.path);
-        ev.dataTransfer.effectAllowed = "move";
-      };
-      // Drop target: dirs only. Drop a file/dir into the target dir.
-      if (e.is_dir) {
-        div.ondragover = (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; };
-        div.ondrop = async (ev) => {
-          ev.preventDefault();
-          const from = ev.dataTransfer.getData("text/plain");
-          if (!from || from === e.path) return;
-          // Block drop into self/descendant — Move would fail at the server but
-          // the early check keeps the UX snappy.
-          if (e.path.startsWith(from + "/")) {
-            setStatus("cannot move a folder into itself");
-            return;
-          }
-          const name = from.split("/").pop();
-          await doMove(from, e.path + "/" + name);
-        };
-      }
-      if (e.path === current) div.classList.add("active");
-      treeEl.appendChild(div);
+    // Group flat entries by parent so the render can emit a real nested tree.
+    // The backend returns every descendant with full relative paths, sorted
+    // lexicographically — that ordering puts a parent dir before its
+    // children, which is what we need to render parent rows that "own" their
+    // children's visibility.
+    const byParent = new Map();
+    const all = entries || [];
+    all.forEach((e) => {
+      const par = parentOf(e.path);
+      if (!byParent.has(par)) byParent.set(par, []);
+      byParent.get(par).push(e);
     });
-    if (!entries || entries.length === 0) treeEl.textContent = "empty workspace";
+    // Recursively render starting from the workspace root (parent = "").
+    const renderInto = (parentDir, depth) => {
+      const kids = byParent.get(parentDir) || [];
+      kids.forEach((e) => {
+        treeEl.appendChild(renderNode(e, depth));
+        if (e.is_dir && expanded.has(e.path)) {
+          renderInto(e.path, depth + 1);
+        }
+      });
+    };
+    renderInto("", 0);
+    if (all.length === 0) treeEl.textContent = "empty workspace";
+    // Click on the empty background clears the selection — explicit way to
+    // reset the "create target" back to the workspace root.
+    treeEl.onclick = (ev) => {
+      if (ev.target !== treeEl) return;
+      selected = null;
+      document.querySelectorAll("#tree .node").forEach((n) => n.classList.remove("active"));
+      updateCtx();
+    };
     // Root-level drop target: drop onto the empty area moves to workspace root.
     treeEl.ondragover = (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; };
     treeEl.ondrop = async (ev) => {
@@ -165,13 +211,94 @@ async function refreshTree() {
       if (name === from) return; // already at root
       await doMove(from, name);
     };
+    updateCtx();
   } catch (err) { setStatus("tree error: " + err); }
+}
+
+// renderNode builds the row for one entry at the given depth.
+function renderNode(e, depth) {
+  const div = document.createElement("div");
+  div.className = "node" + (e.is_dir ? " dir" : "");
+  div.style.paddingLeft = (10 + depth * 14) + "px";
+  div.dataset.path = e.path;
+  div.dataset.isDir = e.is_dir ? "1" : "";
+  div.draggable = true;
+
+  if (e.is_dir) {
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = expanded.has(e.path) ? "▾" : "▸";
+    // Stop propagation so toggling the caret never also opens / selects the
+    // node — the two gestures are distinct.
+    caret.onclick = (ev) => {
+      ev.stopPropagation();
+      if (expanded.has(e.path)) expanded.delete(e.path);
+      else expanded.add(e.path);
+      persistExpanded();
+      refreshTree();
+    };
+    div.appendChild(caret);
+  } else {
+    // Reserve the caret slot so file rows line up under their sibling dir
+    // rows — a row with no caret would visually unindent and read as a
+    // misnested file.
+    const spacer = document.createElement("span");
+    spacer.className = "caret";
+    spacer.textContent = " ";
+    div.appendChild(spacer);
+  }
+
+  const label = document.createElement("span");
+  label.textContent = e.name;
+  div.appendChild(label);
+
+  // Activate on click. Selecting a dir does NOT auto-expand it (use the
+  // caret) — clicking the body of a dir should be safe to do "just to make
+  // it the create target."
+  div.onclick = (ev) => {
+    ev.stopPropagation();
+    selected = { path: e.path, isDir: e.is_dir };
+    document.querySelectorAll("#tree .node").forEach((n) =>
+      n.classList.toggle("active", n.dataset.path === e.path));
+    updateCtx();
+    if (!e.is_dir) openFile(e.path);
+  };
+  // Drag source: stash the source path on the dataTransfer object.
+  div.ondragstart = (ev) => {
+    ev.stopPropagation();
+    ev.dataTransfer.setData("text/plain", e.path);
+    ev.dataTransfer.effectAllowed = "move";
+  };
+  // Drop target: dirs only.
+  if (e.is_dir) {
+    div.ondragover = (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; };
+    div.ondrop = async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const from = ev.dataTransfer.getData("text/plain");
+      if (!from || from === e.path) return;
+      if (e.path.startsWith(from + "/")) {
+        setStatus("cannot move a folder into itself");
+        return;
+      }
+      const name = from.split("/").pop();
+      await doMove(from, e.path + "/" + name);
+    };
+  }
+  // Persist visual selection across refresh.
+  if (selected && e.path === selected.path) div.classList.add("active");
+  // The open file gets a softer highlight (the .active selection wins when both apply).
+  if (e.path === current && (!selected || selected.path !== e.path)) div.classList.add("active");
+  return div;
 }
 
 async function doMove(from, to) {
   const res = await api.move(from, to);
   if (res.ok) {
     if (current === from) { current = to; pathEl.textContent = to; }
+    // The selection followed the moved node — otherwise the chip would point
+    // at a path that no longer exists.
+    if (selected && selected.path === from) selected.path = to;
     setStatus("moved " + from + " → " + to);
     await refreshTree();
   } else {
@@ -207,24 +334,18 @@ async function save() {
   setStatus(res.ok ? "saved " + current : "save failed (" + res.status + ")");
 }
 
-// parentPath returns the directory the new file/folder should live in, based on
-// the current selection: a selected directory is used as-is, a selected file's
-// parent directory is used, and no selection means the workspace root.
-function parentPath() {
-  if (!selected) return "";
-  if (selected.isDir) return selected.path;
-  const slash = selected.path.lastIndexOf("/");
-  return slash < 0 ? "" : selected.path.slice(0, slash);
-}
-
 async function newFile() {
   const base = parentPath();
   const prompted = prompt("New file name" + (base ? ` (inside ${base}/)` : " (at workspace root)") + ":");
   if (!prompted) return;
   const p = base ? base + "/" + prompted : prompted;
   const res = await api.create(p, false);
-  if (res.ok) { await refreshTree(); openFile(p); }
-  else setStatus("create failed (" + res.status + ")");
+  if (res.ok) {
+    // Auto-expand the parent so the new file is visible without an extra click.
+    if (base) { expanded.add(base); persistExpanded(); }
+    await refreshTree();
+    openFile(p);
+  } else setStatus("create failed (" + res.status + ")");
 }
 
 async function newDir() {
@@ -233,8 +354,11 @@ async function newDir() {
   if (!prompted) return;
   const p = base ? base + "/" + prompted : prompted;
   const res = await api.create(p, true);
-  if (res.ok) { await refreshTree(); setStatus("created folder " + p); }
-  else setStatus("create folder failed (" + res.status + ")");
+  if (res.ok) {
+    if (base) { expanded.add(base); persistExpanded(); }
+    await refreshTree();
+    setStatus("created folder " + p);
+  } else setStatus("create folder failed (" + res.status + ")");
 }
 
 async function renameSelected() {
@@ -255,12 +379,49 @@ async function downloadExamples() {
   } catch (err) { setStatus("install error: " + err); }
 }
 
-async function deleteCurrent() {
-  if (!current) { setStatus("nothing open"); return; }
-  if (!confirm("Delete " + current + "?")) return;
-  const res = await api.remove(current);
-  if (res.ok) { current = null; pathEl.textContent = ""; editor.setValue(""); await refreshTree(); setStatus("deleted"); }
-  else setStatus("delete failed (" + res.status + ")");
+// deleteSelected removes the selected node, falling back to the open file
+// when nothing is selected (so an operator with a file open can still hit
+// Delete to remove it without first clicking it in the tree). Folders are
+// recursive on the server (os.RemoveAll); the confirmation makes the
+// recursion explicit so a stray click never silently wipes a tree.
+async function deleteSelected() {
+  let target = null;
+  let isDir = false;
+  if (selected) {
+    target = selected.path;
+    isDir = selected.isDir;
+  } else if (current) {
+    target = current;
+    isDir = false;
+  }
+  if (!target) { setStatus("nothing selected"); return; }
+  const msg = isDir
+    ? "Delete folder \"" + target + "\" and ALL its contents? This cannot be undone."
+    : "Delete \"" + target + "\"?";
+  if (!confirm(msg)) return;
+  const res = await api.remove(target);
+  if (res.ok) {
+    // Clear local state pointing at anything underneath the deleted node so
+    // a stale selection / open file does not survive the delete.
+    if (current === target || (current && current.startsWith(target + "/"))) {
+      current = null;
+      pathEl.textContent = "";
+      if (editor) editor.setValue("");
+    }
+    if (selected && (selected.path === target || selected.path.startsWith(target + "/"))) {
+      selected = null;
+    }
+    // Drop any expanded entries under the deleted node — keeping them
+    // around would silently leak into a future folder of the same name.
+    [...expanded].forEach((p) => {
+      if (p === target || p.startsWith(target + "/")) expanded.delete(p);
+    });
+    persistExpanded();
+    await refreshTree();
+    setStatus("deleted " + target);
+  } else {
+    setStatus("delete failed (" + res.status + ")");
+  }
 }
 
 function bootEditor() {
@@ -277,12 +438,22 @@ function bootEditor() {
     document.getElementById("btn-new").onclick = newFile;
     document.getElementById("btn-newdir").onclick = newDir;
     document.getElementById("btn-rename").onclick = renameSelected;
-    document.getElementById("btn-delete").onclick = deleteCurrent;
+    document.getElementById("btn-delete").onclick = deleteSelected;
     document.getElementById("btn-examples").onclick = downloadExamples;
     refreshTree();
     // Deep-link: /ide?open=<path> opens a file directly (shareable links).
     const open = new URLSearchParams(location.search).get("open");
-    if (open) openFile(open); else setStatus("ready");
+    if (open) {
+      // Make sure every ancestor of the deep-linked path is expanded so the
+      // user can see where the file lives in the tree after the open.
+      let acc = "";
+      open.split("/").slice(0, -1).forEach((seg) => {
+        acc = acc ? acc + "/" + seg : seg;
+        expanded.add(acc);
+      });
+      persistExpanded();
+      refreshTree().then(() => openFile(open));
+    } else setStatus("ready");
   });
 }
 

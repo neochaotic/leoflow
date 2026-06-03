@@ -117,6 +117,34 @@ func TestIDECreateAndDelete(t *testing.T) {
 	}
 }
 
+// TestIDEDeleteHandlesNonEmptyFolderRecursively pins the contract the new IDE
+// delete UX depends on: hitting DELETE on a directory path removes the
+// directory and every descendant. Without this, the editor's "Delete folder"
+// confirmation would lie — the call would return 200 but leave a partially
+// scrubbed tree, and the user would have to fall back to `rm -rf` from the
+// terminal (the friction PR-C/#347 is meant to remove).
+func TestIDEDeleteHandlesNonEmptyFolderRecursively(t *testing.T) {
+	fs, dir := newWorkspace(t)
+	srv := ideServer(fs)
+	// Build a small subtree: tasks/{extract.py,transform.py,sub/load.py}.
+	if r := authGet(srv, http.MethodPost, "/api/v2/ide/file", `{"path":"tasks/extract.py"}`); r.Code != http.StatusCreated {
+		t.Fatalf("create extract = %d (%s)", r.Code, r.Body.String())
+	}
+	if r := authGet(srv, http.MethodPost, "/api/v2/ide/file", `{"path":"tasks/transform.py"}`); r.Code != http.StatusCreated {
+		t.Fatalf("create transform = %d (%s)", r.Code, r.Body.String())
+	}
+	if r := authGet(srv, http.MethodPost, "/api/v2/ide/file", `{"path":"tasks/sub/load.py"}`); r.Code != http.StatusCreated {
+		t.Fatalf("create load = %d (%s)", r.Code, r.Body.String())
+	}
+	// DELETE the parent directory.
+	if r := authGet(srv, http.MethodDelete, "/api/v2/ide/file?path=tasks", ""); r.Code != http.StatusNoContent {
+		t.Fatalf("delete folder = %d (%s)", r.Code, r.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasks")); !os.IsNotExist(err) {
+		t.Fatalf("folder still present after recursive delete: %v", err)
+	}
+}
+
 func TestIDETraversalRejected(t *testing.T) {
 	fs, _ := newWorkspace(t)
 	srv := ideServer(fs)
@@ -175,6 +203,22 @@ func TestIDEPageServed(t *testing.T) {
 	// over 15 opens; with it, stayed at 1.
 	if !strings.Contains(body, ".dispose()") {
 		t.Error("/ide page must dispose the previous Monaco model on file open (memory leak otherwise)")
+	}
+	// PR-C #347 invariants — pin so a refactor never silently drops them:
+	//   1. The "create target" chip exists in the header so the user can see
+	//      where New file / New folder will land before clicking the button.
+	//   2. The expanded-folder set is persisted in localStorage so a page
+	//      refresh restores the tree shape.
+	//   3. Delete confirmation makes the recursive folder semantics explicit
+	//      so a stray click never silently wipes a tree.
+	for _, marker := range []string{
+		`id="ctx"`,             // (1) the create-target chip
+		"leoflow.ide.expanded", // (2) the persisted-expansion key
+		"ALL its contents",     // (3) the recursive-delete warning
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("/ide page missing PR-C marker %q (UX regression)", marker)
+		}
 	}
 }
 

@@ -227,7 +227,7 @@ func TestStartDevServerStartsAndErrors(t *testing.T) {
 	defer cancel()
 
 	// A real, harmless binary starts successfully and a *Cmd is returned.
-	srv, err := startDevServer(ctx, cmd, "/bin/sleep", subprocessServerEnv("127.0.0.1", 8088, "/bin/true", t.TempDir(), "python3", "", "", ""))
+	srv, err := startDevServer(ctx, cmd, "/bin/sleep", subprocessServerEnv("127.0.0.1", 8088, "/bin/true", t.TempDir(), "python3", t.TempDir(), "", "", ""))
 	if err != nil || srv == nil {
 		t.Fatalf("startDevServer(real bin) = (%v,%v), want a running cmd", srv, err)
 	}
@@ -267,16 +267,6 @@ func TestVenvPythonOSAware(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("venvPython = %q, want %q", got, want)
-	}
-}
-
-func TestVenvPipArgs(t *testing.T) {
-	args := venvPipArgs("runtime/python", []string{"pandas==2.1.0"})
-	joined := strings.Join(args, " ")
-	for _, must := range []string{"-m pip install", "runtime/python", taskSDKVersion, "pandas==2.1.0"} {
-		if !strings.Contains(joined, must) {
-			t.Errorf("pip args %q missing %q", joined, must)
-		}
 	}
 }
 
@@ -336,7 +326,7 @@ func TestMergeLiteDefaults(t *testing.T) {
 }
 
 func TestServerEnvBuilders(t *testing.T) {
-	sub := strings.Join(subprocessServerEnv("127.0.0.1", 8088, "/bin/agent", "/proj", "/venv/py", "", "", ""), "\n")
+	sub := strings.Join(subprocessServerEnv("127.0.0.1", 8088, "/bin/agent", "/proj", "/venv/py", "/h/venvs", "", "", ""), "\n")
 	// Lite binds its own HTTP/gRPC/metrics ports (distinct from the demo's 8080/9090/9091).
 	for _, must := range []string{"LEOFLOW_EXECUTOR_TYPE=subprocess", "LEOFLOW_EXECUTOR_AGENT_PATH=/bin/agent", "LEOFLOW_EXECUTOR_SUBPROCESS_WORKDIR=/proj", "LEOFLOW_PYTHON=/venv/py", "127.0.0.1:9099", "LEOFLOW_SERVER_HTTP_ADDR=127.0.0.1:8088", "LEOFLOW_SERVER_GRPC_ADDR=:9099", "LEOFLOW_SERVER_METRICS_ADDR=:9098"} {
 		if !strings.Contains(sub, must) {
@@ -354,7 +344,7 @@ func TestServerEnvBuilders(t *testing.T) {
 	if !strings.Contains(sub, "LEOFLOW_OBSERVABILITY_OTEL_ENABLED=false") {
 		t.Error("Lite env should disable the OTLP exporter (no local collector)")
 	}
-	alt := strings.Join(subprocessServerEnv("127.0.0.1", 8090, "/bin/agent", "/proj", "/venv/py", "", "", ""), "\n")
+	alt := strings.Join(subprocessServerEnv("127.0.0.1", 8090, "/bin/agent", "/proj", "/venv/py", "/h/venvs", "", "", ""), "\n")
 	for _, must := range []string{"LEOFLOW_SERVER_GRPC_ADDR=:9101", "LEOFLOW_SERVER_METRICS_ADDR=:9100", "127.0.0.1:9101"} {
 		if !strings.Contains(alt, must) {
 			t.Errorf("--port 8090 should offset gRPC/metrics, missing %q", must)

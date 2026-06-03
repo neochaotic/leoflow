@@ -51,6 +51,16 @@ leoflow lite dags/my_dag    # hot-reload at http://localhost:8088 (marked LITE)
     Both paths go through the same FK cascade — versions, runs, TIs, XCom
     are all dropped atomically with the `dags` row.
 
+!!! note "Per-DAG venvs (subprocess executor)"
+    Each DAG gets its own virtualenv under `~/.leoflow/dev/venvs/<dag_id>/`, so
+    editing one project's `dependencies:` only re-runs pip for **that** DAG —
+    other DAGs' venvs are untouched. Two DAGs can pin **conflicting** versions
+    of the same package without interfering. If
+    [`uv`](https://github.com/astral-sh/uv) is on `PATH`, Lite uses it for the
+    install (5–10× faster cold runs); otherwise it falls back to `pip` from
+    the venv. The k3d executor is unaffected — each DAG already ships in its
+    own image.
+
 ## Two executors
 
 | `--executor` | What it does | Reload to a new version |

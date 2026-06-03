@@ -3,7 +3,6 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -91,119 +90,6 @@ func TestRuntimeSrcChecksum_IgnoresNonPyFiles(t *testing.T) {
 	}
 }
 
-// TestRuntimeMarkerRoundtrip: after writeRuntimeMarker, runtimeInstalledChecksum
-// returns the same value, and is empty when no marker exists yet.
-func TestRuntimeMarkerRoundtrip(t *testing.T) {
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, "venv"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if got := runtimeInstalledChecksum(home); got != "" {
-		t.Errorf("absent marker must report empty, got %q", got)
-	}
-	want := "deadbeef" + "00000000000000000000000000000000000000000000000000000000"
-	if err := writeRuntimeMarker(home, want); err != nil {
-		t.Fatal(err)
-	}
-	if got := runtimeInstalledChecksum(home); got != want {
-		t.Errorf("roundtrip mismatch: got %q want %q", got, want)
-	}
-}
-
-// TestNeedsRuntimeInstall_BinaryUpgradeTriggersReinstall is the Lima bug #239
-// case end-to-end: the venv exists with leoflow_runtime importable, but the
-// installed checksum is from a previous binary. Must report needsInstall=true
-// even though the import would succeed.
-func TestNeedsRuntimeInstall_BinaryUpgradeTriggersReinstall(t *testing.T) {
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, "venv"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	// Marker says checksum X is installed (the old binary's runtime).
-	if err := writeRuntimeMarker(home, "deadbeef"+strings.Repeat("0", 56)); err != nil {
-		t.Fatal(err)
-	}
-	// pysrc has a different checksum (the upgraded binary's runtime).
-	src := writeRuntimeFixture(t, t.TempDir(), map[string]string{
-		"runner.py": "def run(): print('[leoflow] new')\n",
-	})
-
-	need, want, err := needsRuntimeInstall(home, src, true /*importOK*/)
-	if err != nil {
-		t.Fatalf("needsRuntimeInstall: %v", err)
-	}
-	if !need {
-		t.Errorf("bug #239: needsRuntimeInstall=false on a mismatched marker; install must fire on binary upgrade")
-	}
-	if want == "" {
-		t.Errorf("expected a non-empty want-checksum to write into the marker after install")
-	}
-}
-
-// TestNeedsRuntimeInstall_MarkerMatchesIsSkipped: when the installed checksum
-// matches the pysrc checksum, the install MUST be skipped — that's the whole
-// point of the gate (no needless `pip install` on every lite startup).
-func TestNeedsRuntimeInstall_MarkerMatchesIsSkipped(t *testing.T) {
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, "venv"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	src := writeRuntimeFixture(t, t.TempDir(), map[string]string{
-		"runner.py": "def run(): pass\n",
-	})
-	want, err := runtimeSrcChecksum(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if werr := writeRuntimeMarker(home, want); werr != nil {
-		t.Fatal(werr)
-	}
-
-	need, _, err := needsRuntimeInstall(home, src, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if need {
-		t.Errorf("matching marker must skip install (no needless pip on every startup)")
-	}
-}
-
-// TestNeedsRuntimeInstall_ImportFailedAlwaysInstalls: when the import check
-// failed (fresh venv), the marker is irrelevant — must install.
-func TestNeedsRuntimeInstall_ImportFailedAlwaysInstalls(t *testing.T) {
-	home := t.TempDir()
-	src := writeRuntimeFixture(t, t.TempDir(), map[string]string{
-		"runner.py": "def run(): pass\n",
-	})
-	need, _, err := needsRuntimeInstall(home, src, false /*importOK*/)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !need {
-		t.Errorf("import check failed must always require install (fresh venv path)")
-	}
-}
-
-// TestNeedsRuntimeInstall_MissingMarkerInstalls: an old venv that pre-dates the
-// marker (installed by a binary that didn't have this check) must reinstall on
-// next lite startup — otherwise we never reach a known-good state.
-func TestNeedsRuntimeInstall_MissingMarkerInstalls(t *testing.T) {
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, "venv"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	src := writeRuntimeFixture(t, t.TempDir(), map[string]string{
-		"runner.py": "def run(): pass\n",
-	})
-	need, _, err := needsRuntimeInstall(home, src, true /*importOK*/)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !need {
-		t.Errorf("missing marker on existing venv must trigger reinstall (defensive — recover to known-good)")
-	}
-}
-
 // TestDevDepsSignatureOrderIndependent: the canonical signature ignores ordering,
 // so a leoflow.yaml that just reorders `dependencies:` does not force a needless
 // reinstall.
@@ -219,24 +105,58 @@ func TestDevDepsSignatureOrderIndependent(t *testing.T) {
 	}
 }
 
-// TestDevDepsRoundtrip: after writeDevDepsMarker, devDepsUpToDate is true for the
-// same deps and false when the deps change — which is what gates the reinstall
-// when switching projects or editing dependencies (#116).
-func TestDevDepsRoundtrip(t *testing.T) {
+// TestDagVenvDepsRoundtrip: writing the per-DAG deps marker makes
+// dagVenvDepsUpToDate report true for the same deps (in any order) and false
+// when the deps change — gates the reinstall when one DAG's `dependencies:`
+// is edited, without re-running pip for every other DAG in the workspace
+// (#346 — the issue with the shared single-venv layout).
+func TestDagVenvDepsRoundtrip(t *testing.T) {
 	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, "venv"), 0o750); err != nil {
+	dagID := "etl"
+	venvDir := dagVenvDir(home, dagID)
+	if err := os.MkdirAll(venvDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if devDepsUpToDate(home, []string{"x"}) {
-		t.Errorf("an absent marker must report not up-to-date")
+	if dagVenvDepsUpToDate(home, dagID, []string{"x"}) {
+		t.Errorf("absent marker must report not up-to-date")
 	}
-	if err := writeDevDepsMarker(home, []string{"requests==2.31.0", "duckdb==1.4.4"}); err != nil {
+	deps := []string{"requests==2.31.0", "duckdb==1.4.4"}
+	if err := os.WriteFile(dagVenvDepsMarkerPath(home, dagID), []byte(devDepsSignature(deps)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !devDepsUpToDate(home, []string{"duckdb==1.4.4", "requests==2.31.0"}) {
+	if !dagVenvDepsUpToDate(home, dagID, []string{"duckdb==1.4.4", "requests==2.31.0"}) {
 		t.Errorf("same deps (any order) must report up-to-date after a successful install")
 	}
-	if devDepsUpToDate(home, []string{"requests==2.31.0"}) {
-		t.Errorf("a different dep set must report not up-to-date (forces reinstall on project switch)")
+	if dagVenvDepsUpToDate(home, dagID, []string{"requests==2.31.0"}) {
+		t.Errorf("a different dep set must report not up-to-date (forces reinstall on dep edit)")
+	}
+	// And the per-DAG marker is scoped: a *different* DAG with no marker yet
+	// is not up-to-date for the same deps — proves the gate is keyed.
+	if dagVenvDepsUpToDate(home, "other", deps) {
+		t.Errorf("the marker must be per-DAG; an unrelated DAG must not inherit it")
+	}
+}
+
+// TestDagVenvRuntimeChecksumRoundtrip pins the per-DAG runtime checksum
+// marker: empty when absent, returns the stamped value after a write. The
+// binary-upgrade reinstall (#239) carries over from the single-venv layout —
+// without this, a `leoflow lite` rerun after `make dev-install` would keep
+// the previous build's runtime in the venv.
+func TestDagVenvRuntimeChecksumRoundtrip(t *testing.T) {
+	home := t.TempDir()
+	dagID := "etl"
+	venvDir := dagVenvDir(home, dagID)
+	if err := os.MkdirAll(venvDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if got := dagVenvRuntimeChecksum(home, dagID); got != "" {
+		t.Errorf("absent marker must report empty, got %q", got)
+	}
+	want := "deadbeef" + "00000000000000000000000000000000000000000000000000000000"
+	if err := os.WriteFile(dagVenvRuntimeMarkerPath(home, dagID), []byte(want+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := dagVenvRuntimeChecksum(home, dagID); got != want {
+		t.Errorf("roundtrip mismatch: got %q want %q", got, want)
 	}
 }

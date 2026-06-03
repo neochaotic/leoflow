@@ -215,6 +215,7 @@ func TestIDEPageServed(t *testing.T) {
 		`id="ctx"`,             // (1) the create-target chip
 		"leoflow.ide.expanded", // (2) the persisted-expansion key
 		"ALL its contents",     // (3) the recursive-delete warning
+		"firstLoad",            // (4) auto-expand-on-first-load (no flat-tree regression)
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("/ide page missing PR-C marker %q (UX regression)", marker)

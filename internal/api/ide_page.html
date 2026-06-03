@@ -117,10 +117,19 @@ let selected = null;
 
 // Expanded-folder paths, persisted in localStorage so a refresh — or a
 // reopened tab — restores the user's tree shape. A Set of dir paths.
+// firstLoad is true when the localStorage key is missing entirely (never
+// used the new tree before, OR upgraded from the flat-tree version).
+// The first refreshTree auto-expands every directory so the user sees the
+// whole workspace by default — preserving the pre-collapse behavior. After
+// that one auto-expand the user owns their state.
 const EXPANDED_KEY = "leoflow.ide.expanded";
+let firstLoad = false;
 const expanded = (() => {
-  try { return new Set(JSON.parse(localStorage.getItem(EXPANDED_KEY) || "[]")); }
-  catch { return new Set(); }
+  try {
+    const raw = localStorage.getItem(EXPANDED_KEY);
+    if (raw === null) { firstLoad = true; return new Set(); }
+    return new Set(JSON.parse(raw));
+  } catch { return new Set(); }
 })();
 function persistExpanded() {
   try { localStorage.setItem(EXPANDED_KEY, JSON.stringify([...expanded])); }
@@ -180,6 +189,14 @@ async function refreshTree() {
       if (!byParent.has(par)) byParent.set(par, []);
       byParent.get(par).push(e);
     });
+    // First-ever load: auto-expand every directory so a fresh user (or one
+    // upgrading from the flat-tree version) sees the whole workspace by
+    // default. This runs exactly once — persistExpanded then locks it in.
+    if (firstLoad) {
+      all.forEach((e) => { if (e.is_dir) expanded.add(e.path); });
+      persistExpanded();
+      firstLoad = false;
+    }
     // Recursively render starting from the workspace root (parent = "").
     const renderInto = (parentDir, depth) => {
       const kids = byParent.get(parentDir) || [];

@@ -49,14 +49,43 @@ func materializeWorkDir(source, taskInstanceID string) (workDir string, cleanup 
 type SubprocessExecutor struct {
 	agentPath string
 	workDir   string
-	logger    *slog.Logger
+	// liteVenvsRoot, when set (Lite-only via LEOFLOW_LITE_VENVS_ROOT), is the
+	// directory where each DAG owns its own venv at
+	// <root>/<dag_id>/bin/python. Execute consults it per-task and overrides
+	// the agent's inherited LEOFLOW_PYTHON so the right venv runs the right
+	// DAG. Empty in Pro / k8s / cluster-mode Lite.
+	liteVenvsRoot string
+	logger        *slog.Logger
 }
 
 // NewSubprocessExecutor builds a SubprocessExecutor running the given agent
-// binary. It warns that user code runs unsandboxed.
+// binary. It warns that user code runs unsandboxed. The per-DAG venv root
+// is read from LEOFLOW_LITE_VENVS_ROOT at construction time so the executor
+// can pick the right Python for each task without a follow-up call.
 func NewSubprocessExecutor(agentPath string, logger *slog.Logger) *SubprocessExecutor {
 	logger.Warn("subprocess executor active; user code runs without isolation. Do NOT use in production")
-	return &SubprocessExecutor{agentPath: agentPath, logger: logger}
+	return &SubprocessExecutor{
+		agentPath:     agentPath,
+		liteVenvsRoot: os.Getenv("LEOFLOW_LITE_VENVS_ROOT"),
+		logger:        logger,
+	}
+}
+
+// resolveLitePythonForDag returns the per-DAG venv interpreter at
+// <venvsRoot>/<dagID>/bin/python when both fields are non-empty AND the file
+// exists, and "" otherwise (so the caller keeps the inherited LEOFLOW_PYTHON).
+// Pulled out so it can be unit-tested without spawning a subprocess (the bug
+// class is silent fallback to the wrong venv — exactly what an integration
+// test would mask).
+func resolveLitePythonForDag(venvsRoot, dagID string) string {
+	if venvsRoot == "" || dagID == "" {
+		return ""
+	}
+	candidate := filepath.Join(venvsRoot, dagID, "bin", "python")
+	if _, err := os.Stat(candidate); err != nil {
+		return ""
+	}
+	return candidate
 }
 
 // SetWorkDir sets the working directory the agent runs in. In a task pod the
@@ -113,6 +142,13 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
 	// as "signal: killed" and a falsely failed task), mirroring the inline runner.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), e.agentPath) //nolint:gosec // dev-only executor running the trusted agent binary
 	cmd.Env = append(os.Environ(), agentEnv(req)...)
+	// Lite-only: when a per-DAG venv exists, override the inherited
+	// LEOFLOW_PYTHON so the agent's `python -m leoflow_runtime` resolves the
+	// DAG's own dependencies. Last write wins in os/exec, so appending here
+	// is enough to beat any earlier server-inherited LEOFLOW_PYTHON.
+	if perDagPy := resolveLitePythonForDag(e.liteVenvsRoot, req.DagID); perDagPy != "" {
+		cmd.Env = append(cmd.Env, "LEOFLOW_PYTHON="+perDagPy)
+	}
 	cmd.Dir = workDir
 	// Surface the agent's own diagnostics (it logs to stderr); otherwise an agent
 	// that fails to start or connect fails silently. The task's stdout/stderr are

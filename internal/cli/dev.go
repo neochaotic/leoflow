@@ -676,11 +676,18 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSp
 	if err != nil {
 		return nil, nil, err
 	}
-	venvPy, verr := ensureDevVenv(ctx, cmd, home, resolveRuntimeSrc(o.runtimeSrc, home), ws.RootCfg.Dependencies)
+	runtimeSrc := resolveRuntimeSrc(o.runtimeSrc, home)
+	// Per-DAG venvs: every project gets its own ~/.leoflow/dev/venvs/<dag_id>/.
+	// Editing one project's `dependencies:` only re-runs pip for THAT project,
+	// not the whole workspace (#346). The first project's venv is the boot
+	// fallback exposed via LEOFLOW_PYTHON so the agent always has a runnable
+	// interpreter even before per-DAG resolution kicks in on Execute().
+	bootPy, verr := ensureWorkspaceDagVenvs(ctx, cmd, ws, home, runtimeSrc)
 	if verr != nil {
 		return nil, nil, verr
 	}
-	env = subprocessServerEnv(o.host, o.port, agentBin, ws.Path, venvPy, o.adminHash, o.adminEmail, o.jwtSecret)
+	venvsRoot := filepath.Join(home, "venvs")
+	env = subprocessServerEnv(o.host, o.port, agentBin, ws.Path, bootPy, venvsRoot, o.adminHash, o.adminEmail, o.jwtSecret)
 	env = append(env, liteEditorEnv(ws.Path, filepath.Dir(home))...)
 	makeReload = func(token string) func() error {
 		return func() error {
@@ -691,10 +698,47 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSp
 			if rerr != nil {
 				return rerr
 			}
+			// Refresh per-DAG venvs on every reload too — a new project, or a
+			// `dependencies:` edit, is picked up here (the gate inside
+			// ensureDagVenv makes the unchanged-project case a cheap no-op).
+			if _, perr := ensureWorkspaceDagVenvs(ctx, cmd, curWs, home, runtimeSrc); perr != nil {
+				return perr
+			}
 			return devCompileAndRegisterAll(ctx, cmd, curWs, compileOptions{image: o.image}, token, nil, devURL(o.port))
 		}
 	}
 	return env, makeReload, nil
+}
+
+// ensureWorkspaceDagVenvs creates / refreshes the per-DAG venv for every
+// project in the workspace and returns the first project's venv Python, which
+// the control plane exports as LEOFLOW_PYTHON for the boot fallback path.
+// Failure to provision any one project's venv stops the loop and surfaces
+// which project failed — there is no point pretending the workspace is up
+// when a DAG cannot import its runtime.
+func ensureWorkspaceDagVenvs(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, home, runtimeSrc string) (bootPy string, err error) {
+	for _, p := range ws.Projects {
+		dagID := p.DagID
+		deps := []string(nil)
+		if p.Config != nil {
+			deps = p.Config.Dependencies
+		}
+		py, verr := ensureDagVenv(ctx, cmd, home, dagID, runtimeSrc, deps)
+		if verr != nil {
+			return "", fmt.Errorf("provisioning venv for project %q: %w", p.Path, verr)
+		}
+		if bootPy == "" {
+			bootPy = py
+		}
+	}
+	if bootPy == "" {
+		// No projects discovered yet — fall back to the legacy single-venv
+		// location so the server can still boot with a usable LEOFLOW_PYTHON.
+		// A later watcher tick will create per-DAG venvs once the user adds a
+		// dag.py to the workspace.
+		bootPy = venvPython(home)
+	}
+	return bootPy, nil
 }
 
 // devClusterSetup ensures the task base image, the dedicated k3d cluster, its
@@ -954,19 +998,7 @@ func venvPython(home string) string {
 	return filepath.Join(home, "venv", "bin", "python")
 }
 
-// venvPipArgs builds the pip-install argv for the dev venv: the task runtime,
-// the Airflow Task SDK, and the project's declared dependencies.
-func venvPipArgs(runtimeSrc string, deps []string) []string {
-	args := make([]string, 0, 6+len(deps))
-	args = append(args, "-m", "pip", "install", "-q", runtimeSrc, taskSDKVersion)
-	return append(args, deps...)
-}
-
-// ensureDevVenv creates the isolated dev venv if absent and installs the task
-// runtime + Airflow SDK + project deps into it (skipping the install when the
-// runtime is already present, so reruns are fast). It returns the venv's python
-// path, which the agent uses to run user code — the host's Python is untouched.
-// devBasePython returns the interpreter used to CREATE the dev venv: the managed
+// devBasePython returns the interpreter used to CREATE a dev venv: the managed
 // relocatable CPython 3.11 (installed by `leoflow setup` under ~/.leoflow/python)
 // when present, since it bundles venv + ensurepip. It falls back to a python3.11
 // / python3 on PATH. Using the managed interpreter avoids needing the system
@@ -1000,76 +1032,6 @@ func resolveRuntimeSrc(flagValue, home string) string {
 	return filepath.Join(filepath.Dir(home), "pysrc", "runtime", "python")
 }
 
-func ensureDevVenv(ctx context.Context, cmd *cobra.Command, home, runtimeSrc string, deps []string) (string, error) {
-	py := venvPython(home)
-	if _, err := os.Stat(py); err != nil {
-		devPrintln(cmd.OutOrStdout(), "▸ creating isolated dev venv …")
-		base := devBasePython(home)
-		mk := exec.CommandContext(ctx, base, "-m", "venv", filepath.Join(home, "venv")) //nolint:gosec // base is the managed CPython or a resolved python3
-		mk.Stdout, mk.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
-		if e := mk.Run(); e != nil {
-			return "", fmt.Errorf("creating dev venv with %s (the managed CPython bundles venv; a system python3 may need its python3-venv package): %w", base, e)
-		}
-	}
-	// Runtime + Airflow SDK: install when either (a) the runtime is not importable
-	// (fresh venv) or (b) the installed runtime's checksum drifts from the bundled
-	// pysrc — which is the binary-upgrade case (#239). Gating only on (a) meant a
-	// binary upgrade kept the OLD runtime in the venv (the import succeeds, so the
-	// install branch never fires) and any runtime improvements (lifecycle log
-	// lines, drill-down markers, etc.) were invisible until the user manually
-	// deleted the venv.
-	check := exec.CommandContext(ctx, py, "-c", "import leoflow_runtime") //nolint:gosec // py is the managed venv interpreter
-	importOK := check.Run() == nil
-	need, want, cerr := needsRuntimeInstall(home, runtimeSrc, importOK)
-	if cerr != nil {
-		// Checksum failure is recoverable (e.g. pysrc not yet extracted): fall
-		// back to the old behavior — install only when the import fails.
-		need = !importOK
-	}
-	if need {
-		devPrintln(cmd.OutOrStdout(), "▸ installing task runtime + Airflow SDK into the dev venv …")
-		install := exec.CommandContext(ctx, py, venvPipArgs(runtimeSrc, nil)...) //nolint:gosec // py is the managed venv interpreter
-		install.Stdout, install.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
-		if e := install.Run(); e != nil {
-			return "", fmt.Errorf("installing dev venv runtime: %w", e)
-		}
-		// Record what we just installed so the next startup can skip when nothing
-		// changed. Best-effort: a write failure means the next startup reinstalls
-		// (slow, not broken) — better than leaving a stale marker.
-		if want != "" {
-			if e := writeRuntimeMarker(home, want); e != nil {
-				slog.Warn("recording dev venv runtime checksum", "error", e)
-			}
-		}
-	}
-	// Project deps: (re)install when the active project's declared dependencies
-	// change — gating only on the runtime above meant switching projects, or
-	// editing `dependencies:`, never refreshed the venv (#116). Additive: extra
-	// packages from a previous project are harmless.
-	if len(deps) > 0 && !devDepsUpToDate(home, deps) {
-		devPrintln(cmd.OutOrStdout(), "▸ installing project dependencies into the dev venv …")
-		install := exec.CommandContext(ctx, py, venvDepsArgs(deps)...) //nolint:gosec // py is the managed venv interpreter
-		install.Stdout, install.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
-		if e := install.Run(); e != nil {
-			return "", fmt.Errorf("installing project dependencies: %w", e)
-		}
-		if e := writeDevDepsMarker(home, deps); e != nil {
-			return "", fmt.Errorf("recording installed project deps: %w", e)
-		}
-	}
-	return py, nil
-}
-
-// venvDepsArgs is the pip invocation that installs just the project's declared
-// dependencies into the dev venv.
-func venvDepsArgs(deps []string) []string {
-	return append([]string{"-m", "pip", "install", "-q"}, deps...)
-}
-
-// devDepsMarkerPath is the file recording which project dependencies the dev venv
-// currently has installed.
-func devDepsMarkerPath(home string) string { return filepath.Join(home, "venv", ".leoflow-deps") }
-
 // devDepsSignature is an order-independent canonical form of a dependency list, so
 // reordering `dependencies:` does not force a needless reinstall.
 func devDepsSignature(deps []string) string {
@@ -1078,49 +1040,9 @@ func devDepsSignature(deps []string) string {
 	return strings.Join(s, "\n")
 }
 
-// devDepsUpToDate reports whether the dev venv already has exactly these project
-// deps installed (per the marker written by the last successful install).
-func devDepsUpToDate(home string, deps []string) bool {
-	b, err := os.ReadFile(devDepsMarkerPath(home)) //nolint:gosec // path derived from the per-user dev home
-	if err != nil {
-		return false
-	}
-	return string(b) == devDepsSignature(deps)
-}
-
-// writeDevDepsMarker records the project deps just installed into the dev venv.
-func writeDevDepsMarker(home string, deps []string) error {
-	return os.WriteFile(devDepsMarkerPath(home), []byte(devDepsSignature(deps)), 0o600)
-}
-
-// runtimeMarkerPath is the file recording the checksum of the leoflow_runtime
-// source last installed into the dev venv. Sits alongside devDepsMarkerPath so a
-// single "rm venv/.leoflow-*" wipes all of the venv's freshness state.
-func runtimeMarkerPath(home string) string {
-	return filepath.Join(home, "venv", ".leoflow-runtime-checksum")
-}
-
-// runtimeInstalledChecksum returns the checksum recorded by the most recent
-// runtime install into the dev venv, or "" if absent (fresh venv, or a venv
-// from a binary that pre-dates this gate).
-func runtimeInstalledChecksum(home string) string {
-	b, err := os.ReadFile(runtimeMarkerPath(home)) //nolint:gosec // path derived from the per-user dev home
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// writeRuntimeMarker stamps the dev venv with the checksum of the runtime
-// source just installed. Subsequent leoflow lite startups compare this against
-// the bundled pysrc to detect a binary upgrade (#239).
-func writeRuntimeMarker(home, checksum string) error {
-	return os.WriteFile(runtimeMarkerPath(home), []byte(checksum+"\n"), 0o600)
-}
-
 // runtimeSrcChecksum returns a stable SHA-256 hex digest covering every `.py`
 // file under runtimeSrc, walked in deterministic path order. Used by
-// ensureDevVenv to decide whether the venv's installed leoflow_runtime has
+// ensureDagVenv to decide whether the venv's installed leoflow_runtime has
 // drifted from the bundled pysrc after a binary upgrade (#239).
 //
 // Non-Python files (READMEs, __pycache__/*.pyc, etc.) are ignored: a stray
@@ -1164,33 +1086,6 @@ func runtimeSrcChecksum(runtimeSrc string) (string, error) {
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// needsRuntimeInstall decides whether the dev venv requires (re)installing
-// leoflow_runtime. Three triggers, in order:
-//
-//  1. The runtime is not importable in the venv (fresh venv, broken install).
-//  2. The bundled pysrc checksum cannot be computed — defensive: better to
-//     reinstall than to skip and leave the user stuck with a stale runtime.
-//  3. The marker checksum does not match the bundled pysrc checksum (binary
-//     upgrade — #239).
-//
-// Returns (need, want, err): `want` is the bundled checksum to stamp into the
-// marker after a successful install. `err` is non-nil only when the source
-// walk truly fails (e.g. permission denied); the caller can choose to fall
-// back to the import-only gate.
-func needsRuntimeInstall(home, runtimeSrc string, importOK bool) (need bool, want string, err error) {
-	want, err = runtimeSrcChecksum(runtimeSrc)
-	if err != nil {
-		return true, "", err
-	}
-	if !importOK {
-		return true, want, nil
-	}
-	if runtimeInstalledChecksum(home) != want {
-		return true, want, nil
-	}
-	return false, want, nil
 }
 
 // devRun and devOutput run external dev tools (k3d/docker/kubectl). They are
@@ -1446,15 +1341,19 @@ func loadLiteAdmin(cmd *cobra.Command) (hash, email, jwtSecret string) {
 }
 
 // subprocessServerEnv adds the subprocess-executor settings: the agent binary,
-// the project workdir (so dag.py imports), the venv Python, and a dialable
-// control-plane address (the server binds 0.0.0.0, which is not a dial target).
-func subprocessServerEnv(host string, port int, agentBin, workDir, venvPython, adminHash, adminEmail, jwtSecret string) []string {
+// the project workdir (so dag.py imports), the venv Python (boot fallback when
+// the per-DAG venv lookup misses), the per-DAG venvs root (LEOFLOW_LITE_VENVS_ROOT
+// — the subprocess executor consults <root>/<dag_id>/bin/python to override the
+// fallback per task), and a dialable control-plane address (the server binds
+// 0.0.0.0, which is not a dial target).
+func subprocessServerEnv(host string, port int, agentBin, workDir, venvPython, venvsRoot, adminHash, adminEmail, jwtSecret string) []string {
 	return append(sharedServerEnv(host, port, adminHash, adminEmail, jwtSecret),
 		"LEOFLOW_EXECUTOR_TYPE=subprocess",
 		"LEOFLOW_EXECUTOR_AGENT_PATH="+agentBin,
 		"LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR=127.0.0.1"+devGRPCBindAddr(port),
 		"LEOFLOW_EXECUTOR_SUBPROCESS_WORKDIR="+workDir,
 		"LEOFLOW_PYTHON="+venvPython,
+		"LEOFLOW_LITE_VENVS_ROOT="+venvsRoot,
 	)
 }
 

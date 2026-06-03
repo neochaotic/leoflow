@@ -175,7 +175,7 @@ The probe stays structural — no cloud SDK in Go (ADR 0014 stance preserved).
 
 ### 4.3 ADR 0035 — does it need a revision?
 
-**No.** ADR 0035 is correct as written. The shim does not change the security stance; it adds a compat surface that *honors* the stance via the pre-processor. The follow-up ADR (the one Strategy A asks for — "Runtime hook compatibility shim") will *reference* ADR 0035 and say: "Cloud-flavored connections resolve `extra` through the ADR 0035 chain before reaching any upstream hook."
+**No.** ADR 0035 is correct as written. The shim does not change the security stance; it adds a compat surface that *honors* the stance via the pre-processor. The follow-up ADR (the one Strategy A asks for — ADR 0036 (Runtime hook compatibility shim)) will *reference* ADR 0035 and say: "Cloud-flavored connections resolve `extra` through the ADR 0035 chain before reaching any upstream hook."
 
 ## 5. Generalizing to AWS / Azure
 
@@ -212,7 +212,7 @@ The **exception** the user mentioned ("abrir uma exception para caso de integrac
 
 ## 7. Concrete next steps (before any code)
 
-1. **Open an ADR** ("Runtime hook compatibility shim") that locks the model in §3 and references both ADR 0019 (encryption at rest) and ADR 0035 (cloud auth posture).
+1. **Open an ADR** (ADR 0036 (Runtime hook compatibility shim)) that locks the model in §3 and references both ADR 0019 (encryption at rest) and ADR 0035 (cloud auth posture).
 2. **Add to the ADR's "Decision":** the pre-processor pipeline; the cloud-resolver plug-in point; the warning emitted when `keyfile_dict` is in use.
 3. **Phase A.1 of the compatibility study** stays as-is (postgres / http / sqlite / redis / mysql first — none of these has the cloud-key issue).
 4. **Phase A.2** adds the GCP resolver as the *first* cloud — same scope as today's GCP connector but with the pre-processor seam in place.

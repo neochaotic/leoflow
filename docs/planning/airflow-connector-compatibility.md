@@ -1,7 +1,7 @@
 # Airflow 3.X connector compatibility — complexity study
 
-> **Status:** planning document, not yet an ADR. The recommendation here is a
-> proposal to feed an ADR before any code lands. **Scope is exclusively Airflow
+> **Status:** planning document, not yet ADR 0036. The recommendation here is a
+> proposal to feed ADR 0036 before any code lands. **Scope is exclusively Airflow
 > 3.X (3.2.x line, `main` as of 2026-06-02). Airflow 2.x is out of scope.**
 >
 > **Goal:**
@@ -14,6 +14,126 @@
 >
 > Both goals are reachable simultaneously with a small Python shim. This
 > document measures how small.
+
+## The model in one picture — connection metadata and connector code never live together
+
+Connection **metadata** (host, login, password, extra JSON) is owned by the
+Leoflow control plane: created in the admin UI, encrypted at rest (ADR 0019).
+Connector **code** (`PostgresHook.get_records()`, `GCSHook.upload()`, …) is
+owned by the user's DAG image: pip-installed from `apache-airflow-providers-<X>`
+declared in `leoflow.yaml.dependencies`. Leoflow ships **no** provider code.
+
+The two meet only at runtime, through the `AIRFLOW_CONN_<ID>` environment
+variable (ADR 0021 wire format) that the Leoflow agent stamps into the task
+process. The Leoflow runtime compat shim (ADR 0036) intercepts
+`BaseHook.get_connection()` and returns the canonical Connection. The upstream
+hook does the real work.
+
+```text
+┌─────────────────────────────────────────┐    ┌──────────────────────────────────┐
+│  Admin UI / API  (Leoflow control plane,│    │  leoflow.yaml  (user, per-DAG)   │
+│                   Go — ADR 0014)        │    │                                  │
+│                                         │    │  dependencies:                   │
+│  POST /api/v2/connections               │    │    - apache-airflow-providers-   │
+│  {conn_id: "my_pg", type: "postgres",   │    │      postgres==6.0               │
+│   host: "...", login: "...",            │    │    - psycopg2-binary==2.9        │
+│   password: "...", extra: "{...}"}      │    │                                  │
+└────────────────────┬────────────────────┘    └─────────────────┬────────────────┘
+                     │                                            │
+                     ▼                                            ▼
+┌─────────────────────────────────────────┐    ┌──────────────────────────────────┐
+│  Leoflow DB (encrypted, ADR 0019)       │    │  DAG image (built once per push) │
+│  connections:                           │    │  ─────────────                   │
+│    id="my_pg" type="postgres"           │    │  leoflow-base:py3.11             │
+│    password = AES-256-GCM(...)          │    │  + apache-airflow-providers-     │
+│    extra    = AES-256-GCM(...)          │    │      postgres   (PostgresHook)   │
+└────────────────────┬────────────────────┘    │  + leoflow-runtime-compat-shim   │
+                     │                          │      (airflow.sdk.* shim,        │
+                     │ on dispatch              │       ADR 0036)                  │
+                     ▼                          └─────────────────┬────────────────┘
+┌─────────────────────────────────────────┐                      │
+│  Leoflow agent (Go, in the pod or       │                      │
+│  subprocess host)                       │                      │
+│  - decrypts password + extra            │                      │
+│  - renders the URI:                     │                      │
+│    AIRFLOW_CONN_MY_PG=                  │                      │
+│      postgres://login:pw@host:5432/db   │                      │
+│      ?__extra__={"sslmode": ...}        │                      │
+│    (ADR 0021 wire format)               │                      │
+│  - injects env var into the task        │                      │
+└────────────────────┬────────────────────┘                      │
+                     │                                            │
+                     └────────────────► task process ◄────────────┘
+                                              │
+                                              ▼
+                ┌──────────────────────────────────────────────┐
+                │  User DAG (Python)                           │
+                │                                              │
+                │  from airflow.providers.postgres.hooks       │
+                │       .postgres import PostgresHook          │
+                │  hook = PostgresHook(postgres_conn_id=        │
+                │                      "my_pg")                │
+                │  hook.get_records("SELECT 1")                │
+                └─────────────────────┬────────────────────────┘
+                                      │
+                                      ▼ provider calls
+                                      │ BaseHook.get_connection("my_pg")
+                ┌──────────────────────────────────────────────┐
+                │  Leoflow runtime compat shim  (ADR 0036)     │
+                │  ──────────────────────────                  │
+                │  1. Read AIRFLOW_CONN_MY_PG env var          │
+                │  2. Parse URI → host/login/password/port/    │
+                │      schema/extra                            │
+                │  3. Pre-processor (per-type policy seam)     │
+                │     • cloud type → cloud resolver            │
+                │       (ADR 0035 chain: keyfile_dict →        │
+                │        key_path → key_secret_name → ADC)     │
+                │       fetches Secret Manager NOW if          │
+                │       key_secret_name is set; emits the      │
+                │       fetched key as a transient keyfile_    │
+                │       dict so the upstream hook understands. │
+                │     • non-cloud type → pass through.         │
+                │  4. Return a canonical                       │
+                │      airflow.sdk.definitions.Connection      │
+                └─────────────────────┬────────────────────────┘
+                                      │
+                                      ▼
+                ┌──────────────────────────────────────────────┐
+                │  Upstream PostgresHook                       │
+                │  (apache-airflow-providers-postgres)         │
+                │  - receives the canonical Connection         │
+                │  - psycopg2.connect(...) → real query        │
+                └──────────────────────────────────────────────┘
+```
+
+### What works out of the box vs what needs a provider declared
+
+Two tiers of "Airflow imports that work on Leoflow" — they have very
+different dependency contracts, and the cookbook pages must state this in
+the very first line.
+
+| Tier | Import | Needs a provider in `leoflow.yaml.dependencies`? | Runtime path |
+|---|---|---|---|
+| **A. Native (already shipped)** | `from airflow.sdk import DAG, task` | **No** | Parser maps to `python` / `bash` / `http_api` task types; Leoflow runtime executes directly. |
+| A. | `from airflow.providers.standard.operators.python import PythonOperator` | **No** | Same as above. |
+| A. | `from airflow.providers.standard.operators.bash import BashOperator` | **No** | Same. |
+| A. | `from airflow.providers.standard.operators.empty import EmptyOperator` | **No** | Same. |
+| A. | `from airflow.providers.http.operators.http import HttpOperator` | **No** | Task type `http_api` — Leoflow agent executes the HTTP call. |
+| **B. Compat (ADR 0036)** | `from airflow.providers.postgres.hooks.postgres import PostgresHook` | **Yes — `apache-airflow-providers-postgres` + `psycopg2-binary`** | Through the runtime compat shim. |
+| B. | `from airflow.providers.google.cloud.hooks.gcs import GCSHook` | **Yes — `apache-airflow-providers-google`** | Shim + GCP resolver (ADR 0035). |
+| B. | `from airflow.providers.http.hooks.http import HttpHook` | **Yes — `apache-airflow-providers-http`** | Shim. (Distinct from `HttpOperator` in tier A.) |
+| B. | any other `from airflow.providers.<X>.hooks.<Y>...` | **Yes — the matching `apache-airflow-providers-<X>`** | Shim. |
+
+Forgetting the dependency for a tier-B import is a fast, loud failure:
+`ModuleNotFoundError: No module named 'airflow.providers.postgres'` at
+import time, before any task work runs. The cookbook page for the hook
+names the exact error so search engines route the user back to the right
+recipe.
+
+Out of scope (still rejected at compile time per the closed-set policy):
+sensors, dynamic task mapping (`.expand` / `.partial`), `TaskGroup`,
+branching operators, untyped operators outside the standard / http
+providers. Parser fails fast with "not supported by Leoflow".
 
 ## 0. TL;DR
 
@@ -436,7 +556,7 @@ upside the shim doesn't already provide.
 
 ## 6. Open questions for the ADR
 
-These are the decisions that an ADR would need to lock before code lands.
+These are the decisions that ADR 0036 would need to lock before code lands.
 Not blockers for this study, but listed so they're explicit:
 
 1. **Module namespace.** Do we expose the shim at `airflow.*` (so user

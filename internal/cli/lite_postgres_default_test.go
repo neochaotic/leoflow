@@ -9,7 +9,11 @@ import "testing"
 func TestLitePostgresDefaultIsAuto(t *testing.T) {
 	f := newLiteCommand().Flags().Lookup("postgres")
 	if f == nil {
+		// Return after t.Fatal so staticcheck (SA5011) does not flag the
+		// dereference below — older bundled go/analysis in some lint
+		// rebuilds did not model testing.TB.Fatal as terminating.
 		t.Fatal("--postgres flag not defined")
+		return
 	}
 	if f.DefValue != datastoreAuto {
 		t.Errorf("--postgres default = %q, want %q", f.DefValue, datastoreAuto)

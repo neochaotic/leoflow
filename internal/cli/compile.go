@@ -78,11 +78,12 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 		return ierr
 	}
 	if rerr := runParser(cmd, command, parserArgs{
-		source:     dagSourcePath(dir, cfg),
-		config:     projectConfigPath(dir),
-		output:     o.output,
-		image:      o.image,
-		dagVersion: o.dagVersion,
+		source:        dagSourcePath(dir, cfg),
+		config:        projectConfigPath(dir),
+		output:        o.output,
+		image:         o.image,
+		dagVersion:    o.dagVersion,
+		projectConfig: cfg,
 	}); rerr != nil {
 		return rerr
 	}
@@ -170,7 +171,20 @@ type parserArgs struct {
 	output     string
 	image      string
 	dagVersion string
+	// projectConfig is the parsed + defaulted LeoflowConfig the CLI loaded
+	// before invoking the parser. It is marshaled to JSON and handed to the
+	// parser via LEOFLOW_PROJECT_CONFIG_JSON, replacing the in-parser
+	// PyYAML read of leoflow.yaml. The Go side stays the single source of
+	// truth for the config schema; the parser carries zero third-party
+	// Python deps (ADR 0024 + alpha cleanup).
+	projectConfig *domain.LeoflowConfig
 }
+
+// parserConfigEnv is the env var that carries the resolved project config
+// (JSON) from the CLI to the Python parser. The parser refuses to read a
+// YAML file directly — keeping this seam tight prevents a re-vendoring of
+// PyYAML.
+const parserConfigEnv = "LEOFLOW_PROJECT_CONFIG_JSON"
 
 // gitVersion derives a version label from git, falling back to "dev".
 func gitVersion(ctx context.Context) string {
@@ -211,6 +225,16 @@ func runParser(cmd *cobra.Command, command string, a parserArgs) error {
 		"--dag-version", a.dagVersion)
 	//nolint:gosec // G204: the parser command is operator-configured by design (ADR 0005).
 	pc := exec.CommandContext(cmdContext(cmd), fields[0], argv...)
+	// Hand the resolved project config to the parser as JSON via an env var.
+	// The parser uses this instead of re-parsing leoflow.yaml in-process, so
+	// Go owns the schema and the parser ships zero third-party deps.
+	if a.projectConfig != nil {
+		raw, merr := json.Marshal(a.projectConfig)
+		if merr != nil {
+			return fmt.Errorf("marshaling project config for parser: %w", merr)
+		}
+		pc.Env = append(os.Environ(), parserConfigEnv+"="+string(raw))
+	}
 	pc.Stdout = cmd.OutOrStdout()
 	// Stream the parser's stderr to the terminal and capture it, so a parse
 	// failure carries the real traceback (e.g. the SyntaxError + file:line) in

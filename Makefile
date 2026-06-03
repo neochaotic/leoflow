@@ -66,7 +66,7 @@ chaos-dogfood: ## Pre-Lima gate (#231) — Phase 1: run all suites on the host +
 	@bash scripts/chaos/run.sh
 
 CHAOS_IMAGE          ?= leoflow-chaos:local
-CHAOS_GO_VERSION     ?= 1.26.3
+CHAOS_GO_VERSION     ?= 1.26.4
 CHAOS_LINT_VERSION   ?= v2.12.2
 
 .PHONY: chaos-dogfood-docker
@@ -189,6 +189,16 @@ ci-local: ## Run every CI gate locally — pre-push tripwire so a PR does not ar
 	@golangci-lint run ./...
 	@echo "▸ go test"
 	@go test ./...
+	@echo "▸ govulncheck (advisories DB is fetched at runtime — catches new stdlib CVEs CI will see)"
+	@command -v govulncheck >/dev/null && govulncheck ./... \
+		|| ($$(go env GOPATH)/bin/govulncheck ./... 2>/dev/null) \
+		|| (echo "skip govulncheck (run: go install golang.org/x/vuln/cmd/govulncheck@latest)"; exit 0)
+	@echo "▸ helm unittest (chart contracts)"
+	@command -v helm >/dev/null && command -v helm-unittest >/dev/null \
+		&& (cd helm/leoflow && helm unittest .) \
+		|| (command -v helm >/dev/null && helm plugin list 2>/dev/null | grep -q unittest \
+			&& (cd helm/leoflow && helm unittest .) \
+			|| echo "skip helm unittest (install: helm plugin install https://github.com/helm-unittest/helm-unittest)")
 	@echo "▸ python parser tests"
 	@command -v python3 >/dev/null && (cd parser && python3 -m pytest -q) || echo "skip pytest (no python3)"
 	@echo "▸ ADR index check"
@@ -198,6 +208,13 @@ ci-local: ## Run every CI gate locally — pre-push tripwire so a PR does not ar
 		|| (command -v python3 >/dev/null && python3 -c "import mkdocs" 2>/dev/null && python3 -m mkdocs build --strict --quiet) \
 		|| echo "skip mkdocs (not installed: pip install mkdocs-material mkdocs-mermaid2-plugin)"
 	@echo "✅ ci-local clean — push when ready"
+
+.PHONY: install-pre-push-hook
+install-pre-push-hook: ## Install a pre-push hook that runs `make ci-local` automatically
+	@mkdir -p .git/hooks
+	@printf '#!/usr/bin/env bash\n# Auto-installed by `make install-pre-push-hook`.\n# Runs every CI gate locally so a PR never lands red on infra-class checks\n# (govulncheck advisories, helm tests, mkdocs --strict) the per-commit hook\n# does not cover. Skip with: git push --no-verify.\nset -euo pipefail\nexec make ci-local\n' > .git/hooks/pre-push
+	@chmod +x .git/hooks/pre-push
+	@echo "▸ installed .git/hooks/pre-push → runs 'make ci-local' on every push"
 
 .PHONY: dev-up
 dev-up: ## Start local Postgres + Redis (wait healthy) and apply migrations

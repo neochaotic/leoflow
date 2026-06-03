@@ -50,11 +50,31 @@ UI's accent in either theme). Force a theme with a query parameter:
 
 | Action | How |
 |---|---|
-| Browse the workspace | The left panel lists every file and folder (skipping `.git`, `__pycache__`, `node_modules`, …). |
+| Browse the workspace | The left panel lists every file and folder (skipping `.git`, `__pycache__`, `node_modules`, …). Folders show a `▸` / `▾` caret — click it to collapse or expand. Your tree shape persists across reloads. |
 | Open & edit a file | Click it in the tree; edits happen in the Monaco editor with Python/YAML highlighting. |
 | Save | **⌘S / Ctrl-S**, or the **Save** button. |
-| Create a file | **New file** → type a path relative to the workspace (e.g. `tasks/extract.py`). |
-| Delete | **Delete** removes the open file. |
+| Create a file or folder | **New file** / **New folder** — the blue **"Create target"** chip in the header shows where it will land (a selected folder, or the workspace root). |
+| Rename | **Rename** — works on the selected file or folder, including moves into another folder by typing the new full path. |
+| Delete | **Delete** — removes the selected file or folder. Folder deletes are recursive; the confirmation says so explicitly so a stray click never quietly wipes a tree. |
+
+### IDE invariants
+
+A few small UX rules the editor enforces so the cursor never lies to you:
+
+- **Selection is sticky.** Click a folder once and it becomes the **create
+  target** for subsequent **New file** / **New folder** clicks — even after a
+  tree refresh. To reset back to the workspace root, click the empty area
+  below the tree.
+- **The "Create target" chip is the truth.** Whatever path it shows is where
+  the next create lands. Read it before clicking the button.
+- **Expanded folders are remembered.** The set of open folders is written to
+  `localStorage` (`leoflow.ide.expanded`) so reopening the tab restores your
+  tree shape. Deep-linking with `?open=<path>` auto-expands every ancestor of
+  that path so you can see where it lives.
+- **Delete is loud about recursion.** Folder deletes are recursive on the
+  server (`os.RemoveAll`); the confirmation prompt says "Delete folder \"X\"
+  and ALL its contents?" so you can never confuse it with a single-file
+  delete.
 
 Saving a file is exactly like editing it on disk — the `leoflow lite` watcher
 picks up the change and **hot-reloads** the DAG, same as if you had saved from any

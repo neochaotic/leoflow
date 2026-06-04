@@ -94,6 +94,11 @@ Until a phase lands, its constructs stay a **loud compile reject** — never a
 silent mistranslation (the standing principle). The phases are the plan to retire
 each reject, not a permanent exclusion.
 
+**Scope decision (2026-06-04):** the first implementation pass is **Phase A + B
+only** (sync operators, poke sensors, reschedule sensors — all via Airflow's own
+mechanisms). **Phase C (deferrable / triggerer) is parked** for a separate future
+ADR. Deferrable operators stay a loud reject until then.
+
 ### Native sensors via goroutines (future direction)
 
 The Phases A/B above run sensors *the Airflow way* (a Python `poke` loop in a
@@ -104,8 +109,12 @@ the condition on its interval, **holding no pod and needing no `task_reschedule`
 table**. Thousands wait concurrently for the cost of a goroutine each. This is
 where the most-used sensors migrate as part of the native whitelist, superseding
 both Airflow modes for them. The generic Python path (Phase A) remains the
-fallback for the long tail of sensors we have not promoted. *Present state: the
-closed native set; the goroutine sensor engine is future work.*
+fallback for the long tail of sensors we have not promoted.
+
+**Scope decision (2026-06-04):** the goroutine sensor engine is **NOT in the
+first implementation pass** — sensors initially use Airflow's own modes (poke in
+Phase A, reschedule in Phase B). The goroutine engine is a later optimization
+once the generic path is proven in production.
 
 ## Design (pieces, sized against the spikes)
 
@@ -138,6 +147,41 @@ closed native set; the goroutine sensor engine is future work.*
   "batteries-included" fat base image for convenience over size — neither the
   default (the default stays the lean per-DAG image).
 
+## Implementation roadmap (first pass = Phase A + B)
+
+Post-RC, after the connectors branch merges. Each step is independently testable.
+
+**Phase A — generic executor (the unlock, ~2–3 weeks)**
+
+| Step | Deliverable | Touches | Size |
+|---|---|---|---|
+| A0 | **Mini-spike**: can the parser shim capture `from airflow.providers.X.operators.Y import Z` + the constructor kwargs **without** the real provider? (a generic catch-all in the shim) | `parser/_shim/` | S — riskiest, do first |
+| A1 | Parser stops **rejecting** provider operators → **captures** them: `type=airflow_operator` + `{class_path, kwargs, mode?}`; reuses the call-literal capture (#115) + XComArg→`xcom_input`. **Note:** the parser need not know `template_fields` — the real operator does; the runtime `render_template_fields` handles it | `compiler.py` `_operator_type`/`_map_task` | M |
+| A2 | dag.json / domain carrier (`airflow_operator` / `airflow_sensor`) | `internal/domain` | S |
+| A3 | **Generic runtime executor**: `import_string → instantiate → minimal context (ds/ts/params/ti-shim) → render_template_fields → execute → xcom push`; map `AirflowSensorTimeout` → failure | `runtime/python/.../runner.py` | M |
+| A4 | Go dispatch routes the new type to the pod (same path as `python`) | `internal/executor` / `dispatch` | S |
+| A5 | **Compile validation**: a provider import requires `connectors:`/`dependencies:` (the ADR 0038 #2 scan) | `compiler.py` + `domain` | S |
+| A6 | Goldens + e2e (one SQL operator, one S3 operator, one poke sensor) + docs (`dag-authoring`, cookbook) | tests / docs | M |
+
+**Ships:** any synchronous operator (~760) + poke-mode sensors work as tasks.
+
+**Phase B — reschedule sensors (~1–1.5 weeks)**
+
+| Step | Deliverable | Touches |
+|---|---|---|
+| B1 | Runtime signals `AirflowRescheduleException` as a distinct status | `runner.py` |
+| B2 | `task_reschedule` migration + table + repo (next-poke time) | `migrations/`, `internal/storage` |
+| B3 | Go scheduler catches the reschedule, frees the pod, re-dispatches at the due time | `internal/scheduler` |
+
+**Ships:** long-waiting sensors do not hold a pod.
+
+**Explicitly NOT in this pass:** Phase C (deferrable/triggerer) and the native
+goroutine sensor engine — both deferred to later, separate work. Phase D (dynamic
+mapping / task groups) is an independent track, sequenced separately.
+
+**Minimum high-impact slice = Phase A alone** (~2–3 weeks): 3 → ~1,500 operators +
+poke sensors, faithful to the thesis, no Airflow serialization re-adopted.
+
 ## Consequences
 
 - **Breadth in one move:** ~3 → ~1,500 operators + poke sensors via a single
@@ -160,5 +204,8 @@ closed native set; the goroutine sensor engine is future work.*
 
 Operator and sensor (poke) spikes are done (recorded here). Implementation is
 **deferred to post-RC**: the closed native set is unchanged for the first
-release. Phase C (deferrable/triggerer) needs its own spike before it is sized.
-This ADR is the executable plan for picking up full operator/sensor integration.
+release. The first implementation pass is **Phase A + B** (sync operators, poke
+sensors, reschedule sensors). **Phase C (deferrable/triggerer) and the goroutine
+sensor engine are explicitly out of this pass** — deferred to separate future
+work (Phase C needs its own spike before it is sized). This ADR is the executable
+plan; the roadmap above is the build order.

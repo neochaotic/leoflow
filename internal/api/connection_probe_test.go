@@ -57,13 +57,40 @@ func TestConnectionTestEndpoint(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.Status != tc.ok || got.Message != tc.msg {
-				t.Errorf("got %+v, want status=%v msg=%q", got, tc.ok, tc.msg)
+			// The reachability result is preserved verbatim …
+			if got.Status != tc.ok || !strings.Contains(got.Message, tc.msg) {
+				t.Errorf("got %+v, want status=%v msg containing %q", got, tc.ok, tc.msg)
+			}
+			// … and a connector nudge is appended for a known conn_type, since the
+			// probe response is our surface (the form itself is Airflow's SPA). This
+			// is the setup-time reminder that the Connection alone is not enough —
+			// the DAG must declare the provider. ADR 0038 #1.
+			if !strings.Contains(got.Message, "connectors: [postgres]") {
+				t.Errorf("message %q missing the connectors: nudge", got.Message)
 			}
 			if tester.gotType != "postgres" {
 				t.Errorf("tester saw conn_type %q, want postgres", tester.gotType)
 			}
 		})
+	}
+}
+
+// TestConnectionTestNudgeOnlyForKnownConnectors guards that the nudge is keyed on
+// the catalog: a curated conn_type gets the connectors: hint; an unknown one does
+// not (no misleading suggestion for a type the sugar cannot expand).
+func TestConnectionTestNudgeOnlyForKnownConnectors(t *testing.T) {
+	tester := &fakeConnTester{ok: true, message: "reachable: x:1"}
+	rec := authGet(probeServer(tester), http.MethodPost, "/api/v2/connections/test",
+		`{"connection_id":"c","conn_type":"totally_made_up","host":"x"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d (%s)", rec.Code, rec.Body.String())
+	}
+	var got connectionTestResultDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.Message, "connectors:") {
+		t.Errorf("unknown conn_type should get no nudge; message = %q", got.Message)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/neochaotic/leoflow/internal/connectors"
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
@@ -38,8 +39,24 @@ func testConnectionHandler(tester ConnectionTester) gin.HandlerFunc {
 			return
 		}
 		ok, msg := tester.Test(c.Request.Context(), body.toDomain(body.ConnectionID))
+		if hint := connectorDependencyNudge(body.ConnType); hint != "" {
+			msg = msg + " · " + hint
+		}
 		c.JSON(http.StatusOK, connectionTestResultDTO{Status: ok, Message: msg})
 	}
+}
+
+// connectorDependencyNudge returns a setup-time reminder that a Connection alone
+// is not enough — the DAG must also declare the provider so the hook is installed
+// (ADR 0038 #1). It is appended to the probe response (our surface; the form is
+// Airflow's SPA). Empty for a conn_type the catalog cannot expand, to avoid
+// suggesting a connectors: entry that would fail the compile.
+func connectorDependencyNudge(connType string) string {
+	if _, ok := connectors.PackageFor(connType); !ok {
+		return ""
+	}
+	return "to use this connection from a task hook, declare the provider in your " +
+		"DAG's leoflow.yaml: connectors: [" + connType + "]"
 }
 
 // defaultConnPorts maps connection types to their well-known port, used when the

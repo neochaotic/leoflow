@@ -96,6 +96,10 @@ The package boundary is **not** a mechanical join of the dotted hook path
 (`amazon.aws` → `amazon`; `microsoft.mssql` → `microsoft-mssql`), which is
 exactly why the mapping is curated rather than derived.
 
+When you press **Test** on a connection of a known type, the result line also
+reminds you to declare the provider (`connectors: [<type>]`) — a Connection in the
+UI carries credentials, but the DAG still has to install the hook to use them.
+
 ## Locally-testable (Docker / Lima)
 
 | Type | Doc | Example DAG | Status |

@@ -59,7 +59,10 @@ jobs:
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
-          version: latest
+          # Pin to the v2 major (what GoReleaser auto-locks `latest` to anyway):
+          # silences the "using latest" warning and keeps releases reproducible
+          # against a known major line (no surprise v3 jump).
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -132,6 +135,84 @@ jobs:
       # every published tag by digest (ADR 0014). Without `--yes` cosign would
       # prompt for OIDC confirmation; CI passes the Sigstore challenge via the
       # GH OIDC token from id-token: write.
+      - name: Sign image with cosign (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for tag in $TAGS; do
+            cosign sign --yes "${tag}@${DIGEST}"
+          done
+
+  # ── Build + push the Leoflow task base image (runtime/Dockerfile)
+  # A DAG image is `FROM ghcr.io/neochaotic/leoflow-runtime:py<ver>` (ADR 0003):
+  # the base ships the leoflow-agent (PID 1) and the leoflow_runtime helper, so a
+  # `leoflow compile --build` needs nothing but a registry. Before this job the
+  # base only existed locally (built from a source checkout), which blocked
+  # testing Pro without the repo (#318). One leg per supported Python so an author
+  # picks the interpreter via `python_version`. Multi-arch + keyless cosign mirror
+  # leoflow-server/leoflow-migrate.
+  runtime-image:
+    name: Build + push leoflow-runtime base (py${{ matrix.python }})
+    needs: release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write       # keyless cosign signing
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.4.3
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/leoflow-runtime
+          # Two tags per Python line: an immutable per-release pin
+          # (py3.11-v0.0.2-rc.1) and a moving line tag (py3.11) the docs and the
+          # generated DAG Dockerfile default to. No bare `:latest` — the tag must
+          # always name a Python version.
+          tags: |
+            type=raw,value=py${{ matrix.python }}-${{ github.ref_name }}
+            type=raw,value=py${{ matrix.python }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+
+      - name: Build + push (multi-arch)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: runtime/Dockerfile
+          build-args: |
+            PYTHON_VERSION=${{ matrix.python }}
+            GO_VERSION=${{ env.GO_VERSION }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
       - name: Sign image with cosign (keyless)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -285,22 +366,22 @@ jobs:
   # it can act on any failure; on success it leaves the published pre-release
   # untouched.
   gate:
-    name: Gate release on install + lite-cold-start + upgrade + migrate image
-    needs: [release, install-smoke, lite-cold-start-smoke, upgrade-smoke, migrate-image]
+    name: Gate release on install + lite-cold-start + upgrade + migrate + runtime image
+    needs: [release, install-smoke, lite-cold-start-smoke, upgrade-smoke, migrate-image, runtime-image]
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # Edit the published release back to a draft on failure.
     steps:
-      - name: Retract release to draft on smoke or migrate-image failure
-        if: needs.install-smoke.result != 'success' || needs.lite-cold-start-smoke.result != 'success' || needs.upgrade-smoke.result != 'success' || needs.migrate-image.result != 'success'
+      - name: Retract release to draft on smoke or image failure
+        if: needs.install-smoke.result != 'success' || needs.lite-cold-start-smoke.result != 'success' || needs.upgrade-smoke.result != 'success' || needs.migrate-image.result != 'success' || needs.runtime-image.result != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} upgrade-smoke=${{ needs.upgrade-smoke.result }} migrate-image=${{ needs.migrate-image.result }}; retracting ${GITHUB_REF_NAME} to a draft."
+          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} upgrade-smoke=${{ needs.upgrade-smoke.result }} migrate-image=${{ needs.migrate-image.result }} runtime-image=${{ needs.runtime-image.result }}; retracting ${GITHUB_REF_NAME} to a draft."
           gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft
           exit 1
       - name: Confirm release passed all gates
-        if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.upgrade-smoke.result == 'success' && needs.migrate-image.result == 'success'
-        run: echo "install smoke + lite cold-start + upgrade smoke + migrate-image passed; ${GITHUB_REF_NAME} stays published."
+        if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.upgrade-smoke.result == 'success' && needs.migrate-image.result == 'success' && needs.runtime-image.result == 'success'
+        run: echo "install smoke + lite cold-start + upgrade smoke + migrate-image + runtime-image passed; ${GITHUB_REF_NAME} stays published."

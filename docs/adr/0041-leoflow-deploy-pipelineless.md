@@ -1,6 +1,6 @@
 # ADR 0041: `leoflow deploy` — pipeline-less promotion from Lite to Pro
 
-**Status:** Accepted (design; implementation post-v0.1.0)
+**Status:** Accepted — implementation in progress (branch `feat/deploy`, PR #367); target **v0.0.2-rc.2**, independent of the held v0.1.0 connectors epic
 **Date:** 2026-06-04
 **Companions:** ADR 0003 (DAG as immutable artifact), ADR 0019 (secret encryption), ADR 0021 (AIRFLOW_CONN delivery), the editions split (Lite/Pro)
 
@@ -53,7 +53,7 @@ itself). It aligns with the standing loud-reject-over-silent principle.
 - **NOT in the yaml** (environment, not per-DAG): the target control plane
   `--server` and the auth token. The same DAG deploys to staging and prod by
   changing only `--server`. Provided via flag, `LEOFLOW_TOKEN` env, or a persisted
-  session (`leoflow login`).
+  session (`leoflow auth login`).
 
 ### Two auths, kept separate
 1. **Registry auth** (image push) — the **builder's** credential (`docker login`,
@@ -62,12 +62,15 @@ itself). It aligns with the standing loud-reject-over-silent principle.
    `docker push`. Leoflow is registry-agnostic.
 2. **Control-plane auth** (register `dag.json`) — a JWT bearer token. Precedence:
    `--token` (default from `LEOFLOW_TOKEN`) → `--username`/`--password` (deploy
-   fetches a token via `/auth/login`) → a persisted session from `leoflow login`.
+   fetches a token via `/auth/login`) → a persisted session from `leoflow auth login`.
 
-### `leoflow login` ships alongside `deploy`
-`leoflow login --server <pro>` stores the token in `~/.leoflow/config`, so
+### `leoflow auth login` ships alongside `deploy`
+`leoflow auth login --server <pro>` stores the token in `~/.leoflow/config`, so
 `leoflow deploy` then needs **no auth flags**. This is what makes the pipeline-less
-loop fluid (login once, deploy many).
+loop fluid (login once, deploy many). It is nested under `auth` (sibling of
+`auth create-token`) to disambiguate from `docker login` (registry auth, which
+Leoflow never handles); it prompts for the password interactively (hidden) when
+not given, so the secret never lands in shell history.
 
 ### The CLI is runtime-independent (Lite and CI share it)
 
@@ -81,7 +84,7 @@ two settings with no special-casing:
 - **From Lite** — a developer who has `leoflow lite` up still invokes `deploy`/
   `login` as plain client calls against the Pro `--server`.
 - **From a CI pipeline, without Lite** — a runner that only has the `leoflow`
-  binary runs `leoflow login` + `leoflow deploy` (journey 3); it never starts a
+  binary runs `leoflow auth login` + `leoflow deploy` (journey 3); it never starts a
   local runtime.
 
 **Packaging note (deferred optimization).** The single `leoflow` binary already
@@ -181,6 +184,35 @@ only show one by-hand sequence:
 When `deploy` ships, `first-pro-dag.md` is restructured around journeys (1) and
 (2) — replacing the current by-hand `compile --build --push` + `push` sequence —
 and `deploy.md` keeps (3) as the automated variant.
+
+### Two-tier happy path (rc.2 reality vs. the complete vision)
+
+The fully-ergonomic Pro path is **Dockerfile-free** — `compile --build`
+synthesizes the image from `leoflow.yaml` (`FROM` the published base, install
+`connectors:`/`dependencies:`, copy the DAG). But that **yaml-driven build is part
+of the v0.1.0 connectors epic** (it calls `EffectiveDependencies()`), which is
+**held**. `feat/deploy` (rc.2) ships `deploy` itself but **not** the yaml-driven
+build. To document a happy path that is *true on the branch it ships on* without
+waiting for v0.1.0, the walkthrough is written in **two tiers**:
+
+- **Tier 1 — the simple happy path (true in rc.2).** Deploy a **shipped example**
+  whose `Dockerfile` builds `FROM` the CI-published base
+  (`ghcr.io/neochaotic/leoflow-runtime`). The user authors nothing and writes no
+  Dockerfile — it belongs to the example. `leoflow auth login` → `leoflow deploy
+  examples/<dag>`. This runs today on `feat/deploy`. "A Dockerfile is for examples
+  only" holds: the example carries it; the user never writes one.
+- **Tier 2 — the complete happy path (your first DAG, end-to-end).** Author your
+  own DAG, **yaml-driven, no Dockerfile**, with `connectors:`/`dependencies:`. The
+  prose/structure is borrowed now from the connectors-branch `first-pro-dag.md`,
+  marked clearly as the **complete path that becomes executable when v0.1.0 lands**
+  (the yaml-driven build). No connectors code is duplicated into `feat/deploy`.
+
+**Branch sync (deferred, not a rebase).** `feat/deploy` stays independent of the
+held v0.1.0: we borrow the connectors docs' *ideas*, not its code. When v0.1.0
+unfreezes, the branches are reconciled — Tier 2 loses its "lands with v0.1.0"
+caveat and the yaml-driven build is wired once (no duplicate `compile_build.go`).
+Rebasing `feat/deploy` onto `feat/connectors` was rejected: it would couple
+rc.2's Steve-unblock to the held epic.
 
 ## Open questions (decide during implementation)
 

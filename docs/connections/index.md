@@ -67,7 +67,7 @@ by the admin connection form, the sugar expansion, and compile validation:
 | `mongo` | `apache-airflow-providers-mongo` |
 | `http` | `apache-airflow-providers-http` |
 | `aws` | `apache-airflow-providers-amazon` |
-| `google_cloud_platform` | `apache-airflow-providers-google` |
+| `google_cloud_platform` (alias `gcp`, `google`) | `apache-airflow-providers-google` |
 | `snowflake` | `apache-airflow-providers-snowflake` |
 | `ssh` | `apache-airflow-providers-ssh` |
 | `ftp` | `apache-airflow-providers-ftp` |

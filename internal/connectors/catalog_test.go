@@ -50,6 +50,20 @@ func TestPackageForKnownAndUnknown(t *testing.T) {
 	}
 }
 
+// TestSugarAliases pins the ergonomic aliases: the `connectors:` short names a
+// user reaches for first. Airflow's own conn_types are asymmetric (`aws` is
+// terse, `google_cloud_platform` is verbose), so the sugar accepts a friendly
+// alias (`gcp`) that resolves to the same provider as the canonical conn_type.
+// The canonical name keeps working — the alias is additive, not a rename.
+func TestSugarAliases(t *testing.T) {
+	for _, name := range []string{"gcp", "google", "google_cloud_platform"} {
+		got, ok := PackageFor(name)
+		if !ok || got != "apache-airflow-providers-google" {
+			t.Errorf("PackageFor(%q) = (%q,%v), want google provider", name, got, ok)
+		}
+	}
+}
+
 // TestResolve pins the sugar expansion: known names → packages (order preserved),
 // unknown names collected separately for an actionable compile error.
 func TestResolve(t *testing.T) {

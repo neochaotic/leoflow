@@ -259,17 +259,22 @@ K8s executor (`internal/executor/kubernetes.go::BuildPod`) sets **no**
 `ImagePullSecrets`, and the task ServiceAccount template carries none either. A
 private-registry deploy would therefore fail the task pod with `ErrImagePull`.
 
-**Fix (cheap, no executor code):** attach `imagePullSecrets` to the **task
-ServiceAccount** — Kubernetes auto-injects a SA's pull secrets into every pod that
-uses it. Two parts:
-- `values.yaml`: `taskServiceAccount.imagePullSecrets: []`; emit the block in
-  `templates/task-serviceaccount.yaml`.
-- **Ensure task pods default to that SA.** Today the pod only runs as
-  `taskServiceAccount` when `Execution.ServiceAccount` is set
-  (`kubernetes.go:93`); otherwise it falls back to the namespace `default` SA,
-  which has no pull secrets. The deploy path requires task pods to default to the
-  task SA (or, as a heavier alternative, a per-pod `ImagePullSecrets` fed from
-  server config into `BuildPod`).
+**Done (rc.2):** `taskServiceAccount.imagePullSecrets` (values + the block in
+`templates/task-serviceaccount.yaml`, helm-unittested) — Kubernetes auto-injects a
+SA's pull secrets into every pod that uses it.
+
+**The remaining half — task pods must *run as* that SA — is by contract, not by
+default (rc.2 decision).** Today a pod runs as `taskServiceAccount` only when
+`Execution.ServiceAccount` is set (`kubernetes.go:93`); otherwise it uses the
+namespace `default` SA, which has no pull secrets. We **do not** change the
+executor default for rc.2: the GKE/Workload-Identity pattern *already* requires
+`execution.service_account: <taskServiceAccount.name>` in the DAG's `leoflow.yaml`
+(Workload Identity binds to the same SA), so those users already run as it and the
+pull secrets apply. The requirement is surfaced in `NOTES.txt` (printed when
+`imagePullSecrets` is set) and the values comment. **Deferred (own,
+cluster-tested change):** a server-config default execution SA applied in
+`BuildPod` when a task names none — nice ergonomics, but a behavior change on a
+path already validated on GKE, so not slipped into rc.2.
 
 This chart change is a **prerequisite** for journeys (1) and (2) against a private
 registry; public images (e.g. the shipped examples on a public GHCR) work without

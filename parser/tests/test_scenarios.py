@@ -145,13 +145,10 @@ def test_dag_id_selection_with_multiple_dags(monkeypatch, tmp_path):
     with DAG("g"):
         a()
     """,
-    # an unsupported provider operator
-    """
-    from airflow.sdk import DAG
-    from airflow.providers.amazon.aws.operators.s3 import S3CreateBucketOperator
-    with DAG("g"):
-        S3CreateBucketOperator(task_id="b", bucket_name="z")
-    """,
+    # NOTE: a top-level provider import (e.g. an amazon S3 operator) is NOT in
+    # this list — it is no longer treated as "unsupported". It gets a dedicated
+    # actionable message pointing at connectors: (ADR 0038 #2), covered by
+    # test_shim_edges.test_top_level_provider_import_gives_actionable_message.
 ])
 def test_unsupported_constructs_error_clearly(monkeypatch, tmp_path, body):
     with pytest.raises(ValueError) as ei:

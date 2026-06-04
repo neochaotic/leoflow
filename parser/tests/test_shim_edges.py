@@ -101,3 +101,26 @@ def test_missing_sdk_helper_gives_clear_unsupported_error(monkeypatch, tmp_path)
                 a()
         """)
     assert "not supported by Leoflow" in str(ei.value)
+
+
+def test_top_level_provider_import_gives_actionable_message(monkeypatch, tmp_path):
+    """A provider hook imported at DAG module top-level fails the parse (the
+    parser has no providers installed). The message must NOT claim the provider
+    is categorically unsupported (it IS supported at runtime via connectors:);
+    it must name the provider, tell the user to import inside the @task body, and
+    point at connectors:/dependencies:. ADR 0038 #2."""
+    with pytest.raises(ValueError) as ei:
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG, task
+            from airflow.providers.postgres.hooks.postgres import PostgresHook
+            @task
+            def a() -> None: ...
+            with DAG("g"):
+                a()
+        """)
+    msg = str(ei.value)
+    assert "airflow.providers.postgres" in msg
+    assert "connectors:" in msg
+    assert "@task" in msg
+    # It must NOT fall through to the generic operator-unsupported wording.
+    assert "supported: Bash, Http" not in msg

@@ -51,6 +51,24 @@ dependencies`. A name in `connectors:` that isn't in the catalog **fails the
 compile** with the offender, the known list, and a pointer to `dependencies:`,
 so a typo never slips through to a runtime `ModuleNotFoundError` in the task pod.
 
+!!! tip "Import provider hooks inside the task function"
+    Leoflow parses your DAG without providers installed (the parser only needs the
+    DAG's *shape*). So put hook/operator imports **inside** the `@task` body, not at
+    the module top level:
+
+    ```python
+    @task
+    def load():
+        from airflow.providers.postgres.hooks.postgres import PostgresHook  # here
+        hook = PostgresHook(postgres_conn_id="pg_target")
+        ...
+    ```
+
+    A provider import at the module top level fails the compile with an actionable
+    message telling you to move it into the task and declare it via `connectors:`.
+    The import works at runtime because `connectors:`/`dependencies:` installed the
+    provider into the task image / venv.
+
 ### Connector → provider package
 
 The curated catalog (`internal/connectors`) is the single source of truth shared

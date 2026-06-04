@@ -160,6 +160,8 @@ def _load_dags_shim(source: str):
     try:
         runpy.run_path(source, run_name="__leoflow_dag__")
     except ModuleNotFoundError as exc:
+        if _is_provider_module(exc.name):
+            return {}, _provider_import_hint(exc.name)
         return {}, _unsupported(f"module {exc.name!r}")
     except ImportError as exc:
         # A missing name the shim does not provide (e.g. `chain`, a Branch operator).
@@ -183,6 +185,38 @@ def _load_dags_shim(source: str):
 def _unsupported(detail: str) -> str:
     return (f"{detail}: not supported by Leoflow "
             f"(supported: Bash, Http, Python/@task; no dynamic task mapping or task groups)")
+
+
+def _is_provider_module(name: str | None) -> bool:
+    """True for an Airflow provider module (`airflow.providers.<x>`), except the
+    bundled `standard` provider — which the shim supplies, so a failure there is
+    a real bug, not a missing-dependency the connectors: hint would address."""
+    if not name:
+        return False
+    return name.startswith("airflow.providers.") and not name.startswith(
+        "airflow.providers.standard"
+    )
+
+
+def _provider_import_hint(name: str) -> str:
+    """Actionable message for a provider hook/operator imported at the DAG module
+    top level. Leoflow parses DAGs without providers installed, so the import
+    fails here even when the provider IS declared — the fix is to import it inside
+    the @task body (which the parser never executes) and declare it so it lands in
+    the task runtime. ADR 0038 #2.
+
+    `name` is the failed module, e.g. 'airflow.providers.postgres'. We do not
+    translate it to a connector short name here (that mapping is the Go catalog's
+    job); we point at the mechanism so the message stays correct for every
+    provider, curated or not."""
+    return (
+        f"{name!r} is an Airflow provider imported at the DAG module top level, "
+        f"which Leoflow cannot resolve while parsing (providers are not installed "
+        f"in the parser). Import the hook/operator INSIDE your @task function, and "
+        f"declare the provider in leoflow.yaml via `connectors:` (short names like "
+        f"postgres, http) or `dependencies:` (an explicit pip package) so it is "
+        f"installed in the task runtime."
+    )
 
 
 def _load_dags_airflow(source: str):

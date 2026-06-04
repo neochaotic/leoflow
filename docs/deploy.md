@@ -212,6 +212,27 @@ into.
     options: { logging: CLOUD_LOGGING_ONLY }
     ```
 
+    !!! tip "Restricted networks (Cloud Shell): build with `gcloud builds submit`"
+        When the local Docker daemon can't reach Google's IPs — e.g. in Cloud
+        Shell — don't build the image locally at all. Let Cloud Build do it
+        **serverless**, with no local daemon and no egress from your machine.
+        Split the build off from `compile`:
+
+        ```bash
+        IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/dags/my_pipeline:$(git rev-parse --short HEAD)"
+        # compile only: records IMAGE into dag.json, never touches a Docker daemon
+        leoflow compile dags/my_pipeline --image "$IMAGE" -o dag.json
+        # serverless build + push of the DAG's Dockerfile (runs in Google's infra)
+        gcloud builds submit dags/my_pipeline --tag "$IMAGE"
+        leoflow push dag.json --server "$LEOFLOW_SERVER" --token "$LEOFLOW_TOKEN"
+        ```
+
+        `gcloud builds submit` uploads the DAG directory, builds its `Dockerfile`
+        in Cloud Build, and pushes to Artifact Registry — so `leoflow` never needs
+        `--build`/`--push` or a reachable daemon. The image it produces and the
+        `--image` recorded in `dag.json` are the same ref, so the artifact stays
+        consistent.
+
 === "Generic / Makefile"
 
     Any runner with Docker, **Python 3.11+**, and the `leoflow` CLI

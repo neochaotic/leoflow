@@ -36,6 +36,14 @@ type TaskSpec struct {
 	// runtime decodes it. Empty when the task has no literals. The name
 	// keeps Airflow's DAG-run `params` term free for a future feature (#148).
 	CallArgsJSON string
+	// OperatorClass is the dotted Airflow operator/sensor class for an
+	// airflow_operator task (ADR 0040); empty for native operators. The agent
+	// passes it to BuildCommand to dispatch the runtime's --operator mode.
+	OperatorClass string
+	// OperatorArgsJSON carries the operator's constructor kwargs (JSON). The agent
+	// injects it as LEOFLOW_OPERATOR_ARGS; the runtime decodes it. Empty when the
+	// operator takes no args.
+	OperatorArgsJSON string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -133,6 +141,8 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		XcomInputMapping:        toXComUpstreamsMap(spec.XComInputMapping),
 		ExecutionTimeoutSeconds: clampInt32(spec.TimeoutSeconds),
 		CallArgsJson:            spec.CallArgsJSON,
+		OperatorClass:           spec.OperatorClass,
+		OperatorArgsJson:        spec.OperatorArgsJSON,
 	}, nil
 }
 

@@ -69,3 +69,27 @@ func contains(env []string, want string) bool {
 	}
 	return false
 }
+
+// TestBuildEnvInjectsOperatorArgs: an airflow_operator task's constructor kwargs
+// (ADR 0040) flow to the runtime as LEOFLOW_OPERATOR_ARGS, and nothing is injected
+// when the operator has no args.
+func TestBuildEnvInjectsOperatorArgs(t *testing.T) {
+	r := newRunner(&fakeClient{}, &fakeCmd{}, &recordingSink{})
+	env, err := r.buildEnv(context.Background(), &agentv1.TaskSpec{OperatorArgsJson: `{"bash_command":"echo hi"}`})
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if !contains(env, `LEOFLOW_OPERATOR_ARGS={"bash_command":"echo hi"}`) {
+		t.Errorf("buildEnv must inject LEOFLOW_OPERATOR_ARGS, got %v", env)
+	}
+
+	env2, err := r.buildEnv(context.Background(), &agentv1.TaskSpec{})
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	for _, kv := range env2 {
+		if strings.HasPrefix(kv, "LEOFLOW_OPERATOR_ARGS=") {
+			t.Errorf("must not inject operator args when none set, got %q", kv)
+		}
+	}
+}

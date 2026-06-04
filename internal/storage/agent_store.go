@@ -46,6 +46,17 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		}
 		callArgsJSON = string(b)
 	}
+	// Marshal the captured operator constructor kwargs (ADR 0040) the same way;
+	// the agent forwards it as LEOFLOW_OPERATOR_ARGS. A non-serialisable arg in
+	// dag.json is a compile-time bug we surface rather than paper over.
+	var operatorArgsJSON string
+	if len(task.OperatorArgs) > 0 {
+		b, mErr := json.Marshal(task.OperatorArgs)
+		if mErr != nil {
+			return agentrpc.TaskSpec{}, fmt.Errorf("marshaling operator args: %w", mErr)
+		}
+		operatorArgsJSON = string(b)
+	}
 	return agentrpc.TaskSpec{
 		Operator:         string(task.Type),
 		Entrypoint:       task.Entrypoint,
@@ -55,6 +66,8 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		XComSchema:       task.XComSchema,
 		TimeoutSeconds:   timeout,
 		CallArgsJSON:     callArgsJSON,
+		OperatorClass:    task.OperatorClass,
+		OperatorArgsJSON: operatorArgsJSON,
 	}, nil
 }
 

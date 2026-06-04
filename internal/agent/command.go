@@ -30,7 +30,9 @@ func NewReturnValuePath() (path string, cleanup func() error, err error) {
 
 // BuildCommand returns the argv to execute the user's task for the given
 // operator. http_api tasks are executed by the control plane, not the agent.
-func BuildCommand(operator, entrypoint string) ([]string, error) {
+// operatorClass is the dotted Airflow operator/sensor class, used only for
+// airflow_operator tasks (ADR 0040); it is ignored for the other operators.
+func BuildCommand(operator, entrypoint, operatorClass string) ([]string, error) {
 	switch operator {
 	case "python":
 		module, fn, ok := strings.Cut(entrypoint, ":")
@@ -52,6 +54,15 @@ func BuildCommand(operator, entrypoint string) ([]string, error) {
 			return nil, errors.New("bash operator requires a command")
 		}
 		return []string{"bash", "-c", entrypoint}, nil
+	case "airflow_operator":
+		// A captured provider operator/sensor (ADR 0040): the runtime imports the
+		// dotted class, instantiates it with the operator args (delivered via
+		// LEOFLOW_OPERATOR_ARGS in runner.go buildEnv) and calls execute(). Same
+		// `-u` unbuffered rationale as python above.
+		if operatorClass == "" {
+			return nil, errors.New("airflow_operator task requires an operator class")
+		}
+		return []string{pythonInterpreter(), "-u", "-m", "leoflow_runtime", "--operator", operatorClass}, nil
 	case "http_api":
 		return nil, errors.New("http_api is executed by the control plane, not the agent")
 	default:

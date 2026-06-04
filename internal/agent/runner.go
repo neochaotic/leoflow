@@ -69,7 +69,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	if spec.GetOperator() == "http_api" {
 		return errors.New("agent received an http_api task, which is executed by the control plane")
 	}
-	argv, err := BuildCommand(spec.GetOperator(), spec.GetEntrypoint())
+	argv, err := BuildCommand(spec.GetOperator(), spec.GetEntrypoint(), spec.GetOperatorClass())
 	if err != nil {
 		return err
 	}
@@ -145,6 +145,11 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		// at runtime for any same-name parameter. The env var name keeps
 		// Airflow's DAG-run `params` term free for a future feature (#148).
 		env = append(env, "LEOFLOW_CALL_ARGS_JSON="+callArgs)
+	}
+	if opArgs := spec.GetOperatorArgsJson(); opArgs != "" {
+		// Operator constructor kwargs (ADR 0040). The runtime's --operator mode
+		// decodes this and instantiates the captured provider operator with it.
+		env = append(env, "LEOFLOW_OPERATOR_ARGS="+opArgs)
 	}
 	return append(env, r.secretsEnv(ctx)...), nil
 }

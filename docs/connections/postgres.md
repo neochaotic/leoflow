@@ -28,16 +28,26 @@ covered by `TestConnectionDeliveryChainOfCustodyIntegration` — see #138.
 | Port | optional | Defaults to `5432`. |
 | Extra | optional | A JSON object — e.g. `{"sslmode":"require"}`. Stored encrypted at rest alongside the password. |
 
-## Example DAG
+## Example DAGs — two styles
 
-[`examples/postgres_load`](https://github.com/neochaotic/leoflow/tree/main/examples/postgres_load) reads `AIRFLOW_CONN_PG_TARGET`, opens a `psycopg2`
-connection, and writes 20 rows into the target. The example's
-[README](https://github.com/neochaotic/leoflow/tree/main/examples/postgres_load/README.md) walks through:
+| Example | Declares the provider via | In the task |
+|---|---|---|
+| [`postgres_load`](https://github.com/neochaotic/leoflow/tree/main/examples/postgres_load) | `dependencies: [psycopg2-binary==2.9.10]` | raw `psycopg2` |
+| [`postgres_hook_load`](https://github.com/neochaotic/leoflow/tree/main/examples/postgres_hook_load) | `connectors: [postgres]` (one line) | Airflow's `PostgresHook` |
+
+Both read the managed `pg_target` Connection (delivered as
+`AIRFLOW_CONN_PG_TARGET`) and write 20 rows into the target. The raw one falls
+back to a local DSN for a quick demo; the hook one requires the Connection (the
+hook has no fallback). Their READMEs walk through:
 
 1. Spinning up a target Postgres with Docker.
 2. Creating the Connection in **Admin → Connections**.
 3. Triggering the DAG.
 4. Verifying the rows in the target.
+
+If you use `PostgresHook`, import it **inside** your `@task` function (see
+[Installing a connector's provider](index.md#installing-a-connectors-provider)) —
+a top-level provider import fails the compile.
 
 ## Lite vs Pro caveats
 

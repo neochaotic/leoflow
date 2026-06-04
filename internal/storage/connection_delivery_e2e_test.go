@@ -35,7 +35,7 @@ import (
 // Table-driven across the locally-testable SQL connectors so adding the
 // next (mssql, sqlite) is a 1-line change.
 func TestConnectionDeliveryChainOfCustodyIntegration(t *testing.T) {
-	const rawPassword = "p@ss/w0rd:!#$" //nolint:gosec // hardcoded test fixture, not a credential
+	const rawPassword = "p@ss//w0rd:!#$?" //nolint:gosec // fixture: reserved chars incl. // and ?, not a credential
 	cases := []struct {
 		connType    string
 		defaultPort int

@@ -153,6 +153,7 @@ nav:
           - Snowflake: connections/snowflake.md
           - Amazon Web Services: connections/aws.md
           - Slack: connections/slack.md
+          - Databricks: connections/databricks.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

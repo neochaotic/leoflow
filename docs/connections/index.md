@@ -123,6 +123,7 @@ UI carries credentials, but the DAG still has to install the hook to use them.
 | `snowflake` | [snowflake.md](snowflake.md) | doc-only (needs a Snowflake account) | ✅ documented + delivery test (`TestSnowflakeConnectionURIShapeIntegration`); account/warehouse/role round-trip via `__extra__`; real-cloud e2e is manual |
 | `aws` | [aws.md](aws.md) | doc-only (needs an AWS account) | ✅ documented — **keyless (IAM role) + key-based** (ADR 0035); delivery test (`TestAWSConnectionURIShapeIntegration`); real-cloud e2e is manual |
 | `slack` / `slackwebhook` | [slack.md](slack.md) | doc-only (needs a Slack workspace) | ✅ documented + delivery test (`TestSlackConnectionURIShapeIntegration`); bot-token round-trip; real-workspace e2e is manual |
+| `databricks` | [databricks.md](databricks.md) | doc-only (needs a Databricks workspace) | ✅ documented + delivery test (`TestDatabricksConnectionURIShapeIntegration`); host + PAT + http_path round-trip; real e2e is manual |
 
 ## Cloud (deferred past alpha)
 

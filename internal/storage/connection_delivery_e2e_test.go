@@ -441,6 +441,74 @@ func TestSlackConnectionURIShapeIntegration(t *testing.T) {
 	}
 }
 
+// TestDatabricksConnectionURIShapeIntegration is the Databricks chain-of-custody.
+// A Databricks connection has a real host (the workspace URL) plus a Personal
+// Access Token in password; DatabricksHook reads host + token. So it is the
+// host-bearing shape (unlike Snowflake/Slack), and this proves the PAT — which
+// can contain reserved characters — survives the encryption + delivery hop and
+// the host round-trips.
+func TestDatabricksConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 37)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	const (
+		host    = "dbc-12345678-9abc.cloud.databricks.com"
+		rawPAT  = "dapi/1+2:3@4#deadbeef" //nolint:gosec // fixture, not a real token
+		rawHTTP = "/sql/1.0/warehouses/abc123"
+	)
+	rawExtra := fmt.Sprintf(`{"http_path":%q}`, rawHTTP)
+	connID := fmt.Sprintf("e2e_databricks_%d", time.Now().UnixNano())
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "databricks",
+		Host:     host,
+		Password: rawPAT,
+		Extra:    rawExtra,
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	uri, present := uris[connID]
+	if !present {
+		t.Fatalf("URI for %q missing from delivery map; got keys = %v", connID, mapKeys(uris))
+	}
+
+	parsed, perr := url.Parse(uri)
+	if perr != nil {
+		t.Fatalf("URI is not parseable (DatabricksHook would fail): %q err=%v", uri, perr)
+	}
+	if parsed.Scheme != "databricks" {
+		t.Errorf("scheme = %q, want databricks", parsed.Scheme)
+	}
+	if parsed.Host != host {
+		t.Errorf("host = %q, want %q", parsed.Host, host)
+	}
+	gotPAT, _ := parsed.User.Password()
+	if gotPAT != rawPAT {
+		t.Errorf("PAT round-trip failed: got %q, want %q", gotPAT, rawPAT)
+	}
+	gotExtra := parsed.Query().Get("__extra__")
+	if gotExtra != rawExtra {
+		t.Errorf("__extra__ round-trip failed: got %q, want %q", gotExtra, rawExtra)
+	}
+}
+
 // TestAWSConnectionURIShapeIntegration is the AWS chain-of-custody. Like
 // Snowflake it is the http shape (no host:port): an AWS connection carries the
 // access key as login, the secret key as password, and region_name/role_arn in

@@ -1,5 +1,10 @@
 # CI/CD & deploy examples
 
+!!! tip "New to Pro? Start with the walkthrough"
+    [**Your first Pro DAG (≈20 min)**](first-pro-dag.md) takes one DAG from source
+    to a running pod by hand, so you see each artifact boundary before you automate
+    it. This page is the CI recipes for the same pipeline.
+
 Deploying a Leoflow DAG is the same everywhere because a DAG is an **immutable
 artifact** — a `dag.json` + a container image, versioned together (ADR 0003).
 The pipeline is always:

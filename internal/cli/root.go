@@ -31,7 +31,7 @@ func NewRootCommand() *cobra.Command {
 		&cobra.Group{ID: "lifecycle", Title: "Lifecycle (install, configure, repair, retire):"},
 	)
 
-	authoring := []*cobra.Command{newInitCommand(), newValidateCommand(), newCompileCommand(), newPushCommand()}
+	authoring := []*cobra.Command{newInitCommand(), newValidateCommand(), newCompileCommand(), newPushCommand(), newLoginCommand()}
 	runtime := []*cobra.Command{newLiteCommand(), newServerCommand()}
 	inspection := []*cobra.Command{newDagsCommand(), newRunsCommand(), newAuthCommand()}
 	lifecycle := []*cobra.Command{newSetupCommand(), newDoctorCommand(), newDBCommand(), newUninstallCommand(), newVersionCommand()}

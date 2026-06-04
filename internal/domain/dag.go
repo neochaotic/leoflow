@@ -19,6 +19,11 @@ const (
 	TaskTypeBash TaskType = "bash"
 	// TaskTypeHTTPAPI performs an outbound HTTP request from the control plane.
 	TaskTypeHTTPAPI TaskType = "http_api"
+	// TaskTypeAirflowOperator runs a captured Airflow provider operator/sensor in
+	// the task pod via the generic executor (ADR 0040): the runtime instantiates
+	// OperatorClass with OperatorArgs and calls execute(). The provider is
+	// installed in the image via connectors:/dependencies:.
+	TaskTypeAirflowOperator TaskType = "airflow_operator"
 )
 
 // ExecutionMode selects how a task runs. It is only meaningful for http_api
@@ -120,6 +125,14 @@ type TaskSpec struct {
 	// Named call_args (not params) to leave the term free for Airflow's
 	// DAG-run params semantic (#148).
 	CallArgs map[string]any `json:"call_args,omitempty"`
+	// OperatorClass is the dotted Airflow operator/sensor class for an
+	// airflow_operator task (ADR 0040), e.g.
+	// "airflow.providers.snowflake.operators.snowflake.SQLExecuteQueryOperator".
+	OperatorClass string `json:"operator_class,omitempty"`
+	// OperatorArgs are the operator's constructor kwargs captured at compile time.
+	// The agent serializes them as the env var LEOFLOW_OPERATOR_ARGS; the runtime
+	// instantiates the operator with them.
+	OperatorArgs map[string]any `json:"operator_args,omitempty"`
 }
 
 // HTTPRequest is the request executed directly by the control plane for

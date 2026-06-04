@@ -136,8 +136,17 @@
           "enum": [
             "python",
             "bash",
-            "http_api"
+            "http_api",
+            "airflow_operator"
           ]
+        },
+        "operator_class": {
+          "type": "string",
+          "description": "For type=airflow_operator: the dotted Airflow operator/sensor class the runtime imports and executes (ADR 0040)."
+        },
+        "operator_args": {
+          "type": "object",
+          "description": "For type=airflow_operator: the operator's constructor kwargs captured at compile time."
         },
         "depends_on": {
           "type": "array",

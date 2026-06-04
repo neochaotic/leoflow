@@ -245,6 +245,7 @@ func runDeploy(cmd *cobra.Command, dir string, o deployOptions) error {
 	if rerr != nil {
 		return rerr
 	}
+	surfaceConnections(out, output)
 	if o.trigger {
 		return triggerDeployRun(ctx, out, serverURL, token, dagID)
 	}

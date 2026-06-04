@@ -51,11 +51,14 @@ jobs:
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install protoc-gen plugins (pinned to go.mod)
+      # Plugins are pinned: protoc-gen-go to the go.mod version, protoc-gen-go-grpc
+      # to v1.6.2 — these MUST match the versions the committed code was generated
+      # with, or this check reports false drift.
+      - name: Install protoc-gen plugins
         run: |
           set -euo pipefail
           go install "google.golang.org/protobuf/cmd/protoc-gen-go@$(go list -m -f '{{.Version}}' google.golang.org/protobuf)"
-          go install "google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest"
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
       - name: buf generate
         run: buf generate
       - name: Fail on drift

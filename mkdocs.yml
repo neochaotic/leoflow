@@ -151,6 +151,7 @@ nav:
           - HTTP / HTTPS: connections/http.md
           - Google Cloud: connections/google_cloud_platform.md
           - Snowflake: connections/snowflake.md
+          - Amazon Web Services: connections/aws.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

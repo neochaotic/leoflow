@@ -121,14 +121,15 @@ UI carries credentials, but the DAG still has to install the hook to use them.
 |---|---|---|---|
 | `google_cloud_platform` | [google_cloud_platform.md](google_cloud_platform.md) | [examples/gcp_gcs_load](https://github.com/neochaotic/leoflow/tree/main/examples/gcp_gcs_load) | ✅ documented — **key + keyless (Workload Identity)** (#77, #56); delivery test with a synthetic key; real-cloud e2e is manual |
 | `snowflake` | [snowflake.md](snowflake.md) | doc-only (needs a Snowflake account) | ✅ documented + delivery test (`TestSnowflakeConnectionURIShapeIntegration`); account/warehouse/role round-trip via `__extra__`; real-cloud e2e is manual |
+| `aws` | [aws.md](aws.md) | doc-only (needs an AWS account) | ✅ documented — **keyless (IAM role) + key-based** (ADR 0035); delivery test (`TestAWSConnectionURIShapeIntegration`); real-cloud e2e is manual |
 
 ## Cloud (deferred past alpha)
 
 These need provider accounts to test end-to-end; the umbrella issues are
 filed but the cookbook entries are not part of the first alpha cut.
 
-- `aws` (#76), `oracle` (#72), `kafka` (#82), `ssh` (#79), `ftp` (#80),
-  `sftp` (#81), `mongo` (#74)
+- `oracle` (#72), `kafka` (#82), `ssh` (#79), `ftp` (#80), `sftp` (#81),
+  `mongo` (#74)
 
 ## Contract every entry honours
 

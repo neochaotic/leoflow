@@ -379,3 +379,81 @@ func TestSnowflakeConnectionURIShapeIntegration(t *testing.T) {
 		t.Errorf("__extra__ round-trip failed: got %q, want %q", gotExtra, rawExtra)
 	}
 }
+
+// TestAWSConnectionURIShapeIntegration is the AWS chain-of-custody. Like
+// Snowflake it is the http shape (no host:port): an AWS connection carries the
+// access key as login, the secret key as password, and region_name/role_arn in
+// Extra. AwsBaseHook reads them at runtime.
+//
+// This covers the **key-based** path. The recommended path is keyless (an IAM
+// role / instance profile / web-identity, ADR 0035): no key is stored, and the
+// SDK resolves credentials in the task at runtime — so there is nothing for this
+// delivery test to assert there.
+//
+// The contract this pins: an AWS Connection with a secret key containing
+// URI-reserved characters (the `/` and `+` AWS secret keys routinely contain)
+// AND the region/role Extra round-trips end-to-end via AIRFLOW_CONN_<ID> — the
+// secret key un-escapes intact and the Extra is recoverable from `__extra__`.
+func TestAWSConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 29)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	const (
+		accessKeyID = "AKIAIOSFODNN7EXAMPLE"
+		// An AWS secret key shape: contains `/` and `+`, the reserved chars that
+		// break a naive URI builder.
+		rawSecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCY+EXAMPLEKEY" //nolint:gosec // fixture, not a real credential
+		rawExtra  = `{"region_name":"eu-central-1","role_arn":"arn:aws:iam::123456789012:role/transformer"}`
+	)
+	connID := fmt.Sprintf("e2e_aws_%d", time.Now().UnixNano())
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "aws",
+		Login:    accessKeyID,
+		Password: rawSecret,
+		Extra:    rawExtra,
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	uri, present := uris[connID]
+	if !present {
+		t.Fatalf("URI for %q missing from delivery map; got keys = %v", connID, mapKeys(uris))
+	}
+
+	parsed, perr := url.Parse(uri)
+	if perr != nil {
+		t.Fatalf("URI is not parseable (AwsBaseHook would fail): %q err=%v", uri, perr)
+	}
+	if parsed.Scheme != "aws" {
+		t.Errorf("scheme = %q, want aws", parsed.Scheme)
+	}
+	if parsed.User.Username() != accessKeyID {
+		t.Errorf("access key = %q, want %q", parsed.User.Username(), accessKeyID)
+	}
+	gotSecret, _ := parsed.User.Password()
+	if gotSecret != rawSecret {
+		t.Errorf("secret key round-trip failed: got %q, want %q (the URI builder must percent-escape / and +)",
+			gotSecret, rawSecret)
+	}
+	gotExtra := parsed.Query().Get("__extra__")
+	if gotExtra != rawExtra {
+		t.Errorf("__extra__ round-trip failed: got %q, want %q", gotExtra, rawExtra)
+	}
+}

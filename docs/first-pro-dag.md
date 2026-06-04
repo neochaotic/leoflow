@@ -12,28 +12,34 @@ across one boundary:
 ```mermaid
 flowchart LR
   A[dag.py + leoflow.yaml] --> B[compile → dag.json]
-  B --> C[build DAG image<br/>FROM leoflow-runtime]
-  C --> D[push image → registry]
+  B --> C[compile --build<br/>generates image from yaml]
+  C --> D[push image → your registry]
   D --> E[register dag.json → control plane]
   E --> F[trigger → runs in a pod]
 ```
 
-The DAG image is built `FROM` the **published Leoflow task base**
-(`ghcr.io/neochaotic/leoflow-runtime:py3.11`), which bundles the `leoflow-agent`
-(PID 1, talks gRPC to the control plane) and the `leoflow_runtime` Python helper.
-You never build the base yourself — pull it from GHCR, multi-arch, signed.
+!!! tip "No Dockerfile to maintain"
+    The real pipeline is **yaml-driven**: you ship only `dag.py` + `leoflow.yaml`.
+    `leoflow compile --build` synthesizes the image from the yaml — `FROM` the
+    published Leoflow base, your `dependencies:`/`connectors:` installed, your DAG
+    copied in. Ship your own `Dockerfile` only if you want full control (it's then
+    used verbatim).
 
 ## Prerequisites
 
 - `docker` (or `podman`/`nerdctl` — pass `--builder`).
 - The `leoflow` CLI and Python 3.11+ on your machine
   (see [Python on the runner](deploy.md#python-on-the-runner)).
+- **A container registry your cluster can pull from** — anywhere you like: Docker
+  Hub, GHCR, Amazon ECR, Google Artifact Registry, Azure ACR, or a private
+  registry. You push the DAG image there; the control plane pulls from it.
 - A reachable Leoflow **control plane** (`LEOFLOW_SERVER`) and a push token
   (`LEOFLOW_TOKEN`). For a throwaway target, the Helm chart's
-  [Pro deployment](helm-chart.md) brings one up; a local registry
-  (`docker run -d -p 5000:5000 registry:2`) is enough to push DAG images to.
+  [Pro deployment](helm-chart.md) brings one up.
 
-## Step 1 — a project (`dag.py` + `leoflow.yaml` + `Dockerfile`)
+## Step 1 — a project (`dag.py` + `leoflow.yaml`)
+
+No Dockerfile, no `requirements.txt` — two files:
 
 ```python title="dag.py"
 from airflow.sdk import DAG, task
@@ -55,39 +61,35 @@ dag_id: first_pro_dag
 python_version: "3.11"
 dependencies:
   - requests==2.32.3
+registry:
+  # Wherever you want the artifact to live — this is just an example.
+  # Docker Hub: docker.io/your-user · ECR: <acct>.dkr.ecr.<region>.amazonaws.com
+  # Artifact Registry: <region>-docker.pkg.dev/<project>/<repo> · GHCR: ghcr.io/your-org
+  url: docker.io/your-user
+  image_name: first-pro-dag
 ```
 
-```dockerfile title="Dockerfile"
-FROM ghcr.io/neochaotic/leoflow-runtime:py3.11
-RUN pip install --no-cache-dir requests==2.32.3
-COPY dag.py /home/leoflow/dag.py
-ENV PYTHONPATH=/home/leoflow
-```
-
-!!! tip "The Dockerfile is boilerplate"
-    It always layers the same way: `FROM` the base, install your deps, `COPY` the
-    DAG, set `PYTHONPATH`. The [Lite loop](local-deploy.md) generates this for you;
-    in Pro you keep it in the repo so the image is fully reproducible in CI.
+The only image Leoflow owns is the **base** your DAG layers on:
+`ghcr.io/neochaotic/leoflow-runtime:py<version>` (the `leoflow-agent` + Python
+runtime, multi-arch, signed). It is pulled automatically; override it with
+`base_image:` in `leoflow.yaml` if you mirror it into your own registry.
 
 ## Step 2 — compile, build, and push
 
 ```bash
 leoflow setup                 # once per machine: extracts the parser
-leoflow compile . --build --push \
-  --image localhost:5000/first-pro-dag:v1.0.0 \
-  --dag-version v1.0.0
+leoflow compile . --build --push --dag-version v1.0.0
 ```
 
 This single command crosses three boundaries:
 
 1. **compile** — parses `dag.py`, overlays `leoflow.yaml`, runs the guardrails
-   (unknown `task_id`, unsupported operator, duplicate keys), and writes `dag.json`
-   with `--image` recorded inside it.
-2. **build** — builds the image from your `Dockerfile`.
-3. **push** — pushes it to your registry.
-
-Because the `--image` you pass is written into `dag.json`, the registered artifact
-and the pushed image can never drift.
+   (unknown `task_id`, unsupported operator, duplicate keys), writes `dag.json`.
+2. **build** — synthesizes the image from `leoflow.yaml` (no Dockerfile needed) and
+   builds it. With no `--image`, the reference comes from your `registry:` block →
+   `docker.io/your-user/first-pro-dag:v1.0.0`. That exact ref is written into
+   `dag.json`, so the registered artifact and the pushed image can never drift.
+3. **push** — pushes the image to **your** registry.
 
 !!! tip "The guardrails are your CI gate"
     The same checks fail the build here that warn you in `leoflow lite`, so a bad
@@ -99,7 +101,8 @@ and the pushed image can never drift.
 leoflow push dag.json --server "$LEOFLOW_SERVER" --token "$LEOFLOW_TOKEN"
 ```
 
-The control plane now knows the DAG, its version, and which image to pull.
+The control plane now knows the DAG, its version, and which image to pull (from
+your registry).
 
 ## Step 4 — trigger and watch it run
 

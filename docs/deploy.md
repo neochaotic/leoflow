@@ -31,37 +31,42 @@ flowchart LR
     manually so you can watch the DAG cross each boundary. Come back here to wire
     the same steps into CI.
 
-## Your repo of DAGs
+## Your repo of DAGs (CI is the recommended path)
 
-In Pro you keep your DAGs in a Git repository — one directory per DAG — and CI
-turns each into an artifact when it changes. Nothing here is Leoflow-specific
-magic: it's a normal repo plus three CLI calls.
+In Pro you keep your DAGs in a Git repository — one directory per DAG — and **CI**
+turns each into an artifact when it changes. This is the recommended path: a push
+triggers the pipeline, no one builds by hand. Each DAG is just **two files** — no
+Dockerfile, no `requirements.txt`:
 
 ```text
 my-dags/                      # your Git repo
 ├── .github/workflows/
-│   └── deploy-dag.yml        # the CI below
+│   └── deploy-dag.yml        # the CI below (the recommended path)
 └── dags/
     ├── my_pipeline/
     │   ├── dag.py            # the DAG (TaskFlow / operators)
-    │   ├── leoflow.yaml      # id, python_version, dependencies
-    │   └── Dockerfile        # FROM ghcr.io/neochaotic/leoflow-runtime:py3.11
+    │   └── leoflow.yaml      # id, python_version, dependencies, registry
     └── another_pipeline/
         ├── dag.py
-        ├── leoflow.yaml
-        └── Dockerfile
+        └── leoflow.yaml
 ```
 
-Each DAG directory is a self-contained project — its own dependencies, its own
-image. A typical `Dockerfile` is four lines of boilerplate (the
-[walkthrough](first-pro-dag.md) shows it); it layers your code onto the
-**published task base**, so CI pulls a signed image instead of building one.
+`leoflow compile --build` **synthesizes the image from `leoflow.yaml`** — `FROM`
+the published Leoflow base, your deps/connectors installed, your DAG copied in.
+No Dockerfile to maintain. (Ship your own `Dockerfile` only if you want full
+control; it is then used verbatim. Our [examples](examples.md) ship one so you can
+`docker build` and inspect them by hand.)
+
+The built image is **your** artifact — push it wherever you like (Docker Hub, ECR,
+Artifact Registry, ACR, GHCR, a private registry), via the `registry:` block in
+`leoflow.yaml` or `--image`. The only image Leoflow owns is the base your DAG
+layers on.
 
 **The mental model:** a push that touches `dags/my_pipeline/**` triggers CI for
-*that* DAG only (the `paths:` filter), which compiles → builds → pushes the image
-→ registers `dag.json`. The control plane runs the new version on the next
-trigger. One DAG per pipeline keeps blast radius small: a broken
-`another_pipeline` never blocks `my_pipeline`.
+*that* DAG only (the `paths:` filter), which compiles → builds (from yaml) →
+pushes the image to your registry → registers `dag.json`. The control plane runs
+the new version on the next trigger. One DAG per pipeline keeps blast radius
+small: a broken `another_pipeline` never blocks `my_pipeline`.
 
 !!! tip "Tag images immutably"
     The recipes tag by git SHA (`my_pipeline:$GIT_SHA`), never `:latest`. The
@@ -212,26 +217,21 @@ into.
     options: { logging: CLOUD_LOGGING_ONLY }
     ```
 
-    !!! tip "Restricted networks (Cloud Shell): build with `gcloud builds submit`"
+    !!! tip "Restricted networks (Cloud Shell): run the build inside Cloud Build"
         When the local Docker daemon can't reach Google's IPs — e.g. in Cloud
-        Shell — don't build the image locally at all. Let Cloud Build do it
-        **serverless**, with no local daemon and no egress from your machine.
-        Split the build off from `compile`:
+        Shell — don't build locally at all. The `cloudbuild.yaml` above runs
+        `leoflow compile --build --push` **inside Cloud Build** (Google's network,
+        not your machine): serverless, still yaml-driven, no Dockerfile, no local
+        egress. Trigger it from Cloud Shell with:
 
         ```bash
-        IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/dags/my_pipeline:$(git rev-parse --short HEAD)"
-        # compile only: records IMAGE into dag.json, never touches a Docker daemon
-        leoflow compile dags/my_pipeline --image "$IMAGE" -o dag.json
-        # serverless build + push of the DAG's Dockerfile (runs in Google's infra)
-        gcloud builds submit dags/my_pipeline --tag "$IMAGE"
-        leoflow push dag.json --server "$LEOFLOW_SERVER" --token "$LEOFLOW_TOKEN"
+        gcloud builds submit --config cloudbuild.yaml .
         ```
 
-        `gcloud builds submit` uploads the DAG directory, builds its `Dockerfile`
-        in Cloud Build, and pushes to Artifact Registry — so `leoflow` never needs
-        `--build`/`--push` or a reachable daemon. The image it produces and the
-        `--image` recorded in `dag.json` are the same ref, so the artifact stays
-        consistent.
+        Cloud Build checks out the source, runs compile + build + push there, and
+        pushes to Artifact Registry — your machine never touches a Docker daemon.
+        (Use `gcloud builds submit --tag …` only if you ship your own Dockerfile;
+        the yaml-driven path has none for it to build.)
 
 === "Generic / Makefile"
 

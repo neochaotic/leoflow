@@ -51,6 +51,12 @@ func TestConnectionDeliveryChainOfCustodyIntegration(t *testing.T) {
 		// `redis://[user]:password@host:port/<db>`, identical in shape to the
 		// SQL family — only the semantics of Schema differ.
 		{connType: "redis", defaultPort: 6379, host: "warehouse.example.com", schema: "0"},
+		// Oracle and MongoDB are the same host:port + login/password + schema
+		// shape: Oracle's Schema carries the service name / PDB, Mongo's the
+		// database. Both are locally testable (a container exists) so they ride
+		// the same table.
+		{connType: "oracle", defaultPort: 1521, host: "warehouse.example.com", schema: "ORCLPDB1"},
+		{connType: "mongo", defaultPort: 27017, host: "warehouse.example.com", schema: "analytics"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.connType, func(t *testing.T) {
@@ -129,6 +135,69 @@ func TestConnectionDeliveryChainOfCustodyIntegration(t *testing.T) {
 			}
 			if !strings.HasPrefix(parsed.Path, "/"+tc.schema) {
 				t.Errorf("path = %q, want /%s prefix", parsed.Path, tc.schema)
+			}
+		})
+	}
+}
+
+// TestFileTransferConnectionURIShapeIntegration is the chain-of-custody for the
+// file-transfer family (ssh, ftp, sftp): host:port + login + password, no schema
+// and no Extra. SSHHook/FTPHook/SFTPHook read host:port + credentials. This
+// proves a password with reserved characters round-trips for each.
+func TestFileTransferConnectionURIShapeIntegration(t *testing.T) {
+	const rawPassword = "p@ss/w0rd:!#$" //nolint:gosec // fixture, not a credential
+	cases := []struct {
+		connType    string
+		defaultPort int
+	}{
+		{connType: "ssh", defaultPort: 22},
+		{connType: "sftp", defaultPort: 22},
+		{connType: "ftp", defaultPort: 21},
+	}
+	for _, tc := range cases {
+		t.Run(tc.connType, func(t *testing.T) {
+			repo, _, ctx := openRepo(t)
+			key := make([]byte, 32)
+			for i := range key {
+				key[i] = byte(i + 53)
+			}
+			cipher, err := secrets.NewAESGCM(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo.SetCipher(cipher)
+
+			connID := fmt.Sprintf("e2e_%s_%d", tc.connType, time.Now().UnixNano())
+			port := tc.defaultPort
+			if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+				ConnID: connID, ConnType: tc.connType,
+				Host: "files.example.com", Login: "etl_user", Password: rawPassword, Port: &port,
+			}); cerr != nil {
+				t.Fatalf("SetConnection: %v", cerr)
+			}
+			t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+			tenantUUID, err := repo.TenantUUID(ctx, "default")
+			if err != nil {
+				t.Fatalf("TenantUUID: %v", err)
+			}
+			uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+			if err != nil {
+				t.Fatalf("SecretConnectionURIs: %v", err)
+			}
+			parsed, perr := url.Parse(uris[connID])
+			if perr != nil {
+				t.Fatalf("URI not parseable: %q err=%v", uris[connID], perr)
+			}
+			if parsed.Scheme != tc.connType {
+				t.Errorf("scheme = %q, want %q", parsed.Scheme, tc.connType)
+			}
+			if want := fmt.Sprintf("files.example.com:%d", tc.defaultPort); parsed.Host != want {
+				t.Errorf("host = %q, want %q", parsed.Host, want)
+			}
+			gotPassword, _ := parsed.User.Password()
+			if gotPassword != rawPassword {
+				t.Errorf("password round-trip failed: got %q, want %q", gotPassword, rawPassword)
 			}
 		})
 	}

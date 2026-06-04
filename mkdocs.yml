@@ -157,6 +157,9 @@ nav:
           - Azure: connections/azure.md
           - Apache Spark: connections/spark.md
           - Apache Kafka: connections/kafka.md
+          - Oracle: connections/oracle.md
+          - MongoDB: connections/mongo.md
+          - "File transfer (SSH/SFTP/FTP)": connections/file-transfer.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

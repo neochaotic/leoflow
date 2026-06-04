@@ -114,6 +114,9 @@ UI carries credentials, but the DAG still has to install the hook to use them.
 | `sqlite` | [sqlite.md](sqlite.md) | [examples/sqlite_load](https://github.com/neochaotic/leoflow/tree/main/examples/sqlite_load) | ✅ documented + automated test (#70, dedicated test for file-path shape; Tier 1 — no service needed) |
 | `redis` | [redis.md](redis.md) | [examples/redis_load](https://github.com/neochaotic/leoflow/tree/main/examples/redis_load) | ✅ documented + automated test (#73, table-driven via #138; Tier 1 — redis already in CI services) |
 | `http` / `https` | [http.md](http.md) | [examples/http_load](https://github.com/neochaotic/leoflow/tree/main/examples/http_load) | ✅ documented + automated test (#75, dedicated test for `__extra__` round-trip; Tier 1 — no service needed) |
+| `oracle` | [oracle.md](oracle.md) | doc-only | ✅ documented + delivery test (table-driven, oracle row); service-name in Schema |
+| `mongo` | [mongo.md](mongo.md) | doc-only | ✅ documented + delivery test (table-driven, mongo row); db in Schema, `srv` for Atlas |
+| `ssh` / `sftp` / `ftp` | [file-transfer.md](file-transfer.md) | doc-only | ✅ documented + delivery test (`TestFileTransferConnectionURIShapeIntegration`); key auth in Extra |
 
 ## Cloud (documented)
 
@@ -128,12 +131,13 @@ UI carries credentials, but the DAG still has to install the hook to use them.
 | `spark` / `spark_sql` / … | [spark.md](spark.md) | doc-only (needs a Spark cluster) | ✅ documented + delivery test (`TestSparkConnectionURIShapeIntegration`); host:port + tuning Extra round-trip |
 | `kafka` | [kafka.md](kafka.md) | doc-only (needs a Kafka cluster) | ✅ documented + delivery test (`TestKafkaConnectionURIShapeIntegration`); full client config (incl. SASL) Extra round-trip |
 
-## Cloud (deferred past alpha)
+## The long tail
 
-These need provider accounts to test end-to-end; the umbrella issues are
-filed but the cookbook entries are not part of the first alpha cut.
-
-- `oracle` (#72), `ssh` (#79), `ftp` (#80), `sftp` (#81), `mongo` (#74)
+Every curated connector above is first-class (impl + delivery test + cookbook).
+Beyond them, **all ~86 connector types in the generated catalog** (ADR 0039) are
+usable today via `connectors:` (dropdown + sugar) — they just don't each have a
+dedicated cookbook recipe yet. Any other Airflow provider works via
+`dependencies:`. Recipes are added connector-by-connector as they are promoted.
 
 ## Contract every entry honours
 

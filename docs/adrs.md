@@ -41,4 +41,6 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0036: Airflow 3.X runtime compatibility shim — one model, one policy seam](adr/0036-airflow-runtime-compat-shim.md)
 - [ADR 0037: Release version scheme — skip alpha/beta, RC discipline from `v0.0.1`](adr/0037-release-version-scheme.md)
 - [ADR 0038: Connector dependency ergonomics — `connectors:` sugar + `dependencies:` escape hatch](adr/0038-connector-dependency-ergonomics.md)
+- [ADR 0039: Generated connector catalog with full form fidelity](adr/0039-generated-connector-catalog.md)
+- [ADR 0040: Airflow operator + sensor execution — native fast path + generic executor](adr/0040-airflow-operator-support.md)
 <!-- END ADR INDEX -->

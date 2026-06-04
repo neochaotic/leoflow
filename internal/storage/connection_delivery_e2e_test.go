@@ -302,3 +302,80 @@ func TestHTTPConnectionURIShapeIntegration(t *testing.T) {
 		t.Errorf("__extra__ round-trip failed: got %q, want %q", gotExtra, rawExtra)
 	}
 }
+
+// TestSnowflakeConnectionURIShapeIntegration is the Snowflake chain-of-custody.
+// It is the http shape, not the SQL host:port one, because a Snowflake
+// connection's defining fields (account, warehouse, database, role, region)
+// live in Extra — there is no meaningful host:port. SnowflakeHook reads those
+// from the connection's extra_dejson at runtime.
+//
+// The contract this pins: a Snowflake Connection POSTed in the UI with a
+// password containing URI-reserved characters AND the account/warehouse/role
+// Extra blob round-trips end-to-end via AIRFLOW_CONN_<ID> — url.Parse recovers
+// the password unencoded and the Extra blob is recoverable from `__extra__`. A
+// regression would silently drop the warehouse/role and the hook would fail to
+// connect only at runtime.
+func TestSnowflakeConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 23)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	const (
+		rawPassword = "p@ss/w0rd:!#$" //nolint:gosec // hardcoded test fixture, not a credential
+		rawExtra    = `{"account":"xy12345.eu-central-1","warehouse":"COMPUTE_WH","database":"ANALYTICS","role":"TRANSFORMER","region":"eu-central-1"}`
+	)
+	connID := fmt.Sprintf("e2e_snowflake_%d", time.Now().UnixNano())
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "snowflake",
+		Login:    "etl_user",
+		Password: rawPassword,
+		Schema:   "PUBLIC",
+		Extra:    rawExtra,
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	uri, present := uris[connID]
+	if !present {
+		t.Fatalf("URI for %q missing from delivery map; got keys = %v", connID, mapKeys(uris))
+	}
+
+	parsed, perr := url.Parse(uri)
+	if perr != nil {
+		t.Fatalf("URI is not parseable (SnowflakeHook would fail): %q err=%v", uri, perr)
+	}
+	if parsed.Scheme != "snowflake" {
+		t.Errorf("scheme = %q, want snowflake", parsed.Scheme)
+	}
+	if parsed.User.Username() != "etl_user" {
+		t.Errorf("username = %q, want etl_user", parsed.User.Username())
+	}
+	gotPassword, _ := parsed.User.Password()
+	if gotPassword != rawPassword {
+		t.Errorf("password round-trip failed: got %q, want %q (the URI builder must percent-escape; net/url must un-escape on parse)",
+			gotPassword, rawPassword)
+	}
+	// The Snowflake-specific edge: the account/warehouse/role Extra must survive
+	// the Repository -> SecretConnectionURIs -> agent env hop and be recoverable
+	// from `__extra__`, since the hook has no host to fall back on.
+	gotExtra := parsed.Query().Get("__extra__")
+	if gotExtra != rawExtra {
+		t.Errorf("__extra__ round-trip failed: got %q, want %q", gotExtra, rawExtra)
+	}
+}

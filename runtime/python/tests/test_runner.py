@@ -258,3 +258,17 @@ def test_run_ignores_malformed_call_args_json(tmp_path, monkeypatch):
     runner.run(f"{mod}:task")
 
     assert json.loads(out.read_text()) == 5
+
+
+def test_run_operator_executes_captured_provider_operator(tmp_path, monkeypatch):
+    """ADR 0040 A3: run_operator imports a captured operator and executes it,
+    writing its return as the XCom. Skips when Airflow is not installed (the lean
+    runtime test env); runs against the real operator otherwise."""
+    pytest.importorskip("airflow.providers.standard.operators.bash")
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(tmp_path / "ret.json"))
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
+    runner.run_operator(
+        "airflow.providers.standard.operators.bash.BashOperator",
+        {"bash_command": "echo generic-op-ran"},
+    )
+    assert json.loads((tmp_path / "ret.json").read_text()) == "generic-op-ran"

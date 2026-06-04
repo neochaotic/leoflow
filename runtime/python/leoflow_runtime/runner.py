@@ -148,12 +148,69 @@ def run(entrypoint: str) -> None:
         # the agent captures it.
         raise
 
+    _write_return(result)
+
+
+def _write_return(result) -> None:
+    """Write a non-None return as JSON to the return-value file (the agent pushes
+    it as the task's return_value XCom). A None return writes nothing."""
     if result is None:
         _lifecycle("returned None (no XCom pushed)")
         return
-    # Mention the type + payload size so the user can confirm the right value
-    # is leaving the task without dumping huge return values into the log.
-    payload = json.dumps(result)
+    try:
+        payload = json.dumps(result)
+    except (TypeError, ValueError):
+        # Airflow operators can return non-JSON objects; stringify so the XCom is
+        # at least usable rather than failing the task on serialization.
+        payload = json.dumps(repr(result))
     _lifecycle(f"returned {type(result).__name__} ({len(payload)} B XCom)")
-    with open(return_value_path(), "w", encoding="utf-8") as f:
-        f.write(payload)
+    with open(return_value_path(), "w", encoding="utf-8") as fh:
+        fh.write(payload)
+
+
+def _operator_context() -> dict:
+    """A minimal Airflow execution context for a standalone operator run (ADR 0040
+    Phase A). The agent supplies the run's macros via env; many operators read no
+    context at all, so sensible defaults are enough for the common case."""
+    params = {}
+    raw_params = os.environ.get("LEOFLOW_PARAMS")
+    if raw_params:
+        try:
+            params = json.loads(raw_params)
+        except (TypeError, ValueError):
+            params = {}
+    ds = os.environ.get("LEOFLOW_DS", "")
+    return {
+        "ds": ds,
+        "ts": os.environ.get("LEOFLOW_TS", ""),
+        "run_id": os.environ.get("LEOFLOW_RUN_ID", ""),
+        "params": params,
+        "task_instance": None,
+        "ti": None,
+        "dag_run": None,
+    }
+
+
+def run_operator(operator_class: str, args: dict) -> None:
+    """Instantiate and execute a captured Airflow operator/sensor (ADR 0040 Phase
+    A): ``import_string(class)(task_id, **args) → render_template_fields → execute``.
+    The provider is installed in the task image (declared via connectors:/
+    dependencies:); connections resolve from AIRFLOW_CONN_* exactly as a hook's do.
+    """
+    _lifecycle(f"loading operator {operator_class}")
+    module_name, _, class_name = operator_class.rpartition(".")
+    if not module_name:
+        raise ValueError(f"operator class must be dotted, got {operator_class!r}")
+    op_cls = getattr(importlib.import_module(module_name), class_name)
+    task_id = os.environ.get("LEOFLOW_TASK_ID", class_name)
+    op = op_cls(task_id=task_id, **args)
+
+    context = _operator_context()
+    try:
+        op.render_template_fields(context)
+    except Exception as exc:  # noqa: BLE001 — templating is best-effort in Phase A
+        _lifecycle(f"render_template_fields skipped ({type(exc).__name__}: {exc})")
+
+    _lifecycle(f"executing {class_name}.execute()")
+    result = op.execute(context)
+    _write_return(result)

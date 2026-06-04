@@ -28,6 +28,7 @@ type deployOptions struct {
 	all        bool
 	skipBuild  bool
 	trigger    bool
+	yes        bool
 }
 
 // newDeployCommand builds `leoflow deploy [path]`: the pipeline-less promotion of
@@ -47,6 +48,7 @@ func newDeployCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&o.all, "all", false, "deploy every DAG project in the workspace")
 	cmd.Flags().BoolVar(&o.skipBuild, "skip-build", false, "re-use the already-built image (promote without rebuilding)")
 	cmd.Flags().BoolVar(&o.trigger, "trigger", false, "trigger a run immediately after registering")
+	cmd.Flags().BoolVarP(&o.yes, "yes", "y", false, "skip the confirmation prompt (for automation)")
 	cmd.Flags().StringVar(&o.serverURL, "server", "", "control plane base URL (default: config server_url)")
 	cmd.Flags().StringVar(&o.token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token (default: config token)")
 	cmd.Flags().StringVar(&o.builder, "builder", "docker", "image build tool to shell out to (e.g. docker, podman, nerdctl)")
@@ -115,6 +117,14 @@ func deployAll(cmd *cobra.Command, o deployOptions) error {
 		return fmt.Errorf("no DAG projects found in workspace %s", wsDir)
 	}
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	if serverURL, _, terr := resolveServerToken(cmd, o.serverURL, o.token); terr == nil &&
+		shouldConfirm(serverURL, o.yes, cmdInteractive(cmd)) {
+		target := fmt.Sprintf("%d DAG(s) from %s", len(ws.Projects), wsDir)
+		if !confirmDeploy(cmd.InOrStdin(), out, target, serverURL) {
+			return fmt.Errorf("deploy aborted")
+		}
+	}
+	o.yes = true // confirmed once for the whole workspace; no per-project prompts
 	var failed []string
 	for _, p := range ws.Projects {
 		devPrintf(out, "==> deploying %s (%s)\n", p.DagID, p.Path)
@@ -214,6 +224,10 @@ func runDeploy(cmd *cobra.Command, dir string, o deployOptions) error {
 	serverURL, token, serr := resolveServerToken(cmd, o.serverURL, o.token)
 	if serr != nil {
 		return serr
+	}
+	if shouldConfirm(serverURL, o.yes, cmdInteractive(cmd)) &&
+		!confirmDeploy(cmd.InOrStdin(), cmd.OutOrStdout(), dir, serverURL) {
+		return fmt.Errorf("deploy aborted")
 	}
 
 	version := o.dagVersion

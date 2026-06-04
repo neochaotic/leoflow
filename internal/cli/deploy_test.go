@@ -34,9 +34,12 @@ func TestRegisterDeployedDAGRepinsAndRegisters(t *testing.T) {
 	digest := "ghcr.io/org/etl@sha256:cafef00d"
 
 	var sb strings.Builder
-	err := registerDeployedDAG(context.Background(), &sb, srv.URL, "tok", out, digest, "v1")
+	dagID, err := registerDeployedDAG(context.Background(), &sb, srv.URL, "tok", out, digest, "v1")
 	if err != nil {
 		t.Fatalf("registerDeployedDAG: %v", err)
+	}
+	if dagID != "etl" {
+		t.Errorf("dagID = %q, want etl", dagID)
 	}
 	if gotPath != "/api/v2/dags/etl/versions" {
 		t.Errorf("path = %q", gotPath)
@@ -68,9 +71,48 @@ func TestRegisterDeployedDAGSurfacesServerError(t *testing.T) {
 	if err := os.WriteFile(out, []byte(pushSpec), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := registerDeployedDAG(context.Background(), io.Discard, srv.URL, "tok", out, "r@sha256:x", "v1")
+	_, err := registerDeployedDAG(context.Background(), io.Discard, srv.URL, "tok", out, "r@sha256:x", "v1")
 	if err == nil {
 		t.Error("expected an error when the control plane rejects the register")
+	}
+}
+
+func TestTriggerDeployRunPostsToDagRuns(t *testing.T) {
+	var gotPath, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var sb strings.Builder
+	if err := triggerDeployRun(context.Background(), &sb, srv.URL, "tok", "etl"); err != nil {
+		t.Fatalf("triggerDeployRun: %v", err)
+	}
+	if gotPath != "/api/v2/dags/etl/dagRuns" {
+		t.Errorf("path = %q, want the dagRuns trigger endpoint", gotPath)
+	}
+	if gotAuth != "Bearer tok" {
+		t.Errorf("auth = %q", gotAuth)
+	}
+	if !strings.Contains(gotBody, "dag_run_id") {
+		t.Errorf("body = %q, want a dag_run_id", gotBody)
+	}
+	if !strings.Contains(sb.String(), "triggered run") {
+		t.Errorf("summary = %q, want a triggered-run line", sb.String())
+	}
+}
+
+func TestTriggerDeployRunSurfacesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer srv.Close()
+	if err := triggerDeployRun(context.Background(), io.Discard, srv.URL, "tok", "etl"); err == nil {
+		t.Error("expected an error when the trigger is rejected")
 	}
 }
 

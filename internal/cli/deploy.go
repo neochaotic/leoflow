@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -24,6 +26,8 @@ type deployOptions struct {
 	dockerfile string
 	dagVersion string
 	all        bool
+	skipBuild  bool
+	trigger    bool
 }
 
 // newDeployCommand builds `leoflow deploy [path]`: the pipeline-less promotion of
@@ -41,6 +45,8 @@ func newDeployCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&o.all, "all", false, "deploy every DAG project in the workspace")
+	cmd.Flags().BoolVar(&o.skipBuild, "skip-build", false, "re-use the already-built image (promote without rebuilding)")
+	cmd.Flags().BoolVar(&o.trigger, "trigger", false, "trigger a run immediately after registering")
 	cmd.Flags().StringVar(&o.serverURL, "server", "", "control plane base URL (default: config server_url)")
 	cmd.Flags().StringVar(&o.token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token (default: config token)")
 	cmd.Flags().StringVar(&o.builder, "builder", "docker", "image build tool to shell out to (e.g. docker, podman, nerdctl)")
@@ -223,8 +229,8 @@ func runDeploy(cmd *cobra.Command, dir string, o deployOptions) error {
 		builder:    o.builder,
 		dockerfile: o.dockerfile,
 		dagVersion: version,
-		build:      true,
-		push:       true,
+		build:      !o.skipBuild,
+		push:       !o.skipBuild,
 	}
 	if cerr := runCompile(cmd, dir, co); cerr != nil {
 		return cerr
@@ -234,37 +240,81 @@ func runDeploy(cmd *cobra.Command, dir string, o deployOptions) error {
 	if derr != nil {
 		return derr
 	}
-	return registerDeployedDAG(cmdContext(cmd), cmd.OutOrStdout(), serverURL, token, output, digestRef, version)
+	ctx, out := cmdContext(cmd), cmd.OutOrStdout()
+	dagID, rerr := registerDeployedDAG(ctx, out, serverURL, token, output, digestRef, version)
+	if rerr != nil {
+		return rerr
+	}
+	if o.trigger {
+		return triggerDeployRun(ctx, out, serverURL, token, dagID)
+	}
+	return nil
 }
 
 // registerDeployedDAG re-pins the compiled dag.json to the pushed image's digest
 // and registers it with the control plane, then prints a per-phase summary. It
 // is split from runDeploy so the post-build flow (which needs no builder) is
 // unit-testable against a fake control plane.
-func registerDeployedDAG(ctx context.Context, out io.Writer, serverURL, token, output, digestRef, version string) error {
+func registerDeployedDAG(ctx context.Context, out io.Writer, serverURL, token, output, digestRef, version string) (dagID string, err error) {
 	data, rerr := os.ReadFile(output) //nolint:gosec // output path is operator-controlled (the DAG dir).
 	if rerr != nil {
-		return fmt.Errorf("reading %s: %w", output, rerr)
+		return "", fmt.Errorf("reading %s: %w", output, rerr)
 	}
 	repinned, perr := repinImageInSpec(data, digestRef)
 	if perr != nil {
-		return perr
+		return "", perr
 	}
 	if werr := os.WriteFile(output, repinned, 0o600); werr != nil {
-		return fmt.Errorf("writing %s: %w", output, werr)
+		return "", fmt.Errorf("writing %s: %w", output, werr)
 	}
 	var spec domain.DAGSpec
 	if jerr := json.Unmarshal(repinned, &spec); jerr != nil {
-		return fmt.Errorf("parsing compiled dag.json: %w", jerr)
+		return "", fmt.Errorf("parsing compiled dag.json: %w", jerr)
 	}
 	status, body, uerr := pushVersion(ctx, serverURL, token, spec.DagID, repinned)
 	if uerr != nil {
-		return uerr
+		return "", uerr
 	}
 	if status >= http.StatusMultipleChoices {
-		return fmt.Errorf("server returned %d: %s", status, body)
+		return "", fmt.Errorf("server returned %d: %s", status, body)
 	}
-	_, err := fmt.Fprintf(out,
-		"Deployed %s -> %s\n  image %s\n  registered version %s\n", spec.DagID, serverURL, digestRef, version)
+	if _, werr := fmt.Fprintf(out,
+		"Deployed %s -> %s\n  image %s\n  registered version %s\n", spec.DagID, serverURL, digestRef, version); werr != nil {
+		return "", werr
+	}
+	return spec.DagID, nil
+}
+
+// triggerDeployRun kicks a manual run of the just-registered DAG, the --trigger
+// opt-in (deploy registers only by default). It posts to the Airflow-compatible
+// trigger endpoint with a unique manual run id.
+func triggerDeployRun(ctx context.Context, out io.Writer, serverURL, token, dagID string) error {
+	runID := fmt.Sprintf("manual__%d", time.Now().UTC().Unix())
+	payload := []byte(fmt.Sprintf(`{"dag_run_id":%q}`, runID))
+	url := strings.TrimRight(serverURL, "/") + "/api/v2/dags/" + dagID + "/dagRuns"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("building trigger request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("triggering run for %q: %w", dagID, err)
+	}
+	raw, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("reading trigger response: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing trigger response: %w", closeErr)
+	}
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("trigger returned %d: %s", resp.StatusCode, string(raw))
+	}
+	_, err = fmt.Fprintf(out, "  triggered run %s\n", runID)
 	return err
 }

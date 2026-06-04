@@ -10,15 +10,18 @@ import (
 	"github.com/neochaotic/leoflow/internal/config"
 )
 
-// newLoginCommand builds `leoflow login`: it exchanges credentials for a JWT at
-// the control plane and persists the token (and server URL) to the config file,
-// so subsequent `push`/`deploy` calls need no auth flags. This is what makes the
-// pipeline-less Lite->Pro loop fluid (login once, deploy many) — ADR 0041.
+// newLoginCommand builds `leoflow auth login`: it exchanges credentials for a
+// JWT at a control plane (typically Pro) and persists the token (and server URL)
+// to the config file, so subsequent `push`/`deploy` calls need no auth flags.
+// This is what makes the pipeline-less Lite->Pro loop fluid (login once, deploy
+// many) — ADR 0041. It is distinct from `docker login` (registry auth), which
+// Leoflow never handles. It is a sibling of `auth create-token`, which prints a
+// token for CI rather than persisting an interactive session.
 func newLoginCommand() *cobra.Command {
 	var serverURL, username, password string
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Authenticate to a control plane and store the token.",
+		Short: "Authenticate to a control plane (Pro) and store the token.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if serverURL == "" {

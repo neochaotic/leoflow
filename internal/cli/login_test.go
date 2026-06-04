@@ -22,7 +22,7 @@ func TestLoginPersistsTokenAndServer(t *testing.T) {
 	defer srv.Close()
 
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	out, _, err := run(t, "login", "--server", srv.URL,
+	out, _, err := run(t, "auth", "login", "--server", srv.URL,
 		"--username", "admin", "--password", "pw", "--config", cfgPath)
 	if err != nil {
 		t.Fatalf("login: %v", err)
@@ -56,7 +56,7 @@ func TestLoginUsesConfigServerWhenFlagOmitted(t *testing.T) {
 		t.Fatalf("seed config: %v", err)
 	}
 
-	if _, _, err := run(t, "login", "--username", "a", "--password", "b", "--config", cfgPath); err != nil {
+	if _, _, err := run(t, "auth", "login", "--username", "a", "--password", "b", "--config", cfgPath); err != nil {
 		t.Fatalf("login with server from config: %v", err)
 	}
 	cfg, err := config.Load(cfgPath, nil)
@@ -75,7 +75,7 @@ func TestLoginFailsLoudlyOnBadCredentials(t *testing.T) {
 	defer srv.Close()
 
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	if _, _, err := run(t, "login", "--server", srv.URL,
+	if _, _, err := run(t, "auth", "login", "--server", srv.URL,
 		"--username", "admin", "--password", "wrong", "--config", cfgPath); err == nil {
 		t.Error("expected login to fail on 401, got nil error")
 	}

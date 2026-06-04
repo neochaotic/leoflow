@@ -26,6 +26,49 @@ flowchart LR
     The same checks that warn you locally in `leoflow lite` fail the CI build, so a
     bad `dag_id`/`task_id` binding or an unsupported operator never reaches prod.
 
+!!! note "First time? Do it by hand once"
+    The [**first Pro DAG walkthrough**](first-pro-dag.md) runs these three steps
+    manually so you can watch the DAG cross each boundary. Come back here to wire
+    the same steps into CI.
+
+## Your repo of DAGs
+
+In Pro you keep your DAGs in a Git repository — one directory per DAG — and CI
+turns each into an artifact when it changes. Nothing here is Leoflow-specific
+magic: it's a normal repo plus three CLI calls.
+
+```text
+my-dags/                      # your Git repo
+├── .github/workflows/
+│   └── deploy-dag.yml        # the CI below
+└── dags/
+    ├── my_pipeline/
+    │   ├── dag.py            # the DAG (TaskFlow / operators)
+    │   ├── leoflow.yaml      # id, python_version, dependencies
+    │   └── Dockerfile        # FROM ghcr.io/neochaotic/leoflow-runtime:py3.11
+    └── another_pipeline/
+        ├── dag.py
+        ├── leoflow.yaml
+        └── Dockerfile
+```
+
+Each DAG directory is a self-contained project — its own dependencies, its own
+image. A typical `Dockerfile` is four lines of boilerplate (the
+[walkthrough](first-pro-dag.md) shows it); it layers your code onto the
+**published task base**, so CI pulls a signed image instead of building one.
+
+**The mental model:** a push that touches `dags/my_pipeline/**` triggers CI for
+*that* DAG only (the `paths:` filter), which compiles → builds → pushes the image
+→ registers `dag.json`. The control plane runs the new version on the next
+trigger. One DAG per pipeline keeps blast radius small: a broken
+`another_pipeline` never blocks `my_pipeline`.
+
+!!! tip "Tag images immutably"
+    The recipes tag by git SHA (`my_pipeline:$GIT_SHA`), never `:latest`. The
+    image a `dag.json` points at is then frozen — re-running an old DAG version
+    pulls exactly the bytes it shipped with, and a rollback is a re-`push` of the
+    older `dag.json`.
+
 ## Prerequisites
 - The `leoflow` CLI on the runner (download the release binary, or `go install`).
 - **Python 3.11+ on the runner** (`leoflow compile` invokes the stdlib-only

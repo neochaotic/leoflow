@@ -96,7 +96,7 @@ and the pushed image can never drift.
 ## Step 3 — register the artifact
 
 ```bash
-leoflow push dag.json --url "$LEOFLOW_SERVER" --token "$LEOFLOW_TOKEN"
+leoflow push dag.json --server "$LEOFLOW_SERVER" --token "$LEOFLOW_TOKEN"
 ```
 
 The control plane now knows the DAG, its version, and which image to pull.

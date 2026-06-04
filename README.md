@@ -158,7 +158,7 @@ leoflow compile .              # generates Dockerfile, builds image, produces da
 leoflow push ./dag.json        # registers with the control plane
 ```
 
-That is the entire developer surface. The CLI builds the image against an official base (`leoflow/python-runtime:3.11`), pushes to your registry, and registers a versioned DAG. The Airflow UI shows it at the next refresh.
+That is the entire developer surface. The CLI builds the image on the Leoflow task base (`leoflow-base:py3.11`, selected by `python_version`), pushes to your registry, and registers a versioned DAG. The Airflow UI shows it at the next refresh.
 
 ## Native map-reduce for ML/AI
 

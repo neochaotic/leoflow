@@ -59,7 +59,10 @@ jobs:
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
-          version: latest
+          # Pin to the v2 major (what GoReleaser auto-locks `latest` to anyway):
+          # silences the "using latest" warning and keeps releases reproducible
+          # against a known major line (no surprise v3 jump).
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

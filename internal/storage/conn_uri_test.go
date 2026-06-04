@@ -40,7 +40,9 @@ func TestAirflowConnURIGCP(t *testing.T) {
 	// No host/login/password → the conn_type is the scheme and there is no
 	// authority component (no "//", no "@" userinfo). The client_email's "@" is
 	// percent-encoded inside __extra__, so a literal "@" must not appear.
-	const prefix = "google_cloud_platform:?"
+	// The scheme is hyphenated (RFC 3986 — `_` is illegal in a scheme); Airflow
+	// reverses `-`→`_` in from_uri, so google-cloud-platform → google_cloud_platform.
+	const prefix = "google-cloud-platform:?"
 	if !strings.HasPrefix(got, prefix) {
 		t.Fatalf("uri = %q, want %q prefix", got, prefix)
 	}
@@ -54,6 +56,31 @@ func TestAirflowConnURIGCP(t *testing.T) {
 	}
 	if q.Get("__extra__") != extra {
 		t.Errorf("__extra__ = %q, want exact round-trip %q", q.Get("__extra__"), extra)
+	}
+}
+
+// TestAirflowConnURISchemeUnderscoreNormalized pins the RFC 3986 fix: a conn_type
+// with an underscore (google_ads, azure_data_lake, spark_sql, …) is NOT a legal
+// URI scheme. Airflow rewrites `_`→`-` for the scheme (and reverses it in
+// from_uri), so we must too — otherwise the built URI fails url.Parse with a host
+// ("first path segment cannot contain colon") and Python's urllib reads an empty
+// scheme. This asserts the scheme is hyphenated AND the result is parseable.
+func TestAirflowConnURISchemeUnderscoreNormalized(t *testing.T) {
+	for _, connType := range []string{"google_ads", "azure_data_lake", "spark_sql"} {
+		port := 443
+		got := airflowConnURI(domain.Connection{
+			ConnID: "c", ConnType: connType,
+			Host: "h.example.com", Port: &port, Login: "u", Password: "p",
+		})
+		wantScheme := strings.ReplaceAll(connType, "_", "-")
+		parsed, err := url.Parse(got)
+		if err != nil {
+			t.Errorf("%s: url.Parse(%q) failed: %v", connType, got, err)
+			continue
+		}
+		if parsed.Scheme != wantScheme {
+			t.Errorf("%s: scheme = %q, want %q", connType, parsed.Scheme, wantScheme)
+		}
 	}
 }
 

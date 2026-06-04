@@ -131,6 +131,28 @@ UI carries credentials, but the DAG still has to install the hook to use them.
 | `spark` / `spark_sql` / … | [spark.md](spark.md) | doc-only (needs a Spark cluster) | ✅ documented + delivery test (`TestSparkConnectionURIShapeIntegration`); host:port + tuning Extra round-trip |
 | `kafka` | [kafka.md](kafka.md) | doc-only (needs a Kafka cluster) | ✅ documented + delivery test (`TestKafkaConnectionURIShapeIntegration`); full client config (incl. SASL) Extra round-trip |
 
+## More connectors (documented + delivery test)
+
+Each ships with a chain-of-custody delivery test and a cookbook recipe; all are
+doc-only (a real run needs the external account/service). Cloud families share a
+provider package (e.g. redshift/athena/emr → `apache-airflow-providers-amazon`;
+bigquery/cloudsql/ads → `…-google`).
+
+| Type | Doc | Type | Doc |
+|---|---|---|---|
+| `redshift` | [redshift.md](redshift.md) | `trino` | [trino.md](trino.md) |
+| `athena` | [athena.md](athena.md) | `presto` | [presto.md](presto.md) |
+| `emr` | [emr.md](emr.md) | `jdbc` | [jdbc.md](jdbc.md) |
+| `gcpbigquery` | [gcpbigquery.md](gcpbigquery.md) | `docker` | [docker.md](docker.md) |
+| `gcpcloudsql` | [gcpcloudsql.md](gcpcloudsql.md) | `salesforce` | [salesforce.md](salesforce.md) |
+| `google_ads` | [google_ads.md](google_ads.md) | `telegram` | [telegram.md](telegram.md) |
+| `cassandra` | [cassandra.md](cassandra.md) | `discord` | [discord.md](discord.md) |
+| `neo4j` | [neo4j.md](neo4j.md) | `pagerduty` | [pagerduty.md](pagerduty.md) |
+| `vertica` | [vertica.md](vertica.md) | `datadog` | [datadog.md](datadog.md) |
+| `influxdb` | [influxdb.md](influxdb.md) | `tableau` | [tableau.md](tableau.md) |
+| `druid` | [druid.md](druid.md) | `github` | [github.md](github.md) |
+| `pinot` | [pinot.md](pinot.md) | `elasticsearch` | [elasticsearch.md](elasticsearch.md) |
+
 ## The long tail
 
 Every curated connector above is first-class (impl + delivery test + cookbook).

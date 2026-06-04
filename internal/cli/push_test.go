@@ -60,6 +60,32 @@ func TestPushCommandEndToEnd(t *testing.T) {
 	}
 }
 
+func TestPushCommandUsesConfigTokenWhenFlagAbsent(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	// A config produced by `leoflow login`: it carries both server_url and token.
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("server_url: "+srv.URL+"\ntoken: jwt-saved\n"), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	f := filepath.Join(t.TempDir(), "dag.json")
+	if err := os.WriteFile(f, []byte(pushSpec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := run(t, "push", f, "--config", cfgPath); err != nil {
+		t.Fatalf("push using config token: %v", err)
+	}
+	if gotAuth != "Bearer jwt-saved" {
+		t.Errorf("auth = %q, want the token persisted by login (Bearer jwt-saved)", gotAuth)
+	}
+}
+
 func TestPushCommandUsesConfigServerURL(t *testing.T) {
 	var hit bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

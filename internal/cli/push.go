@@ -35,12 +35,17 @@ func newPushCommand() *cobra.Command {
 			if verr := spec.Validate(); verr != nil {
 				return fmt.Errorf("invalid dag.json: %w", verr)
 			}
-			if serverURL == "" {
+			if serverURL == "" || token == "" {
 				cfg, cerr := config.Load(configFilePath(cmd), cmd.Flags())
 				if cerr != nil {
 					return cerr
 				}
-				serverURL = cfg.ServerURL
+				if serverURL == "" {
+					serverURL = cfg.ServerURL
+				}
+				if token == "" {
+					token = cfg.Token
+				}
 			}
 			status, body, err := pushVersion(cmdContext(cmd), serverURL, token, spec.DagID, data)
 			if err != nil {

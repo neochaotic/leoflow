@@ -191,6 +191,23 @@ def _operator_context() -> dict:
     }
 
 
+def _merge_operator_xcom(args: dict) -> dict:
+    """Inject upstream XCom values into a captured operator's kwargs (ADR 0040
+    A1.1). The parser records an operator arg bound to an upstream task's output
+    as an xcom_input; the agent fetches that upstream's return_value and delivers
+    it as ``LEOFLOW_XCOM_<PARAM>``. Here we decode each and set it on the matching
+    kwarg, so ``MyOperator(sql=extract())`` runs with the real upstream SQL. An
+    XCom value overrides any same-name literal, matching the @task precedence.
+    """
+    for key, raw in os.environ.items():
+        if not key.startswith(XCOM_ENV_PREFIX):
+            continue
+        param = key[len(XCOM_ENV_PREFIX):].lower()
+        args[param] = json.loads(raw)
+        _lifecycle(f"pulled {param} for operator ({len(raw)} B)")
+    return args
+
+
 def run_operator(operator_class: str, args: dict) -> None:
     """Instantiate and execute a captured Airflow operator/sensor (ADR 0040 Phase
     A): ``import_string(class)(task_id, **args) → render_template_fields → execute``.
@@ -203,7 +220,7 @@ def run_operator(operator_class: str, args: dict) -> None:
         raise ValueError(f"operator class must be dotted, got {operator_class!r}")
     op_cls = getattr(importlib.import_module(module_name), class_name)
     task_id = os.environ.get("LEOFLOW_TASK_ID", class_name)
-    op = op_cls(task_id=task_id, **args)
+    op = op_cls(task_id=task_id, **_merge_operator_xcom(dict(args)))
 
     context = _operator_context()
     try:

@@ -259,23 +259,52 @@ def _map_task(task, source: str) -> dict[str, Any]:
         entry["http_request"] = _http_request(task)
     elif task_type == "airflow_operator":
         entry["operator_class"] = type(task).__leoflow_operator_class__
-        entry["operator_args"] = _json_safe_args(getattr(task, "__leoflow_args__", {}))
+        xcom_input, operator_args = _split_operator_args(task)
+        if xcom_input:
+            entry["xcom_input"] = xcom_input
+        if operator_args:
+            entry["operator_args"] = operator_args
     return entry
 
 
-def _json_safe_args(args: dict) -> dict:
-    """Keep the operator kwargs the runtime can carry verbatim in dag.json
-    (JSON-serializable). Non-serializable values (XComArg references, callables)
-    are dropped here and wired separately as XCom inputs — a later Phase A
-    refinement; the common case is literal strings/numbers."""
-    out: dict[str, Any] = {}
-    for key, value in args.items():
-        try:
-            json.dumps(value)
-        except (TypeError, ValueError):
+def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
+    """Split a captured operator's constructor kwargs into XCom inputs and JSON
+    literals (ADR 0040 A1.1).
+
+    - An arg bound to an upstream task's output (``MyOperator(sql=extract())``)
+      becomes an **xcom_input** — ``arg → [upstream_task_ids…]`` — so the agent
+      fetches the upstream's return_value and the runtime injects it. A list of
+      outputs is fan-in, mirroring the @task path (:func:`_bind_call_arguments`).
+    - A JSON-serialisable literal becomes an **operator_arg**, carried verbatim
+      in dag.json and delivered via LEOFLOW_OPERATOR_ARGS.
+
+    An arg that is neither — a callable, a datetime, an arbitrary object — is a
+    **loud compile error**, not a silent drop: the generic executor cannot carry
+    it across dag.json, and dropping it would run the operator wrong. Move that
+    logic into a @task, or pass a JSON-serialisable value / an upstream output.
+    """
+    raw = getattr(task, "__leoflow_args__", {}) or {}
+    xcom: dict[str, list[str]] = {}
+    operator_args: dict[str, Any] = {}
+    for name, value in raw.items():
+        single_upstream = getattr(getattr(value, "operator", None), "task_id", None)
+        if single_upstream:
+            xcom[name] = [single_upstream]
             continue
-        out[key] = value
-    return out
+        if isinstance(value, (list, tuple)) and value and all(
+                getattr(getattr(item, "operator", None), "task_id", None)
+                for item in value):
+            xcom[name] = [item.operator.task_id for item in value]
+            continue
+        if _is_json_literal(value):
+            operator_args[name] = value
+            continue
+        raise ValueError(
+            f"operator argument {name!r} on task {task.task_id} is a "
+            f"{type(value).__name__}, which Leoflow cannot carry in dag.json; "
+            f"pass a JSON-serialisable value or an upstream task's output, or "
+            f"move the logic into a @task")
+    return xcom, operator_args
 
 
 def _operator_type(task) -> str:

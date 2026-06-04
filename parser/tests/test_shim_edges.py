@@ -157,3 +157,36 @@ def test_top_level_provider_import_gives_actionable_message(monkeypatch, tmp_pat
     assert "@task" in msg
     # It must NOT fall through to the generic operator-unsupported wording.
     assert "supported: Bash, Http" not in msg
+
+
+def test_operator_arg_bound_to_upstream_becomes_xcom_input(monkeypatch, tmp_path):
+    """A generic-operator arg set to an upstream task's output is wired as an
+    xcom_input (ADR 0040 A1.1), not silently dropped; sibling literals still
+    land in operator_args."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, task
+        from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+        @task
+        def make_sql() -> str: ...
+        with DAG("g"):
+            s = make_sql()
+            SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql=s)
+    """)
+    q = _task(spec, "q")
+    assert q["xcom_input"] == {"sql": ["make_sql"]}
+    assert "sql" not in q.get("operator_args", {})
+    assert q["operator_args"]["conn_id"] == "sf"
+
+
+def test_operator_non_serialisable_arg_is_loud_reject(monkeypatch, tmp_path):
+    """A non-JSON, non-XCom operator arg (e.g. a callable) is a loud compile
+    error, not a silent drop (ADR 0040 A1.1)."""
+    import pytest
+    with pytest.raises(ValueError):
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG
+            from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+            with DAG("g"):
+                SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1",
+                                        on_success_callback=lambda ctx: None)
+        """)

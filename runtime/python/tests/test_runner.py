@@ -272,3 +272,20 @@ def test_run_operator_executes_captured_provider_operator(tmp_path, monkeypatch)
         {"bash_command": "echo generic-op-ran"},
     )
     assert json.loads((tmp_path / "ret.json").read_text()) == "generic-op-ran"
+
+
+def test_merge_operator_xcom_injects_upstream_values(monkeypatch):
+    """An operator arg bound to an upstream (recorded as xcom_input) is delivered
+    as LEOFLOW_XCOM_<PARAM>; _merge_operator_xcom must set it on the kwargs,
+    overriding any same-name literal (ADR 0040 A1.1). Pure: no Airflow needed."""
+    monkeypatch.setenv("LEOFLOW_XCOM_SQL", '"SELECT 42"')
+    merged = runner._merge_operator_xcom({"conn_id": "sf", "sql": "PLACEHOLDER"})
+    assert merged["sql"] == "SELECT 42"   # XCom overrides the literal
+    assert merged["conn_id"] == "sf"      # untouched literal survives
+
+
+def test_merge_operator_xcom_noop_without_xcom(monkeypatch):
+    """With no LEOFLOW_XCOM_* in the env, the operator kwargs pass through."""
+    monkeypatch.delenv("LEOFLOW_XCOM_SQL", raising=False)
+    merged = runner._merge_operator_xcom({"conn_id": "sf"})
+    assert merged == {"conn_id": "sf"}

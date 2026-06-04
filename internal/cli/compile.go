@@ -100,6 +100,9 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if eerr := embedSource(o.output, dagSourcePath(dir, cfg)); eerr != nil {
 		return eerr
 	}
+	if perr := validateOperatorProvidersFile(o.output, cfg); perr != nil {
+		return perr
+	}
 	if berr := buildAndPush(cmd, dir, o, cfg, image); berr != nil {
 		return berr
 	}

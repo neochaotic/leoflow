@@ -203,6 +203,67 @@ func TestFileTransferConnectionURIShapeIntegration(t *testing.T) {
 	}
 }
 
+// TestSecretConnectionURIsSkipsUndecryptableIntegration is the regression for the
+// review-found robustness bug: SecretConnectionURIs used to fail the WHOLE batch
+// (returning no connections, blinding the entire tenant) if a single row could
+// not be decrypted — e.g. a row encrypted under a previous LEOFLOW_SECRET_KEY.
+// The fix skips the bad row with a warning and delivers the rest. This stores one
+// connection under key A and one under key B, then resolves with key A: the
+// key-A connection is delivered, the key-B one is skipped, and there is NO error.
+func TestSecretConnectionURIsSkipsUndecryptableIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	keyA := make([]byte, 32)
+	keyB := make([]byte, 32)
+	for i := range keyA {
+		keyA[i] = byte(i + 3)
+		keyB[i] = byte(i + 200) // a different key
+	}
+	cipherA, err := secrets.NewAESGCM(keyA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipherB, err := secrets.NewAESGCM(keyB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := 5432
+	goodID := fmt.Sprintf("e2e_good_%d", time.Now().UnixNano())
+	badID := fmt.Sprintf("e2e_bad_%d", time.Now().UnixNano())
+
+	repo.SetCipher(cipherA)
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: goodID, ConnType: "postgres", Host: "h", Port: &port, Login: "u", Password: "good", Schema: "db",
+	}); cerr != nil {
+		t.Fatalf("SetConnection(good): %v", cerr)
+	}
+	t.Cleanup(func() { repo.SetCipher(cipherA); _ = repo.DeleteConnection(ctx, "default", goodID) })
+
+	repo.SetCipher(cipherB)
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: badID, ConnType: "postgres", Host: "h", Port: &port, Login: "u", Password: "bad", Schema: "db",
+	}); cerr != nil {
+		t.Fatalf("SetConnection(bad): %v", cerr)
+	}
+	t.Cleanup(func() { repo.SetCipher(cipherB); _ = repo.DeleteConnection(ctx, "default", badID) })
+
+	// Resolve with key A: the key-B connection is now undecryptable.
+	repo.SetCipher(cipherA)
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs returned an error — one bad row must NOT blind the tenant: %v", err)
+	}
+	if _, ok := uris[goodID]; !ok {
+		t.Errorf("the decryptable connection %q was not delivered (tenant blinded by the bad row?)", goodID)
+	}
+	if _, ok := uris[badID]; ok {
+		t.Errorf("the undecryptable connection %q should have been skipped, not delivered", badID)
+	}
+}
+
 // mapKeys returns the keys of a string-keyed map, used to assemble
 // diagnostic output when a Connection delivery test fails.
 func mapKeys(m map[string]string) []string {

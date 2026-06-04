@@ -13,6 +13,7 @@ Two surfaces: **`leoflow.yaml`** (per-DAG, authoring) and **server environment**
 | `python_version` | `3.10`\|`3.11`\|`3.12` | Base image Python (default 3.11). |
 | `base_image` | string | Override the runtime base image. |
 | `dependencies` | list | pip specifiers baked into the image. |
+| `connectors` | list | Short connector names (`postgres`, `http`, …) expanded at compile to their `apache-airflow-providers-*` packages. Sugar over `dependencies` — see [Installing a connector's provider](connections/index.md#installing-a-connectors-provider). |
 | `system_packages` | list | apt packages. |
 | `dag_source` | string | DAG file (default `dag.py`). |
 | `build`, `registry` | object | Image build + push settings. |
@@ -37,6 +38,7 @@ roadmap item.
 | `python_version` | `"3.11"` | Pick `3.10`, `3.11`, or `3.12`. |
 | `dag_source` | `"dag.py"` | DAG file relative to the project. |
 | `dependencies` | `[]` | pip specifiers baked into the image. |
+| `connectors` | `[]` | Short connector names expanded to provider packages at compile (ADR 0038). |
 | `system_packages` | `[]` | apt packages. |
 | `include_paths` | `["."]` | Files copied into the image. |
 | `exclude_paths` | `[".git", "__pycache__", "*.pyc", ".venv", "venv"]` | Skipped both in image build **and** workspace discovery. Hidden directories (`.*`) are skipped as well. |

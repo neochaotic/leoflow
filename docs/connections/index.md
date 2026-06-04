@@ -12,6 +12,72 @@ URI shape, an example DAG, and how to test it.
     Only a subset of Airflow's standard connection types are documented +
     tested at this stage. The list below grows as we land them.
 
+## Installing a connector's provider
+
+A Connection only carries credentials. To *use* a connector — whether through
+its Airflow hook (`PostgresHook`) or a raw driver (`psycopg2`) — the matching
+Python package has to be in the image / venv. Leoflow gives you two ways to
+declare that in `leoflow.yaml`, and you pick whichever fits:
+
+=== "connectors: (the sugar)"
+
+    ```yaml
+    dag_id: my_pipeline
+    connectors:
+      - postgres
+      - http
+    ```
+
+    Short names you don't have to memorise. At compile, each expands to its
+    `apache-airflow-providers-*` package (ADR 0038), which pulls the hook **and**
+    its driver transitively — so `connectors: [postgres]` is enough to use either
+    `PostgresHook` or raw `psycopg2`. One line per connector, no version to recall.
+
+=== "dependencies: (the escape hatch)"
+
+    ```yaml
+    dag_id: my_pipeline
+    dependencies:
+      - apache-airflow-providers-postgres==6.0.0   # pin the provider, or…
+      - psycopg2-binary==2.9.10                    # …just the driver, your call
+    ```
+
+    Full control: pin an exact version, install only the driver, or add a package
+    the catalog doesn't know about. Advanced users who already think in pip
+    specifiers stay here.
+
+Both lists are additive — the effective install is `expand(connectors) +
+dependencies`. A name in `connectors:` that isn't in the catalog **fails the
+compile** with the offender, the known list, and a pointer to `dependencies:`,
+so a typo never slips through to a runtime `ModuleNotFoundError` in the task pod.
+
+### Connector → provider package
+
+The curated catalog (`internal/connectors`) is the single source of truth shared
+by the admin connection form, the sugar expansion, and compile validation:
+
+| `connectors:` name | pip package |
+|---|---|
+| `postgres` | `apache-airflow-providers-postgres` |
+| `mysql` | `apache-airflow-providers-mysql` |
+| `sqlite` | `apache-airflow-providers-sqlite` |
+| `mssql` | `apache-airflow-providers-microsoft-mssql` |
+| `oracle` | `apache-airflow-providers-oracle` |
+| `redis` | `apache-airflow-providers-redis` |
+| `mongo` | `apache-airflow-providers-mongo` |
+| `http` | `apache-airflow-providers-http` |
+| `aws` | `apache-airflow-providers-amazon` |
+| `google_cloud_platform` | `apache-airflow-providers-google` |
+| `snowflake` | `apache-airflow-providers-snowflake` |
+| `ssh` | `apache-airflow-providers-ssh` |
+| `ftp` | `apache-airflow-providers-ftp` |
+| `sftp` | `apache-airflow-providers-sftp` |
+| `kafka` | `apache-airflow-providers-apache-kafka` |
+
+The package boundary is **not** a mechanical join of the dotted hook path
+(`amazon.aws` → `amazon`; `microsoft.mssql` → `microsoft-mssql`), which is
+exactly why the mapping is curated rather than derived.
+
 ## Locally-testable (Docker / Lima)
 
 | Type | Doc | Example DAG | Status |

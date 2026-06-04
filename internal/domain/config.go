@@ -1,5 +1,12 @@
 package domain
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/neochaotic/leoflow/internal/connectors"
+)
+
 // LeoflowConfig is the developer-facing project configuration parsed from
 // leoflow.yaml. It mirrors docs/api/leoflow-yaml-schema.json and is consumed
 // by `leoflow compile` to build an image and emit a DAGSpec.
@@ -118,6 +125,35 @@ func (c *LeoflowConfig) ApplyDefaults() {
 	if c.Registry.TagStrategy == "" {
 		c.Registry.TagStrategy = "version"
 	}
+}
+
+// EffectiveDependencies resolves the full pip install list the image/venv needs:
+// the `connectors:` short names expanded to their apache-airflow-providers-*
+// packages (ADR 0038's sugar), followed by the explicit `dependencies:` verbatim.
+// Providers come first so a transitive driver pinned in dependencies resolves
+// against the provider declared via the sugar.
+//
+// An unknown connector name is a compile error, not a silent drop: a typo that
+// slipped through would otherwise surface as a ModuleNotFoundError inside the
+// task pod, far from its cause. The message names the offender, lists the known
+// types, and points at the dependencies: escape hatch.
+func (c *LeoflowConfig) EffectiveDependencies() ([]string, error) {
+	packages, unknown := connectors.Resolve(c.Connectors)
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf(
+			"unknown connector(s) %s in connectors:; known: %s; "+
+				"or add the pip package to dependencies: directly",
+			strings.Join(unknown, ", "),
+			strings.Join(connectors.Types(), ", "),
+		)
+	}
+	if len(packages) == 0 && len(c.Dependencies) == 0 {
+		return nil, nil
+	}
+	effective := make([]string, 0, len(packages)+len(c.Dependencies))
+	effective = append(effective, packages...)
+	effective = append(effective, c.Dependencies...)
+	return effective, nil
 }
 
 // Validate checks the LeoflowConfig against the canonical leoflow.yaml schema

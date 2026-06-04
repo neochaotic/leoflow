@@ -12,6 +12,7 @@ func TestIsLoopback(t *testing.T) {
 		"http://[::1]:8080":       true,
 		"https://pro.example.com": false,
 		"http://10.0.0.5:8080":    false,
+		"://malformed":            false, // unparseable URL is treated as non-loopback
 	}
 	for url, want := range cases {
 		if got := isLoopback(url); got != want {

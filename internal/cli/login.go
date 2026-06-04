@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/neochaotic/leoflow/internal/config"
 )
@@ -30,6 +33,11 @@ func newLoginCommand() *cobra.Command {
 					return cerr
 				}
 				serverURL = cfg.ServerURL
+			}
+			var cerr error
+			username, password, cerr = resolveCredentials(cmd, username, password)
+			if cerr != nil {
+				return cerr
 			}
 			token, err := requestToken(cmdContext(cmd), serverURL, username, password)
 			if err != nil {
@@ -61,4 +69,56 @@ func sessionConfigPath(cmd *cobra.Command) (string, error) {
 		return p, nil
 	}
 	return config.DefaultConfigFile()
+}
+
+// resolveCredentials fills missing username/password by prompting when the
+// session is interactive — the password is read hidden so it never lands in
+// shell history. In a non-interactive session (CI) the values must come from
+// flags/env, so a missing one is a loud error rather than a hang on a prompt.
+func resolveCredentials(cmd *cobra.Command, username, password string) (user, pass string, err error) {
+	user, pass = username, password
+	interactive := cmdInteractive(cmd)
+	if user == "" {
+		if !interactive {
+			return "", "", fmt.Errorf("username required: pass --username or set LEOFLOW_USERNAME")
+		}
+		if user, err = promptValue(cmd.InOrStdin(), cmd.OutOrStdout(), "Username: "); err != nil {
+			return "", "", err
+		}
+	}
+	if pass == "" {
+		if !interactive {
+			return "", "", fmt.Errorf("password required: pass --password or set LEOFLOW_PASSWORD")
+		}
+		if pass, err = promptPassword(cmd.InOrStdin(), cmd.OutOrStdout()); err != nil {
+			return "", "", err
+		}
+	}
+	return user, pass, nil
+}
+
+// promptValue prints a label and reads a trimmed line of input.
+func promptValue(in io.Reader, out io.Writer, label string) (string, error) {
+	devPrintf(out, "%s", label)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// promptPassword reads a password without echoing it when in is a terminal;
+// otherwise (a pipe, e.g. `echo pw | leoflow auth login`) it falls back to a
+// plain line read so the value can still be supplied non-interactively.
+func promptPassword(in io.Reader, out io.Writer) (string, error) {
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		devPrintf(out, "Password: ")
+		secret, err := term.ReadPassword(int(f.Fd()))
+		devPrintf(out, "\n") // ReadPassword swallows the user's newline
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(secret)), nil
+	}
+	return promptValue(in, out, "Password: ")
 }

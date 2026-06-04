@@ -154,6 +154,9 @@ nav:
           - Amazon Web Services: connections/aws.md
           - Slack: connections/slack.md
           - Databricks: connections/databricks.md
+          - Azure: connections/azure.md
+          - Apache Spark: connections/spark.md
+          - Apache Kafka: connections/kafka.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

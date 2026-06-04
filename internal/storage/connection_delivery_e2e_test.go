@@ -509,6 +509,164 @@ func TestDatabricksConnectionURIShapeIntegration(t *testing.T) {
 	}
 }
 
+// TestWasbConnectionURIShapeIntegration is the Azure Blob (wasb) chain-of-custody
+// — the representative of the Azure provider family (adls, azure_data_lake,
+// azure_data_factory, …, all apache-airflow-providers-microsoft-azure). A wasb
+// connection carries the storage account as login, the account key as password,
+// and tenant/identity hints in Extra; WasbHook reads them. Keyless via a managed
+// identity is the recommended posture (ADR 0035); this covers the key path.
+func TestWasbConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 41)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	const (
+		account  = "mystorageacct"
+		rawKey   = "Eby8vd/M02xNOcqF+l9C7T1/3xK+abc==" //nolint:gosec // fixture, not a real key
+		rawExtra = `{"tenant_id":"00000000-1111-2222-3333-444444444444"}`
+	)
+	connID := fmt.Sprintf("e2e_wasb_%d", time.Now().UnixNano())
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "wasb",
+		Login: account, Password: rawKey, Extra: rawExtra,
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	uri := uris[connID]
+	parsed, perr := url.Parse(uri)
+	if perr != nil {
+		t.Fatalf("URI not parseable (WasbHook would fail): %q err=%v", uri, perr)
+	}
+	if parsed.Scheme != "wasb" {
+		t.Errorf("scheme = %q, want wasb", parsed.Scheme)
+	}
+	if parsed.User.Username() != account {
+		t.Errorf("account = %q, want %q", parsed.User.Username(), account)
+	}
+	gotKey, _ := parsed.User.Password()
+	if gotKey != rawKey {
+		t.Errorf("account key round-trip failed: got %q, want %q", gotKey, rawKey)
+	}
+	if got := parsed.Query().Get("__extra__"); got != rawExtra {
+		t.Errorf("__extra__ round-trip failed: got %q, want %q", got, rawExtra)
+	}
+}
+
+// TestSparkConnectionURIShapeIntegration is the Spark chain-of-custody. A Spark
+// connection is host-bearing (the master URL, e.g. spark://host:7077) with
+// tuning (queue, deploy-mode) in Extra. SparkSubmitHook reads host:port + Extra.
+func TestSparkConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 43)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	const (
+		host     = "spark-master.example.com"
+		rawExtra = `{"queue":"analytics","deploy-mode":"cluster"}`
+	)
+	connID := fmt.Sprintf("e2e_spark_%d", time.Now().UnixNano())
+	port := 7077
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "spark", Host: host, Port: &port, Extra: rawExtra,
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	parsed, perr := url.Parse(uris[connID])
+	if perr != nil {
+		t.Fatalf("URI not parseable: %q err=%v", uris[connID], perr)
+	}
+	if parsed.Scheme != "spark" {
+		t.Errorf("scheme = %q, want spark", parsed.Scheme)
+	}
+	if want := fmt.Sprintf("%s:%d", host, port); parsed.Host != want {
+		t.Errorf("host = %q, want %q", parsed.Host, want)
+	}
+	if got := parsed.Query().Get("__extra__"); got != rawExtra {
+		t.Errorf("__extra__ round-trip failed: got %q, want %q", got, rawExtra)
+	}
+}
+
+// TestKafkaConnectionURIShapeIntegration is the Kafka chain-of-custody. A Kafka
+// connection carries the entire client config (bootstrap.servers, security
+// settings) as raw JSON in Extra — there is no host:port or login. KafkaBaseHook
+// passes the Extra dict straight to the confluent-kafka client.
+func TestKafkaConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 47)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	const rawExtra = `{"bootstrap.servers":"broker1:9092,broker2:9092","security.protocol":"SASL_SSL","sasl.username":"etl"}`
+	connID := fmt.Sprintf("e2e_kafka_%d", time.Now().UnixNano())
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "kafka", Extra: rawExtra,
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	parsed, perr := url.Parse(uris[connID])
+	if perr != nil {
+		t.Fatalf("URI not parseable: %q err=%v", uris[connID], perr)
+	}
+	if parsed.Scheme != "kafka" {
+		t.Errorf("scheme = %q, want kafka", parsed.Scheme)
+	}
+	// The whole Kafka client config lives in Extra; a regression that dropped it
+	// would leave the hook with no brokers to connect to.
+	if got := parsed.Query().Get("__extra__"); got != rawExtra {
+		t.Errorf("__extra__ round-trip failed: got %q, want %q", got, rawExtra)
+	}
+}
+
 // TestAWSConnectionURIShapeIntegration is the AWS chain-of-custody. Like
 // Snowflake it is the http shape (no host:port): an AWS connection carries the
 // access key as login, the secret key as password, and region_name/role_arn in

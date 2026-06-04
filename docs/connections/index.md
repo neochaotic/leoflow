@@ -124,14 +124,16 @@ UI carries credentials, but the DAG still has to install the hook to use them.
 | `aws` | [aws.md](aws.md) | doc-only (needs an AWS account) | ✅ documented — **keyless (IAM role) + key-based** (ADR 0035); delivery test (`TestAWSConnectionURIShapeIntegration`); real-cloud e2e is manual |
 | `slack` / `slackwebhook` | [slack.md](slack.md) | doc-only (needs a Slack workspace) | ✅ documented + delivery test (`TestSlackConnectionURIShapeIntegration`); bot-token round-trip; real-workspace e2e is manual |
 | `databricks` | [databricks.md](databricks.md) | doc-only (needs a Databricks workspace) | ✅ documented + delivery test (`TestDatabricksConnectionURIShapeIntegration`); host + PAT + http_path round-trip; real e2e is manual |
+| `wasb` / `adls` / `azure_*` | [azure.md](azure.md) | doc-only (needs an Azure account) | ✅ documented — **managed identity + key** (ADR 0035); delivery test (`TestWasbConnectionURIShapeIntegration`); real e2e is manual |
+| `spark` / `spark_sql` / … | [spark.md](spark.md) | doc-only (needs a Spark cluster) | ✅ documented + delivery test (`TestSparkConnectionURIShapeIntegration`); host:port + tuning Extra round-trip |
+| `kafka` | [kafka.md](kafka.md) | doc-only (needs a Kafka cluster) | ✅ documented + delivery test (`TestKafkaConnectionURIShapeIntegration`); full client config (incl. SASL) Extra round-trip |
 
 ## Cloud (deferred past alpha)
 
 These need provider accounts to test end-to-end; the umbrella issues are
 filed but the cookbook entries are not part of the first alpha cut.
 
-- `oracle` (#72), `kafka` (#82), `ssh` (#79), `ftp` (#80), `sftp` (#81),
-  `mongo` (#74)
+- `oracle` (#72), `ssh` (#79), `ftp` (#80), `sftp` (#81), `mongo` (#74)
 
 ## Contract every entry honours
 

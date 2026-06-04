@@ -190,3 +190,29 @@ def test_operator_non_serialisable_arg_is_loud_reject(monkeypatch, tmp_path):
                 SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1",
                                         on_success_callback=lambda ctx: None)
         """)
+
+
+def test_http_sensor_is_generic_operator_not_native_http(monkeypatch, tmp_path):
+    """A SENSOR whose name contains 'Http' (HttpSensor) must be captured as a
+    generic airflow_operator (poke in a pod), NOT mistranslated to the native
+    http_api inline call. Regression for the substring fast-path (e2e finding)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.http.sensors.http import HttpSensor
+        with DAG("g"):
+            HttpSensor(task_id="probe", http_conn_id="cp", endpoint="readyz")
+    """)
+    probe = _task(spec, "probe")
+    assert probe["type"] == "airflow_operator"
+    assert probe["operator_class"] == "airflow.providers.http.sensors.http.HttpSensor"
+
+
+def test_http_operator_stays_native_http_api(monkeypatch, tmp_path):
+    """HttpOperator (an operator, not a sensor) keeps its native http_api fast path."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.http.operators.http import HttpOperator
+        with DAG("g"):
+            HttpOperator(task_id="call", method="GET", endpoint="https://example.com/x")
+    """)
+    assert _task(spec, "call")["type"] == "http_api"

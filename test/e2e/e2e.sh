@@ -22,7 +22,11 @@ PY_VERSION="3.11"
 BASE_IMAGE="leoflow-base:py${PY_VERSION}"
 DAG_IMAGE="leoflow-e2e-dag:dev"
 DAG_ID="e2edag"
-API="http://localhost:8080"
+# HTTP port is overridable (LEOFLOW_E2E_HTTP_PORT) so a developer whose 8080 is
+# already taken — a forwarded VM, another server — can run without a conflict. CI
+# uses the default.
+HTTP_PORT="${LEOFLOW_E2E_HTTP_PORT:-8080}"
+API="http://localhost:${HTTP_PORT}"
 GRPC_PORT="9091"
 # Address task pods dial to reach the host control plane's gRPC. On Docker
 # Desktop (macOS/Windows) host.docker.internal resolves to the host; k3d does
@@ -56,6 +60,10 @@ done
 
 log "Scaffolding a minimal DAG project ($DAG_ID)"
 "$ROOT/bin/leoflow" init "$WORKDIR/$DAG_ID"
+# Declare the sensor's provider so the ADR 0040 A5 compile check passes; the
+# Dockerfile below installs it into the image.
+sed -i.bak 's/^dependencies: \[\]/dependencies: [apache-airflow-providers-http]/' \
+  "$WORKDIR/$DAG_ID/leoflow.yaml" && rm -f "$WORKDIR/$DAG_ID/leoflow.yaml.bak"
 # A real Airflow-SDK DAG (the parser requires an actual DAG object, not a bare
 # function). Two tasks in sequence prove pod-per-task AND cross-pod ordering:
 # each runs in its own pod whose agent reports state over gRPC.
@@ -64,6 +72,12 @@ cat > "$WORKDIR/$DAG_ID/dag.py" <<'PY'
 from __future__ import annotations
 
 from airflow.sdk import DAG, task
+# A provider SENSOR (poke mode) — captured generically as type=airflow_operator
+# (ADR 0040). HttpSensor pokes an endpoint until it returns 200; we point it at
+# the control plane's own public /readyz, so it succeeds on the first poke and
+# exercises the FULL operator chain end-to-end: scheduler -> pod -> agent
+# `--operator` -> runtime run_operator -> execute(), plus connection delivery.
+from airflow.providers.http.sensors.http import HttpSensor
 
 
 @task
@@ -87,10 +101,19 @@ def read_var(_value: str) -> None:
 
 
 with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
-    read_var(transform(extract()))
+    tail = read_var(transform(extract()))
+    # A real provider sensor (poke mode) downstream of the @task chain. Proves a
+    # type=airflow_operator task runs in its own pod and resolves a managed
+    # Connection (AIRFLOW_CONN_CP) — the generic-executor path.
+    probe = HttpSensor(task_id="probe", http_conn_id="cp", endpoint="readyz",
+                       poke_interval=2, timeout=60)
+    tail >> probe
 PY
 cat > "$WORKDIR/$DAG_ID/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
+# The DAG uses a provider sensor; install its provider into the image (this is
+# what connectors:/dependencies: do in a real project).
+RUN pip install --no-cache-dir apache-airflow-providers-http
 COPY dag.py /home/leoflow/dag.py
 ENV PYTHONPATH=/home/leoflow
 DOCKER
@@ -115,6 +138,10 @@ export LEOFLOW_LOGS_DIR="${WORKDIR}/logs"
 # Allow secret delivery over the e2e's plaintext gRPC (dev only; prod uses TLS,
 # issue #58) so the agent can fetch Admin Variables/Connections (#54).
 export LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true
+# Connections are encrypted at rest (ADR 0019); the server refuses to store one
+# without a key. Set a 32-byte key so the operator's Connection can be created.
+export LEOFLOW_SECRET_KEY="e2e-secret-key-32-bytes-padding!"
+export LEOFLOW_SERVER_HTTP_ADDR="0.0.0.0:${HTTP_PORT}"
 "$ROOT/bin/leoflow-server" &
 SERVER_PID=$!
 sleep 5
@@ -122,15 +149,25 @@ sleep 5
 log "Compiling, building, and importing the DAG image"
 "$ROOT/bin/leoflow" compile "$WORKDIR/$DAG_ID" --image "$DAG_IMAGE" \
   --build --dockerfile Dockerfile -o "$WORKDIR/$DAG_ID/dag.json"
+log "Asserting the sensor compiled to type=airflow_operator (ADR 0040 generic path)"
+jq -e '.tasks[] | select(.task_id=="probe" and .type=="airflow_operator")' \
+  "$WORKDIR/$DAG_ID/dag.json" >/dev/null || fail "probe did not compile to airflow_operator"
 k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER"
 
 log "Pushing the DAG"
-TOKEN="$("$ROOT/bin/leoflow" auth create-token --username admin@leoflow.local --password admin)"
-"$ROOT/bin/leoflow" push "$WORKDIR/$DAG_ID/dag.json" --token "$TOKEN"
+TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"
+"$ROOT/bin/leoflow" push "$WORKDIR/$DAG_ID/dag.json" --server "$API" --token "$TOKEN"
 
 log "Creating an Admin Variable for the runtime-delivery check (#54)"
 curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"key":"e2e_greeting","value":"hi-from-admin"}' "$API/api/v2/variables" >/dev/null
+
+log "Creating the 'cp' http Connection the operator sensor pokes (ADR 0040)"
+# Point it at the host control plane (the pod reaches the host the same way the
+# agent dials gRPC). HttpSensor pokes http://${HOST_ADDR}:${HTTP_PORT}/readyz.
+curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"connection_id\":\"cp\",\"conn_type\":\"http\",\"host\":\"${HOST_ADDR}\",\"port\":${HTTP_PORT},\"schema\":\"http\"}" \
+  "$API/api/v2/connections" >/dev/null
 
 log "Triggering a run"
 RUN_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \

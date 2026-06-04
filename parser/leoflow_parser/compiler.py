@@ -329,12 +329,18 @@ def _operator_type(task) -> str:
                 "silently mistranslate. See docs/dag-authoring.md for the "
                 "current supported operator list."
             )
-    if "Bash" in name:
-        return "bash"
-    if "Http" in name:
-        return "http_api"
-    if "Python" in name:
-        return "python"
+    # The native fast path is for OPERATORS only. A SENSOR whose class name happens
+    # to contain Bash/Http/Python (HttpSensor, BashSensor, PythonSensor) must NOT be
+    # mistranslated into a native one-shot task — sensors run via the generic poke
+    # executor in their own pod. (An e2e caught HttpSensor silently becoming an
+    # inline http_api call.) Airflow sensors conventionally end in "Sensor".
+    if not name.endswith("Sensor"):
+        if "Bash" in name:
+            return "bash"
+        if "Http" in name:
+            return "http_api"
+        if "Python" in name:
+            return "python"
     # Any captured provider operator / sensor / transfer runs through the generic
     # executor (ADR 0040 Phase A): import_string(class)(**args).execute(context).
     if getattr(type(task), "__leoflow_operator_class__", None):

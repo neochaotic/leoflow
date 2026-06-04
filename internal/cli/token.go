@@ -22,6 +22,7 @@ func newAuthCommand() *cobra.Command {
 		Short: "Manage authentication tokens.",
 	}
 	auth.AddCommand(newCreateTokenCommand())
+	auth.AddCommand(newLoginCommand())
 	return auth
 }
 

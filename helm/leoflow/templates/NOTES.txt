@@ -22,6 +22,14 @@ WARNING: no database URL set. Provide .Values.database.url or .Values.database.e
 
 WARNING: no JWT secret set. Provide .Values.auth.jwtSecret or .Values.auth.existingSecret (key jwtSecret).
 {{- end }}
+{{- if .Values.taskServiceAccount.imagePullSecrets }}
+
+NOTE: taskServiceAccount.imagePullSecrets is set (for private DAG images), but
+Kubernetes only injects them into pods that RUN AS this ServiceAccount. Set
+`execution.service_account: {{ .Values.taskServiceAccount.name }}` in each DAG's
+leoflow.yaml (the same field Workload Identity uses), or task pods will fall back
+to the namespace default SA and the pull secrets will not apply.
+{{- end }}
 {{- if .Values.migrations.enabled }}
 
 Migrations run as a pre-install/pre-upgrade Job using image

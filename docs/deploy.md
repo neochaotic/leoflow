@@ -1,13 +1,27 @@
 # CI/CD & deploy examples
 
 !!! tip "New to Pro? Start with the walkthrough"
-    [**Your first Pro DAG (≈20 min)**](first-pro-dag.md) takes one DAG from source
-    to a running pod by hand, so you see each artifact boundary before you automate
-    it. This page is the CI recipes for the same pipeline.
+    [**Your first Pro DAG (≈10 min)**](first-pro-dag.md) takes one DAG from source
+    to a running pod with **one command** (`leoflow deploy`), so you see each
+    artifact boundary before you automate it. This page is the CI recipes for the
+    same pipeline.
 
 Deploying a Leoflow DAG is the same everywhere because a DAG is an **immutable
 artifact** — a `dag.json` + a container image, versioned together (ADR 0003).
-The pipeline is always:
+
+**By hand or for a team without a pipeline,** one command does it all:
+
+```bash
+leoflow auth login --server "$LEOFLOW_SERVER"   # once; stores the token
+leoflow deploy --yes                            # compile → build → push → register
+```
+
+`leoflow deploy` is the [pipeline-less promotion](adr/0041-leoflow-deploy-pipelineless.md)
+— it cross-builds for the cluster, pins the image by digest, and registers the
+artifact. `--yes` skips the confirmation prompt (use it in automation).
+
+**In a pipeline,** the same three boundaries are explicit so each can be cached,
+gated, and audited independently:
 
 ```mermaid
 flowchart LR
@@ -21,6 +35,11 @@ flowchart LR
    build the DAG image.
 2. **push the image** to your registry, tagged by git SHA (immutable).
 3. **`leoflow push dag.json`** — register the artifact with the control plane.
+
+!!! note "`deploy` vs. the three explicit steps"
+    They do the same thing. A pipeline can run the one-liner (`leoflow deploy
+    --yes`) just as well; the explicit steps are shown because most CI systems want
+    the build and the register as separate, individually-cacheable stages.
 
 !!! tip "The guardrails are your CI gate"
     The same checks that warn you locally in `leoflow lite` fail the CI build, so a

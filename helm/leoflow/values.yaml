@@ -29,6 +29,11 @@ taskServiceAccount:
   name: leoflow-task
   # -- Annotations. GKE Workload Identity: `iam.gke.io/gcp-service-account: GSA@PROJECT.iam.gserviceaccount.com`. EKS IRSA: `eks.amazonaws.com/role-arn: ...`.
   annotations: {}
+  # -- Pull secrets for private DAG images. Kubernetes auto-injects these into
+  # every task pod that runs as this SA, so a `leoflow deploy` to a private
+  # registry can be pulled (ADR 0041). Reference an existing docker-registry
+  # secret, e.g. `[{name: regcred}]`.
+  imagePullSecrets: []
 
 serviceAccount:
   # -- Create a dedicated ServiceAccount for the leoflow-server. Set `false` only if you bring your own via `name`.

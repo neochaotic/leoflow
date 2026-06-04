@@ -1,0 +1,250 @@
+# ADR 0041: `leoflow deploy` — pipeline-less promotion from Lite to Pro
+
+**Status:** Accepted (design; implementation post-v0.1.0)
+**Date:** 2026-06-04
+**Companions:** ADR 0003 (DAG as immutable artifact), ADR 0019 (secret encryption), ADR 0021 (AIRFLOW_CONN delivery), the editions split (Lite/Pro)
+
+## Context
+
+Today, promoting a DAG to a Pro control plane is **three CLI calls** —
+`leoflow compile --build --push --image …` then `leoflow push dag.json --server …`
+(after a `leoflow auth create-token`). CI automates them; by hand it is awkward.
+A user who built and tested a DAG in **Lite** (the local loop) and wants it in
+**Pro** but has **no CI pipeline yet** has no single, ergonomic command.
+
+This ADR defines **`leoflow deploy`**: one command that promotes a DAG (or a whole
+workspace) from a developer's machine to a Pro control plane, **without a
+pipeline**, reusing the existing primitives (`compile`, `--build`, `--push`,
+`push`). It is the manual happy path the `first-pro-dag` walkthrough already
+describes, collapsed into one verb.
+
+## Decision
+
+### Split by edition, not by cluster topology
+- **Lite** (`leoflow lite`) runs locally and needs **no registry** — unchanged.
+- **`leoflow deploy` targets Pro and REQUIRES a registry.** We do **not** add a
+  single-node image-import path for Pro (it complicates our side — per-node
+  containerd trust). Kubernetes pulls images from a registry; a Pro deploy needs
+  one, full stop.
+
+### Registry is mandatory for deploy — fail loudly when missing
+`leoflow deploy` without a configured `registry:` is a **loud, actionable error**,
+never a silent attempt:
+
+```
+error: deploy requires a container registry, but none is configured.
+  A Pro deploy pushes the DAG image to a registry your cluster can pull from
+  (Lite runs locally and needs none). Add to leoflow.yaml:
+
+      registry:
+        url: ghcr.io/<your-org>     # or ECR / Artifact Registry / ACR / private
+        image_name: <name>
+
+  Then authenticate your builder once:  docker login ghcr.io
+```
+
+This is **documented as a hard requirement** of the command (docs + the error
+itself). It aligns with the standing loud-reject-over-silent principle.
+
+### What lives where
+- **`leoflow.yaml`** (per-DAG, part of the artifact): `registry:` (`url`,
+  `image_name`, `tag_strategy`). Optional for Lite (ignored locally), required for
+  deploy.
+- **NOT in the yaml** (environment, not per-DAG): the target control plane
+  `--server` and the auth token. The same DAG deploys to staging and prod by
+  changing only `--server`. Provided via flag, `LEOFLOW_TOKEN` env, or a persisted
+  session (`leoflow login`).
+
+### Two auths, kept separate
+1. **Registry auth** (image push) — the **builder's** credential (`docker login`,
+   or cloud helpers: `aws ecr get-login`, `gcloud auth configure-docker`,
+   `az acr login`). Leoflow never stores registry credentials; it shells out to
+   `docker push`. Leoflow is registry-agnostic.
+2. **Control-plane auth** (register `dag.json`) — a JWT bearer token. Precedence:
+   `--token` (default from `LEOFLOW_TOKEN`) → `--username`/`--password` (deploy
+   fetches a token via `/auth/login`) → a persisted session from `leoflow login`.
+
+### `leoflow login` ships alongside `deploy`
+`leoflow login --server <pro>` stores the token in `~/.leoflow/config`, so
+`leoflow deploy` then needs **no auth flags**. This is what makes the pipeline-less
+loop fluid (login once, deploy many).
+
+### The CLI is runtime-independent (Lite and CI share it)
+
+`deploy`, `login`, `compile`, and `push` are **client-side by contract**: they talk
+to a remote control plane via `--server` + a token and require **no local runtime**
+— no `leoflow lite`, no embedded server, no datastore. They already live in the
+root command's *authoring* group (`internal/cli/root.go`), distinct from the
+*runtime* group (`lite`/`server`). This is what lets the exact same commands run in
+two settings with no special-casing:
+
+- **From Lite** — a developer who has `leoflow lite` up still invokes `deploy`/
+  `login` as plain client calls against the Pro `--server`.
+- **From a CI pipeline, without Lite** — a runner that only has the `leoflow`
+  binary runs `leoflow login` + `leoflow deploy` (journey 3); it never starts a
+  local runtime.
+
+**Packaging note (deferred optimization).** The single `leoflow` binary already
+serves both — CI simply calls the authoring subcommands. A **slim, client-only
+build** (build-tag-gated to exclude `lite`/`server`/the SPA, shrinking the CI
+image) is a *packaging* optimization, not a requirement, and is deferred until
+binary size is a real pain. The contract above (commands are runtime-independent)
+is what keeps that option open.
+
+### Deploy scope — single, by id, or all
+- `leoflow deploy [path]` (default `.`) — the DAG project in that directory.
+- `leoflow deploy <dag_id>` — resolve the id to its subdir in a multi-DAG
+  workspace and deploy that one.
+- `leoflow deploy --all` — every DAG in the workspace (reuses `DiscoverProjects`).
+  **Best-effort**: build+push+register each, print a per-DAG summary, and exit
+  non-zero if **any** failed (so CI catches it) — partial pushes are not rolled
+  back (images are content-addressed; a re-deploy is idempotent).
+
+### Behavior + UX
+- **Registers only** by default (the artifact is published; scheduled DAGs run on
+  their schedule). `--trigger` opts into kicking a run immediately.
+- **Confirmation** when interactive and the server is non-loopback (a real Pro):
+  `Deploy <dag> → <server>? [y/N]`. `--yes` skips it (CI/automation).
+- **Rebuilds** the image by default (simple, deterministic); `--skip-build`
+  re-uses an already-built image (promote without rebuild).
+- **Pins by digest:** the push captures the image digest and writes
+  `registry/img@sha256:…` into `dag.json` — Pro pulls **exactly** the bytes that
+  were built; there is no `:latest` lookup. The first deploy *registers* the
+  artifact, which is how Pro learns it; subsequent deploys register new versions,
+  and "latest" in Pro means the newest registered artifact, each pinning its own
+  digest.
+- **Default tag strategy:** `git-sha` (immutable per commit); falls back to a
+  timestamp when the project is not in git.
+- **Output:** a clear per-phase summary —
+  `built … @sha256 · pushed … · registered <dag> <version> → <server>/dags/<dag>`.
+
+### Target architecture — cross-build by default (Mac-safe)
+
+The common dev setup is **macOS/arm64**; the common Pro cluster is **Linux/amd64**.
+A local `docker build` inherits the host arch (`internal/cli/compile.go:182` passes
+no `--platform`), so a Mac-built image would crash the task pod with
+`exec format error`. Decision:
+
+- **`leoflow deploy` defaults to `--platform linux/amd64`** — it builds for the
+  cluster, not the laptop. On Docker Desktop this "just works" (bundled QEMU/binfmt
+  cross-builds with no setup); the runtime base is already published multi-arch
+  (`release.yaml` → `linux/amd64,linux/arm64`), so the cross-build resolves.
+- **`--platform` is overridable:** `linux/arm64` (Graviton) or a comma list
+  (`linux/amd64,linux/arm64`). A multi-arch value routes through
+  `<builder> buildx build --platform … --push` (a manifest list cannot be `--load`ed
+  locally, so multi-arch is inherently a push).
+- **Builder-agnostic, no new library surface.** The platform fix is just a CLI arg
+  to the operator-chosen `--builder` (`docker`/`podman`/`nerdctl`); Leoflow shells
+  out and never links the Docker Go SDK (ADR 0015). (`docker/docker` in `go.sum` is
+  a test-only transitive of golang-migrate's `dktest` — `go mod why` reports it
+  unneeded by any package; govulncheck finds it unreachable.)
+- **Loud first-time note:** cross-building under emulation is slow (pip/wheels); the
+  command prints a one-line heads-up so a long build is not mistaken for a hang.
+  Non-Docker-Desktop runtimes (Colima/Lima/podman) may need a one-time
+  `docker run --privileged tonistiigi/binfmt --install all`.
+
+### What the artifact does NOT carry — connections & variables
+
+The DAG **image + `dag.json`** travel; **connections and variables do not** — they
+live encrypted in the Pro control-plane DB (ADR 0019), not in the artifact. So a
+deploy can succeed and the DAG still fail at runtime because its `conn_id` does not
+exist on Pro. This bites journey (2) hardest (an example DAG that needs a
+connection). The deploy flow must therefore:
+
+- **Surface the dependency, not hide it.** A deploy of a DAG that references a
+  `conn_id` prints the connections it expects and reminds the user to create them
+  on Pro (UI or API), the same way the registry-missing error teaches.
+- A future `leoflow connections push` (seed selected connections to Pro) is a
+  natural follow-up but is **out of scope** here — secrets crossing machines is a
+  deliberate, separately-designed step, never an implicit side effect of deploy.
+
+## Happy paths (documentation restructures on ship)
+
+`deploy` reshapes the Pro happy path into **three journeys**, which the docs
+(`docs/first-pro-dag.md`, `docs/deploy.md`) must present distinctly — today they
+only show one by-hand sequence:
+
+1. **Your own DAG — develop in Lite, then deploy.** Iterate locally with
+   `leoflow lite` (fast, no registry, hot-reload); when it is ready,
+   `leoflow deploy --server <pro>` promotes it. Lite is the dev loop; deploy is
+   the promotion. This is the path for DAGs you are writing.
+
+2. **An example DAG — deploy directly, no Lite.** The shipped examples are
+   known-good, so you skip the local loop entirely: configure `registry:` (and any
+   connection the example needs), then `leoflow deploy --server <pro>`. Good for a
+   first taste of Pro without authoring anything.
+
+3. **Automated — a CI pipeline (esteira).** The same `compile → build → push →
+   register` (or one `leoflow deploy`) on every push (the `deploy.md` recipes),
+   for teams that already have a pipeline.
+
+When `deploy` ships, `first-pro-dag.md` is restructured around journeys (1) and
+(2) — replacing the current by-hand `compile --build --push` + `push` sequence —
+and `deploy.md` keeps (3) as the automated variant.
+
+## Open questions (decide during implementation)
+
+- **Registry reachability asymmetry.** The dev pushes; the *cluster* pulls the same
+  ref. A LAN/short-name `registry.url` that resolves differently inside the cluster
+  (or needs different TLS trust) makes the dev's push succeed while the pod's pull
+  fails. `imagePullSecrets` covers *auth*, not *name/reachability*. Decide whether
+  deploy does a best-effort reachability hint.
+- **Paused/catchup on first register.** `versions.go` does not set `IsPaused`, so a
+  fresh deploy inherits the default; if that is active-with-catchup, a deploy could
+  immediately fire a backlog on Pro. Decide: register **paused** by default with an
+  `--activate`, or document the current behavior loudly.
+- **CLI ↔ Pro version skew.** A newer Lite writes a `dag.json` `schema_version` an
+  older Pro cannot parse (or vice versa). The register endpoint should reject with
+  an explicit "upgrade Pro" message, not a confusing validation error.
+- **Tenant is implicit (works, document it).** `RegisterDagVersion` uses
+  `tenantOf(token)` — deploy lands in the **token's tenant**. On a multi-tenant Pro
+  the user selects the tenant by which token they `login` with; the docs must say so.
+
+## Deferred (explicitly out of scope here)
+- **Rollback UX.** The model is already versioned server-side
+  (`POST /dags/{id}/versions`), so the data supports rollback, but there is no
+  `leoflow deploy --rollback` / pin-previous command yet. Name now, build later.
+- **Secrets baked into the image during Lite dev** get pushed to the registry on
+  deploy. A lint/warn for obvious secret material in the build context is a later
+  hardening, not part of this command.
+- **Bundled in-cluster registry** (Pro shipping its own `registry:2`) — it is the
+  part that complicates *our* side (per-node containerd trust, TLS, image GC).
+  Reconsider only on real demand for multi-node-without-external-registry.
+- **Named environments / contexts** (`--env prod`, kubectl-style) — start with
+  `--server` + `login`; add named targets if demand appears.
+- **A "Deploy" button in the Lite web editor** — viable Lite-first (it has Docker),
+  but a UI concern that reuses this same `deploy` command; not part of the CLI work.
+
+## Cluster wiring (Helm) — required for the deploy path to actually pull
+
+The deploy story is only complete if the **task pod** can pull the DAG image from
+a **private** registry. Today the chart's `imagePullSecrets` is applied **only to
+the control-plane Deployment** (`deployment.yaml`); the per-task pod built by the
+K8s executor (`internal/executor/kubernetes.go::BuildPod`) sets **no**
+`ImagePullSecrets`, and the task ServiceAccount template carries none either. A
+private-registry deploy would therefore fail the task pod with `ErrImagePull`.
+
+**Fix (cheap, no executor code):** attach `imagePullSecrets` to the **task
+ServiceAccount** — Kubernetes auto-injects a SA's pull secrets into every pod that
+uses it. Two parts:
+- `values.yaml`: `taskServiceAccount.imagePullSecrets: []`; emit the block in
+  `templates/task-serviceaccount.yaml`.
+- **Ensure task pods default to that SA.** Today the pod only runs as
+  `taskServiceAccount` when `Execution.ServiceAccount` is set
+  (`kubernetes.go:93`); otherwise it falls back to the namespace `default` SA,
+  which has no pull secrets. The deploy path requires task pods to default to the
+  task SA (or, as a heavier alternative, a per-pod `ImagePullSecrets` fed from
+  server config into `BuildPod`).
+
+This chart change is a **prerequisite** for journeys (1) and (2) against a private
+registry; public images (e.g. the shipped examples on a public GHCR) work without
+it, which is why journey (2) is the gentlest first taste of Pro.
+
+## Consequences
+- The pipeline-less promotion becomes one command, reusing tested primitives —
+  little new code on our side (orchestration + a registry-presence check + the
+  digest capture + `login`).
+- A registry is a hard, documented prerequisite for Pro deploy; the failure path
+  teaches the user instead of guessing.
+- The artifact stays immutable and environment-agnostic: `leoflow.yaml` describes
+  the DAG + where its image lives; `--server`/`login` chooses where it runs.

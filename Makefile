@@ -247,10 +247,17 @@ proto: ## Regenerate protobuf/gRPC code from proto/ via buf
 	buf generate
 
 .PHONY: gen-connectors
-gen-connectors: ## Regenerate internal/connectors/catalog.json from a real Airflow install (ADR 0039)
+gen-connectors: ## Regenerate internal/connectors/catalog.json from the pinned providers (ADR 0039)
 	python3 -m venv /tmp/conngen
-	/tmp/conngen/bin/pip install --quiet -r scripts/connectors-providers.txt
+	/tmp/conngen/bin/pip install --quiet -r scripts/connectors-providers.lock.txt
 	/tmp/conngen/bin/python scripts/gen_connectors.py internal/connectors/catalog.json
+
+.PHONY: gen-connectors-check
+gen-connectors-check: ## Anti-drift: regenerate to a temp file and diff against the committed catalog.json
+	python3 -m venv /tmp/conngen
+	/tmp/conngen/bin/pip install --quiet -r scripts/connectors-providers.lock.txt
+	/tmp/conngen/bin/python scripts/gen_connectors.py /tmp/catalog.check.json
+	@diff -u internal/connectors/catalog.json /tmp/catalog.check.json && echo "catalog.json is in sync with the pinned providers"
 
 .PHONY: clean
 clean: ## Remove build artifacts

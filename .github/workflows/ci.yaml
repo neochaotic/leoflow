@@ -35,6 +35,37 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
   # ─────────────────────────────────────────────────────────────────────
+  # Proto drift: the generated gRPC code (proto/agent/v1) is committed, so a
+  # change to proto/agent.proto without re-running `buf generate` would ship a
+  # stale stub. Regenerate in CI and fail if the working tree differs.
+  # ─────────────────────────────────────────────────────────────────────
+  proto-drift:
+    name: Proto generated code is in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install protoc-gen plugins (pinned to go.mod)
+        run: |
+          set -euo pipefail
+          go install "google.golang.org/protobuf/cmd/protoc-gen-go@$(go list -m -f '{{.Version}}' google.golang.org/protobuf)"
+          go install "google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest"
+      - name: buf generate
+        run: buf generate
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code -- proto/; then
+            echo "::error::proto/agent/v1 is out of sync with proto/agent.proto. Run 'buf generate' and commit." >&2
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────
   # Lint the GitHub Actions workflows themselves (actionlint). A malformed
   # workflow can silently fail to trigger or break a release; catching schema and
   # expression errors here keeps the CI/release workflows valid before they merge.

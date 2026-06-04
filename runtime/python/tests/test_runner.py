@@ -289,3 +289,18 @@ def test_merge_operator_xcom_noop_without_xcom(monkeypatch):
     monkeypatch.delenv("LEOFLOW_XCOM_SQL", raising=False)
     merged = runner._merge_operator_xcom({"conn_id": "sf"})
     assert merged == {"conn_id": "sf"}
+
+
+def test_is_reschedule_exc_matches_by_name():
+    """AirflowRescheduleException is recognized by class name across the MRO, so
+    the runtime translates reschedule-mode sensors to a clear error without
+    importing Airflow (review polish #5)."""
+    class AirflowRescheduleException(Exception):
+        pass
+
+    class Subclass(AirflowRescheduleException):
+        pass
+
+    assert runner._is_reschedule_exc(AirflowRescheduleException())
+    assert runner._is_reschedule_exc(Subclass())
+    assert not runner._is_reschedule_exc(ValueError("nope"))

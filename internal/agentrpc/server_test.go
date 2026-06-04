@@ -421,3 +421,25 @@ func TestRegisterAndHeartbeatReturnServerTime(t *testing.T) {
 		t.Error("heartbeat should return server time")
 	}
 }
+
+// TestGetTaskSpecMapsOperatorFields covers the airflow_operator wiring (ADR 0040
+// A4): the store's OperatorClass + OperatorArgsJSON must reach the proto so the
+// agent can dispatch the runtime's --operator mode (review polish #6).
+func TestGetTaskSpecMapsOperatorFields(t *testing.T) {
+	store := &fakeStore{spec: TaskSpec{
+		Operator:         "airflow_operator",
+		OperatorClass:    "airflow.providers.snowflake.operators.snowflake.SQLExecuteQueryOperator",
+		OperatorArgsJSON: `{"sql":"SELECT 1","conn_id":"sf"}`,
+	}}
+	srv, a := newServer(store)
+	spec, err := srv.GetTaskSpec(ctxWithToken(t, a), &agentv1.GetTaskSpecRequest{})
+	if err != nil {
+		t.Fatalf("GetTaskSpec: %v", err)
+	}
+	if spec.GetOperatorClass() != store.spec.OperatorClass {
+		t.Errorf("operator_class = %q, want %q", spec.GetOperatorClass(), store.spec.OperatorClass)
+	}
+	if spec.GetOperatorArgsJson() != store.spec.OperatorArgsJSON {
+		t.Errorf("operator_args_json = %q, want %q", spec.GetOperatorArgsJson(), store.spec.OperatorArgsJSON)
+	}
+}

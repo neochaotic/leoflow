@@ -246,6 +246,12 @@ sqlc: ## Regenerate sqlc code
 proto: ## Regenerate protobuf/gRPC code from proto/ via buf
 	buf generate
 
+.PHONY: gen-connectors
+gen-connectors: ## Regenerate internal/connectors/catalog.json from a real Airflow install (ADR 0039)
+	python3 -m venv /tmp/conngen
+	/tmp/conngen/bin/pip install --quiet -r scripts/connectors-providers.txt
+	/tmp/conngen/bin/python scripts/gen_connectors.py internal/connectors/catalog.json
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR) coverage.out

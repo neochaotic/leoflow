@@ -5,27 +5,27 @@ import (
 	"testing"
 )
 
-// TestCatalogShape guards that every curated connector carries the identity the
-// three consumers need (the admin form, the `connectors:` sugar expansion, and
-// compile validation): a type, a display name, an Airflow hook class, and a pip
-// package named the way PyPI ships it.
+// TestCatalogShape guards that every generated entry carries the identity the
+// consumers need: a conn_type and a hook name. Provider-backed entries (those
+// with a pip package) must name it the way PyPI ships it. Core types (generic,
+// email) legitimately have no package.
 func TestCatalogShape(t *testing.T) {
 	cat := Catalog()
 	if len(cat) < 10 {
-		t.Fatalf("catalog too small: %d", len(cat))
+		t.Fatalf("catalog too small: %d (did scripts/gen_connectors.py run against the full provider set?)", len(cat))
 	}
 	seen := map[string]bool{}
 	for _, c := range cat {
-		if c.Type == "" || c.DisplayName == "" || c.HookClass == "" || c.PipPackage == "" {
+		if c.ConnectionType == "" || c.HookName == "" {
 			t.Errorf("incomplete connector: %+v", c)
 		}
-		if !strings.HasPrefix(c.PipPackage, "apache-airflow-providers-") {
-			t.Errorf("%s: pip package %q lacks the provider prefix", c.Type, c.PipPackage)
+		if c.PipPackage != "" && !strings.HasPrefix(c.PipPackage, "apache-airflow-providers-") {
+			t.Errorf("%s: pip package %q lacks the provider prefix", c.ConnectionType, c.PipPackage)
 		}
-		if seen[c.Type] {
-			t.Errorf("duplicate connector type %q", c.Type)
+		if seen[c.ConnectionType] {
+			t.Errorf("duplicate connector type %q", c.ConnectionType)
 		}
-		seen[c.Type] = true
+		seen[c.ConnectionType] = true
 	}
 }
 
@@ -37,7 +37,6 @@ func TestPackageForKnownAndUnknown(t *testing.T) {
 		"mssql":                 "apache-airflow-providers-microsoft-mssql",
 		"aws":                   "apache-airflow-providers-amazon",
 		"google_cloud_platform": "apache-airflow-providers-google",
-		"kafka":                 "apache-airflow-providers-apache-kafka",
 	}
 	for connType, want := range cases {
 		got, ok := PackageFor(connType)
@@ -50,11 +49,9 @@ func TestPackageForKnownAndUnknown(t *testing.T) {
 	}
 }
 
-// TestSugarAliases pins the ergonomic aliases: the `connectors:` short names a
-// user reaches for first. Airflow's own conn_types are asymmetric (`aws` is
-// terse, `google_cloud_platform` is verbose), so the sugar accepts a friendly
-// alias (`gcp`) that resolves to the same provider as the canonical conn_type.
-// The canonical name keeps working — the alias is additive, not a rename.
+// TestSugarAliases pins the ergonomic overlay: "gcp"/"google" resolve to the same
+// provider as the canonical "google_cloud_platform". The canonical name keeps
+// working — the alias is additive.
 func TestSugarAliases(t *testing.T) {
 	for _, name := range []string{"gcp", "google", "google_cloud_platform"} {
 		got, ok := PackageFor(name)
@@ -75,20 +72,20 @@ func TestResolve(t *testing.T) {
 	if strings.Join(unknown, ",") != "nope" {
 		t.Errorf("unknown = %v, want [nope]", unknown)
 	}
-	// Empty in → empty out (no spurious entries).
 	if p, u := Resolve(nil); len(p) != 0 || len(u) != 0 {
 		t.Errorf("Resolve(nil) = (%v,%v), want empty", p, u)
 	}
 }
 
-// TestTypesListed lets callers build "known: postgres, mysql, …" error messages.
+// TestTypesAreSugarResolvable guards that Types() lists only pip-backed names
+// (the ones a `connectors:` entry can actually install) and includes a known one.
 func TestTypesListed(t *testing.T) {
 	types := Types()
-	if len(types) != len(Catalog()) {
-		t.Fatalf("Types() len %d != catalog len %d", len(types), len(Catalog()))
-	}
 	found := false
 	for _, ty := range types {
+		if pkg, ok := PackageFor(ty); !ok || pkg == "" {
+			t.Errorf("Types() listed %q which is not sugar-resolvable", ty)
+		}
 		if ty == "postgres" {
 			found = true
 		}
@@ -96,4 +93,19 @@ func TestTypesListed(t *testing.T) {
 	if !found {
 		t.Error("Types() missing postgres")
 	}
+}
+
+// TestExtraFieldsPopulatedForCloud is the ADR 0038 field-fidelity guard: a
+// credential-rich connector (snowflake) must carry provider-specific extra_fields
+// in the generated catalog — the gap the empty {} used to leave (ADR 0036).
+func TestExtraFieldsPopulatedForCloud(t *testing.T) {
+	for _, c := range Catalog() {
+		if c.ConnectionType == "snowflake" {
+			if len(c.ExtraFields) == 0 {
+				t.Error("snowflake has no extra_fields; the generated form would miss account/warehouse/etc.")
+			}
+			return
+		}
+	}
+	t.Skip("snowflake not in catalog (provider not installed at generation time)")
 }

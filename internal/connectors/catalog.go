@@ -1,67 +1,89 @@
-// Package connectors is the single source of truth for the curated Airflow
-// connector types Leoflow knows about: the connection type, its display name,
-// the Airflow hook class, the pip package that provides it (named as PyPI ships
-// it), and which standard form fields to hide. Three consumers read this catalog
-// so they never drift: the admin connection form (internal/api), the
+// Package connectors is the single source of truth for the Airflow connector
+// types Leoflow knows about. The catalog is GENERATED, not hand-written: an
+// offline step (scripts/gen_connectors.py) asks a real Apache Airflow install for
+// the exact connection-form metadata its UI renders (via the same
+// HookMetaService the /ui/connections/hook_meta endpoint uses) plus the pip
+// package each conn_type ships in, and embeds it as catalog.json. Three consumers
+// read it so they never drift: the admin connection form (internal/api), the
 // `connectors:` sugar expansion at compile, and compile-time dependency
-// validation (ADR 0038).
+// validation (ADR 0038). Regenerate by installing more providers and re-running
+// the script — never edit catalog.json by hand.
 package connectors
 
-// Connector is one curated connector type.
+import (
+	_ "embed"
+	"encoding/json"
+)
+
+//go:embed catalog.json
+var catalogJSON []byte
+
+// Connector is one curated connector type, mirroring a catalog.json entry. The
+// field metadata (StandardFields/ExtraFields) is the precise shape the Airflow
+// 3.2 SPA renders via its FlexibleForm component, so the admin form can serve it
+// verbatim.
 type Connector struct {
-	// Type is the Airflow conn_type, e.g. "postgres".
-	Type string
-	// DisplayName is the human label shown in the admin form.
-	DisplayName string
-	// HookClass is the dotted Airflow hook class, e.g.
-	// "airflow.providers.postgres.hooks.postgres.PostgresHook".
-	HookClass string
+	// ConnectionType is the Airflow conn_type, e.g. "postgres".
+	ConnectionType string `json:"connection_type"`
+	// HookName is the human label shown in the admin form, e.g. "Postgres".
+	HookName string `json:"hook_name"`
+	// HookClassName is the dotted Airflow hook class.
+	HookClassName string `json:"hook_class_name"`
+	// DefaultConnName is Airflow's conventional default connection id; empty for
+	// core types that declare none.
+	DefaultConnName string `json:"default_conn_name"`
 	// PipPackage is the PyPI package that provides the hook, e.g.
-	// "apache-airflow-providers-postgres". Note the package boundary is not a
-	// simple join of the dotted path (amazon.aws -> amazon; microsoft.mssql ->
-	// microsoft-mssql), which is exactly why this is curated, not derived.
-	PipPackage string
-	// DefaultConnName is Airflow's conventional default connection id.
-	DefaultConnName string
-	// HiddenFields are the standard form fields hidden for this type.
-	HiddenFields []string
-	// Aliases are extra short names the `connectors:` sugar accepts for this
-	// type, on top of Type. They exist purely to smooth Airflow's own
-	// asymmetric conn_type vocabulary (e.g. "gcp" for the verbose
-	// "google_cloud_platform", mirroring how "aws" is already terse). The
-	// canonical Type always works; aliases never reach the admin form or the
-	// AIRFLOW_CONN delivery, which speak Airflow's conn_type verbatim.
-	Aliases []string
+	// "apache-airflow-providers-postgres". Empty for core conn types (generic,
+	// email): they appear in the form but are not resolvable by the `connectors:`
+	// sugar (nothing to install).
+	PipPackage string `json:"pip_package"`
+	// StandardFields is the per-field behavior for the built-in fields
+	// (host/login/password/port/schema/description): hidden flag, relabel title,
+	// and placeholder.
+	StandardFields map[string]any `json:"standard_fields"`
+	// ExtraFields is the provider-specific custom fields (the credential fields
+	// that live in Connection.extra), each a FlexibleForm param spec.
+	ExtraFields map[string]any `json:"extra_fields"`
+	// Aliases are extra short names the `connectors:` sugar accepts on top of
+	// ConnectionType. They are a Leoflow overlay (see aliasOverlay), not part of
+	// Airflow's metadata, and exist only to smooth Airflow's asymmetric conn_type
+	// vocabulary (e.g. "gcp" for the verbose "google_cloud_platform").
+	Aliases []string `json:"-"`
 }
 
-// catalog is the curated registry. Additive: new connector types append here.
-var catalog = []Connector{
-	{"postgres", "Postgres", "airflow.providers.postgres.hooks.postgres.PostgresHook", "apache-airflow-providers-postgres", "postgres_default", nil, nil},
-	{"mysql", "MySQL", "airflow.providers.mysql.hooks.mysql.MySqlHook", "apache-airflow-providers-mysql", "mysql_default", nil, nil},
-	{"sqlite", "SQLite", "airflow.providers.sqlite.hooks.sqlite.SqliteHook", "apache-airflow-providers-sqlite", "sqlite_default", []string{"login", "password", "port", "url_schema"}, nil},
-	{"mssql", "Microsoft SQL Server", "airflow.providers.microsoft.mssql.hooks.mssql.MsSqlHook", "apache-airflow-providers-microsoft-mssql", "mssql_default", nil, nil},
-	{"oracle", "Oracle", "airflow.providers.oracle.hooks.oracle.OracleHook", "apache-airflow-providers-oracle", "oracle_default", nil, nil},
-	{"redis", "Redis", "airflow.providers.redis.hooks.redis.RedisHook", "apache-airflow-providers-redis", "redis_default", []string{"url_schema"}, nil},
-	{"mongo", "MongoDB", "airflow.providers.mongo.hooks.mongo.MongoHook", "apache-airflow-providers-mongo", "mongo_default", nil, nil},
-	{"http", "HTTP", "airflow.providers.http.hooks.http.HttpHook", "apache-airflow-providers-http", "http_default", nil, nil},
-	{"aws", "Amazon Web Services", "airflow.providers.amazon.aws.hooks.base_aws.AwsBaseHook", "apache-airflow-providers-amazon", "aws_default", []string{"host", "port", "url_schema"}, nil},
-	{"google_cloud_platform", "Google Cloud", "airflow.providers.google.cloud.hooks.cloud_base.GoogleBaseHook", "apache-airflow-providers-google", "google_cloud_default", []string{"host", "login", "password", "port", "url_schema"}, []string{"gcp", "google"}},
-	{"snowflake", "Snowflake", "airflow.providers.snowflake.hooks.snowflake.SnowflakeHook", "apache-airflow-providers-snowflake", "snowflake_default", nil, nil},
-	{"ssh", "SSH", "airflow.providers.ssh.hooks.ssh.SSHHook", "apache-airflow-providers-ssh", "ssh_default", []string{"url_schema"}, nil},
-	{"ftp", "FTP", "airflow.providers.ftp.hooks.ftp.FTPHook", "apache-airflow-providers-ftp", "ftp_default", []string{"url_schema"}, nil},
-	{"sftp", "SFTP", "airflow.providers.sftp.hooks.sftp.SFTPHook", "apache-airflow-providers-sftp", "sftp_default", []string{"url_schema"}, nil},
-	{"kafka", "Apache Kafka", "airflow.providers.apache.kafka.hooks.base.KafkaBaseHook", "apache-airflow-providers-apache-kafka", "kafka_default", []string{"login", "password", "port", "url_schema"}, nil},
+// aliasOverlay maps a conn_type to friendly `connectors:` aliases. Hand-curated:
+// Airflow's own vocabulary is asymmetric ("aws" is terse, "google_cloud_platform"
+// is verbose), so the sugar accepts a short alias that resolves to the same
+// provider. The canonical conn_type always works; aliases never reach the form.
+var aliasOverlay = map[string][]string{
+	"google_cloud_platform": {"gcp", "google"},
 }
 
-// Catalog returns the curated connector registry.
+var catalog []Connector
+
+func init() {
+	if err := json.Unmarshal(catalogJSON, &catalog); err != nil {
+		panic("connectors: parsing embedded catalog.json: " + err.Error())
+	}
+	for i := range catalog {
+		catalog[i].Aliases = aliasOverlay[catalog[i].ConnectionType]
+	}
+}
+
+// Catalog returns every connector entry, including core types with no pip package
+// — the admin form's connection-type dropdown needs the full set.
 func Catalog() []Connector { return catalog }
 
-// PackageFor returns the pip package for a connector name — its canonical Type
-// or any of its sugar Aliases (e.g. "gcp" for "google_cloud_platform"). ok=false
-// when the name is in neither, so the caller can fall back to dependencies:.
+// PackageFor returns the pip package for a connector name — its canonical
+// ConnectionType or any of its sugar Aliases (e.g. "gcp"). ok=false when the name
+// is unknown OR maps to a core type with no package (nothing for `connectors:` to
+// install), so the caller can fall back to dependencies:.
 func PackageFor(name string) (pkg string, ok bool) {
 	for _, c := range catalog {
-		if c.Type == name {
+		if c.PipPackage == "" {
+			continue
+		}
+		if c.ConnectionType == name {
 			return c.PipPackage, true
 		}
 		for _, a := range c.Aliases {
@@ -75,8 +97,7 @@ func PackageFor(name string) (pkg string, ok bool) {
 
 // Resolve expands `connectors:` short names into their pip packages, preserving
 // order. Unknown names are returned separately so the caller can fail compile
-// with an actionable message ("unknown connector 'x'; known: …; or add the
-// package to dependencies:") rather than letting a typo slip to a runtime
+// with an actionable message rather than letting a typo slip to a runtime
 // ModuleNotFoundError. ADR 0038.
 func Resolve(types []string) (packages, unknown []string) {
 	for _, t := range types {
@@ -89,12 +110,14 @@ func Resolve(types []string) (packages, unknown []string) {
 	return packages, unknown
 }
 
-// Types returns the known connector type names, for building error messages
-// ("known: postgres, mysql, …").
+// Types returns the sugar-resolvable connector names (those backed by a pip
+// package), for building error messages ("known: postgres, mysql, …").
 func Types() []string {
-	out := make([]string, len(catalog))
-	for i, c := range catalog {
-		out[i] = c.Type
+	out := make([]string, 0, len(catalog))
+	for _, c := range catalog {
+		if c.PipPackage != "" {
+			out = append(out, c.ConnectionType)
+		}
 	}
 	return out
 }

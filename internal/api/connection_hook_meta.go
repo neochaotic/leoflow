@@ -10,14 +10,13 @@ import (
 
 // The connection-type catalog the SPA's "Add/Edit Connection" form reads from
 // GET /ui/connections/hook_meta. Each entry tells the form which standard fields
-// to render (host/login/password/port/schema/description) and the type's display
-// name — borrowed from Airflow's providers so the common connections work and the
-// user just edits them. Without this the edit form renders empty (the form is
-// entirely driven by this metadata).
-//
-// standard_fields keys mirror what the SPA consumes: description, host, login,
-// password, port, and url_schema (the "Schema" field). Each value is a behavior
-// object; { "hidden": true } drops the field for that type.
+// to render (host/login/password/port/schema/description, with per-field hide /
+// relabel / placeholder behavior) and which provider-specific custom fields to
+// render (extra_fields, the credential fields stored in Connection.extra). The
+// metadata is generated from a real Airflow install (internal/connectors —
+// catalog.json), so it is the exact shape the Airflow 3.2 SPA's FlexibleForm
+// renders. Without this the edit form renders empty (the form is entirely driven
+// by this metadata).
 
 type hookMetaEntry struct {
 	ConnectionType  string         `json:"connection_type"`
@@ -28,33 +27,29 @@ type hookMetaEntry struct {
 	StandardFields  map[string]any `json:"standard_fields"`
 }
 
-// stdFields builds the standard-field behavior map, hiding the named fields.
-func stdFields(hidden ...string) map[string]any {
-	h := make(map[string]bool, len(hidden))
-	for _, f := range hidden {
-		h[f] = true
+// orEmpty returns an empty map for a nil one, so the JSON renders {} (which the
+// SPA expects) rather than null.
+func orEmpty(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
 	}
-	out := make(map[string]any, 6)
-	for _, f := range []string{"description", "host", "login", "password", "port", "url_schema"} {
-		out[f] = map[string]any{"hidden": h[f]}
-	}
-	return out
+	return m
 }
 
 // connectionTypeCatalog builds the form catalog from the shared connector
-// registry (internal/connectors — ADR 0038's single source of truth), adapting
-// each entry to the form DTO (the standard-field hidden behavior the SPA reads).
+// registry (internal/connectors — ADR 0038's single source of truth), serving
+// each entry's generated standard_fields + extra_fields verbatim.
 func connectionTypeCatalog() []hookMetaEntry {
 	cat := connectors.Catalog()
 	out := make([]hookMetaEntry, len(cat))
 	for i, c := range cat {
 		out[i] = hookMetaEntry{
-			ConnectionType:  c.Type,
-			HookName:        c.DisplayName,
-			HookClassName:   c.HookClass,
+			ConnectionType:  c.ConnectionType,
+			HookName:        c.HookName,
+			HookClassName:   c.HookClassName,
 			DefaultConnName: c.DefaultConnName,
-			ExtraFields:     map[string]any{},
-			StandardFields:  stdFields(c.HiddenFields...),
+			ExtraFields:     orEmpty(c.ExtraFields),
+			StandardFields:  orEmpty(c.StandardFields),
 		}
 	}
 	return out

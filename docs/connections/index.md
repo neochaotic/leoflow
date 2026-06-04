@@ -71,8 +71,12 @@ so a typo never slips through to a runtime `ModuleNotFoundError` in the task pod
 
 ### Connector → provider package
 
-The curated catalog (`internal/connectors`) is the single source of truth shared
-by the admin connection form, the sugar expansion, and compile validation:
+The catalog is **generated** from a real Airflow install (`scripts/gen_connectors.py`
+→ `internal/connectors/catalog.json`, ADR 0039), so ~86 connector types ship with
+a dropdown entry, the correct standard-field behavior, and the provider-specific
+**custom fields** rendered in the form (e.g. Snowflake's `account`/`warehouse`, the
+GCP keyfile) — no raw-JSON typing. It is the single source of truth shared by the
+admin form, the sugar expansion, and compile validation. The common head:
 
 | `connectors:` name | pip package |
 |---|---|

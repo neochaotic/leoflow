@@ -217,26 +217,30 @@ caveat and the yaml-driven build is wired once (no duplicate `compile_build.go`)
 Rebasing `feat/deploy` onto `feat/connectors` was rejected: it would couple
 rc.2's Steve-unblock to the held epic.
 
-## Open questions (decide during implementation)
+## Open questions (decide during implementation — tracked as issues)
 
 - **Registry reachability asymmetry.** The dev pushes; the *cluster* pulls the same
   ref. A LAN/short-name `registry.url` that resolves differently inside the cluster
   (or needs different TLS trust) makes the dev's push succeed while the pod's pull
   fails. `imagePullSecrets` covers *auth*, not *name/reachability*. Decide whether
   deploy does a best-effort reachability hint.
-- **Paused/catchup on first register.** `versions.go` does not set `IsPaused`, so a
-  fresh deploy inherits the default; if that is active-with-catchup, a deploy could
-  immediately fire a backlog on Pro. Decide: register **paused** by default with an
-  `--activate`, or document the current behavior loudly.
-- **CLI ↔ Pro version skew.** A newer Lite writes a `dag.json` `schema_version` an
-  older Pro cannot parse (or vice versa). The register endpoint should reject with
-  an explicit "upgrade Pro" message, not a confusing validation error.
+- **Paused/catchup on first register** (issue #370). `versions.go` does not set
+  `IsPaused`, so a fresh deploy inherits the default; if that is active-with-catchup,
+  a deploy could immediately fire a backlog on Pro. Decide: register **paused** by
+  default with an `--activate`, or document the current behavior loudly.
+- **CLI ↔ Pro version skew** (issue #371). A newer Lite writes a `dag.json`
+  `schema_version` an older Pro cannot parse (or vice versa). The register endpoint
+  should reject with an explicit "upgrade Pro" message, not a confusing error.
+- **Re-register of the same version returns 500, not 409** (issue #368). The unique
+  violation on `dag_versions_unique` should map to a 409 with an actionable message.
+- **Default task SA for private-registry pulls** (issue #369). `imagePullSecrets`
+  on the task SA only apply when pods run as it; default the execution SA so they do.
 - **Tenant is implicit (works, document it).** `RegisterDagVersion` uses
   `tenantOf(token)` — deploy lands in the **token's tenant**. On a multi-tenant Pro
   the user selects the tenant by which token they `login` with; the docs must say so.
 
 ## Deferred (explicitly out of scope here)
-- **Rollback UX.** The model is already versioned server-side
+- **Rollback UX** (issue #372). The model is already versioned server-side
   (`POST /dags/{id}/versions`), so the data supports rollback, but there is no
   `leoflow deploy --rollback` / pin-previous command yet. Name now, build later.
 - **Secrets baked into the image during Lite dev** get pushed to the registry on

@@ -96,6 +96,98 @@ func TestDeployRunsPastGuardThenFailsAtCompile(t *testing.T) {
 	}
 }
 
+func TestResolveProjectDirFindsByDagID(t *testing.T) {
+	ws := t.TempDir()
+	for _, name := range []string{"alpha", "beta"} {
+		if _, _, err := run(t, "init", filepath.Join(ws, name)); err != nil {
+			t.Fatalf("init %s: %v", name, err)
+		}
+	}
+	spec, err := ResolveWorkspace(ws)
+	if err != nil {
+		t.Fatalf("ResolveWorkspace: %v", err)
+	}
+	if len(spec.Projects) == 0 {
+		t.Fatal("expected discovered projects")
+	}
+	want := spec.Projects[0]
+	got, gerr := resolveProjectDir(ws, want.DagID)
+	if gerr != nil {
+		t.Fatalf("resolveProjectDir(%q): %v", want.DagID, gerr)
+	}
+	if got != want.Path {
+		t.Errorf("dir = %q, want %q", got, want.Path)
+	}
+	if _, err := resolveProjectDir(ws, "definitely-not-a-dag"); err == nil {
+		t.Error("expected an error for an unknown dag_id")
+	}
+}
+
+func TestDeployUnknownDagIDFails(t *testing.T) {
+	ws := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("workspace: "+ws+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "deploy", "ghost-dag", "--config", cfgPath); err == nil {
+		t.Error("expected deploy of an unknown dag_id to fail")
+	}
+}
+
+func TestDeployAllEmptyWorkspaceFails(t *testing.T) {
+	ws := t.TempDir() // empty: no DAG projects
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("workspace: "+ws+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "deploy", "--all", "--config", cfgPath); err == nil {
+		t.Error("expected --all on an empty workspace to fail")
+	}
+}
+
+func TestDeployAllRejectsExtraArg(t *testing.T) {
+	if _, _, err := run(t, "deploy", "somedir", "--all"); err == nil {
+		t.Error("expected --all combined with a path/dag_id to be rejected")
+	}
+}
+
+func TestDeployAllReportsPerProjectFailure(t *testing.T) {
+	// A workspace with one scaffolded project that has no registry: --all must
+	// iterate to it, fail it at the registry guard, and report a non-zero result.
+	ws := t.TempDir()
+	if _, _, err := run(t, "init", filepath.Join(ws, "one")); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("workspace: "+ws+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "deploy", "--all", "--config", cfgPath); err == nil {
+		t.Error("expected --all to report the registry-less project's failure")
+	}
+}
+
+func TestDeployByDagIDReachesProjectThenGuard(t *testing.T) {
+	ws := t.TempDir()
+	if _, _, err := run(t, "init", filepath.Join(ws, "solo")); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	spec, err := ResolveWorkspace(ws)
+	if err != nil || len(spec.Projects) == 0 {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if werr := os.WriteFile(cfgPath, []byte("workspace: "+ws+"\n"), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	// Deploying by the resolved dag_id reaches its project, which has no
+	// registry -> the guard fires. Proves the dag_id->dir resolution path.
+	_, _, derr := run(t, "deploy", spec.Projects[0].DagID, "--config", cfgPath)
+	if derr == nil || !strings.Contains(derr.Error(), "registry") {
+		t.Errorf("want a registry guard error via dag_id resolution, got %v", derr)
+	}
+}
+
 func TestResolveServerTokenPrecedence(t *testing.T) {
 	cmd := newDeployCommand()
 	// Flags win outright — config is not even consulted.

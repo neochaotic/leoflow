@@ -23,6 +23,7 @@ type deployOptions struct {
 	builder    string
 	dockerfile string
 	dagVersion string
+	all        bool
 }
 
 // newDeployCommand builds `leoflow deploy [path]`: the pipeline-less promotion of
@@ -32,23 +33,96 @@ type deployOptions struct {
 func newDeployCommand() *cobra.Command {
 	var o deployOptions
 	cmd := &cobra.Command{
-		Use:   "deploy [path]",
+		Use:   "deploy [path | dag_id]",
 		Short: "Build, push, and register a DAG to a control plane (Pro).",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := "."
-			if len(args) == 1 {
-				dir = args[0]
-			}
-			return runDeploy(cmd, dir, o)
+			return runDeployTarget(cmd, args, o)
 		},
 	}
+	cmd.Flags().BoolVar(&o.all, "all", false, "deploy every DAG project in the workspace")
 	cmd.Flags().StringVar(&o.serverURL, "server", "", "control plane base URL (default: config server_url)")
 	cmd.Flags().StringVar(&o.token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token (default: config token)")
 	cmd.Flags().StringVar(&o.builder, "builder", "docker", "image build tool to shell out to (e.g. docker, podman, nerdctl)")
 	cmd.Flags().StringVar(&o.dockerfile, "dockerfile", "Dockerfile", "Dockerfile path relative to the DAG directory")
 	cmd.Flags().StringVar(&o.dagVersion, "dag-version", "", "DAG version label (default: git describe, else dev)")
 	return cmd
+}
+
+// runDeployTarget resolves what to deploy from the args and flags: --all (every
+// project in the workspace), a directory path, or a dag_id (resolved to its
+// subdir in the multi-DAG workspace). A bare invocation deploys the current dir.
+func runDeployTarget(cmd *cobra.Command, args []string, o deployOptions) error {
+	if o.all {
+		if len(args) > 0 {
+			return fmt.Errorf("--all deploys the whole workspace; do not also pass a path or dag_id")
+		}
+		return deployAll(cmd, o)
+	}
+	target := "."
+	if len(args) == 1 {
+		target = args[0]
+	}
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		return runDeploy(cmd, target, o)
+	}
+	if len(args) == 1 {
+		dir, rerr := resolveProjectDir(defaultWorkspace(cmd), target)
+		if rerr != nil {
+			return rerr
+		}
+		return runDeploy(cmd, dir, o)
+	}
+	return runDeploy(cmd, target, o)
+}
+
+// resolveProjectDir maps a dag_id to its project directory within the workspace,
+// erroring (with the available ids) when no project matches — so a typo is a
+// loud, helpful failure rather than a silent wrong-DAG deploy.
+func resolveProjectDir(workspaceDir, dagID string) (string, error) {
+	ws, err := ResolveWorkspace(workspaceDir)
+	if err != nil {
+		return "", err
+	}
+	available := make([]string, 0, len(ws.Projects))
+	for _, p := range ws.Projects {
+		if p.DagID == dagID {
+			return p.Path, nil
+		}
+		available = append(available, p.DagID)
+	}
+	return "", fmt.Errorf("no DAG %q in workspace %s; available: %s",
+		dagID, workspaceDir, strings.Join(available, ", "))
+}
+
+// deployAll deploys every project in the workspace, best-effort: it builds,
+// pushes, and registers each, prints a per-DAG summary, and returns a non-zero
+// error if any failed (so CI catches it) — partial pushes are not rolled back
+// (content-addressed images make a re-deploy idempotent). ADR 0041.
+func deployAll(cmd *cobra.Command, o deployOptions) error {
+	wsDir := defaultWorkspace(cmd)
+	ws, err := ResolveWorkspace(wsDir)
+	if err != nil {
+		return err
+	}
+	if len(ws.Projects) == 0 {
+		return fmt.Errorf("no DAG projects found in workspace %s", wsDir)
+	}
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	var failed []string
+	for _, p := range ws.Projects {
+		devPrintf(out, "==> deploying %s (%s)\n", p.DagID, p.Path)
+		if derr := runDeploy(cmd, p.Path, o); derr != nil {
+			failed = append(failed, p.DagID)
+			devPrintf(errOut, "    FAILED %s: %v\n", p.DagID, derr)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d deploys failed: %s",
+			len(failed), len(ws.Projects), strings.Join(failed, ", "))
+	}
+	_, err = fmt.Fprintf(out, "Deployed %d DAG(s) from %s\n", len(ws.Projects), wsDir)
+	return err
 }
 
 // requireRegistry enforces ADR 0041's hard prerequisite: a Pro deploy pushes the

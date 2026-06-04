@@ -222,6 +222,16 @@ def run_operator(operator_class: str, args: dict) -> None:
     task_id = os.environ.get("LEOFLOW_TASK_ID", class_name)
     op = op_cls(task_id=task_id, **_merge_operator_xcom(dict(args)))
 
+    # Reject a reschedule-mode sensor up front (review polish #5). Its execute()
+    # reaches for a real TaskInstance (ti.get_first_reschedule_date) that our
+    # minimal standalone context cannot provide, so it would otherwise crash with
+    # a confusing AttributeError rather than raising AirflowRescheduleException.
+    if getattr(op, "mode", None) == "reschedule":
+        raise RuntimeError(
+            f"{class_name} is a reschedule-mode sensor, which Leoflow does not "
+            f"support yet (ADR 0040 Phase B). Set mode='poke' — the sensor holds "
+            f"the worker until its condition is met.")
+
     context = _operator_context()
     try:
         op.render_template_fields(context)
@@ -231,7 +241,7 @@ def run_operator(operator_class: str, args: dict) -> None:
     _lifecycle(f"executing {class_name}.execute()")
     try:
         result = op.execute(context)
-    except Exception as exc:  # noqa: BLE001 — translate one known shape, re-raise the rest
+    except Exception as exc:  # noqa: BLE001 — fallback if reschedule slips past the mode check
         if _is_reschedule_exc(exc):
             raise RuntimeError(
                 f"{class_name} asked to reschedule (sensor mode='reschedule'), which "

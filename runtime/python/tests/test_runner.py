@@ -304,3 +304,16 @@ def test_is_reschedule_exc_matches_by_name():
     assert runner._is_reschedule_exc(AirflowRescheduleException())
     assert runner._is_reschedule_exc(Subclass())
     assert not runner._is_reschedule_exc(ValueError("nope"))
+
+
+def test_run_operator_rejects_reschedule_sensor(monkeypatch):
+    """A reschedule-mode sensor is rejected up front with a clear message (review
+    polish #5) — its execute() would otherwise crash on a missing TaskInstance.
+    Skips without Airflow."""
+    pytest.importorskip("airflow.providers.standard.sensors.filesystem")
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "s")
+    with pytest.raises(RuntimeError, match="reschedule"):
+        runner.run_operator(
+            "airflow.providers.standard.sensors.filesystem.FileSensor",
+            {"filepath": "/nope", "mode": "reschedule", "poke_interval": 1, "timeout": 1},
+        )

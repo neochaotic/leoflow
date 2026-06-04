@@ -91,27 +91,71 @@ with DAG("my_pipeline", schedule="@daily", catchup=False, tags=["etl"]):
 
 ### Supported task types
 
-Leoflow accepts a **closed set of three task types** today. Anything outside
-the set is a hard compile error — never silently dropped, never silently
-translated. The list is deliberately small so what runs in production
-matches what you wrote.
+Leoflow runs the common types on a **native fast path** and everything else — any
+of Airflow's ~1,500 provider operators and poke-mode sensors — through a **generic
+executor**, native-first by type. Nothing is silently dropped or mistranslated.
 
 | Task type | Airflow operator | Where it runs | Notes |
 |---|---|---|---|
 | `python` | `@task` (TaskFlow) **or** `PythonOperator` | agent in a pod (Pro) / subprocess (Lite) | The general-purpose escape hatch — any provider library you `pip install` is callable from inside a `@task`. |
 | `bash` | `BashOperator` | agent | Executes a shell command. |
-| `http_api` | `HttpOperator` (`airflow.providers.http`) | **inline in the control plane** (no pod, no agent) | Synchronous outbound HTTP. Use it for lightweight webhooks/probes; for anything with retries, throughput, or auth headers you control, prefer `@task` + `requests` in `python`. |
+| `http_api` | `HttpOperator` (`airflow.providers.http`) | **inline in the control plane** (no pod, no agent) | Synchronous outbound HTTP. For retries/throughput/custom auth, prefer `@task` + `requests` in `python`. |
+| `airflow_operator` | **any provider operator/sensor** (Snowflake, S3, Postgres, BigQuery, …) | agent in a pod | The generic executor (ADR 0040): the runtime imports the class, instantiates it with your args, and calls `execute()`. Declare the provider or compile fails. |
 
 Also supported:
 
 - **Trigger rules**: `all_success`, `all_failed`, `all_done`, `one_success`, `one_failed`.
-- **XCom**: TaskFlow data-flow (`transform(extract())`) is resolved automatically into typed inputs (`xcom_input`).
+- **XCom**: TaskFlow data-flow (`transform(extract())`) is resolved automatically into typed inputs (`xcom_input`) — for `@task` **and** operator args.
 - **Schedule**: cron strings and presets (`@daily`, `0 * * * *`).
 - **Dependencies**: linear ordering via TaskFlow calls or `a >> b`.
 
-> Connector cookbooks (postgres, mysql, sqlite, redis, http) are all `python`
-> tasks that read a managed Connection (`AIRFLOW_CONN_*`) injected as an env
-> var — they are **not** new operator types.
+> Connector cookbooks (postgres, mysql, sqlite, redis, http) are `python`
+> tasks that read a managed Connection (`AIRFLOW_CONN_*`) — that is the
+> hook-inside-`@task` style. The `airflow_operator` type below is the
+> operator-class style; both resolve the same managed connections.
+
+### Provider operators & sensors (`airflow_operator`)
+
+Write the operator exactly as you would in Airflow — Leoflow captures it and runs
+it in its own task pod:
+
+```python
+from airflow.sdk import DAG, task
+from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+
+@task
+def build_sql() -> str:
+    return "SELECT count(*) FROM events"
+
+with DAG("rollup", schedule="@daily"):
+    # an upstream task's output flows straight into an operator arg
+    SQLExecuteQueryOperator(task_id="rollup", conn_id="snowflake_default",
+                            sql=build_sql())
+```
+
+```yaml
+# leoflow.yaml — installs apache-airflow-providers-snowflake into the image
+connectors: [snowflake]      # or: dependencies: [apache-airflow-providers-snowflake]
+```
+
+How it works, and the Phase-A limits:
+
+- The operator runs in its **own task pod**; its hooks resolve connections from
+  `AIRFLOW_CONN_*` exactly as inside a `@task`.
+- Constructor args must be **JSON-serializable** or an **upstream task's output**
+  (wired as XCom, like `sql=build_sql()` above). A non-serializable arg — a
+  callable, a `datetime`, an arbitrary object — is a **loud compile error**; move
+  that logic into a `@task`.
+- The provider must be declared in `leoflow.yaml` (`connectors:` or
+  `dependencies:`). If it isn't, `leoflow compile` fails and prints the exact line
+  to add — no surprise `ModuleNotFoundError` in the pod.
+- **Sensors** run in **poke mode** (the pod holds until the condition is met).
+  `mode="reschedule"` is not supported yet and fails with a clear message.
+- **Jinja templating** is best-effort (`render_template_fields` runs with a
+  minimal context); for rich macros (`{{ ds }}`, `{{ ti }}`, custom params),
+  compute the value in a `@task` and pass it in.
+- A native task type (`bash`/`http_api`/`python`) always wins when it matches, so
+  `BashOperator`/`HttpOperator`/`PythonOperator` keep their fast path.
 
 ### Not supported — `leoflow compile` rejects these
 
@@ -125,11 +169,12 @@ Also supported:
 The unsupported set, with the things Airflow users most often expect to
 "just work" called out first:
 
-- **Sensors** — `FileSensor`, `S3KeySensor`, `ExternalTaskSensor`, every
-  custom `BaseSensorOperator` subclass. Pre-alpha Leoflow has **no
-  sensor runtime**; an async/sensor scheduler is post-alpha work.
-  Workaround: poll inside a `@task` and let the run drive itself.
-- **Jinja templating** — `{{ ds }}`, `{{ ti }}`, `{{ var.value.x }}`,
+- **Reschedule-mode sensors** — a sensor with `mode="reschedule"` (frees the
+  worker between pokes) is not supported yet; it fails at runtime with a clear
+  message. Use the default `mode="poke"` (the pod holds until the condition is
+  met). *Poke-mode sensors and provider operators ARE supported* — see
+  [`airflow_operator`](#provider-operators-sensors-airflow_operator) above.
+- **Jinja templating** in `@task` — `{{ ds }}`, `{{ ti }}`, `{{ var.value.x }}`,
   every `templates_dict=` knob. The control plane never re-parses
   Python and the templating step is intentionally not implemented.
   Workaround: build the values inside the `@task` from `airflow.sdk`
@@ -150,9 +195,6 @@ The unsupported set, with the things Airflow users most often expect to
   in another pod is redundant and adds an isolation hole.
 - **Datasets / Assets triggers** — not implemented yet; the asset
   graph is a 3.x Airflow feature on the post-alpha backlog.
-- **Provider operators** (S3, Postgres, Snowflake, …) — refused. Do
-  the work inside a `@task` instead; your DAG's image already has
-  the libraries (declare them in `leoflow.yaml`'s `dependencies`).
 - **Per-task `default_args` in `dag.py`** are ignored at the parser
   level — use `leoflow.yaml`'s `tasks.<id>:` override block instead,
   which is checked at compile time.

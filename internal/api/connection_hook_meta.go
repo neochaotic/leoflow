@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/connectors"
 )
 
 // The connection-type catalog the SPA's "Add/Edit Connection" form reads from
@@ -39,28 +41,23 @@ func stdFields(hidden ...string) map[string]any {
 	return out
 }
 
-// connectionTypeCatalog is the curated set of common connection types. New types
-// are additive; each is a template the user edits. (A full provider catalog can
-// follow; these cover the common cases.)
+// connectionTypeCatalog builds the form catalog from the shared connector
+// registry (internal/connectors — ADR 0038's single source of truth), adapting
+// each entry to the form DTO (the standard-field hidden behavior the SPA reads).
 func connectionTypeCatalog() []hookMetaEntry {
-	all := stdFields()
-	return []hookMetaEntry{
-		{"postgres", "Postgres", "airflow.providers.postgres.hooks.postgres.PostgresHook", "postgres_default", map[string]any{}, all},
-		{"mysql", "MySQL", "airflow.providers.mysql.hooks.mysql.MySqlHook", "mysql_default", map[string]any{}, all},
-		{"sqlite", "SQLite", "airflow.providers.sqlite.hooks.sqlite.SqliteHook", "sqlite_default", map[string]any{}, stdFields("login", "password", "port", "url_schema")},
-		{"mssql", "Microsoft SQL Server", "airflow.providers.microsoft.mssql.hooks.mssql.MsSqlHook", "mssql_default", map[string]any{}, all},
-		{"oracle", "Oracle", "airflow.providers.oracle.hooks.oracle.OracleHook", "oracle_default", map[string]any{}, all},
-		{"redis", "Redis", "airflow.providers.redis.hooks.redis.RedisHook", "redis_default", map[string]any{}, stdFields("url_schema")},
-		{"mongo", "MongoDB", "airflow.providers.mongo.hooks.mongo.MongoHook", "mongo_default", map[string]any{}, all},
-		{"http", "HTTP", "airflow.providers.http.hooks.http.HttpHook", "http_default", map[string]any{}, all},
-		{"aws", "Amazon Web Services", "airflow.providers.amazon.aws.hooks.base_aws.AwsBaseHook", "aws_default", map[string]any{}, stdFields("host", "port", "url_schema")},
-		{"google_cloud_platform", "Google Cloud", "airflow.providers.google.cloud.hooks.cloud_base.GoogleBaseHook", "google_cloud_default", map[string]any{}, stdFields("host", "login", "password", "port", "url_schema")},
-		{"snowflake", "Snowflake", "airflow.providers.snowflake.hooks.snowflake.SnowflakeHook", "snowflake_default", map[string]any{}, all},
-		{"ssh", "SSH", "airflow.providers.ssh.hooks.ssh.SSHHook", "ssh_default", map[string]any{}, stdFields("url_schema")},
-		{"ftp", "FTP", "airflow.providers.ftp.hooks.ftp.FTPHook", "ftp_default", map[string]any{}, stdFields("url_schema")},
-		{"sftp", "SFTP", "airflow.providers.sftp.hooks.sftp.SFTPHook", "sftp_default", map[string]any{}, stdFields("url_schema")},
-		{"kafka", "Apache Kafka", "airflow.providers.apache.kafka.hooks.base.KafkaBaseHook", "kafka_default", map[string]any{}, stdFields("login", "password", "port", "url_schema")},
+	cat := connectors.Catalog()
+	out := make([]hookMetaEntry, len(cat))
+	for i, c := range cat {
+		out[i] = hookMetaEntry{
+			ConnectionType:  c.Type,
+			HookName:        c.DisplayName,
+			HookClassName:   c.HookClass,
+			DefaultConnName: c.DefaultConnName,
+			ExtraFields:     map[string]any{},
+			StandardFields:  stdFields(c.HiddenFields...),
+		}
 	}
+	return out
 }
 
 // connectionHookMetaHandler serves the connection-type catalog the form needs.

@@ -244,6 +244,63 @@ jobs:
         run: bash test/e2e/lite-multidag.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # Full pod-per-task e2e on a real k3d cluster (test/e2e/e2e.sh): builds the
+  # base + DAG images, runs the control plane on the runner, triggers a DAG, and
+  # asserts every task reaches success — including a provider SENSOR
+  # (type=airflow_operator, ADR 0040) that runs in its own pod and resolves a
+  # managed Connection. This is the operator chain's end-to-end gate. On Linux the
+  # pods reach the host control plane via host.k3d.internal (k3d injects it into
+  # CoreDNS). ~10 min.
+  # ─────────────────────────────────────────────────────────────────────
+  operator-e2e:
+    name: E2E operators (k3d pod-per-task)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: leoflow
+          POSTGRES_PASSWORD: leoflow
+          POSTGRES_DB: leoflow
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7
+        ports: [6379:6379]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      # The control plane runs on the runner; k3d pods dial it via host.k3d.internal
+      # (Linux only — Docker Desktop uses host.docker.internal, the e2e default).
+      LEOFLOW_E2E_HOST_ADDR: host.k3d.internal
+      # leoflow compile spawns `python3 -m leoflow_parser`; the parser ships under
+      # parser/ and needs no install — just PYTHONPATH (the airflow-free shim).
+      PYTHONPATH: parser
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install k3d + kubectl + jq + migrate
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.7.4/install.sh | TAG=v5.7.4 bash
+          curl -fsSLO "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+          sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+      - name: Apply migrations
+        run: ~/go/bin/migrate -path migrations -database "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable" up
+      - name: Build binaries
+        run: make build
+      - name: Run the k3d operator e2e
+        run: bash test/e2e/e2e.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # TDD discipline check: every new exported function in production code
   # must have a corresponding test added or modified in the same PR.
   # This is a best-effort heuristic; reviewers verify the spirit of ADR 0011.

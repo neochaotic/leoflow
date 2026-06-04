@@ -257,7 +257,25 @@ def _map_task(task, source: str) -> dict[str, Any]:
         entry["entrypoint"] = _bash_command(task)
     elif task_type == "http_api":
         entry["http_request"] = _http_request(task)
+    elif task_type == "airflow_operator":
+        entry["operator_class"] = type(task).__leoflow_operator_class__
+        entry["operator_args"] = _json_safe_args(getattr(task, "__leoflow_args__", {}))
     return entry
+
+
+def _json_safe_args(args: dict) -> dict:
+    """Keep the operator kwargs the runtime can carry verbatim in dag.json
+    (JSON-serializable). Non-serializable values (XComArg references, callables)
+    are dropped here and wired separately as XCom inputs — a later Phase A
+    refinement; the common case is literal strings/numbers."""
+    out: dict[str, Any] = {}
+    for key, value in args.items():
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            continue
+        out[key] = value
+    return out
 
 
 def _operator_type(task) -> str:
@@ -268,11 +286,12 @@ def _operator_type(task) -> str:
     # to translate them to a plain `python` task — and every "skipped" branch
     # would then actually execute. Refusing them at compile is the loud failure
     # the parser owes; remove the gate when real translation lands.
+    # Control-flow operators need scheduler branch/skip support we do not have yet
+    # (ADR 0040 Phase D); refuse rather than mistranslate. Provider operators and
+    # sensors ARE captured generically below.
     for marker, feature in (
         ("Branch", "branching (@task.branch / BranchPythonOperator)"),
         ("ShortCircuit", "short-circuit (@task.short_circuit / ShortCircuitOperator)"),
-        ("Virtualenv", "virtualenv operators (PythonVirtualenvOperator)"),
-        ("Sensor", "sensors (BaseSensorOperator and subclasses)"),
     ):
         if marker in name:
             raise ValueError(
@@ -287,6 +306,10 @@ def _operator_type(task) -> str:
         return "http_api"
     if "Python" in name:
         return "python"
+    # Any captured provider operator / sensor / transfer runs through the generic
+    # executor (ADR 0040 Phase A): import_string(class)(**args).execute(context).
+    if getattr(type(task), "__leoflow_operator_class__", None):
+        return "airflow_operator"
     raise ValueError(f"unsupported operator {name!r} on task {task.task_id}")
 
 

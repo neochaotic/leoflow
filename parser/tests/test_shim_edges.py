@@ -103,6 +103,39 @@ def test_missing_sdk_helper_gives_clear_unsupported_error(monkeypatch, tmp_path)
     assert "not supported by Leoflow" in str(ei.value)
 
 
+def test_generic_provider_operator_is_captured(monkeypatch, tmp_path):
+    """A top-level provider OPERATOR (the task itself) is captured generically
+    instead of rejected: the shim synthesizes the operator class, the parser emits
+    type=airflow_operator with the real class path + the constructor kwargs, which
+    the runtime later instantiates and executes (ADR 0040 Phase A)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+        with DAG("g"):
+            SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1")
+    """)
+    t = next(x for x in spec["tasks"] if x["task_id"] == "q")
+    assert t["type"] == "airflow_operator"
+    assert t["operator_class"] == \
+        "airflow.providers.snowflake.operators.snowflake.SQLExecuteQueryOperator"
+    assert t["operator_args"]["conn_id"] == "sf"
+    assert t["operator_args"]["sql"] == "SELECT 1"
+
+
+def test_generic_provider_sensor_is_captured(monkeypatch, tmp_path):
+    """A provider SENSOR is captured too, carrying its poke mode (ADR 0040)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
+        with DAG("g"):
+            S3KeySensor(task_id="wait", bucket_key="k", bucket_name="b", mode="poke")
+    """)
+    t = next(x for x in spec["tasks"] if x["task_id"] == "wait")
+    assert t["type"] == "airflow_operator"
+    assert t["operator_class"] == "airflow.providers.amazon.aws.sensors.s3.S3KeySensor"
+    assert t["operator_args"]["bucket_key"] == "k"
+
+
 def test_top_level_provider_import_gives_actionable_message(monkeypatch, tmp_path):
     """A provider hook imported at DAG module top-level fails the parse (the
     parser has no providers installed). The message must NOT claim the provider

@@ -60,6 +60,22 @@ func PackageFor(connType string) (pkg string, ok bool) {
 	return "", false
 }
 
+// Resolve expands `connectors:` short names into their pip packages, preserving
+// order. Unknown names are returned separately so the caller can fail compile
+// with an actionable message ("unknown connector 'x'; known: …; or add the
+// package to dependencies:") rather than letting a typo slip to a runtime
+// ModuleNotFoundError. ADR 0038.
+func Resolve(types []string) (packages, unknown []string) {
+	for _, t := range types {
+		if pkg, ok := PackageFor(t); ok {
+			packages = append(packages, pkg)
+		} else {
+			unknown = append(unknown, t)
+		}
+	}
+	return packages, unknown
+}
+
 // Types returns the known connector type names, for building error messages
 // ("known: postgres, mysql, …").
 func Types() []string {

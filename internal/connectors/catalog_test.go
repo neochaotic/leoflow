@@ -50,6 +50,23 @@ func TestPackageForKnownAndUnknown(t *testing.T) {
 	}
 }
 
+// TestResolve pins the sugar expansion: known names → packages (order preserved),
+// unknown names collected separately for an actionable compile error.
+func TestResolve(t *testing.T) {
+	pkgs, unknown := Resolve([]string{"postgres", "http", "nope"})
+	wantPkgs := []string{"apache-airflow-providers-postgres", "apache-airflow-providers-http"}
+	if strings.Join(pkgs, ",") != strings.Join(wantPkgs, ",") {
+		t.Errorf("packages = %v, want %v", pkgs, wantPkgs)
+	}
+	if strings.Join(unknown, ",") != "nope" {
+		t.Errorf("unknown = %v, want [nope]", unknown)
+	}
+	// Empty in → empty out (no spurious entries).
+	if p, u := Resolve(nil); len(p) != 0 || len(u) != 0 {
+		t.Errorf("Resolve(nil) = (%v,%v), want empty", p, u)
+	}
+}
+
 // TestTypesListed lets callers build "known: postgres, mysql, …" error messages.
 func TestTypesListed(t *testing.T) {
 	types := Types()

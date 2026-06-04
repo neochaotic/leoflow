@@ -37,6 +37,11 @@
       "items": { "type": "string" },
       "description": "Python package specifiers, e.g., 'pandas==2.1.0'."
     },
+    "connectors": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Short connector names (e.g. 'postgres', 'http') expanded at compile to their apache-airflow-providers-* packages. Sugar over dependencies; advanced users can pin via dependencies instead."
+    },
     "system_packages": {
       "type": "array",
       "items": { "type": "string" },

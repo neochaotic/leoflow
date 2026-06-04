@@ -12,6 +12,7 @@ type LeoflowConfig struct {
 	PythonVersion  string          `json:"python_version,omitempty" yaml:"python_version,omitempty"`
 	BaseImage      string          `json:"base_image,omitempty" yaml:"base_image,omitempty"`
 	Dependencies   []string        `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
+	Connectors     []string        `json:"connectors,omitempty" yaml:"connectors,omitempty"`
 	SystemPackages []string        `json:"system_packages,omitempty" yaml:"system_packages,omitempty"`
 	DagSource      string          `json:"dag_source,omitempty" yaml:"dag_source,omitempty"`
 	IncludePaths   []string        `json:"include_paths,omitempty" yaml:"include_paths,omitempty"`

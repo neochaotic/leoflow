@@ -380,6 +380,67 @@ func TestSnowflakeConnectionURIShapeIntegration(t *testing.T) {
 	}
 }
 
+// TestSlackConnectionURIShapeIntegration is the Slack chain-of-custody. A Slack
+// API connection carries the bot token in password and tuning (base_url/timeout)
+// in Extra; SlackHook reads the token from the connection's password. The token
+// is the secret, so this proves it survives the encryption + delivery hop with a
+// reserved-character fixture standing in for the token.
+func TestSlackConnectionURIShapeIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 31)
+	}
+	cipher, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(cipher)
+
+	const (
+		rawToken = "xoxb-1/2+3:4@5#secret" //nolint:gosec // fixture, not a real token
+		rawExtra = `{"base_url":"https://slack.com/api/","timeout":30}`
+	)
+	connID := fmt.Sprintf("e2e_slack_%d", time.Now().UnixNano())
+	if cerr := repo.SetConnection(ctx, "default", domain.Connection{
+		ConnID: connID, ConnType: "slack",
+		Password: rawToken,
+		Extra:    rawExtra,
+	}); cerr != nil {
+		t.Fatalf("SetConnection: %v", cerr)
+	}
+	t.Cleanup(func() { _ = repo.DeleteConnection(ctx, "default", connID) })
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	uris, err := repo.SecretConnectionURIs(ctx, tenantUUID)
+	if err != nil {
+		t.Fatalf("SecretConnectionURIs: %v", err)
+	}
+	uri, present := uris[connID]
+	if !present {
+		t.Fatalf("URI for %q missing from delivery map; got keys = %v", connID, mapKeys(uris))
+	}
+
+	parsed, perr := url.Parse(uri)
+	if perr != nil {
+		t.Fatalf("URI is not parseable (SlackHook would fail): %q err=%v", uri, perr)
+	}
+	if parsed.Scheme != "slack" {
+		t.Errorf("scheme = %q, want slack", parsed.Scheme)
+	}
+	gotToken, _ := parsed.User.Password()
+	if gotToken != rawToken {
+		t.Errorf("token round-trip failed: got %q, want %q", gotToken, rawToken)
+	}
+	gotExtra := parsed.Query().Get("__extra__")
+	if gotExtra != rawExtra {
+		t.Errorf("__extra__ round-trip failed: got %q, want %q", gotExtra, rawExtra)
+	}
+}
+
 // TestAWSConnectionURIShapeIntegration is the AWS chain-of-custody. Like
 // Snowflake it is the http shape (no host:port): an AWS connection carries the
 // access key as login, the secret key as password, and region_name/role_arn in

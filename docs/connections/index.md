@@ -122,6 +122,7 @@ UI carries credentials, but the DAG still has to install the hook to use them.
 | `google_cloud_platform` | [google_cloud_platform.md](google_cloud_platform.md) | [examples/gcp_gcs_load](https://github.com/neochaotic/leoflow/tree/main/examples/gcp_gcs_load) | ✅ documented — **key + keyless (Workload Identity)** (#77, #56); delivery test with a synthetic key; real-cloud e2e is manual |
 | `snowflake` | [snowflake.md](snowflake.md) | doc-only (needs a Snowflake account) | ✅ documented + delivery test (`TestSnowflakeConnectionURIShapeIntegration`); account/warehouse/role round-trip via `__extra__`; real-cloud e2e is manual |
 | `aws` | [aws.md](aws.md) | doc-only (needs an AWS account) | ✅ documented — **keyless (IAM role) + key-based** (ADR 0035); delivery test (`TestAWSConnectionURIShapeIntegration`); real-cloud e2e is manual |
+| `slack` / `slackwebhook` | [slack.md](slack.md) | doc-only (needs a Slack workspace) | ✅ documented + delivery test (`TestSlackConnectionURIShapeIntegration`); bot-token round-trip; real-workspace e2e is manual |
 
 ## Cloud (deferred past alpha)
 

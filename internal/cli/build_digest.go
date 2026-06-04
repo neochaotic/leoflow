@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
+	"os/exec"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 // inspectDigestArgs assembles the builder argv that prints a pushed image's
@@ -26,4 +30,19 @@ func parseDigestRef(out string) (string, error) {
 		return "", fmt.Errorf("inspect returned %q, which is not a digest-pinned reference", ref)
 	}
 	return ref, nil
+}
+
+// imageDigest shells out to the builder to resolve image's pinned repo digest
+// after a push (ADR 0015: no Docker SDK). The returned reference is what deploy
+// writes into dag.json so Pro pulls exactly the bytes that were built.
+func imageDigest(cmd *cobra.Command, builder, image string) (string, error) {
+	//nolint:gosec // G204: builder is operator-configured by design (ADR 0015).
+	ic := exec.CommandContext(cmdContext(cmd), builder, inspectDigestArgs(image)...)
+	var out bytes.Buffer
+	ic.Stdout = &out
+	ic.Stderr = cmd.ErrOrStderr()
+	if err := ic.Run(); err != nil {
+		return "", fmt.Errorf("inspecting image %q with %q: %w", image, builder, err)
+	}
+	return parseDigestRef(out.String())
 }

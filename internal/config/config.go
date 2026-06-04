@@ -83,6 +83,10 @@ func Load(configFile string, flags *pflag.FlagSet) (*Config, error) {
 	v.SetDefault("log_level", defaultLogLevel)
 	v.SetDefault("parser_cmd", defaultParserCmd)
 	v.SetDefault("registry", "")
+	// Register token so viper's AutomaticEnv binds LEOFLOW_TOKEN (viper only
+	// resolves env vars for keys it knows). The file path works regardless, as
+	// ReadInConfig populates the key directly.
+	v.SetDefault("token", "")
 
 	v.SetEnvPrefix("LEOFLOW")
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))

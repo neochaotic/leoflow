@@ -152,6 +152,13 @@ bigquery/cloudsql/ads → `…-google`).
 | `influxdb` | [influxdb.md](influxdb.md) | `tableau` | [tableau.md](tableau.md) |
 | `druid` | [druid.md](druid.md) | `github` | [github.md](github.md) |
 | `pinot` | [pinot.md](pinot.md) | `elasticsearch` | [elasticsearch.md](elasticsearch.md) |
+| `dbt_cloud` | [dbt_cloud.md](dbt_cloud.md) | `smtp` | [smtp.md](smtp.md) |
+| `hiveserver2` | [hiveserver2.md](hiveserver2.md) | `imap` | [imap.md](imap.md) |
+| `hive_cli` | [hive_cli.md](hive_cli.md) | `opsgenie` | [opsgenie.md](opsgenie.md) |
+| `powerbi` | [powerbi.md](powerbi.md) | `zendesk` | [zendesk.md](zendesk.md) |
+| `msgraph` | [msgraph.md](msgraph.md) | `samba` | [samba.md](samba.md) |
+| `livy` | [livy.md](livy.md) | `gcpssh` | [gcpssh.md](gcpssh.md) |
+| `gcp_looker` | [gcp_looker.md](gcp_looker.md) | | |
 
 ## The long tail
 

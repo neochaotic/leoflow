@@ -184,6 +184,19 @@ nav:
           - Datadog: connections/datadog.md
           - Tableau: connections/tableau.md
           - GitHub: connections/github.md
+          - dbt Cloud: connections/dbt_cloud.md
+          - HiveServer2: connections/hiveserver2.md
+          - Hive CLI: connections/hive_cli.md
+          - Power BI: connections/powerbi.md
+          - Microsoft Graph: connections/msgraph.md
+          - Apache Livy: connections/livy.md
+          - Google Looker: connections/gcp_looker.md
+          - SMTP: connections/smtp.md
+          - IMAP: connections/imap.md
+          - Opsgenie: connections/opsgenie.md
+          - Zendesk: connections/zendesk.md
+          - Samba: connections/samba.md
+          - "GCP: SSH (Compute)": connections/gcpssh.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

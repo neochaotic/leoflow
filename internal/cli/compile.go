@@ -212,6 +212,17 @@ func gitVersion(ctx context.Context) string {
 	return strings.TrimSpace(string(out))
 }
 
+// gitSHA returns the short commit hash, or "" when the project is not in git —
+// so a deploy with tag_strategy git_sha gets a genuine per-commit tag and falls
+// back to the version label otherwise.
+func gitSHA(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // resolveParserCommand returns the explicit --parser-cmd value when set,
 // otherwise the command resolved from configuration.
 func resolveParserCommand(cmd *cobra.Command, explicit string) (string, error) {

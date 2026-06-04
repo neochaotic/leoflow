@@ -180,9 +180,11 @@ func repinImageInSpec(data []byte, digestRef string) ([]byte, error) {
 }
 
 // deployImageRef composes the pushed image reference for a project from its
-// registry config and the resolved version, applying the tag strategy.
-func deployImageRef(cfg *domain.LeoflowConfig, version string) string {
-	tag := resolveImageTag(cfg.Registry.TagStrategy, version, version)
+// registry config, the resolved version, and the git sha, applying the tag
+// strategy (so tag_strategy: git_sha yields a genuine commit tag, not the
+// version label).
+func deployImageRef(cfg *domain.LeoflowConfig, version, sha string) string {
+	tag := resolveImageTag(cfg.Registry.TagStrategy, version, sha)
 	return composeImageRef(cfg.Registry.URL, cfg.Registry.ImageName, tag)
 }
 
@@ -234,7 +236,7 @@ func runDeploy(cmd *cobra.Command, dir string, o deployOptions) error {
 	if version == "" {
 		version = gitVersion(cmdContext(cmd))
 	}
-	image := deployImageRef(cfg, version)
+	image := deployImageRef(cfg, version, gitSHA(cmdContext(cmd)))
 
 	output := filepath.Join(dir, "dag.json")
 	co := compileOptions{

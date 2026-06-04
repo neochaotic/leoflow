@@ -116,8 +116,11 @@ is what keeps that option open.
   artifact, which is how Pro learns it; subsequent deploys register new versions,
   and "latest" in Pro means the newest registered artifact, each pinning its own
   digest.
-- **Default tag strategy:** `git-sha` (immutable per commit); falls back to a
-  timestamp when the project is not in git.
+- **Tag strategy:** `tag_strategy: version` (the config default) tags by the DAG
+  version label (`git describe`); `tag_strategy: git_sha` tags by the immutable
+  short commit sha (`git rev-parse --short HEAD`), falling back to the version
+  label when the project is not in git. (Either way the artifact is then re-pinned
+  by digest, so the tag is a convenience, not the integrity boundary.)
 - **Output:** a clear per-phase summary —
   `built … @sha256 · pushed … · registered <dag> <version> → <server>/dags/<dag>`.
 

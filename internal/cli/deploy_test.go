@@ -256,11 +256,19 @@ func TestResolveServerTokenFallsBackToEnv(t *testing.T) {
 }
 
 func TestDeployImageRef(t *testing.T) {
-	cfg := &domain.LeoflowConfig{Registry: &domain.RegistryConfig{
-		URL: "ghcr.io/org", ImageName: "etl", TagStrategy: "version",
-	}}
-	if got := deployImageRef(cfg, "v3"); got != "ghcr.io/org/etl:v3" {
-		t.Errorf("ref = %q, want ghcr.io/org/etl:v3", got)
+	base := func(strategy string) *domain.LeoflowConfig {
+		return &domain.LeoflowConfig{Registry: &domain.RegistryConfig{
+			URL: "ghcr.io/org", ImageName: "etl", TagStrategy: strategy,
+		}}
+	}
+	// version strategy tags by the version label.
+	if got := deployImageRef(base("version"), "v3", "1a2b3c4"); got != "ghcr.io/org/etl:v3" {
+		t.Errorf("version: ref = %q, want ghcr.io/org/etl:v3", got)
+	}
+	// git_sha strategy tags by the actual commit sha (the #2 fix — it used to
+	// collapse to the version label).
+	if got := deployImageRef(base("git_sha"), "v3", "1a2b3c4"); got != "ghcr.io/org/etl:1a2b3c4" {
+		t.Errorf("git_sha: ref = %q, want ghcr.io/org/etl:1a2b3c4", got)
 	}
 }
 

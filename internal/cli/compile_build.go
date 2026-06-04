@@ -14,15 +14,24 @@ import (
 // way; the cleanup removes it after the build so it never lingers in the workspace.
 const generatedDockerfileName = ".leoflow.generated.Dockerfile"
 
+// publishedBaseRepo is the published Leoflow task base image repository. A
+// yaml-driven build's generated Dockerfile defaults its FROM to this (per Python
+// version), so the produced DAG image builds anywhere — no locally-built
+// leoflow-base required and the Pro control plane can pull it. This is the real
+// pipeline: the user ships dag.py + leoflow.yaml, CI (or a local compile)
+// generates the image from the published base and pushes it to Pro.
+const publishedBaseRepo = "ghcr.io/neochaotic/leoflow-runtime"
+
 // resolveBaseImage returns the task base image a generated DAG Dockerfile builds
 // FROM. An explicit base_image in leoflow.yaml wins; otherwise it defaults to the
-// canonical leoflow-base:py<python_version> tag (matching runtime/Dockerfile and
-// the Lite dev loop), so the same image name is used everywhere.
+// published runtime base (publishedBaseRepo:py<python_version>) so the image is
+// reproducible and pullable from any builder, not just a host that ran
+// `leoflow lite` to build the local base.
 func resolveBaseImage(cfg *domain.LeoflowConfig) string {
 	if cfg.BaseImage != "" {
 		return cfg.BaseImage
 	}
-	return "leoflow-base:py" + cfg.PythonVersion
+	return publishedBaseRepo + ":py" + cfg.PythonVersion
 }
 
 // resolveBuildImage decides the image reference for a build. An explicit --image

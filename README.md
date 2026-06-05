@@ -17,8 +17,8 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/neochaotic/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/neochaotic/leoflow)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13068/badge)](https://www.bestpractices.dev/projects/13068)
 
-[![Edition: Lite](https://img.shields.io/badge/edition-Lite-C0C0C0?labelColor=4a4a4a)](docs/editions.md#leoflow-lite)
-[![Edition: Pro](https://img.shields.io/badge/edition-Pro-FFD700?labelColor=4a4a4a)](docs/editions.md#leoflow-pro-chart-installable)
+[![Edition: Lite](https://img.shields.io/badge/edition-Lite-1F6FEB?labelColor=4a4a4a)](docs/editions.md#leoflow-lite)
+[![Edition: Pro](https://img.shields.io/badge/edition-Pro-8957E5?labelColor=4a4a4a)](docs/editions.md#leoflow-pro-chart-installable)
 
 ---
 

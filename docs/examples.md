@@ -59,7 +59,7 @@ re-registered:
 - **Demo:** seeded once at boot with no watcher/CI re-registering, so a clear or
   deregister sticks until you re-seed.
 
-In short: to truly remove a DAG, **remove its source** (file in dev, repo in
+In short: to truly remove a DAG, **remove its source** (file in Lite, repo in
 prod); `--deregister` just clears the current registration. (The embedded Airflow
 UI's trash maps to *clear history*; an explicit "Clear vs Deregister" dialog is
 planned for the custom UI — ADR 0018/0020.)

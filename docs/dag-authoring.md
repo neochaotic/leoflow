@@ -234,13 +234,13 @@ and re-registers. A bad binding prints an error in the terminal **immediately**:
 ✗ leoflow.yaml tasks: unknown task_id "transfrom"; the DAG defines [extract load transform]
 ```
 
-Dev is fully isolated from Demo/Pro (own database, cluster, and ports) —
+Lite is fully isolated from Demo/Pro (own database, cluster, and ports) —
 **no split brain**. See [Operating modes](operating-modes.md).
 
 ### 2 · Deploy (authoritative, immutable)
 
 On `git push`, CI compiles + builds + pushes the artifact. The **same** parser,
-overlay, and guardrails run as a gate, so what you tested in Dev is what ships:
+overlay, and guardrails run as a gate, so what you tested in Lite is what ships:
 
 ```bash
 leoflow compile dags/my_pipeline --image ghcr.io/org/my_pipeline:$GIT_SHA --build --push

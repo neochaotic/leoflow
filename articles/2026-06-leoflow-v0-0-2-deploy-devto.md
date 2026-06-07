@@ -1,10 +1,11 @@
 ---
-title: "One command from your laptop to Kubernetes — no CI pipeline"
+title: One command from your laptop to Kubernetes — no CI pipeline
 published: false
-description: "Leoflow v0.0.2 ships `leoflow deploy`: compile, build, push, pin by digest, and register a DAG to a Pro control plane in a single command. No Dockerfile-in-CI ceremony, no registry dance, no deploy YAML. The same command runs from your laptop or from a CI runner."
-tags: airflow, go, kubernetes, dataengineering
-cover_image: https://raw.githubusercontent.com/neochaotic/leoflow/main/docs/assets/screenshots/etl-graph.png
-series: "Building Leoflow"
+description: 'Leoflow v0.0.2 ships `leoflow deploy`: compile, build, push, pin by digest, and register a DAG to a Pro control plane in a single command. No Dockerfile-in-CI ceremony, no registry dance, no deploy YAML. The same command runs from your laptop or from a CI runner.'
+tags: 'airflow, go, kubernetes, dataengineering'
+cover_image: 'https://raw.githubusercontent.com/neochaotic/leoflow/main/docs/assets/screenshots/etl-graph.png'
+series: Building Leoflow
+id: 3838498
 ---
 
 > **TL;DR** — Leoflow `v0.0.2` just shipped, and the headline is one verb: **`leoflow deploy`**. It takes a DAG from `dag.py` on your laptop to a running pod on a Kubernetes control plane in a single command — compile → build → push to your registry → **pin the image by digest** → register the artifact. No bespoke CI pipeline required, no hand-rolled `docker build && docker push && curl`. The same command runs identically from your machine *or* from a CI runner. Login is `leoflow auth login` (token saved, password read hidden). GitHub: **[neochaotic/leoflow](https://github.com/neochaotic/leoflow)**.

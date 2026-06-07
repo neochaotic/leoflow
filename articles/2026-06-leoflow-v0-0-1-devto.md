@@ -5,6 +5,7 @@ description: "Leoflow v0.0.1 just shipped. Pod-per-task, but actually fast. Nati
 tags: airflow, go, kubernetes, dataengineering
 cover_image: https://raw.githubusercontent.com/neochaotic/leoflow/main/docs/assets/screenshots/etl-graph.png
 series: "Building Leoflow"
+devto_sync: false # already published manually on dev.to — excluded from auto-sync to avoid a duplicate
 ---
 
 > **TL;DR** — Leoflow `v0.0.1` just shipped. It speaks the Airflow API, runs the Airflow 3.2.x UI **unmodified**, but replaces the Python control plane with Go. Pod-per-task is the only execution mode. Each DAG is its own container image. Fan-in (map-reduce) is a Python list comprehension. Install: `curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh`. GitHub: **[neochaotic/leoflow](https://github.com/neochaotic/leoflow)** — stars and issues warmly accepted.

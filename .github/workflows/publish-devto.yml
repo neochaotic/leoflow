@@ -1,0 +1,52 @@
+name: Publish to dev.to
+
+# Pushes articles/*.md to dev.to via the devto-cli (sinedied/publish-devto).
+#
+# Safety model:
+# - A push to main runs a DRY RUN (preview only) — it never publishes or commits.
+# - Real publishing happens only via the manual "Run workflow" button with the
+#   `dry_run` checkbox UNCHECKED. Articles with `published: false` go up as DRAFTS;
+#   flip a file to `published: true` to make that post go live.
+# - On a real (non-dry) publish the action writes an `id:` back into the file's
+#   frontmatter and commits it, so later edits update the same post.
+#
+# Requires one repository secret: DEVTO_TOKEN (a dev.to "DEV Community API Key"
+# from https://dev.to/settings/extensions). Without it, this workflow no-ops.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "articles/**/*.md"
+      - ".github/workflows/publish-devto.yml"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only — do not publish or commit ids"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # the action commits the returned article id back to the repo
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Skip entirely if the token secret is not configured, so forks/CI stay green.
+    if: ${{ github.repository == 'neochaotic/leoflow' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish articles on dev.to
+        uses: sinedied/publish-devto@v2
+        env:
+          GIT_COMMITTER_NAME: neochaotic
+          GIT_COMMITTER_EMAIL: alisson.david.rosa@gmail.com
+        with:
+          devto_key: ${{ secrets.DEVTO_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          files: "articles/**/*.md"
+          branch: main
+          conventional_commits: true
+          # push → always dry run (preview). Real publish only via manual dispatch
+          # with the dry_run checkbox unchecked.
+          dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || github.event_name == 'push' }}

@@ -659,7 +659,7 @@ func TestWasbConnectionURIShapeIntegration(t *testing.T) {
 
 	const (
 		account  = "mystorageacct"
-		rawKey   = "Eby8vd/M02xNOcqF+l9C7T1/3xK+abc==" //nolint:gosec // fixture, not a real key
+		rawKey   = "Eby8vd/M02xNOcqF+l9C7T1/3xK+abc==" //nolint:gosec // fixture, not a real key; gitleaks:allow
 		rawExtra = `{"tenant_id":"00000000-1111-2222-3333-444444444444"}`
 	)
 	connID := fmt.Sprintf("e2e_wasb_%d", time.Now().UnixNano())

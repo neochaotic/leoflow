@@ -243,8 +243,8 @@ func TestDiscordConnectionURIShapeIntegration(t *testing.T) {
 // API and the routing key for Events v2 alerts.
 func TestPagerdutyConnectionURIShapeIntegration(t *testing.T) {
 	const (
-		rawToken = "api-token/1+2" //nolint:gosec // hardcoded test fixture, not a credential
-		rawExtra = `{"routing_key":"R0UTING+KEY/1"}`
+		rawToken = "api-token/1+2"                   //nolint:gosec // hardcoded test fixture, not a credential
+		rawExtra = `{"routing_key":"R0UTING+KEY/1"}` // gitleaks:allow test fixture, not a real routing key
 	)
 	parsed := saasDeliver(t, 97, domain.Connection{
 		ConnID:   fmt.Sprintf("e2e_pagerduty_%d", time.Now().UnixNano()),

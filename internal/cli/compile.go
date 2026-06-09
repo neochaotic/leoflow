@@ -122,7 +122,11 @@ func buildAndPush(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.
 			return derr
 		}
 		defer cleanup()
-		if berr := buildImage(cmd, o.builder, image, dockerfile, dir); berr != nil {
+		var platforms []string
+		if cfg.Build != nil {
+			platforms = cfg.Build.Platforms
+		}
+		if berr := buildImage(cmd, o.builder, image, dockerfile, dir, platforms); berr != nil {
 			return berr
 		}
 	}
@@ -174,12 +178,25 @@ func checkImageFlags(cmd *cobra.Command, build, push bool, image string) error {
 	return nil
 }
 
+// buildArgs assembles the builder argv for a DAG image build. When platforms is
+// non-empty it injects `--platform a,b`, so a deploy can target the cluster's
+// architecture instead of the host's — the Mac-safe default linux/amd64 (ADR
+// 0041). A single platform works with a plain `docker build`; a multi-platform
+// list is the caller's signal to route through buildx (the deploy command does).
+func buildArgs(image, dockerfile, contextDir string, platforms []string) []string {
+	args := []string{"build"}
+	if len(platforms) > 0 {
+		args = append(args, "--platform", strings.Join(platforms, ","))
+	}
+	return append(args, "-t", image, "-f", dockerfile, contextDir)
+}
+
 // buildImage shells out to the configured builder to build the DAG image
 // out-of-process (ADR 0015: no Docker SDK in our binaries). The build context
-// is the DAG directory.
-func buildImage(cmd *cobra.Command, builder, image, dockerfile, contextDir string) error {
+// is the DAG directory; platforms selects the target architecture(s).
+func buildImage(cmd *cobra.Command, builder, image, dockerfile, contextDir string, platforms []string) error {
 	//nolint:gosec // G204: builder is operator-configured by design (ADR 0015).
-	bc := exec.CommandContext(cmdContext(cmd), builder, "build", "-t", image, "-f", dockerfile, contextDir)
+	bc := exec.CommandContext(cmdContext(cmd), builder, buildArgs(image, dockerfile, contextDir, platforms)...)
 	bc.Stdout = cmd.OutOrStdout()
 	bc.Stderr = cmd.ErrOrStderr()
 	if err := bc.Run(); err != nil {
@@ -228,6 +245,17 @@ func gitVersion(ctx context.Context) string {
 	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--always", "--dirty").Output()
 	if err != nil {
 		return "dev"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitSHA returns the short commit hash, or "" when the project is not in git —
+// so a deploy with tag_strategy git_sha gets a genuine per-commit tag and falls
+// back to the version label otherwise.
+func gitSHA(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
 	}
 	return strings.TrimSpace(string(out))
 }

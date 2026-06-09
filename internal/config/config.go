@@ -32,6 +32,9 @@ var flagToKey = map[string]string{
 type Config struct {
 	// ServerURL is the control plane base URL used by push and auth create-token.
 	ServerURL string `mapstructure:"server_url"`
+	// Token is the JWT bearer token persisted by `leoflow login` and used by
+	// push and deploy when no --token flag or LEOFLOW_TOKEN env is set.
+	Token string `mapstructure:"token"`
 	// LogLevel is reserved for CLI log verbosity (not yet wired).
 	LogLevel string `mapstructure:"log_level"`
 	// Registry is reserved for the image registry used by image build (ADR 0003).
@@ -80,6 +83,10 @@ func Load(configFile string, flags *pflag.FlagSet) (*Config, error) {
 	v.SetDefault("log_level", defaultLogLevel)
 	v.SetDefault("parser_cmd", defaultParserCmd)
 	v.SetDefault("registry", "")
+	// Register token so viper's AutomaticEnv binds LEOFLOW_TOKEN (viper only
+	// resolves env vars for keys it knows). The file path works regardless, as
+	// ReadInConfig populates the key directly.
+	v.SetDefault("token", "")
 
 	v.SetEnvPrefix("LEOFLOW")
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))

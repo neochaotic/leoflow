@@ -43,4 +43,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0038: Connector dependency ergonomics — `connectors:` sugar + `dependencies:` escape hatch](adr/0038-connector-dependency-ergonomics.md)
 - [ADR 0039: Generated connector catalog with full form fidelity](adr/0039-generated-connector-catalog.md)
 - [ADR 0040: Airflow operator + sensor execution — native fast path + generic executor](adr/0040-airflow-operator-support.md)
+- [ADR 0041: `leoflow deploy` — pipeline-less promotion from Lite to Pro](adr/0041-leoflow-deploy-pipelineless.md)
 <!-- END ADR INDEX -->

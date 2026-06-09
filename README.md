@@ -17,8 +17,8 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/neochaotic/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/neochaotic/leoflow)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13068/badge)](https://www.bestpractices.dev/projects/13068)
 
-[![Edition: Lite](https://img.shields.io/badge/edition-Lite-C0C0C0?labelColor=4a4a4a)](docs/editions.md#leoflow-lite)
-[![Edition: Pro](https://img.shields.io/badge/edition-Pro-FFD700?labelColor=4a4a4a)](docs/editions.md#leoflow-pro-chart-installable)
+[![Edition: Lite](https://img.shields.io/badge/edition-Lite-1F6FEB?labelColor=4a4a4a)](docs/editions.md#leoflow-lite)
+[![Edition: Pro](https://img.shields.io/badge/edition-Pro-8957E5?labelColor=4a4a4a)](docs/editions.md#leoflow-pro-chart-installable)
 
 ---
 
@@ -42,7 +42,15 @@
 
 Leoflow ships in two editions. Pick the track that matches your target:
 
-### 🥈 Lite — local laptop, single VM, internal demo
+### Lite — the full engine on a single host
+
+The **full Leoflow control plane on one machine** — the same engine, the same
+Airflow-3.2 UI, the same `dag.py` + `leoflow.yaml` as Pro — in a one-command,
+**no-Kubernetes** package. Light to run, powerful where it counts: real
+pod-per-task execution, a **durable** Postgres datastore, hot-reload, a real
+admin login. It is not a stripped-down demo — it is the whole engine scoped to
+one host, carrying real workloads from local development to **light-to-medium
+production** on a laptop, a single VM, or an internal server (trusted network).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
@@ -57,7 +65,7 @@ executor for higher-fidelity local runs. Linux + macOS, amd64 + arm64
 `~/.leoflow/dev/venvs/<dag_id>/` so conflicting dependencies between DAGs
 coexist out of the box.
 
-### 🥇 Pro — Kubernetes cluster (Helm)
+### Pro — Kubernetes cluster (Helm)
 
 ```bash
 helm repo add leoflow https://neochaotic.github.io/leoflow   # (charts published per release)

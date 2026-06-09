@@ -15,9 +15,12 @@ gate-and-release policy these tests implement.
 | `lite-login.sh` | Lite happy path: `leoflow setup` → control plane → admin login → JWT → web editor | ~15 s | `ci.yaml` job `e2e-lite` on every PR + push |
 | `lite-multidag.sh` | The multi-DAG materialization contract: subdir DAG → `dag.json.source` carries `dag.py` verbatim (the property the subprocess executor depends on to materialize per-TI work dirs) | ~5 s | `ci.yaml` job `e2e-lite-multidag` on every PR + push |
 | `e2e.sh` | Pod-path E2E on k3d: build images, k3d import, agent-over-gRPC, real pod-per-task | minutes | Manual / separate workflow |
+| `deploy-e2e.sh` | The real `leoflow deploy` path (ADR 0041): `auth login` → one `leoflow deploy` that builds for the cluster arch, **pushes to a registry the cluster pulls from**, captures the digest, re-pins `dag.json`, registers — then the cluster pulls the digest-pinned image and runs it | minutes | Manual / separate workflow |
 
 The `lite-*` scripts gate Lite behavior; `e2e.sh` gates the pod-path that
-Lite cluster mode and Pro both rely on.
+Lite cluster mode and Pro both rely on; `deploy-e2e.sh` gates the pipeline-less
+`leoflow deploy` promotion (the build→push→digest→register glue that unit tests
+leave to e2e).
 
 ## Running locally
 
@@ -54,6 +57,29 @@ script sets through `LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR` — the host
 listen address (`0.0.0.0:9091`) is not reachable from inside a pod. The DAG
 image is imported into the cluster with `k3d image import` so no registry
 is needed.
+
+### Deploy test (`deploy-e2e.sh`) — k3d + a registry the cluster pulls from
+
+```bash
+make dev-up      # Postgres + Redis on the host
+make build       # bin/leoflow, bin/leoflow-server
+bash test/e2e/deploy-e2e.sh
+```
+
+Unlike `e2e.sh` (which `k3d image import`s the image), this uses a **k3d-managed
+registry** so it exercises the real push→pull path: a single `leoflow deploy`
+builds for the cluster arch (auto-detected — `linux/arm64` on an arm64 Mac,
+`linux/amd64` on amd64 CI), pushes to `k3d-registry.localhost:5111`, captures the
+image digest, re-pins `dag.json`, and registers; the cluster then pulls the
+digest-pinned image and runs it. It binds the API on `:18080` by default
+(`LEOFLOW_E2E_HTTP_PORT`) to avoid clashing with a Lima/other forward on 8080.
+
+!!! note "Docker Desktop on macOS"
+    The host `docker push` to the k3d registry can be intermittently routed
+    through Docker Desktop's HTTP proxy. If a push times out
+    (`proxyconnect … i/o timeout`), add `k3d-registry.localhost:5111` to Docker
+    Desktop → Settings → Resources → Proxies bypass, or run this gate on Linux/CI
+    (no Docker Desktop proxy), where it is clean.
 
 ## Adding a new gate
 

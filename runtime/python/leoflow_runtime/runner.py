@@ -241,12 +241,17 @@ def run_operator(operator_class: str, args: dict) -> None:
     _lifecycle(f"executing {class_name}.execute()")
     try:
         result = op.execute(context)
-    except Exception as exc:  # noqa: BLE001 — fallback if reschedule slips past the mode check
+    except Exception as exc:  # noqa: BLE001 — translate reschedule/deferral; re-raise the rest
         if _is_reschedule_exc(exc):
             raise RuntimeError(
                 f"{class_name} asked to reschedule (sensor mode='reschedule'), which "
                 f"Leoflow does not support yet (ADR 0040 Phase B). Use mode='poke' — "
                 f"the sensor holds the worker until its condition is met.") from exc
+        if _is_deferral_exc(exc):
+            raise RuntimeError(
+                f"{class_name} asked to defer (deferrable=True), which Leoflow does not "
+                f"support yet (ADR 0040 Phase C — no triggerer). Pass deferrable=False — "
+                f"the operator runs synchronously in the pod (poke-style).") from exc
         raise
     _write_return(result)
 
@@ -257,3 +262,12 @@ def _is_reschedule_exc(exc: BaseException) -> bool:
     mode is ADR 0040 Phase B; until then we translate it to a clear error instead
     of leaking a raw traceback (review polish #5)."""
     return any(base.__name__ == "AirflowRescheduleException" for base in type(exc).__mro__)
+
+
+def _is_deferral_exc(exc: BaseException) -> bool:
+    """True if exc is Airflow's TaskDeferred (matched by name across the MRO, so the
+    runtime needn't import Airflow). A deferrable operator (deferrable=True) raises
+    it to suspend onto a trigger; Leoflow has no triggerer yet (ADR 0040 Phase C),
+    so we translate it into a clear "set deferrable=False" error rather than leaking
+    a raw TaskDeferred traceback."""
+    return any(base.__name__ == "TaskDeferred" for base in type(exc).__mro__)

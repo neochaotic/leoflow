@@ -174,6 +174,10 @@ The unsupported set, with the things Airflow users most often expect to
   message. Use the default `mode="poke"` (the pod holds until the condition is
   met). *Poke-mode sensors and provider operators ARE supported* — see
   [`airflow_operator`](#provider-operators-sensors-airflow_operator) above.
+- **Deferrable operators / sensors** — anything with `deferrable=True` (it suspends
+  the task onto a *trigger*) is not supported yet: Leoflow has no triggerer (ADR
+  0040 Phase C). It fails at runtime with a clear message. Pass `deferrable=False`
+  — the operator runs synchronously in the pod (poke-style).
 - **Jinja templating** in `@task` — `{{ ds }}`, `{{ ti }}`, `{{ var.value.x }}`,
   every `templates_dict=` knob. The control plane never re-parses
   Python and the templating step is intentionally not implemented.

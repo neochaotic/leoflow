@@ -58,6 +58,18 @@ class LateRescheduleSensor(EchoOperator):
 
     def execute(self, context):
         raise AirflowRescheduleException("reschedule at ...")
+
+
+# Named exactly as Airflow's exception: a deferrable operator suspends itself by
+# raising TaskDeferred from execute(). Leoflow has no triggerer (Phase C), so the
+# runtime must translate it into a clear "set deferrable=False" message.
+class TaskDeferred(Exception):
+    pass
+
+
+class DeferringOperator(EchoOperator):
+    def execute(self, context):
+        raise TaskDeferred("deferring to a trigger")
 '''
 
 
@@ -107,6 +119,15 @@ def test_run_operator_translates_late_reschedule_exception(tmp_path, monkeypatch
     mod = _write_operator_module(tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="reschedule"):
         runner.run_operator(f"{mod}.LateRescheduleSensor", {})
+
+
+def test_run_operator_translates_deferral(tmp_path, monkeypatch):
+    # A deferrable operator (deferrable=True) raises TaskDeferred. With no
+    # triggerer (Phase C), the runtime must fail with a clear, actionable message
+    # naming deferrable — not leak a raw TaskDeferred traceback.
+    mod = _write_operator_module(tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="deferrable"):
+        runner.run_operator(f"{mod}.DeferringOperator", {})
 
 
 def test_run_operator_merges_upstream_xcom(tmp_path, monkeypatch):

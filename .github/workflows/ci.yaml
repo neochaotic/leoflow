@@ -284,11 +284,11 @@ jobs:
           [ -n "$PW" ] || { echo "could not capture admin password"; cat /tmp/setup.log; exit 1; }
           leoflow lite --port 18080 --postgres managed --executor subprocess \
             --server-bin "$PWD/bin/leoflow-server" --agent-bin "$PWD/bin/leoflow-agent" > /tmp/lite.log 2>&1 &
-          for i in $(seq 1 60); do curl -fsS http://localhost:18080/readyz >/dev/null 2>&1 && break; sleep 3; done
+          for _ in $(seq 1 60); do curl -fsS http://localhost:18080/readyz >/dev/null 2>&1 && break; sleep 3; done
           curl -fsS http://localhost:18080/readyz >/dev/null || { echo "lite did not become ready"; tail -40 /tmp/lite.log; exit 1; }
           TOK=$(leoflow auth create-token --server http://localhost:18080 --username admin@leoflow.local --password "$PW")
           # Wait for the scaffolded "hello" DAG to register (its venv installs first), then run it for log content.
-          for i in $(seq 1 40); do curl -fsS -H "Authorization: Bearer $TOK" http://localhost:18080/api/v2/dags/hello >/dev/null 2>&1 && break; sleep 3; done
+          for _ in $(seq 1 40); do curl -fsS -H "Authorization: Bearer $TOK" http://localhost:18080/api/v2/dags/hello >/dev/null 2>&1 && break; sleep 3; done
           curl -fsS -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{}' \
             http://localhost:18080/api/v2/dags/hello/dagRuns >/dev/null 2>&1 || true
           sleep 10

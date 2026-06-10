@@ -244,6 +244,58 @@ jobs:
         run: bash test/e2e/lite-multidag.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # Headless SPA crash smoke (test/e2e/ui-smoke.js): boots Lite (managed PG, no
+  # Docker), drives the embedded Airflow 3.2 UI with a real browser, and fails on
+  # any uncaught React error. The Go tests cannot see the React layer — the
+  # connector config page once shipped broken (catalog omitted standard_fields
+  # keys the SPA reads) and only a browser caught it. This guards that whole class
+  # plus the logs render contract. ~4 min (chromium + relocatable PG download).
+  # ─────────────────────────────────────────────────────────────────────
+  ui-smoke:
+    name: UI smoke (headless SPA crash check)
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: parser
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+      - name: Build binaries
+        run: make build
+      - name: Install Playwright + Chromium
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm i --no-save playwright-core playwright
+          npx playwright install --with-deps chromium
+      - name: Boot Lite and run the UI smoke
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/bin:$PATH"
+          # `leoflow setup` prints the admin password once; capture it.
+          PW=$(leoflow setup 2>&1 | tee /tmp/setup.log | grep -oiE 'password:[[:space:]]*[A-Za-z0-9]+' | head -1 | awk '{print $NF}')
+          [ -n "$PW" ] || { echo "could not capture admin password"; cat /tmp/setup.log; exit 1; }
+          leoflow lite --port 18080 --postgres managed --executor subprocess \
+            --server-bin "$PWD/bin/leoflow-server" --agent-bin "$PWD/bin/leoflow-agent" > /tmp/lite.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://localhost:18080/readyz >/dev/null 2>&1 && break; sleep 3; done
+          curl -fsS http://localhost:18080/readyz >/dev/null || { echo "lite did not become ready"; tail -40 /tmp/lite.log; exit 1; }
+          TOK=$(leoflow auth create-token --server http://localhost:18080 --username admin@leoflow.local --password "$PW")
+          # Wait for the scaffolded "hello" DAG to register (its venv installs first), then run it for log content.
+          for i in $(seq 1 40); do curl -fsS -H "Authorization: Bearer $TOK" http://localhost:18080/api/v2/dags/hello >/dev/null 2>&1 && break; sleep 3; done
+          curl -fsS -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{}' \
+            http://localhost:18080/api/v2/dags/hello/dagRuns >/dev/null 2>&1 || true
+          sleep 10
+          LEOFLOW_URL=http://localhost:18080 LEOFLOW_USER=admin@leoflow.local LEOFLOW_PASS="$PW" \
+            node test/e2e/ui-smoke.js
+
+  # ─────────────────────────────────────────────────────────────────────
   # Full pod-per-task e2e on a real k3d cluster (test/e2e/e2e.sh): builds the
   # base + DAG images, runs the control plane on the runner, triggers a DAG, and
   # asserts every task reaches success — including a provider SENSOR

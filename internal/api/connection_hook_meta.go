@@ -27,15 +27,40 @@ type hookMetaEntry struct {
 	StandardFields  map[string]any `json:"standard_fields"`
 }
 
-// sanitizeFields returns a copy with each nil-valued field spec replaced by a
-// minimal visible spec ({"hidden": false}), and {} for a nil map. The Airflow 3.2
-// FlexibleForm iterates each entry of standard_fields/extra_fields and reads
-// `field.hidden`; the generated catalog emits e.g. "description": null for a
-// standard field with no overrides, and reading `.hidden` off that null crashes
-// the whole Add/Edit Connection page ("Cannot read properties of undefined
-// (reading 'hidden')"). We keep the key (the form still renders the field) but
-// give it a valid, visible default so the read never crashes.
-func sanitizeFields(m map[string]any) map[string]any {
+// standardFieldKeys are the six standard fields the Airflow 3.2 FlexibleForm
+// reads off EVERY connector unconditionally (its LDt helper does
+// `g1(spec.description)`, `g1(spec.url_schema)`, …). g1 tolerates a null value
+// (treats it as "use the field default") but NOT a missing key: an absent key is
+// `undefined`, and `undefined.hidden` crashes the whole Connections page with
+// "Cannot read properties of undefined (reading 'hidden')". The generated catalog
+// only emits a standard field when it has an override, so most connectors are
+// missing several keys — which is why opening Connections errored for the user.
+var standardFieldKeys = []string{"description", "host", "login", "password", "port", "url_schema"}
+
+// ensureStandardFields returns a copy that always carries all six standardFieldKeys.
+// A missing key is filled with nil (the form's "use default" sentinel, which g1
+// handles); existing values (including nil) are preserved. This is the fix for the
+// undefined-key crash above.
+func ensureStandardFields(m map[string]any) map[string]any {
+	out := make(map[string]any, len(standardFieldKeys))
+	for k, v := range m {
+		out[k] = v
+	}
+	for _, k := range standardFieldKeys {
+		if _, ok := out[k]; !ok {
+			out[k] = nil
+		}
+	}
+	return out
+}
+
+// sanitizeExtraFields replaces each nil extra-field spec with a minimal visible
+// one ({"hidden": false}) and returns {} for a nil map. Unlike the standard fields
+// (rendered through g1, which guards nil), the SPA renders extra fields by
+// iterating the map and reading `spec.hidden` directly — a nil spec there would
+// crash. Extra fields are keyed dynamically, so only nil VALUES (not missing keys)
+// are a hazard.
+func sanitizeExtraFields(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {
 		if v == nil {
@@ -59,8 +84,8 @@ func connectionTypeCatalog() []hookMetaEntry {
 			HookName:        c.HookName,
 			HookClassName:   c.HookClassName,
 			DefaultConnName: c.DefaultConnName,
-			ExtraFields:     sanitizeFields(c.ExtraFields),
-			StandardFields:  sanitizeFields(c.StandardFields),
+			ExtraFields:     sanitizeExtraFields(c.ExtraFields),
+			StandardFields:  ensureStandardFields(c.StandardFields),
 		}
 	}
 	return out

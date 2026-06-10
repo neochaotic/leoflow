@@ -27,13 +27,24 @@ type hookMetaEntry struct {
 	StandardFields  map[string]any `json:"standard_fields"`
 }
 
-// orEmpty returns an empty map for a nil one, so the JSON renders {} (which the
-// SPA expects) rather than null.
-func orEmpty(m map[string]any) map[string]any {
-	if m == nil {
-		return map[string]any{}
+// sanitizeFields returns a copy with each nil-valued field spec replaced by a
+// minimal visible spec ({"hidden": false}), and {} for a nil map. The Airflow 3.2
+// FlexibleForm iterates each entry of standard_fields/extra_fields and reads
+// `field.hidden`; the generated catalog emits e.g. "description": null for a
+// standard field with no overrides, and reading `.hidden` off that null crashes
+// the whole Add/Edit Connection page ("Cannot read properties of undefined
+// (reading 'hidden')"). We keep the key (the form still renders the field) but
+// give it a valid, visible default so the read never crashes.
+func sanitizeFields(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if v == nil {
+			out[k] = map[string]any{"hidden": false}
+			continue
+		}
+		out[k] = v
 	}
-	return m
+	return out
 }
 
 // connectionTypeCatalog builds the form catalog from the shared connector
@@ -48,8 +59,8 @@ func connectionTypeCatalog() []hookMetaEntry {
 			HookName:        c.HookName,
 			HookClassName:   c.HookClassName,
 			DefaultConnName: c.DefaultConnName,
-			ExtraFields:     orEmpty(c.ExtraFields),
-			StandardFields:  orEmpty(c.StandardFields),
+			ExtraFields:     sanitizeFields(c.ExtraFields),
+			StandardFields:  sanitizeFields(c.StandardFields),
 		}
 	}
 	return out

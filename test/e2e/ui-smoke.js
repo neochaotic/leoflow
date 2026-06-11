@@ -125,6 +125,30 @@ const CRASH_RE = /Cannot read properties|is not a function|client-side exception
     if (await m.count()) await m.click({ timeout: 4000 }).catch(() => {});
   });
 
+  // The connection "Test" probe must honor the host/port/schema the form sends as
+  // SEPARATE fields. Regression guard: it once built {scheme}://{host} from
+  // conn_type alone, dropping port+schema, so a reachable endpoint on a non-default
+  // port reported unreachable. We probe the lite server itself (guaranteed up) on
+  // its real port; status:true proves the port made it into the probe URL.
+  await step('connection Test honors port+schema', async () => {
+    const auth = await (await page.request.post(URL + '/auth/token',
+      { data: { username: USER, password: PASS } })).json().catch(() => ({}));
+    const tok = auth.access_token;
+    if (!tok) throw new Error('POST /auth/token returned no access_token');
+    // NB: the base URL is bound to the module const `URL`, which shadows the
+    // global URL constructor here — parse via Node's url module explicitly.
+    const u = new (require('url').URL)(URL);
+    const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+    const res = await (await page.request.post(URL + '/api/v2/connections/test', {
+      headers: { Authorization: 'Bearer ' + tok },
+      data: { connection_id: 'smoke_http', conn_type: 'http',
+        host: u.hostname, port, schema: u.protocol.replace(':', '') },
+    })).json().catch(() => ({}));
+    if (res.status !== true) {
+      throw new Error(`Test probe failed for a reachable endpoint (port/schema dropped?): ${res.message}`);
+    }
+  });
+
   await browser.close();
 
   const failed = results.filter((r) => r.bad);

@@ -170,11 +170,20 @@ func validateGCPKeyfileDict(kd any) (ok bool, message string) {
 func testHTTPReachable(ctx context.Context, conn domain.Connection) (ok bool, message string) {
 	target := conn.Host
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		// The Airflow connection form sends host, schema and port as separate
+		// fields; mirror Airflow's HttpHook, which builds {schema}://{host}:{port}.
+		// `schema` selects the URL scheme; conn_type ("https") is the fallback.
 		scheme := "http"
-		if strings.EqualFold(conn.ConnType, "https") {
+		if strings.EqualFold(conn.Schema, "https") || strings.EqualFold(conn.ConnType, "https") {
 			scheme = "https"
+		} else if strings.EqualFold(conn.Schema, "http") {
+			scheme = "http"
 		}
 		target = scheme + "://" + conn.Host
+		// Honor an explicitly pinned port unless the host already carries one.
+		if conn.Port != nil && *conn.Port != 0 && !strings.Contains(conn.Host, ":") {
+			target += ":" + strconv.Itoa(*conn.Port)
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 	if err != nil {

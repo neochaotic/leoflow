@@ -185,4 +185,24 @@ func TestHTTPReachable(t *testing.T) {
 	if ok, msg := testHTTPReachable(context.Background(), domain.Connection{ConnType: "http", Host: "127.0.0.1:1"}); ok || msg == "" {
 		t.Errorf("an unreachable host should fail with a message, got ok=%v msg=%q", ok, msg)
 	}
+
+	// The Airflow connection form sends host, port and schema as SEPARATE fields
+	// (it does not fold the port into the host). The probe MUST honor the Port
+	// field, else it silently dials the scheme's default port (80/443) and a
+	// perfectly reachable endpoint reports unreachable. Regression guard for the
+	// real-connection test bug (localhost:18080 probed as http://localhost).
+	addr := srv.Listener.Addr().(*net.TCPAddr)
+	bareHost := addr.IP.String() // e.g. "127.0.0.1", no port
+	port := addr.Port
+	if ok, msg := testHTTPReachable(context.Background(),
+		domain.Connection{ConnType: "http", Host: bareHost, Port: &port, Schema: "http"}); !ok {
+		t.Errorf("a separate Port field must be honored, got ok=%v msg=%q", ok, msg)
+	}
+
+	// The Schema field selects the URL scheme (Airflow's HttpHook uses `schema`
+	// for http/https), independent of conn_type.
+	if ok, _ := testHTTPReachable(context.Background(),
+		domain.Connection{ConnType: "http", Host: bareHost, Port: &port, Schema: "https"}); ok {
+		t.Error("schema=https against a plain-HTTP server should fail (scheme honored)")
+	}
 }

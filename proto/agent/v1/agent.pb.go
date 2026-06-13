@@ -468,6 +468,7 @@ type TaskSpec struct {
 	CallArgsJson            string                    `protobuf:"bytes,13,opt,name=call_args_json,json=callArgsJson,proto3" json:"call_args_json,omitempty"`             // TaskFlow literal call args, JSON-encoded (#115). Named call_args to leave 'params' free for Airflow's DAG-run params (#148).
 	OperatorClass           string                    `protobuf:"bytes,14,opt,name=operator_class,json=operatorClass,proto3" json:"operator_class,omitempty"`            // For operator='airflow_operator': the dotted provider operator/sensor class the runtime imports and executes (ADR 0040).
 	OperatorArgsJson        string                    `protobuf:"bytes,15,opt,name=operator_args_json,json=operatorArgsJson,proto3" json:"operator_args_json,omitempty"` // For operator='airflow_operator': the operator's constructor kwargs, JSON-encoded. Delivered to the runtime as LEOFLOW_OPERATOR_ARGS.
+	LogicalDate             string                    `protobuf:"bytes,16,opt,name=logical_date,json=logicalDate,proto3" json:"logical_date,omitempty"`                  // The DagRun's logical date, RFC3339. The agent derives the runtime's LEOFLOW_TS (this value) and LEOFLOW_DS (the date) so the standalone operator context has a real ds/ts (ADR 0040). Empty leaves them unset.
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -603,6 +604,13 @@ func (x *TaskSpec) GetOperatorClass() string {
 func (x *TaskSpec) GetOperatorArgsJson() string {
 	if x != nil {
 		return x.OperatorArgsJson
+	}
+	return ""
+}
+
+func (x *TaskSpec) GetLogicalDate() string {
+	if x != nil {
+		return x.LogicalDate
 	}
 	return ""
 }
@@ -1270,7 +1278,7 @@ const file_agent_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\"\x14\n" +
-	"\x12GetTaskSpecRequest\"\xa5\x06\n" +
+	"\x12GetTaskSpecRequest\"\xc8\x06\n" +
 	"\bTaskSpec\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06dag_id\x18\x02 \x01(\tR\x05dagId\x12\x1f\n" +
@@ -1291,7 +1299,8 @@ const file_agent_proto_rawDesc = "" +
 	"\x05extra\x18\f \x01(\v2\x17.google.protobuf.StructR\x05extra\x12$\n" +
 	"\x0ecall_args_json\x18\r \x01(\tR\fcallArgsJson\x12%\n" +
 	"\x0eoperator_class\x18\x0e \x01(\tR\roperatorClass\x12,\n" +
-	"\x12operator_args_json\x18\x0f \x01(\tR\x10operatorArgsJson\x1a>\n" +
+	"\x12operator_args_json\x18\x0f \x01(\tR\x10operatorArgsJson\x12!\n" +
+	"\flogical_date\x18\x10 \x01(\tR\vlogicalDate\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ad\n" +

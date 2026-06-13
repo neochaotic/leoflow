@@ -229,6 +229,28 @@ func TestBuildEnvStampsRunContext(t *testing.T) {
 	}
 }
 
+func TestBuildEnvDerivesDsTsFromLogicalDate(t *testing.T) {
+	// The runtime's standalone context exposes ds/ts (LEOFLOW_DS / LEOFLOW_TS). The
+	// agent derives both from the DagRun's logical_date the server sends — ts is the
+	// RFC3339 value, ds its UTC date — so date-filtering operators see a real value
+	// instead of "".
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "airflow_operator", LogicalDate: "2026-06-13T08:30:00Z",
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	for _, want := range []string{"LEOFLOW_TS=2026-06-13T08:30:00Z", "LEOFLOW_DS=2026-06-13"} {
+		if !strings.Contains(je, want) {
+			t.Errorf("env missing %q; got %v", want, env)
+		}
+	}
+}
+
 func TestRunnerReportsFailureOnNonZeroExit(t *testing.T) {
 	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "bash", Entrypoint: "exit 1"}}
 	cmd := &fakeCmd{exitCode: 1}

@@ -133,26 +133,7 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 	// in Python's block buffer when the process is killed (SIGKILL/OOM/evict)
 	// and never reach the agent's pipe.
 	env = append(env, "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=UTF-8")
-	// Stamp the run context so the runtime's standalone operator context
-	// (_StandaloneTaskInstance / _operator_context, ADR 0040) reflects reality.
-	// Without these the context is blank in every executor — ti.task_id="",
-	// run_id="", try_number defaults to 1 — a silent-wrong gap for operators that
-	// read them, and run_operator falls back to the operator class name as the
-	// task_id. The server already carries these on the TaskSpec. (The logical-date
-	// macros ds/ts/params need the DagRun's logical_date plumbed onto TaskSpec and
-	// are deliberately left unset rather than fabricated.)
-	if v := spec.GetTaskId(); v != "" {
-		env = append(env, "LEOFLOW_TASK_ID="+v)
-	}
-	if v := spec.GetRunId(); v != "" {
-		env = append(env, "LEOFLOW_RUN_ID="+v)
-	}
-	if v := spec.GetDagId(); v != "" {
-		env = append(env, "LEOFLOW_DAG_ID="+v)
-	}
-	if n := spec.GetTryNumber(); n > 0 {
-		env = append(env, fmt.Sprintf("LEOFLOW_TRY_NUMBER=%d", n))
-	}
+	env = append(env, runContextEnv(spec)...)
 	if r.ReturnPath != "" {
 		// Tell the runtime to write the return value to the agent's per-task path,
 		// not the shared global default — so concurrent tasks and other users never
@@ -172,6 +153,37 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		env = append(env, "LEOFLOW_OPERATOR_ARGS="+opArgs)
 	}
 	return append(env, r.secretsEnv(ctx)...), nil
+}
+
+// runContextEnv renders the DagRun/task identity the runtime's standalone operator
+// context reads (_StandaloneTaskInstance / _operator_context, ADR 0040): without it
+// the context is blank in every executor — ti.task_id="", run_id="", try_number
+// defaulting to 1, and run_operator falling back to the operator class name as the
+// task_id — a silent-wrong gap for operators that read them. The server carries
+// these on the TaskSpec. ts/ds are derived from the single logical_date (ts is the
+// RFC3339 value, ds its UTC date). The macros params/data_interval need fields not
+// yet on TaskSpec and are deliberately left unset rather than fabricated.
+func runContextEnv(spec *agentv1.TaskSpec) []string {
+	var env []string
+	if v := spec.GetTaskId(); v != "" {
+		env = append(env, "LEOFLOW_TASK_ID="+v)
+	}
+	if v := spec.GetRunId(); v != "" {
+		env = append(env, "LEOFLOW_RUN_ID="+v)
+	}
+	if v := spec.GetDagId(); v != "" {
+		env = append(env, "LEOFLOW_DAG_ID="+v)
+	}
+	if n := spec.GetTryNumber(); n > 0 {
+		env = append(env, fmt.Sprintf("LEOFLOW_TRY_NUMBER=%d", n))
+	}
+	if ld := spec.GetLogicalDate(); ld != "" {
+		env = append(env, "LEOFLOW_TS="+ld)
+		if t, perr := time.Parse(time.RFC3339, ld); perr == nil {
+			env = append(env, "LEOFLOW_DS="+t.UTC().Format("2006-01-02"))
+		}
+	}
+	return env
 }
 
 // secretsEnv fetches the tenant's Variables/Connections and renders them as

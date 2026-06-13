@@ -44,6 +44,9 @@ type TaskSpec struct {
 	// injects it as LEOFLOW_OPERATOR_ARGS; the runtime decodes it. Empty when the
 	// operator takes no args.
 	OperatorArgsJSON string
+	// LogicalDate is the DagRun's logical date in RFC3339; the agent derives the
+	// runtime's LEOFLOW_TS/LEOFLOW_DS from it (ADR 0040). Empty leaves them unset.
+	LogicalDate string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -143,6 +146,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		CallArgsJson:            spec.CallArgsJSON,
 		OperatorClass:           spec.OperatorClass,
 		OperatorArgsJson:        spec.OperatorArgsJSON,
+		LogicalDate:             spec.LogicalDate,
 	}, nil
 }
 

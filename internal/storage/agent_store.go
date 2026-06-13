@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/neochaotic/leoflow/internal/agentrpc"
 	"github.com/neochaotic/leoflow/internal/auth"
@@ -26,9 +27,15 @@ func NewExecutionStore(pg *Postgres) *ExecutionStore {
 
 // TaskSpec returns the agent-facing execution spec for a task instance.
 func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (agentrpc.TaskSpec, error) {
-	task, spec, _, err := s.resolve(ctx, id.RunID, id.TaskID)
+	task, spec, _, run, err := s.resolve(ctx, id.RunID, id.TaskID)
 	if err != nil {
 		return agentrpc.TaskSpec{}, err
+	}
+	// The DagRun's logical date, RFC3339, for the runtime's ds/ts (ADR 0040). Empty
+	// when unset so the agent leaves LEOFLOW_TS/DS unset rather than stamping a zero.
+	var logicalDate string
+	if run.LogicalDate.Valid {
+		logicalDate = run.LogicalDate.Time.UTC().Format(time.RFC3339)
 	}
 	var timeout int
 	if task.ExecutionTimeoutSeconds != nil {
@@ -68,6 +75,7 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		CallArgsJSON:     callArgsJSON,
 		OperatorClass:    task.OperatorClass,
 		OperatorArgsJSON: operatorArgsJSON,
+		LogicalDate:      logicalDate,
 	}, nil
 }
 
@@ -124,7 +132,7 @@ func (s *ExecutionStore) FailTask(ctx context.Context, taskInstanceID, reason st
 
 // ResolveTask returns the dispatcher's execution context for a run's task.
 func (s *ExecutionStore) ResolveTask(ctx context.Context, runID, taskID string) (dispatch.Resolved, error) {
-	task, spec, ver, err := s.resolve(ctx, runID, taskID)
+	task, spec, ver, _, err := s.resolve(ctx, runID, taskID)
 	if err != nil {
 		return dispatch.Resolved{}, err
 	}
@@ -160,30 +168,32 @@ func (s *ExecutionStore) ResolveTask(ctx context.Context, runID, taskID string) 
 	}, nil
 }
 
-// resolve loads the dag version for a run and returns the named task's spec.
-func (s *ExecutionStore) resolve(ctx context.Context, runID, taskID string) (domain.TaskSpec, domain.DAGSpec, queries.DagVersion, error) {
+// resolve loads the dag version and run for a run id and returns the named task's
+// spec. The run is returned too so callers can read run-scoped fields (e.g. its
+// logical date) without a second query.
+func (s *ExecutionStore) resolve(ctx context.Context, runID, taskID string) (domain.TaskSpec, domain.DAGSpec, queries.DagVersion, queries.DagRun, error) {
 	rid, err := parseUUID(runID)
 	if err != nil {
-		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, err
+		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, err
 	}
 	run, err := s.q.GetDagRunByID(ctx, rid)
 	if err != nil {
-		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, fmt.Errorf("loading run: %w", err)
+		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, fmt.Errorf("loading run: %w", err)
 	}
 	ver, err := s.q.GetDagVersionByID(ctx, run.DagVersionID)
 	if err != nil {
-		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, fmt.Errorf("loading dag version: %w", err)
+		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, fmt.Errorf("loading dag version: %w", err)
 	}
 	var spec domain.DAGSpec
 	if jerr := json.Unmarshal(ver.Spec, &spec); jerr != nil {
-		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, fmt.Errorf("decoding spec: %w", jerr)
+		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, fmt.Errorf("decoding spec: %w", jerr)
 	}
 	for _, t := range spec.Tasks {
 		if t.TaskID == taskID {
-			return t, spec, ver, nil
+			return t, spec, ver, run, nil
 		}
 	}
-	return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, fmt.Errorf("task %q not found in run %q", taskID, runID)
+	return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, fmt.Errorf("task %q not found in run %q", taskID, runID)
 }
 
 // latestTry returns the highest try_number task instance for the given task.

@@ -100,14 +100,28 @@ def read_var(_value: str) -> None:
     print("e2e variable:", os.environ.get("AIRFLOW_VAR_E2E_GREETING"))
 
 
+@task
+def endpoint_name() -> str:
+    # A value-returning upstream the operator consumes via ti.xcom_pull below.
+    return "readyz"
+
+
 with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
     tail = read_var(transform(extract()))
+    target = endpoint_name()
     # A real provider sensor (poke mode) downstream of the @task chain. Proves a
     # type=airflow_operator task runs in its own pod and resolves a managed
-    # Connection (AIRFLOW_CONN_CP) — the generic-executor path.
-    probe = HttpSensor(task_id="probe", http_conn_id="cp", endpoint="readyz",
+    # Connection (AIRFLOW_CONN_CP) — the generic-executor path. Its endpoint is
+    # CHAINED from an upstream operator's return_value via ti.xcom_pull (ADR 0040),
+    # so this exercises the real chaining wire: the agent must authorize fetching a
+    # depends_on upstream AND deliver a NON-EMPTY upstream-xcom map (the case a
+    # None-returning upstream would not, which let a kwarg-collision regression slip
+    # past CI once). If chaining breaks, the endpoint renders empty and the poke fails.
+    probe = HttpSensor(task_id="probe", http_conn_id="cp",
+                       endpoint="{{ ti.xcom_pull('endpoint_name') }}",
                        poke_interval=2, timeout=60)
     tail >> probe
+    target >> probe
 PY
 cat > "$WORKDIR/$DAG_ID/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
@@ -152,6 +166,9 @@ log "Compiling, building, and importing the DAG image"
 log "Asserting the sensor compiled to type=airflow_operator (ADR 0040 generic path)"
 jq -e '.tasks[] | select(.task_id=="probe" and .type=="airflow_operator")' \
   "$WORKDIR/$DAG_ID/dag.json" >/dev/null || fail "probe did not compile to airflow_operator"
+log "Asserting probe chains from endpoint_name (ti.xcom_pull, ADR 0040)"
+jq -e '.tasks[] | select(.task_id=="probe") | .depends_on | index("endpoint_name")' \
+  "$WORKDIR/$DAG_ID/dag.json" >/dev/null || fail "probe does not depend on endpoint_name (chaining wire missing)"
 k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER"
 
 log "Pushing the DAG"

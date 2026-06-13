@@ -195,8 +195,8 @@ def test_operator_context_provides_tolerant_ti(monkeypatch):
 def test_ti_xcom_pull_resolves_upstream_return_value(monkeypatch):
     # Like Airflow: ti.xcom_pull('compile') returns the upstream's real
     # return_value, so chained operators (compile >> invoke) can pass data. The
-    # agent delivers the upstream return_values as the LEOFLOW_XCOM_BY_TASK map.
-    monkeypatch.setenv("LEOFLOW_XCOM_BY_TASK", json.dumps({
+    # agent delivers the upstream return_values as the UPSTREAM_XCOM_ENV map.
+    monkeypatch.setenv(runner.UPSTREAM_XCOM_ENV, json.dumps({
         "compile": {"name": "projects/p/compilationResults/abc"},
         "extract": [1, 2, 3],
     }))
@@ -207,6 +207,21 @@ def test_ti_xcom_pull_resolves_upstream_return_value(monkeypatch):
         {"name": "projects/p/compilationResults/abc"}, [1, 2, 3]]
     assert ti.xcom_pull("missing") is None      # unknown upstream -> None
     assert ti.xcom_pull("compile", key="custom") is None  # only return_value is carried
+
+
+def test_run_operator_does_not_inject_xcom_pull_map_as_kwarg(tmp_path, monkeypatch):
+    # The upstream-xcom map exposed to ti.xcom_pull must NOT be mistaken by
+    # _merge_operator_xcom for a param-bound LEOFLOW_XCOM_<PARAM> and injected as an
+    # operator constructor kwarg — that crashes the operator with an unexpected
+    # `by_task=` arg. (Caught by the live GCP compile >> invoke chain test.)
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv(runner.UPSTREAM_XCOM_ENV, json.dumps({"compile": {"name": "x"}}))
+    mod = _write_operator_module(tmp_path, monkeypatch)
+
+    runner.run_operator(f"{mod}.EchoOperator", {"bucket": "b1"})
+
+    assert json.loads(out.read_text())["kwargs"] == {"bucket": "b1"}
 
 
 def test_operator_context_parses_params(monkeypatch):

@@ -168,12 +168,19 @@ def _write_return(result) -> None:
         fh.write(payload)
 
 
+# Env var carrying the upstream task_id -> return_value map for ti.xcom_pull. It must
+# NOT start with XCOM_ENV_PREFIX ("LEOFLOW_XCOM_"): _merge_operator_xcom consumes every
+# such var as a param-bound operator kwarg, and would otherwise inject this whole map
+# as a bogus `by_task=` kwarg (a real collision the live GCP chain test caught).
+UPSTREAM_XCOM_ENV = "LEOFLOW_UPSTREAM_XCOM"
+
+
 def _load_xcom_by_task() -> dict:
-    """Decode LEOFLOW_XCOM_BY_TASK — the map of upstream ``task_id`` to its decoded
+    """Decode UPSTREAM_XCOM_ENV — the map of upstream ``task_id`` to its decoded
     ``return_value`` the agent delivers so ``ti.xcom_pull`` can resolve it (chained
     operators). Malformed/absent → empty: a missing upstream pulls as None, never a
     crash."""
-    raw = os.environ.get("LEOFLOW_XCOM_BY_TASK")
+    raw = os.environ.get(UPSTREAM_XCOM_ENV)
     if not raw:
         return {}
     try:
@@ -217,7 +224,7 @@ class _StandaloneTaskInstance:
     def xcom_pull(self, task_ids=None, dag_id=None, key="return_value", *args, **kwargs):
         """Resolve an upstream task's ``return_value`` — the Airflow-idiomatic way
         chained operators pass data (``ti.xcom_pull('compile')['name']``). The agent
-        delivers each declared upstream's return_value in LEOFLOW_XCOM_BY_TASK; only
+        delivers each declared upstream's return_value in UPSTREAM_XCOM_ENV; only
         the ``return_value`` key is carried (custom keys → None, matching Leoflow's
         single-payload XCom model). ``task_ids`` may be a single id (→ one value) or a
         list (→ a list, like Airflow); an unknown id resolves to ``default``

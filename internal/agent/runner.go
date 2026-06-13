@@ -161,13 +161,19 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 	return append(env, r.secretsEnv(ctx)...), nil
 }
 
-// xcomByTaskEnv fetches each upstream's return_value and renders the
-// LEOFLOW_XCOM_BY_TASK map the runtime's ti.xcom_pull reads, so a captured operator
-// can pull a chained upstream's output like in Airflow (ADR 0040). Only captured
-// operators use ti.xcom_pull — a python @task gets its inputs via the param-keyed
-// xcom_input_mapping — so the map is built for airflow_operator tasks only, avoiding
-// wasted fetches. An upstream with no return_value is omitted (pulls as None). nil
-// when there is nothing to deliver.
+// upstreamXComEnv is the env var carrying the upstream task_id -> return_value map the
+// runtime's ti.xcom_pull reads. It deliberately does NOT start with "LEOFLOW_XCOM_":
+// the runtime's _merge_operator_xcom consumes every LEOFLOW_XCOM_<PARAM> var as a
+// param-bound operator kwarg and would otherwise inject this whole map as a bogus
+// by_task= kwarg (a collision the live GCP chain test caught).
+const upstreamXComEnv = "LEOFLOW_UPSTREAM_XCOM"
+
+// xcomByTaskEnv fetches each upstream's return_value and renders the upstreamXComEnv
+// map the runtime's ti.xcom_pull reads, so a captured operator can pull a chained
+// upstream's output like in Airflow (ADR 0040). Only captured operators use
+// ti.xcom_pull — a python @task gets its inputs via the param-keyed xcom_input_mapping
+// — so the map is built for airflow_operator tasks only, avoiding wasted fetches. An
+// upstream with no return_value is omitted (pulls as None). nil when nothing to deliver.
 func (r *Runner) xcomByTaskEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string, error) {
 	if spec.GetOperator() != "airflow_operator" {
 		return nil, nil
@@ -193,7 +199,7 @@ func (r *Runner) xcomByTaskEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]s
 	if err != nil {
 		return nil, fmt.Errorf("encoding xcom-by-task map: %w", err)
 	}
-	return []string{"LEOFLOW_XCOM_BY_TASK=" + string(encoded)}, nil
+	return []string{upstreamXComEnv + "=" + string(encoded)}, nil
 }
 
 // runContextEnv renders the DagRun/task identity the runtime's standalone operator

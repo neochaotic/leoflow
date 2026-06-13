@@ -216,3 +216,27 @@ def test_http_operator_stays_native_http_api(monkeypatch, tmp_path):
             HttpOperator(task_id="call", method="GET", endpoint="https://example.com/x")
     """)
     assert _task(spec, "call")["type"] == "http_api"
+
+
+@pytest.mark.parametrize("class_name", [
+    "AcmePythonModelOperator",  # contains "Python"
+    "AcmeBashStyleOperator",    # contains "Bash"
+    "AcmeHttpCallOperator",     # contains "Http"
+])
+def test_generic_operator_with_native_substring_name_is_captured(
+        monkeypatch, tmp_path, class_name):
+    """A long-tail provider OPERATOR (captured by _generic) whose class name happens
+    to contain Bash/Http/Python must route to airflow_operator — NOT the native task
+    type the substring fast-path infers. The fast-path exists only for the bundled
+    shim operators (which carry no __leoflow_operator_class__); routing a captured
+    class natively would drop its operator_class and silently mistranslate it (same
+    class of bug as the HttpSensor regression above)."""
+    spec = _compile(monkeypatch, tmp_path, f"""
+        from airflow.sdk import DAG
+        from airflow.providers.acme.operators.run import {class_name}
+        with DAG("g"):
+            {class_name}(task_id="t")
+    """)
+    t = _task(spec, "t")
+    assert t["type"] == "airflow_operator"
+    assert t["operator_class"] == f"airflow.providers.acme.operators.run.{class_name}"

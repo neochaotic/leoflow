@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -225,8 +226,13 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
 	}
-	if !declaresUpstream(spec.XComInputMapping, req.GetUpstreamTaskId()) {
-		return nil, status.Errorf(codes.PermissionDenied, "task %q did not declare %q as an xcom input", id.TaskID, req.GetUpstreamTaskId())
+	// A task may fetch XCom from an upstream it declared as an xcom input OR from any
+	// of its direct dependencies (depends_on) — the latter powers a captured
+	// operator's ti.xcom_pull(<upstream>) chaining (ADR 0040), like Airflow. Anything
+	// else is denied to keep tasks from reading unrelated tasks' XCom.
+	if !declaresUpstream(spec.XComInputMapping, req.GetUpstreamTaskId()) &&
+		!slices.Contains(spec.DependsOn, req.GetUpstreamTaskId()) {
+		return nil, status.Errorf(codes.PermissionDenied, "task %q may not read xcom from %q (not a declared input or dependency)", id.TaskID, req.GetUpstreamTaskId())
 	}
 	entry, err := s.xcom.Fetch(ctx, xcomKey(*id, req.GetUpstreamTaskId(), req.GetKey()))
 	if errors.Is(err, xcom.ErrNotFound) {

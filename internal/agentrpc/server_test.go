@@ -232,6 +232,26 @@ func TestFetchXComReturnsDeclaredUpstream(t *testing.T) {
 	}
 }
 
+func TestFetchXComAllowsDependsOnUpstream(t *testing.T) {
+	// A captured operator chains via ti.xcom_pull(<upstream>) (ADR 0040): the
+	// upstream is a declared dependency (depends_on) but not an xcom_input binding.
+	// FetchXCom must authorize it (Airflow lets a task pull an upstream), else the
+	// agent's xcom-by-task delivery fails the task — the k3d operator-e2e regression.
+	x := &fakeXCom{entries: map[string]xcom.Entry{
+		"xcom:acme:etl:run-1:compile:return_value": {Value: []byte(`{"name":"abc"}`), ContentType: "application/json"},
+	}}
+	store := &fakeStore{spec: TaskSpec{DependsOn: []string{"compile"}}}
+	srv, a := newServerX(store, x)
+
+	resp, err := srv.FetchXCom(ctxWithToken(t, a), &agentv1.FetchXComRequest{UpstreamTaskId: "compile"})
+	if err != nil {
+		t.Fatalf("FetchXCom for a depends_on upstream: %v", err)
+	}
+	if string(resp.GetValue()) != `{"name":"abc"}` {
+		t.Errorf("value = %s", resp.GetValue())
+	}
+}
+
 func TestFetchXComDeniesUndeclaredUpstream(t *testing.T) {
 	store := &fakeStore{spec: TaskSpec{XComInputMapping: map[string][]string{"val": {"other"}}}}
 	srv, a := newServerX(store, &fakeXCom{})

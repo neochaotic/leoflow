@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -134,6 +135,11 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 	// and never reach the agent's pipe.
 	env = append(env, "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=UTF-8")
 	env = append(env, runContextEnv(spec)...)
+	byTaskEnv, err := r.xcomByTaskEnv(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	env = append(env, byTaskEnv...)
 	if r.ReturnPath != "" {
 		// Tell the runtime to write the return value to the agent's per-task path,
 		// not the shared global default — so concurrent tasks and other users never
@@ -153,6 +159,41 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		env = append(env, "LEOFLOW_OPERATOR_ARGS="+opArgs)
 	}
 	return append(env, r.secretsEnv(ctx)...), nil
+}
+
+// xcomByTaskEnv fetches each upstream's return_value and renders the
+// LEOFLOW_XCOM_BY_TASK map the runtime's ti.xcom_pull reads, so a captured operator
+// can pull a chained upstream's output like in Airflow (ADR 0040). Only captured
+// operators use ti.xcom_pull — a python @task gets its inputs via the param-keyed
+// xcom_input_mapping — so the map is built for airflow_operator tasks only, avoiding
+// wasted fetches. An upstream with no return_value is omitted (pulls as None). nil
+// when there is nothing to deliver.
+func (r *Runner) xcomByTaskEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string, error) {
+	if spec.GetOperator() != "airflow_operator" {
+		return nil, nil
+	}
+	byTask := map[string]json.RawMessage{}
+	for _, taskID := range spec.GetDependsOn() {
+		resp, err := r.Client.FetchXCom(ctx, &agentv1.FetchXComRequest{
+			UpstreamTaskId: taskID,
+			Key:            "return_value",
+		})
+		if status.Code(err) == codes.NotFound {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("fetching xcom for upstream %q: %w", taskID, err)
+		}
+		byTask[taskID] = resp.GetValue()
+	}
+	if len(byTask) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(byTask)
+	if err != nil {
+		return nil, fmt.Errorf("encoding xcom-by-task map: %w", err)
+	}
+	return []string{"LEOFLOW_XCOM_BY_TASK=" + string(encoded)}, nil
 }
 
 // runContextEnv renders the DagRun/task identity the runtime's standalone operator

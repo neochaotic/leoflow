@@ -47,6 +47,9 @@ type TaskSpec struct {
 	// LogicalDate is the DagRun's logical date in RFC3339; the agent derives the
 	// runtime's LEOFLOW_TS/LEOFLOW_DS from it (ADR 0040). Empty leaves them unset.
 	LogicalDate string
+	// DependsOn lists the task's upstream task_ids. The agent fetches each one's
+	// return_value so a captured operator's ti.xcom_pull(<id>) resolves it (ADR 0040).
+	DependsOn []string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -147,6 +150,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		OperatorClass:           spec.OperatorClass,
 		OperatorArgsJson:        spec.OperatorArgsJSON,
 		LogicalDate:             spec.LogicalDate,
+		DependsOn:               spec.DependsOn,
 	}, nil
 }
 

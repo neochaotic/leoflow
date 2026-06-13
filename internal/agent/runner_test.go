@@ -251,6 +251,50 @@ func TestBuildEnvDerivesDsTsFromLogicalDate(t *testing.T) {
 	}
 }
 
+func TestBuildEnvDeliversXComByTaskForOperators(t *testing.T) {
+	// For a captured operator (ADR 0040), the agent fetches each upstream's
+	// return_value and delivers them as the LEOFLOW_XCOM_BY_TASK map so the
+	// runtime's ti.xcom_pull('compile') resolves it — chained operators like
+	// Airflow. A missing upstream is omitted (pulls as None).
+	client := &fakeClient{
+		spec: &agentv1.TaskSpec{
+			Operator:      "airflow_operator",
+			OperatorClass: "x.Y",
+			DependsOn:     []string{"compile", "missing"},
+		},
+		xcom: map[string]*agentv1.FetchXComResponse{
+			"compile": {Value: []byte(`{"name":"abc"}`)},
+		},
+	}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	if !strings.Contains(je, `LEOFLOW_XCOM_BY_TASK={"compile":{"name":"abc"}}`) {
+		t.Errorf("env missing/!= xcom-by-task map; got %v", env)
+	}
+}
+
+func TestBuildEnvSkipsXComByTaskForNonOperators(t *testing.T) {
+	// A python @task gets its inputs via xcom_input_mapping, not ti.xcom_pull, so
+	// the agent must not waste fetches building the map for it.
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "python", Entrypoint: "dag:f", DependsOn: []string{"compile"},
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if strings.Contains(strings.Join(env, "\n"), "LEOFLOW_XCOM_BY_TASK") {
+		t.Errorf("non-operator task should not get the xcom-by-task map; got %v", env)
+	}
+}
+
 func TestRunnerReportsFailureOnNonZeroExit(t *testing.T) {
 	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "bash", Entrypoint: "exit 1"}}
 	cmd := &fakeCmd{exitCode: 1}

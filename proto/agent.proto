@@ -101,6 +101,7 @@ message TaskSpec {
     string operator_class = 14;                   // For operator='airflow_operator': the dotted provider operator/sensor class the runtime imports and executes (ADR 0040).
     string operator_args_json = 15;               // For operator='airflow_operator': the operator's constructor kwargs, JSON-encoded. Delivered to the runtime as LEOFLOW_OPERATOR_ARGS.
     string logical_date = 16;                      // The DagRun's logical date, RFC3339. The agent derives the runtime's LEOFLOW_TS (this value) and LEOFLOW_DS (the date) so the standalone operator context has a real ds/ts (ADR 0040). Empty leaves them unset.
+    repeated string depends_on = 17;               // The task's upstream task_ids. The agent fetches each one's return_value and delivers them as the LEOFLOW_XCOM_BY_TASK map so a captured operator's ti.xcom_pull(<id>) resolves it (chained operators, ADR 0040).
 }
 
 // XComUpstreams is the list of upstream task_ids whose return_values feed one

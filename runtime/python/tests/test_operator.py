@@ -192,6 +192,23 @@ def test_operator_context_provides_tolerant_ti(monkeypatch):
     assert ti.try_number == 3 and ti.task_id == "t1"
 
 
+def test_ti_xcom_pull_resolves_upstream_return_value(monkeypatch):
+    # Like Airflow: ti.xcom_pull('compile') returns the upstream's real
+    # return_value, so chained operators (compile >> invoke) can pass data. The
+    # agent delivers the upstream return_values as the LEOFLOW_XCOM_BY_TASK map.
+    monkeypatch.setenv("LEOFLOW_XCOM_BY_TASK", json.dumps({
+        "compile": {"name": "projects/p/compilationResults/abc"},
+        "extract": [1, 2, 3],
+    }))
+    ti = runner._operator_context()["ti"]
+    assert ti.xcom_pull("compile") == {"name": "projects/p/compilationResults/abc"}
+    assert ti.xcom_pull(task_ids="compile", key="return_value")["name"].endswith("abc")
+    assert ti.xcom_pull(task_ids=["compile", "extract"]) == [
+        {"name": "projects/p/compilationResults/abc"}, [1, 2, 3]]
+    assert ti.xcom_pull("missing") is None      # unknown upstream -> None
+    assert ti.xcom_pull("compile", key="custom") is None  # only return_value is carried
+
+
 def test_operator_context_parses_params(monkeypatch):
     monkeypatch.setenv("LEOFLOW_PARAMS", '{"a": 1}')
     monkeypatch.setenv("LEOFLOW_DS", "2026-06-09")

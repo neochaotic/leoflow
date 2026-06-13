@@ -168,6 +168,21 @@ def _write_return(result) -> None:
         fh.write(payload)
 
 
+def _load_xcom_by_task() -> dict:
+    """Decode LEOFLOW_XCOM_BY_TASK — the map of upstream ``task_id`` to its decoded
+    ``return_value`` the agent delivers so ``ti.xcom_pull`` can resolve it (chained
+    operators). Malformed/absent → empty: a missing upstream pulls as None, never a
+    crash."""
+    raw = os.environ.get("LEOFLOW_XCOM_BY_TASK")
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
 class _StandaloneTaskInstance:
     """A minimal, tolerant TaskInstance stand-in for a standalone operator run (ADR
     0040 Phase A).
@@ -193,15 +208,29 @@ class _StandaloneTaskInstance:
             self.try_number = int(os.environ.get("LEOFLOW_TRY_NUMBER", "1"))
         except (TypeError, ValueError):
             self.try_number = 1
+        self._xcom_by_task = _load_xcom_by_task()
 
     def xcom_push(self, *args, **kwargs) -> None:
         """No-op: Leoflow propagates only the execute() return value (see
         :func:`_write_return`), not UI-link or extra keyed XCom pushes."""
 
-    def xcom_pull(self, *args, **kwargs):
-        """No-op returning None: upstream values reach operators via rendered args /
-        :func:`_merge_operator_xcom`, not via context xcom_pull."""
-        return None
+    def xcom_pull(self, task_ids=None, dag_id=None, key="return_value", *args, **kwargs):
+        """Resolve an upstream task's ``return_value`` — the Airflow-idiomatic way
+        chained operators pass data (``ti.xcom_pull('compile')['name']``). The agent
+        delivers each declared upstream's return_value in LEOFLOW_XCOM_BY_TASK; only
+        the ``return_value`` key is carried (custom keys → None, matching Leoflow's
+        single-payload XCom model). ``task_ids`` may be a single id (→ one value) or a
+        list (→ a list, like Airflow); an unknown id resolves to ``default``
+        (Airflow's ``default`` kwarg, itself None unless the caller passes one).
+        """
+        default = kwargs.get("default")
+        if key not in (None, "return_value"):
+            return default
+        if isinstance(task_ids, (list, tuple)):
+            return [self._xcom_by_task.get(t, default) for t in task_ids]
+        if task_ids is None:
+            return default
+        return self._xcom_by_task.get(task_ids, default)
 
 
 def _operator_context() -> dict:

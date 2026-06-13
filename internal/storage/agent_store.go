@@ -76,6 +76,7 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		OperatorClass:    task.OperatorClass,
 		OperatorArgsJSON: operatorArgsJSON,
 		LogicalDate:      logicalDate,
+		DependsOn:        task.DependsOn,
 	}, nil
 }
 

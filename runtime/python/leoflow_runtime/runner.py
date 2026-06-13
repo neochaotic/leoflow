@@ -168,10 +168,48 @@ def _write_return(result) -> None:
         fh.write(payload)
 
 
+class _StandaloneTaskInstance:
+    """A minimal, tolerant TaskInstance stand-in for a standalone operator run (ADR
+    0040 Phase A).
+
+    Almost every provider operator calls ``context["ti"].xcom_push(...)`` at the end
+    of ``execute()`` to persist its UI operator link (see Airflow's
+    ``.../links/base.py``); a few read ``try_number``. Leoflow propagates only the
+    operator's ``execute()`` return value as the downstream XCom (see
+    :func:`_write_return`), so ``xcom_push``/``xcom_pull`` are deliberate no-ops —
+    they drop the UI link and any extra keyed XCom that Leoflow does not consume,
+    rather than crashing the task *after* its real side effect (which on retry would
+    re-run a non-idempotent operator). Identity fields come from the agent's env.
+    Attributes beyond these are intentionally absent: an operator that needs the real
+    metastore then fails loudly rather than running silently wrong.
+    """
+
+    def __init__(self) -> None:
+        self.task_id = os.environ.get("LEOFLOW_TASK_ID", "")
+        self.dag_id = os.environ.get("LEOFLOW_DAG_ID", "")
+        self.run_id = os.environ.get("LEOFLOW_RUN_ID", "")
+        self.map_index = -1
+        try:
+            self.try_number = int(os.environ.get("LEOFLOW_TRY_NUMBER", "1"))
+        except (TypeError, ValueError):
+            self.try_number = 1
+
+    def xcom_push(self, *args, **kwargs) -> None:
+        """No-op: Leoflow propagates only the execute() return value (see
+        :func:`_write_return`), not UI-link or extra keyed XCom pushes."""
+
+    def xcom_pull(self, *args, **kwargs):
+        """No-op returning None: upstream values reach operators via rendered args /
+        :func:`_merge_operator_xcom`, not via context xcom_pull."""
+        return None
+
+
 def _operator_context() -> dict:
     """A minimal Airflow execution context for a standalone operator run (ADR 0040
     Phase A). The agent supplies the run's macros via env; many operators read no
-    context at all, so sensible defaults are enough for the common case."""
+    context at all, so sensible defaults are enough for the common case. ``ti`` /
+    ``task_instance`` are a tolerant :class:`_StandaloneTaskInstance` (not None) so
+    the near-universal operator-link ``ti.xcom_push`` pattern does not crash."""
     params = {}
     raw_params = os.environ.get("LEOFLOW_PARAMS")
     if raw_params:
@@ -180,13 +218,14 @@ def _operator_context() -> dict:
         except (TypeError, ValueError):
             params = {}
     ds = os.environ.get("LEOFLOW_DS", "")
+    ti = _StandaloneTaskInstance()
     return {
         "ds": ds,
         "ts": os.environ.get("LEOFLOW_TS", ""),
         "run_id": os.environ.get("LEOFLOW_RUN_ID", ""),
         "params": params,
-        "task_instance": None,
-        "ti": None,
+        "task_instance": ti,
+        "ti": ti,
         "dag_run": None,
     }
 

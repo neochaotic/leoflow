@@ -70,6 +70,18 @@ class TaskDeferred(Exception):
 class DeferringOperator(EchoOperator):
     def execute(self, context):
         raise TaskDeferred("deferring to a trigger")
+
+
+class LinkPersistOperator(EchoOperator):
+    """Mirrors the provider operator-link persist pattern: almost every Google/AWS
+    operator calls context["ti"].xcom_push(...) at the end of execute() (airflow
+    .../links/base.py), and some read context["ti"].try_number. With ti=None this
+    crashed AFTER the operator's real side effect."""
+
+    def execute(self, context):
+        context["ti"].xcom_push(key="my_link", value={"region": "us"})
+        assert context["task_instance"] is context["ti"]
+        return {"task_id": self.task_id, "try_number": context["ti"].try_number}
 '''
 
 
@@ -152,6 +164,32 @@ def test_run_operator_stringifies_non_json_return(tmp_path, monkeypatch):
 
     # A non-serializable return is stringified (repr) rather than failing.
     assert json.loads(out.read_text()).startswith("<object object")
+
+
+def test_run_operator_tolerates_ti_xcom_push_and_try_number(tmp_path, monkeypatch):
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "invoke")
+    monkeypatch.setenv("LEOFLOW_TRY_NUMBER", "2")
+    mod = _write_operator_module(tmp_path, monkeypatch)
+
+    # 43 of the google provider's operators persist a UI link via
+    # context["ti"].xcom_push(...) at the end of execute(). With ti=None this
+    # crashed AFTER the real side effect (the worst failure — double-exec on
+    # retry). The standalone context must provide a tolerant ti.
+    runner.run_operator(f"{mod}.LinkPersistOperator", {})
+
+    assert json.loads(out.read_text()) == {"task_id": "invoke", "try_number": 2}
+
+
+def test_operator_context_provides_tolerant_ti(monkeypatch):
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "t1")
+    monkeypatch.setenv("LEOFLOW_TRY_NUMBER", "3")
+    ti = runner._operator_context()["ti"]
+    assert ti is not None
+    assert ti.xcom_push(key="k", value=1) is None  # no-op, no crash
+    assert ti.xcom_pull(key="k") is None
+    assert ti.try_number == 3 and ti.task_id == "t1"
 
 
 def test_operator_context_parses_params(monkeypatch):

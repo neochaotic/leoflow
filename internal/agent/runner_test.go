@@ -203,6 +203,32 @@ func TestRunnerHappyPath(t *testing.T) {
 	}
 }
 
+func TestBuildEnvStampsRunContext(t *testing.T) {
+	// The runtime's standalone operator context (_StandaloneTaskInstance / ADR 0040)
+	// reads LEOFLOW_TASK_ID/RUN_ID/TRY_NUMBER/DAG_ID. The server already sends these
+	// on the TaskSpec; the agent must stamp them into the process env, else the
+	// context is blank in every executor (silent-wrong for operators that read them).
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "airflow_operator", DagId: "etl", RunId: "run-123",
+		TaskId: "load", TryNumber: 3,
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	for _, want := range []string{
+		"LEOFLOW_TASK_ID=load", "LEOFLOW_RUN_ID=run-123",
+		"LEOFLOW_DAG_ID=etl", "LEOFLOW_TRY_NUMBER=3",
+	} {
+		if !strings.Contains(je, want) {
+			t.Errorf("env missing %q; got %v", want, env)
+		}
+	}
+}
+
 func TestRunnerReportsFailureOnNonZeroExit(t *testing.T) {
 	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "bash", Entrypoint: "exit 1"}}
 	cmd := &fakeCmd{exitCode: 1}

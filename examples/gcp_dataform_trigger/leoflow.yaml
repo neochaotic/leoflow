@@ -1,0 +1,12 @@
+schema_version: "1.0"
+dag_id: gcp_dataform_trigger
+description: "Compile a Dataform repository and run its workflow via the Google provider operators (ADR 0040), chaining compile -> invoke with ti.xcom_pull."
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+# The connectors: sugar — this one line expands at compile to
+# apache-airflow-providers-google, which provides the Dataform operators and the
+# google_cloud_platform Connection hook. ADR 0038.
+connectors:
+  - gcp

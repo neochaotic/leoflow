@@ -56,6 +56,7 @@ a `README.md` walking through their specific Connection wiring.
 | [csv_report](csv_report/) | Generate a CSV, compute a report from it, all in-task (no deps). |
 | [duckdb_http_csv](duckdb_http_csv/) | DuckDB reads a remote CSV over HTTP and aggregates it (out-of-core). |
 | [fan_out_aggregate](fan_out_aggregate/) | Fan-out to parallel workers then fan-in to an aggregate (map-reduce). |
+| [gcp_dataform_trigger](gcp_dataform_trigger/) | Chained Google Dataform operators (`compile >> invoke`) — passes the compilation result via `{{ ti.xcom_pull('compile')['name'] }}` (ADR 0040). |
 | [gcp_gcs_load](gcp_gcs_load/) | Write + read a GCS object via a managed `google_cloud_platform` Connection (key or keyless/ADC). |
 | [http_jsonplaceholder](http_jsonplaceholder/) | Fetch posts from a public JSON API (jsonplaceholder) and summarize. |
 | [http_load](http_load/) | POST a payload to an external HTTP endpoint via a managed Connection, assert the echo round-trips. |

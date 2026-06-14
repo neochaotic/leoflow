@@ -71,6 +71,22 @@ def test_run_explicit_binding_overrides_context(tmp_path, monkeypatch):
     assert json.loads(out.read_text()) == {"ds": "explicit-ds"}
 
 
+def test_run_task_ships_custom_xcom_pushes(tmp_path, monkeypatch):
+    # A @task that does ti.xcom_push(key=...) (via **context) ships the custom keys
+    # the same way operators do — multi-key XCom parity for native tasks (ADR 0040).
+    pushes = tmp_path / "pushes.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(tmp_path / "rv.json"))
+    monkeypatch.setenv("LEOFLOW_PUSHES_PATH", str(pushes))
+    body = ("def task(**context):\n"
+            "    context['ti'].xcom_push(key='row_count', value=7)\n"
+            "    return {'ok': True}\n")
+    mod = _write_module(tmp_path, monkeypatch, body)
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(pushes.read_text()) == {"row_count": 7}
+
+
 def test_run_without_return_writes_no_file(tmp_path, monkeypatch):
     out = tmp_path / "rv.json"
     monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))

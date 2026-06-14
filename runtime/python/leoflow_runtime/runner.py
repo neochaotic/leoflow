@@ -139,7 +139,8 @@ def run(entrypoint: str) -> None:
     # and capture its real return value.
     if hasattr(fn, "function"):
         fn = fn.function
-    kwargs = _resolve_kwargs(fn, _operator_context())
+    context = _operator_context()
+    kwargs = _resolve_kwargs(fn, context)
     if kwargs:
         # Log keys only — the values can carry XCom-pulled secrets or any
         # user payload; per ADR 0032 they belong in the XCom tab, not in the
@@ -160,6 +161,9 @@ def run(entrypoint: str) -> None:
         raise
 
     _write_return(result)
+    # A @task can push custom-keyed XComs via context["ti"].xcom_push — ship them the
+    # same way operators do (multi-key XCom parity for native tasks, ADR 0040).
+    _write_xcom_pushes(context["ti"].pushed)
 
 
 def _write_return(result) -> None:
@@ -298,9 +302,13 @@ def _secrets_accessors():
     backends, which include the environment backend. Returns (None, None) when Airflow is
     absent (the runtime's Airflow-free tests), so the keys are simply not injected."""
     try:
-        from airflow.utils.context import ConnectionAccessor, VariableAccessor
-    except Exception:  # noqa: BLE001 — no Airflow in this env
-        return None, None
+        # The Task SDK module (Airflow 3); airflow.utils.context is deprecated.
+        from airflow.sdk.execution_time.context import ConnectionAccessor, VariableAccessor
+    except Exception:  # noqa: BLE001 — older Airflow or none in this env
+        try:
+            from airflow.utils.context import ConnectionAccessor, VariableAccessor
+        except Exception:  # noqa: BLE001 — no Airflow in this env
+            return None, None
     var = {
         "value": VariableAccessor(deserialize_json=False),
         "json": VariableAccessor(deserialize_json=True),

@@ -377,7 +377,7 @@ def test_operator_context_injects_var_conn_accessors(monkeypatch):
     # {{ var.json.X }} / {{ conn.X }} resolve from the AIRFLOW_VAR_*/AIRFLOW_CONN_* env
     # the agent delivers. Reuses Airflow's own accessor classes; here faked so the wiring
     # is covered without installing Airflow.
-    m = types.ModuleType("airflow.utils.context")
+    m = types.ModuleType("airflow.sdk.execution_time.context")
 
     class VariableAccessor:
         def __init__(self, deserialize_json):
@@ -388,9 +388,9 @@ def test_operator_context_injects_var_conn_accessors(monkeypatch):
 
     m.VariableAccessor = VariableAccessor
     m.ConnectionAccessor = ConnectionAccessor
-    for n in ("airflow", "airflow.utils"):
+    for n in ("airflow", "airflow.sdk", "airflow.sdk.execution_time"):
         monkeypatch.setitem(sys.modules, n, types.ModuleType(n))
-    monkeypatch.setitem(sys.modules, "airflow.utils.context", m)
+    monkeypatch.setitem(sys.modules, "airflow.sdk.execution_time.context", m)
 
     ctx = runner._operator_context()
     assert set(ctx["var"]) == {"value", "json"}
@@ -400,8 +400,9 @@ def test_operator_context_injects_var_conn_accessors(monkeypatch):
 
 
 def test_operator_context_no_accessors_without_airflow(monkeypatch):
-    # Force the accessor import to fail (sys.modules[...] = None) so the graceful-absence
+    # Force both accessor imports to fail (sys.modules[...] = None) so the graceful-absence
     # path is covered deterministically, whether or not Airflow is installed in the dev env.
+    monkeypatch.setitem(sys.modules, "airflow.sdk.execution_time.context", None)
     monkeypatch.setitem(sys.modules, "airflow.utils.context", None)
     ctx = runner._operator_context()
     assert "var" not in ctx and "conn" not in ctx

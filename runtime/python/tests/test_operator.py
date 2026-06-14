@@ -338,6 +338,41 @@ def test_run_operator_no_extra_links_writes_nothing(tmp_path, monkeypatch):
     assert not links.exists()  # an operator with no extra links writes no file
 
 
+def test_operator_context_injects_var_conn_accessors(monkeypatch):
+    # The context exposes Airflow's var/conn template accessors so {{ var.value.X }} /
+    # {{ var.json.X }} / {{ conn.X }} resolve from the AIRFLOW_VAR_*/AIRFLOW_CONN_* env
+    # the agent delivers. Reuses Airflow's own accessor classes; here faked so the wiring
+    # is covered without installing Airflow.
+    m = types.ModuleType("airflow.utils.context")
+
+    class VariableAccessor:
+        def __init__(self, deserialize_json):
+            self.deserialize_json = deserialize_json
+
+    class ConnectionAccessor:
+        pass
+
+    m.VariableAccessor = VariableAccessor
+    m.ConnectionAccessor = ConnectionAccessor
+    for n in ("airflow", "airflow.utils"):
+        monkeypatch.setitem(sys.modules, n, types.ModuleType(n))
+    monkeypatch.setitem(sys.modules, "airflow.utils.context", m)
+
+    ctx = runner._operator_context()
+    assert set(ctx["var"]) == {"value", "json"}
+    assert ctx["var"]["value"].deserialize_json is False
+    assert ctx["var"]["json"].deserialize_json is True
+    assert isinstance(ctx["conn"], ConnectionAccessor)
+
+
+def test_operator_context_no_accessors_without_airflow(monkeypatch):
+    # Force the accessor import to fail (sys.modules[...] = None) so the graceful-absence
+    # path is covered deterministically, whether or not Airflow is installed in the dev env.
+    monkeypatch.setitem(sys.modules, "airflow.utils.context", None)
+    ctx = runner._operator_context()
+    assert "var" not in ctx and "conn" not in ctx
+
+
 def test_operator_context_exposes_data_interval(monkeypatch):
     # The DagRun's data interval the agent stamps (RFC3339) is exposed as datetimes,
     # so operators that filter by interval (and {{ data_interval_start }} templates)

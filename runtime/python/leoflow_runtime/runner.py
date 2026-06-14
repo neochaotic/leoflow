@@ -261,7 +261,7 @@ def _operator_context() -> dict:
             params = {}
     ds = os.environ.get("LEOFLOW_DS", "")
     ti = _StandaloneTaskInstance()
-    return {
+    ctx = {
         "ds": ds,
         "ts": os.environ.get("LEOFLOW_TS", ""),
         "run_id": os.environ.get("LEOFLOW_RUN_ID", ""),
@@ -272,6 +272,28 @@ def _operator_context() -> dict:
         "data_interval_start": _parse_dt(os.environ.get("LEOFLOW_DATA_INTERVAL_START")),
         "data_interval_end": _parse_dt(os.environ.get("LEOFLOW_DATA_INTERVAL_END")),
     }
+    var, conn = _secrets_accessors()
+    if var is not None:
+        ctx["var"] = var
+        ctx["conn"] = conn
+    return ctx
+
+
+def _secrets_accessors():
+    """Airflow's var/conn template accessors, so ``{{ var.value.X }}`` / ``{{ var.json.X }}``
+    / ``{{ conn.X }}`` resolve from the AIRFLOW_VAR_*/AIRFLOW_CONN_* env the agent delivers
+    (ADR 0040). Reuses Airflow's own accessor classes — they read through the secrets
+    backends, which include the environment backend. Returns (None, None) when Airflow is
+    absent (the runtime's Airflow-free tests), so the keys are simply not injected."""
+    try:
+        from airflow.utils.context import ConnectionAccessor, VariableAccessor
+    except Exception:  # noqa: BLE001 — no Airflow in this env
+        return None, None
+    var = {
+        "value": VariableAccessor(deserialize_json=False),
+        "json": VariableAccessor(deserialize_json=True),
+    }
+    return var, ConnectionAccessor()
 
 
 def _parse_dt(value):

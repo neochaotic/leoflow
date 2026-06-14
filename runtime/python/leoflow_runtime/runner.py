@@ -337,34 +337,85 @@ def run_operator(operator_class: str, args: dict) -> None:
     _write_extra_links(op, context["ti"].pushed)
 
 
+def _ti_key():
+    """Build the TaskInstanceKey a link's get_link expects, from the run-context env.
+    Returns None when Airflow is not importable (e.g. the runtime's Airflow-free unit
+    tests), so callers fall back to the format_str path."""
+    try:
+        from airflow.models.taskinstancekey import TaskInstanceKey
+    except Exception:  # noqa: BLE001 — no Airflow in this env
+        return None
+    try:
+        try_number = int(os.environ.get("LEOFLOW_TRY_NUMBER", "1"))
+    except (TypeError, ValueError):
+        try_number = 1
+    return TaskInstanceKey(
+        dag_id=os.environ.get("LEOFLOW_DAG_ID", ""),
+        task_id=os.environ.get("LEOFLOW_TASK_ID", ""),
+        run_id=os.environ.get("LEOFLOW_RUN_ID", ""),
+        try_number=try_number,
+        map_index=-1,
+    )
+
+
+def _generic_link_url(link, op, ti_key, pushed: dict) -> str:
+    """Resolve a link's URL the way Airflow's UI does — call ``link.get_link(op,
+    ti_key)`` — but bridge ``BaseXCom.get_value`` to the params the operator persisted
+    via ti.xcom_push (captured in ``pushed``) instead of the metastore we don't have.
+    This is provider-agnostic: Google, Amazon, Azure, … all resolve through their own
+    get_link (#375 / #379). Best-effort: any failure yields ""."""
+    try:
+        from airflow.sdk.bases.xcom import BaseXCom
+    except Exception:  # noqa: BLE001 — no Airflow in this env
+        return ""
+    orig = BaseXCom.get_value
+    BaseXCom.get_value = staticmethod(lambda *, ti_key, key: pushed.get(key))
+    try:
+        return link.get_link(op, ti_key=ti_key) or ""
+    except Exception:  # noqa: BLE001 — a malformed link must not fail the task
+        return ""
+    finally:
+        BaseXCom.get_value = orig
+
+
+def _format_link_url(link, op, pushed: dict) -> str:
+    """Fallback for Google-style links (BaseGoogleLink._format_link) when the generic
+    get_link path is unavailable (no Airflow) — fills the link's format_str from the
+    captured params."""
+    key = getattr(link, "key", None)
+    value = pushed.get(key) if key else None
+    if isinstance(value, str) and value.startswith("http"):
+        return value
+    if not isinstance(value, dict):
+        return ""
+    fmt = getattr(link, "_format_link", None)
+    if not callable(fmt):
+        return ""
+    conf = {**(getattr(op, "extra_links_params", {}) or {}), **value}
+    conf.setdefault("namespace", "default")  # mirrors BaseGoogleLink.get_config
+    try:
+        return fmt(**conf) or ""
+    except Exception:  # noqa: BLE001 — best-effort
+        return ""
+
+
 def _extra_links(op, pushed: dict) -> dict:
     """Compute the operator's UI deep-link buttons (operator_extra_links) from the
-    params it persisted via ti.xcom_push during execute() (ADR 0040, #375). Each link
-    fills its ``format_str`` with the captured params (the same path Airflow's
-    BaseGoogleLink.get_link takes, minus the metastore). Best-effort: a link that
-    cannot be computed is skipped, never raised — links are UI sugar, not task success.
+    params it persisted via ti.xcom_push during execute() (ADR 0040, #375). Primary
+    path copies Airflow's own generic resolution (:func:`_generic_link_url` —
+    ``link.get_link`` with a bridged XCom), which works for every provider; the
+    format_str path (:func:`_format_link_url`) is the fallback when Airflow is absent.
+    Best-effort: a link that cannot be computed is skipped, never raised.
     """
     out: dict = {}
+    ti_key = _ti_key()
     for link in getattr(op, "operator_extra_links", ()) or ():
-        key = getattr(link, "key", None)
-        if not key:
+        name = getattr(link, "name", None)
+        if not name:
             continue
-        name = getattr(link, "name", key) or key
-        value = pushed.get(key)
-        if isinstance(value, str) and value.startswith("http"):
-            out[name] = value
-            continue
-        if not isinstance(value, dict):
-            continue
-        conf = {**(getattr(op, "extra_links_params", {}) or {}), **value}
-        conf.setdefault("namespace", "default")  # mirrors BaseGoogleLink.get_config
-        fmt = getattr(link, "_format_link", None)
-        if not callable(fmt):
-            continue
-        try:
-            url = fmt(**conf)
-        except Exception:  # noqa: BLE001 — best-effort; a malformed link must not fail the task
-            url = ""
+        url = _generic_link_url(link, op, ti_key, pushed) if ti_key is not None else ""
+        if not url:
+            url = _format_link_url(link, op, pushed)
         if url:
             out[name] = url
     return out

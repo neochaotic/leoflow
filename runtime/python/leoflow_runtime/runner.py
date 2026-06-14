@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 import sys
+from datetime import datetime
 
 from leoflow_runtime.xcom import XCOM_ENV_PREFIX
 
@@ -268,7 +269,21 @@ def _operator_context() -> dict:
         "task_instance": ti,
         "ti": ti,
         "dag_run": None,
+        "data_interval_start": _parse_dt(os.environ.get("LEOFLOW_DATA_INTERVAL_START")),
+        "data_interval_end": _parse_dt(os.environ.get("LEOFLOW_DATA_INTERVAL_END")),
     }
+
+
+def _parse_dt(value):
+    """Parse an RFC3339 timestamp (the agent's data-interval format) to a datetime, so
+    operators can use data_interval_start/end as real datetimes. None when unset or
+    unparseable. Tolerates a trailing 'Z' (Python < 3.11 fromisoformat does not)."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _merge_operator_xcom(args: dict) -> dict:

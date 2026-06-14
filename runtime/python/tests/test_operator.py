@@ -338,6 +338,24 @@ def test_run_operator_no_extra_links_writes_nothing(tmp_path, monkeypatch):
     assert not links.exists()  # an operator with no extra links writes no file
 
 
+def test_operator_context_exposes_data_interval(monkeypatch):
+    # The DagRun's data interval the agent stamps (RFC3339) is exposed as datetimes,
+    # so operators that filter by interval (and {{ data_interval_start }} templates)
+    # get real values (ADR 0040).
+    monkeypatch.setenv("LEOFLOW_DATA_INTERVAL_START", "2026-06-13T00:00:00Z")
+    monkeypatch.setenv("LEOFLOW_DATA_INTERVAL_END", "2026-06-14T06:30:00Z")
+    ctx = runner._operator_context()
+    assert ctx["data_interval_start"].day == 13
+    assert ctx["data_interval_end"].hour == 6 and ctx["data_interval_end"].day == 14
+
+
+def test_operator_context_data_interval_unset_is_none(monkeypatch):
+    monkeypatch.delenv("LEOFLOW_DATA_INTERVAL_START", raising=False)
+    monkeypatch.delenv("LEOFLOW_DATA_INTERVAL_END", raising=False)
+    ctx = runner._operator_context()
+    assert ctx["data_interval_start"] is None and ctx["data_interval_end"] is None
+
+
 def test_operator_context_parses_params(monkeypatch):
     monkeypatch.setenv("LEOFLOW_PARAMS", '{"a": 1}')
     monkeypatch.setenv("LEOFLOW_DS", "2026-06-09")

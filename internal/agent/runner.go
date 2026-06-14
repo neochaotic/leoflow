@@ -235,6 +235,12 @@ func runContextEnv(spec *agentv1.TaskSpec) []string {
 			env = append(env, "LEOFLOW_DS="+t.UTC().Format("2006-01-02"))
 		}
 	}
+	if v := spec.GetDataIntervalStart(); v != "" {
+		env = append(env, "LEOFLOW_DATA_INTERVAL_START="+v)
+	}
+	if v := spec.GetDataIntervalEnd(); v != "" {
+		env = append(env, "LEOFLOW_DATA_INTERVAL_END="+v)
+	}
 	return env
 }
 

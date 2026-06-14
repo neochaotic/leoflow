@@ -37,6 +37,15 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 	if run.LogicalDate.Valid {
 		logicalDate = run.LogicalDate.Time.UTC().Format(time.RFC3339)
 	}
+	// The DagRun's data interval, RFC3339, for the runtime's data_interval_start/end
+	// context (ADR 0040). Empty when unset so the agent leaves them unset.
+	var dataIntervalStart, dataIntervalEnd string
+	if run.DataIntervalStart.Valid {
+		dataIntervalStart = run.DataIntervalStart.Time.UTC().Format(time.RFC3339)
+	}
+	if run.DataIntervalEnd.Valid {
+		dataIntervalEnd = run.DataIntervalEnd.Time.UTC().Format(time.RFC3339)
+	}
 	var timeout int
 	if task.ExecutionTimeoutSeconds != nil {
 		timeout = *task.ExecutionTimeoutSeconds
@@ -65,18 +74,20 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		operatorArgsJSON = string(b)
 	}
 	return agentrpc.TaskSpec{
-		Operator:         string(task.Type),
-		Entrypoint:       task.Entrypoint,
-		DagVersion:       spec.DagVersion,
-		Environment:      task.Env,
-		XComInputMapping: task.XComInput,
-		XComSchema:       task.XComSchema,
-		TimeoutSeconds:   timeout,
-		CallArgsJSON:     callArgsJSON,
-		OperatorClass:    task.OperatorClass,
-		OperatorArgsJSON: operatorArgsJSON,
-		LogicalDate:      logicalDate,
-		DependsOn:        task.DependsOn,
+		Operator:          string(task.Type),
+		Entrypoint:        task.Entrypoint,
+		DagVersion:        spec.DagVersion,
+		Environment:       task.Env,
+		XComInputMapping:  task.XComInput,
+		XComSchema:        task.XComSchema,
+		TimeoutSeconds:    timeout,
+		CallArgsJSON:      callArgsJSON,
+		OperatorClass:     task.OperatorClass,
+		OperatorArgsJSON:  operatorArgsJSON,
+		LogicalDate:       logicalDate,
+		DependsOn:         task.DependsOn,
+		DataIntervalStart: dataIntervalStart,
+		DataIntervalEnd:   dataIntervalEnd,
 	}, nil
 }
 

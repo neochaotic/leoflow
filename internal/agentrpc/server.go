@@ -51,6 +51,10 @@ type TaskSpec struct {
 	// DependsOn lists the task's upstream task_ids. The agent fetches each one's
 	// return_value so a captured operator's ti.xcom_pull(<id>) resolves it (ADR 0040).
 	DependsOn []string
+	// DataIntervalStart/End are the DagRun's data interval in RFC3339; the agent
+	// stamps the runtime's data_interval_start/end context from them (ADR 0040).
+	DataIntervalStart string
+	DataIntervalEnd   string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -152,6 +156,8 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		OperatorArgsJson:        spec.OperatorArgsJSON,
 		LogicalDate:             spec.LogicalDate,
 		DependsOn:               spec.DependsOn,
+		DataIntervalStart:       spec.DataIntervalStart,
+		DataIntervalEnd:         spec.DataIntervalEnd,
 	}, nil
 }
 

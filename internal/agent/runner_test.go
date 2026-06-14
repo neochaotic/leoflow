@@ -229,6 +229,31 @@ func TestBuildEnvStampsRunContext(t *testing.T) {
 	}
 }
 
+func TestBuildEnvStampsDataInterval(t *testing.T) {
+	// The runtime's standalone context exposes data_interval_start/end; the agent
+	// stamps them from the DagRun's interval the server sends (ADR 0040).
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator:          "airflow_operator",
+		DataIntervalStart: "2026-06-13T00:00:00Z",
+		DataIntervalEnd:   "2026-06-14T00:00:00Z",
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	for _, want := range []string{
+		"LEOFLOW_DATA_INTERVAL_START=2026-06-13T00:00:00Z",
+		"LEOFLOW_DATA_INTERVAL_END=2026-06-14T00:00:00Z",
+	} {
+		if !strings.Contains(je, want) {
+			t.Errorf("env missing %q; got %v", want, env)
+		}
+	}
+}
+
 func TestBuildEnvDerivesDsTsFromLogicalDate(t *testing.T) {
 	// The runtime's standalone context exposes ds/ts (LEOFLOW_DS / LEOFLOW_TS). The
 	// agent derives both from the DagRun's logical_date the server sends — ts is the

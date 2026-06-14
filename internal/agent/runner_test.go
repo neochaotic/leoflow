@@ -295,6 +295,36 @@ func TestBuildEnvSkipsXComByTaskForNonOperators(t *testing.T) {
 	}
 }
 
+func TestRunnerPushesExtraLinks(t *testing.T) {
+	// The runtime computes operator_extra_links and writes them to LinksPath; the
+	// agent ships them to the control plane as the reserved "_extra_links" XCom so
+	// the UI can render the provider deep-link buttons (#375).
+	links := filepath.Join(t.TempDir(), "extra_links.json")
+	body := `{"BigQuery Job Detail":"https://console.cloud.google.com/bigquery?x=1"}`
+	if err := os.WriteFile(links, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "airflow_operator", OperatorClass: "x.Y"}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.LinksPath = links
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var found *agentv1.PushXComRequest
+	for _, p := range client.pushed {
+		if p.GetKey() == "_extra_links" {
+			found = p
+		}
+	}
+	if found == nil {
+		t.Fatalf("no _extra_links PushXCom; pushed=%v", client.pushed)
+	}
+	if string(found.GetValue()) != body {
+		t.Errorf("links value = %s, want %s", found.GetValue(), body)
+	}
+}
+
 func TestRunnerReportsFailureOnNonZeroExit(t *testing.T) {
 	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "bash", Entrypoint: "exit 1"}}
 	cmd := &fakeCmd{exitCode: 1}

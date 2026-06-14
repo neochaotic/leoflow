@@ -53,6 +53,7 @@ type Runner struct {
 	Version    string
 	Env        []string // base process environment (typically os.Environ())
 	ReturnPath string   // file the task writes its return value to; empty disables push
+	LinksPath  string   // file the runtime writes operator_extra_links to; empty disables (#375)
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
@@ -145,6 +146,10 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		// not the shared global default — so concurrent tasks and other users never
 		// collide on /tmp/leoflow_return_value.json.
 		env = append(env, "LEOFLOW_RETURN_VALUE_PATH="+r.ReturnPath)
+	}
+	if r.LinksPath != "" {
+		// The runtime writes the operator's computed extra-links here (#375).
+		env = append(env, "LEOFLOW_EXTRA_LINKS_PATH="+r.LinksPath)
 	}
 	if callArgs := spec.GetCallArgsJson(); callArgs != "" {
 		// TaskFlow literal call args (#115). The runtime decodes this and merges
@@ -343,6 +348,9 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	if err := r.pushReturnValue(ctx); err != nil {
 		return r.fail(ctx, 0, err)
 	}
+	if err := r.pushExtraLinks(ctx); err != nil {
+		return r.fail(ctx, 0, err)
+	}
 	return r.report(ctx, agentv1.TaskState_TASK_STATE_SUCCESS, 0, "")
 }
 
@@ -397,6 +405,35 @@ func (r *Runner) pushReturnValue(ctx context.Context) error {
 	}
 	if !resp.GetAccepted() {
 		return fmt.Errorf("control plane rejected return value: %s", resp.GetRejectionReason())
+	}
+	return nil
+}
+
+// pushExtraLinks ships the operator's computed UI deep-link buttons (the runtime wrote
+// them to LinksPath) to the control plane as the reserved "_extra_links" XCom, so the
+// task Details view can render them (#375). Absent file or no-XCom control plane is a
+// no-op — links are UI sugar and must not fail an otherwise-successful task.
+func (r *Runner) pushExtraLinks(ctx context.Context) error {
+	if r.LinksPath == "" {
+		return nil
+	}
+	value, ok, err := ReadReturnValue(r.LinksPath)
+	if err != nil || !ok {
+		return err
+	}
+	resp, err := r.Client.PushXCom(ctx, &agentv1.PushXComRequest{
+		Key:         "_extra_links",
+		Value:       value,
+		ContentType: "application/json",
+	})
+	if status.Code(err) == codes.Unimplemented {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("pushing extra links: %w", err)
+	}
+	if !resp.GetAccepted() {
+		return fmt.Errorf("control plane rejected extra links: %s", resp.GetRejectionReason())
 	}
 	return nil
 }

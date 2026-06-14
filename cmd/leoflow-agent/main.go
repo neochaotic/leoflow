@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -60,13 +61,15 @@ func run() int {
 	defer func() { _ = cleanupReturn() }() //nolint:errcheck // best-effort cleanup of the per-task temp dir on exit
 
 	runner := &agent.Runner{
-		Client:            client,
-		Cmd:               agent.NewExecRunner(),
-		Sink:              sink,
-		Hostname:          hostname,
-		Version:           version,
-		Env:               os.Environ(),
-		ReturnPath:        returnPath,
+		Client:     client,
+		Cmd:        agent.NewExecRunner(),
+		Sink:       sink,
+		Hostname:   hostname,
+		Version:    version,
+		Env:        os.Environ(),
+		ReturnPath: returnPath,
+		// Operator extra-links share the return value's per-task temp dir (#375).
+		LinksPath:         filepath.Join(filepath.Dir(returnPath), "extra_links.json"),
 		HeartbeatInterval: 15 * time.Second,
 	}
 	if rerr := runner.Run(ctx); rerr != nil {

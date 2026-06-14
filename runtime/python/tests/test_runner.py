@@ -87,6 +87,25 @@ def test_run_task_ships_custom_xcom_pushes(tmp_path, monkeypatch):
     assert json.loads(pushes.read_text()) == {"row_count": 7}
 
 
+def test_render_bash_renders_context_macros():
+    # A bash command is Jinja-rendered with the run context, so {{ ds }} / {{ params.X }}
+    # work like Airflow (ADR 0040 native parity), not just env vars.
+    out = runner._render_bash("echo {{ ds }} {{ params.region }}",
+                              {"ds": "2026-06-14", "params": {"region": "us"}})
+    assert out == "echo 2026-06-14 us"
+
+
+def test_render_bash_no_template_is_unchanged():
+    assert runner._render_bash("echo hello", {"ds": "x"}) == "echo hello"
+
+
+def test_render_bash_bad_template_falls_back_to_raw():
+    # A broken/undefined template must never fail the task — fall back to the raw command
+    # (the env vars $LEOFLOW_DS/$AIRFLOW_VAR_* still reach it).
+    raw = "echo {{ nope.bad }}"
+    assert runner._render_bash(raw, {}) == raw
+
+
 def test_run_without_return_writes_no_file(tmp_path, monkeypatch):
     out = tmp_path / "rv.json"
     monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))

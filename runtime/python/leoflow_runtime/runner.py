@@ -183,6 +183,36 @@ def _write_return(result) -> None:
         fh.write(payload)
 
 
+def _render_bash(command: str, context: dict) -> str:
+    """Jinja-render a bash command with the run context (ds/params/var/conn/...), so a
+    native bash task can template like Airflow (ADR 0040 parity). No template markers,
+    no jinja2, or a render error → the raw command (best-effort; the env vars
+    $LEOFLOW_DS/$AIRFLOW_VAR_* still reach it either way)."""
+    if "{{" not in command and "{%" not in command:
+        return command
+    try:
+        import jinja2
+    except Exception:  # noqa: BLE001 — no jinja in this env; env vars still work
+        return command
+    try:
+        return jinja2.Template(command).render(**context)
+    except Exception:  # noqa: BLE001 — a broken template must not fail the task
+        return command
+
+
+def run_bash(command: str) -> None:
+    """Render a bash command with the run context, then exec ``bash -c`` in place so
+    bash's stdout/stderr/exit code flow to the agent unchanged (ADR 0040). The agent
+    only routes a command here when it contains ``{{`` — plain bash stays a direct
+    ``bash -c`` (no Python needed in bash-only images)."""
+    rendered = _render_bash(command, _operator_context())
+    if rendered != command:
+        _lifecycle("rendered bash command from the run context")
+    # Intentionally exec bash by PATH (the agent ran the task as `bash -c` before this
+    # render hop); replacing the process keeps bash's stdout/stderr/exit code intact.
+    os.execvp("bash", ["bash", "-c", rendered])  # noqa: S606,S607 — deliberate bash exec
+
+
 # Env var carrying the upstream task_id -> return_value map for ti.xcom_pull. It must
 # NOT start with XCOM_ENV_PREFIX ("LEOFLOW_XCOM_"): _merge_operator_xcom consumes every
 # such var as a param-bound operator kwarg, and would otherwise inject this whole map

@@ -53,6 +53,12 @@ func BuildCommand(operator, entrypoint, operatorClass string) ([]string, error) 
 		if entrypoint == "" {
 			return nil, errors.New("bash operator requires a command")
 		}
+		// A templated command ({{ ds }}, {{ var.value.X }}) is rendered with the run
+		// context by the runtime, then exec'd in place (#382). A plain command stays a
+		// direct `bash -c` so bash-only images need no Python. `-u` mirrors the python path.
+		if strings.Contains(entrypoint, "{{") {
+			return []string{pythonInterpreter(), "-u", "-m", "leoflow_runtime", "--bash", entrypoint}, nil
+		}
 		return []string{"bash", "-c", entrypoint}, nil
 	case "airflow_operator":
 		// A captured provider operator/sensor (ADR 0040): the runtime imports the

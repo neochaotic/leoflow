@@ -1,9 +1,11 @@
 """CLI entry point.
 
-Two modes:
+Three modes:
   python -m leoflow_runtime <module:callable>      # run a @task / Python entrypoint
   python -m leoflow_runtime --operator <class>     # run a captured Airflow operator
                                                    # (args from LEOFLOW_OPERATOR_ARGS JSON)
+  python -m leoflow_runtime --bash <command>       # render {{ }} with the run context,
+                                                   # then exec bash -c in place (#382)
 """
 
 from __future__ import annotations
@@ -12,12 +14,16 @@ import json
 import os
 import sys
 
-from leoflow_runtime.runner import run, run_operator
+from leoflow_runtime.runner import run, run_bash, run_operator
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Dispatch to the entrypoint runner or the generic operator executor."""
+    """Dispatch to the entrypoint runner, the generic operator executor, or bash."""
     args = sys.argv[1:] if argv is None else argv
+    if len(args) == 2 and args[0] == "--bash":
+        # Render the command with the run context, then exec bash in place (#382).
+        run_bash(args[1])
+        return 0
     if len(args) == 2 and args[0] == "--operator":
         raw = os.environ.get("LEOFLOW_OPERATOR_ARGS", "{}")
         try:

@@ -58,6 +58,25 @@ func TestBuildCommandBash(t *testing.T) {
 	}
 }
 
+func TestBuildCommandBashTemplatedRoutesThroughRuntime(t *testing.T) {
+	// A bash command with {{ }} is rendered with the run context by the runtime (#382);
+	// plain bash stays a direct `bash -c` (TestBuildCommandBash) so bash-only images
+	// need no Python.
+	argv, err := BuildCommand("bash", "echo {{ ds }}", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{pythonInterpreter(), "-u", "-m", "leoflow_runtime", "--bash", "echo {{ ds }}"}
+	if len(argv) != len(want) {
+		t.Fatalf("argv = %v, want %v", argv, want)
+	}
+	for i := range want {
+		if argv[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, argv[i], want[i])
+		}
+	}
+}
+
 func TestBuildCommandHTTPAndUnknown(t *testing.T) {
 	if _, err := BuildCommand("http_api", "x", ""); err == nil {
 		t.Error("http_api should not be runnable by the agent")

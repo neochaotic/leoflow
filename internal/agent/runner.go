@@ -54,6 +54,7 @@ type Runner struct {
 	Env        []string // base process environment (typically os.Environ())
 	ReturnPath string   // file the task writes its return value to; empty disables push
 	LinksPath  string   // file the runtime writes operator_extra_links to; empty disables (#375)
+	PushesPath string   // file the runtime writes custom-keyed XCom pushes to; empty disables (multi-key XCom)
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
@@ -150,6 +151,11 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 	if r.LinksPath != "" {
 		// The runtime writes the operator's computed extra-links here (#375).
 		env = append(env, "LEOFLOW_EXTRA_LINKS_PATH="+r.LinksPath)
+	}
+	if r.PushesPath != "" {
+		// The runtime writes the operator's custom-keyed XCom pushes here (multi-key
+		// XCom). Off the LEOFLOW_XCOM_ prefix so _merge_operator_xcom does not consume it.
+		env = append(env, "LEOFLOW_PUSHES_PATH="+r.PushesPath)
 	}
 	if callArgs := spec.GetCallArgsJson(); callArgs != "" {
 		// TaskFlow literal call args (#115). The runtime decodes this and merges
@@ -360,6 +366,9 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	if err := r.pushExtraLinks(ctx); err != nil {
 		return r.fail(ctx, 0, err)
 	}
+	if err := r.pushCustomXComs(ctx); err != nil {
+		return r.fail(ctx, 0, err)
+	}
 	return r.report(ctx, agentv1.TaskState_TASK_STATE_SUCCESS, 0, "")
 }
 
@@ -445,6 +454,51 @@ func (r *Runner) pushExtraLinks(ctx context.Context) error {
 		return fmt.Errorf("control plane rejected extra links: %s", resp.GetRejectionReason())
 	}
 	return nil
+}
+
+// pushCustomXComs stores the operator's custom-keyed ti.xcom_push values (the runtime
+// wrote them to PushesPath as a {key: value} JSON map) as individual XComs, so they
+// show in the XCom tab like Airflow (multi-key XCom). Absent file or a no-XCom control
+// plane is a no-op — these are observability, not task success.
+func (r *Runner) pushCustomXComs(ctx context.Context) error {
+	if r.PushesPath == "" {
+		return nil
+	}
+	value, ok, err := ReadReturnValue(r.PushesPath)
+	if err != nil || !ok {
+		return err
+	}
+	var pushes map[string]json.RawMessage
+	if uerr := json.Unmarshal(value, &pushes); uerr != nil {
+		return fmt.Errorf("decoding xcom pushes: %w", uerr)
+	}
+	for _, key := range sortedKeys(pushes) {
+		resp, perr := r.Client.PushXCom(ctx, &agentv1.PushXComRequest{
+			Key:         key,
+			Value:       pushes[key],
+			ContentType: "application/json",
+		})
+		if status.Code(perr) == codes.Unimplemented {
+			return nil
+		}
+		if perr != nil {
+			return fmt.Errorf("pushing xcom %q: %w", key, perr)
+		}
+		if !resp.GetAccepted() {
+			return fmt.Errorf("control plane rejected xcom %q: %s", key, resp.GetRejectionReason())
+		}
+	}
+	return nil
+}
+
+// sortedKeys returns the map keys sorted, for deterministic push order.
+func sortedKeys(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // heartbeat pings the control plane on an interval while the task runs and

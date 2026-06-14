@@ -337,6 +337,29 @@ func TestBuildEnvSkipsXComByTaskForNonOperators(t *testing.T) {
 	}
 }
 
+func TestRunnerPushesCustomXComs(t *testing.T) {
+	// The runtime writes the operator's custom-keyed ti.xcom_push values to PushesPath;
+	// the agent stores each as its own XCom (multi-key XCom — visible in the XCom tab).
+	pushes := filepath.Join(t.TempDir(), "pushes.json")
+	if err := os.WriteFile(pushes, []byte(`{"row_count":42,"summary":{"ok":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "airflow_operator", OperatorClass: "x.Y"}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.PushesPath = pushes
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := map[string]string{}
+	for _, p := range client.pushed {
+		got[p.GetKey()] = string(p.GetValue())
+	}
+	if got["row_count"] != "42" || got["summary"] != `{"ok":true}` {
+		t.Errorf("custom xcoms pushed = %v", got)
+	}
+}
+
 func TestRunnerPushesExtraLinks(t *testing.T) {
 	// The runtime computes operator_extra_links and writes them to LinksPath; the
 	// agent ships them to the control plane as the reserved "_extra_links" XCom so

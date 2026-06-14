@@ -374,6 +374,7 @@ def run_operator(operator_class: str, args: dict) -> None:
         raise
     _write_return(result)
     _write_extra_links(op, context["ti"].pushed)
+    _write_xcom_pushes(context["ti"].pushed)
 
 
 def _ti_key():
@@ -473,6 +474,22 @@ def _write_extra_links(op, pushed: dict) -> None:
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(links, fh)
     _lifecycle(f"extra links: {sorted(links)}")
+
+
+def _write_xcom_pushes(pushed: dict) -> None:
+    """Write the operator's custom-keyed ti.xcom_push values to LEOFLOW_PUSHES_PATH
+    as a ``{key: value}`` JSON map for the agent to store as XComs — multi-key XCom, so
+    operator pushes show in the XCom tab like Airflow. ``return_value`` is excluded (it
+    travels via :func:`_write_return`); nothing is written when there are no custom keys."""
+    pushes = {k: v for k, v in pushed.items() if k != "return_value"}
+    if not pushes:
+        return
+    path = os.environ.get("LEOFLOW_PUSHES_PATH")
+    if not path:
+        return
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(pushes, fh)
+    _lifecycle(f"xcom pushes: {sorted(pushes)}")
 
 
 def _is_reschedule_exc(exc: BaseException) -> bool:

@@ -149,6 +149,15 @@ class GenericLinkOperator(EchoOperator):
     def execute(self, context):
         context["ti"].xcom_push(key="genlink", value={"id": "42"})
         return {"ok": True}
+
+
+class MultiKeyOperator(EchoOperator):
+    """Pushes a custom-keyed XCom during execute (besides its return value) — the
+    multi-key XCom pattern the runtime ships so it is stored/visible (#XCOM)."""
+
+    def execute(self, context):
+        context["ti"].xcom_push(key="row_count", value=42)
+        return {"ok": True}
 '''
 
 
@@ -325,6 +334,31 @@ def test_run_operator_generic_extra_links(tmp_path, monkeypatch):
     runner.run_operator(f"{mod}.GenericLinkOperator", {})
 
     assert json.loads(links.read_text()) == {"Generic Console": "https://x.example.com/42"}
+
+
+def test_run_operator_writes_custom_xcom_pushes(tmp_path, monkeypatch):
+    # Custom-keyed ti.xcom_push during execute is shipped (besides return_value) so the
+    # control plane stores it and it shows in the XCom tab — Airflow parity for operator
+    # XComs. return_value is excluded (it travels via _write_return).
+    pushes = tmp_path / "pushes.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(tmp_path / "rv.json"))
+    monkeypatch.setenv("LEOFLOW_PUSHES_PATH", str(pushes))
+    mod = _write_operator_module(tmp_path, monkeypatch)
+
+    runner.run_operator(f"{mod}.MultiKeyOperator", {})
+
+    assert json.loads(pushes.read_text()) == {"row_count": 42}
+
+
+def test_run_operator_no_custom_pushes_writes_nothing(tmp_path, monkeypatch):
+    pushes = tmp_path / "pushes.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(tmp_path / "rv.json"))
+    monkeypatch.setenv("LEOFLOW_PUSHES_PATH", str(pushes))
+    mod = _write_operator_module(tmp_path, monkeypatch)
+
+    runner.run_operator(f"{mod}.EchoOperator", {"bucket": "b1"})
+
+    assert not pushes.exists()  # no custom xcom_push -> no file
 
 
 def test_run_operator_no_extra_links_writes_nothing(tmp_path, monkeypatch):

@@ -69,7 +69,9 @@ func run() int {
 		Env:        os.Environ(),
 		ReturnPath: returnPath,
 		// Operator extra-links share the return value's per-task temp dir (#375).
-		LinksPath:         filepath.Join(filepath.Dir(returnPath), "extra_links.json"),
+		LinksPath: filepath.Join(filepath.Dir(returnPath), "extra_links.json"),
+		// Custom-keyed XCom pushes, same per-task temp dir (multi-key XCom).
+		PushesPath:        filepath.Join(filepath.Dir(returnPath), "xcom_pushes.json"),
 		HeartbeatInterval: 15 * time.Second,
 	}
 	if rerr := runner.Run(ctx); rerr != nil {

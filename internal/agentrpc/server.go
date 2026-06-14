@@ -55,6 +55,9 @@ type TaskSpec struct {
 	// stamps the runtime's data_interval_start/end context from them (ADR 0040).
 	DataIntervalStart string
 	DataIntervalEnd   string
+	// ParamsJSON is the DagRun's params/conf, JSON-encoded (#148); the agent stamps
+	// LEOFLOW_PARAMS so the runtime exposes context['params'] / {{ params.X }}.
+	ParamsJSON string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -158,6 +161,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		DependsOn:               spec.DependsOn,
 		DataIntervalStart:       spec.DataIntervalStart,
 		DataIntervalEnd:         spec.DataIntervalEnd,
+		ParamsJson:              spec.ParamsJSON,
 	}, nil
 }
 

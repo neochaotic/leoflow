@@ -472,6 +472,7 @@ type TaskSpec struct {
 	DependsOn               []string                  `protobuf:"bytes,17,rep,name=depends_on,json=dependsOn,proto3" json:"depends_on,omitempty"`                           // The task's upstream task_ids. The agent fetches each one's return_value and delivers them as the LEOFLOW_XCOM_BY_TASK map so a captured operator's ti.xcom_pull(<id>) resolves it (chained operators, ADR 0040).
 	DataIntervalStart       string                    `protobuf:"bytes,18,opt,name=data_interval_start,json=dataIntervalStart,proto3" json:"data_interval_start,omitempty"` // The DagRun's data interval start, RFC3339. The agent stamps LEOFLOW_DATA_INTERVAL_START so the standalone operator context exposes data_interval_start (ADR 0040). Empty leaves it unset.
 	DataIntervalEnd         string                    `protobuf:"bytes,19,opt,name=data_interval_end,json=dataIntervalEnd,proto3" json:"data_interval_end,omitempty"`       // The DagRun's data interval end, RFC3339. Stamped as LEOFLOW_DATA_INTERVAL_END -> context data_interval_end. Empty leaves it unset.
+	ParamsJson              string                    `protobuf:"bytes,20,opt,name=params_json,json=paramsJson,proto3" json:"params_json,omitempty"`                        // The DagRun's params/conf, JSON-encoded (#148). Stamped as LEOFLOW_PARAMS so the standalone operator context exposes context['params'] / {{ params.X }}. Empty leaves params={}.
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -635,6 +636,13 @@ func (x *TaskSpec) GetDataIntervalStart() string {
 func (x *TaskSpec) GetDataIntervalEnd() string {
 	if x != nil {
 		return x.DataIntervalEnd
+	}
+	return ""
+}
+
+func (x *TaskSpec) GetParamsJson() string {
+	if x != nil {
+		return x.ParamsJson
 	}
 	return ""
 }
@@ -1302,7 +1310,7 @@ const file_agent_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\"\x14\n" +
-	"\x12GetTaskSpecRequest\"\xc3\a\n" +
+	"\x12GetTaskSpecRequest\"\xe4\a\n" +
 	"\bTaskSpec\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06dag_id\x18\x02 \x01(\tR\x05dagId\x12\x1f\n" +
@@ -1328,7 +1336,9 @@ const file_agent_proto_rawDesc = "" +
 	"\n" +
 	"depends_on\x18\x11 \x03(\tR\tdependsOn\x12.\n" +
 	"\x13data_interval_start\x18\x12 \x01(\tR\x11dataIntervalStart\x12*\n" +
-	"\x11data_interval_end\x18\x13 \x01(\tR\x0fdataIntervalEnd\x1a>\n" +
+	"\x11data_interval_end\x18\x13 \x01(\tR\x0fdataIntervalEnd\x12\x1f\n" +
+	"\vparams_json\x18\x14 \x01(\tR\n" +
+	"paramsJson\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ad\n" +

@@ -256,9 +256,11 @@ def _operator_context() -> dict:
     raw_params = os.environ.get("LEOFLOW_PARAMS")
     if raw_params:
         try:
-            params = json.loads(raw_params)
+            decoded = json.loads(raw_params)
         except (TypeError, ValueError):
-            params = {}
+            decoded = {}
+        # Coerce non-object conf (e.g. "null") to {} so context["params"].get(...) works.
+        params = decoded if isinstance(decoded, dict) else {}
     ds = os.environ.get("LEOFLOW_DS", "")
     ti = _StandaloneTaskInstance()
     ctx = {

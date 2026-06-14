@@ -229,6 +229,23 @@ func TestBuildEnvStampsRunContext(t *testing.T) {
 	}
 }
 
+func TestBuildEnvStampsParams(t *testing.T) {
+	// The DagRun's params/conf reach the runtime's context['params'] via LEOFLOW_PARAMS (#148).
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator:   "airflow_operator",
+		ParamsJson: `{"region":"us-east1"}`,
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if !strings.Contains(strings.Join(env, "\n"), `LEOFLOW_PARAMS={"region":"us-east1"}`) {
+		t.Errorf("env missing LEOFLOW_PARAMS; got %v", env)
+	}
+}
+
 func TestBuildEnvStampsDataInterval(t *testing.T) {
 	// The runtime's standalone context exposes data_interval_start/end; the agent
 	// stamps them from the DagRun's interval the server sends (ADR 0040).

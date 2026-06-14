@@ -46,6 +46,12 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 	if run.DataIntervalEnd.Valid {
 		dataIntervalEnd = run.DataIntervalEnd.Time.UTC().Format(time.RFC3339)
 	}
+	// The DagRun's params/conf JSON, for the runtime's context['params'] (#148). Empty
+	// when the run carried no conf, so the agent leaves LEOFLOW_PARAMS unset (params={}).
+	var paramsJSON string
+	if len(run.Conf) > 0 {
+		paramsJSON = string(run.Conf)
+	}
 	var timeout int
 	if task.ExecutionTimeoutSeconds != nil {
 		timeout = *task.ExecutionTimeoutSeconds
@@ -88,6 +94,7 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		DependsOn:         task.DependsOn,
 		DataIntervalStart: dataIntervalStart,
 		DataIntervalEnd:   dataIntervalEnd,
+		ParamsJSON:        paramsJSON,
 	}, nil
 }
 

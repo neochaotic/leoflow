@@ -404,6 +404,15 @@ def test_operator_context_ignores_malformed_params(monkeypatch):
     assert runner._operator_context()["params"] == {}
 
 
+def test_operator_context_non_dict_params_coerced(monkeypatch):
+    # Valid JSON that is not an object (e.g. a conf of "null") must still yield a dict,
+    # so operators that do context["params"].get(...) never crash (#148).
+    monkeypatch.setenv("LEOFLOW_PARAMS", "null")
+    assert runner._operator_context()["params"] == {}
+    monkeypatch.setenv("LEOFLOW_PARAMS", "[1, 2]")
+    assert runner._operator_context()["params"] == {}
+
+
 def test_main_operator_dispatch(monkeypatch):
     calls = {}
 

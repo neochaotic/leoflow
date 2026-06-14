@@ -241,6 +241,9 @@ func runContextEnv(spec *agentv1.TaskSpec) []string {
 	if v := spec.GetDataIntervalEnd(); v != "" {
 		env = append(env, "LEOFLOW_DATA_INTERVAL_END="+v)
 	}
+	if v := spec.GetParamsJson(); v != "" {
+		env = append(env, "LEOFLOW_PARAMS="+v)
+	}
 	return env
 }
 

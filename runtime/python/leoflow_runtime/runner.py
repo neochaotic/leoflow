@@ -59,40 +59,50 @@ def _load_call_args() -> dict:
     return decoded if isinstance(decoded, dict) else {}
 
 
-def _resolve_kwargs(fn) -> dict:
-    """Resolve each of fn's parameters from compile-time literals and upstream XCom.
+def _resolve_kwargs(fn, context: dict) -> dict:
+    """Resolve each of fn's parameters from compile-time literals, upstream XCom, and
+    the run context — so a TaskFlow @task gets the same context a captured operator does.
 
-    Two injection paths are merged into the same kwargs map:
+    Injection paths, by precedence (highest first):
 
-    - **LEOFLOW_CALL_ARGS_JSON** (#115): the literal args the user wrote at
-      the ``@task`` call site (``shard(n=0)``), captured by the parser at
-      compile time.
-    - **LEOFLOW_XCOM_<PARAM>**: an upstream task's ``return_value``, fetched
-      by the agent at dispatch time. Takes precedence over a same-name
-      literal so an explicit upstream binding always wins (in practice
-      ``shard(extract())`` would only have one or the other; the deterministic
-      precedence keeps the contract clean).
+    - **LEOFLOW_XCOM_<PARAM>**: an upstream task's ``return_value`` (the agent fetches it).
+    - **LEOFLOW_CALL_ARGS_JSON** (#115): the literal args the user wrote at the @task call
+      site (``shard(n=0)``), captured by the parser at compile time.
+    - **run context** (ds, ts, data_interval_start/end, params, run_id, ti, var, conn):
+      injected for a param whose name is a context key, and for a ``**kwargs`` catch-all —
+      mirroring Airflow's TaskFlow context injection. Lowest precedence, so an explicit
+      call_arg/XCom binding is never overridden and existing tasks are unchanged.
 
-    Parameters with neither binding are left unset so the function's defaults
-    apply (or it raises TypeError if it has none — exactly Airflow's
-    semantics).
+    Parameters with no binding are left unset so the function's defaults apply (or it
+    raises TypeError if it has none — exactly Airflow's semantics).
     """
     call_args = _load_call_args()
     kwargs: dict = {}
+    has_var_kw = False
     for name, param in inspect.signature(fn).parameters.items():
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            continue
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            has_var_kw = True
             continue
         if name in call_args:
             kwargs[name] = call_args[name]
         # Read the raw env var here (rather than via xcom_pull) so we can log
         # the wire size when the pull succeeds — invaluable when debugging a
         # task that "received None" because the upstream payload didn't arrive.
-        # XCom takes precedence over the literal call arg of the same name
-        # (matches the precedence comment above and prior behavior).
+        # XCom takes precedence over the literal call arg of the same name.
         raw = os.environ.get(XCOM_ENV_PREFIX + name.upper())
         if raw is not None:
             kwargs[name] = json.loads(raw)
             _lifecycle(f"pulled {name} ({len(raw)} B)")
+        elif name not in kwargs and name in context:
+            # Airflow injects context values by matching param name (def f(ds=None)).
+            kwargs[name] = context[name]
+    if has_var_kw:
+        # def f(**context): Airflow passes the whole context. Do not clobber explicit
+        # call_arg/XCom bindings already in kwargs.
+        for key, value in context.items():
+            kwargs.setdefault(key, value)
     return kwargs
 
 
@@ -129,7 +139,7 @@ def run(entrypoint: str) -> None:
     # and capture its real return value.
     if hasattr(fn, "function"):
         fn = fn.function
-    kwargs = _resolve_kwargs(fn)
+    kwargs = _resolve_kwargs(fn, _operator_context())
     if kwargs:
         # Log keys only — the values can carry XCom-pulled secrets or any
         # user payload; per ADR 0032 they belong in the XCom tab, not in the

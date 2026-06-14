@@ -28,6 +28,49 @@ def test_run_writes_return_value(tmp_path, monkeypatch):
     assert json.loads(out.read_text()) == {"rows": 7}
 
 
+def test_run_injects_context_into_named_params(tmp_path, monkeypatch):
+    # A @task gets the run context the same way a captured operator does: params named
+    # after context keys are injected (def task(ds=None)), so native tasks are on par.
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_DS", "2026-06-14")
+    monkeypatch.setenv("LEOFLOW_RUN_ID", "run-9")
+    body = "def task(ds=None, run_id=None):\n    return {'ds': ds, 'run_id': run_id}\n"
+    mod = _write_module(tmp_path, monkeypatch, body)
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == {"ds": "2026-06-14", "run_id": "run-9"}
+
+
+def test_run_injects_full_context_into_kwargs(tmp_path, monkeypatch):
+    # def task(**context): gets the whole context (the documented "old style").
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_DS", "2026-06-14")
+    monkeypatch.setenv("LEOFLOW_PARAMS", '{"region": "us"}')
+    body = ("def task(**context):\n"
+            "    return {'ds': context['ds'], 'region': context['params']['region']}\n")
+    mod = _write_module(tmp_path, monkeypatch, body)
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == {"ds": "2026-06-14", "region": "us"}
+
+
+def test_run_explicit_binding_overrides_context(tmp_path, monkeypatch):
+    # call_args / XCom win over context — existing behavior preserved, nothing broken.
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_DS", "ctx-ds")
+    monkeypatch.setenv("LEOFLOW_CALL_ARGS_JSON", '{"ds": "explicit-ds"}')
+    mod = _write_module(tmp_path, monkeypatch, "def task(ds=None):\n    return {'ds': ds}\n")
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == {"ds": "explicit-ds"}
+
+
 def test_run_without_return_writes_no_file(tmp_path, monkeypatch):
     out = tmp_path / "rv.json"
     monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))

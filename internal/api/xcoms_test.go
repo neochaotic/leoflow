@@ -54,6 +54,29 @@ func TestXComReadReturnsEntry(t *testing.T) {
 	}
 }
 
+func TestTaskInstanceLinksServesExtraLinksXCom(t *testing.T) {
+	// The /links endpoint serves the operator deep-link buttons from the
+	// "_extra_links" XCom the agent stored (#375), not a hardcoded {}.
+	reader := &fakeXComReader{entry: xcom.Entry{
+		Value:       []byte(`{"BigQuery Job Detail":"https://console.cloud.google.com/bigquery?x=1"}`),
+		ContentType: "application/json", CreatedAt: time.Now(),
+	}}
+	rec := authGet(xcomServer(reader), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/query/links", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("links = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		ExtraLinks map[string]string `json:"extra_links"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.ExtraLinks["BigQuery Job Detail"] != "https://console.cloud.google.com/bigquery?x=1" {
+		t.Errorf("extra_links = %v, want the BigQuery deep-link", resp.ExtraLinks)
+	}
+}
+
 func TestXComReadNotFound(t *testing.T) {
 	reader := &fakeXComReader{err: domain.ErrNotFound}
 	rec := authGet(xcomServer(reader), http.MethodGet, "/api/v2/xcoms/etl/run-1/extract/missing", "")

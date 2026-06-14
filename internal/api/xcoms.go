@@ -36,6 +36,23 @@ func xcomHandler(reader XComReader) gin.HandlerFunc {
 	}
 }
 
+// serveExtraLinks returns the task's operator deep-link buttons as
+// {"extra_links": {name: url, ...}} (#375). The agent stores them as the reserved
+// "_extra_links" XCom (computed by the runtime from operator_extra_links); an absent
+// entry or nil reader yields an empty — but present — object, which the SPA's
+// Object.keys(extra_links) needs to avoid crashing the Details view.
+func serveExtraLinks(c *gin.Context, reader XComReader) {
+	links := map[string]string{}
+	if reader != nil {
+		entry, err := reader.GetXCom(c.Request.Context(), tenantOf(c),
+			c.Param("dag_id"), c.Param("dag_run_id"), c.Param("task_id"), "_extra_links")
+		if err == nil {
+			_ = json.Unmarshal(entry.Value, &links) //nolint:errcheck // best-effort; malformed -> empty object
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"extra_links": links})
+}
+
 // serveXComValue writes a single XCom entry (with its value). Used by the legacy
 // /api/v2/xcoms/... route and the taskInstances/.../xcomEntries/{key} path.
 func serveXComValue(c *gin.Context, reader XComReader, key string) {

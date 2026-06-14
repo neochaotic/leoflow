@@ -94,10 +94,14 @@ def transform(value: str) -> str:
 
 
 @task
-def read_var(_value: str) -> None:
+def read_var(_value: str, ds=None) -> None:
     # The agent delivers Admin Variables as AIRFLOW_VAR_* env (#54 / ADR 0021).
     import os
     print("e2e variable:", os.environ.get("AIRFLOW_VAR_E2E_GREETING"))
+    # A @task gets the run context too (ADR 0040 native parity): `ds` is injected by
+    # name (a string when injected, None if injection regressed). Assert + log it.
+    assert ds is not None, "@task did not receive 'ds' from the run context"
+    print("e2e context ds:", ds)
 
 
 @task
@@ -251,5 +255,9 @@ for try in 0 1 2; do
 done
 [ -n "$vlog" ] || fail "read_var did not see the Admin Variable — var/conn runtime delivery broken (#54)"
 log "variable delivery OK: read_var saw hi-from-admin"
+
+log "Asserting @task run-context injection (ADR 0040): read_var received 'ds'"
+echo "$vlog" | grep -q "e2e context ds:" || fail "read_var did not receive ds from the run context — @task context injection broken"
+log "@task context OK: read_var received ds"
 
 log "E2E passed"

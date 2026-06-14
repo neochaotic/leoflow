@@ -1,0 +1,11 @@
+schema_version: "1.0"
+dag_id: gcp_bigquery_query
+description: "A single BigQuery operator (BigQueryInsertJobOperator) querying a public dataset via the generic operator path (ADR 0040)."
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+# The connectors: sugar expands at compile to apache-airflow-providers-google,
+# which provides the BigQuery operators and the google_cloud_platform hook. ADR 0038.
+connectors:
+  - gcp

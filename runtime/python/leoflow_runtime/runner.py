@@ -216,10 +216,15 @@ class _StandaloneTaskInstance:
         except (TypeError, ValueError):
             self.try_number = 1
         self._xcom_by_task = _load_xcom_by_task()
+        self.pushed: dict = {}
 
-    def xcom_push(self, *args, **kwargs) -> None:
-        """No-op: Leoflow propagates only the execute() return value (see
-        :func:`_write_return`), not UI-link or extra keyed XCom pushes."""
+    def xcom_push(self, key=None, value=None, *args, **kwargs) -> None:
+        """Capture the push (keyed by ``key``) so the operator's UI deep-link buttons
+        (operator_extra_links) can be computed after execute() — see
+        :func:`_extra_links` (ADR 0040, #375). Leoflow still propagates only the
+        execute() return value downstream (:func:`_write_return`), not these pushes."""
+        if key is not None:
+            self.pushed[key] = value
 
     def xcom_pull(self, task_ids=None, dag_id=None, key="return_value", *args, **kwargs):
         """Resolve an upstream task's ``return_value`` — the Airflow-idiomatic way
@@ -329,6 +334,55 @@ def run_operator(operator_class: str, args: dict) -> None:
                 f"the operator runs synchronously in the pod (poke-style).") from exc
         raise
     _write_return(result)
+    _write_extra_links(op, context["ti"].pushed)
+
+
+def _extra_links(op, pushed: dict) -> dict:
+    """Compute the operator's UI deep-link buttons (operator_extra_links) from the
+    params it persisted via ti.xcom_push during execute() (ADR 0040, #375). Each link
+    fills its ``format_str`` with the captured params (the same path Airflow's
+    BaseGoogleLink.get_link takes, minus the metastore). Best-effort: a link that
+    cannot be computed is skipped, never raised — links are UI sugar, not task success.
+    """
+    out: dict = {}
+    for link in getattr(op, "operator_extra_links", ()) or ():
+        key = getattr(link, "key", None)
+        if not key:
+            continue
+        name = getattr(link, "name", key) or key
+        value = pushed.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            out[name] = value
+            continue
+        if not isinstance(value, dict):
+            continue
+        conf = {**(getattr(op, "extra_links_params", {}) or {}), **value}
+        conf.setdefault("namespace", "default")  # mirrors BaseGoogleLink.get_config
+        fmt = getattr(link, "_format_link", None)
+        if not callable(fmt):
+            continue
+        try:
+            url = fmt(**conf)
+        except Exception:  # noqa: BLE001 — best-effort; a malformed link must not fail the task
+            url = ""
+        if url:
+            out[name] = url
+    return out
+
+
+def _write_extra_links(op, pushed: dict) -> None:
+    """Write the computed operator_extra_links to LEOFLOW_EXTRA_LINKS_PATH as a
+    ``{name: url}`` JSON map for the agent to ship back (ADR 0040, #375). Nothing is
+    written when the operator exposes no resolvable link."""
+    links = _extra_links(op, pushed)
+    if not links:
+        return
+    path = os.environ.get("LEOFLOW_EXTRA_LINKS_PATH")
+    if not path:
+        return
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(links, fh)
+    _lifecycle(f"extra links: {sorted(links)}")
 
 
 def _is_reschedule_exc(exc: BaseException) -> bool:

@@ -82,6 +82,29 @@ class LinkPersistOperator(EchoOperator):
         context["ti"].xcom_push(key="my_link", value={"region": "us"})
         assert context["task_instance"] is context["ti"]
         return {"task_id": self.task_id, "try_number": context["ti"].try_number}
+
+
+class _ConsoleLink:
+    """A provider operator_extra_link, shaped like Airflow's BaseGoogleLink: a key it
+    persists params under, and _format_link that fills format_str (relative -> prefixed
+    with the console base)."""
+    name = "Open Console"
+    key = "console"
+    format_str = "/x?p={project}&j={job}"
+
+    def _format_link(self, **kwargs):
+        s = self.format_str.format(**kwargs)
+        return s if s.startswith("http") else "https://console.example.com" + s
+
+
+class ExtraLinkOperator(EchoOperator):
+    """An operator that declares an operator_extra_link and persists its params during
+    execute() — exactly how Google/AWS operators expose their UI deep-link buttons."""
+    operator_extra_links = (_ConsoleLink(),)
+
+    def execute(self, context):
+        context["ti"].xcom_push(key="console", value={"project": "p1", "job": "j1"})
+        return {"ok": True}
 '''
 
 
@@ -222,6 +245,34 @@ def test_run_operator_does_not_inject_xcom_pull_map_as_kwarg(tmp_path, monkeypat
     runner.run_operator(f"{mod}.EchoOperator", {"bucket": "b1"})
 
     assert json.loads(out.read_text())["kwargs"] == {"bucket": "b1"}
+
+
+def test_run_operator_writes_extra_links(tmp_path, monkeypatch):
+    # Operators expose UI deep-link buttons (operator_extra_links) by persisting
+    # params via ti.xcom_push during execute(). The runtime — which has Airflow in
+    # the pod, unlike the Go control plane — computes each link's URL and writes it
+    # out for the agent to ship back, so the UI can render the "open in <provider>"
+    # button (ADR 0040, #375).
+    out = tmp_path / "rv.json"
+    links = tmp_path / "links.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_EXTRA_LINKS_PATH", str(links))
+    mod = _write_operator_module(tmp_path, monkeypatch)
+
+    runner.run_operator(f"{mod}.ExtraLinkOperator", {})
+
+    assert json.loads(links.read_text()) == {"Open Console": "https://console.example.com/x?p=p1&j=j1"}
+
+
+def test_run_operator_no_extra_links_writes_nothing(tmp_path, monkeypatch):
+    links = tmp_path / "links.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(tmp_path / "rv.json"))
+    monkeypatch.setenv("LEOFLOW_EXTRA_LINKS_PATH", str(links))
+    mod = _write_operator_module(tmp_path, monkeypatch)
+
+    runner.run_operator(f"{mod}.EchoOperator", {"bucket": "b1"})
+
+    assert not links.exists()  # an operator with no extra links writes no file
 
 
 def test_operator_context_parses_params(monkeypatch):

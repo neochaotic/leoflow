@@ -1,0 +1,11 @@
+schema_version: "1.0"
+dag_id: gcp_gcs_bucket
+description: "Google Cloud Storage operators (create -> list -> delete bucket) via the generic operator path (ADR 0040)."
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+# The connectors: sugar expands at compile to apache-airflow-providers-google,
+# which provides the GCS operators and the google_cloud_platform hook. ADR 0038.
+connectors:
+  - gcp

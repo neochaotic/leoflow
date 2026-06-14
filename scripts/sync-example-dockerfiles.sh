@@ -58,7 +58,9 @@ EOF
 }
 
 drift=0
-for yaml in examples/*/leoflow.yaml; do
+# Find every example at any depth, so category folders (e.g. examples/gcp/<name>/)
+# are covered alongside flat examples/<name>/.
+while IFS= read -r yaml; do
   dir="$(dirname "$yaml")"
   dockerfile="$dir/Dockerfile"
   expected="$(gen_dockerfile "$yaml")"
@@ -71,7 +73,7 @@ for yaml in examples/*/leoflow.yaml; do
   else
     printf '%s\n' "$expected" > "$dockerfile"
   fi
-done
+done < <(find examples -name leoflow.yaml | sort)
 
 if [ "$mode" = "check" ] && [ "$drift" -ne 0 ]; then
   echo "" >&2

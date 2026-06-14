@@ -1,5 +1,5 @@
 # Standard DAG image (#318). Built by 'leoflow compile --build' or by hand:
-#   docker build -t my-registry/gcp_dataform_trigger:<tag> .
+#   docker build -t my-registry/gcs_bucket:<tag> .
 # Synthesized by scripts/sync-example-dockerfiles.sh from leoflow.yaml; do
 # not hand-edit — re-run the script after changing python_version or
 # dependencies, or CI's drift check fails.

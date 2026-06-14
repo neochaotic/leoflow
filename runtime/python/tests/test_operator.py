@@ -7,10 +7,34 @@ in CI where ``apache-airflow`` is intentionally absent.
 
 import itertools
 import json
+import sys
+import types
 
 import pytest
 
 from leoflow_runtime import __main__, runner
+
+
+def _fake_airflow_links(monkeypatch):
+    """Inject the minimal Airflow surface the generic link path imports
+    (TaskInstanceKey + BaseXCom), so the provider-agnostic get_link path can be
+    exercised without installing Airflow (#379)."""
+    from collections import namedtuple
+    for name in ("airflow", "airflow.models", "airflow.sdk", "airflow.sdk.bases"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    tik = types.ModuleType("airflow.models.taskinstancekey")
+    tik.TaskInstanceKey = namedtuple(
+        "TaskInstanceKey", "dag_id task_id run_id try_number map_index")
+    monkeypatch.setitem(sys.modules, "airflow.models.taskinstancekey", tik)
+    xc = types.ModuleType("airflow.sdk.bases.xcom")
+
+    class BaseXCom:
+        @staticmethod
+        def get_value(*, ti_key, key):
+            return None
+
+    xc.BaseXCom = BaseXCom
+    monkeypatch.setitem(sys.modules, "airflow.sdk.bases.xcom", xc)
 
 _counter = itertools.count()
 
@@ -104,6 +128,26 @@ class ExtraLinkOperator(EchoOperator):
 
     def execute(self, context):
         context["ti"].xcom_push(key="console", value={"project": "p1", "job": "j1"})
+        return {"ok": True}
+
+
+class _GenericLink:
+    """A provider-agnostic link, shaped like Airflow's generic BaseOperatorLink: no
+    _format_link, only get_link(op, ti_key) reading BaseXCom.get_value — the path
+    Amazon/Azure/etc. use (#379)."""
+    name = "Generic Console"
+
+    def get_link(self, operator, *, ti_key):
+        from airflow.sdk.bases.xcom import BaseXCom
+        params = BaseXCom.get_value(key="genlink", ti_key=ti_key)
+        return ("https://x.example.com/" + params["id"]) if isinstance(params, dict) else ""
+
+
+class GenericLinkOperator(EchoOperator):
+    operator_extra_links = (_GenericLink(),)
+
+    def execute(self, context):
+        context["ti"].xcom_push(key="genlink", value={"id": "42"})
         return {"ok": True}
 '''
 
@@ -262,6 +306,25 @@ def test_run_operator_writes_extra_links(tmp_path, monkeypatch):
     runner.run_operator(f"{mod}.ExtraLinkOperator", {})
 
     assert json.loads(links.read_text()) == {"Open Console": "https://console.example.com/x?p=p1&j=j1"}
+
+
+def test_run_operator_generic_extra_links(tmp_path, monkeypatch):
+    # The generic path (used in the pod for every provider): reuse each link's own
+    # get_link, bridging BaseXCom to the captured ti.xcom_push params — no metastore,
+    # no Google-specific format_str (#379). Validated live against GCP; here via a
+    # faked-Airflow generic link so it is covered without installing Airflow.
+    _fake_airflow_links(monkeypatch)
+    links = tmp_path / "links.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(tmp_path / "rv.json"))
+    monkeypatch.setenv("LEOFLOW_EXTRA_LINKS_PATH", str(links))
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
+    monkeypatch.setenv("LEOFLOW_DAG_ID", "d")
+    monkeypatch.setenv("LEOFLOW_RUN_ID", "r")
+    mod = _write_operator_module(tmp_path, monkeypatch)
+
+    runner.run_operator(f"{mod}.GenericLinkOperator", {})
+
+    assert json.loads(links.read_text()) == {"Generic Console": "https://x.example.com/42"}
 
 
 def test_run_operator_no_extra_links_writes_nothing(tmp_path, monkeypatch):

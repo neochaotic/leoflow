@@ -393,6 +393,28 @@ If you contribute, read the [CONTRIBUTING guide](CONTRIBUTING.md) first.
 
 Apache License 2.0. See [LICENSE](LICENSE).
 
+## The name 🇧🇷
+
+> A note from Leoflow's creator.
+
+Leoflow started in Brazil — every line of it, from the first commit. I'm
+Brazilian, and so are this project's roots.
+
+The *flow* part is easy — it orchestrates workflows. The *Leo* part is personal.
+Early in my career, **Leonardo** ([@leonardo-jas](https://github.com/leonardo-jas)) —
+an architect with deep roots in Brazil's tech industry — taught me to think in
+**state machines**: states, transitions, invariants, the things that must never
+happen. Years later, the core of this project turned out to be exactly that: a
+scheduler that is, underneath, a state machine. Naming it after the person who
+taught me that was the obvious choice.
+
+A living tribute, paid while he's still very much building — to Leonardo, and to
+the many like him who quietly hold up **Latin America's big-data ecosystem**.
+
+Built in Brazil 🇧🇷, for data teams everywhere.
+
+— **Alisson Rosa** ([@neochaotic](https://github.com/neochaotic)), creator of Leoflow
+
 ## Acknowledgements
 
 Leoflow stands on the shoulders of Apache Airflow. The team behind Airflow defined the vocabulary, proved the architecture, and built the UI that Leoflow reuses without modification in the MVP. This project would not exist without their work, and we credit them at every layer of our documentation.

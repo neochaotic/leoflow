@@ -677,3 +677,31 @@ func TestRunnerReschedule(t *testing.T) {
 		t.Error("buildEnv must set LEOFLOW_RESCHEDULE_PATH so the runtime can signal reschedule")
 	}
 }
+
+// TestRunnerExit75WithoutRescheduleFileIsNormalFailure pins #386: exit 75
+// (EX_TEMPFAIL) is the reschedule sentinel, but the reschedule FILE is the real
+// signal. A user task that exits 75 without writing the file is an ordinary
+// failure — it must not be hijacked into the reschedule path nor reported as
+// up_for_reschedule, and the error must read as a normal exit, not "reschedule".
+func TestRunnerExit75WithoutRescheduleFileIsNormalFailure(t *testing.T) {
+	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:t"}}
+	cmd := &fakeCmd{exitCode: rescheduleExitCode} // exit 75, no reschedule file written
+	r := newRunner(client, cmd, &recordingSink{})
+	r.ReschedulePath = filepath.Join(t.TempDir(), "reschedule.txt") // path set, file absent
+
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("exit 75 without a reschedule file must fail")
+	}
+	if strings.Contains(err.Error(), "reschedule") {
+		t.Errorf("exit 75 without a file must fail as a normal exit, not a reschedule: %v", err)
+	}
+	for _, rep := range client.reports {
+		if rep.GetState() == agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE {
+			t.Error("exit 75 without a file must not report up_for_reschedule")
+		}
+	}
+	if last := client.reports[len(client.reports)-1]; last.GetState() != agentv1.TaskState_TASK_STATE_FAILED {
+		t.Errorf("final state = %v, want failed", last.GetState())
+	}
+}

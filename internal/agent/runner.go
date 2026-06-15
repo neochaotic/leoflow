@@ -377,12 +377,15 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 		msg := fmt.Sprintf("execution_timeout: task exceeded %s limit", timeout)
 		return r.failWithReason(ctx, exitCode, msg)
 	}
-	// A reschedule-mode sensor poked not-ready: it exits with rescheduleExitCode and
-	// leaves its next-poke time in ReschedulePath. Report up_for_reschedule (not
-	// failure) so the scheduler re-dispatches it later without consuming retry budget
-	// (#380). Checked before the generic non-zero-exit failure path.
-	if runErr == nil && exitCode == rescheduleExitCode && r.ReschedulePath != "" {
-		return r.reschedule(ctx)
+	// A reschedule-mode sensor poked not-ready: it exits with rescheduleExitCode AND
+	// leaves its next-poke time in ReschedulePath. The FILE is the real signal — a
+	// user task that exits 75 (EX_TEMPFAIL) with no file is an ordinary failure, not
+	// a reschedule (#386). Report up_for_reschedule only when both line up, before
+	// the generic non-zero-exit path; otherwise fall through and fail normally.
+	if runErr == nil && exitCode == rescheduleExitCode {
+		if when, ok := r.readReschedule(); ok {
+			return r.reportReschedule(ctx, when)
+		}
 	}
 	if runErr != nil || exitCode != 0 {
 		return r.fail(ctx, exitCode, runErr)
@@ -578,17 +581,28 @@ func (r *Runner) reportRequest(ctx context.Context, req *agentv1.ReportStateRequ
 // ReschedulePath and reports up_for_reschedule with it, so the scheduler
 // re-dispatches the task instance later without consuming retry budget (#380). A
 // missing or unparseable time fails loudly rather than silently dropping the task.
-func (r *Runner) reschedule(ctx context.Context) error {
+// readReschedule reads and parses the next-poke time a reschedule-mode sensor wrote
+// to ReschedulePath. ok is false when the path is unset, the file is absent, or it
+// is unparseable — in which case the exit is treated as an ordinary result, not a
+// reschedule, so exit 75 alone never hijacks a normal task outcome (#386).
+func (r *Runner) readReschedule() (time.Time, bool) {
+	if r.ReschedulePath == "" {
+		return time.Time{}, false
+	}
 	data, ok, err := ReadReturnValue(r.ReschedulePath)
 	if err != nil || !ok {
-		return r.fail(ctx, rescheduleExitCode,
-			fmt.Errorf("reschedule signaled but reschedule time unreadable (present=%v): %w", ok, err))
+		return time.Time{}, false
 	}
-	raw := strings.TrimSpace(string(data))
-	when, perr := time.Parse(time.RFC3339Nano, raw)
+	when, perr := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data)))
 	if perr != nil {
-		return r.fail(ctx, rescheduleExitCode, fmt.Errorf("parsing reschedule time %q: %w", raw, perr))
+		return time.Time{}, false
 	}
+	return when, true
+}
+
+// reportReschedule reports up_for_reschedule with the next-poke time so the
+// scheduler re-dispatches the task later, consuming no retry budget (#380).
+func (r *Runner) reportReschedule(ctx context.Context, when time.Time) error {
 	return r.reportRequest(ctx, &agentv1.ReportStateRequest{
 		State:        agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE,
 		OccurredAt:   timestamppb.Now(),

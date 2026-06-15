@@ -231,7 +231,7 @@ func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateSched
 const createTaskInstance = `-- name: CreateTaskInstance :one
 INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
 VALUES ($1, $2, $3, $4, $5, $6, 1)
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at
 `
 
 type CreateTaskInstanceParams struct {
@@ -281,6 +281,7 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 		&i.ScheduledAt,
 		&i.LastHeartbeatAt,
 		&i.RescheduleAt,
+		&i.FirstRescheduleAt,
 	)
 	return i, err
 }
@@ -886,7 +887,7 @@ func (q *Queries) ListTaskInstanceAttempts(ctx context.Context, arg ListTaskInst
 }
 
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
-SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at FROM task_instances
+SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at FROM task_instances
 WHERE dag_run_id = $1
 ORDER BY task_id
 `
@@ -925,6 +926,7 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 			&i.ScheduledAt,
 			&i.LastHeartbeatAt,
 			&i.RescheduleAt,
+			&i.FirstRescheduleAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1127,7 +1129,10 @@ func (q *Queries) ReportTaskResult(ctx context.Context, arg ReportTaskResultPara
 const rescheduleTaskInstance = `-- name: RescheduleTaskInstance :exec
 UPDATE task_instances
 SET state = 'up_for_reschedule'::task_state,
-    reschedule_at = $3
+    reschedule_at = $3,
+    -- Stamp the FIRST reschedule once and preserve it across re-dispatches so the
+    -- delivered get_first_reschedule_date lets the sensor honor cumulative timeout.
+    first_reschedule_at = COALESCE(first_reschedule_at, now())
 WHERE dag_run_id = $1 AND task_id = $2
   AND state IN ('running', 'queued', 'scheduled')
 `
@@ -1271,6 +1276,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    reschedule_at = NULL,
+    first_reschedule_at = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2
 `
@@ -1354,6 +1361,26 @@ type StampDagRunStateParams struct {
 func (q *Queries) StampDagRunState(ctx context.Context, arg StampDagRunStateParams) error {
 	_, err := q.db.Exec(ctx, stampDagRunState, arg.State, arg.ID)
 	return err
+}
+
+const taskInstanceFirstRescheduleAt = `-- name: TaskInstanceFirstRescheduleAt :one
+SELECT first_reschedule_at FROM task_instances
+WHERE dag_run_id = $1 AND task_id = $2
+`
+
+type TaskInstanceFirstRescheduleAtParams struct {
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskID   string      `json:"task_id"`
+}
+
+// The time a reschedule-mode sensor first entered reschedule (NULL until it does).
+// Delivered to each re-dispatched pod so get_first_reschedule_date returns the real
+// value and the sensor honors its cumulative timeout across pokes (#380).
+func (q *Queries) TaskInstanceFirstRescheduleAt(ctx context.Context, arg TaskInstanceFirstRescheduleAtParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, taskInstanceFirstRescheduleAt, arg.DagRunID, arg.TaskID)
+	var first_reschedule_at pgtype.Timestamptz
+	err := row.Scan(&first_reschedule_at)
+	return first_reschedule_at, err
 }
 
 const taskInstancesForDagRuns = `-- name: TaskInstancesForDagRuns :many
@@ -1455,7 +1482,7 @@ const updateTaskInstanceState = `-- name: UpdateTaskInstanceState :one
 UPDATE task_instances
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at
 `
 
 type UpdateTaskInstanceStateParams struct {
@@ -1498,6 +1525,7 @@ func (q *Queries) UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskIns
 		&i.ScheduledAt,
 		&i.LastHeartbeatAt,
 		&i.RescheduleAt,
+		&i.FirstRescheduleAt,
 	)
 	return i, err
 }

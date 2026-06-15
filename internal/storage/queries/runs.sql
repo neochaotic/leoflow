@@ -220,6 +220,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    reschedule_at = NULL,
+    first_reschedule_at = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2;
 
@@ -238,6 +240,13 @@ SET state = 'none',
     scheduled_at = NULL,
     reschedule_at = NULL
 WHERE dag_run_id = $1 AND task_id = $2 AND state = 'up_for_reschedule';
+
+-- name: TaskInstanceFirstRescheduleAt :one
+-- The time a reschedule-mode sensor first entered reschedule (NULL until it does).
+-- Delivered to each re-dispatched pod so get_first_reschedule_date returns the real
+-- value and the sensor honors its cumulative timeout across pokes (#380).
+SELECT first_reschedule_at FROM task_instances
+WHERE dag_run_id = $1 AND task_id = $2;
 
 -- name: FailTaskInstanceIfActive :exec
 UPDATE task_instances
@@ -267,7 +276,10 @@ WHERE dag_run_id = $1 AND task_id = $2;
 -- left untouched (the task is not finished); started_at is preserved.
 UPDATE task_instances
 SET state = 'up_for_reschedule'::task_state,
-    reschedule_at = $3
+    reschedule_at = $3,
+    -- Stamp the FIRST reschedule once and preserve it across re-dispatches so the
+    -- delivered get_first_reschedule_date lets the sensor honor cumulative timeout.
+    first_reschedule_at = COALESCE(first_reschedule_at, now())
 WHERE dag_run_id = $1 AND task_id = $2
   AND state IN ('running', 'queued', 'scheduled');
 

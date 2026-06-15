@@ -264,6 +264,12 @@ func runContextEnv(spec *agentv1.TaskSpec) []string {
 	if v := spec.GetParamsJson(); v != "" {
 		env = append(env, "LEOFLOW_PARAMS="+v)
 	}
+	if v := spec.GetFirstRescheduleAt(); v != "" {
+		// Delivered to a re-dispatched reschedule-mode sensor so its
+		// get_first_reschedule_date returns the real first time and `timeout` is
+		// honored cumulatively across pokes (#380). Empty on the first attempt.
+		env = append(env, "LEOFLOW_FIRST_RESCHEDULE_AT="+v)
+	}
 	return env
 }
 

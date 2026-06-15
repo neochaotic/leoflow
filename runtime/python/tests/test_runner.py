@@ -393,9 +393,14 @@ def test_is_reschedule_exc_matches_by_name():
     assert not runner._is_reschedule_exc(ValueError("nope"))
 
 
-def test_standalone_ti_get_first_reschedule_date_is_none():
-    """The standalone ti has no metastore, so get_first_reschedule_date returns None
-    — the sensor's timeout then applies per-poke, not cumulatively across reschedules
-    (documented MVP fidelity limit, ADR 0040 Phase B / #380). The full reschedule
-    signal path (wired/not-wired) is covered with a controlled fake in test_operator."""
+def test_standalone_ti_get_first_reschedule_date(monkeypatch):
+    """get_first_reschedule_date returns None on the first attempt (env unset) and the
+    delivered first-reschedule time once the agent stamps LEOFLOW_FIRST_RESCHEDULE_AT,
+    so a reschedule-mode sensor honors its cumulative timeout (#380). The full
+    reschedule signal path (wired/not-wired) is covered with a fake in test_operator."""
+    from datetime import datetime, timezone
+    monkeypatch.delenv("LEOFLOW_FIRST_RESCHEDULE_AT", raising=False)
     assert runner._StandaloneTaskInstance().get_first_reschedule_date({}) is None
+    monkeypatch.setenv("LEOFLOW_FIRST_RESCHEDULE_AT", "2099-01-02T03:04:05+00:00")
+    got = runner._StandaloneTaskInstance().get_first_reschedule_date({})
+    assert got == datetime(2099, 1, 2, 3, 4, 5, tzinfo=timezone.utc)

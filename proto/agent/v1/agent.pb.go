@@ -479,6 +479,7 @@ type TaskSpec struct {
 	DataIntervalStart       string                    `protobuf:"bytes,18,opt,name=data_interval_start,json=dataIntervalStart,proto3" json:"data_interval_start,omitempty"` // The DagRun's data interval start, RFC3339. The agent stamps LEOFLOW_DATA_INTERVAL_START so the standalone operator context exposes data_interval_start (ADR 0040). Empty leaves it unset.
 	DataIntervalEnd         string                    `protobuf:"bytes,19,opt,name=data_interval_end,json=dataIntervalEnd,proto3" json:"data_interval_end,omitempty"`       // The DagRun's data interval end, RFC3339. Stamped as LEOFLOW_DATA_INTERVAL_END -> context data_interval_end. Empty leaves it unset.
 	ParamsJson              string                    `protobuf:"bytes,20,opt,name=params_json,json=paramsJson,proto3" json:"params_json,omitempty"`                        // The DagRun's params/conf, JSON-encoded (#148). Stamped as LEOFLOW_PARAMS so the standalone operator context exposes context['params'] / {{ params.X }}. Empty leaves params={}.
+	FirstRescheduleAt       string                    `protobuf:"bytes,21,opt,name=first_reschedule_at,json=firstRescheduleAt,proto3" json:"first_reschedule_at,omitempty"` // For a reschedule-mode sensor re-dispatched after poking not-ready (#380): the time it FIRST entered reschedule, RFC3339. Stamped as LEOFLOW_FIRST_RESCHEDULE_AT so get_first_reschedule_date returns the real value and the sensor honors its cumulative timeout. Empty on the first attempt.
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -649,6 +650,13 @@ func (x *TaskSpec) GetDataIntervalEnd() string {
 func (x *TaskSpec) GetParamsJson() string {
 	if x != nil {
 		return x.ParamsJson
+	}
+	return ""
+}
+
+func (x *TaskSpec) GetFirstRescheduleAt() string {
+	if x != nil {
+		return x.FirstRescheduleAt
 	}
 	return ""
 }
@@ -1326,7 +1334,7 @@ const file_agent_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\"\x14\n" +
-	"\x12GetTaskSpecRequest\"\xe4\a\n" +
+	"\x12GetTaskSpecRequest\"\x94\b\n" +
 	"\bTaskSpec\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06dag_id\x18\x02 \x01(\tR\x05dagId\x12\x1f\n" +
@@ -1354,7 +1362,8 @@ const file_agent_proto_rawDesc = "" +
 	"\x13data_interval_start\x18\x12 \x01(\tR\x11dataIntervalStart\x12*\n" +
 	"\x11data_interval_end\x18\x13 \x01(\tR\x0fdataIntervalEnd\x12\x1f\n" +
 	"\vparams_json\x18\x14 \x01(\tR\n" +
-	"paramsJson\x1a>\n" +
+	"paramsJson\x12.\n" +
+	"\x13first_reschedule_at\x18\x15 \x01(\tR\x11firstRescheduleAt\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ad\n" +

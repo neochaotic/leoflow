@@ -82,6 +82,72 @@ func TestRescheduleRedispatchPreservesTryNumberIntegration(t *testing.T) {
 	}
 }
 
+// TestRescheduleFirstRescheduleAtDeliveredAndPreservedIntegration proves the
+// cumulative-timeout fix (#380, approach A): the first reschedule stamps
+// first_reschedule_at, it is delivered on the re-dispatched pod's TaskSpec (so
+// get_first_reschedule_date is real), and it is PRESERVED across reschedules — so
+// a reschedule-mode sensor measures run_duration from the first poke and honors
+// its timeout instead of polling forever.
+func TestRescheduleFirstRescheduleAtDeliveredAndPreservedIntegration(t *testing.T) {
+	repo, sched, exec, ctx := openExec(t)
+
+	dagID := fmt.Sprintf("reschedule_first_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{{TaskID: "probe", Type: domain.TaskTypePython}}
+	registerSpec(t, repo, ctx, dagID, tasks)
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual", LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("CreateDagRun: %v", err)
+	}
+	runUUID := resolveRunUUID(t, sched, ctx, dagID)
+	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
+		t.Fatalf("MaterializeTasks: %v", err)
+	}
+	id := auth.AgentIdentity{RunID: runUUID, TaskID: "probe", TryNumber: 1}
+	bringToRunning := func() {
+		for _, st := range []domain.TaskState{domain.TaskStateScheduled, domain.TaskStateQueued, domain.TaskStateRunning} {
+			if err := sched.ApplyTransition(ctx, runUUID, "probe", st); err != nil {
+				t.Fatalf("ApplyTransition %s: %v", st, err)
+			}
+		}
+	}
+	firstRescheduleOnSpec := func() string {
+		spec, err := exec.TaskSpec(ctx, id)
+		if err != nil {
+			t.Fatalf("TaskSpec: %v", err)
+		}
+		return spec.FirstRescheduleAt
+	}
+
+	// Before any reschedule the spec carries no first-reschedule time (first attempt).
+	if got := firstRescheduleOnSpec(); got != "" {
+		t.Fatalf("first_reschedule_at = %q before any reschedule, want empty", got)
+	}
+
+	// First reschedule stamps it; it is delivered on the spec the next pod fetches.
+	bringToRunning()
+	if err := exec.Reschedule(ctx, id, time.Now().UTC().Add(time.Minute)); err != nil {
+		t.Fatalf("Reschedule #1: %v", err)
+	}
+	first := firstRescheduleOnSpec()
+	if first == "" {
+		t.Fatal("first_reschedule_at not stamped/delivered after the first reschedule")
+	}
+
+	// Re-dispatch, run again, reschedule again — first_reschedule_at must be PRESERVED
+	// (COALESCE), so cumulative timeout spans pokes rather than resetting each one.
+	if err := sched.RedispatchReschedule(ctx, runUUID, "probe"); err != nil {
+		t.Fatalf("RedispatchReschedule: %v", err)
+	}
+	bringToRunning()
+	if err := exec.Reschedule(ctx, id, time.Now().UTC().Add(2*time.Minute)); err != nil {
+		t.Fatalf("Reschedule #2: %v", err)
+	}
+	if second := firstRescheduleOnSpec(); second != first {
+		t.Fatalf("first_reschedule_at changed %q -> %q across reschedules; must be preserved", first, second)
+	}
+}
+
 // rescheduleActiveRun returns the RunState for runUUID from ActiveRuns (carrying
 // States, Tries, and RescheduleAt loaded from the DB).
 func rescheduleActiveRun(t *testing.T, sched *storage.SchedulerStore, ctx context.Context, runUUID string) scheduler.RunState {

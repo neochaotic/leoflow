@@ -304,12 +304,12 @@ class _StandaloneTaskInstance:
         return self._xcom_by_task.get(task_ids, default)
 
     def get_first_reschedule_date(self, context=None):
-        """Return the time of this task's first reschedule, used by a reschedule-mode
-        sensor to measure its total timeout across pokes. Leoflow keeps no
-        task_reschedule history (the TI is updated in place — #380), so this is None:
-        the sensor's ``timeout`` then applies per-poke, not cumulatively. Documented
-        MVP fidelity limit of reschedule mode (ADR 0040 Phase B)."""
-        return None
+        """Return when this task first entered reschedule, delivered by the agent as
+        LEOFLOW_FIRST_RESCHEDULE_AT (#380), so a reschedule-mode sensor measures its
+        run_duration from the first poke and honors its cumulative ``timeout`` across
+        re-dispatches. None on the first attempt (not yet rescheduled) — the sensor's
+        started_at then falls back to now(), as Airflow does for the first poke."""
+        return _parse_dt(os.environ.get("LEOFLOW_FIRST_RESCHEDULE_AT"))
 
 
 def _operator_context() -> dict:

@@ -307,30 +307,31 @@ type StagingVolume struct {
 }
 
 type TaskInstance struct {
-	ID              pgtype.UUID        `json:"id"`
-	TenantID        pgtype.UUID        `json:"tenant_id"`
-	DagRunID        pgtype.UUID        `json:"dag_run_id"`
-	TaskID          string             `json:"task_id"`
-	MapIndex        int32              `json:"map_index"`
-	TryNumber       int32              `json:"try_number"`
-	MaxTries        int32              `json:"max_tries"`
-	State           TaskState          `json:"state"`
-	Pool            *string            `json:"pool"`
-	Operator        string             `json:"operator"`
-	QueuedAt        pgtype.Timestamptz `json:"queued_at"`
-	StartedAt       pgtype.Timestamptz `json:"started_at"`
-	EndedAt         pgtype.Timestamptz `json:"ended_at"`
-	DurationSeconds *float64           `json:"duration_seconds"`
-	PodName         *string            `json:"pod_name"`
-	NodeName        *string            `json:"node_name"`
-	ExitCode        *int32             `json:"exit_code"`
-	ErrorMessage    *string            `json:"error_message"`
-	LogUrl          *string            `json:"log_url"`
-	Hostname        *string            `json:"hostname"`
-	Note            *string            `json:"note"`
-	ScheduledAt     pgtype.Timestamptz `json:"scheduled_at"`
-	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
-	RescheduleAt    pgtype.Timestamptz `json:"reschedule_at"`
+	ID                pgtype.UUID        `json:"id"`
+	TenantID          pgtype.UUID        `json:"tenant_id"`
+	DagRunID          pgtype.UUID        `json:"dag_run_id"`
+	TaskID            string             `json:"task_id"`
+	MapIndex          int32              `json:"map_index"`
+	TryNumber         int32              `json:"try_number"`
+	MaxTries          int32              `json:"max_tries"`
+	State             TaskState          `json:"state"`
+	Pool              *string            `json:"pool"`
+	Operator          string             `json:"operator"`
+	QueuedAt          pgtype.Timestamptz `json:"queued_at"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	EndedAt           pgtype.Timestamptz `json:"ended_at"`
+	DurationSeconds   *float64           `json:"duration_seconds"`
+	PodName           *string            `json:"pod_name"`
+	NodeName          *string            `json:"node_name"`
+	ExitCode          *int32             `json:"exit_code"`
+	ErrorMessage      *string            `json:"error_message"`
+	LogUrl            *string            `json:"log_url"`
+	Hostname          *string            `json:"hostname"`
+	Note              *string            `json:"note"`
+	ScheduledAt       pgtype.Timestamptz `json:"scheduled_at"`
+	LastHeartbeatAt   pgtype.Timestamptz `json:"last_heartbeat_at"`
+	RescheduleAt      pgtype.Timestamptz `json:"reschedule_at"`
+	FirstRescheduleAt pgtype.Timestamptz `json:"first_reschedule_at"`
 }
 
 type TaskInstanceHistory struct {

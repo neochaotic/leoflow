@@ -58,6 +58,11 @@ type TaskSpec struct {
 	// ParamsJSON is the DagRun's params/conf, JSON-encoded (#148); the agent stamps
 	// LEOFLOW_PARAMS so the runtime exposes context['params'] / {{ params.X }}.
 	ParamsJSON string
+	// FirstRescheduleAt is when a reschedule-mode sensor first entered reschedule,
+	// RFC3339 (#380). The agent stamps LEOFLOW_FIRST_RESCHEDULE_AT so the sensor's
+	// get_first_reschedule_date returns it and cumulative timeout works. Empty on
+	// the first attempt (not yet rescheduled).
+	FirstRescheduleAt string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -165,6 +170,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		DataIntervalStart:       spec.DataIntervalStart,
 		DataIntervalEnd:         spec.DataIntervalEnd,
 		ParamsJson:              spec.ParamsJSON,
+		FirstRescheduleAt:       spec.FirstRescheduleAt,
 	}, nil
 }
 

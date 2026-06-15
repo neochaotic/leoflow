@@ -53,6 +53,17 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 	if len(run.Conf) > 0 {
 		paramsJSON = string(run.Conf)
 	}
+	// When a reschedule-mode sensor is re-dispatched, deliver the time it first
+	// entered reschedule so its get_first_reschedule_date returns the real value and
+	// cumulative timeout works (#380). Best-effort: empty falls back to per-poke
+	// timing, never blocks the spec. Empty on the first attempt (column is NULL).
+	var firstRescheduleAt string
+	if rid, perr := parseUUID(id.RunID); perr == nil {
+		if fr, ferr := s.q.TaskInstanceFirstRescheduleAt(ctx,
+			queries.TaskInstanceFirstRescheduleAtParams{DagRunID: rid, TaskID: id.TaskID}); ferr == nil && fr.Valid {
+			firstRescheduleAt = fr.Time.UTC().Format(time.RFC3339)
+		}
+	}
 	var timeout int
 	if task.ExecutionTimeoutSeconds != nil {
 		timeout = *task.ExecutionTimeoutSeconds
@@ -96,6 +107,7 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		DataIntervalStart: dataIntervalStart,
 		DataIntervalEnd:   dataIntervalEnd,
 		ParamsJSON:        paramsJSON,
+		FirstRescheduleAt: firstRescheduleAt,
 	}, nil
 }
 

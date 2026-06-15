@@ -115,6 +115,31 @@ def endpoint_name() -> str:
     return "readyz"
 
 
+@task
+def recover_cloud_creds() -> None:
+    # The "a user pastes a credential in the UI" path, end to end: the main CLOUD
+    # connections created via the API (below) must reach the task INTACT through
+    # encrypted-at-rest storage (ADR 0019) + agent delivery (AIRFLOW_CONN_*). Pure
+    # stdlib — this asserts the delivery contract, no provider needed.
+    import json
+    import os
+    from urllib.parse import parse_qs, urlsplit
+
+    def extra_of(env: str) -> dict:
+        q = parse_qs(urlsplit(os.environ.get(env, "")).query)
+        return json.loads(q["__extra__"][0]) if "__extra__" in q else {}
+
+    # GCP: a pasted service-account key lives in extra.keyfile_dict (a JSON blob).
+    gcp = json.loads(extra_of("AIRFLOW_CONN_GCP_UI")["keyfile_dict"])
+    print("e2e gcp SA:", gcp["client_email"])
+    # AWS: access key id / secret ride as login:password in the URI userinfo.
+    aws = urlsplit(os.environ.get("AIRFLOW_CONN_AWS_UI", ""))
+    print("e2e aws:", aws.username, extra_of("AIRFLOW_CONN_AWS_UI").get("region_name"))
+    # Azure: a client secret rides as the password.
+    az = urlsplit(os.environ.get("AIRFLOW_CONN_AZURE_UI", ""))
+    print("e2e azure:", az.username, az.password)
+
+
 with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
     tail = read_var(transform(extract()))
     target = endpoint_name()
@@ -133,6 +158,7 @@ with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
     # the pod (#382) before exec'ing bash — a plain command would stay a direct
     # `bash -c`. The rendered ds must match read_var's; asserted from logs below.
     greet = BashOperator(task_id="greet", bash_command='echo "e2e bash ds={{ ds }}"')
+    recover_cloud_creds()
     tail >> probe
     target >> probe
     tail >> greet
@@ -199,6 +225,40 @@ log "Creating the 'cp' http Connection the operator sensor pokes (ADR 0040)"
 curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d "{\"connection_id\":\"cp\",\"conn_type\":\"http\",\"host\":\"${HOST_ADDR}\",\"port\":${HTTP_PORT},\"schema\":\"http\"}" \
   "$API/api/v2/connections" >/dev/null
+
+log "Creating the main CLOUD connections via the API (the UI 'paste a credential' path): aws, gcp, azure"
+# Fake credentials — the point is integrity of delivery, not real auth. Nested JSON
+# (extra carries a JSON string; the GCP key is a JSON-in-JSON blob) is built in
+# Python to dodge shell-quoting hazards.
+python3 - "$WORKDIR" <<'PY'
+import json
+import pathlib
+import sys
+
+d = pathlib.Path(sys.argv[1])
+keyfile = json.dumps({
+    "type": "service_account",
+    "client_email": "leoflow-e2e@example.iam.gserviceaccount.com",
+    "private_key": "-----BEGIN PRIVATE KEY-----\nFAKEKEYNOTREAL\n-----END PRIVATE KEY-----\n",
+})
+bodies = {
+    "gcp_ui": {"connection_id": "gcp_ui", "conn_type": "google_cloud_platform",
+               "extra": json.dumps({"keyfile_dict": keyfile})},
+    "aws_ui": {"connection_id": "aws_ui", "conn_type": "aws",
+               "login": "AKIAEXAMPLEFAKE123", "password": "FAKEsecretkey00000000000000000000000000",
+               "extra": json.dumps({"region_name": "sa-east-1"})},
+    "azure_ui": {"connection_id": "azure_ui", "conn_type": "azure",
+                 "login": "fake-client-id-0000", "password": "FAKEazuresecret9999",
+                 "extra": json.dumps({"tenantId": "fake-tenant-0000"})},
+}
+for name, body in bodies.items():
+    (d / f"conn_{name}.json").write_text(json.dumps(body))
+PY
+for name in gcp_ui aws_ui azure_ui; do
+  curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d @"$WORKDIR/conn_${name}.json" "$API/api/v2/connections" >/dev/null \
+    || fail "failed to create the $name cloud connection via the API"
+done
 
 log "Triggering a run"
 RUN_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -269,6 +329,18 @@ log "variable delivery OK: read_var saw hi-from-admin"
 log "Asserting @task run-context injection (ADR 0040): read_var received 'ds'"
 echo "$vlog" | grep -q "e2e context ds:" || fail "read_var did not receive ds from the run context — @task context injection broken"
 log "@task context OK: read_var received ds"
+
+log "Asserting CLOUD connection delivery (UI paste -> encrypted storage -> pod task): recover_cloud_creds recovered each credential intact"
+clog=""
+for try in 0 1 2; do
+  body="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances/recover_cloud_creds/logs/$try" 2>/dev/null || true)"
+  if echo "$body" | grep -q "e2e gcp SA: leoflow-e2e@example.iam.gserviceaccount.com"; then clog="$body"; break; fi
+done
+[ -n "$clog" ] || fail "recover_cloud_creds did not recover the pasted GCP keyfile_dict — cloud connection key-in-extra delivery broke"
+echo "$clog" | grep -q "e2e aws: AKIAEXAMPLEFAKE123 sa-east-1" || fail "AWS access key id / region not recovered intact in the task"
+echo "$clog" | grep -q "e2e azure: fake-client-id-0000 FAKEazuresecret9999" || fail "Azure client id / secret not recovered intact in the task"
+log "cloud connection delivery OK: gcp keyfile_dict + aws keys + azure secret all recovered intact in the pod"
 
 log "Asserting multi-key XCom (ADR 0040): extract's custom 'row_count' key shipped as its own XCom"
 rc_xcom="$(curl -fsS -H "Authorization: Bearer $TOKEN" \

@@ -78,11 +78,16 @@ from airflow.sdk import DAG, task
 # exercises the FULL operator chain end-to-end: scheduler -> pod -> agent
 # `--operator` -> runtime run_operator -> execute(), plus connection delivery.
 from airflow.providers.http.sensors.http import HttpSensor
+from airflow.providers.standard.operators.bash import BashOperator
 
 
 @task
-def extract() -> str:
+def extract(**context) -> str:
     print("hello from leoflow e2e: extract")
+    # Multi-key XCom (ADR 0040): a custom-keyed push must ship as its OWN XCom via
+    # LEOFLOW_PUSHES_PATH — the channel deliberately renamed off the LEOFLOW_XCOM_
+    # prefix so _merge_operator_xcom does not swallow it as a kwarg. Asserted below.
+    context["ti"].xcom_push(key="row_count", value=42)
     return "payload-42"
 
 
@@ -124,8 +129,13 @@ with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
     probe = HttpSensor(task_id="probe", http_conn_id="cp",
                        endpoint="{{ ti.xcom_pull('endpoint_name') }}",
                        poke_interval=2, timeout=60)
+    # A native bash task carrying a Jinja macro: the runtime must render {{ ds }} in
+    # the pod (#382) before exec'ing bash — a plain command would stay a direct
+    # `bash -c`. The rendered ds must match read_var's; asserted from logs below.
+    greet = BashOperator(task_id="greet", bash_command='echo "e2e bash ds={{ ds }}"')
     tail >> probe
     target >> probe
+    tail >> greet
 PY
 cat > "$WORKDIR/$DAG_ID/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
@@ -259,5 +269,22 @@ log "variable delivery OK: read_var saw hi-from-admin"
 log "Asserting @task run-context injection (ADR 0040): read_var received 'ds'"
 echo "$vlog" | grep -q "e2e context ds:" || fail "read_var did not receive ds from the run context — @task context injection broken"
 log "@task context OK: read_var received ds"
+
+log "Asserting multi-key XCom (ADR 0040): extract's custom 'row_count' key shipped as its own XCom"
+rc_xcom="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+  "$API/api/v2/xcoms/$DAG_ID/$RUN_ID/extract/row_count" 2>/dev/null || true)"
+echo "$rc_xcom" | jq -e '.value == 42' >/dev/null 2>&1 \
+  || fail "extract's custom XCom key 'row_count' was not shipped (multi-key XCom via LEOFLOW_PUSHES_PATH broke): ${rc_xcom:-<none>}"
+log "multi-key XCom OK: row_count=42 shipped as its own XCom"
+
+log "Asserting native bash Jinja templating (#382): greet rendered {{ ds }} in the pod"
+glog=""
+for try in 0 1 2; do
+  body="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances/greet/logs/$try" 2>/dev/null || true)"
+  if echo "$body" | grep -qE "e2e bash ds=[0-9]{4}-[0-9]{2}-[0-9]{2}"; then glog="$body"; break; fi
+done
+[ -n "$glog" ] || fail "greet did not render {{ ds }} to a date — native bash Jinja templating broke (#382)"
+log "bash Jinja OK: greet rendered a real ds"
 
 log "E2E passed"

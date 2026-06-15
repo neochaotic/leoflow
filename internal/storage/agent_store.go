@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/neochaotic/leoflow/internal/agentrpc"
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/dispatch"
@@ -116,6 +117,21 @@ func (s *ExecutionStore) ReportState(ctx context.Context, id auth.AgentIdentity,
 		params.ErrorMessage = &errMsg
 	}
 	return s.q.ReportTaskResult(ctx, params)
+}
+
+// Reschedule parks an active task instance in up_for_reschedule with its next-poke
+// time, so the scheduler re-dispatches it once reschedule_at passes (#380). Used by
+// the agent's reschedule path; a no-op if the TI is no longer active (terminal).
+func (s *ExecutionStore) Reschedule(ctx context.Context, id auth.AgentIdentity, at time.Time) error {
+	rid, err := parseUUID(id.RunID)
+	if err != nil {
+		return err
+	}
+	return s.q.RescheduleTaskInstance(ctx, queries.RescheduleTaskInstanceParams{
+		DagRunID:     rid,
+		TaskID:       id.TaskID,
+		RescheduleAt: pgtype.Timestamptz{Time: at, Valid: true},
+	})
 }
 
 // RecordHeartbeat stamps last_heartbeat_at on the agent's TI so the

@@ -81,7 +81,8 @@ func (tlsFakeStore) TaskSpec(context.Context, auth.AgentIdentity) (agentrpc.Task
 func (tlsFakeStore) ReportState(context.Context, auth.AgentIdentity, domain.TaskState, int, string) error {
 	return nil
 }
-func (tlsFakeStore) RecordHeartbeat(context.Context, auth.AgentIdentity) error { return nil }
+func (tlsFakeStore) Reschedule(context.Context, auth.AgentIdentity, time.Time) error { return nil }
+func (tlsFakeStore) RecordHeartbeat(context.Context, auth.AgentIdentity) error       { return nil }
 
 type tlsNoXCom struct{}
 

@@ -28,6 +28,7 @@ func TestMapStateCoversEveryReportedTransition(t *testing.T) {
 		{agentv1.TaskState_TASK_STATE_SUCCESS, domain.TaskStateSuccess},
 		{agentv1.TaskState_TASK_STATE_FAILED, domain.TaskStateFailed},
 		{agentv1.TaskState_TASK_STATE_SKIPPED, domain.TaskStateSkipped},
+		{agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE, domain.TaskStateUpForReschedule},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in.String(), func(t *testing.T) {

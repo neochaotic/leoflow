@@ -16,16 +16,19 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // fakeStore records ReportState calls and serves a fixed task spec.
 type fakeStore struct {
-	spec         TaskSpec
-	specErr      error
-	reported     []reportedState
-	reportErr    error
-	heartbeats   []auth.AgentIdentity
-	heartbeatErr error
+	spec          TaskSpec
+	specErr       error
+	reported      []reportedState
+	reportErr     error
+	rescheduled   []rescheduleCall
+	rescheduleErr error
+	heartbeats    []auth.AgentIdentity
+	heartbeatErr  error
 }
 
 type reportedState struct {
@@ -35,6 +38,11 @@ type reportedState struct {
 	errMsg   string
 }
 
+type rescheduleCall struct {
+	id auth.AgentIdentity
+	at time.Time
+}
+
 func (s *fakeStore) TaskSpec(context.Context, auth.AgentIdentity) (TaskSpec, error) {
 	return s.spec, s.specErr
 }
@@ -42,6 +50,11 @@ func (s *fakeStore) TaskSpec(context.Context, auth.AgentIdentity) (TaskSpec, err
 func (s *fakeStore) ReportState(_ context.Context, id auth.AgentIdentity, st domain.TaskState, exit int, msg string) error {
 	s.reported = append(s.reported, reportedState{id, st, exit, msg})
 	return s.reportErr
+}
+
+func (s *fakeStore) Reschedule(_ context.Context, id auth.AgentIdentity, at time.Time) error {
+	s.rescheduled = append(s.rescheduled, rescheduleCall{id, at})
+	return s.rescheduleErr
 }
 
 func (s *fakeStore) RecordHeartbeat(_ context.Context, id auth.AgentIdentity) error {
@@ -165,6 +178,31 @@ func TestReportStateAppliesTransition(t *testing.T) {
 	}
 	if got.id.TaskInstanceID != "ti-1" {
 		t.Errorf("identity = %+v", got.id)
+	}
+}
+
+func TestReportStateReschedule(t *testing.T) {
+	store := &fakeStore{}
+	srv, a := newServer(store)
+	at := time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	_, err := srv.ReportState(ctxWithToken(t, a), &agentv1.ReportStateRequest{
+		State:        agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE,
+		RescheduleAt: timestamppb.New(at),
+	})
+	if err != nil {
+		t.Fatalf("ReportState(up_for_reschedule): %v", err)
+	}
+	// Routed to the dedicated reschedule path with the next-poke time, NOT the
+	// generic state write (#380).
+	if len(store.reported) != 0 {
+		t.Errorf("up_for_reschedule must not go through ReportState, got %d", len(store.reported))
+	}
+	if len(store.rescheduled) != 1 {
+		t.Fatalf("expected one Reschedule call, got %d", len(store.rescheduled))
+	}
+	if got := store.rescheduled[0]; !got.at.Equal(at) || got.id.TaskInstanceID != "ti-1" {
+		t.Errorf("reschedule call = %+v, want at=%s ti=ti-1", got, at)
 	}
 }
 

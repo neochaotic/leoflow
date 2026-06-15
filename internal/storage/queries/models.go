@@ -103,16 +103,17 @@ func (ns NullDagRunTrigger) Value() (driver.Value, error) {
 type TaskState string
 
 const (
-	TaskStateNone           TaskState = "none"
-	TaskStateScheduled      TaskState = "scheduled"
-	TaskStateQueued         TaskState = "queued"
-	TaskStateRunning        TaskState = "running"
-	TaskStateDeferred       TaskState = "deferred"
-	TaskStateSuccess        TaskState = "success"
-	TaskStateFailed         TaskState = "failed"
-	TaskStateSkipped        TaskState = "skipped"
-	TaskStateUpstreamFailed TaskState = "upstream_failed"
-	TaskStateUpForRetry     TaskState = "up_for_retry"
+	TaskStateNone            TaskState = "none"
+	TaskStateScheduled       TaskState = "scheduled"
+	TaskStateQueued          TaskState = "queued"
+	TaskStateRunning         TaskState = "running"
+	TaskStateDeferred        TaskState = "deferred"
+	TaskStateSuccess         TaskState = "success"
+	TaskStateFailed          TaskState = "failed"
+	TaskStateSkipped         TaskState = "skipped"
+	TaskStateUpstreamFailed  TaskState = "upstream_failed"
+	TaskStateUpForRetry      TaskState = "up_for_retry"
+	TaskStateUpForReschedule TaskState = "up_for_reschedule"
 )
 
 func (e *TaskState) Scan(src interface{}) error {
@@ -329,6 +330,7 @@ type TaskInstance struct {
 	Note            *string            `json:"note"`
 	ScheduledAt     pgtype.Timestamptz `json:"scheduled_at"`
 	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
+	RescheduleAt    pgtype.Timestamptz `json:"reschedule_at"`
 }
 
 type TaskInstanceHistory struct {

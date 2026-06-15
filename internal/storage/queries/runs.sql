@@ -243,6 +243,18 @@ SET state = $3::task_state,
         THEN EXTRACT(EPOCH FROM (now() - started_at)) ELSE duration_seconds END
 WHERE dag_run_id = $1 AND task_id = $2;
 
+-- name: RescheduleTaskInstance :exec
+-- A reschedule-mode sensor (mode='reschedule') poked not-ready: park the active TI
+-- in up_for_reschedule with its next-poke time ($3) so the scheduler re-dispatches
+-- it once reschedule_at passes (#380), without consuming retry budget. Guarded to
+-- the active states so a late report never clobbers a terminal row. ended_at is
+-- left untouched (the task is not finished); started_at is preserved.
+UPDATE task_instances
+SET state = 'up_for_reschedule'::task_state,
+    reschedule_at = $3
+WHERE dag_run_id = $1 AND task_id = $2
+  AND state IN ('running', 'queued', 'scheduled');
+
 -- name: ResolveRunRef :one
 SELECT t.id AS tenant_id, dr.id AS dag_run_id
 FROM dag_runs dr

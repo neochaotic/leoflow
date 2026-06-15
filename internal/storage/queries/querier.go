@@ -158,6 +158,12 @@ type Querier interface {
 	// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
 	// agent path is the first to exercise this query end-to-end.
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
+	// A reschedule-mode sensor (mode='reschedule') poked not-ready: park the active TI
+	// in up_for_reschedule with its next-poke time ($3) so the scheduler re-dispatches
+	// it once reschedule_at passes (#380), without consuming retry budget. Guarded to
+	// the active states so a late report never clobbers a terminal row. ended_at is
+	// left untouched (the task is not finished); started_at is preserved.
+	RescheduleTaskInstance(ctx context.Context, arg RescheduleTaskInstanceParams) error
 	// Archives every failed attempt in the run into task_instance_history then
 	// resets. See ResetTaskInstanceToNone for the per-attempt rationale.
 	ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error)

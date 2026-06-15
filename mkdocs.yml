@@ -113,6 +113,7 @@ nav:
   - Authoring & deploy:
       - DAG authoring: dag-authoring.md
       - First Pro DAG (walkthrough): first-pro-dag.md
+      - Airflow operators & sensors: airflow-operators.md
       - CI/CD & deploy examples: deploy.md
   - Reference:
       - reference.md

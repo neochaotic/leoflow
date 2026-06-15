@@ -225,6 +225,14 @@ def run_bash(command: str) -> None:
 # as a bogus `by_task=` kwarg (a real collision the live GCP chain test caught).
 UPSTREAM_XCOM_ENV = "LEOFLOW_UPSTREAM_XCOM"
 
+# A reschedule-mode sensor that pokes not-ready writes its requested next-poke time
+# to RESCHEDULE_PATH_ENV and exits with RESCHEDULE_EXIT_CODE; the agent reads both and
+# reports up_for_reschedule instead of failure (ADR 0040 Phase B, #380). 75 is
+# sysexits' EX_TEMPFAIL ("temporary failure, reattempt later") — semantically exact,
+# and distinct from the 0/1 success/failure the agent already maps.
+RESCHEDULE_PATH_ENV = "LEOFLOW_RESCHEDULE_PATH"
+RESCHEDULE_EXIT_CODE = 75
+
 
 def _load_xcom_by_task() -> dict:
     """Decode UPSTREAM_XCOM_ENV — the map of upstream ``task_id`` to its decoded
@@ -294,6 +302,14 @@ class _StandaloneTaskInstance:
         if task_ids is None:
             return default
         return self._xcom_by_task.get(task_ids, default)
+
+    def get_first_reschedule_date(self, context=None):
+        """Return the time of this task's first reschedule, used by a reschedule-mode
+        sensor to measure its total timeout across pokes. Leoflow keeps no
+        task_reschedule history (the TI is updated in place — #380), so this is None:
+        the sensor's ``timeout`` then applies per-poke, not cumulatively. Documented
+        MVP fidelity limit of reschedule mode (ADR 0040 Phase B)."""
+        return None
 
 
 def _operator_context() -> dict:
@@ -395,16 +411,6 @@ def run_operator(operator_class: str, args: dict) -> None:
     task_id = os.environ.get("LEOFLOW_TASK_ID", class_name)
     op = op_cls(task_id=task_id, **_merge_operator_xcom(dict(args)))
 
-    # Reject a reschedule-mode sensor up front (review polish #5). Its execute()
-    # reaches for a real TaskInstance (ti.get_first_reschedule_date) that our
-    # minimal standalone context cannot provide, so it would otherwise crash with
-    # a confusing AttributeError rather than raising AirflowRescheduleException.
-    if getattr(op, "mode", None) == "reschedule":
-        raise RuntimeError(
-            f"{class_name} is a reschedule-mode sensor, which Leoflow does not "
-            f"support yet (ADR 0040 Phase B). Set mode='poke' — the sensor holds "
-            f"the worker until its condition is met.")
-
     context = _operator_context()
     try:
         op.render_template_fields(context)
@@ -416,10 +422,7 @@ def run_operator(operator_class: str, args: dict) -> None:
         result = op.execute(context)
     except Exception as exc:  # noqa: BLE001 — translate reschedule/deferral; re-raise the rest
         if _is_reschedule_exc(exc):
-            raise RuntimeError(
-                f"{class_name} asked to reschedule (sensor mode='reschedule'), which "
-                f"Leoflow does not support yet (ADR 0040 Phase B). Use mode='poke' — "
-                f"the sensor holds the worker until its condition is met.") from exc
+            _signal_reschedule(exc, class_name)  # writes the file + SystemExit, or raises
         if _is_deferral_exc(exc):
             raise RuntimeError(
                 f"{class_name} asked to defer (deferrable=True), which Leoflow does not "
@@ -552,6 +555,25 @@ def _is_reschedule_exc(exc: BaseException) -> bool:
     mode is ADR 0040 Phase B; until then we translate it to a clear error instead
     of leaking a raw traceback (review polish #5)."""
     return any(base.__name__ == "AirflowRescheduleException" for base in type(exc).__mro__)
+
+
+def _signal_reschedule(exc: BaseException, class_name: str) -> None:
+    """A reschedule-mode sensor poked not-ready: if the agent wired
+    RESCHEDULE_PATH_ENV, write the requested reschedule time there and exit with the
+    reschedule sentinel so the agent reports up_for_reschedule — releasing the pod,
+    consuming no retry budget (ADR 0040 Phase B, #380). If unwired (an older agent),
+    fall back to a clear error rather than a silent sentinel exit. Never returns."""
+    path = os.environ.get(RESCHEDULE_PATH_ENV)
+    when = getattr(exc, "reschedule_date", None)
+    if not path or when is None:
+        raise RuntimeError(
+            f"{class_name} asked to reschedule (sensor mode='reschedule'); this build "
+            f"is not wired to deliver it (ADR 0040 Phase B, #380). Use mode='poke' — "
+            f"the sensor holds the worker until its condition is met.") from exc
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(when.isoformat() if hasattr(when, "isoformat") else str(when))
+    _lifecycle(f"{class_name} rescheduled until {when}")
+    raise SystemExit(RESCHEDULE_EXIT_CODE)
 
 
 def _is_deferral_exc(exc: BaseException) -> bool:

@@ -393,14 +393,9 @@ def test_is_reschedule_exc_matches_by_name():
     assert not runner._is_reschedule_exc(ValueError("nope"))
 
 
-def test_run_operator_rejects_reschedule_sensor(monkeypatch):
-    """A reschedule-mode sensor is rejected up front with a clear message (review
-    polish #5) — its execute() would otherwise crash on a missing TaskInstance.
-    Skips without Airflow."""
-    pytest.importorskip("airflow.providers.standard.sensors.filesystem")
-    monkeypatch.setenv("LEOFLOW_TASK_ID", "s")
-    with pytest.raises(RuntimeError, match="reschedule"):
-        runner.run_operator(
-            "airflow.providers.standard.sensors.filesystem.FileSensor",
-            {"filepath": "/nope", "mode": "reschedule", "poke_interval": 1, "timeout": 1},
-        )
+def test_standalone_ti_get_first_reschedule_date_is_none():
+    """The standalone ti has no metastore, so get_first_reschedule_date returns None
+    — the sensor's timeout then applies per-poke, not cumulatively across reschedules
+    (documented MVP fidelity limit, ADR 0040 Phase B / #380). The full reschedule
+    signal path (wired/not-wired) is covered with a controlled fake in test_operator."""
+    assert runner._StandaloneTaskInstance().get_first_reschedule_date({}) is None

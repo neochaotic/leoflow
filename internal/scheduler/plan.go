@@ -54,6 +54,18 @@ func PlanRun(run RunState) []PlannedTransition {
 			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
 			effective[t.TaskID] = domain.TaskStateNone
 			decided[t.TaskID] = true
+		case domain.TaskStateUpForReschedule:
+			// A reschedule-mode sensor parked here by the agent: re-dispatch once
+			// reschedule_at passes, WITHOUT consuming retry budget (reschedule is not
+			// a failure). Until then keep it parked so downstream waits. Mirrors the
+			// up_for_retry rail, gated on reschedule_at instead of retry_delay (#380).
+			if !readyToReschedule(run, t.TaskID) {
+				decided[t.TaskID] = true
+				continue
+			}
+			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
+			effective[t.TaskID] = domain.TaskStateNone
+			decided[t.TaskID] = true
 		default:
 			// none/scheduled/queued/running/terminal: no retry decision here.
 		}
@@ -107,6 +119,26 @@ func readyToRetry(run RunState, taskID string) bool {
 		return true
 	}
 	return !run.Now.Before(ended.Add(time.Duration(delay) * time.Second))
+}
+
+// readyToReschedule reports whether a task parked in up_for_reschedule may be
+// re-dispatched: true when reschedule_at has passed. It honors the "absent data /
+// zero clock falls back to immediate" convention (mirroring readyToRetry) so tests
+// and callers that don't populate RescheduleAt/Now keep the simplest behavior.
+//
+// Returns true when:
+//   - the task has no recorded reschedule_at (re-dispatch now), OR
+//   - run.Now is zero (no clock provided — test seam), OR
+//   - run.Now >= reschedule_at.
+func readyToReschedule(run RunState, taskID string) bool {
+	at := run.RescheduleAt[taskID]
+	if at == nil {
+		return true
+	}
+	if run.Now.IsZero() {
+		return true
+	}
+	return !run.Now.Before(*at)
 }
 
 func decideStart(t domain.TaskSpec, deps []string, states map[string]domain.TaskState) (domain.TaskState, bool) {

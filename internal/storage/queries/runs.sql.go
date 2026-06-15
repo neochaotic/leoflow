@@ -1062,6 +1062,33 @@ func (q *Queries) RecordTaskHeartbeat(ctx context.Context, arg RecordTaskHeartbe
 	return err
 }
 
+const redispatchRescheduledTaskInstance = `-- name: RedispatchRescheduledTaskInstance :exec
+UPDATE task_instances
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    reschedule_at = NULL
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'up_for_reschedule'
+`
+
+type RedispatchRescheduledTaskInstanceParams struct {
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskID   string      `json:"task_id"`
+}
+
+// Re-dispatch a task parked in up_for_reschedule once its reschedule_at has passed:
+// back to 'none' with the per-attempt timestamps cleared (so the next dispatch
+// stamps fresh — queued_at MUST be NULL or the dispatch-lost reaper re-flags it)
+// and reschedule_at cleared. Unlike ResetTaskInstanceToNone (retry), try_number is
+// PRESERVED and no task_instance_history row is archived: reschedule is not a retry,
+// it consumes no attempt (#380). Guarded to the parked state so it is idempotent.
+func (q *Queries) RedispatchRescheduledTaskInstance(ctx context.Context, arg RedispatchRescheduledTaskInstanceParams) error {
+	_, err := q.db.Exec(ctx, redispatchRescheduledTaskInstance, arg.DagRunID, arg.TaskID)
+	return err
+}
+
 const reportTaskResult = `-- name: ReportTaskResult :exec
 UPDATE task_instances
 SET state = $3::task_state,

@@ -21,15 +21,16 @@ const (
 
 // taskTransitions is the authoritative set of legal task state transitions.
 var taskTransitions = map[domain.TaskState]map[domain.TaskState]bool{
-	domain.TaskStateNone:           {domain.TaskStateScheduled: true, domain.TaskStateSkipped: true, domain.TaskStateUpstreamFailed: true},
-	domain.TaskStateScheduled:      {domain.TaskStateQueued: true},
-	domain.TaskStateQueued:         {domain.TaskStateRunning: true, domain.TaskStateFailed: true, domain.TaskStateUpForRetry: true},
-	domain.TaskStateRunning:        {domain.TaskStateSuccess: true, domain.TaskStateFailed: true, domain.TaskStateUpForRetry: true},
-	domain.TaskStateUpForRetry:     {domain.TaskStateScheduled: true, domain.TaskStateQueued: true, domain.TaskStateNone: true},
-	domain.TaskStateSuccess:        {domain.TaskStateNone: true},
-	domain.TaskStateFailed:         {domain.TaskStateNone: true},
-	domain.TaskStateSkipped:        {domain.TaskStateNone: true},
-	domain.TaskStateUpstreamFailed: {domain.TaskStateNone: true},
+	domain.TaskStateNone:            {domain.TaskStateScheduled: true, domain.TaskStateSkipped: true, domain.TaskStateUpstreamFailed: true},
+	domain.TaskStateScheduled:       {domain.TaskStateQueued: true},
+	domain.TaskStateQueued:          {domain.TaskStateRunning: true, domain.TaskStateFailed: true, domain.TaskStateUpForRetry: true},
+	domain.TaskStateRunning:         {domain.TaskStateSuccess: true, domain.TaskStateFailed: true, domain.TaskStateUpForRetry: true, domain.TaskStateUpForReschedule: true},
+	domain.TaskStateUpForRetry:      {domain.TaskStateScheduled: true, domain.TaskStateQueued: true, domain.TaskStateNone: true},
+	domain.TaskStateUpForReschedule: {domain.TaskStateScheduled: true, domain.TaskStateQueued: true, domain.TaskStateNone: true},
+	domain.TaskStateSuccess:         {domain.TaskStateNone: true},
+	domain.TaskStateFailed:          {domain.TaskStateNone: true},
+	domain.TaskStateSkipped:         {domain.TaskStateNone: true},
+	domain.TaskStateUpstreamFailed:  {domain.TaskStateNone: true},
 }
 
 // dagRunTransitions is the authoritative set of legal dag run state transitions.
@@ -58,7 +59,7 @@ type upstreamCounts struct {
 	failed         int
 	skipped        int
 	upstreamFailed int
-	active         int // non-terminal: none, scheduled, queued, running, up_for_retry
+	active         int // non-terminal: none, scheduled, queued, running, up_for_retry, up_for_reschedule
 }
 
 func countUpstreams(upstreams []domain.TaskState) upstreamCounts {

@@ -223,6 +223,22 @@ SET state = 'none',
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2;
 
+-- name: RedispatchRescheduledTaskInstance :exec
+-- Re-dispatch a task parked in up_for_reschedule once its reschedule_at has passed:
+-- back to 'none' with the per-attempt timestamps cleared (so the next dispatch
+-- stamps fresh — queued_at MUST be NULL or the dispatch-lost reaper re-flags it)
+-- and reschedule_at cleared. Unlike ResetTaskInstanceToNone (retry), try_number is
+-- PRESERVED and no task_instance_history row is archived: reschedule is not a retry,
+-- it consumes no attempt (#380). Guarded to the parked state so it is idempotent.
+UPDATE task_instances
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    reschedule_at = NULL
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'up_for_reschedule';
+
 -- name: FailTaskInstanceIfActive :exec
 UPDATE task_instances
 SET state = 'failed', ended_at = now(), error_message = $2

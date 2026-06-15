@@ -169,6 +169,60 @@ func TestPlanRunReleasesUpForRetryAfterDelay(t *testing.T) {
 	}
 }
 
+// TestPlanRunHoldsUpForRescheduleUntilTime: a reschedule-mode sensor parked in
+// up_for_reschedule is NOT re-dispatched until reschedule_at passes, and its
+// downstream waits meanwhile (ADR 0040 Phase B, #380).
+func TestPlanRunHoldsUpForRescheduleUntilTime(t *testing.T) {
+	at := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	run := RunState{
+		Tasks:        linear(),
+		States:       map[string]domain.TaskState{"a": domain.TaskStateUpForReschedule, "b": domain.TaskStateNone},
+		RescheduleAt: map[string]*time.Time{"a": &at},
+		Now:          at.Add(-30 * time.Second),
+	}
+	got := planMap(run)
+	if _, ok := got["a"]; ok {
+		t.Errorf("a planned %q before reschedule_at; should stay up_for_reschedule", got["a"])
+	}
+	if _, ok := got["b"]; ok {
+		t.Errorf("downstream b planned %q while a is up_for_reschedule; should wait", got["b"])
+	}
+}
+
+// TestPlanRunReleasesUpForRescheduleAfterTime: once reschedule_at passes, the task
+// returns to none for re-dispatch (next tick does none → scheduled), the same
+// single-step shape as the retry release.
+func TestPlanRunReleasesUpForRescheduleAfterTime(t *testing.T) {
+	at := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	run := RunState{
+		Tasks:        linear(),
+		States:       map[string]domain.TaskState{"a": domain.TaskStateUpForReschedule, "b": domain.TaskStateNone},
+		RescheduleAt: map[string]*time.Time{"a": &at},
+		Now:          at.Add(time.Second),
+	}
+	if got := planMap(run); got["a"] != domain.TaskStateNone {
+		t.Errorf("a = %q after reschedule_at; want none (ready to re-dispatch)", got["a"])
+	}
+}
+
+// TestPlanRunRescheduleIgnoresRetryBudget: reschedule is not a retry — re-dispatch
+// happens even with the retry budget exhausted (try_number is preserved, no budget
+// consumed; #380). This is the key difference from the up_for_retry rail.
+func TestPlanRunRescheduleIgnoresRetryBudget(t *testing.T) {
+	at := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	run := RunState{
+		Tasks:        linear(),
+		States:       map[string]domain.TaskState{"a": domain.TaskStateUpForReschedule, "b": domain.TaskStateNone},
+		Tries:        map[string]int{"a": 3},
+		MaxTries:     map[string]int{"a": 3}, // exhausted — must not block a reschedule
+		RescheduleAt: map[string]*time.Time{"a": &at},
+		Now:          at.Add(time.Second),
+	}
+	if got := planMap(run); got["a"] != domain.TaskStateNone {
+		t.Errorf("a = %q with retry budget exhausted; reschedule must ignore budget", got["a"])
+	}
+}
+
 // TestPlanRunBackwardsCompatNoRetryDelay confirms that when retry_delay_seconds
 // is 0 or absent (legacy behavior), the task transitions immediately — no
 // regression for DAGs that opted out of backoff.

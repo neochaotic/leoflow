@@ -79,6 +79,7 @@ from airflow.sdk import DAG, task
 # `--operator` -> runtime run_operator -> execute(), plus connection delivery.
 from airflow.providers.http.sensors.http import HttpSensor
 from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.sensors.date_time import DateTimeSensor
 
 
 @task
@@ -159,6 +160,13 @@ with DAG("e2edag", schedule="@daily", catchup=False, tags=["e2e"]):
     # `bash -c`. The rendered ds must match read_var's; asserted from logs below.
     greet = BashOperator(task_id="greet", bash_command='echo "e2e bash ds={{ ds }}"')
     recover_cloud_creds()
+    # A reschedule-mode sensor (#380): it pokes not-ready until the `wait_until` time
+    # (an Admin Variable the e2e sets ~12s in the future before triggering), RELEASING
+    # its pod on each poke (up_for_reschedule) and being re-dispatched, then succeeds —
+    # the reschedule pod-path end to end. target_time is a string (JSON-serialisable,
+    # unlike TimeDeltaSensor's timedelta) rendered from var.value. Independent leaf.
+    DateTimeSensor(task_id="waiter", target_time="{{ var.value.wait_until }}",
+                   mode="reschedule", poke_interval=3)
     tail >> probe
     target >> probe
     tail >> greet
@@ -260,6 +268,14 @@ for name in gcp_ui aws_ui azure_ui; do
     || fail "failed to create the $name cloud connection via the API"
 done
 
+log "Setting the 'wait_until' Variable the reschedule sensor waits on (~12s ahead, #380)"
+# GNU date (Linux/CI) and BSD date (macOS) differ; try both. The reschedule sensor
+# pokes not-ready until this fixed time, so it reschedules a few times then succeeds.
+WAIT_UNTIL="$(date -u -d '+12 seconds' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+12S +%Y-%m-%dT%H:%M:%SZ)"
+curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"key\":\"wait_until\",\"value\":\"${WAIT_UNTIL}\"}" "$API/api/v2/variables" >/dev/null
+log "wait_until = ${WAIT_UNTIL}"
+
 log "Triggering a run"
 RUN_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{}' "$API/api/v2/dags/$DAG_ID/dagRuns" | jq -r '.dag_run_id')"
@@ -268,11 +284,15 @@ log "run = $RUN_ID"
 
 log "Waiting for all task instances to succeed"
 deadline=$(( $(date +%s) + 300 ))
+saw_reschedule=0
 while :; do
   states="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances" | jq -r '.task_instances[].state')"
   log "task states: [$(echo "$states" | tr '\n' ' ')] pods: [$(kubectl get pods -n leoflow --no-headers 2>/dev/null | awk '{print $1"="$3}' | tr '\n' ' ')]"
   echo "$states" | grep -qE 'failed|upstream_failed' && fail "a task failed: $states"
+  # The reschedule-mode 'waiter' must visibly pass through up_for_reschedule — that
+  # is the proof its pod was released and the scheduler re-dispatched it (#380).
+  echo "$states" | grep -q 'up_for_reschedule' && saw_reschedule=1
   if [ -n "$states" ] && ! echo "$states" | grep -qvE 'success|skipped'; then
     log "all tasks terminal-success: $states"
     break
@@ -280,6 +300,10 @@ while :; do
   [ "$(date +%s)" -gt "$deadline" ] && fail "timed out; last states: ${states:-<none>}"
   sleep 3
 done
+
+log "Asserting reschedule-mode sensor passed through up_for_reschedule (#380)"
+[ "$saw_reschedule" = "1" ] || fail "the 'waiter' reschedule sensor never entered up_for_reschedule — its pod was not released/re-dispatched (reschedule pod-path broke)"
+log "reschedule OK: waiter released its pod (up_for_reschedule) and was re-dispatched to success"
 
 log "Asserting task logs were shipped from the pod (#36)"
 read -r FIRST_TASK FIRST_TRY < <(curl -fsS -H "Authorization: Bearer $TOKEN" \

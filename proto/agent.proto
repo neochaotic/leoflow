@@ -165,6 +165,9 @@ message ReportStateRequest {
     int32 exit_code = 2;                          // for terminal states
     string error_message = 3;                     // for failed state
     google.protobuf.Timestamp occurred_at = 4;
+    // For TASK_STATE_UP_FOR_RESCHEDULE: the earliest time the scheduler may
+    // re-dispatch this task instance (a reschedule-mode sensor poked not-ready).
+    google.protobuf.Timestamp reschedule_at = 5;
 }
 
 enum TaskState {
@@ -173,6 +176,10 @@ enum TaskState {
     TASK_STATE_SUCCESS = 2;
     TASK_STATE_FAILED = 3;
     TASK_STATE_SKIPPED = 4;
+    // A reschedule-mode sensor released its pod; re-dispatch at reschedule_at,
+    // without consuming retry budget (ADR 0040 Phase B, #380). Distinct from
+    // FAILED so the scheduler reschedules rather than failing/retrying the task.
+    TASK_STATE_UP_FOR_RESCHEDULE = 5;
 }
 
 message ReportStateResponse {

@@ -635,3 +635,45 @@ func TestRunnerPropagatesGetSpecError(t *testing.T) {
 		t.Error("GetTaskSpec failure should abort the run")
 	}
 }
+
+// TestRunnerReschedule verifies a reschedule-mode sensor that signaled reschedule
+// (sentinel exit + a reschedule-time file the runtime wrote) is reported as
+// up_for_reschedule with reschedule_at — NOT failed — so the scheduler re-dispatches
+// it later without consuming retry budget (ADR 0040 Phase B, #380).
+func TestRunnerReschedule(t *testing.T) {
+	rp := filepath.Join(t.TempDir(), "reschedule.txt")
+	if err := os.WriteFile(rp, []byte("2099-01-02T03:04:05+00:00\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:sensor"}}
+	cmd := &fakeCmd{exitCode: rescheduleExitCode} // the runtime signaled reschedule
+	r := newRunner(client, cmd, &recordingSink{})
+	r.ReschedulePath = rp
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: reschedule must not surface as an error: %v", err)
+	}
+	if len(client.reports) == 0 {
+		t.Fatal("no state reported")
+	}
+	last := client.reports[len(client.reports)-1]
+	if last.GetState() != agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE {
+		t.Errorf("final state = %v, want up_for_reschedule", last.GetState())
+	}
+	if last.GetRescheduleAt() == nil {
+		t.Fatal("reschedule_at must be set on the up_for_reschedule report")
+	}
+	if got := last.GetRescheduleAt().AsTime().UTC().Format(time.RFC3339); got != "2099-01-02T03:04:05Z" {
+		t.Errorf("reschedule_at = %s, want 2099-01-02T03:04:05Z", got)
+	}
+	// The agent must also tell the runtime where to write the reschedule time.
+	foundEnv := false
+	for _, e := range cmd.env {
+		if strings.HasPrefix(e, "LEOFLOW_RESCHEDULE_PATH=") {
+			foundEnv = true
+		}
+	}
+	if !foundEnv {
+		t.Error("buildEnv must set LEOFLOW_RESCHEDULE_PATH so the runtime can signal reschedule")
+	}
+}

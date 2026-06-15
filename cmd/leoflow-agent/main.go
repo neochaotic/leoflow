@@ -71,7 +71,9 @@ func run() int {
 		// Operator extra-links share the return value's per-task temp dir (#375).
 		LinksPath: filepath.Join(filepath.Dir(returnPath), "extra_links.json"),
 		// Custom-keyed XCom pushes, same per-task temp dir (multi-key XCom).
-		PushesPath:        filepath.Join(filepath.Dir(returnPath), "xcom_pushes.json"),
+		PushesPath: filepath.Join(filepath.Dir(returnPath), "xcom_pushes.json"),
+		// A reschedule-mode sensor's next-poke time, same per-task temp dir (#380).
+		ReschedulePath:    filepath.Join(filepath.Dir(returnPath), "reschedule.txt"),
 		HeartbeatInterval: 15 * time.Second,
 	}
 	if rerr := runner.Run(ctx); rerr != nil {

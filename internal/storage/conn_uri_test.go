@@ -40,7 +40,9 @@ func TestAirflowConnURIGCP(t *testing.T) {
 	// No host/login/password → the conn_type is the scheme and there is no
 	// authority component (no "//", no "@" userinfo). The client_email's "@" is
 	// percent-encoded inside __extra__, so a literal "@" must not appear.
-	const prefix = "google_cloud_platform:?"
+	// The scheme is hyphenated (RFC 3986 — `_` is illegal in a scheme); Airflow
+	// reverses `-`→`_` in from_uri, so google-cloud-platform → google_cloud_platform.
+	const prefix = "google-cloud-platform:?"
 	if !strings.HasPrefix(got, prefix) {
 		t.Fatalf("uri = %q, want %q prefix", got, prefix)
 	}
@@ -54,6 +56,91 @@ func TestAirflowConnURIGCP(t *testing.T) {
 	}
 	if q.Get("__extra__") != extra {
 		t.Errorf("__extra__ = %q, want exact round-trip %q", q.Get("__extra__"), extra)
+	}
+}
+
+// TestAirflowConnURIPasswordHardening pins the nastiest passwords through the
+// real builder: a double-slash (`//`, the classic that breaks naive URI string
+// concatenation), plus every URI-reserved char (@ : / ? # % + & = and a space).
+// The contract: airflowConnURI percent-encodes them so the result is parseable
+// and url.Parse (what the user-side Python connector mirrors) recovers the
+// password byte-for-byte. A regression that hand-rolled the URI instead of using
+// net/url would surface here.
+func TestAirflowConnURIPasswordHardening(t *testing.T) {
+	port := 5432
+	for _, pw := range []string{
+		"pa//ss",                   // double slash
+		"a//b:c@d//e",              // double slash mixed with @ and :
+		"//leading",                // leading double slash
+		"trailing//",               // trailing double slash
+		"p@ss/w0rd:!#$%+&=? ",      // the full reserved set incl. ? and a space
+		"a%23b?c//d",               // a literal "%23" must NOT decode to '#'; plus ? and //
+		"%2F%2F already-encoded//", // a literal %2F must NOT be double-decoded
+	} {
+		got := airflowConnURI(domain.Connection{
+			ConnID: "c", ConnType: "postgres",
+			Host: "h", Port: &port, Login: "u", Password: pw, Schema: "db",
+		})
+		parsed, err := url.Parse(got)
+		if err != nil {
+			t.Errorf("password %q → unparseable URI %q: %v", pw, got, err)
+			continue
+		}
+		recovered, _ := parsed.User.Password()
+		if recovered != pw {
+			t.Errorf("password round-trip failed: built %q, recovered %q, want %q", got, recovered, pw)
+		}
+	}
+}
+
+// TestAirflowConnURIExtraWithURL pins that a full URL living in Extra (the common
+// case: webhook endpoints, instance_url, api_host) survives the __extra__
+// round-trip byte-for-byte — including the `//` after the scheme, `//` in the
+// path, query params, and a fragment. A regression that re-encoded or split the
+// Extra would corrupt the URL and the user-side hook would call the wrong
+// endpoint. This complements the per-connector coverage (slack/salesforce/datadog
+// all carry https:// URLs in Extra).
+func TestAirflowConnURIExtraWithURL(t *testing.T) {
+	extras := []string{
+		`{"webhook":"https://hooks.example.com//team//channel/path?token=ab/cd+ef&x=1#frag"}`,
+		`{"instance_url":"https://my.salesforce.com/","api_host":"http://10.0.0.1:8080//v2/"}`,
+		`{"endpoint":"https://例え.example.com/パス//x"}`, // non-ASCII host + path
+	}
+	for _, extra := range extras {
+		got := airflowConnURI(domain.Connection{ConnID: "c", ConnType: "http", Extra: extra})
+		parsed, err := url.Parse(got)
+		if err != nil {
+			t.Errorf("extra %q → unparseable URI %q: %v", extra, got, err)
+			continue
+		}
+		if recovered := parsed.Query().Get("__extra__"); recovered != extra {
+			t.Errorf("Extra URL round-trip failed:\n built     %q\n recovered %q\n want      %q", got, recovered, extra)
+		}
+	}
+}
+
+// TestAirflowConnURISchemeUnderscoreNormalized pins the RFC 3986 fix: a conn_type
+// with an underscore (google_ads, azure_data_lake, spark_sql, …) is NOT a legal
+// URI scheme. Airflow rewrites `_`→`-` for the scheme (and reverses it in
+// from_uri), so we must too — otherwise the built URI fails url.Parse with a host
+// ("first path segment cannot contain colon") and Python's urllib reads an empty
+// scheme. This asserts the scheme is hyphenated AND the result is parseable.
+func TestAirflowConnURISchemeUnderscoreNormalized(t *testing.T) {
+	for _, connType := range []string{"google_ads", "azure_data_lake", "spark_sql"} {
+		port := 443
+		got := airflowConnURI(domain.Connection{
+			ConnID: "c", ConnType: connType,
+			Host: "h.example.com", Port: &port, Login: "u", Password: "p",
+		})
+		wantScheme := strings.ReplaceAll(connType, "_", "-")
+		parsed, err := url.Parse(got)
+		if err != nil {
+			t.Errorf("%s: url.Parse(%q) failed: %v", connType, got, err)
+			continue
+		}
+		if parsed.Scheme != wantScheme {
+			t.Errorf("%s: scheme = %q, want %q", connType, parsed.Scheme, wantScheme)
+		}
 	}
 }
 

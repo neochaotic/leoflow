@@ -12,7 +12,12 @@ import (
 // (conn_type://login:password@host:port/schema), the form Airflow's env secrets
 // backend parses from AIRFLOW_CONN_<ID>. Login/password are percent-encoded.
 func airflowConnURI(c domain.Connection) string {
-	u := url.URL{Scheme: c.ConnType}
+	// A conn_type with an underscore (google_ads, google_cloud_platform,
+	// azure_data_lake, spark_sql, …) is NOT a legal URI scheme per RFC 3986, so
+	// `scheme://host` fails url.Parse and Python's urllib reads an empty scheme.
+	// Airflow rewrites `_`→`-` for the scheme and reverses it in from_uri; we
+	// match that so the delivered AIRFLOW_CONN_<ID> is parseable and round-trips.
+	u := url.URL{Scheme: strings.ReplaceAll(c.ConnType, "_", "-")}
 	if c.Login != "" || c.Password != "" {
 		u.User = url.UserPassword(c.Login, c.Password)
 	}

@@ -16,6 +16,9 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.6",
+    # jinja2 is optional at runtime (bash-only images fall back to raw + env vars,
+    # see _render_bash), but the test suite needs it to exercise the render happy path.
+    "jinja2>=3.0",
 ]
 
 [tool.hatch.build.targets.wheel]

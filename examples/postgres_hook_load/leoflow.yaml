@@ -1,0 +1,13 @@
+schema_version: "1.0"
+dag_id: postgres_hook_load
+description: "Load rows into an external Postgres using Airflow's PostgresHook, with the provider declared via the connectors: sugar."
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+# The connectors: sugar — this one line expands at compile to
+# apache-airflow-providers-postgres, which pulls PostgresHook and its psycopg2
+# driver. Contrast examples/postgres_load, which pins the raw driver in
+# dependencies: and uses psycopg2 directly. ADR 0038.
+connectors:
+  - postgres

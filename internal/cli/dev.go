@@ -721,7 +721,10 @@ func ensureWorkspaceDagVenvs(ctx context.Context, cmd *cobra.Command, ws *Worksp
 		dagID := p.DagID
 		deps := []string(nil)
 		if p.Config != nil {
-			deps = p.Config.Dependencies
+			var derr error
+			if deps, derr = p.Config.EffectiveDependencies(); derr != nil {
+				return "", fmt.Errorf("resolving dependencies for project %q: %w", p.Path, derr)
+			}
 		}
 		py, verr := ensureDagVenv(ctx, cmd, home, dagID, runtimeSrc, deps)
 		if verr != nil {
@@ -1182,8 +1185,12 @@ func ensureProjectDockerfile(cmd *cobra.Command, dir string, cfg *domain.Leoflow
 	if src == "" {
 		src = "dag.py"
 	}
+	deps, derr := cfg.EffectiveDependencies()
+	if derr != nil {
+		return fmt.Errorf("resolving dependencies: %w", derr)
+	}
 	devPrintln(cmd.OutOrStdout(), "▸ generating a default Dockerfile (none found) …")
-	if werr := os.WriteFile(df, []byte(devDockerfile(devBaseImage, src, cfg.Dependencies)), 0o600); werr != nil {
+	if werr := os.WriteFile(df, []byte(devDockerfile(devBaseImage, src, deps)), 0o600); werr != nil {
 		return fmt.Errorf("writing Dockerfile: %w", werr)
 	}
 	return nil

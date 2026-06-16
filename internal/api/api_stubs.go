@@ -34,6 +34,18 @@ func registerAPIStubs(r gin.IRouter) {
 	r.GET("/api/v2/pools", apiEmptyCollection("pools"))                        // #31
 	r.GET("/api/v2/providers", apiEmptyCollection("providers"))                // #30
 	r.GET("/api/v2/jobs", apiEmptyCollection("jobs"))                          // #30
+	r.GET("/api/v2/backfills", apiEmptyCollection("backfills"))                // Backfills screen
+	// The connection form's "create default connections" action: the SPA POSTs
+	// here when the Connections area opens and its generated client handles only
+	// 401/403 — an unhandled 404 crashed the React view, so the connector config
+	// page "wouldn't open". Leoflow seeds no legacy default connections, so this
+	// is a no-op that returns the empty envelope the form reads (`.connections`).
+	r.POST("/api/v2/connections/defaults", apiEmptyCollection("connections"))
+	// The Config screen reads {sections:[]} (not a collection envelope). Leoflow
+	// does not expose the Airflow config, so render an empty (graceful) one.
+	r.GET("/api/v2/config", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"sections": []any{}})
+	})
 	// /api/v2/eventLogs is owned by registerUIAudit (real when an AuditLogReader
 	// is set, empty stub otherwise) — see #37.
 	// Human-in-the-loop details, polled at the DAG-run level (#32).

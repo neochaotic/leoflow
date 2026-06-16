@@ -5,8 +5,13 @@
 # The generated Dockerfile follows the same template `leoflow lite` uses
 # in-process (internal/cli/dev.go devDockerfile): FROM the matching task base,
 # pip install declared dependencies, COPY the DAG source, set PYTHONPATH.
-# Operators copying these into a Pro deploy walkthrough get the same shape
-# regardless of which executor they came from.
+#
+# These examples FROM the LOCAL base `leoflow-base:py<ver>` on purpose: they are
+# the Lite learning track — `leoflow lite examples/<x>` builds that base locally,
+# so the examples build and run offline, no registry needed. The real Pro pipeline
+# is yaml-driven and FROMs the PUBLISHED base ghcr.io/neochaotic/leoflow-runtime
+# (internal/cli/compile_build.go resolveBaseImage) so it builds anywhere — that is
+# the deliberate Lite/Pro split, documented in docs/deploy.md.
 #
 # Usage:
 #   scripts/sync-example-dockerfiles.sh                # write/overwrite all
@@ -53,7 +58,9 @@ EOF
 }
 
 drift=0
-for yaml in examples/*/leoflow.yaml; do
+# Find every example at any depth, so category folders (e.g. examples/gcp/<name>/)
+# are covered alongside flat examples/<name>/.
+while IFS= read -r yaml; do
   dir="$(dirname "$yaml")"
   dockerfile="$dir/Dockerfile"
   expected="$(gen_dockerfile "$yaml")"
@@ -66,7 +73,7 @@ for yaml in examples/*/leoflow.yaml; do
   else
     printf '%s\n' "$expected" > "$dockerfile"
   fi
-done
+done < <(find examples -name leoflow.yaml | sort)
 
 if [ "$mode" = "check" ] && [ "$drift" -ne 0 ]; then
   echo "" >&2

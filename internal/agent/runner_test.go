@@ -203,6 +203,193 @@ func TestRunnerHappyPath(t *testing.T) {
 	}
 }
 
+func TestBuildEnvStampsRunContext(t *testing.T) {
+	// The runtime's standalone operator context (_StandaloneTaskInstance / ADR 0040)
+	// reads LEOFLOW_TASK_ID/RUN_ID/TRY_NUMBER/DAG_ID. The server already sends these
+	// on the TaskSpec; the agent must stamp them into the process env, else the
+	// context is blank in every executor (silent-wrong for operators that read them).
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "airflow_operator", DagId: "etl", RunId: "run-123",
+		TaskId: "load", TryNumber: 3,
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	for _, want := range []string{
+		"LEOFLOW_TASK_ID=load", "LEOFLOW_RUN_ID=run-123",
+		"LEOFLOW_DAG_ID=etl", "LEOFLOW_TRY_NUMBER=3",
+	} {
+		if !strings.Contains(je, want) {
+			t.Errorf("env missing %q; got %v", want, env)
+		}
+	}
+}
+
+func TestBuildEnvStampsParams(t *testing.T) {
+	// The DagRun's params/conf reach the runtime's context['params'] via LEOFLOW_PARAMS (#148).
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator:   "airflow_operator",
+		ParamsJson: `{"region":"us-east1"}`,
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if !strings.Contains(strings.Join(env, "\n"), `LEOFLOW_PARAMS={"region":"us-east1"}`) {
+		t.Errorf("env missing LEOFLOW_PARAMS; got %v", env)
+	}
+}
+
+func TestBuildEnvStampsDataInterval(t *testing.T) {
+	// The runtime's standalone context exposes data_interval_start/end; the agent
+	// stamps them from the DagRun's interval the server sends (ADR 0040).
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator:          "airflow_operator",
+		DataIntervalStart: "2026-06-13T00:00:00Z",
+		DataIntervalEnd:   "2026-06-14T00:00:00Z",
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	for _, want := range []string{
+		"LEOFLOW_DATA_INTERVAL_START=2026-06-13T00:00:00Z",
+		"LEOFLOW_DATA_INTERVAL_END=2026-06-14T00:00:00Z",
+	} {
+		if !strings.Contains(je, want) {
+			t.Errorf("env missing %q; got %v", want, env)
+		}
+	}
+}
+
+func TestBuildEnvDerivesDsTsFromLogicalDate(t *testing.T) {
+	// The runtime's standalone context exposes ds/ts (LEOFLOW_DS / LEOFLOW_TS). The
+	// agent derives both from the DagRun's logical_date the server sends — ts is the
+	// RFC3339 value, ds its UTC date — so date-filtering operators see a real value
+	// instead of "".
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "airflow_operator", LogicalDate: "2026-06-13T08:30:00Z",
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	for _, want := range []string{"LEOFLOW_TS=2026-06-13T08:30:00Z", "LEOFLOW_DS=2026-06-13"} {
+		if !strings.Contains(je, want) {
+			t.Errorf("env missing %q; got %v", want, env)
+		}
+	}
+}
+
+func TestBuildEnvDeliversXComByTaskForOperators(t *testing.T) {
+	// For a captured operator (ADR 0040), the agent fetches each upstream's
+	// return_value and delivers them as the LEOFLOW_UPSTREAM_XCOM map so the
+	// runtime's ti.xcom_pull('compile') resolves it — chained operators like
+	// Airflow. A missing upstream is omitted (pulls as None).
+	client := &fakeClient{
+		spec: &agentv1.TaskSpec{
+			Operator:      "airflow_operator",
+			OperatorClass: "x.Y",
+			DependsOn:     []string{"compile", "missing"},
+		},
+		xcom: map[string]*agentv1.FetchXComResponse{
+			"compile": {Value: []byte(`{"name":"abc"}`)},
+		},
+	}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	je := strings.Join(env, "\n")
+	if !strings.Contains(je, `LEOFLOW_UPSTREAM_XCOM={"compile":{"name":"abc"}}`) {
+		t.Errorf("env missing/!= xcom-by-task map; got %v", env)
+	}
+}
+
+func TestBuildEnvSkipsXComByTaskForNonOperators(t *testing.T) {
+	// A python @task gets its inputs via xcom_input_mapping, not ti.xcom_pull, so
+	// the agent must not waste fetches building the map for it.
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "python", Entrypoint: "dag:f", DependsOn: []string{"compile"},
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+
+	env, err := r.buildEnv(context.Background(), client.spec)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if strings.Contains(strings.Join(env, "\n"), "LEOFLOW_UPSTREAM_XCOM") {
+		t.Errorf("non-operator task should not get the xcom-by-task map; got %v", env)
+	}
+}
+
+func TestRunnerPushesCustomXComs(t *testing.T) {
+	// The runtime writes the operator's custom-keyed ti.xcom_push values to PushesPath;
+	// the agent stores each as its own XCom (multi-key XCom — visible in the XCom tab).
+	pushes := filepath.Join(t.TempDir(), "pushes.json")
+	if err := os.WriteFile(pushes, []byte(`{"row_count":42,"summary":{"ok":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "airflow_operator", OperatorClass: "x.Y"}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.PushesPath = pushes
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := map[string]string{}
+	for _, p := range client.pushed {
+		got[p.GetKey()] = string(p.GetValue())
+	}
+	if got["row_count"] != "42" || got["summary"] != `{"ok":true}` {
+		t.Errorf("custom xcoms pushed = %v", got)
+	}
+}
+
+func TestRunnerPushesExtraLinks(t *testing.T) {
+	// The runtime computes operator_extra_links and writes them to LinksPath; the
+	// agent ships them to the control plane as the reserved "_extra_links" XCom so
+	// the UI can render the provider deep-link buttons (#375).
+	links := filepath.Join(t.TempDir(), "extra_links.json")
+	body := `{"BigQuery Job Detail":"https://console.cloud.google.com/bigquery?x=1"}`
+	if err := os.WriteFile(links, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "airflow_operator", OperatorClass: "x.Y"}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.LinksPath = links
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var found *agentv1.PushXComRequest
+	for _, p := range client.pushed {
+		if p.GetKey() == "_extra_links" {
+			found = p
+		}
+	}
+	if found == nil {
+		t.Fatalf("no _extra_links PushXCom; pushed=%v", client.pushed)
+	}
+	if string(found.GetValue()) != body {
+		t.Errorf("links value = %s, want %s", found.GetValue(), body)
+	}
+}
+
 func TestRunnerReportsFailureOnNonZeroExit(t *testing.T) {
 	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "bash", Entrypoint: "exit 1"}}
 	cmd := &fakeCmd{exitCode: 1}

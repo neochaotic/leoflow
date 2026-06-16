@@ -35,6 +35,40 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
   # ─────────────────────────────────────────────────────────────────────
+  # Proto drift: the generated gRPC code (proto/agent/v1) is committed, so a
+  # change to proto/agent.proto without re-running `buf generate` would ship a
+  # stale stub. Regenerate in CI and fail if the working tree differs.
+  # ─────────────────────────────────────────────────────────────────────
+  proto-drift:
+    name: Proto generated code is in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      # Plugins are pinned: protoc-gen-go to the go.mod version, protoc-gen-go-grpc
+      # to v1.6.2 — these MUST match the versions the committed code was generated
+      # with, or this check reports false drift.
+      - name: Install protoc-gen plugins
+        run: |
+          set -euo pipefail
+          go install "google.golang.org/protobuf/cmd/protoc-gen-go@$(go list -m -f '{{.Version}}' google.golang.org/protobuf)"
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+      - name: buf generate
+        run: buf generate
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code -- proto/; then
+            echo "::error::proto/agent/v1 is out of sync with proto/agent.proto. Run 'buf generate' and commit." >&2
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────
   # Lint the GitHub Actions workflows themselves (actionlint). A malformed
   # workflow can silently fail to trigger or break a release; catching schema and
   # expression errors here keeps the CI/release workflows valid before they merge.
@@ -210,13 +244,119 @@ jobs:
         run: bash test/e2e/lite-multidag.sh
 
   # ─────────────────────────────────────────────────────────────────────
-  # The real `leoflow deploy` path on k3d with a registry the cluster pulls
-  # from (test/e2e/deploy-e2e.sh, ADR 0041): one `leoflow deploy` builds for
-  # the cluster arch, PUSHES to a k3d-managed registry, captures the digest,
-  # re-pins dag.json, registers — then the cluster pulls the digest-pinned image
-  # and runs it. Gates the build→push→digest→register glue unit tests leave to
-  # e2e. Runs clean on Linux (no Docker Desktop proxy). ~10 min.
+  # Headless SPA crash smoke (test/e2e/ui-smoke.js): boots Lite (managed PG, no
+  # Docker), drives the embedded Airflow 3.2 UI with a real browser, and fails on
+  # any uncaught React error. The Go tests cannot see the React layer — the
+  # connector config page once shipped broken (catalog omitted standard_fields
+  # keys the SPA reads) and only a browser caught it. This guards that whole class
+  # plus the logs render contract. ~4 min (chromium + relocatable PG download).
   # ─────────────────────────────────────────────────────────────────────
+  ui-smoke:
+    name: UI smoke (headless SPA crash check)
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: parser
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+      - name: Build binaries
+        run: make build
+      - name: Install Playwright + Chromium
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm i --no-save playwright-core playwright
+          npx playwright install --with-deps chromium
+      - name: Boot Lite and run the UI smoke
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/bin:$PATH"
+          # `leoflow setup` prints the admin password once; capture it.
+          PW=$(leoflow setup 2>&1 | tee /tmp/setup.log | grep -oiE 'password:[[:space:]]*[A-Za-z0-9]+' | head -1 | awk '{print $NF}')
+          [ -n "$PW" ] || { echo "could not capture admin password"; cat /tmp/setup.log; exit 1; }
+          leoflow lite --port 18080 --postgres managed --executor subprocess \
+            --server-bin "$PWD/bin/leoflow-server" --agent-bin "$PWD/bin/leoflow-agent" > /tmp/lite.log 2>&1 &
+          for _ in $(seq 1 60); do curl -fsS http://localhost:18080/readyz >/dev/null 2>&1 && break; sleep 3; done
+          curl -fsS http://localhost:18080/readyz >/dev/null || { echo "lite did not become ready"; tail -40 /tmp/lite.log; exit 1; }
+          TOK=$(leoflow auth create-token --server http://localhost:18080 --username admin@leoflow.local --password "$PW")
+          # Wait for the scaffolded "hello" DAG to register (its venv installs first), then run it for log content.
+          for _ in $(seq 1 40); do curl -fsS -H "Authorization: Bearer $TOK" http://localhost:18080/api/v2/dags/hello >/dev/null 2>&1 && break; sleep 3; done
+          curl -fsS -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{}' \
+            http://localhost:18080/api/v2/dags/hello/dagRuns >/dev/null 2>&1 || true
+          sleep 10
+          LEOFLOW_URL=http://localhost:18080 LEOFLOW_USER=admin@leoflow.local LEOFLOW_PASS="$PW" \
+            node test/e2e/ui-smoke.js
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Full pod-per-task e2e on a real k3d cluster (test/e2e/e2e.sh): builds the
+  # base + DAG images, runs the control plane on the runner, triggers a DAG, and
+  # asserts every task reaches success — including a provider SENSOR
+  # (type=airflow_operator, ADR 0040) that runs in its own pod and resolves a
+  # managed Connection. This is the operator chain's end-to-end gate. On Linux the
+  # pods reach the host control plane via host.k3d.internal (k3d injects it into
+  # CoreDNS). ~10 min.
+  # ─────────────────────────────────────────────────────────────────────
+  operator-e2e:
+    name: E2E operators (k3d pod-per-task)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: leoflow
+          POSTGRES_PASSWORD: leoflow
+          POSTGRES_DB: leoflow
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7
+        ports: [6379:6379]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      # The control plane runs on the runner; k3d pods dial it via host.k3d.internal
+      # (Linux only — Docker Desktop uses host.docker.internal, the e2e default).
+      LEOFLOW_E2E_HOST_ADDR: host.k3d.internal
+      # leoflow compile spawns `python3 -m leoflow_parser`; the parser ships under
+      # parser/ and needs no install — just PYTHONPATH (the airflow-free shim).
+      PYTHONPATH: parser
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install k3d + kubectl + jq + migrate
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.7.4/install.sh | TAG=v5.7.4 bash
+          curl -fsSLO "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+          sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+      - name: Apply migrations
+        run: ~/go/bin/migrate -path migrations -database "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable" up
+      - name: Build binaries
+        run: make build
+      - name: Run the k3d operator e2e
+        run: bash test/e2e/e2e.sh
+
+  # deploy-e2e: the real `leoflow deploy` path on k3d with a registry the cluster
+  # pulls from (test/e2e/deploy-e2e.sh, ADR 0041). One `leoflow deploy` builds for
+  # the cluster arch, pushes to a k3d-managed registry, captures the digest,
+  # re-pins dag.json, registers -- then the cluster pulls the digest-pinned image
+  # and runs it. Gates the build/push/digest/register glue. ~10 min.
   deploy-e2e:
     name: E2E deploy (k3d + registry)
     runs-on: ubuntu-latest
@@ -237,8 +377,6 @@ jobs:
     env:
       # k3d pods dial the runner control plane via host.k3d.internal (Linux only).
       LEOFLOW_E2E_HOST_ADDR: host.k3d.internal
-      # leoflow compile spawns `python3 -m leoflow_parser`; the parser ships under
-      # parser/ and needs no install — just PYTHONPATH (the airflow-free shim).
       PYTHONPATH: parser
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,6 +37,27 @@ type TaskSpec struct {
 	// runtime decodes it. Empty when the task has no literals. The name
 	// keeps Airflow's DAG-run `params` term free for a future feature (#148).
 	CallArgsJSON string
+	// OperatorClass is the dotted Airflow operator/sensor class for an
+	// airflow_operator task (ADR 0040); empty for native operators. The agent
+	// passes it to BuildCommand to dispatch the runtime's --operator mode.
+	OperatorClass string
+	// OperatorArgsJSON carries the operator's constructor kwargs (JSON). The agent
+	// injects it as LEOFLOW_OPERATOR_ARGS; the runtime decodes it. Empty when the
+	// operator takes no args.
+	OperatorArgsJSON string
+	// LogicalDate is the DagRun's logical date in RFC3339; the agent derives the
+	// runtime's LEOFLOW_TS/LEOFLOW_DS from it (ADR 0040). Empty leaves them unset.
+	LogicalDate string
+	// DependsOn lists the task's upstream task_ids. The agent fetches each one's
+	// return_value so a captured operator's ti.xcom_pull(<id>) resolves it (ADR 0040).
+	DependsOn []string
+	// DataIntervalStart/End are the DagRun's data interval in RFC3339; the agent
+	// stamps the runtime's data_interval_start/end context from them (ADR 0040).
+	DataIntervalStart string
+	DataIntervalEnd   string
+	// ParamsJSON is the DagRun's params/conf, JSON-encoded (#148); the agent stamps
+	// LEOFLOW_PARAMS so the runtime exposes context['params'] / {{ params.X }}.
+	ParamsJSON string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -133,6 +155,13 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		XcomInputMapping:        toXComUpstreamsMap(spec.XComInputMapping),
 		ExecutionTimeoutSeconds: clampInt32(spec.TimeoutSeconds),
 		CallArgsJson:            spec.CallArgsJSON,
+		OperatorClass:           spec.OperatorClass,
+		OperatorArgsJson:        spec.OperatorArgsJSON,
+		LogicalDate:             spec.LogicalDate,
+		DependsOn:               spec.DependsOn,
+		DataIntervalStart:       spec.DataIntervalStart,
+		DataIntervalEnd:         spec.DataIntervalEnd,
+		ParamsJson:              spec.ParamsJSON,
 	}, nil
 }
 
@@ -207,8 +236,13 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
 	}
-	if !declaresUpstream(spec.XComInputMapping, req.GetUpstreamTaskId()) {
-		return nil, status.Errorf(codes.PermissionDenied, "task %q did not declare %q as an xcom input", id.TaskID, req.GetUpstreamTaskId())
+	// A task may fetch XCom from an upstream it declared as an xcom input OR from any
+	// of its direct dependencies (depends_on) — the latter powers a captured
+	// operator's ti.xcom_pull(<upstream>) chaining (ADR 0040), like Airflow. Anything
+	// else is denied to keep tasks from reading unrelated tasks' XCom.
+	if !declaresUpstream(spec.XComInputMapping, req.GetUpstreamTaskId()) &&
+		!slices.Contains(spec.DependsOn, req.GetUpstreamTaskId()) {
+		return nil, status.Errorf(codes.PermissionDenied, "task %q may not read xcom from %q (not a declared input or dependency)", id.TaskID, req.GetUpstreamTaskId())
 	}
 	entry, err := s.xcom.Fetch(ctx, xcomKey(*id, req.GetUpstreamTaskId(), req.GetKey()))
 	if errors.Is(err, xcom.ErrNotFound) {

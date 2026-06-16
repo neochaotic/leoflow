@@ -56,6 +56,10 @@ a `README.md` walking through their specific Connection wiring.
 | [csv_report](csv_report/) | Generate a CSV, compute a report from it, all in-task (no deps). |
 | [duckdb_http_csv](duckdb_http_csv/) | DuckDB reads a remote CSV over HTTP and aggregates it (out-of-core). |
 | [fan_out_aggregate](fan_out_aggregate/) | Fan-out to parallel workers then fan-in to an aggregate (map-reduce). |
+| [gcp/dataform_trigger](gcp/dataform_trigger/) | Chained Google Dataform operators (`compile >> invoke`) — passes the compilation result via `{{ ti.xcom_pull('compile')['name'] }}` (ADR 0040). |
+| [gcp/gcs_bucket](gcp/gcs_bucket/) | Google Cloud Storage operators — bucket lifecycle create → list → delete (ADR 0040). |
+| [gcp/bigquery_query](gcp/bigquery_query/) | A single BigQuery operator querying a public dataset — the minimal operator example (ADR 0040). |
+| [gcp/bigquery_chain](gcp/bigquery_chain/) | BigQuery operators with operator-to-operator XCom chaining via `ti.xcom_pull` (ADR 0040). |
 | [gcp_gcs_load](gcp_gcs_load/) | Write + read a GCS object via a managed `google_cloud_platform` Connection (key or keyless/ADC). |
 | [http_jsonplaceholder](http_jsonplaceholder/) | Fetch posts from a public JSON API (jsonplaceholder) and summarize. |
 | [http_load](http_load/) | POST a payload to an external HTTP endpoint via a managed Connection, assert the echo round-trips. |

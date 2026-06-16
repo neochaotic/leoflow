@@ -1,0 +1,4526 @@
+[
+  {
+    "connection_type": "adls",
+    "default_conn_name": null,
+    "extra_fields": {
+      "connection_string": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "ADLS Gen2 Connection String (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Tenant ID (Active Directory)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.data_lake.AzureDataLakeStorageV2Hook",
+    "hook_name": "Azure Data Lake Storage V2",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": "storage account name",
+        "title": "ADLS Gen2 Account Name"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "client id",
+        "title": "Client ID (Active Directory)"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "key / secret",
+        "title": "ADLS Gen2 Key / Client Secret (Active Directory)"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "athena",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.amazon.aws.hooks.athena_sql.AthenaSQLHook",
+    "hook_name": "Amazon Athena",
+    "pip_package": "apache-airflow-providers-amazon",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "YOUR_AWS_ACCESS_KEY_ID",
+        "title": "AWS Access Key ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "YOUR_AWS_SECRET_ACCESS_KEY",
+        "title": "AWS Secret Access Key"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": null
+    }
+  },
+  {
+    "connection_type": "aws",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.amazon.aws.hooks.base_aws.AwsGenericHook",
+    "hook_name": "Amazon Web Services",
+    "pip_package": "apache-airflow-providers-amazon",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "YOUR_AWS_ACCESS_KEY_ID",
+        "title": "AWS Access Key ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "YOUR_AWS_SECRET_ACCESS_KEY",
+        "title": "AWS Secret Access Key"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure",
+    "default_conn_name": null,
+    "extra_fields": {
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "subscriptionId": {
+        "description": null,
+        "schema": {
+          "title": "Azure Subscription ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenantId": {
+        "description": null,
+        "schema": {
+          "title": "Azure Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.base_azure.AzureBaseHook",
+    "hook_name": "Azure",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "client_id (token credentials auth)",
+        "title": "Azure Client ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "secret (token credentials auth)",
+        "title": "Azure Secret"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_batch",
+    "default_conn_name": null,
+    "extra_fields": {
+      "account_url": {
+        "description": null,
+        "schema": {
+          "title": "Batch Account URL",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.batch.AzureBatchHook",
+    "hook_name": "Azure Batch Service",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Batch Account Name"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Batch Account Access Key"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_compute",
+    "default_conn_name": null,
+    "extra_fields": {
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "subscriptionId": {
+        "description": null,
+        "schema": {
+          "title": "Azure Subscription ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenantId": {
+        "description": null,
+        "schema": {
+          "title": "Azure Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.compute.AzureComputeHook",
+    "hook_name": "Azure Compute",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "client_id (token credentials auth)",
+        "title": "Client ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "secret (token credentials auth)",
+        "title": "Client Secret"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_container_instance",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.container_instance.AzureContainerInstanceHook",
+    "hook_name": "Azure Container Instance",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "azure_container_registry",
+    "default_conn_name": null,
+    "extra_fields": {
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "resource_group": {
+        "description": null,
+        "schema": {
+          "title": "Resource group name (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "subscription_id": {
+        "description": null,
+        "schema": {
+          "title": "Subscription ID (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.container_registry.AzureContainerRegistryHook",
+    "hook_name": "Azure Container Registry",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": "docker image registry server",
+        "title": "Registry Server"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "private registry username",
+        "title": "Registry Username"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "private registry password",
+        "title": "Registry Password"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_container_volume",
+    "default_conn_name": null,
+    "extra_fields": {
+      "connection_string": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Blob Storage Connection String (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "resource_group": {
+        "description": null,
+        "schema": {
+          "title": "Resource group name (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "subscription_id": {
+        "description": null,
+        "schema": {
+          "title": "Subscription ID (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.container_volume.AzureContainerVolumeHook",
+    "hook_name": "Azure Container Volume",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "client_id (token credentials auth)",
+        "title": "Azure Client ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "secret (token credentials auth)",
+        "title": "Azure Secret"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_cosmos",
+    "default_conn_name": null,
+    "extra_fields": {
+      "collection_name": {
+        "description": null,
+        "schema": {
+          "title": "Cosmos Collection Name (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "database_name": {
+        "description": null,
+        "schema": {
+          "title": "Cosmos Database Name (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "resource_group_name": {
+        "description": null,
+        "schema": {
+          "title": "Resource Group Name (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "subscription_id": {
+        "description": null,
+        "schema": {
+          "title": "Subscription ID (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.cosmos.AzureCosmosDBHook",
+    "hook_name": "Azure CosmosDB",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "endpoint uri",
+        "title": "Cosmos Endpoint URI"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "master key (not needed for Azure AD authentication)",
+        "title": "Cosmos Master Key Token"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_data_explorer",
+    "default_conn_name": null,
+    "extra_fields": {
+      "auth_method": {
+        "description": null,
+        "schema": {
+          "title": "Authentication Method",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "certificate": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Application PEM Certificate",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenant": {
+        "description": null,
+        "schema": {
+          "title": "Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "thumbprint": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Application Certificate Thumbprint",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.adx.AzureDataExplorerHook",
+    "hook_name": "Azure Data Explorer",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Data Explorer Cluster URL"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "Varies with authentication method",
+        "title": "Username"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "Varies with authentication method",
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_data_factory",
+    "default_conn_name": null,
+    "extra_fields": {
+      "factory_name": {
+        "description": null,
+        "schema": {
+          "title": "Factory Name",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "resource_group_name": {
+        "description": null,
+        "schema": {
+          "title": "Resource Group Name",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "subscriptionId": {
+        "description": null,
+        "schema": {
+          "title": "Subscription ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenantId": {
+        "description": null,
+        "schema": {
+          "title": "Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.data_factory.AzureDataFactoryHook",
+    "hook_name": "Azure Data Factory",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Client ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Secret"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_data_lake",
+    "default_conn_name": null,
+    "extra_fields": {
+      "account_name": {
+        "description": null,
+        "schema": {
+          "title": "Azure DataLake Store Name",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenant": {
+        "description": null,
+        "schema": {
+          "title": "Azure Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.data_lake.AzureDataLakeHook",
+    "hook_name": "Azure Data Lake",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "client id",
+        "title": "Azure Client ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "secret",
+        "title": "Azure Client Secret"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_fileshare",
+    "default_conn_name": null,
+    "extra_fields": {
+      "connection_string": {
+        "description": null,
+        "schema": {
+          "title": "Connection String (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "sas_token": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "SAS Token (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.fileshare.AzureFileShareHook",
+    "hook_name": "Azure FileShare",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "account name or account url",
+        "title": "Blob Storage Login (optional)"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "secret",
+        "title": "Blob Storage Key (optional)"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "azure_service_bus",
+    "default_conn_name": null,
+    "extra_fields": {
+      "credential": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Credential",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "fully_qualified_namespace": {
+        "description": null,
+        "schema": {
+          "title": "Fully Qualified Namespace",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.asb.BaseAzureServiceBusHook",
+    "hook_name": "Azure Service Bus",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": false,
+        "placeholder": "Endpoint=sb://<Resource group>.servicebus.windows.net/; SharedAccessKeyName=<AccessKeyName>;SharedAccessKey=<SharedAccessKey>",
+        "title": "Connection String"
+      }
+    }
+  },
+  {
+    "connection_type": "azure_synapse",
+    "default_conn_name": null,
+    "extra_fields": {
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "subscriptionId": {
+        "description": null,
+        "schema": {
+          "title": "Subscription ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenantId": {
+        "description": null,
+        "schema": {
+          "title": "Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.synapse.BaseAzureSynapseHook",
+    "hook_name": "Azure Synapse",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Synapse Workspace URL"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Client ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Secret"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "cassandra",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.cassandra.hooks.cassandra.CassandraHook",
+    "hook_name": "Cassandra",
+    "pip_package": "apache-airflow-providers-apache-cassandra",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "chime",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.amazon.aws.hooks.chime.ChimeWebhookHook",
+    "hook_name": "Amazon Chime Webhook",
+    "pip_package": "apache-airflow-providers-amazon",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": "hooks.chime.aws/incomingwebhook/",
+        "title": "Chime Webhook Endpoint"
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "T00000000?token=XXXXXXXXXXXXXXXXXXXXXXXX",
+        "title": "Chime Webhook token"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": false,
+        "placeholder": "https",
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "databricks",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.databricks.hooks.databricks.DatabricksHook",
+    "hook_name": "Databricks",
+    "pip_package": "apache-airflow-providers-databricks",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "datadog",
+    "default_conn_name": null,
+    "extra_fields": {
+      "api_host": {
+        "description": null,
+        "schema": {
+          "title": "API endpoint",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "api_key": {
+        "description": null,
+        "schema": {
+          "title": "API key",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "app_key": {
+        "description": null,
+        "schema": {
+          "title": "Application key",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "source_type_name": {
+        "description": null,
+        "schema": {
+          "title": "Source type name",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.datadog.hooks.datadog.DatadogHook",
+    "hook_name": "Datadog",
+    "pip_package": "apache-airflow-providers-datadog",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Events host name"
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "dataprep",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.google.cloud.hooks.dataprep.GoogleDataprepHook",
+    "hook_name": "Google Dataprep",
+    "pip_package": "apache-airflow-providers-google",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "dbt_cloud",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.dbt.cloud.hooks.dbt.DbtCloudHook",
+    "hook_name": "dbt Cloud",
+    "pip_package": "apache-airflow-providers-dbt-cloud",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": "Defaults to 'cloud.getdbt.com'.",
+        "title": "Tenant"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Account ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "API Token"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "discord",
+    "default_conn_name": null,
+    "extra_fields": {
+      "webhook_endpoint": {
+        "description": null,
+        "schema": {
+          "title": "Webhook Endpoint",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.discord.hooks.discord_webhook.DiscordWebhookHook",
+    "hook_name": "Discord",
+    "pip_package": "apache-airflow-providers-discord",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "docker",
+    "default_conn_name": null,
+    "extra_fields": {
+      "email": {
+        "description": null,
+        "schema": {
+          "title": "Email",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "reauth": {
+        "description": "Whether or not to refresh existing authentication on the Docker server.",
+        "schema": {
+          "title": "Reauthenticate",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.docker.hooks.docker.DockerHook",
+    "hook_name": "Docker",
+    "pip_package": "apache-airflow-providers-docker",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Registry URL"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Username"
+      },
+      "password": null,
+      "port": null,
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "druid",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.druid.hooks.druid.DruidDbApiHook",
+    "hook_name": "Druid",
+    "pip_package": "apache-airflow-providers-apache-druid",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "elasticsearch",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.elasticsearch.hooks.elasticsearch.ElasticsearchSQLHook",
+    "hook_name": "Elasticsearch",
+    "pip_package": "apache-airflow-providers-elasticsearch",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "email",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": null,
+    "hook_name": "Email",
+    "pip_package": null,
+    "standard_fields": null
+  },
+  {
+    "connection_type": "emr",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.amazon.aws.hooks.emr.EmrHook",
+    "hook_name": "Amazon Elastic MapReduce",
+    "pip_package": "apache-airflow-providers-amazon",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "fs",
+    "default_conn_name": null,
+    "extra_fields": {
+      "path": {
+        "description": null,
+        "schema": {
+          "title": "Path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.standard.hooks.filesystem.FSHook",
+    "hook_name": "File (path)",
+    "pip_package": "apache-airflow-providers-standard",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "ftp",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.ftp.hooks.ftp.FTPHook",
+    "hook_name": "FTP",
+    "pip_package": "apache-airflow-providers-ftp",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "gcp_looker",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.google.cloud.hooks.looker.LookerHook",
+    "hook_name": "Google Looker",
+    "pip_package": "apache-airflow-providers-google",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "gcpbigquery",
+    "default_conn_name": null,
+    "extra_fields": {
+      "api_resource_configs": {
+        "description": null,
+        "schema": {
+          "title": "API Resource Configs",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "client_id": {
+        "description": null,
+        "schema": {
+          "title": "Client ID (Client Credentials Grant Flow)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "client_secret": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Client Secret (Client Credentials Grant Flow)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "credential_config_file": {
+        "description": null,
+        "schema": {
+          "title": "Credential Configuration File",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "idp_extra_parameters": {
+        "description": null,
+        "schema": {
+          "title": "IdP Extra Request Parameters",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "idp_issuer_url": {
+        "description": null,
+        "schema": {
+          "title": "IdP Token Issue URL (Client Credentials Grant Flow)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "impersonation_chain": {
+        "description": null,
+        "schema": {
+          "title": "Impersonation Chain",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "is_anonymous": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "Anonymous credentials (ignores all other settings)",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      },
+      "key_path": {
+        "description": null,
+        "schema": {
+          "title": "Keyfile Path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "key_secret_name": {
+        "description": null,
+        "schema": {
+          "title": "Keyfile Secret Name (in GCP Secret Manager)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "key_secret_project_id": {
+        "description": null,
+        "schema": {
+          "title": "Keyfile Secret Project Id (in GCP Secret Manager)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "keyfile_dict": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Keyfile JSON",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "labels": {
+        "description": null,
+        "schema": {
+          "title": "Labels",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "location": {
+        "description": null,
+        "schema": {
+          "title": "Location",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "num_retries": {
+        "description": null,
+        "schema": {
+          "default": 5,
+          "title": "Number of Retries",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": 5
+      },
+      "priority": {
+        "description": null,
+        "schema": {
+          "default": "INTERACTIVE",
+          "title": "Priority",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "INTERACTIVE"
+      },
+      "project": {
+        "description": null,
+        "schema": {
+          "title": "Project Id",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "scope": {
+        "description": null,
+        "schema": {
+          "title": "Scopes (comma separated)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "use_legacy_sql": {
+        "description": null,
+        "schema": {
+          "title": "Use Legacy SQL",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.google.cloud.hooks.bigquery.BigQueryHook",
+    "hook_name": "Google Bigquery",
+    "pip_package": "apache-airflow-providers-google",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "gcpcloudsql",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLHook",
+    "hook_name": "Google Cloud SQL",
+    "pip_package": "apache-airflow-providers-google",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "gcpcloudsqldb",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.google.cloud.hooks.cloud_sql.CloudSQLDatabaseHook",
+    "hook_name": "Google Cloud SQL Database",
+    "pip_package": "apache-airflow-providers-google",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "gcpssh",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.google.cloud.hooks.compute_ssh.ComputeEngineSSHHook",
+    "hook_name": "Google Cloud SSH",
+    "pip_package": "apache-airflow-providers-google",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "generic",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": null,
+    "hook_name": "Generic",
+    "pip_package": null,
+    "standard_fields": null
+  },
+  {
+    "connection_type": "github",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.github.hooks.github.GithubHook",
+    "hook_name": "GitHub",
+    "pip_package": "apache-airflow-providers-github",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": "https://{hostname}/api/v3 (for GitHub Enterprise)",
+        "title": "GitHub Enterprise URL (Optional)"
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "GitHub Access Token"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "google_ads",
+    "default_conn_name": null,
+    "extra_fields": {
+      "client_id": {
+        "description": null,
+        "schema": {
+          "title": "OAuth2 Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "client_secret": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "OAuth2 Client Secret",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "developer_token": {
+        "description": null,
+        "schema": {
+          "title": "Developer token",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "refresh_token": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "OAuth2 Refresh Token",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.google.ads.hooks.ads.GoogleAdsHook",
+    "hook_name": "Google Ads",
+    "pip_package": "apache-airflow-providers-google",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "Leave blank (optional)",
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "google_cloud_platform",
+    "default_conn_name": null,
+    "extra_fields": {
+      "client_id": {
+        "description": null,
+        "schema": {
+          "title": "Client ID (Client Credentials Grant Flow)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "client_secret": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Client Secret (Client Credentials Grant Flow)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "credential_config_file": {
+        "description": null,
+        "schema": {
+          "title": "Credential Configuration File",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "idp_extra_parameters": {
+        "description": null,
+        "schema": {
+          "title": "IdP Extra Request Parameters",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "idp_issuer_url": {
+        "description": null,
+        "schema": {
+          "title": "IdP Token Issue URL (Client Credentials Grant Flow)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "impersonation_chain": {
+        "description": null,
+        "schema": {
+          "title": "Impersonation Chain",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "is_anonymous": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "Anonymous credentials (ignores all other settings)",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      },
+      "key_path": {
+        "description": null,
+        "schema": {
+          "title": "Keyfile Path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "key_secret_name": {
+        "description": null,
+        "schema": {
+          "title": "Keyfile Secret Name (in GCP Secret Manager)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "key_secret_project_id": {
+        "description": null,
+        "schema": {
+          "title": "Keyfile Secret Project Id (in GCP Secret Manager)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "keyfile_dict": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Keyfile JSON",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "num_retries": {
+        "description": null,
+        "schema": {
+          "default": 5,
+          "title": "Number of Retries",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": 5
+      },
+      "project": {
+        "description": null,
+        "schema": {
+          "title": "Project Id",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "scope": {
+        "description": null,
+        "schema": {
+          "title": "Scopes (comma separated)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.google.common.hooks.base_google.GoogleBaseHook",
+    "hook_name": "Google Cloud",
+    "pip_package": "apache-airflow-providers-google",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "hive_cli",
+    "default_conn_name": null,
+    "extra_fields": {
+      "high_availability": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "High Availability mode",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      },
+      "principal": {
+        "description": null,
+        "schema": {
+          "default": "hive/_HOST@EXAMPLE.COM",
+          "title": "Principal",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "hive/_HOST@EXAMPLE.COM"
+      },
+      "proxy_user": {
+        "description": null,
+        "schema": {
+          "default": "",
+          "title": "Proxy User",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "***"
+      },
+      "use_beeline": {
+        "description": null,
+        "schema": {
+          "default": true,
+          "title": "Use Beeline",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": true
+      }
+    },
+    "hook_class_name": "airflow.providers.apache.hive.hooks.hive.HiveCliHook",
+    "hook_name": "Hive Client Wrapper",
+    "pip_package": "apache-airflow-providers-apache-hive",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": null,
+      "password": null,
+      "port": null,
+      "url_schema": null
+    }
+  },
+  {
+    "connection_type": "hive_metastore",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.hive.hooks.hive.HiveMetastoreHook",
+    "hook_name": "Hive Metastore Thrift",
+    "pip_package": "apache-airflow-providers-apache-hive",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "hiveserver2",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.hive.hooks.hive.HiveServer2Hook",
+    "hook_name": "Hive Server 2 Thrift",
+    "pip_package": "apache-airflow-providers-apache-hive",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "http",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.http.hooks.http.HttpHook",
+    "hook_name": "HTTP",
+    "pip_package": "apache-airflow-providers-http",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": null,
+      "password": null,
+      "port": null,
+      "url_schema": null
+    }
+  },
+  {
+    "connection_type": "imap",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.imap.hooks.imap.ImapHook",
+    "hook_name": "IMAP",
+    "pip_package": "apache-airflow-providers-imap",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "influxdb",
+    "default_conn_name": null,
+    "extra_fields": {
+      "org": {
+        "description": null,
+        "schema": {
+          "default": "",
+          "title": "Organization Name",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": ""
+      },
+      "token": {
+        "description": null,
+        "schema": {
+          "default": "",
+          "format": "password",
+          "title": "Token",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "***"
+      }
+    },
+    "hook_class_name": "airflow.providers.influxdb.hooks.influxdb.InfluxDBHook",
+    "hook_name": "Influxdb",
+    "pip_package": "apache-airflow-providers-influxdb",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": null,
+      "url_schema": null
+    }
+  },
+  {
+    "connection_type": "influxdb3",
+    "default_conn_name": null,
+    "extra_fields": {
+      "database": {
+        "description": null,
+        "schema": {
+          "default": "",
+          "title": "Database",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": ""
+      },
+      "org": {
+        "description": null,
+        "schema": {
+          "default": "",
+          "title": "Organization Name (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": ""
+      },
+      "token": {
+        "description": null,
+        "schema": {
+          "default": "",
+          "format": "password",
+          "title": "Token",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "***"
+      }
+    },
+    "hook_class_name": "airflow.providers.influxdb.hooks.influxdb3.InfluxDB3Hook",
+    "hook_name": "InfluxDB 3",
+    "pip_package": "apache-airflow-providers-influxdb",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": null,
+      "url_schema": null
+    }
+  },
+  {
+    "connection_type": "jdbc",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.jdbc.hooks.jdbc.JdbcHook",
+    "hook_name": "JDBC Connection",
+    "pip_package": "apache-airflow-providers-jdbc",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Connection URL"
+      },
+      "login": null,
+      "password": null,
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "jupyter_kernel",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.papermill.hooks.kernel.KernelHook",
+    "hook_name": "Jupyter Kernel",
+    "pip_package": "apache-airflow-providers-papermill",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "kafka",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.kafka.hooks.base.KafkaBaseHook",
+    "hook_name": "Apache Kafka",
+    "pip_package": "apache-airflow-providers-apache-kafka",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "livy",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.livy.hooks.livy.LivyHook",
+    "hook_name": "Apache Livy",
+    "pip_package": "apache-airflow-providers-apache-livy",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "mongo",
+    "default_conn_name": null,
+    "extra_fields": {
+      "allow_insecure": {
+        "description": null,
+        "schema": {
+          "title": "Allow Insecure",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "srv": {
+        "description": null,
+        "schema": {
+          "title": "Srv",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "ssl": {
+        "description": null,
+        "schema": {
+          "title": "Ssl",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.mongo.hooks.mongo.MongoHook",
+    "hook_name": "MongoDB",
+    "pip_package": "apache-airflow-providers-mongo",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Username"
+      },
+      "password": null,
+      "port": {
+        "hidden": false,
+        "placeholder": "Note: port should not be set for SRV connections",
+        "title": null
+      },
+      "url_schema": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Default DB"
+      }
+    }
+  },
+  {
+    "connection_type": "msgraph",
+    "default_conn_name": null,
+    "extra_fields": {
+      "allowed_hosts": {
+        "description": null,
+        "schema": {
+          "title": "Allowed hosts",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "api_version": {
+        "description": null,
+        "schema": {
+          "default": "v1.0",
+          "title": "API Version",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "v1.0"
+      },
+      "authority": {
+        "description": null,
+        "schema": {
+          "title": "Authority",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "base_url": {
+        "description": null,
+        "schema": {
+          "title": "Base URL",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "certificate_data": {
+        "description": null,
+        "schema": {
+          "title": "Certificate data",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "certificate_path": {
+        "description": null,
+        "schema": {
+          "title": "Certificate path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "disable_instance_discovery": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "Disable instance discovery",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      },
+      "drive_id": {
+        "description": null,
+        "schema": {
+          "title": "Drive ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "proxies": {
+        "description": null,
+        "schema": {
+          "title": "Proxies",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "scopes": {
+        "description": null,
+        "schema": {
+          "default": "https://graph.microsoft.com/.default",
+          "title": "Scopes",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "https://graph.microsoft.com/.default"
+      },
+      "tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "trust_env": {
+        "description": null,
+        "schema": {
+          "default": true,
+          "title": "Trust environment",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": true
+      },
+      "verify": {
+        "description": null,
+        "schema": {
+          "default": true,
+          "title": "Verify",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": true
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.msgraph.KiotaRequestAdapterHook",
+    "hook_name": "Microsoft Graph API",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Client ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Client Secret"
+      },
+      "port": null,
+      "url_schema": null
+    }
+  },
+  {
+    "connection_type": "mssql",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.microsoft.mssql.hooks.mssql.MsSqlHook",
+    "hook_name": "Microsoft SQL Server",
+    "pip_package": "apache-airflow-providers-microsoft-mssql",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "mysql",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.mysql.hooks.mysql.MySqlHook",
+    "hook_name": "MySQL",
+    "pip_package": "apache-airflow-providers-mysql",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "neo4j",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.neo4j.hooks.neo4j.Neo4jHook",
+    "hook_name": "Neo4j",
+    "pip_package": "apache-airflow-providers-neo4j",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "opsgenie",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.opsgenie.hooks.opsgenie.OpsgenieAlertHook",
+    "hook_name": "Opsgenie",
+    "pip_package": "apache-airflow-providers-opsgenie",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Opsgenie API Key"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "oracle",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.oracle.hooks.oracle.OracleHook",
+    "hook_name": "Oracle",
+    "pip_package": "apache-airflow-providers-oracle",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "package_index",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.standard.hooks.package_index.PackageIndexHook",
+    "hook_name": "Package Index (Python)",
+    "pip_package": "apache-airflow-providers-standard",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": "Example: https://my-package-mirror.net/pypi/repo-name/simple",
+        "title": "Package Index URL"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "Username for package index",
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "Password for package index (will be masked)",
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "pagerduty",
+    "default_conn_name": null,
+    "extra_fields": {
+      "routing_key": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Routing Key",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.pagerduty.hooks.pagerduty.PagerdutyHook",
+    "hook_name": "Pagerduty",
+    "pip_package": "apache-airflow-providers-pagerduty",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Pagerduty API token"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "pagerduty_events",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.pagerduty.hooks.pagerduty_events.PagerdutyEventsHook",
+    "hook_name": "Pagerduty Events",
+    "pip_package": "apache-airflow-providers-pagerduty",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Pagerduty Integration key"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "pinot",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.pinot.hooks.pinot.PinotDbApiHook",
+    "hook_name": "Pinot Broker",
+    "pip_package": "apache-airflow-providers-apache-pinot",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "pinot_admin",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.pinot.hooks.pinot.PinotAdminHook",
+    "hook_name": "Pinot Admin",
+    "pip_package": "apache-airflow-providers-apache-pinot",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "postgres",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.postgres.hooks.postgres.PostgresHook",
+    "hook_name": "Postgres",
+    "pip_package": "apache-airflow-providers-postgres",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": null,
+      "password": null,
+      "port": null,
+      "url_schema": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Database"
+      }
+    }
+  },
+  {
+    "connection_type": "powerbi",
+    "default_conn_name": null,
+    "extra_fields": {
+      "tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.powerbi.PowerBIHook",
+    "hook_name": "Power BI",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Client ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Client Secret"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "presto",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.presto.hooks.presto.PrestoHook",
+    "hook_name": "Presto",
+    "pip_package": "apache-airflow-providers-presto",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "redis",
+    "default_conn_name": null,
+    "extra_fields": {
+      "db": {
+        "description": null,
+        "schema": {
+          "default": 0,
+          "title": "DB",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": 0
+      },
+      "ssl": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "Enable SSL",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      },
+      "ssl_ca_certs": {
+        "description": null,
+        "schema": {
+          "title": "CA certificate path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "ssl_cert_reqs": {
+        "description": "Must be one of: required, optional, none.",
+        "schema": {
+          "default": "required",
+          "enum": [
+            "required",
+            "optional",
+            "none"
+          ],
+          "title": "SSL verify mode",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "required"
+      },
+      "ssl_certfile": {
+        "description": null,
+        "schema": {
+          "title": "Certificate path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "ssl_check_hostname": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "Enable hostname check",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      },
+      "ssl_keyfile": {
+        "description": null,
+        "schema": {
+          "title": "Private key path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.redis.hooks.redis.RedisHook",
+    "hook_name": "Redis",
+    "pip_package": "apache-airflow-providers-redis",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": null,
+      "password": null,
+      "port": null,
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "redshift",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.amazon.aws.hooks.redshift_sql.RedshiftSQLHook",
+    "hook_name": "Amazon Redshift",
+    "pip_package": "apache-airflow-providers-amazon",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "User"
+      },
+      "password": null,
+      "port": null,
+      "url_schema": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Database"
+      }
+    }
+  },
+  {
+    "connection_type": "salesforce",
+    "default_conn_name": null,
+    "extra_fields": {
+      "client_id": {
+        "description": null,
+        "schema": {
+          "title": "Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "consumer_key": {
+        "description": null,
+        "schema": {
+          "title": "Consumer Key",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "consumer_secret": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Consumer Secret",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "domain": {
+        "description": null,
+        "schema": {
+          "title": "Domain",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "instance": {
+        "description": null,
+        "schema": {
+          "title": "Instance",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "instance_url": {
+        "description": null,
+        "schema": {
+          "title": "Instance URL",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "organization_id": {
+        "description": null,
+        "schema": {
+          "title": "Organization ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "private_key": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Private Key",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "private_key_file_path": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Private Key File Path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "proxies": {
+        "description": null,
+        "schema": {
+          "title": "Proxies",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "security_token": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Security Token",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "version": {
+        "description": null,
+        "schema": {
+          "title": "API Version",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.salesforce.hooks.salesforce.SalesforceHook",
+    "hook_name": "Salesforce",
+    "pip_package": "apache-airflow-providers-salesforce",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Username"
+      },
+      "password": null,
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "samba",
+    "default_conn_name": null,
+    "extra_fields": {
+      "share_type": {
+        "description": "The share OS type (`posix` or `windows`). Used to determine the formatting of file and folder paths.",
+        "schema": {
+          "default": "posix",
+          "title": "Share Type",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "posix"
+      }
+    },
+    "hook_class_name": "airflow.providers.samba.hooks.samba.SambaHook",
+    "hook_name": "Samba",
+    "pip_package": "apache-airflow-providers-samba",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": null,
+      "password": null,
+      "port": null,
+      "url_schema": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Share"
+      }
+    }
+  },
+  {
+    "connection_type": "sftp",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.sftp.hooks.sftp.SFTPHook",
+    "hook_name": "SFTP",
+    "pip_package": "apache-airflow-providers-sftp",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Username"
+      },
+      "password": null,
+      "port": null,
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "slack",
+    "default_conn_name": null,
+    "extra_fields": {
+      "base_url": {
+        "description": "Optional. A string representing the Slack API base URL.",
+        "schema": {
+          "title": "Base URL",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "proxy": {
+        "description": "Optional. Proxy to make the Slack API call.",
+        "schema": {
+          "title": "Proxy",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "timeout": {
+        "description": "Optional. Max seconds to wait for Slack API response.",
+        "schema": {
+          "title": "Timeout",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.slack.hooks.slack.SlackHook",
+    "hook_name": "Slack API",
+    "pip_package": "apache-airflow-providers-slack",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "REPLACE ME WITH A SLACK ACCESS TOKEN",
+        "title": "Slack API Token"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "slackwebhook",
+    "default_conn_name": null,
+    "extra_fields": {
+      "proxy": {
+        "description": "Optional. Proxy to make the Slack Incoming Webhook call.",
+        "schema": {
+          "title": "Proxy",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "timeout": {
+        "description": "Optional. Max seconds to wait for Slack Incoming Webhook response.",
+        "schema": {
+          "title": "Timeout",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.slack.hooks.slack_webhook.SlackWebhookHook",
+    "hook_name": "Slack Incoming Webhook",
+    "pip_package": "apache-airflow-providers-slack",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": "hooks.slack.com/services",
+        "title": "Slack Webhook Endpoint"
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX",
+        "title": "Webhook Token"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": false,
+        "placeholder": "https",
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "smtp",
+    "default_conn_name": null,
+    "extra_fields": {
+      "access_token": {
+        "description": null,
+        "schema": {
+          "title": "Access Token",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "auth_type": {
+        "description": "basic or oauth2",
+        "schema": {
+          "default": "basic",
+          "enum": [
+            "basic",
+            "oauth2"
+          ],
+          "title": "Auth Type",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "basic"
+      },
+      "client_id": {
+        "description": null,
+        "schema": {
+          "title": "Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "client_secret": {
+        "description": null,
+        "schema": {
+          "title": "Client Secret",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "disable_ssl": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "Disable SSL",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      },
+      "disable_tls": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "Disable TLS",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      },
+      "from_email": {
+        "description": null,
+        "schema": {
+          "title": "From email",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "html_content_template": {
+        "description": null,
+        "schema": {
+          "title": "Path to the html content template",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "retry_limit": {
+        "description": null,
+        "schema": {
+          "default": 5,
+          "title": "Number of Retries",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": 5
+      },
+      "scope": {
+        "description": null,
+        "schema": {
+          "title": "Scope",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "subject_template": {
+        "description": null,
+        "schema": {
+          "title": "Path to the subject template",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "timeout": {
+        "description": null,
+        "schema": {
+          "default": 30,
+          "title": "Connection timeout",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": 30
+      }
+    },
+    "hook_class_name": "airflow.providers.smtp.hooks.smtp.SmtpHook",
+    "hook_name": "SMTP",
+    "pip_package": "apache-airflow-providers-smtp",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": null,
+      "password": null,
+      "port": null,
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "snowflake",
+    "default_conn_name": null,
+    "extra_fields": {
+      "account": {
+        "description": null,
+        "schema": {
+          "title": "Account",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "database": {
+        "description": null,
+        "schema": {
+          "title": "Database",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "insecure_mode": {
+        "description": "Turns off OCSP certificate checks",
+        "schema": {
+          "title": "Insecure Mode",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "private_key_content": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Private key (Text)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "private_key_file": {
+        "description": null,
+        "schema": {
+          "title": "Private key (Path)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "proxy_host": {
+        "description": null,
+        "schema": {
+          "title": "Proxy Host",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "proxy_password": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Proxy Password",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "proxy_port": {
+        "description": null,
+        "schema": {
+          "title": "Proxy Port",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "proxy_user": {
+        "description": null,
+        "schema": {
+          "title": "Proxy User",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "region": {
+        "description": null,
+        "schema": {
+          "title": "Region",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "role": {
+        "description": null,
+        "schema": {
+          "title": "Role",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "warehouse": {
+        "description": null,
+        "schema": {
+          "title": "Warehouse",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.snowflake.hooks.snowflake.SnowflakeHook",
+    "hook_name": "Snowflake",
+    "pip_package": "apache-airflow-providers-snowflake",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "snowflake username",
+        "title": null
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "snowflake password",
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": false,
+        "placeholder": "snowflake schema",
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "spark",
+    "default_conn_name": null,
+    "extra_fields": {
+      "deploy-mode": {
+        "description": "Must be client or cluster",
+        "schema": {
+          "default": "client",
+          "title": "Deploy mode",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "client"
+      },
+      "keytab": {
+        "description": "Run the command `base64 <your-keytab-path>` and use its output.",
+        "schema": {
+          "format": "password",
+          "title": "Keytab",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "namespace": {
+        "description": null,
+        "schema": {
+          "title": "Kubernetes namespace",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "principal": {
+        "description": null,
+        "schema": {
+          "title": "Principal",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "queue": {
+        "description": "Default YARN queue to use",
+        "schema": {
+          "title": "YARN queue",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "spark-binary": {
+        "description": "Must be one of: spark-submit, spark2-submit, spark3-submit",
+        "schema": {
+          "default": "spark-submit",
+          "title": "Spark binary",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": "spark-submit"
+      }
+    },
+    "hook_class_name": "airflow.providers.apache.spark.hooks.spark_submit.SparkSubmitHook",
+    "hook_name": "Spark",
+    "pip_package": "apache-airflow-providers-apache-spark",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": null,
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "spark_connect",
+    "default_conn_name": null,
+    "extra_fields": {
+      "use_ssl": {
+        "description": null,
+        "schema": {
+          "default": false,
+          "title": "Use SSL",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": false
+      }
+    },
+    "hook_class_name": "airflow.providers.apache.spark.hooks.spark_connect.SparkConnectHook",
+    "hook_name": "Spark Connect",
+    "pip_package": "apache-airflow-providers-apache-spark",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "User ID"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Token"
+      },
+      "port": null,
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "spark_jdbc",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.apache.spark.hooks.spark_jdbc.SparkJDBCHook",
+    "hook_name": "Spark JDBC",
+    "pip_package": "apache-airflow-providers-apache-spark",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "spark_sql",
+    "default_conn_name": null,
+    "extra_fields": {
+      "queue": {
+        "description": "Default YARN queue to use",
+        "schema": {
+          "title": "YARN queue",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.apache.spark.hooks.spark_sql.SparkSqlHook",
+    "hook_name": "Spark SQL",
+    "pip_package": "apache-airflow-providers-apache-spark",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": null,
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "sqlite",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.sqlite.hooks.sqlite.SqliteHook",
+    "hook_name": "Sqlite",
+    "pip_package": "apache-airflow-providers-sqlite",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "ssh",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.ssh.hooks.ssh.SSHHook",
+    "hook_name": "SSH",
+    "pip_package": "apache-airflow-providers-ssh",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Username"
+      },
+      "password": null,
+      "port": null,
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "tableau",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.tableau.hooks.tableau.TableauHook",
+    "hook_name": "Tableau",
+    "pip_package": "apache-airflow-providers-tableau",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "telegram",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.telegram.hooks.telegram.TelegramHook",
+    "hook_name": "Telegram",
+    "pip_package": "apache-airflow-providers-telegram",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": null,
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "trino",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.trino.hooks.trino.TrinoHook",
+    "hook_name": "Trino",
+    "pip_package": "apache-airflow-providers-trino",
+    "standard_fields": {
+      "description": null,
+      "host": null,
+      "login": {
+        "hidden": false,
+        "placeholder": "Effective user for connection",
+        "title": null
+      },
+      "password": null,
+      "port": null,
+      "url_schema": null
+    }
+  },
+  {
+    "connection_type": "vertica",
+    "default_conn_name": null,
+    "extra_fields": {},
+    "hook_class_name": "airflow.providers.vertica.hooks.vertica.VerticaHook",
+    "hook_name": "Vertica",
+    "pip_package": "apache-airflow-providers-vertica",
+    "standard_fields": null
+  },
+  {
+    "connection_type": "wasb",
+    "default_conn_name": null,
+    "extra_fields": {
+      "connection_string": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Blob Storage Connection String (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "managed_identity_client_id": {
+        "description": null,
+        "schema": {
+          "title": "Managed Identity Client ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "sas_token": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "SAS Token (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "shared_access_key": {
+        "description": null,
+        "schema": {
+          "format": "password",
+          "title": "Blob Storage Shared Access Key (optional)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Tenant Id (Active Directory Auth)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "workload_identity_tenant_id": {
+        "description": null,
+        "schema": {
+          "title": "Workload Identity Tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.microsoft.azure.hooks.wasb.WasbHook",
+    "hook_name": "Azure Blob Storage",
+    "pip_package": "apache-airflow-providers-microsoft-azure",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": "account url",
+        "title": "Account URL (Active Directory Auth)"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": "account name",
+        "title": "Blob Storage Login (optional)"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": "secret",
+        "title": "Blob Storage Key (optional)"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
+    "connection_type": "zendesk",
+    "default_conn_name": null,
+    "extra_fields": {
+      "oauth_token": {
+        "description": "Zendesk OAuth token.",
+        "schema": {
+          "format": "password",
+          "title": "OAuth Token",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "token": {
+        "description": "Zendesk API token (alternative to password field).",
+        "schema": {
+          "format": "password",
+          "title": "API Token",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      },
+      "use_token": {
+        "description": "If enabled, the password field is treated as an API token.",
+        "schema": {
+          "title": "Use Token",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": "airflow.providers.zendesk.hooks.zendesk.ZendeskHook",
+    "hook_name": "Zendesk",
+    "pip_package": "apache-airflow-providers-zendesk",
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Zendesk domain"
+      },
+      "login": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Zendesk email"
+      },
+      "password": {
+        "hidden": false,
+        "placeholder": null,
+        "title": "Password / API token"
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "url_schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  }
+]

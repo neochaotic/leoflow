@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -74,14 +73,19 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if o.dagVersion == "" {
 		o.dagVersion = gitVersion(cmdContext(cmd))
 	}
-	if ierr := checkImageFlags(cmd, o.build, o.push, o.image); ierr != nil {
+	// The image is the --image flag when set, else derived from the leoflow.yaml
+	// registry block (url/image_name:version), so a yaml-driven build needs no
+	// flag. The resolved value flows into dag.json (via the parser) and the build,
+	// keeping the registered artifact and the built/pushed image in lockstep.
+	image := resolveBuildImage(o.image, cfg, o.dagVersion)
+	if ierr := checkImageFlags(cmd, o.build, o.push, image); ierr != nil {
 		return ierr
 	}
 	if rerr := runParser(cmd, command, parserArgs{
 		source:        dagSourcePath(dir, cfg),
 		config:        projectConfigPath(dir),
 		output:        o.output,
-		image:         o.image,
+		image:         image,
 		dagVersion:    o.dagVersion,
 		projectConfig: cfg,
 	}); rerr != nil {
@@ -96,22 +100,55 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if eerr := embedSource(o.output, dagSourcePath(dir, cfg)); eerr != nil {
 		return eerr
 	}
+	if perr := validateOperatorProvidersFile(o.output, cfg); perr != nil {
+		return perr
+	}
+	if berr := buildAndPush(cmd, dir, o, cfg, image); berr != nil {
+		return berr
+	}
+	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(dagSourcePath(dir, cfg), o.output, image, o.dagVersion))
+	return werr
+}
+
+// buildAndPush optionally builds the DAG image and pushes it, honoring the
+// --build/--push flags. When building and the project ships no Dockerfile, one is
+// generated from the leoflow.yaml (base image + system packages + dependencies/
+// connectors), built, and removed afterward so the workspace stays clean.
+func buildAndPush(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.LeoflowConfig, image string) error {
 	if o.build {
+		name := resolveDockerfileName(cmd, o, cfg)
+		dockerfile, cleanup, derr := ensureDockerfile(dir, name, cfg, dagSourcePath(dir, cfg))
+		if derr != nil {
+			return derr
+		}
+		defer cleanup()
 		var platforms []string
 		if cfg.Build != nil {
 			platforms = cfg.Build.Platforms
 		}
-		if berr := buildImage(cmd, o.builder, o.image, filepath.Join(dir, o.dockerfile), dir, platforms); berr != nil {
+		if berr := buildImage(cmd, o.builder, image, dockerfile, dir, platforms); berr != nil {
 			return berr
 		}
 	}
 	if o.push {
-		if perr := pushImage(cmd, o.builder, o.image); perr != nil {
+		if perr := pushImage(cmd, o.builder, image); perr != nil {
 			return perr
 		}
 	}
-	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(dagSourcePath(dir, cfg), o.output, o.image, o.dagVersion))
-	return werr
+	return nil
+}
+
+// resolveDockerfileName picks the Dockerfile name to look for in the DAG
+// directory: an explicit --dockerfile flag wins, then leoflow.yaml's
+// build.dockerfile, else the "Dockerfile" default.
+func resolveDockerfileName(cmd *cobra.Command, o compileOptions, cfg *domain.LeoflowConfig) string {
+	if cmd.Flags().Changed("dockerfile") {
+		return o.dockerfile
+	}
+	if cfg.Build != nil && cfg.Build.Dockerfile != "" {
+		return cfg.Build.Dockerfile
+	}
+	return o.dockerfile
 }
 
 // compileSummary formats the success line for `leoflow compile`. When image is
@@ -132,7 +169,7 @@ func checkImageFlags(cmd *cobra.Command, build, push bool, image string) error {
 		return errors.New("--push requires --build")
 	}
 	if build && image == "" {
-		return errors.New("--build requires --image")
+		return errors.New("--build needs an image reference: pass --image, or set registry.url + registry.image_name in leoflow.yaml")
 	}
 	if !build && image != "" {
 		_, werr := fmt.Fprintf(cmd.ErrOrStderr(), "note: recording image %q without building it; pass --build to build the DAG image\n", image)

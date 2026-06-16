@@ -726,8 +726,10 @@ func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xco
 		if action == "links" {
 			// The task Details view reads g.extra_links and calls Object.keys on it,
 			// so the response must carry an extra_links object (a bare {} or a 400
-			// crashes the view). We expose no operator links, so it is empty.
-			c.JSON(http.StatusOK, gin.H{"extra_links": gin.H{}})
+			// crashes the view). We serve the operator's UI deep-link buttons from the
+			// "_extra_links" XCom the agent stored (#375); empty when the task exposed
+			// none or the store has no entry.
+			serveExtraLinks(c, xcoms)
 			return
 		}
 		if action == "tries" || strings.HasPrefix(action, "tries/") {

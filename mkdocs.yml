@@ -113,6 +113,7 @@ nav:
   - Authoring & deploy:
       - DAG authoring: dag-authoring.md
       - First Pro DAG (walkthrough): first-pro-dag.md
+      - Airflow operators & sensors: airflow-operators.md
       - CI/CD & deploy examples: deploy.md
   - Reference:
       - reference.md
@@ -151,6 +152,53 @@ nav:
           - Redis: connections/redis.md
           - HTTP / HTTPS: connections/http.md
           - Google Cloud: connections/google_cloud_platform.md
+          - Snowflake: connections/snowflake.md
+          - Amazon Web Services: connections/aws.md
+          - Slack: connections/slack.md
+          - Databricks: connections/databricks.md
+          - Azure: connections/azure.md
+          - Apache Spark: connections/spark.md
+          - Apache Kafka: connections/kafka.md
+          - Oracle: connections/oracle.md
+          - MongoDB: connections/mongo.md
+          - "File transfer (SSH/SFTP/FTP)": connections/file-transfer.md
+          - "AWS: Redshift": connections/redshift.md
+          - "AWS: Athena": connections/athena.md
+          - "AWS: EMR": connections/emr.md
+          - "GCP: BigQuery": connections/gcpbigquery.md
+          - "GCP: Cloud SQL": connections/gcpcloudsql.md
+          - "GCP: Google Ads": connections/google_ads.md
+          - Cassandra: connections/cassandra.md
+          - Neo4j: connections/neo4j.md
+          - Vertica: connections/vertica.md
+          - InfluxDB: connections/influxdb.md
+          - Druid: connections/druid.md
+          - Pinot: connections/pinot.md
+          - Elasticsearch: connections/elasticsearch.md
+          - Trino: connections/trino.md
+          - Presto: connections/presto.md
+          - JDBC: connections/jdbc.md
+          - Docker registry: connections/docker.md
+          - Salesforce: connections/salesforce.md
+          - Telegram: connections/telegram.md
+          - Discord: connections/discord.md
+          - PagerDuty: connections/pagerduty.md
+          - Datadog: connections/datadog.md
+          - Tableau: connections/tableau.md
+          - GitHub: connections/github.md
+          - dbt Cloud: connections/dbt_cloud.md
+          - HiveServer2: connections/hiveserver2.md
+          - Hive CLI: connections/hive_cli.md
+          - Power BI: connections/powerbi.md
+          - Microsoft Graph: connections/msgraph.md
+          - Apache Livy: connections/livy.md
+          - Google Looker: connections/gcp_looker.md
+          - SMTP: connections/smtp.md
+          - IMAP: connections/imap.md
+          - Opsgenie: connections/opsgenie.md
+          - Zendesk: connections/zendesk.md
+          - Samba: connections/samba.md
+          - "GCP: SSH (Compute)": connections/gcpssh.md
       - Troubleshooting & observability: troubleshooting.md
       - UI compatibility: ui-compatibility.md
       - Staging volume: staging-volume.md

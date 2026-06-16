@@ -4,18 +4,19 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/connectors"
 )
 
 // The connection-type catalog the SPA's "Add/Edit Connection" form reads from
 // GET /ui/connections/hook_meta. Each entry tells the form which standard fields
-// to render (host/login/password/port/schema/description) and the type's display
-// name — borrowed from Airflow's providers so the common connections work and the
-// user just edits them. Without this the edit form renders empty (the form is
-// entirely driven by this metadata).
-//
-// standard_fields keys mirror what the SPA consumes: description, host, login,
-// password, port, and url_schema (the "Schema" field). Each value is a behavior
-// object; { "hidden": true } drops the field for that type.
+// to render (host/login/password/port/schema/description, with per-field hide /
+// relabel / placeholder behavior) and which provider-specific custom fields to
+// render (extra_fields, the credential fields stored in Connection.extra). The
+// metadata is generated from a real Airflow install (internal/connectors —
+// catalog.json), so it is the exact shape the Airflow 3.2 SPA's FlexibleForm
+// renders. Without this the edit form renders empty (the form is entirely driven
+// by this metadata).
 
 type hookMetaEntry struct {
 	ConnectionType  string         `json:"connection_type"`
@@ -26,41 +27,68 @@ type hookMetaEntry struct {
 	StandardFields  map[string]any `json:"standard_fields"`
 }
 
-// stdFields builds the standard-field behavior map, hiding the named fields.
-func stdFields(hidden ...string) map[string]any {
-	h := make(map[string]bool, len(hidden))
-	for _, f := range hidden {
-		h[f] = true
+// standardFieldKeys are the six standard fields the Airflow 3.2 FlexibleForm
+// reads off EVERY connector unconditionally (its LDt helper does
+// `g1(spec.description)`, `g1(spec.url_schema)`, …). g1 tolerates a null value
+// (treats it as "use the field default") but NOT a missing key: an absent key is
+// `undefined`, and `undefined.hidden` crashes the whole Connections page with
+// "Cannot read properties of undefined (reading 'hidden')". The generated catalog
+// only emits a standard field when it has an override, so most connectors are
+// missing several keys — which is why opening Connections errored for the user.
+var standardFieldKeys = []string{"description", "host", "login", "password", "port", "url_schema"}
+
+// ensureStandardFields returns a copy that always carries all six standardFieldKeys.
+// A missing key is filled with nil (the form's "use default" sentinel, which g1
+// handles); existing values (including nil) are preserved. This is the fix for the
+// undefined-key crash above.
+func ensureStandardFields(m map[string]any) map[string]any {
+	out := make(map[string]any, len(standardFieldKeys))
+	for k, v := range m {
+		out[k] = v
 	}
-	out := make(map[string]any, 6)
-	for _, f := range []string{"description", "host", "login", "password", "port", "url_schema"} {
-		out[f] = map[string]any{"hidden": h[f]}
+	for _, k := range standardFieldKeys {
+		if _, ok := out[k]; !ok {
+			out[k] = nil
+		}
 	}
 	return out
 }
 
-// connectionTypeCatalog is the curated set of common connection types. New types
-// are additive; each is a template the user edits. (A full provider catalog can
-// follow; these cover the common cases.)
-func connectionTypeCatalog() []hookMetaEntry {
-	all := stdFields()
-	return []hookMetaEntry{
-		{"postgres", "Postgres", "airflow.providers.postgres.hooks.postgres.PostgresHook", "postgres_default", map[string]any{}, all},
-		{"mysql", "MySQL", "airflow.providers.mysql.hooks.mysql.MySqlHook", "mysql_default", map[string]any{}, all},
-		{"sqlite", "SQLite", "airflow.providers.sqlite.hooks.sqlite.SqliteHook", "sqlite_default", map[string]any{}, stdFields("login", "password", "port", "url_schema")},
-		{"mssql", "Microsoft SQL Server", "airflow.providers.microsoft.mssql.hooks.mssql.MsSqlHook", "mssql_default", map[string]any{}, all},
-		{"oracle", "Oracle", "airflow.providers.oracle.hooks.oracle.OracleHook", "oracle_default", map[string]any{}, all},
-		{"redis", "Redis", "airflow.providers.redis.hooks.redis.RedisHook", "redis_default", map[string]any{}, stdFields("url_schema")},
-		{"mongo", "MongoDB", "airflow.providers.mongo.hooks.mongo.MongoHook", "mongo_default", map[string]any{}, all},
-		{"http", "HTTP", "airflow.providers.http.hooks.http.HttpHook", "http_default", map[string]any{}, all},
-		{"aws", "Amazon Web Services", "airflow.providers.amazon.aws.hooks.base_aws.AwsBaseHook", "aws_default", map[string]any{}, stdFields("host", "port", "url_schema")},
-		{"google_cloud_platform", "Google Cloud", "airflow.providers.google.cloud.hooks.cloud_base.GoogleBaseHook", "google_cloud_default", map[string]any{}, stdFields("host", "login", "password", "port", "url_schema")},
-		{"snowflake", "Snowflake", "airflow.providers.snowflake.hooks.snowflake.SnowflakeHook", "snowflake_default", map[string]any{}, all},
-		{"ssh", "SSH", "airflow.providers.ssh.hooks.ssh.SSHHook", "ssh_default", map[string]any{}, stdFields("url_schema")},
-		{"ftp", "FTP", "airflow.providers.ftp.hooks.ftp.FTPHook", "ftp_default", map[string]any{}, stdFields("url_schema")},
-		{"sftp", "SFTP", "airflow.providers.sftp.hooks.sftp.SFTPHook", "sftp_default", map[string]any{}, stdFields("url_schema")},
-		{"kafka", "Apache Kafka", "airflow.providers.apache.kafka.hooks.base.KafkaBaseHook", "kafka_default", map[string]any{}, stdFields("login", "password", "port", "url_schema")},
+// sanitizeExtraFields replaces each nil extra-field spec with a minimal visible
+// one ({"hidden": false}) and returns {} for a nil map. Unlike the standard fields
+// (rendered through g1, which guards nil), the SPA renders extra fields by
+// iterating the map and reading `spec.hidden` directly — a nil spec there would
+// crash. Extra fields are keyed dynamically, so only nil VALUES (not missing keys)
+// are a hazard.
+func sanitizeExtraFields(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if v == nil {
+			out[k] = map[string]any{"hidden": false}
+			continue
+		}
+		out[k] = v
 	}
+	return out
+}
+
+// connectionTypeCatalog builds the form catalog from the shared connector
+// registry (internal/connectors — ADR 0038's single source of truth), serving
+// each entry's generated standard_fields + extra_fields verbatim.
+func connectionTypeCatalog() []hookMetaEntry {
+	cat := connectors.Catalog()
+	out := make([]hookMetaEntry, len(cat))
+	for i, c := range cat {
+		out[i] = hookMetaEntry{
+			ConnectionType:  c.ConnectionType,
+			HookName:        c.HookName,
+			HookClassName:   c.HookClassName,
+			DefaultConnName: c.DefaultConnName,
+			ExtraFields:     sanitizeExtraFields(c.ExtraFields),
+			StandardFields:  ensureStandardFields(c.StandardFields),
+		}
+	}
+	return out
 }
 
 // connectionHookMetaHandler serves the connection-type catalog the form needs.

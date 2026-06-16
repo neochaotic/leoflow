@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"time"
 
@@ -834,13 +835,21 @@ func (r *Repository) SecretConnectionURIs(ctx context.Context, tenantID string) 
 	}
 	out := make(map[string]string, len(rows))
 	for _, row := range rows {
+		// One undecryptable connection (key rotated, or a row encrypted under a
+		// different LEOFLOW_SECRET_KEY) must NOT blind the whole tenant: skip it
+		// with a warning and deliver the rest. The task that needs the bad
+		// connection still fails — correctly — but every other task keeps working.
 		pass, derr := r.decryptExtra(row.Password)
 		if derr != nil {
-			return nil, fmt.Errorf("decrypting password for %q: %w", row.ConnID, derr)
+			slog.Warn("skipping connection: password decrypt failed (key rotated or wrong LEOFLOW_SECRET_KEY?)",
+				"conn_id", row.ConnID, "error", derr)
+			continue
 		}
 		extra, eerr := r.decryptExtra(row.Extra)
 		if eerr != nil {
-			return nil, fmt.Errorf("decrypting extra for %q: %w", row.ConnID, eerr)
+			slog.Warn("skipping connection: extra decrypt failed (key rotated or wrong LEOFLOW_SECRET_KEY?)",
+				"conn_id", row.ConnID, "error", eerr)
+			continue
 		}
 		out[row.ConnID] = airflowConnURI(domain.Connection{
 			ConnID: row.ConnID, ConnType: row.ConnType, Host: strOrEmpty(row.Host),

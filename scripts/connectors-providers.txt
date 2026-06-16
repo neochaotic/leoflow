@@ -1,0 +1,54 @@
+# Provider packages the connector catalog is generated from (scripts/gen_connectors.py).
+# Pinned to the Airflow line in CLAUDE.md (3.2.x). Grow this list to curate more
+# connectors; re-run the codegen to regenerate internal/connectors/catalog.json.
+apache-airflow==3.2.1
+# --- the core data/warehouse + protocol head (already shipped) ---
+apache-airflow-providers-postgres
+apache-airflow-providers-mysql
+apache-airflow-providers-microsoft-mssql
+apache-airflow-providers-sqlite
+apache-airflow-providers-oracle
+apache-airflow-providers-redis
+apache-airflow-providers-mongo
+apache-airflow-providers-http
+apache-airflow-providers-amazon
+apache-airflow-providers-google
+apache-airflow-providers-snowflake
+apache-airflow-providers-ssh
+apache-airflow-providers-ftp
+apache-airflow-providers-sftp
+apache-airflow-providers-apache-kafka
+# --- the Pareto head we are adding ---
+apache-airflow-providers-slack
+apache-airflow-providers-databricks
+apache-airflow-providers-microsoft-azure
+apache-airflow-providers-apache-spark
+apache-airflow-providers-apache-hive
+apache-airflow-providers-dbt-cloud
+# --- the common tail ---
+apache-airflow-providers-trino
+apache-airflow-providers-presto
+apache-airflow-providers-elasticsearch
+apache-airflow-providers-odbc
+apache-airflow-providers-jdbc
+apache-airflow-providers-docker
+apache-airflow-providers-salesforce
+apache-airflow-providers-vertica
+apache-airflow-providers-neo4j
+apache-airflow-providers-influxdb
+apache-airflow-providers-apache-cassandra
+apache-airflow-providers-apache-druid
+apache-airflow-providers-apache-pinot
+apache-airflow-providers-apache-livy
+apache-airflow-providers-telegram
+apache-airflow-providers-discord
+apache-airflow-providers-pagerduty
+apache-airflow-providers-opsgenie
+apache-airflow-providers-datadog
+apache-airflow-providers-tableau
+apache-airflow-providers-zendesk
+apache-airflow-providers-github
+apache-airflow-providers-papermill
+apache-airflow-providers-samba
+apache-airflow-providers-imap
+apache-airflow-providers-smtp

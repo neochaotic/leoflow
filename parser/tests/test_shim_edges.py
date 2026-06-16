@@ -101,3 +101,142 @@ def test_missing_sdk_helper_gives_clear_unsupported_error(monkeypatch, tmp_path)
                 a()
         """)
     assert "not supported by Leoflow" in str(ei.value)
+
+
+def test_generic_provider_operator_is_captured(monkeypatch, tmp_path):
+    """A top-level provider OPERATOR (the task itself) is captured generically
+    instead of rejected: the shim synthesizes the operator class, the parser emits
+    type=airflow_operator with the real class path + the constructor kwargs, which
+    the runtime later instantiates and executes (ADR 0040 Phase A)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+        with DAG("g"):
+            SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1")
+    """)
+    t = next(x for x in spec["tasks"] if x["task_id"] == "q")
+    assert t["type"] == "airflow_operator"
+    assert t["operator_class"] == \
+        "airflow.providers.snowflake.operators.snowflake.SQLExecuteQueryOperator"
+    assert t["operator_args"]["conn_id"] == "sf"
+    assert t["operator_args"]["sql"] == "SELECT 1"
+
+
+def test_generic_provider_sensor_is_captured(monkeypatch, tmp_path):
+    """A provider SENSOR is captured too, carrying its poke mode (ADR 0040)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
+        with DAG("g"):
+            S3KeySensor(task_id="wait", bucket_key="k", bucket_name="b", mode="poke")
+    """)
+    t = next(x for x in spec["tasks"] if x["task_id"] == "wait")
+    assert t["type"] == "airflow_operator"
+    assert t["operator_class"] == "airflow.providers.amazon.aws.sensors.s3.S3KeySensor"
+    assert t["operator_args"]["bucket_key"] == "k"
+
+
+def test_top_level_provider_import_gives_actionable_message(monkeypatch, tmp_path):
+    """A provider hook imported at DAG module top-level fails the parse (the
+    parser has no providers installed). The message must NOT claim the provider
+    is categorically unsupported (it IS supported at runtime via connectors:);
+    it must name the provider, tell the user to import inside the @task body, and
+    point at connectors:/dependencies:. ADR 0038 #2."""
+    with pytest.raises(ValueError) as ei:
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG, task
+            from airflow.providers.postgres.hooks.postgres import PostgresHook
+            @task
+            def a() -> None: ...
+            with DAG("g"):
+                a()
+        """)
+    msg = str(ei.value)
+    assert "airflow.providers.postgres" in msg
+    assert "connectors:" in msg
+    assert "@task" in msg
+    # It must NOT fall through to the generic operator-unsupported wording.
+    assert "supported: Bash, Http" not in msg
+
+
+def test_operator_arg_bound_to_upstream_becomes_xcom_input(monkeypatch, tmp_path):
+    """A generic-operator arg set to an upstream task's output is wired as an
+    xcom_input (ADR 0040 A1.1), not silently dropped; sibling literals still
+    land in operator_args."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, task
+        from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+        @task
+        def make_sql() -> str: ...
+        with DAG("g"):
+            s = make_sql()
+            SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql=s)
+    """)
+    q = _task(spec, "q")
+    assert q["xcom_input"] == {"sql": ["make_sql"]}
+    assert "sql" not in q.get("operator_args", {})
+    assert q["operator_args"]["conn_id"] == "sf"
+
+
+def test_operator_non_serialisable_arg_is_loud_reject(monkeypatch, tmp_path):
+    """A non-JSON, non-XCom operator arg (e.g. a callable) is a loud compile
+    error, not a silent drop (ADR 0040 A1.1)."""
+    import pytest
+    with pytest.raises(ValueError):
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG
+            from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+            with DAG("g"):
+                SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1",
+                                        on_success_callback=lambda ctx: None)
+        """)
+
+
+def test_http_sensor_is_generic_operator_not_native_http(monkeypatch, tmp_path):
+    """A SENSOR whose name contains 'Http' (HttpSensor) must be captured as a
+    generic airflow_operator (poke in a pod), NOT mistranslated to the native
+    http_api inline call. Regression for the substring fast-path (e2e finding)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.http.sensors.http import HttpSensor
+        with DAG("g"):
+            HttpSensor(task_id="probe", http_conn_id="cp", endpoint="readyz")
+    """)
+    probe = _task(spec, "probe")
+    assert probe["type"] == "airflow_operator"
+    assert probe["operator_class"] == "airflow.providers.http.sensors.http.HttpSensor"
+
+
+def test_http_operator_stays_native_http_api(monkeypatch, tmp_path):
+    """HttpOperator (an operator, not a sensor) keeps its native http_api fast path."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.http.operators.http import HttpOperator
+        with DAG("g"):
+            HttpOperator(task_id="call", method="GET", endpoint="https://example.com/x")
+    """)
+    assert _task(spec, "call")["type"] == "http_api"
+
+
+@pytest.mark.parametrize("class_name", [
+    "AcmePythonModelOperator",  # contains "Python"
+    "AcmeBashStyleOperator",    # contains "Bash"
+    "AcmeHttpCallOperator",     # contains "Http"
+])
+def test_generic_operator_with_native_substring_name_is_captured(
+        monkeypatch, tmp_path, class_name):
+    """A long-tail provider OPERATOR (captured by _generic) whose class name happens
+    to contain Bash/Http/Python must route to airflow_operator — NOT the native task
+    type the substring fast-path infers. The fast-path exists only for the bundled
+    shim operators (which carry no __leoflow_operator_class__); routing a captured
+    class natively would drop its operator_class and silently mistranslate it (same
+    class of bug as the HttpSensor regression above)."""
+    spec = _compile(monkeypatch, tmp_path, f"""
+        from airflow.sdk import DAG
+        from airflow.providers.acme.operators.run import {class_name}
+        with DAG("g"):
+            {class_name}(task_id="t")
+    """)
+    t = _task(spec, "t")
+    assert t["type"] == "airflow_operator"
+    assert t["operator_class"] == f"airflow.providers.acme.operators.run.{class_name}"

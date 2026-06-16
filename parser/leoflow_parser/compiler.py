@@ -160,6 +160,8 @@ def _load_dags_shim(source: str):
     try:
         runpy.run_path(source, run_name="__leoflow_dag__")
     except ModuleNotFoundError as exc:
+        if _is_provider_module(exc.name):
+            return {}, _provider_import_hint(exc.name)
         return {}, _unsupported(f"module {exc.name!r}")
     except ImportError as exc:
         # A missing name the shim does not provide (e.g. `chain`, a Branch operator).
@@ -183,6 +185,38 @@ def _load_dags_shim(source: str):
 def _unsupported(detail: str) -> str:
     return (f"{detail}: not supported by Leoflow "
             f"(supported: Bash, Http, Python/@task; no dynamic task mapping or task groups)")
+
+
+def _is_provider_module(name: str | None) -> bool:
+    """True for an Airflow provider module (`airflow.providers.<x>`), except the
+    bundled `standard` provider — which the shim supplies, so a failure there is
+    a real bug, not a missing-dependency the connectors: hint would address."""
+    if not name:
+        return False
+    return name.startswith("airflow.providers.") and not name.startswith(
+        "airflow.providers.standard"
+    )
+
+
+def _provider_import_hint(name: str) -> str:
+    """Actionable message for a provider hook/operator imported at the DAG module
+    top level. Leoflow parses DAGs without providers installed, so the import
+    fails here even when the provider IS declared — the fix is to import it inside
+    the @task body (which the parser never executes) and declare it so it lands in
+    the task runtime. ADR 0038 #2.
+
+    `name` is the failed module, e.g. 'airflow.providers.postgres'. We do not
+    translate it to a connector short name here (that mapping is the Go catalog's
+    job); we point at the mechanism so the message stays correct for every
+    provider, curated or not."""
+    return (
+        f"{name!r} is an Airflow provider imported at the DAG module top level, "
+        f"which Leoflow cannot resolve while parsing (providers are not installed "
+        f"in the parser). Import the hook/operator INSIDE your @task function, and "
+        f"declare the provider in leoflow.yaml via `connectors:` (short names like "
+        f"postgres, http) or `dependencies:` (an explicit pip package) so it is "
+        f"installed in the task runtime."
+    )
 
 
 def _load_dags_airflow(source: str):
@@ -223,7 +257,54 @@ def _map_task(task, source: str) -> dict[str, Any]:
         entry["entrypoint"] = _bash_command(task)
     elif task_type == "http_api":
         entry["http_request"] = _http_request(task)
+    elif task_type == "airflow_operator":
+        entry["operator_class"] = type(task).__leoflow_operator_class__
+        xcom_input, operator_args = _split_operator_args(task)
+        if xcom_input:
+            entry["xcom_input"] = xcom_input
+        if operator_args:
+            entry["operator_args"] = operator_args
     return entry
+
+
+def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
+    """Split a captured operator's constructor kwargs into XCom inputs and JSON
+    literals (ADR 0040 A1.1).
+
+    - An arg bound to an upstream task's output (``MyOperator(sql=extract())``)
+      becomes an **xcom_input** — ``arg → [upstream_task_ids…]`` — so the agent
+      fetches the upstream's return_value and the runtime injects it. A list of
+      outputs is fan-in, mirroring the @task path (:func:`_bind_call_arguments`).
+    - A JSON-serialisable literal becomes an **operator_arg**, carried verbatim
+      in dag.json and delivered via LEOFLOW_OPERATOR_ARGS.
+
+    An arg that is neither — a callable, a datetime, an arbitrary object — is a
+    **loud compile error**, not a silent drop: the generic executor cannot carry
+    it across dag.json, and dropping it would run the operator wrong. Move that
+    logic into a @task, or pass a JSON-serialisable value / an upstream output.
+    """
+    raw = getattr(task, "__leoflow_args__", {}) or {}
+    xcom: dict[str, list[str]] = {}
+    operator_args: dict[str, Any] = {}
+    for name, value in raw.items():
+        single_upstream = getattr(getattr(value, "operator", None), "task_id", None)
+        if single_upstream:
+            xcom[name] = [single_upstream]
+            continue
+        if isinstance(value, (list, tuple)) and value and all(
+                getattr(getattr(item, "operator", None), "task_id", None)
+                for item in value):
+            xcom[name] = [item.operator.task_id for item in value]
+            continue
+        if _is_json_literal(value):
+            operator_args[name] = value
+            continue
+        raise ValueError(
+            f"operator argument {name!r} on task {task.task_id} is a "
+            f"{type(value).__name__}, which Leoflow cannot carry in dag.json; "
+            f"pass a JSON-serialisable value or an upstream task's output, or "
+            f"move the logic into a @task")
+    return xcom, operator_args
 
 
 def _operator_type(task) -> str:
@@ -234,11 +315,12 @@ def _operator_type(task) -> str:
     # to translate them to a plain `python` task — and every "skipped" branch
     # would then actually execute. Refusing them at compile is the loud failure
     # the parser owes; remove the gate when real translation lands.
+    # Control-flow operators need scheduler branch/skip support we do not have yet
+    # (ADR 0040 Phase D); refuse rather than mistranslate. Provider operators and
+    # sensors ARE captured generically below.
     for marker, feature in (
         ("Branch", "branching (@task.branch / BranchPythonOperator)"),
         ("ShortCircuit", "short-circuit (@task.short_circuit / ShortCircuitOperator)"),
-        ("Virtualenv", "virtualenv operators (PythonVirtualenvOperator)"),
-        ("Sensor", "sensors (BaseSensorOperator and subclasses)"),
     ):
         if marker in name:
             raise ValueError(
@@ -247,12 +329,29 @@ def _operator_type(task) -> str:
                 "silently mistranslate. See docs/dag-authoring.md for the "
                 "current supported operator list."
             )
-    if "Bash" in name:
-        return "bash"
-    if "Http" in name:
-        return "http_api"
-    if "Python" in name:
-        return "python"
+    # Any captured provider operator / sensor / transfer runs through the generic
+    # executor (ADR 0040 Phase A): import_string(class)(**args).execute(context). Only
+    # _generic-captured classes carry __leoflow_operator_class__; the bundled shim
+    # operators (Bash/Python/Http) do not. This check MUST precede the substring
+    # fast-path below: a long-tail operator whose class name happens to contain
+    # Bash/Http/Python (e.g. AcmePythonModelOperator) would otherwise be mistranslated
+    # into a native task, silently dropping its operator_class — the same
+    # silent-mistranslation class as the HttpSensor regression guarded below.
+    if getattr(type(task), "__leoflow_operator_class__", None):
+        return "airflow_operator"
+    # The native fast path is for the BUNDLED shim operators only (which carry no
+    # __leoflow_operator_class__, so they fall through to here). A SENSOR whose class
+    # name happens to contain Bash/Http/Python (HttpSensor, BashSensor, PythonSensor)
+    # must NOT be mistranslated into a native one-shot task — sensors run via the
+    # generic poke executor in their own pod. (An e2e caught HttpSensor silently
+    # becoming an inline http_api call.) Airflow sensors conventionally end in "Sensor".
+    if not name.endswith("Sensor"):
+        if "Bash" in name:
+            return "bash"
+        if "Http" in name:
+            return "http_api"
+        if "Python" in name:
+            return "python"
     raise ValueError(f"unsupported operator {name!r} on task {task.task_id}")
 
 

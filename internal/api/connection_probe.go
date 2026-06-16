@@ -5,19 +5,23 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/neochaotic/leoflow/internal/connectors"
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
-// ConnectionTester checks whether a connection's endpoint is usable. The default
-// implementation tests reachability (TCP dial / HTTP) from the control plane;
-// full credential/provider validation would need the provider hooks (Python),
-// which the Go control plane does not run.
+// ConnectionTester checks whether a connection is well-formed. The default
+// implementation validates STRUCTURE only and makes no network call: the Go
+// control plane must never reach out to a user-configured host (SSRF / internal
+// port-scan — go/request-forgery), and "reachable from the control plane" is the
+// wrong question anyway, since a connection is used in the task's network scope,
+// not the control plane's. Live reachability/auth is tested where the connection
+// is actually used (the task/executor) — tracked as a follow-up.
 type ConnectionTester interface {
 	Test(ctx context.Context, c domain.Connection) (ok bool, message string)
 }
@@ -38,8 +42,24 @@ func testConnectionHandler(tester ConnectionTester) gin.HandlerFunc {
 			return
 		}
 		ok, msg := tester.Test(c.Request.Context(), body.toDomain(body.ConnectionID))
+		if hint := connectorDependencyNudge(body.ConnType); hint != "" {
+			msg = msg + " · " + hint
+		}
 		c.JSON(http.StatusOK, connectionTestResultDTO{Status: ok, Message: msg})
 	}
+}
+
+// connectorDependencyNudge returns a setup-time reminder that a Connection alone
+// is not enough — the DAG must also declare the provider so the hook is installed
+// (ADR 0038 #1). It is appended to the probe response (our surface; the form is
+// Airflow's SPA). Empty for a conn_type the catalog cannot expand, to avoid
+// suggesting a connectors: entry that would fail the compile.
+func connectorDependencyNudge(connType string) string {
+	if _, ok := connectors.PackageFor(connType); !ok {
+		return ""
+	}
+	return "to use this connection from a task hook, declare the provider in your " +
+		"DAG's leoflow.yaml: connectors: [" + connType + "]"
 }
 
 // defaultConnPorts maps connection types to their well-known port, used when the
@@ -50,22 +70,25 @@ var defaultConnPorts = map[string]int{
 	"ftp": 21, "sftp": 22, "ssh": 22, "kafka": 9092,
 }
 
-// defaultConnectionTester tests endpoint reachability using only the stdlib.
+// defaultConnectionTester validates a connection's STRUCTURE using only the
+// stdlib — it makes no network call (see ConnectionTester).
 type defaultConnectionTester struct{}
 
-// Test reports whether the connection's endpoint is reachable from the control
-// plane. HTTP(S) connections get a GET; everything else gets a TCP dial to
-// host:port (the connection's port, else the type's default).
-func (defaultConnectionTester) Test(ctx context.Context, conn domain.Connection) (ok bool, message string) {
+// Test validates that the connection is well-formed without contacting the host:
+// GCP keys are checked structurally, HTTP(S) URLs are parsed, and host/port
+// endpoint types must carry a host and a (declared or default) port. It never
+// dials — reachability/auth is exercised when a task uses the connection, in the
+// task's own network scope, not the control plane's.
+func (defaultConnectionTester) Test(_ context.Context, conn domain.Connection) (ok bool, message string) {
 	t := strings.ToLower(conn.ConnType)
-	if t == "http" || t == "https" {
-		return testHTTPReachable(ctx, conn)
-	}
 	if t == "google_cloud_platform" {
 		return testGCPConnection(conn)
 	}
+	if t == "http" || t == "https" {
+		return validateHTTPConnection(conn)
+	}
 	if conn.Host == "" {
-		return false, "no host configured to test"
+		return false, "no host configured"
 	}
 	port := 0
 	if conn.Port != nil {
@@ -75,16 +98,10 @@ func (defaultConnectionTester) Test(ctx context.Context, conn domain.Connection)
 		port = defaultConnPorts[t]
 	}
 	if port == 0 {
-		return false, "set a port to test reachability for conn_type " + conn.ConnType
+		return false, "set a port — no default known for conn_type " + conn.ConnType
 	}
-	addr := net.JoinHostPort(conn.Host, strconv.Itoa(port))
-	d := net.Dialer{Timeout: 5 * time.Second}
-	cn, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return false, "cannot reach " + addr + ": " + err.Error()
-	}
-	_ = cn.Close() //nolint:errcheck // reachability probe; close result is irrelevant
-	return true, "reachable: " + addr
+	return true, "connection looks valid: " + net.JoinHostPort(conn.Host, strconv.Itoa(port)) +
+		" — reachability is tested when a task uses it"
 }
 
 // testGCPConnection structurally validates a google_cloud_platform connection
@@ -150,23 +167,31 @@ func validateGCPKeyfileDict(kd any) (ok bool, message string) {
 	return true, "service-account key looks valid (" + got["client_email"] + ")"
 }
 
-func testHTTPReachable(ctx context.Context, conn domain.Connection) (ok bool, message string) {
+// validateHTTPConnection structurally validates an http/https connection's URL
+// WITHOUT making a request (no SSRF). It mirrors Airflow's HttpHook URL assembly
+// ({schema}://{host}:{port}) so a malformed host is caught, then parses it.
+func validateHTTPConnection(conn domain.Connection) (ok bool, message string) {
+	if conn.Host == "" {
+		return false, "no host configured"
+	}
 	target := conn.Host
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		// The Airflow connection form sends host, schema and port as separate
+		// fields; mirror Airflow's HttpHook, which builds {schema}://{host}:{port}.
+		// `schema` selects the URL scheme; conn_type ("https") is the fallback.
 		scheme := "http"
-		if strings.EqualFold(conn.ConnType, "https") {
+		if strings.EqualFold(conn.Schema, "https") || strings.EqualFold(conn.ConnType, "https") {
 			scheme = "https"
 		}
 		target = scheme + "://" + conn.Host
+		// Honor an explicitly pinned port unless the host already carries one.
+		if conn.Port != nil && *conn.Port != 0 && !strings.Contains(conn.Host, ":") {
+			target += ":" + strconv.Itoa(*conn.Port)
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
-	if err != nil {
-		return false, "invalid host: " + err.Error()
+	u, err := url.Parse(target)
+	if err != nil || u.Host == "" {
+		return false, "invalid URL: " + target
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-	if err != nil {
-		return false, "request failed: " + err.Error()
-	}
-	_ = resp.Body.Close() //nolint:errcheck // reachability probe
-	return resp.StatusCode < http.StatusInternalServerError, "HTTP " + strconv.Itoa(resp.StatusCode)
+	return true, "connection looks valid: " + target + " — reachability is tested when a task uses it"
 }

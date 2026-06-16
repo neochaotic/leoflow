@@ -28,6 +28,93 @@ def test_run_writes_return_value(tmp_path, monkeypatch):
     assert json.loads(out.read_text()) == {"rows": 7}
 
 
+def test_run_injects_context_into_named_params(tmp_path, monkeypatch):
+    # A @task gets the run context the same way a captured operator does: params named
+    # after context keys are injected (def task(ds=None)), so native tasks are on par.
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_DS", "2026-06-14")
+    monkeypatch.setenv("LEOFLOW_RUN_ID", "run-9")
+    body = "def task(ds=None, run_id=None):\n    return {'ds': ds, 'run_id': run_id}\n"
+    mod = _write_module(tmp_path, monkeypatch, body)
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == {"ds": "2026-06-14", "run_id": "run-9"}
+
+
+def test_run_injects_full_context_into_kwargs(tmp_path, monkeypatch):
+    # def task(**context): gets the whole context (the documented "old style").
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_DS", "2026-06-14")
+    monkeypatch.setenv("LEOFLOW_PARAMS", '{"region": "us"}')
+    body = ("def task(**context):\n"
+            "    return {'ds': context['ds'], 'region': context['params']['region']}\n")
+    mod = _write_module(tmp_path, monkeypatch, body)
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == {"ds": "2026-06-14", "region": "us"}
+
+
+def test_run_explicit_binding_overrides_context(tmp_path, monkeypatch):
+    # call_args / XCom win over context — existing behavior preserved, nothing broken.
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
+    monkeypatch.setenv("LEOFLOW_DS", "ctx-ds")
+    monkeypatch.setenv("LEOFLOW_CALL_ARGS_JSON", '{"ds": "explicit-ds"}')
+    mod = _write_module(tmp_path, monkeypatch, "def task(ds=None):\n    return {'ds': ds}\n")
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(out.read_text()) == {"ds": "explicit-ds"}
+
+
+def test_run_task_ships_custom_xcom_pushes(tmp_path, monkeypatch):
+    # A @task that does ti.xcom_push(key=...) (via **context) ships the custom keys
+    # the same way operators do — multi-key XCom parity for native tasks (ADR 0040).
+    pushes = tmp_path / "pushes.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(tmp_path / "rv.json"))
+    monkeypatch.setenv("LEOFLOW_PUSHES_PATH", str(pushes))
+    body = ("def task(**context):\n"
+            "    context['ti'].xcom_push(key='row_count', value=7)\n"
+            "    return {'ok': True}\n")
+    mod = _write_module(tmp_path, monkeypatch, body)
+
+    runner.run(f"{mod}:task")
+
+    assert json.loads(pushes.read_text()) == {"row_count": 7}
+
+
+def test_render_bash_renders_context_macros():
+    # A bash command is Jinja-rendered with the run context, so {{ ds }} / {{ params.X }}
+    # work like Airflow (ADR 0040 native parity), not just env vars.
+    out = runner._render_bash("echo {{ ds }} {{ params.region }}",
+                              {"ds": "2026-06-14", "params": {"region": "us"}})
+    assert out == "echo 2026-06-14 us"
+
+
+def test_render_bash_no_template_is_unchanged():
+    assert runner._render_bash("echo hello", {"ds": "x"}) == "echo hello"
+
+
+def test_render_bash_bad_template_falls_back_to_raw():
+    # A broken/undefined template must never fail the task — fall back to the raw command
+    # (the env vars $LEOFLOW_DS/$AIRFLOW_VAR_* still reach it).
+    raw = "echo {{ nope.bad }}"
+    assert runner._render_bash(raw, {}) == raw
+
+
+def test_render_bash_sandbox_blocks_template_injection():
+    # The bash command is rendered with a SandboxedEnvironment (Airflow parity), so a
+    # server-side template-injection payload that reaches for Python internals is refused
+    # at render time. The render fails closed → fall back to the raw command, never
+    # executing the injection nor leaking the resolved attribute.
+    raw = "echo {{ ''.__class__.__mro__[1].__subclasses__() }}"
+    assert runner._render_bash(raw, {}) == raw
+
+
 def test_run_without_return_writes_no_file(tmp_path, monkeypatch):
     out = tmp_path / "rv.json"
     monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
@@ -258,3 +345,62 @@ def test_run_ignores_malformed_call_args_json(tmp_path, monkeypatch):
     runner.run(f"{mod}:task")
 
     assert json.loads(out.read_text()) == 5
+
+
+def test_run_operator_executes_captured_provider_operator(tmp_path, monkeypatch):
+    """ADR 0040 A3: run_operator imports a captured operator and executes it,
+    writing its return as the XCom. Skips when Airflow is not installed (the lean
+    runtime test env); runs against the real operator otherwise."""
+    pytest.importorskip("airflow.providers.standard.operators.bash")
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(tmp_path / "ret.json"))
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
+    runner.run_operator(
+        "airflow.providers.standard.operators.bash.BashOperator",
+        {"bash_command": "echo generic-op-ran"},
+    )
+    assert json.loads((tmp_path / "ret.json").read_text()) == "generic-op-ran"
+
+
+def test_merge_operator_xcom_injects_upstream_values(monkeypatch):
+    """An operator arg bound to an upstream (recorded as xcom_input) is delivered
+    as LEOFLOW_XCOM_<PARAM>; _merge_operator_xcom must set it on the kwargs,
+    overriding any same-name literal (ADR 0040 A1.1). Pure: no Airflow needed."""
+    monkeypatch.setenv("LEOFLOW_XCOM_SQL", '"SELECT 42"')
+    merged = runner._merge_operator_xcom({"conn_id": "sf", "sql": "PLACEHOLDER"})
+    assert merged["sql"] == "SELECT 42"   # XCom overrides the literal
+    assert merged["conn_id"] == "sf"      # untouched literal survives
+
+
+def test_merge_operator_xcom_noop_without_xcom(monkeypatch):
+    """With no LEOFLOW_XCOM_* in the env, the operator kwargs pass through."""
+    monkeypatch.delenv("LEOFLOW_XCOM_SQL", raising=False)
+    merged = runner._merge_operator_xcom({"conn_id": "sf"})
+    assert merged == {"conn_id": "sf"}
+
+
+def test_is_reschedule_exc_matches_by_name():
+    """AirflowRescheduleException is recognized by class name across the MRO, so
+    the runtime translates reschedule-mode sensors to a clear error without
+    importing Airflow (review polish #5)."""
+    class AirflowRescheduleException(Exception):
+        pass
+
+    class Subclass(AirflowRescheduleException):
+        pass
+
+    assert runner._is_reschedule_exc(AirflowRescheduleException())
+    assert runner._is_reschedule_exc(Subclass())
+    assert not runner._is_reschedule_exc(ValueError("nope"))
+
+
+def test_run_operator_rejects_reschedule_sensor(monkeypatch):
+    """A reschedule-mode sensor is rejected up front with a clear message (review
+    polish #5) — its execute() would otherwise crash on a missing TaskInstance.
+    Skips without Airflow."""
+    pytest.importorskip("airflow.providers.standard.sensors.filesystem")
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "s")
+    with pytest.raises(RuntimeError, match="reschedule"):
+        runner.run_operator(
+            "airflow.providers.standard.sensors.filesystem.FileSensor",
+            {"filepath": "/nope", "mode": "reschedule", "poke_interval": 1, "timeout": 1},
+        )

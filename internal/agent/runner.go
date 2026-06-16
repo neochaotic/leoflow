@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +53,8 @@ type Runner struct {
 	Version    string
 	Env        []string // base process environment (typically os.Environ())
 	ReturnPath string   // file the task writes its return value to; empty disables push
+	LinksPath  string   // file the runtime writes operator_extra_links to; empty disables (#375)
+	PushesPath string   // file the runtime writes custom-keyed XCom pushes to; empty disables (multi-key XCom)
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
@@ -69,7 +72,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	if spec.GetOperator() == "http_api" {
 		return errors.New("agent received an http_api task, which is executed by the control plane")
 	}
-	argv, err := BuildCommand(spec.GetOperator(), spec.GetEntrypoint())
+	argv, err := BuildCommand(spec.GetOperator(), spec.GetEntrypoint(), spec.GetOperatorClass())
 	if err != nil {
 		return err
 	}
@@ -133,11 +136,26 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 	// in Python's block buffer when the process is killed (SIGKILL/OOM/evict)
 	// and never reach the agent's pipe.
 	env = append(env, "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=UTF-8")
+	env = append(env, runContextEnv(spec)...)
+	byTaskEnv, err := r.xcomByTaskEnv(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	env = append(env, byTaskEnv...)
 	if r.ReturnPath != "" {
 		// Tell the runtime to write the return value to the agent's per-task path,
 		// not the shared global default — so concurrent tasks and other users never
 		// collide on /tmp/leoflow_return_value.json.
 		env = append(env, "LEOFLOW_RETURN_VALUE_PATH="+r.ReturnPath)
+	}
+	if r.LinksPath != "" {
+		// The runtime writes the operator's computed extra-links here (#375).
+		env = append(env, "LEOFLOW_EXTRA_LINKS_PATH="+r.LinksPath)
+	}
+	if r.PushesPath != "" {
+		// The runtime writes the operator's custom-keyed XCom pushes here (multi-key
+		// XCom). Off the LEOFLOW_XCOM_ prefix so _merge_operator_xcom does not consume it.
+		env = append(env, "LEOFLOW_PUSHES_PATH="+r.PushesPath)
 	}
 	if callArgs := spec.GetCallArgsJson(); callArgs != "" {
 		// TaskFlow literal call args (#115). The runtime decodes this and merges
@@ -146,7 +164,93 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		// Airflow's DAG-run `params` term free for a future feature (#148).
 		env = append(env, "LEOFLOW_CALL_ARGS_JSON="+callArgs)
 	}
+	if opArgs := spec.GetOperatorArgsJson(); opArgs != "" {
+		// Operator constructor kwargs (ADR 0040). The runtime's --operator mode
+		// decodes this and instantiates the captured provider operator with it.
+		env = append(env, "LEOFLOW_OPERATOR_ARGS="+opArgs)
+	}
 	return append(env, r.secretsEnv(ctx)...), nil
+}
+
+// upstreamXComEnv is the env var carrying the upstream task_id -> return_value map the
+// runtime's ti.xcom_pull reads. It deliberately does NOT start with "LEOFLOW_XCOM_":
+// the runtime's _merge_operator_xcom consumes every LEOFLOW_XCOM_<PARAM> var as a
+// param-bound operator kwarg and would otherwise inject this whole map as a bogus
+// by_task= kwarg (a collision the live GCP chain test caught).
+const upstreamXComEnv = "LEOFLOW_UPSTREAM_XCOM"
+
+// xcomByTaskEnv fetches each upstream's return_value and renders the upstreamXComEnv
+// map the runtime's ti.xcom_pull reads, so a captured operator can pull a chained
+// upstream's output like in Airflow (ADR 0040). Only captured operators use
+// ti.xcom_pull — a python @task gets its inputs via the param-keyed xcom_input_mapping
+// — so the map is built for airflow_operator tasks only, avoiding wasted fetches. An
+// upstream with no return_value is omitted (pulls as None). nil when nothing to deliver.
+func (r *Runner) xcomByTaskEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string, error) {
+	if spec.GetOperator() != "airflow_operator" {
+		return nil, nil
+	}
+	byTask := map[string]json.RawMessage{}
+	for _, taskID := range spec.GetDependsOn() {
+		resp, err := r.Client.FetchXCom(ctx, &agentv1.FetchXComRequest{
+			UpstreamTaskId: taskID,
+			Key:            "return_value",
+		})
+		if status.Code(err) == codes.NotFound {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("fetching xcom for upstream %q: %w", taskID, err)
+		}
+		byTask[taskID] = resp.GetValue()
+	}
+	if len(byTask) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(byTask)
+	if err != nil {
+		return nil, fmt.Errorf("encoding xcom-by-task map: %w", err)
+	}
+	return []string{upstreamXComEnv + "=" + string(encoded)}, nil
+}
+
+// runContextEnv renders the DagRun/task identity the runtime's standalone operator
+// context reads (_StandaloneTaskInstance / _operator_context, ADR 0040): without it
+// the context is blank in every executor — ti.task_id="", run_id="", try_number
+// defaulting to 1, and run_operator falling back to the operator class name as the
+// task_id — a silent-wrong gap for operators that read them. The server carries
+// these on the TaskSpec. ts/ds are derived from the single logical_date (ts is the
+// RFC3339 value, ds its UTC date). The macros params/data_interval need fields not
+// yet on TaskSpec and are deliberately left unset rather than fabricated.
+func runContextEnv(spec *agentv1.TaskSpec) []string {
+	var env []string
+	if v := spec.GetTaskId(); v != "" {
+		env = append(env, "LEOFLOW_TASK_ID="+v)
+	}
+	if v := spec.GetRunId(); v != "" {
+		env = append(env, "LEOFLOW_RUN_ID="+v)
+	}
+	if v := spec.GetDagId(); v != "" {
+		env = append(env, "LEOFLOW_DAG_ID="+v)
+	}
+	if n := spec.GetTryNumber(); n > 0 {
+		env = append(env, fmt.Sprintf("LEOFLOW_TRY_NUMBER=%d", n))
+	}
+	if ld := spec.GetLogicalDate(); ld != "" {
+		env = append(env, "LEOFLOW_TS="+ld)
+		if t, perr := time.Parse(time.RFC3339, ld); perr == nil {
+			env = append(env, "LEOFLOW_DS="+t.UTC().Format("2006-01-02"))
+		}
+	}
+	if v := spec.GetDataIntervalStart(); v != "" {
+		env = append(env, "LEOFLOW_DATA_INTERVAL_START="+v)
+	}
+	if v := spec.GetDataIntervalEnd(); v != "" {
+		env = append(env, "LEOFLOW_DATA_INTERVAL_END="+v)
+	}
+	if v := spec.GetParamsJson(); v != "" {
+		env = append(env, "LEOFLOW_PARAMS="+v)
+	}
+	return env
 }
 
 // secretsEnv fetches the tenant's Variables/Connections and renders them as
@@ -259,6 +363,12 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	if err := r.pushReturnValue(ctx); err != nil {
 		return r.fail(ctx, 0, err)
 	}
+	if err := r.pushExtraLinks(ctx); err != nil {
+		return r.fail(ctx, 0, err)
+	}
+	if err := r.pushCustomXComs(ctx); err != nil {
+		return r.fail(ctx, 0, err)
+	}
 	return r.report(ctx, agentv1.TaskState_TASK_STATE_SUCCESS, 0, "")
 }
 
@@ -315,6 +425,80 @@ func (r *Runner) pushReturnValue(ctx context.Context) error {
 		return fmt.Errorf("control plane rejected return value: %s", resp.GetRejectionReason())
 	}
 	return nil
+}
+
+// pushExtraLinks ships the operator's computed UI deep-link buttons (the runtime wrote
+// them to LinksPath) to the control plane as the reserved "_extra_links" XCom, so the
+// task Details view can render them (#375). Absent file or no-XCom control plane is a
+// no-op — links are UI sugar and must not fail an otherwise-successful task.
+func (r *Runner) pushExtraLinks(ctx context.Context) error {
+	if r.LinksPath == "" {
+		return nil
+	}
+	value, ok, err := ReadReturnValue(r.LinksPath)
+	if err != nil || !ok {
+		return err
+	}
+	resp, err := r.Client.PushXCom(ctx, &agentv1.PushXComRequest{
+		Key:         "_extra_links",
+		Value:       value,
+		ContentType: "application/json",
+	})
+	if status.Code(err) == codes.Unimplemented {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("pushing extra links: %w", err)
+	}
+	if !resp.GetAccepted() {
+		return fmt.Errorf("control plane rejected extra links: %s", resp.GetRejectionReason())
+	}
+	return nil
+}
+
+// pushCustomXComs stores the operator's custom-keyed ti.xcom_push values (the runtime
+// wrote them to PushesPath as a {key: value} JSON map) as individual XComs, so they
+// show in the XCom tab like Airflow (multi-key XCom). Absent file or a no-XCom control
+// plane is a no-op — these are observability, not task success.
+func (r *Runner) pushCustomXComs(ctx context.Context) error {
+	if r.PushesPath == "" {
+		return nil
+	}
+	value, ok, err := ReadReturnValue(r.PushesPath)
+	if err != nil || !ok {
+		return err
+	}
+	var pushes map[string]json.RawMessage
+	if uerr := json.Unmarshal(value, &pushes); uerr != nil {
+		return fmt.Errorf("decoding xcom pushes: %w", uerr)
+	}
+	for _, key := range sortedKeys(pushes) {
+		resp, perr := r.Client.PushXCom(ctx, &agentv1.PushXComRequest{
+			Key:         key,
+			Value:       pushes[key],
+			ContentType: "application/json",
+		})
+		if status.Code(perr) == codes.Unimplemented {
+			return nil
+		}
+		if perr != nil {
+			return fmt.Errorf("pushing xcom %q: %w", key, perr)
+		}
+		if !resp.GetAccepted() {
+			return fmt.Errorf("control plane rejected xcom %q: %s", key, resp.GetRejectionReason())
+		}
+	}
+	return nil
+}
+
+// sortedKeys returns the map keys sorted, for deterministic push order.
+func sortedKeys(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // heartbeat pings the control plane on an interval while the task runs and

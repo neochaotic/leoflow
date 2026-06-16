@@ -30,6 +30,24 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Postgres, Redis, and the control plane with the UI; bootstraps an admin user.
   `deploy/Dockerfile.server` builds the single image.
 - `make fetch-airflow-ui` extracts the pinned UI bundle from `apache/airflow:3.2.1`.
+- **Connectors — provider hooks/operators without `apache-airflow` in the control
+  plane (ADR 0038/0039).** `connectors:` / `dependencies:` in `leoflow.yaml` install a
+  provider into the DAG image; a **generated connection catalog** (86 connection
+  types, derived from real Airflow) drives the UI's Add-Connection form
+  (`/ui/connections/hook_meta`) and the structural connection-test probe
+  (`POST /api/v2/connections/test`). Admin Variables and Connections are delivered to
+  each task as `AIRFLOW_VAR_*` / `AIRFLOW_CONN_*` (encrypted at rest, ADR 0019) and
+  resolved by Airflow's native env-secrets backend — in pods (via the agent over gRPC)
+  and in Lite/subprocess.
+- **Airflow operators & poke sensors (ADR 0040, Phase A).** Any provider operator or
+  sensor runs in its own pod through a generic executor
+  (`import_string(class)(**args) → render_template_fields → execute(context)`) — no
+  per-operator code. Includes `ti.xcom_pull` chaining between operators; the
+  standalone run context (`ds`, `ts`, `data_interval_*`, `params`, `var`, `conn`);
+  operator extra-links (the UI "open in …" buttons); multi-key XCom; and native
+  `@task` / `bash` parity (including Jinja-templated bash commands). Reschedule-mode
+  sensors, deferrable operators, dynamic task mapping and branching are loudly
+  rejected with actionable errors (tracked for later phases).
 
 ### Changed
 

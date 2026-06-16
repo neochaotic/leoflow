@@ -106,6 +106,15 @@ def test_render_bash_bad_template_falls_back_to_raw():
     assert runner._render_bash(raw, {}) == raw
 
 
+def test_render_bash_sandbox_blocks_template_injection():
+    # The bash command is rendered with a SandboxedEnvironment (Airflow parity), so a
+    # server-side template-injection payload that reaches for Python internals is refused
+    # at render time. The render fails closed → fall back to the raw command, never
+    # executing the injection nor leaking the resolved attribute.
+    raw = "echo {{ ''.__class__.__mro__[1].__subclasses__() }}"
+    assert runner._render_bash(raw, {}) == raw
+
+
 def test_run_without_return_writes_no_file(tmp_path, monkeypatch):
     out = tmp_path / "rv.json"
     monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))

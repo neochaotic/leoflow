@@ -191,12 +191,18 @@ def _render_bash(command: str, context: dict) -> str:
     if "{{" not in command and "{%" not in command:
         return command
     try:
-        import jinja2
+        from jinja2.sandbox import SandboxedEnvironment
     except Exception:  # noqa: BLE001 — no jinja in this env; env vars still work
         return command
     try:
-        return jinja2.Template(command).render(**context)
-    except Exception:  # noqa: BLE001 — a broken template must not fail the task
+        # A SandboxedEnvironment (what Airflow uses for templating) refuses access to
+        # Python internals, so a template-injection payload (e.g. {{ ''.__class__ }})
+        # fails closed instead of executing. autoescape stays off on purpose: this
+        # renders a shell command, not HTML — HTML-escaping would corrupt it. Secrets
+        # should be referenced as $AIRFLOW_VAR_*/$AIRFLOW_CONN_* env vars rather than
+        # rendered into the command string (see the env-secrets delivery path).
+        return SandboxedEnvironment().from_string(command).render(**context)
+    except Exception:  # noqa: BLE001 — a broken/blocked template must not fail the task
         return command
 
 

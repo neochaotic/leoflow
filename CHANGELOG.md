@@ -6,10 +6,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-> Work toward **0.1.0-rc1** — a Go control plane that runs DAGs end-to-end and
-> serves the embedded Apache Airflow 3.2.1 UI. **Not tagged or released yet:** the
-> `0.1.0-rc1` tag will be cut only after the maintainer validates the UI in a real
-> browser (the open acceptance step below). Nothing here is published.
+## [0.1.0-rc.1] - 2026-06-16
+
+> First release candidate of the **0.1.0** line — a Go control plane that runs
+> DAGs end-to-end and serves the embedded Apache Airflow 3.2.1 UI. Published as a
+> pre-release after hands-on maintainer validation of the UI and the connector
+> flow in a real browser.
 
 ### Added
 
@@ -69,4 +71,5 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/commits/main
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.1...HEAD
+[0.1.0-rc.1]: https://github.com/neochaotic/leoflow/releases/tag/v0.1.0-rc.1

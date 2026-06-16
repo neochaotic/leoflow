@@ -138,11 +138,15 @@ release:
     ## Leoflow {{ .Tag }} (pre-alpha)
 
     Pre-alpha build — APIs and on-disk shape may still change before the
-    `v0.1.0` cut. Install with:
+    `v0.1.0` cut. Install **this exact release** with:
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
+    LEOFLOW_VERSION={{ .Tag }} curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/{{ .Tag }}/install.sh | sh
     ```
+
+    > A bare `curl … | sh` installs the latest **stable** release (`/releases/latest`
+    > excludes pre-releases), so on a pre-release page it would NOT give you `{{ .Tag }}`.
+    > Pinning `LEOFLOW_VERSION` (and fetching `install.sh` from the tag) installs this build.
   footer: |
     ---
     Artifacts are checksummed (SHA-256) and the checksums file is cosign-signed

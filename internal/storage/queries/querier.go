@@ -152,12 +152,25 @@ type Querier interface {
 	// terminal TI must stay terminal even if a late heartbeat arrives.
 	RecordTaskHeartbeat(ctx context.Context, arg RecordTaskHeartbeatParams) error
 	RecordXCom(ctx context.Context, arg RecordXComParams) error
+	// Re-dispatch a task parked in up_for_reschedule once its reschedule_at has passed:
+	// back to 'none' with the per-attempt timestamps cleared (so the next dispatch
+	// stamps fresh — queued_at MUST be NULL or the dispatch-lost reaper re-flags it)
+	// and reschedule_at cleared. Unlike ResetTaskInstanceToNone (retry), try_number is
+	// PRESERVED and no task_instance_history row is archived: reschedule is not a retry,
+	// it consumes no attempt (#380). Guarded to the parked state so it is idempotent.
+	RedispatchRescheduledTaskInstance(ctx context.Context, arg RedispatchRescheduledTaskInstanceParams) error
 	RemoveFavorite(ctx context.Context, arg RemoveFavoriteParams) error
 	// $3 is cast to task_state in every usage: without the cast Postgres deduces an
 	// enum type from `state = $3` but text from the literal comparisons below and
 	// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
 	// agent path is the first to exercise this query end-to-end.
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
+	// A reschedule-mode sensor (mode='reschedule') poked not-ready: park the active TI
+	// in up_for_reschedule with its next-poke time ($3) so the scheduler re-dispatches
+	// it once reschedule_at passes (#380), without consuming retry budget. Guarded to
+	// the active states so a late report never clobbers a terminal row. ended_at is
+	// left untouched (the task is not finished); started_at is preserved.
+	RescheduleTaskInstance(ctx context.Context, arg RescheduleTaskInstanceParams) error
 	// Archives every failed attempt in the run into task_instance_history then
 	// resets. See ResetTaskInstanceToNone for the per-attempt rationale.
 	ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error)
@@ -185,6 +198,10 @@ type Querier interface {
 	// show its duration: started_at on first entry into 'running', ended_at on a
 	// terminal state. Other timestamps are preserved (the scheduler may re-run).
 	StampDagRunState(ctx context.Context, arg StampDagRunStateParams) error
+	// The time a reschedule-mode sensor first entered reschedule (NULL until it does).
+	// Delivered to each re-dispatched pod so get_first_reschedule_date returns the real
+	// value and the sensor honors its cumulative timeout across pokes (#380).
+	TaskInstanceFirstRescheduleAt(ctx context.Context, arg TaskInstanceFirstRescheduleAtParams) (pgtype.Timestamptz, error)
 	TaskInstancesForDagRuns(ctx context.Context, arg TaskInstancesForDagRunsParams) ([]TaskInstancesForDagRunsRow, error)
 	UpdateDagRunState(ctx context.Context, arg UpdateDagRunStateParams) (DagRun, error)
 	UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskInstanceStateParams) (TaskInstance, error)

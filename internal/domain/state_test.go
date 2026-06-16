@@ -4,15 +4,16 @@ import "testing"
 
 func TestTaskStateIsTerminal(t *testing.T) {
 	terminal := map[TaskState]bool{
-		TaskStateNone:           false,
-		TaskStateScheduled:      false,
-		TaskStateQueued:         false,
-		TaskStateRunning:        false,
-		TaskStateUpForRetry:     false,
-		TaskStateSuccess:        true,
-		TaskStateFailed:         true,
-		TaskStateSkipped:        true,
-		TaskStateUpstreamFailed: true,
+		TaskStateNone:            false,
+		TaskStateScheduled:       false,
+		TaskStateQueued:          false,
+		TaskStateRunning:         false,
+		TaskStateUpForRetry:      false,
+		TaskStateUpForReschedule: false,
+		TaskStateSuccess:         true,
+		TaskStateFailed:          true,
+		TaskStateSkipped:         true,
+		TaskStateUpstreamFailed:  true,
 	}
 	for state, want := range terminal {
 		if got := state.IsTerminal(); got != want {

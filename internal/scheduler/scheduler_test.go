@@ -23,6 +23,7 @@ type fakeStore struct {
 	materialize        []string
 	transitions        []transition
 	retried            []transition
+	redispatched       []transition
 	runStates          map[string]domain.DagRunState
 	scheduled          []ScheduledDAG
 	createdRuns        []string
@@ -68,6 +69,10 @@ func (f *fakeStore) ApplyTransition(_ context.Context, runID, taskID string, to 
 }
 func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) error {
 	f.retried = append(f.retried, transition{runID, taskID, domain.TaskStateNone})
+	return nil
+}
+func (f *fakeStore) RedispatchReschedule(_ context.Context, runID, taskID string) error {
+	f.redispatched = append(f.redispatched, transition{runID, taskID, domain.TaskStateNone})
 	return nil
 }
 func (f *fakeStore) SetRunState(_ context.Context, runID string, state domain.DagRunState) error {
@@ -142,6 +147,29 @@ func TestStepResetsUpForRetryTask(t *testing.T) {
 	}
 	if len(store.retried) != 1 || store.retried[0].taskID != "a" {
 		t.Errorf("up_for_retry a should be reset for retry, got %v", store.retried)
+	}
+}
+
+func TestStepRedispatchesRescheduledTask(t *testing.T) {
+	at := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	store := newFakeStore(RunState{
+		RunID: "r1", DagID: "etl", State: domain.DagRunStateRunning, Tasks: linearTasks(),
+		States:       map[string]domain.TaskState{"a": domain.TaskStateUpForReschedule, "b": domain.TaskStateNone},
+		Tries:        map[string]int{"a": 1, "b": 1},
+		MaxTries:     map[string]int{"a": 3, "b": 3},
+		RescheduleAt: map[string]*time.Time{"a": &at},
+		Now:          at.Add(time.Second), // reschedule_at has passed
+	})
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.redispatched) != 1 || store.redispatched[0].taskID != "a" {
+		t.Errorf("up_for_reschedule a should be re-dispatched, got %v", store.redispatched)
+	}
+	// Reschedule must NOT take the retry path (ResetForRetry bumps try_number) —
+	// it consumes no attempt (#380).
+	if len(store.retried) != 0 {
+		t.Errorf("reschedule must not consume retry budget; retried=%v", store.retried)
 	}
 }
 

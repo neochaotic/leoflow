@@ -14,6 +14,10 @@ import pytest
 
 from leoflow_runtime import __main__, runner
 
+# Mirrors _RESCHEDULE_AT in the fake module below (datetime(2099,1,2,3,4,5, UTC));
+# the runtime writes its .isoformat() to LEOFLOW_RESCHEDULE_PATH.
+_RESCHEDULE_AT_ISO = "2099-01-02T03:04:05+00:00"
+
 
 def _fake_airflow_links(monkeypatch):
     """Inject the minimal Airflow surface the generic link path imports
@@ -42,6 +46,9 @@ _counter = itertools.count()
 # (``__init__(task_id, **kwargs)`` → ``render_template_fields`` → ``execute``),
 # so we can drive every branch without installing Airflow.
 _FAKE_OPERATOR_MODULE = '''
+from datetime import datetime, timezone
+
+
 class EchoOperator:
     mode = None
 
@@ -57,7 +64,9 @@ class EchoOperator:
         return {"task_id": self.task_id, "kwargs": self.kwargs}
 
 
-class RescheduleSensor(EchoOperator):
+class ReadyRescheduleSensor(EchoOperator):
+    # mode='reschedule' alone no longer blanket-rejects (ADR 0040 Phase B): a sensor
+    # whose poke is immediately ready just runs and succeeds, like any operator.
     mode = "reschedule"
 
 
@@ -72,16 +81,22 @@ class NonJsonOperator(EchoOperator):
 
 
 # Named exactly as Airflow's exception: run_operator matches it by class name
-# across the MRO (no Airflow import), so this reproduces a reschedule request.
+# across the MRO (no Airflow import). It carries reschedule_date like the real one.
 class AirflowRescheduleException(Exception):
-    pass
+    def __init__(self, reschedule_date):
+        super().__init__(str(reschedule_date))
+        self.reschedule_date = reschedule_date
+
+
+# A fixed future time the sensor asks to be rescheduled to.
+_RESCHEDULE_AT = datetime(2099, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
 
 class LateRescheduleSensor(EchoOperator):
-    mode = "poke"  # slips past the up-front mode check
+    mode = "reschedule"
 
     def execute(self, context):
-        raise AirflowRescheduleException("reschedule at ...")
+        raise AirflowRescheduleException(_RESCHEDULE_AT)
 
 
 # Named exactly as Airflow's exception: a deferrable operator suspends itself by
@@ -185,10 +200,14 @@ def test_run_operator_requires_dotted_class():
         runner.run_operator("NotDotted", {})
 
 
-def test_run_operator_rejects_reschedule_mode(tmp_path, monkeypatch):
+def test_run_operator_reschedule_mode_ready_succeeds(tmp_path, monkeypatch):
+    # mode='reschedule' no longer blanket-rejects (ADR 0040 Phase B): a sensor whose
+    # poke is immediately ready runs and returns like any operator.
+    out = tmp_path / "rv.json"
+    monkeypatch.setenv("LEOFLOW_RETURN_VALUE_PATH", str(out))
     mod = _write_operator_module(tmp_path, monkeypatch)
-    with pytest.raises(RuntimeError, match="reschedule-mode sensor"):
-        runner.run_operator(f"{mod}.RescheduleSensor", {})
+    runner.run_operator(f"{mod}.ReadyRescheduleSensor", {})
+    assert out.exists()
 
 
 def test_run_operator_render_template_fields_is_best_effort(tmp_path, monkeypatch, capsys):
@@ -203,7 +222,23 @@ def test_run_operator_render_template_fields_is_best_effort(tmp_path, monkeypatc
     assert "render_template_fields skipped" in capsys.readouterr().out
 
 
-def test_run_operator_translates_late_reschedule_exception(tmp_path, monkeypatch):
+def test_run_operator_reschedule_signals_when_wired(tmp_path, monkeypatch):
+    # A reschedule poke-not-ready, with the agent's LEOFLOW_RESCHEDULE_PATH wired:
+    # write the requested reschedule time and exit with the reschedule sentinel so
+    # the agent reports up_for_reschedule, releasing the pod (ADR 0040 Phase B, #380).
+    rp = tmp_path / "reschedule.txt"
+    monkeypatch.setenv("LEOFLOW_RESCHEDULE_PATH", str(rp))
+    mod = _write_operator_module(tmp_path, monkeypatch)
+    with pytest.raises(SystemExit) as exc:
+        runner.run_operator(f"{mod}.LateRescheduleSensor", {})
+    assert exc.value.code == runner.RESCHEDULE_EXIT_CODE
+    assert rp.read_text().strip() == _RESCHEDULE_AT_ISO
+
+
+def test_run_operator_reschedule_rejects_when_not_wired(tmp_path, monkeypatch):
+    # Without LEOFLOW_RESCHEDULE_PATH (an older agent), a reschedule request fails
+    # with a clear error rather than a silent sentinel exit.
+    monkeypatch.delenv("LEOFLOW_RESCHEDULE_PATH", raising=False)
     mod = _write_operator_module(tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="reschedule"):
         runner.run_operator(f"{mod}.LateRescheduleSensor", {})

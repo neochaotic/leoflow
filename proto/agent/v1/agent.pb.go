@@ -90,6 +90,10 @@ const (
 	TaskState_TASK_STATE_SUCCESS     TaskState = 2
 	TaskState_TASK_STATE_FAILED      TaskState = 3
 	TaskState_TASK_STATE_SKIPPED     TaskState = 4
+	// A reschedule-mode sensor released its pod; re-dispatch at reschedule_at,
+	// without consuming retry budget (ADR 0040 Phase B, #380). Distinct from
+	// FAILED so the scheduler reschedules rather than failing/retrying the task.
+	TaskState_TASK_STATE_UP_FOR_RESCHEDULE TaskState = 5
 )
 
 // Enum value maps for TaskState.
@@ -100,13 +104,15 @@ var (
 		2: "TASK_STATE_SUCCESS",
 		3: "TASK_STATE_FAILED",
 		4: "TASK_STATE_SKIPPED",
+		5: "TASK_STATE_UP_FOR_RESCHEDULE",
 	}
 	TaskState_value = map[string]int32{
-		"TASK_STATE_UNSPECIFIED": 0,
-		"TASK_STATE_RUNNING":     1,
-		"TASK_STATE_SUCCESS":     2,
-		"TASK_STATE_FAILED":      3,
-		"TASK_STATE_SKIPPED":     4,
+		"TASK_STATE_UNSPECIFIED":       0,
+		"TASK_STATE_RUNNING":           1,
+		"TASK_STATE_SUCCESS":           2,
+		"TASK_STATE_FAILED":            3,
+		"TASK_STATE_SKIPPED":           4,
+		"TASK_STATE_UP_FOR_RESCHEDULE": 5,
 	}
 )
 
@@ -473,6 +479,7 @@ type TaskSpec struct {
 	DataIntervalStart       string                    `protobuf:"bytes,18,opt,name=data_interval_start,json=dataIntervalStart,proto3" json:"data_interval_start,omitempty"` // The DagRun's data interval start, RFC3339. The agent stamps LEOFLOW_DATA_INTERVAL_START so the standalone operator context exposes data_interval_start (ADR 0040). Empty leaves it unset.
 	DataIntervalEnd         string                    `protobuf:"bytes,19,opt,name=data_interval_end,json=dataIntervalEnd,proto3" json:"data_interval_end,omitempty"`       // The DagRun's data interval end, RFC3339. Stamped as LEOFLOW_DATA_INTERVAL_END -> context data_interval_end. Empty leaves it unset.
 	ParamsJson              string                    `protobuf:"bytes,20,opt,name=params_json,json=paramsJson,proto3" json:"params_json,omitempty"`                        // The DagRun's params/conf, JSON-encoded (#148). Stamped as LEOFLOW_PARAMS so the standalone operator context exposes context['params'] / {{ params.X }}. Empty leaves params={}.
+	FirstRescheduleAt       string                    `protobuf:"bytes,21,opt,name=first_reschedule_at,json=firstRescheduleAt,proto3" json:"first_reschedule_at,omitempty"` // For a reschedule-mode sensor re-dispatched after poking not-ready (#380): the time it FIRST entered reschedule, RFC3339. Stamped as LEOFLOW_FIRST_RESCHEDULE_AT so get_first_reschedule_date returns the real value and the sensor honors its cumulative timeout. Empty on the first attempt.
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -643,6 +650,13 @@ func (x *TaskSpec) GetDataIntervalEnd() string {
 func (x *TaskSpec) GetParamsJson() string {
 	if x != nil {
 		return x.ParamsJson
+	}
+	return ""
+}
+
+func (x *TaskSpec) GetFirstRescheduleAt() string {
+	if x != nil {
+		return x.FirstRescheduleAt
 	}
 	return ""
 }
@@ -1057,11 +1071,14 @@ func (x *LogAck) GetAcknowledgedThroughLine() int64 {
 }
 
 type ReportStateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         TaskState              `protobuf:"varint,1,opt,name=state,proto3,enum=leoflow.agent.v1.TaskState" json:"state,omitempty"`
-	ExitCode      int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`            // for terminal states
-	ErrorMessage  string                 `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"` // for failed state
-	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	State        TaskState              `protobuf:"varint,1,opt,name=state,proto3,enum=leoflow.agent.v1.TaskState" json:"state,omitempty"`
+	ExitCode     int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`            // for terminal states
+	ErrorMessage string                 `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"` // for failed state
+	OccurredAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// For TASK_STATE_UP_FOR_RESCHEDULE: the earliest time the scheduler may
+	// re-dispatch this task instance (a reschedule-mode sensor poked not-ready).
+	RescheduleAt  *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=reschedule_at,json=rescheduleAt,proto3" json:"reschedule_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1120,6 +1137,13 @@ func (x *ReportStateRequest) GetErrorMessage() string {
 func (x *ReportStateRequest) GetOccurredAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.OccurredAt
+	}
+	return nil
+}
+
+func (x *ReportStateRequest) GetRescheduleAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RescheduleAt
 	}
 	return nil
 }
@@ -1310,7 +1334,7 @@ const file_agent_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\"\x14\n" +
-	"\x12GetTaskSpecRequest\"\xe4\a\n" +
+	"\x12GetTaskSpecRequest\"\x94\b\n" +
 	"\bTaskSpec\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06dag_id\x18\x02 \x01(\tR\x05dagId\x12\x1f\n" +
@@ -1338,7 +1362,8 @@ const file_agent_proto_rawDesc = "" +
 	"\x13data_interval_start\x18\x12 \x01(\tR\x11dataIntervalStart\x12*\n" +
 	"\x11data_interval_end\x18\x13 \x01(\tR\x0fdataIntervalEnd\x12\x1f\n" +
 	"\vparams_json\x18\x14 \x01(\tR\n" +
-	"paramsJson\x1a>\n" +
+	"paramsJson\x12.\n" +
+	"\x13first_reschedule_at\x18\x15 \x01(\tR\x11firstRescheduleAt\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ad\n" +
@@ -1374,13 +1399,14 @@ const file_agent_proto_rawDesc = "" +
 	"\vline_number\x18\x05 \x01(\x03R\n" +
 	"lineNumber\"D\n" +
 	"\x06LogAck\x12:\n" +
-	"\x19acknowledged_through_line\x18\x01 \x01(\x03R\x17acknowledgedThroughLine\"\xc6\x01\n" +
+	"\x19acknowledged_through_line\x18\x01 \x01(\x03R\x17acknowledgedThroughLine\"\x87\x02\n" +
 	"\x12ReportStateRequest\x121\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1b.leoflow.agent.v1.TaskStateR\x05state\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12#\n" +
 	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\x12;\n" +
 	"\voccurred_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"occurredAt\"d\n" +
+	"occurredAt\x12?\n" +
+	"\rreschedule_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\frescheduleAt\"d\n" +
 	"\x13ReportStateResponse\x12\"\n" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\x12)\n" +
 	"\x10should_terminate\x18\x02 \x01(\bR\x0fshouldTerminate\"\xe7\x01\n" +
@@ -1399,13 +1425,14 @@ const file_agent_proto_rawDesc = "" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x02\x12\x12\n" +
 	"\x0eLOG_LEVEL_WARN\x10\x03\x12\x13\n" +
-	"\x0fLOG_LEVEL_ERROR\x10\x04*\x86\x01\n" +
+	"\x0fLOG_LEVEL_ERROR\x10\x04*\xa8\x01\n" +
 	"\tTaskState\x12\x1a\n" +
 	"\x16TASK_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12TASK_STATE_RUNNING\x10\x01\x12\x16\n" +
 	"\x12TASK_STATE_SUCCESS\x10\x02\x12\x15\n" +
 	"\x11TASK_STATE_FAILED\x10\x03\x12\x16\n" +
-	"\x12TASK_STATE_SKIPPED\x10\x042\x98\x06\n" +
+	"\x12TASK_STATE_SKIPPED\x10\x04\x12 \n" +
+	"\x1cTASK_STATE_UP_FOR_RESCHEDULE\x10\x052\x98\x06\n" +
 	"\fAgentService\x12Q\n" +
 	"\bRegister\x12!.leoflow.agent.v1.RegisterRequest\x1a\".leoflow.agent.v1.RegisterResponse\x12O\n" +
 	"\vGetTaskSpec\x12$.leoflow.agent.v1.GetTaskSpecRequest\x1a\x1a.leoflow.agent.v1.TaskSpec\x12T\n" +
@@ -1476,33 +1503,34 @@ var file_agent_proto_depIdxs = []int32{
 	0,  // 9: leoflow.agent.v1.LogLine.level:type_name -> leoflow.agent.v1.LogLevel
 	1,  // 10: leoflow.agent.v1.ReportStateRequest.state:type_name -> leoflow.agent.v1.TaskState
 	27, // 11: leoflow.agent.v1.ReportStateRequest.occurred_at:type_name -> google.protobuf.Timestamp
-	27, // 12: leoflow.agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
-	26, // 13: leoflow.agent.v1.HeartbeatRequest.custom_metrics:type_name -> leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
-	27, // 14: leoflow.agent.v1.HeartbeatResponse.server_time:type_name -> google.protobuf.Timestamp
-	10, // 15: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry.value:type_name -> leoflow.agent.v1.XComUpstreams
-	6,  // 16: leoflow.agent.v1.AgentService.Register:input_type -> leoflow.agent.v1.RegisterRequest
-	8,  // 17: leoflow.agent.v1.AgentService.GetTaskSpec:input_type -> leoflow.agent.v1.GetTaskSpecRequest
-	11, // 18: leoflow.agent.v1.AgentService.FetchXCom:input_type -> leoflow.agent.v1.FetchXComRequest
-	13, // 19: leoflow.agent.v1.AgentService.PushXCom:input_type -> leoflow.agent.v1.PushXComRequest
-	15, // 20: leoflow.agent.v1.AgentService.StreamLogs:input_type -> leoflow.agent.v1.LogLine
-	17, // 21: leoflow.agent.v1.AgentService.ReportState:input_type -> leoflow.agent.v1.ReportStateRequest
-	19, // 22: leoflow.agent.v1.AgentService.Heartbeat:input_type -> leoflow.agent.v1.HeartbeatRequest
-	2,  // 23: leoflow.agent.v1.AgentService.GetVariables:input_type -> leoflow.agent.v1.GetVariablesRequest
-	4,  // 24: leoflow.agent.v1.AgentService.GetConnections:input_type -> leoflow.agent.v1.GetConnectionsRequest
-	7,  // 25: leoflow.agent.v1.AgentService.Register:output_type -> leoflow.agent.v1.RegisterResponse
-	9,  // 26: leoflow.agent.v1.AgentService.GetTaskSpec:output_type -> leoflow.agent.v1.TaskSpec
-	12, // 27: leoflow.agent.v1.AgentService.FetchXCom:output_type -> leoflow.agent.v1.FetchXComResponse
-	14, // 28: leoflow.agent.v1.AgentService.PushXCom:output_type -> leoflow.agent.v1.PushXComResponse
-	16, // 29: leoflow.agent.v1.AgentService.StreamLogs:output_type -> leoflow.agent.v1.LogAck
-	18, // 30: leoflow.agent.v1.AgentService.ReportState:output_type -> leoflow.agent.v1.ReportStateResponse
-	20, // 31: leoflow.agent.v1.AgentService.Heartbeat:output_type -> leoflow.agent.v1.HeartbeatResponse
-	3,  // 32: leoflow.agent.v1.AgentService.GetVariables:output_type -> leoflow.agent.v1.GetVariablesResponse
-	5,  // 33: leoflow.agent.v1.AgentService.GetConnections:output_type -> leoflow.agent.v1.GetConnectionsResponse
-	25, // [25:34] is the sub-list for method output_type
-	16, // [16:25] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	27, // 12: leoflow.agent.v1.ReportStateRequest.reschedule_at:type_name -> google.protobuf.Timestamp
+	27, // 13: leoflow.agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
+	26, // 14: leoflow.agent.v1.HeartbeatRequest.custom_metrics:type_name -> leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
+	27, // 15: leoflow.agent.v1.HeartbeatResponse.server_time:type_name -> google.protobuf.Timestamp
+	10, // 16: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry.value:type_name -> leoflow.agent.v1.XComUpstreams
+	6,  // 17: leoflow.agent.v1.AgentService.Register:input_type -> leoflow.agent.v1.RegisterRequest
+	8,  // 18: leoflow.agent.v1.AgentService.GetTaskSpec:input_type -> leoflow.agent.v1.GetTaskSpecRequest
+	11, // 19: leoflow.agent.v1.AgentService.FetchXCom:input_type -> leoflow.agent.v1.FetchXComRequest
+	13, // 20: leoflow.agent.v1.AgentService.PushXCom:input_type -> leoflow.agent.v1.PushXComRequest
+	15, // 21: leoflow.agent.v1.AgentService.StreamLogs:input_type -> leoflow.agent.v1.LogLine
+	17, // 22: leoflow.agent.v1.AgentService.ReportState:input_type -> leoflow.agent.v1.ReportStateRequest
+	19, // 23: leoflow.agent.v1.AgentService.Heartbeat:input_type -> leoflow.agent.v1.HeartbeatRequest
+	2,  // 24: leoflow.agent.v1.AgentService.GetVariables:input_type -> leoflow.agent.v1.GetVariablesRequest
+	4,  // 25: leoflow.agent.v1.AgentService.GetConnections:input_type -> leoflow.agent.v1.GetConnectionsRequest
+	7,  // 26: leoflow.agent.v1.AgentService.Register:output_type -> leoflow.agent.v1.RegisterResponse
+	9,  // 27: leoflow.agent.v1.AgentService.GetTaskSpec:output_type -> leoflow.agent.v1.TaskSpec
+	12, // 28: leoflow.agent.v1.AgentService.FetchXCom:output_type -> leoflow.agent.v1.FetchXComResponse
+	14, // 29: leoflow.agent.v1.AgentService.PushXCom:output_type -> leoflow.agent.v1.PushXComResponse
+	16, // 30: leoflow.agent.v1.AgentService.StreamLogs:output_type -> leoflow.agent.v1.LogAck
+	18, // 31: leoflow.agent.v1.AgentService.ReportState:output_type -> leoflow.agent.v1.ReportStateResponse
+	20, // 32: leoflow.agent.v1.AgentService.Heartbeat:output_type -> leoflow.agent.v1.HeartbeatResponse
+	3,  // 33: leoflow.agent.v1.AgentService.GetVariables:output_type -> leoflow.agent.v1.GetVariablesResponse
+	5,  // 34: leoflow.agent.v1.AgentService.GetConnections:output_type -> leoflow.agent.v1.GetConnectionsResponse
+	26, // [26:35] is the sub-list for method output_type
+	17, // [17:26] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }

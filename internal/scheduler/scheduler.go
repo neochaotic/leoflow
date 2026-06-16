@@ -53,6 +53,11 @@ type RunState struct {
 	// declared backoff (issue #201). Absent entries mean no cooldown applies.
 	EndedAt           map[string]*time.Time
 	RetryDelaySeconds map[string]int
+	// RescheduleAt holds the next-poke time per task (only meaningful for tasks in
+	// up_for_reschedule). The planner re-dispatches such a task once Now >=
+	// reschedule_at — without consuming retry budget (#380). Absent/zero entries
+	// re-dispatch immediately (preserves the test seam, like EndedAt).
+	RescheduleAt map[string]*time.Time
 	// Now is the wall-clock value the planner compares against EndedAt. Zero
 	// means "skip the cooldown gate" so legacy callers + tests that don't set
 	// retry_delay get the previous (immediate-retry) behavior.
@@ -86,6 +91,9 @@ type Store interface {
 	// ResetForRetry returns a task to 'none' and increments its try number so a
 	// retry re-evaluates and re-runs it.
 	ResetForRetry(ctx context.Context, runID, taskID string) error
+	// RedispatchReschedule returns a task parked in up_for_reschedule to 'none' for
+	// re-dispatch, PRESERVING try_number (reschedule is not a retry; #380).
+	RedispatchReschedule(ctx context.Context, runID, taskID string) error
 	SetRunState(ctx context.Context, runID string, state domain.DagRunState) error
 	ScheduledDAGs(ctx context.Context) ([]ScheduledDAG, error)
 	CreateScheduledRun(ctx context.Context, dagID string, logical time.Time) error
@@ -575,6 +583,11 @@ func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTra
 	case domain.TaskStateQueued:
 		return s.launchQueued(ctx, run, t)
 	case domain.TaskStateNone:
+		// A → none transition is either a retry release (bump try_number) or a
+		// reschedule re-dispatch (preserve try_number) — keyed on the from-state.
+		if run.States[t.TaskID] == domain.TaskStateUpForReschedule {
+			return s.redispatchReschedule(ctx, run, t.TaskID)
+		}
 		return s.resetForRetry(ctx, run, t.TaskID)
 	default:
 		return s.recordTransition(ctx, run, t.TaskID, t.To)
@@ -589,6 +602,19 @@ func (s *Scheduler) resetForRetry(ctx context.Context, run RunState, taskID stri
 	}
 	if s.recorder != nil {
 		s.recorder.RecordSchedulerDecision("retry")
+		s.recorder.RecordTaskTransition(string(run.States[taskID]), string(domain.TaskStateNone), run.DagID)
+	}
+	return nil
+}
+
+// redispatchReschedule returns a reschedule-mode sensor to 'none' for re-dispatch
+// once its reschedule_at has passed, preserving try_number (no attempt consumed).
+func (s *Scheduler) redispatchReschedule(ctx context.Context, run RunState, taskID string) error {
+	if err := s.store.RedispatchReschedule(ctx, run.RunID, taskID); err != nil {
+		return fmt.Errorf("re-dispatching rescheduled %s: %w", taskID, err)
+	}
+	if s.recorder != nil {
+		s.recorder.RecordSchedulerDecision("reschedule")
 		s.recorder.RecordTaskTransition(string(run.States[taskID]), string(domain.TaskStateNone), run.DagID)
 	}
 	return nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/neochaotic/leoflow/internal/agentrpc"
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/dispatch"
@@ -52,6 +53,17 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 	if len(run.Conf) > 0 {
 		paramsJSON = string(run.Conf)
 	}
+	// When a reschedule-mode sensor is re-dispatched, deliver the time it first
+	// entered reschedule so its get_first_reschedule_date returns the real value and
+	// cumulative timeout works (#380). Best-effort: empty falls back to per-poke
+	// timing, never blocks the spec. Empty on the first attempt (column is NULL).
+	var firstRescheduleAt string
+	if rid, perr := parseUUID(id.RunID); perr == nil {
+		if fr, ferr := s.q.TaskInstanceFirstRescheduleAt(ctx,
+			queries.TaskInstanceFirstRescheduleAtParams{DagRunID: rid, TaskID: id.TaskID}); ferr == nil && fr.Valid {
+			firstRescheduleAt = fr.Time.UTC().Format(time.RFC3339)
+		}
+	}
 	var timeout int
 	if task.ExecutionTimeoutSeconds != nil {
 		timeout = *task.ExecutionTimeoutSeconds
@@ -95,6 +107,7 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		DataIntervalStart: dataIntervalStart,
 		DataIntervalEnd:   dataIntervalEnd,
 		ParamsJSON:        paramsJSON,
+		FirstRescheduleAt: firstRescheduleAt,
 	}, nil
 }
 
@@ -116,6 +129,21 @@ func (s *ExecutionStore) ReportState(ctx context.Context, id auth.AgentIdentity,
 		params.ErrorMessage = &errMsg
 	}
 	return s.q.ReportTaskResult(ctx, params)
+}
+
+// Reschedule parks an active task instance in up_for_reschedule with its next-poke
+// time, so the scheduler re-dispatches it once reschedule_at passes (#380). Used by
+// the agent's reschedule path; a no-op if the TI is no longer active (terminal).
+func (s *ExecutionStore) Reschedule(ctx context.Context, id auth.AgentIdentity, at time.Time) error {
+	rid, err := parseUUID(id.RunID)
+	if err != nil {
+		return err
+	}
+	return s.q.RescheduleTaskInstance(ctx, queries.RescheduleTaskInstanceParams{
+		DagRunID:     rid,
+		TaskID:       id.TaskID,
+		RescheduleAt: pgtype.Timestamptz{Time: at, Valid: true},
+	})
 }
 
 // RecordHeartbeat stamps last_heartbeat_at on the agent's TI so the

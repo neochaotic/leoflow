@@ -393,14 +393,14 @@ def test_is_reschedule_exc_matches_by_name():
     assert not runner._is_reschedule_exc(ValueError("nope"))
 
 
-def test_run_operator_rejects_reschedule_sensor(monkeypatch):
-    """A reschedule-mode sensor is rejected up front with a clear message (review
-    polish #5) — its execute() would otherwise crash on a missing TaskInstance.
-    Skips without Airflow."""
-    pytest.importorskip("airflow.providers.standard.sensors.filesystem")
-    monkeypatch.setenv("LEOFLOW_TASK_ID", "s")
-    with pytest.raises(RuntimeError, match="reschedule"):
-        runner.run_operator(
-            "airflow.providers.standard.sensors.filesystem.FileSensor",
-            {"filepath": "/nope", "mode": "reschedule", "poke_interval": 1, "timeout": 1},
-        )
+def test_standalone_ti_get_first_reschedule_date(monkeypatch):
+    """get_first_reschedule_date returns None on the first attempt (env unset) and the
+    delivered first-reschedule time once the agent stamps LEOFLOW_FIRST_RESCHEDULE_AT,
+    so a reschedule-mode sensor honors its cumulative timeout (#380). The full
+    reschedule signal path (wired/not-wired) is covered with a fake in test_operator."""
+    from datetime import datetime, timezone
+    monkeypatch.delenv("LEOFLOW_FIRST_RESCHEDULE_AT", raising=False)
+    assert runner._StandaloneTaskInstance().get_first_reschedule_date({}) is None
+    monkeypatch.setenv("LEOFLOW_FIRST_RESCHEDULE_AT", "2099-01-02T03:04:05+00:00")
+    got = runner._StandaloneTaskInstance().get_first_reschedule_date({})
+    assert got == datetime(2099, 1, 2, 3, 4, 5, tzinfo=timezone.utc)

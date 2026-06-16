@@ -24,6 +24,10 @@ const (
 	TaskStateUpstreamFailed TaskState = "upstream_failed"
 	// TaskStateUpForRetry means the task failed but has retries remaining.
 	TaskStateUpForRetry TaskState = "up_for_retry"
+	// TaskStateUpForReschedule means a reschedule-mode sensor poked not-ready and
+	// released its pod; the scheduler re-dispatches it once reschedule_at is reached,
+	// without consuming retry budget (ADR 0040 Phase B, #380). Non-terminal.
+	TaskStateUpForReschedule TaskState = "up_for_reschedule"
 )
 
 // IsTerminal reports whether the task state is final (no further automatic

@@ -58,6 +58,11 @@ type TaskSpec struct {
 	// ParamsJSON is the DagRun's params/conf, JSON-encoded (#148); the agent stamps
 	// LEOFLOW_PARAMS so the runtime exposes context['params'] / {{ params.X }}.
 	ParamsJSON string
+	// FirstRescheduleAt is when a reschedule-mode sensor first entered reschedule,
+	// RFC3339 (#380). The agent stamps LEOFLOW_FIRST_RESCHEDULE_AT so the sensor's
+	// get_first_reschedule_date returns it and cumulative timeout works. Empty on
+	// the first attempt (not yet rescheduled).
+	FirstRescheduleAt string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -71,6 +76,9 @@ type Store interface {
 	TaskSpec(ctx context.Context, id auth.AgentIdentity) (TaskSpec, error)
 	// ReportState records a state transition reported by the agent.
 	ReportState(ctx context.Context, id auth.AgentIdentity, state domain.TaskState, exitCode int, errMsg string) error
+	// Reschedule parks an active TI in up_for_reschedule with its next-poke time so
+	// the scheduler re-dispatches it later without consuming retry budget (#380).
+	Reschedule(ctx context.Context, id auth.AgentIdentity, at time.Time) error
 	// RecordHeartbeat stamps last_heartbeat_at on the identified TI so the
 	// scheduler's heartbeat reaper (#128) can tell live tasks from agent-lost
 	// ones. The state guard inside the SQL skips already-terminal rows.
@@ -162,6 +170,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		DataIntervalStart:       spec.DataIntervalStart,
 		DataIntervalEnd:         spec.DataIntervalEnd,
 		ParamsJson:              spec.ParamsJSON,
+		FirstRescheduleAt:       spec.FirstRescheduleAt,
 	}, nil
 }
 
@@ -170,6 +179,15 @@ func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateReques
 	id, err := s.identify(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// A reschedule-mode sensor reports up_for_reschedule + its next-poke time; route
+	// it to the dedicated store path that persists reschedule_at, instead of the
+	// generic state write (#380).
+	if req.GetState() == agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE {
+		if rerr := s.store.Reschedule(ctx, *id, req.GetRescheduleAt().AsTime()); rerr != nil {
+			return nil, status.Errorf(codes.Internal, "recording reschedule: %v", rerr)
+		}
+		return &agentv1.ReportStateResponse{Acknowledged: true}, nil
 	}
 	state, err := mapState(req.GetState())
 	if err != nil {
@@ -408,6 +426,8 @@ func mapState(state agentv1.TaskState) (domain.TaskState, error) {
 		return domain.TaskStateFailed, nil
 	case agentv1.TaskState_TASK_STATE_SKIPPED:
 		return domain.TaskStateSkipped, nil
+	case agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE:
+		return domain.TaskStateUpForReschedule, nil
 	default:
 		return "", status.Errorf(codes.InvalidArgument, "unsupported task state %v", state)
 	}

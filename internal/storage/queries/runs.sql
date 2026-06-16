@@ -220,8 +220,33 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    reschedule_at = NULL,
+    first_reschedule_at = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2;
+
+-- name: RedispatchRescheduledTaskInstance :exec
+-- Re-dispatch a task parked in up_for_reschedule once its reschedule_at has passed:
+-- back to 'none' with the per-attempt timestamps cleared (so the next dispatch
+-- stamps fresh — queued_at MUST be NULL or the dispatch-lost reaper re-flags it)
+-- and reschedule_at cleared. Unlike ResetTaskInstanceToNone (retry), try_number is
+-- PRESERVED and no task_instance_history row is archived: reschedule is not a retry,
+-- it consumes no attempt (#380). Guarded to the parked state so it is idempotent.
+UPDATE task_instances
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    reschedule_at = NULL
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'up_for_reschedule';
+
+-- name: TaskInstanceFirstRescheduleAt :one
+-- The time a reschedule-mode sensor first entered reschedule (NULL until it does).
+-- Delivered to each re-dispatched pod so get_first_reschedule_date returns the real
+-- value and the sensor honors its cumulative timeout across pokes (#380).
+SELECT first_reschedule_at FROM task_instances
+WHERE dag_run_id = $1 AND task_id = $2;
 
 -- name: FailTaskInstanceIfActive :exec
 UPDATE task_instances
@@ -242,6 +267,21 @@ SET state = $3::task_state,
     duration_seconds = CASE WHEN $3::task_state IN ('success', 'failed') AND started_at IS NOT NULL
         THEN EXTRACT(EPOCH FROM (now() - started_at)) ELSE duration_seconds END
 WHERE dag_run_id = $1 AND task_id = $2;
+
+-- name: RescheduleTaskInstance :exec
+-- A reschedule-mode sensor (mode='reschedule') poked not-ready: park the active TI
+-- in up_for_reschedule with its next-poke time ($3) so the scheduler re-dispatches
+-- it once reschedule_at passes (#380), without consuming retry budget. Guarded to
+-- the active states so a late report never clobbers a terminal row. ended_at is
+-- left untouched (the task is not finished); started_at is preserved.
+UPDATE task_instances
+SET state = 'up_for_reschedule'::task_state,
+    reschedule_at = $3,
+    -- Stamp the FIRST reschedule once and preserve it across re-dispatches so the
+    -- delivered get_first_reschedule_date lets the sensor honor cumulative timeout.
+    first_reschedule_at = COALESCE(first_reschedule_at, now())
+WHERE dag_run_id = $1 AND task_id = $2
+  AND state IN ('running', 'queued', 'scheduled');
 
 -- name: ResolveRunRef :one
 SELECT t.id AS tenant_id, dr.id AS dag_run_id

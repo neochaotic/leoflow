@@ -16,20 +16,22 @@ var allTaskStates = []domain.TaskState{
 	domain.TaskStateSkipped,
 	domain.TaskStateUpstreamFailed,
 	domain.TaskStateUpForRetry,
+	domain.TaskStateUpForReschedule,
 }
 
 // allowedTaskTransitions is the test's independent source of truth for the task
 // state machine; the implementation must agree with it on all 81 pairs.
 var allowedTaskTransitions = map[domain.TaskState][]domain.TaskState{
-	domain.TaskStateNone:           {domain.TaskStateScheduled, domain.TaskStateSkipped, domain.TaskStateUpstreamFailed},
-	domain.TaskStateScheduled:      {domain.TaskStateQueued},
-	domain.TaskStateQueued:         {domain.TaskStateRunning, domain.TaskStateFailed, domain.TaskStateUpForRetry},
-	domain.TaskStateRunning:        {domain.TaskStateSuccess, domain.TaskStateFailed, domain.TaskStateUpForRetry},
-	domain.TaskStateUpForRetry:     {domain.TaskStateScheduled, domain.TaskStateQueued, domain.TaskStateNone},
-	domain.TaskStateSuccess:        {domain.TaskStateNone},
-	domain.TaskStateFailed:         {domain.TaskStateNone},
-	domain.TaskStateSkipped:        {domain.TaskStateNone},
-	domain.TaskStateUpstreamFailed: {domain.TaskStateNone},
+	domain.TaskStateNone:            {domain.TaskStateScheduled, domain.TaskStateSkipped, domain.TaskStateUpstreamFailed},
+	domain.TaskStateScheduled:       {domain.TaskStateQueued},
+	domain.TaskStateQueued:          {domain.TaskStateRunning, domain.TaskStateFailed, domain.TaskStateUpForRetry},
+	domain.TaskStateRunning:         {domain.TaskStateSuccess, domain.TaskStateFailed, domain.TaskStateUpForRetry, domain.TaskStateUpForReschedule},
+	domain.TaskStateUpForRetry:      {domain.TaskStateScheduled, domain.TaskStateQueued, domain.TaskStateNone},
+	domain.TaskStateUpForReschedule: {domain.TaskStateScheduled, domain.TaskStateQueued, domain.TaskStateNone},
+	domain.TaskStateSuccess:         {domain.TaskStateNone},
+	domain.TaskStateFailed:          {domain.TaskStateNone},
+	domain.TaskStateSkipped:         {domain.TaskStateNone},
+	domain.TaskStateUpstreamFailed:  {domain.TaskStateNone},
 }
 
 func TestCanTransitionExhaustive(t *testing.T) {

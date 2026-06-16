@@ -24,6 +24,12 @@ type CommandRunner interface {
 	Run(ctx context.Context, argv, env []string, stdout, stderr io.Writer) (exitCode int, err error)
 }
 
+// rescheduleExitCode is the process exit code a reschedule-mode sensor uses to
+// signal "not ready, re-dispatch me later" (it also writes the next-poke time to
+// ReschedulePath). It mirrors RESCHEDULE_EXIT_CODE in the Python runtime; 75 is
+// sysexits' EX_TEMPFAIL, distinct from the 0/non-zero success/failure mapping.
+const rescheduleExitCode = 75
+
 // LogSink receives log lines produced by the user task. Sends are best-effort.
 type LogSink interface {
 	Send(line *agentv1.LogLine) error
@@ -55,6 +61,9 @@ type Runner struct {
 	ReturnPath string   // file the task writes its return value to; empty disables push
 	LinksPath  string   // file the runtime writes operator_extra_links to; empty disables (#375)
 	PushesPath string   // file the runtime writes custom-keyed XCom pushes to; empty disables (multi-key XCom)
+	// ReschedulePath is the file a reschedule-mode sensor writes its next-poke time
+	// to before exiting with rescheduleExitCode; empty disables reschedule (#380).
+	ReschedulePath string
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
@@ -157,6 +166,11 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		// XCom). Off the LEOFLOW_XCOM_ prefix so _merge_operator_xcom does not consume it.
 		env = append(env, "LEOFLOW_PUSHES_PATH="+r.PushesPath)
 	}
+	if r.ReschedulePath != "" {
+		// A reschedule-mode sensor writes its next-poke time here and exits with
+		// rescheduleExitCode; the agent then reports up_for_reschedule (#380).
+		env = append(env, "LEOFLOW_RESCHEDULE_PATH="+r.ReschedulePath)
+	}
 	if callArgs := spec.GetCallArgsJson(); callArgs != "" {
 		// TaskFlow literal call args (#115). The runtime decodes this and merges
 		// values into the user function's kwargs. XCom upstreams take precedence
@@ -249,6 +263,12 @@ func runContextEnv(spec *agentv1.TaskSpec) []string {
 	}
 	if v := spec.GetParamsJson(); v != "" {
 		env = append(env, "LEOFLOW_PARAMS="+v)
+	}
+	if v := spec.GetFirstRescheduleAt(); v != "" {
+		// Delivered to a re-dispatched reschedule-mode sensor so its
+		// get_first_reschedule_date returns the real first time and `timeout` is
+		// honored cumulatively across pokes (#380). Empty on the first attempt.
+		env = append(env, "LEOFLOW_FIRST_RESCHEDULE_AT="+v)
 	}
 	return env
 }
@@ -356,6 +376,16 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	if timeout > 0 && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
 		msg := fmt.Sprintf("execution_timeout: task exceeded %s limit", timeout)
 		return r.failWithReason(ctx, exitCode, msg)
+	}
+	// A reschedule-mode sensor poked not-ready: it exits with rescheduleExitCode AND
+	// leaves its next-poke time in ReschedulePath. The FILE is the real signal — a
+	// user task that exits 75 (EX_TEMPFAIL) with no file is an ordinary failure, not
+	// a reschedule (#386). Report up_for_reschedule only when both line up, before
+	// the generic non-zero-exit path; otherwise fall through and fail normally.
+	if runErr == nil && exitCode == rescheduleExitCode {
+		if when, ok := r.readReschedule(); ok {
+			return r.reportReschedule(ctx, when)
+		}
 	}
 	if runErr != nil || exitCode != 0 {
 		return r.fail(ctx, exitCode, runErr)
@@ -526,19 +556,58 @@ func (r *Runner) heartbeat(ctx context.Context, cancel context.CancelFunc) {
 }
 
 func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode int32, msg string) error {
-	resp, err := r.Client.ReportState(ctx, &agentv1.ReportStateRequest{
+	return r.reportRequest(ctx, &agentv1.ReportStateRequest{
 		State:        state,
 		ExitCode:     exitCode,
 		ErrorMessage: msg,
 		OccurredAt:   timestamppb.Now(),
 	})
+}
+
+// reportRequest sends a ReportState request and translates the response's
+// should_terminate signal into an error.
+func (r *Runner) reportRequest(ctx context.Context, req *agentv1.ReportStateRequest) error {
+	resp, err := r.Client.ReportState(ctx, req)
 	if err != nil {
-		return fmt.Errorf("reporting state %v: %w", state, err)
+		return fmt.Errorf("reporting state %v: %w", req.GetState(), err)
 	}
 	if resp.GetShouldTerminate() {
 		return errors.New("control plane requested task termination")
 	}
 	return nil
+}
+
+// reschedule reads the next-poke time a reschedule-mode sensor wrote to
+// ReschedulePath and reports up_for_reschedule with it, so the scheduler
+// re-dispatches the task instance later without consuming retry budget (#380). A
+// missing or unparseable time fails loudly rather than silently dropping the task.
+// readReschedule reads and parses the next-poke time a reschedule-mode sensor wrote
+// to ReschedulePath. ok is false when the path is unset, the file is absent, or it
+// is unparseable — in which case the exit is treated as an ordinary result, not a
+// reschedule, so exit 75 alone never hijacks a normal task outcome (#386).
+func (r *Runner) readReschedule() (time.Time, bool) {
+	if r.ReschedulePath == "" {
+		return time.Time{}, false
+	}
+	data, ok, err := ReadReturnValue(r.ReschedulePath)
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	when, perr := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data)))
+	if perr != nil {
+		return time.Time{}, false
+	}
+	return when, true
+}
+
+// reportReschedule reports up_for_reschedule with the next-poke time so the
+// scheduler re-dispatches the task later, consuming no retry budget (#380).
+func (r *Runner) reportReschedule(ctx context.Context, when time.Time) error {
+	return r.reportRequest(ctx, &agentv1.ReportStateRequest{
+		State:        agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE,
+		OccurredAt:   timestamppb.Now(),
+		RescheduleAt: timestamppb.New(when),
+	})
 }
 
 // mergeEnv combines the base environment with the task spec variables (sorted for

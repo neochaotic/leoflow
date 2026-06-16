@@ -105,6 +105,7 @@ message TaskSpec {
     string data_interval_start = 18;               // The DagRun's data interval start, RFC3339. The agent stamps LEOFLOW_DATA_INTERVAL_START so the standalone operator context exposes data_interval_start (ADR 0040). Empty leaves it unset.
     string data_interval_end = 19;                 // The DagRun's data interval end, RFC3339. Stamped as LEOFLOW_DATA_INTERVAL_END -> context data_interval_end. Empty leaves it unset.
     string params_json = 20;                        // The DagRun's params/conf, JSON-encoded (#148). Stamped as LEOFLOW_PARAMS so the standalone operator context exposes context['params'] / {{ params.X }}. Empty leaves params={}.
+    string first_reschedule_at = 21;                 // For a reschedule-mode sensor re-dispatched after poking not-ready (#380): the time it FIRST entered reschedule, RFC3339. Stamped as LEOFLOW_FIRST_RESCHEDULE_AT so get_first_reschedule_date returns the real value and the sensor honors its cumulative timeout. Empty on the first attempt.
 }
 
 // XComUpstreams is the list of upstream task_ids whose return_values feed one
@@ -165,6 +166,9 @@ message ReportStateRequest {
     int32 exit_code = 2;                          // for terminal states
     string error_message = 3;                     // for failed state
     google.protobuf.Timestamp occurred_at = 4;
+    // For TASK_STATE_UP_FOR_RESCHEDULE: the earliest time the scheduler may
+    // re-dispatch this task instance (a reschedule-mode sensor poked not-ready).
+    google.protobuf.Timestamp reschedule_at = 5;
 }
 
 enum TaskState {
@@ -173,6 +177,10 @@ enum TaskState {
     TASK_STATE_SUCCESS = 2;
     TASK_STATE_FAILED = 3;
     TASK_STATE_SKIPPED = 4;
+    // A reschedule-mode sensor released its pod; re-dispatch at reschedule_at,
+    // without consuming retry budget (ADR 0040 Phase B, #380). Distinct from
+    // FAILED so the scheduler reschedules rather than failing/retrying the task.
+    TASK_STATE_UP_FOR_RESCHEDULE = 5;
 }
 
 message ReportStateResponse {

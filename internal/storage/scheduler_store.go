@@ -57,6 +57,7 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		tries := make(map[string]int, len(tis))
 		maxTries := make(map[string]int, len(tis))
 		endedAt := make(map[string]*time.Time, len(tis))
+		rescheduleAt := make(map[string]*time.Time, len(tis))
 		for _, ti := range tis {
 			states[ti.TaskID] = domain.TaskState(ti.State)
 			tries[ti.TaskID] = int(ti.TryNumber)
@@ -64,6 +65,12 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			if ti.EndedAt.Valid {
 				ts := ti.EndedAt.Time
 				endedAt[ti.TaskID] = &ts
+			}
+			// reschedule_at gates the up_for_reschedule → none re-dispatch (#380),
+			// the reschedule counterpart of ended_at + retry_delay for retries.
+			if ti.RescheduleAt.Valid {
+				ts := ti.RescheduleAt.Time
+				rescheduleAt[ti.TaskID] = &ts
 			}
 		}
 		// Build per-task retry_delay_seconds from the DAG spec so the planner
@@ -86,6 +93,7 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			MaxTries:          maxTries,
 			EndedAt:           endedAt,
 			RetryDelaySeconds: retryDelay,
+			RescheduleAt:      rescheduleAt,
 			Now:               time.Now(),
 		})
 	}
@@ -155,6 +163,20 @@ func (s *SchedulerStore) ResetForRetry(ctx context.Context, runID, taskID string
 		return err
 	}
 	return s.q.ResetTaskInstanceToNone(ctx, queries.ResetTaskInstanceToNoneParams{
+		DagRunID: rid,
+		TaskID:   taskID,
+	})
+}
+
+// RedispatchReschedule returns a task parked in up_for_reschedule to 'none' for
+// re-dispatch, clearing its per-attempt timestamps and reschedule_at but PRESERVING
+// try_number — reschedule is not a retry, so it consumes no attempt (#380).
+func (s *SchedulerStore) RedispatchReschedule(ctx context.Context, runID, taskID string) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.RedispatchRescheduledTaskInstance(ctx, queries.RedispatchRescheduledTaskInstanceParams{
 		DagRunID: rid,
 		TaskID:   taskID,
 	})

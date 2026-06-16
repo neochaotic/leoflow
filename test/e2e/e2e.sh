@@ -268,13 +268,22 @@ for name in gcp_ui aws_ui azure_ui; do
     || fail "failed to create the $name cloud connection via the API"
 done
 
-log "Setting the 'wait_until' Variable the reschedule sensor waits on (~12s ahead, #380)"
-# GNU date (Linux/CI) and BSD date (macOS) differ; try both. The reschedule sensor
-# pokes not-ready until this fixed time, so it reschedules a few times then succeeds.
-WAIT_UNTIL="$(date -u -d '+12 seconds' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+12S +%Y-%m-%dT%H:%M:%SZ)"
-curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d "{\"key\":\"wait_until\",\"value\":\"${WAIT_UNTIL}\"}" "$API/api/v2/variables" >/dev/null
-log "wait_until = ${WAIT_UNTIL}"
+log "Setting the 'wait_until' Variable far in the future so the reschedule sensor MUST poke not-ready (#380)"
+# Deterministic, not wall-clock-racy. A far-future target guarantees the sensor enters
+# up_for_reschedule (its pod is released + re-dispatched); once the poll loop observes
+# that, it flips this Variable to a PAST time so the next re-dispatch pokes ready and
+# succeeds. The old "~12s ahead" margin flaked: under pod-startup latency the first poke
+# could land AFTER the target and succeed immediately, never rescheduling (seen on main
+# after merge). The agent fetches Variables live per pod (agentrpc secrets), so a
+# re-dispatched pod renders the flipped value.
+WAIT_FUTURE="2999-01-01T00:00:00Z"
+WAIT_PAST="2000-01-01T00:00:00Z"
+set_wait_until() {
+  curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d "{\"key\":\"wait_until\",\"value\":\"$1\"}" "$API/api/v2/variables" >/dev/null
+}
+set_wait_until "$WAIT_FUTURE"
+log "wait_until = ${WAIT_FUTURE} (far future — the sensor will reschedule)"
 
 log "Triggering a run"
 RUN_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -285,14 +294,24 @@ log "run = $RUN_ID"
 log "Waiting for all task instances to succeed"
 deadline=$(( $(date +%s) + 300 ))
 saw_reschedule=0
+flipped=0
 while :; do
   states="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances" | jq -r '.task_instances[].state')"
   log "task states: [$(echo "$states" | tr '\n' ' ')] pods: [$(kubectl get pods -n leoflow --no-headers 2>/dev/null | awk '{print $1"="$3}' | tr '\n' ' ')]"
   echo "$states" | grep -qE 'failed|upstream_failed' && fail "a task failed: $states"
-  # The reschedule-mode 'waiter' must visibly pass through up_for_reschedule — that
-  # is the proof its pod was released and the scheduler re-dispatched it (#380).
-  echo "$states" | grep -q 'up_for_reschedule' && saw_reschedule=1
+  # The reschedule-mode 'waiter' must visibly pass through up_for_reschedule — proof its
+  # pod was released and the scheduler re-dispatched it (#380). Once observed, flip the
+  # target to the past so the next re-dispatch pokes ready and the run completes (the
+  # re-dispatched pod fetches Variables fresh, so it renders the new value).
+  if echo "$states" | grep -q 'up_for_reschedule'; then
+    saw_reschedule=1
+    if [ "$flipped" = "0" ]; then
+      set_wait_until "$WAIT_PAST"
+      flipped=1
+      log "observed up_for_reschedule → flipped wait_until = ${WAIT_PAST} (sensor will now succeed)"
+    fi
+  fi
   if [ -n "$states" ] && ! echo "$states" | grep -qvE 'success|skipped'; then
     log "all tasks terminal-success: $states"
     break
@@ -303,7 +322,7 @@ done
 
 log "Asserting reschedule-mode sensor passed through up_for_reschedule (#380)"
 [ "$saw_reschedule" = "1" ] || fail "the 'waiter' reschedule sensor never entered up_for_reschedule — its pod was not released/re-dispatched (reschedule pod-path broke)"
-log "reschedule OK: waiter released its pod (up_for_reschedule) and was re-dispatched to success"
+log "reschedule OK: waiter released its pod (up_for_reschedule), was re-dispatched, and succeeded after the flip"
 
 log "Asserting task logs were shipped from the pod (#36)"
 read -r FIRST_TASK FIRST_TRY < <(curl -fsS -H "Authorization: Bearer $TOKEN" \

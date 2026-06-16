@@ -135,10 +135,12 @@ release:
   prerelease: auto
   name_template: "{{ .Tag }}"
   header: |
-    ## Leoflow {{ .Tag }} (pre-alpha)
+    ## Leoflow {{ .Tag }}
 
-    Pre-alpha build — APIs and on-disk shape may still change before the
-    `v0.1.0` cut. Install **this exact release** with:
+    A `0.x` (pre-1.0) build — SemVer carries the maturity, there is no separate
+    alpha/beta, and the pre-alpha series ended at `v0.0.1` (ADR 0037). APIs and
+    on-disk shape may still evolve between minor versions; `-rc.N` tags are release
+    candidates gated by the E2E suite. Install **this exact release** with:
 
     ```bash
     LEOFLOW_VERSION={{ .Tag }} curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/{{ .Tag }}/install.sh | sh

@@ -6,6 +6,39 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-rc.2] - 2026-06-24
+
+> Second release candidate of the **0.1.0** line. On top of rc.1 it ships
+> **reschedule-mode sensors** — the first ADR 0040 Phase B capability, which rc.1
+> still rejected at compile — plus release- and CI-hardening fixes. E2E-gated on a
+> real k3d cluster.
+
+### Added
+
+- **Reschedule-mode sensors (ADR 0040, Phase B).** A sensor declared
+  `mode='reschedule'` now releases its pod between pokes instead of holding it:
+  on a not-ready poke the task transitions to `up_for_reschedule` and the
+  scheduler re-dispatches it once `reschedule_at` arrives — no retry budget
+  consumed (mirrors the `up_for_retry` rail). The agent reports
+  `up_for_reschedule` only when the task exits 75 **and** writes a parseable
+  reschedule file, so a bare exit 75 stays an ordinary failure. Validated on a
+  real k3d cluster via a `DateTimeSensor(mode='reschedule')` e2e guard that
+  visibly passes through `up_for_reschedule` and is re-dispatched to success
+  (#380, #389).
+
+### Fixed
+
+- Deterministic reschedule-sensor e2e guard: the wait loop asserts the sensor
+  passed through `up_for_reschedule` without timing flakiness (#390).
+- Release notes now install the exact release tag (`LEOFLOW_VERSION` + the
+  tag's `install.sh`) instead of resolving latest-stable, and drop the stale
+  `(pre-alpha)` wording (ADR 0037) (#391).
+
+### Changed
+
+- CI secret-scan runs a pinned `gitleaks` binary and drops the flaky Docker Hub
+  pull (#392).
+
 ## [0.1.0-rc.1] - 2026-06-16
 
 > First release candidate of the **0.1.0** line — a Go control plane that runs
@@ -71,5 +104,6 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.1...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.2...HEAD
+[0.1.0-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.1...v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/neochaotic/leoflow/releases/tag/v0.1.0-rc.1

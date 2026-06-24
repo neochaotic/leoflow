@@ -31,10 +31,27 @@ type LeoflowConfig struct {
 	// Leoflow deployment concern (not an Airflow DAG attribute), so it lives in
 	// leoflow.yaml and the compiler overlays it onto the produced dag.json.
 	Staging *StagingConfig `json:"staging,omitempty" yaml:"staging,omitempty"`
+	// Dbt declares a dbt project as the DAG source (ADR 0042). Its presence routes
+	// `leoflow compile` to the dbt renderer instead of the Python parser.
+	Dbt *DbtConfig `json:"dbt,omitempty" yaml:"dbt,omitempty"`
 	// Tasks holds per-task overrides bound by task_id (ADR 0023). Each entry's
 	// key must match a task_id in the compiled DAG; the compiler errors on an
 	// unknown id rather than silently dropping it.
 	Tasks map[string]*TaskConfig `json:"tasks,omitempty" yaml:"tasks,omitempty"`
+}
+
+// DbtConfig declares a dbt project as the DAG source (ADR 0042). The compiler
+// reads the project's manifest.json and renders one task per dbt node (or per
+// group), so a dbt project becomes a Leoflow DAG with no Cosmos or Airflow.
+type DbtConfig struct {
+	// Project is the directory containing dbt_project.yml.
+	Project string `json:"project,omitempty" yaml:"project,omitempty"`
+	// Granularity is the task partition strategy: node, level, folder, or tag
+	// (ADR 0042 §5). Empty means node.
+	Granularity string `json:"granularity,omitempty" yaml:"granularity,omitempty"`
+	// Manifest optionally points to a pre-built manifest.json (the Pro/CI baked
+	// path); empty means run `dbt parse` to generate it at compile time.
+	Manifest string `json:"manifest,omitempty" yaml:"manifest,omitempty"`
 }
 
 // TaskConfig holds the leoflow.yaml per-task overrides bound by task_id (ADR

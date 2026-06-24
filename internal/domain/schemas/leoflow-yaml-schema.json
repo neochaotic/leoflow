@@ -134,6 +134,17 @@
       "additionalProperties": false
     },
 
+    "dbt": {
+      "type": "object",
+      "description": "Declares a dbt project as the DAG source (ADR 0042); its presence routes compile to the dbt renderer instead of the Python parser.",
+      "properties": {
+        "project": { "type": "string", "description": "Directory containing dbt_project.yml." },
+        "granularity": { "type": "string", "enum": ["node", "level", "folder", "tag"], "default": "node", "description": "Task partition strategy (ADR 0042)." },
+        "manifest": { "type": "string", "description": "Optional pre-built manifest.json path (Pro/CI baked); empty runs dbt parse." }
+      },
+      "additionalProperties": false
+    },
+
     "tasks": {
       "type": "object",
       "description": "Per-task overrides bound by task_id (ADR 0023). Each key MUST match a task_id in the compiled DAG; an unknown id fails the compile. A set field overrides the value compiled from the DAG (task override > DAG defaults).",

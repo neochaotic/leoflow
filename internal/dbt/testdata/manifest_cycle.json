@@ -1,0 +1,61 @@
+{
+  "nodes": {
+    "model.cyc.mart_a": {
+      "depends_on": {
+        "nodes": [
+          "model.cyc.stg_a"
+        ]
+      },
+      "fqn": [
+        "cyc",
+        "marts",
+        "mart_a"
+      ],
+      "name": "mart_a",
+      "resource_type": "model",
+      "tags": []
+    },
+    "model.cyc.stg_a": {
+      "depends_on": {
+        "nodes": [
+          "seed.cyc.raw"
+        ]
+      },
+      "fqn": [
+        "cyc",
+        "staging",
+        "stg_a"
+      ],
+      "name": "stg_a",
+      "resource_type": "model",
+      "tags": []
+    },
+    "model.cyc.stg_b": {
+      "depends_on": {
+        "nodes": [
+          "model.cyc.mart_a"
+        ]
+      },
+      "fqn": [
+        "cyc",
+        "staging",
+        "stg_b"
+      ],
+      "name": "stg_b",
+      "resource_type": "model",
+      "tags": []
+    },
+    "seed.cyc.raw": {
+      "depends_on": {
+        "nodes": []
+      },
+      "fqn": [
+        "cyc",
+        "raw"
+      ],
+      "name": "raw",
+      "resource_type": "seed",
+      "tags": []
+    }
+  }
+}

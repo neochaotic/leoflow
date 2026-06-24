@@ -17,7 +17,7 @@ func TestRenderNodeGranularity(t *testing.T) {
 		t.Fatalf("reading testdata: %v", err)
 	}
 
-	tasks, err := Render(manifest)
+	tasks, err := Render(manifest, Options{Granularity: GranularityNode})
 	if err != nil {
 		t.Fatalf("Render() error: %v", err)
 	}

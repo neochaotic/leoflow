@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/neochaotic/leoflow/internal/config"
+	"github.com/neochaotic/leoflow/internal/dbt"
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
@@ -66,6 +68,9 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if verr := cfg.Validate(); verr != nil {
 		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
 	}
+	if cfg.Dbt != nil {
+		return runDbtCompile(cmd, dir, o, cfg)
+	}
 	command, err := resolveParserCommand(cmd, o.parserCmd)
 	if err != nil {
 		return err
@@ -108,6 +113,86 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}
 	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(dagSourcePath(dir, cfg), o.output, image, o.dagVersion))
 	return werr
+}
+
+// runDbtCompile compiles a dbt project (ADR 0042) instead of a Python DAG: it
+// acquires the manifest.json (a baked file or a fresh `dbt parse`), renders it
+// into a dag.json via the dbt package, overlays the leoflow.yaml, validates, and
+// optionally builds/pushes the image — reusing the same tail as the parser path.
+func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.LeoflowConfig) error {
+	if o.dagVersion == "" {
+		o.dagVersion = gitVersion(cmdContext(cmd))
+	}
+	image := resolveBuildImage(o.image, cfg, o.dagVersion)
+	if ierr := checkImageFlags(cmd, o.build, o.push, image); ierr != nil {
+		return ierr
+	}
+	manifest, err := loadDbtManifest(cmd, dir, cfg.Dbt)
+	if err != nil {
+		return err
+	}
+	spec, err := dbt.Compile(manifest, dbt.Meta{
+		DagID:       cfg.DagID,
+		DagVersion:  o.dagVersion,
+		Image:       image,
+		Granularity: dbt.Granularity(cfg.Dbt.Granularity),
+	})
+	if err != nil {
+		return fmt.Errorf("dbt compile: %w", err)
+	}
+	if werr := writeDAGFile(o.output, &spec); werr != nil {
+		return werr
+	}
+	if oerr := overlayProject(o.output, cfg); oerr != nil {
+		return oerr
+	}
+	if verr := validateDAGFile(o.output); verr != nil {
+		return verr
+	}
+	if berr := buildAndPush(cmd, dir, o, cfg, image); berr != nil {
+		return berr
+	}
+	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(filepath.Join(dir, cfg.Dbt.Project), o.output, image, o.dagVersion))
+	return werr
+}
+
+// loadDbtManifest returns the dbt manifest.json bytes: a pre-built file when
+// dbt.manifest is set (the Pro/CI baked path), else the output of running
+// `dbt parse` in the project directory (the Lite path).
+func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig) ([]byte, error) {
+	if c.Manifest != "" {
+		path := filepath.Join(dir, c.Manifest)
+		data, rerr := os.ReadFile(path) //nolint:gosec // G304: operator-supplied project path.
+		if rerr != nil {
+			return nil, fmt.Errorf("reading dbt manifest %s: %w", path, rerr)
+		}
+		return data, nil
+	}
+	projectDir := filepath.Join(dir, c.Project)
+	pc := exec.CommandContext(cmdContext(cmd), "dbt", "parse")
+	pc.Dir = projectDir
+	pc.Stderr = cmd.ErrOrStderr()
+	if rerr := pc.Run(); rerr != nil {
+		return nil, fmt.Errorf("dbt parse in %s: %w", projectDir, rerr)
+	}
+	path := filepath.Join(projectDir, "target", "manifest.json")
+	data, rerr := os.ReadFile(path) //nolint:gosec // G304: derived from operator-supplied project path.
+	if rerr != nil {
+		return nil, fmt.Errorf("reading dbt manifest %s: %w", path, rerr)
+	}
+	return data, nil
+}
+
+// writeDAGFile marshals a DAGSpec to path as indented dag.json.
+func writeDAGFile(path string, spec *domain.DAGSpec) error {
+	out, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding dag.json: %w", err)
+	}
+	if werr := os.WriteFile(path, append(out, '\n'), 0o600); werr != nil {
+		return fmt.Errorf("writing %s: %w", path, werr)
+	}
+	return nil
 }
 
 // buildAndPush optionally builds the DAG image and pushes it, honoring the

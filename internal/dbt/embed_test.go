@@ -1,6 +1,7 @@
 package dbt
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -46,5 +47,57 @@ func TestEmbedGroupNamespacesAndWires(t *testing.T) {
 func TestEmbedGroupRejectsEmptyName(t *testing.T) {
 	if _, _, err := EmbedGroup("", []domain.TaskSpec{{TaskID: "x"}}, nil); err == nil {
 		t.Fatal("expected an error for an empty group name")
+	}
+}
+
+// ExpandGroups replaces a dbt_group placeholder with the rendered+embedded dbt
+// tasks and rewires downstream dependents from the placeholder onto the leaves.
+func TestExpandGroups(t *testing.T) {
+	tasks := []domain.TaskSpec{
+		{TaskID: "extract", Type: domain.TaskTypePython},
+		{TaskID: "analytics", Type: domain.TaskTypeDbtGroup, DependsOn: []string{"extract"}},
+		{TaskID: "notify", Type: domain.TaskTypePython, DependsOn: []string{"analytics"}},
+	}
+	render := func(group string) ([]domain.TaskSpec, error) {
+		if group != "analytics" {
+			t.Fatalf("unexpected group %q", group)
+		}
+		return []domain.TaskSpec{
+			{TaskID: "raw", Type: domain.TaskTypeBash, Entrypoint: "dbt seed --select raw"},
+			{TaskID: "stg", Type: domain.TaskTypeBash, Entrypoint: "dbt run --select stg", DependsOn: []string{"raw"}},
+			{TaskID: "mart", Type: domain.TaskTypeBash, Entrypoint: "dbt run --select mart", DependsOn: []string{"stg"}},
+		}, nil
+	}
+
+	out, err := ExpandGroups(tasks, render)
+	if err != nil {
+		t.Fatalf("ExpandGroups() error: %v", err)
+	}
+	byID := tasksByID(out)
+
+	if _, ok := byID["analytics"]; ok {
+		t.Error("the dbt_group placeholder should be gone after expansion")
+	}
+	for _, id := range []string{"extract", "notify", "analytics__raw", "analytics__stg", "analytics__mart"} {
+		if _, ok := byID[id]; !ok {
+			t.Errorf("missing task %q (have %v)", id, ids(byID))
+		}
+	}
+	if !reflect.DeepEqual(byID["analytics__raw"].DependsOn, []string{"extract"}) {
+		t.Errorf("group root deps = %v, want [extract]", byID["analytics__raw"].DependsOn)
+	}
+	if !reflect.DeepEqual(byID["notify"].DependsOn, []string{"analytics__mart"}) {
+		t.Errorf("downstream deps = %v, want [analytics__mart] (rewired to the leaf)", byID["notify"].DependsOn)
+	}
+}
+
+// An error from render (e.g. no matching group config) is propagated loudly.
+func TestExpandGroupsRenderError(t *testing.T) {
+	tasks := []domain.TaskSpec{{TaskID: "g", Type: domain.TaskTypeDbtGroup}}
+	_, err := ExpandGroups(tasks, func(string) ([]domain.TaskSpec, error) {
+		return nil, fmt.Errorf("no such group")
+	})
+	if err == nil {
+		t.Fatal("expected the render error to propagate")
 	}
 }

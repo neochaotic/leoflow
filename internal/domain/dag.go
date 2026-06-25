@@ -24,6 +24,10 @@ const (
 	// OperatorClass with OperatorArgs and calls execute(). The provider is
 	// installed in the image via connectors:/dependencies:.
 	TaskTypeAirflowOperator TaskType = "airflow_operator"
+	// TaskTypeDbtGroup is a transient placeholder for a dbt project embedded in a
+	// DAG (ADR 0043). The compiler expands it into one task per dbt node and the
+	// type never appears in a finished dag.json.
+	TaskTypeDbtGroup TaskType = "dbt_group"
 )
 
 // ExecutionMode selects how a task runs. It is only meaningful for http_api

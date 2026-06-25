@@ -48,3 +48,58 @@ func EmbedGroup(groupName string, tasks []domain.TaskSpec, upstream []string) ([
 	sort.Strings(leaves)
 	return embedded, leaves, nil
 }
+
+// ExpandGroups replaces each dbt_group placeholder task with the rendered +
+// embedded dbt group's tasks (namespaced), rewiring any downstream dependents from
+// the placeholder onto the group's leaves. render maps a group name to its rendered
+// dbt tasks (the caller supplies manifest loading + Render).
+func ExpandGroups(tasks []domain.TaskSpec, render func(group string) ([]domain.TaskSpec, error)) ([]domain.TaskSpec, error) {
+	leafReplacements := map[string][]string{} // placeholder id -> group leaf ids
+	out := make([]domain.TaskSpec, 0, len(tasks))
+	for _, t := range tasks {
+		if t.Type != domain.TaskTypeDbtGroup {
+			out = append(out, t)
+			continue
+		}
+		dbtTasks, err := render(t.TaskID)
+		if err != nil {
+			return nil, fmt.Errorf("expanding dbt group %q: %w", t.TaskID, err)
+		}
+		embedded, leaves, err := EmbedGroup(t.TaskID, dbtTasks, t.DependsOn)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, embedded...)
+		leafReplacements[t.TaskID] = leaves
+	}
+	for i := range out {
+		out[i].DependsOn = rewireDeps(out[i].DependsOn, leafReplacements)
+	}
+	sortTasks(out)
+	return out, nil
+}
+
+// rewireDeps replaces any dependency that is a placeholder id with that group's
+// leaf ids, leaving other dependencies untouched.
+func rewireDeps(deps []string, repl map[string][]string) []string {
+	hit := false
+	for _, d := range deps {
+		if _, ok := repl[d]; ok {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return deps
+	}
+	out := make([]string, 0, len(deps))
+	for _, d := range deps {
+		if leaves, ok := repl[d]; ok {
+			out = append(out, leaves...)
+			continue
+		}
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out
+}

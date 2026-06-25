@@ -60,6 +60,10 @@ type DbtConfig struct {
 	// "0 6 * * *"). dbt carries no schedule, so it is declared here; empty means
 	// an unscheduled DAG (run on demand).
 	Schedule string `json:"schedule,omitempty" yaml:"schedule,omitempty"`
+	// Connection is a managed Leoflow connection id (ADR 0043 #2). When set, the
+	// dbt task generates its profiles.yml from the connection delivered to the pod
+	// instead of a profiles.yml baked into the image — use one or the other.
+	Connection string `json:"connection,omitempty" yaml:"connection,omitempty"`
 }
 
 // TaskConfig holds the leoflow.yaml per-task overrides bound by task_id (ADR

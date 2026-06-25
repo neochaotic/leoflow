@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -77,6 +78,56 @@ dbt:
 	for _, ts := range spec.Tasks {
 		if ts.Type != domain.TaskTypeBash {
 			t.Errorf("task %q type = %q, want bash", ts.TaskID, ts.Type)
+		}
+	}
+}
+
+// With a managed connection, the expanded dbt tasks' commands are wrapped with the
+// runtime profile-generation step, using the profile name read from dbt_project.yml.
+func TestExpandDbtGroupsWithManagedConnection(t *testing.T) {
+	dir := t.TempDir()
+	dagJSON := `{"schema_version":"1.0","dag_id":"d","dag_version":"v1","image":"img","tasks":[
+		{"task_id":"g","type":"dbt_group"}
+	]}`
+	out := filepath.Join(dir, "dag.json")
+	if err := os.WriteFile(out, []byte(dagJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if mkErr := os.MkdirAll(filepath.Join(dir, "proj"), 0o750); mkErr != nil {
+		t.Fatal(mkErr)
+	}
+	if werr := os.WriteFile(filepath.Join(dir, "proj", "dbt_project.yml"),
+		[]byte("name: proj\nprofile: wh_profile\n"), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	manifest, err := os.ReadFile(filepath.Join("..", "dbt", "testdata", "manifest_chain.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if werr := os.WriteFile(filepath.Join(dir, "proj", "manifest.json"), manifest, 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	cfg := &domain.LeoflowConfig{
+		DagID: "d",
+		DbtGroups: map[string]*domain.DbtConfig{
+			"g": {Project: "proj", Manifest: "manifest.json", Granularity: "node", Connection: "warehouse_pg"},
+		},
+	}
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	if eerr := expandDbtGroupsInFile(cmd, dir, out, cfg); eerr != nil {
+		t.Fatalf("expandDbtGroupsInFile: %v", eerr)
+	}
+	data, _ := os.ReadFile(out)
+	var spec domain.DAGSpec
+	if uerr := json.Unmarshal(data, &spec); uerr != nil {
+		t.Fatal(uerr)
+	}
+	want := "python -m leoflow_runtime --dbt-profile warehouse_pg wh_profile && "
+	for _, ts := range spec.Tasks {
+		if !strings.HasPrefix(ts.Entrypoint, want) {
+			t.Errorf("task %q entrypoint = %q, want prefix %q", ts.TaskID, ts.Entrypoint, want)
 		}
 	}
 }

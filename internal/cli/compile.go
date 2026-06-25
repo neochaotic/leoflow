@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/dbt"
@@ -136,6 +137,10 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	if err != nil {
 		return err
 	}
+	conn, profile, perr := dbtConnectionProfile(dir, cfg.Dbt)
+	if perr != nil {
+		return perr
+	}
 	spec, err := dbt.Compile(manifest, dbt.Meta{
 		DagID:       cfg.DagID,
 		DagVersion:  o.dagVersion,
@@ -145,6 +150,8 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Tags:        cfg.Tags,
 		Schedule:    cfg.Dbt.Schedule,
 		Granularity: dbt.Granularity(cfg.Dbt.Granularity),
+		Connection:  conn,
+		Profile:     profile,
 	})
 	if err != nil {
 		return fmt.Errorf("dbt compile: %w", err)
@@ -187,7 +194,15 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 		if merr != nil {
 			return nil, merr
 		}
-		return dbt.Render(manifest, dbt.Options{Granularity: dbt.Granularity(gc.Granularity)})
+		conn, profile, perr := dbtConnectionProfile(dir, gc)
+		if perr != nil {
+			return nil, perr
+		}
+		return dbt.Render(manifest, dbt.Options{
+			Granularity: dbt.Granularity(gc.Granularity),
+			Connection:  conn,
+			Profile:     profile,
+		})
 	}
 	tasks, err := dbt.ExpandGroups(spec.Tasks, render)
 	if err != nil {
@@ -195,6 +210,41 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 	}
 	spec.Tasks = tasks
 	return writeDAGFile(output, &spec)
+}
+
+// dbtConnectionProfile resolves the managed connection id and the dbt profile name
+// for a dbt config (ADR 0043 #2). When no connection is configured it returns
+// empty strings (the image's baked profiles.yml is used instead). Otherwise the
+// profile name is read from the project's dbt_project.yml.
+func dbtConnectionProfile(dir string, c *domain.DbtConfig) (conn, profile string, err error) {
+	if c.Connection == "" {
+		return "", "", nil
+	}
+	profile, err = dbtProfileName(filepath.Join(dir, c.Project))
+	if err != nil {
+		return "", "", err
+	}
+	return c.Connection, profile, nil
+}
+
+// dbtProfileName reads the `profile:` field from a project's dbt_project.yml — the
+// key the generated profiles.yml must use.
+func dbtProfileName(projectDir string) (string, error) {
+	path := filepath.Join(projectDir, "dbt_project.yml")
+	data, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied project path.
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
+	var p struct {
+		Profile string `yaml:"profile"`
+	}
+	if uerr := yaml.Unmarshal(data, &p); uerr != nil {
+		return "", fmt.Errorf("parsing %s: %w", path, uerr)
+	}
+	if p.Profile == "" {
+		return "", fmt.Errorf("%s has no `profile:` field", path)
+	}
+	return p.Profile, nil
 }
 
 // loadDbtManifest returns the dbt manifest.json bytes: a pre-built file when

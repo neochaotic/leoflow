@@ -18,6 +18,10 @@ type Meta struct {
 	Tags        []string
 	Schedule    string
 	Granularity Granularity
+	// Connection and Profile, when set, wrap each task's dbt command with the
+	// runtime step that writes profiles.yml from the managed connection (ADR 0043).
+	Connection string
+	Profile    string
 }
 
 // Compile renders a dbt manifest.json into tasks and assembles a complete
@@ -27,7 +31,11 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 	if meta.DagID == "" {
 		return domain.DAGSpec{}, fmt.Errorf("dbt compile: dag_id is required")
 	}
-	tasks, err := Render(manifestJSON, Options{Granularity: meta.Granularity})
+	tasks, err := Render(manifestJSON, Options{
+		Granularity: meta.Granularity,
+		Connection:  meta.Connection,
+		Profile:     meta.Profile,
+	})
 	if err != nil {
 		return domain.DAGSpec{}, err
 	}

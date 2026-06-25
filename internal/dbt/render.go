@@ -33,6 +33,13 @@ const (
 type Options struct {
 	// Granularity selects the partition strategy; the empty value means node.
 	Granularity Granularity
+	// Connection, when set, is a managed Leoflow connection id; each task's dbt
+	// command is prefixed with the runtime step that writes profiles.yml from it
+	// (ADR 0043 #2), so no credential is baked into the image.
+	Connection string
+	// Profile is the dbt project's profile name (dbt_project.yml `profile:`), used
+	// as the generated profiles.yml key. Meaningful only when Connection is set.
+	Profile string
 }
 
 // dbtVerb maps each executable dbt resource type to the dbt subcommand that runs
@@ -138,10 +145,23 @@ func Render(manifestJSON []byte, opts Options) ([]domain.TaskSpec, error) {
 		nodes[id] = en
 	}
 
+	var tasks []domain.TaskSpec
 	if opts.Granularity == "" || opts.Granularity == GranularityNode {
-		return renderNodes(nodes), nil
+		tasks = renderNodes(nodes)
+	} else {
+		grouped, gerr := renderGrouped(nodes, opts.Granularity)
+		if gerr != nil {
+			return nil, gerr
+		}
+		tasks = grouped
 	}
-	return renderGrouped(nodes, opts.Granularity)
+	if opts.Connection != "" {
+		prefix := fmt.Sprintf("python -m leoflow_runtime --dbt-profile %s %s && ", opts.Connection, opts.Profile)
+		for i := range tasks {
+			tasks[i].Entrypoint = prefix + tasks[i].Entrypoint
+		}
+	}
+	return tasks, nil
 }
 
 // renderNodes emits one task per node, scoped to that node's own dbt verb

@@ -2,51 +2,122 @@
 
 Connections are delivered to the task pod as ``AIRFLOW_CONN_<ID>`` (an Airflow
 connection URI). A dbt task generates its ``profiles.yml`` from that at runtime,
-so no warehouse credential is baked into the image. Postgres first; other
-adapters (snowflake, bigquery, …) are follow-ons.
+so no warehouse credential is baked into the image. Supports postgres, snowflake,
+bigquery, and databricks (the official ``dbt-databricks`` adapter).
 """
+
 from __future__ import annotations
 
 import json
 import os
 from urllib.parse import parse_qs, unquote, urlsplit
 
-_POSTGRES_SCHEMES = {"postgres", "postgresql"}
+
+def _uri_extra(query: str) -> dict:
+    """Merge direct query params and the ``__extra__`` JSON blob Leoflow carries in
+    the URI into one dict."""
+    parsed = {k: v[0] for k, v in parse_qs(query).items()}
+    raw = parsed.pop("__extra__", None)
+    if raw:
+        try:
+            extra = json.loads(raw)
+            if isinstance(extra, dict):
+                parsed.update(extra)
+        except (TypeError, ValueError):
+            pass
+    return parsed
 
 
-def dbt_profile_from_uri(uri: str) -> dict:
-    """Return the dbt ``outputs.<target>`` block for a connection URI.
+def _eget(extra: dict, conn_type: str, key: str, default=None):
+    """Look up an extra key, trying the plain name then Airflow's
+    ``extra__<conn_type>__<key>`` form."""
+    if key in extra:
+        return extra[key]
+    return extra.get(f"extra__{conn_type}__{key}", default)
 
-    The Airflow URI's path is the database (Airflow's "schema" = dbt's
-    ``dbname``); the dbt target ``schema`` and ``threads`` come from query
-    parameters, defaulting to ``public`` and ``4``. Only postgres is supported
-    for now; any other scheme is a loud error.
-    """
-    parts = urlsplit(uri)
-    scheme = parts.scheme.lower()
-    if scheme not in _POSTGRES_SCHEMES:
-        raise ValueError(
-            f"unsupported dbt connection scheme {scheme!r}; only postgres is "
-            "supported for now (snowflake/bigquery are follow-ons)"
-        )
-    query = parse_qs(parts.query)
 
-    def _first(key: str, default: str) -> str:
-        return query.get(key, [default])[0]
+def _threads(extra: dict) -> int:
+    return int(extra.get("threads", 4))
 
+
+def _postgres(parts, _ct, login, password, path, extra):
     return {
-        "type": "postgres",
-        "host": parts.hostname or "",
-        "port": parts.port or 5432,
-        "user": unquote(parts.username or ""),
-        "password": unquote(parts.password or ""),
-        "dbname": unquote(parts.path.lstrip("/")),
-        "schema": _first("schema", "public"),
-        "threads": int(_first("threads", "4")),
+        "type": "postgres", "host": parts.hostname or "", "port": parts.port or 5432,
+        "user": login, "password": password, "dbname": path,
+        "schema": extra.get("schema", "public"), "threads": _threads(extra),
     }
 
 
-def write_dbt_profile(conn_id: str, profile_name: str, profiles_dir: str, env=None, schema=None) -> str:
+def _snowflake(_parts, ct, login, password, path, extra):
+    account = _eget(extra, ct, "account")
+    if not account:
+        raise ValueError("snowflake connection needs `account` in its extra")
+    return {
+        "type": "snowflake", "account": account, "user": login, "password": password,
+        "role": _eget(extra, ct, "role"), "database": _eget(extra, ct, "database"),
+        "warehouse": _eget(extra, ct, "warehouse"),
+        "schema": path or _eget(extra, ct, "schema", "PUBLIC"), "threads": _threads(extra),
+    }
+
+
+def _bigquery(_parts, ct, _login, _password, path, extra):
+    keyfile = _eget(extra, ct, "keyfile_dict")
+    if not keyfile:
+        raise ValueError("bigquery connection needs `keyfile_dict` in its extra")
+    return {
+        "type": "bigquery", "method": "service-account-json",
+        "project": _eget(extra, ct, "project"), "dataset": path or _eget(extra, ct, "dataset"),
+        "keyfile_json": json.loads(keyfile) if isinstance(keyfile, str) else keyfile,
+        "threads": _threads(extra),
+    }
+
+
+def _databricks(parts, ct, _login, password, path, extra):
+    http_path = _eget(extra, ct, "http_path")
+    if not http_path:
+        raise ValueError("databricks connection needs `http_path` in its extra")
+    return {
+        "type": "databricks", "host": parts.hostname or "", "http_path": http_path,
+        "token": password or _eget(extra, ct, "token"), "catalog": _eget(extra, ct, "catalog"),
+        "schema": path or _eget(extra, ct, "schema"), "threads": _threads(extra),
+    }
+
+
+# conn_type -> dbt profile mapper. The official dbt-databricks adapter is used for
+# databricks (not the community dbt-spark).
+_MAPPERS = {
+    "postgres": _postgres,
+    "postgresql": _postgres,
+    "snowflake": _snowflake,
+    "google_cloud_platform": _bigquery,
+    "databricks": _databricks,
+}
+
+
+def dbt_profile_from_uri(uri: str) -> dict:
+    """Map an Airflow connection URI to a dbt ``outputs.<target>`` block, dispatching
+    by connection type. Supports postgres, snowflake, bigquery
+    (``google_cloud_platform``), and databricks; any other type is a loud error.
+    """
+    parts = urlsplit(uri)
+    conn_type = parts.scheme.lower().replace("-", "_")
+    mapper = _MAPPERS.get(conn_type)
+    if mapper is None:
+        raise ValueError(
+            f"unsupported dbt adapter for connection type {conn_type!r} "
+            "(supported: postgres, snowflake, bigquery, databricks)"
+        )
+    extra = _uri_extra(parts.query)
+    return mapper(
+        parts, conn_type,
+        unquote(parts.username or ""), unquote(parts.password or ""),
+        unquote(parts.path.lstrip("/")), extra,
+    )
+
+
+def write_dbt_profile(
+    conn_id: str, profile_name: str, profiles_dir: str, env=None, schema=None
+) -> str:
     """Generate ``<profiles_dir>/profiles.yml`` from the ``AIRFLOW_CONN_<conn_id>``
     the agent delivered, under the dbt project's ``profile_name``. Written as JSON,
     which is valid YAML, so dbt reads it without us depending on PyYAML. Returns the

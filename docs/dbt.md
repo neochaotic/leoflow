@@ -202,9 +202,13 @@ image). Simple for Lite; you own the credential delivery.
 > Use **one or the other** — a `connection:` makes Leoflow generate the profile;
 > without it, your baked `profiles.yml` is used.
 
-**Adapters:** Postgres is supported today. Snowflake, BigQuery, and Databricks
-(the official `dbt-databricks` adapter) are follow-ons; the adapter package is
-declared like any dependency and the connection mapping is the extension point.
+**Adapters:** Postgres, Snowflake, BigQuery, and Databricks (the official
+`dbt-databricks` adapter, not the community one) are supported — Leoflow maps the
+managed connection to each adapter's profile. Declare the adapter package
+(`dbt-snowflake`, `dbt-bigquery`, `dbt-databricks`, …) as a dependency so it lands
+in the image. BigQuery uses the connection's `keyfile_dict`; Snowflake its
+`account`/`warehouse`; Databricks its `http_path` — all from the connection's
+`extra`, so nothing secret is baked in.
 
 ---
 

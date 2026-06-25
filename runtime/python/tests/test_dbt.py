@@ -4,8 +4,21 @@ from __future__ import annotations
 import pytest
 
 import json
+from urllib.parse import urlencode
 
 from leoflow_runtime.dbt import dbt_profile_from_uri, write_dbt_profile
+
+
+def _conn_uri(scheme, login="", password="", host="", port=None, schema="", extra=None):
+    """Build an Airflow connection URI the way Leoflow delivers it (conn_type with
+    _->-, extra as a single __extra__ JSON query param)."""
+    netloc = ""
+    if login or password:
+        netloc += f"{login}:{password}@"
+    netloc += host + (f":{port}" if port else "")
+    path = f"/{schema}" if schema else ""
+    query = "?" + urlencode({"__extra__": json.dumps(extra)}) if extra else ""
+    return f"{scheme.replace('_', '-')}://{netloc}{path}{query}"
 
 
 def test_postgres_uri_maps_to_dbt_profile():
@@ -38,9 +51,45 @@ def test_url_encoded_credentials_are_decoded():
 
 
 def test_unsupported_adapter_is_a_loud_error():
-    # snowflake/bigquery are follow-ons (#2 ships postgres first).
     with pytest.raises(ValueError):
-        dbt_profile_from_uri("snowflake://u:p@acct/db")
+        dbt_profile_from_uri("mysql://u:p@h/db")
+
+
+def test_snowflake_uri_maps_to_dbt_profile():
+    uri = _conn_uri("snowflake", login="user", password="pass", schema="analytics",
+                    extra={"account": "ab12345", "warehouse": "WH", "database": "DB", "role": "TRANSFORMER"})
+    assert dbt_profile_from_uri(uri) == {
+        "type": "snowflake", "account": "ab12345", "user": "user", "password": "pass",
+        "role": "TRANSFORMER", "database": "DB", "warehouse": "WH", "schema": "analytics", "threads": 4,
+    }
+
+
+def test_bigquery_uri_maps_to_dbt_profile():
+    keyfile = '{"type": "service_account", "project_id": "p"}'
+    uri = _conn_uri("google_cloud_platform", schema="my_dataset",
+                    extra={"project": "my-proj", "keyfile_dict": keyfile})
+    out = dbt_profile_from_uri(uri)
+    assert out["type"] == "bigquery"
+    assert out["method"] == "service-account-json"
+    assert out["project"] == "my-proj"
+    assert out["dataset"] == "my_dataset"
+    assert out["keyfile_json"] == {"type": "service_account", "project_id": "p"}
+
+
+def test_databricks_uri_maps_to_dbt_profile():
+    uri = _conn_uri("databricks", password="dapitoken", host="dbc.databricks.com", schema="analytics",
+                    extra={"http_path": "/sql/1.0/warehouses/abc", "catalog": "main"})
+    assert dbt_profile_from_uri(uri) == {
+        "type": "databricks", "host": "dbc.databricks.com", "http_path": "/sql/1.0/warehouses/abc",
+        "token": "dapitoken", "catalog": "main", "schema": "analytics", "threads": 4,
+    }
+
+
+def test_airflow_prefixed_extra_keys_are_accepted():
+    # Older Airflow exports extra as extra__<conn_type>__<key>; accept both forms.
+    uri = _conn_uri("databricks", password="t", host="h",
+                    extra={"extra__databricks__http_path": "/sql/x"})
+    assert dbt_profile_from_uri(uri)["http_path"] == "/sql/x"
 
 
 def test_write_dbt_profile_from_env(tmp_path, monkeypatch):

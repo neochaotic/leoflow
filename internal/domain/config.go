@@ -34,6 +34,10 @@ type LeoflowConfig struct {
 	// Dbt declares a dbt project as the DAG source (ADR 0042). Its presence routes
 	// `leoflow compile` to the dbt renderer instead of the Python parser.
 	Dbt *DbtConfig `json:"dbt,omitempty" yaml:"dbt,omitempty"`
+	// DbtGroups configures dbt projects embedded as task groups in a dag.py (ADR
+	// 0043), keyed by the name passed to `dbt_group(name)`. Schedule does not apply
+	// to a group (the DAG owns the schedule).
+	DbtGroups map[string]*DbtConfig `json:"dbt_groups,omitempty" yaml:"dbt_groups,omitempty"`
 	// Tasks holds per-task overrides bound by task_id (ADR 0023). Each entry's
 	// key must match a task_id in the compiled DAG; the compiler errors on an
 	// unknown id rather than silently dropping it.

@@ -96,6 +96,11 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}); rerr != nil {
 		return rerr
 	}
+	if len(cfg.DbtGroups) > 0 {
+		if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg); eerr != nil {
+			return eerr
+		}
+	}
 	if oerr := overlayProject(o.output, cfg); oerr != nil {
 		return oerr
 	}
@@ -158,6 +163,38 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	}
 	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(filepath.Join(dir, cfg.Dbt.Project), o.output, image, o.dagVersion))
 	return werr
+}
+
+// expandDbtGroupsInFile expands any dbt_group placeholders in the compiled dag.json
+// (ADR 0043): each is replaced by its dbt project's rendered tasks (namespaced) and
+// the group's downstream is rewired onto the group's leaves. Runs after the parser
+// and before validation, so the final dag.json carries no dbt_group type.
+func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.LeoflowConfig) error {
+	data, err := os.ReadFile(output) //nolint:gosec // G304: operator-supplied output path.
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", output, err)
+	}
+	var spec domain.DAGSpec
+	if uerr := json.Unmarshal(data, &spec); uerr != nil {
+		return fmt.Errorf("parsing %s: %w", output, uerr)
+	}
+	render := func(group string) ([]domain.TaskSpec, error) {
+		gc, ok := cfg.DbtGroups[group]
+		if !ok {
+			return nil, fmt.Errorf("dag uses dbt_group(%q) but leoflow.yaml has no dbt_groups.%s", group, group)
+		}
+		manifest, merr := loadDbtManifest(cmd, dir, gc)
+		if merr != nil {
+			return nil, merr
+		}
+		return dbt.Render(manifest, dbt.Options{Granularity: dbt.Granularity(gc.Granularity)})
+	}
+	tasks, err := dbt.ExpandGroups(spec.Tasks, render)
+	if err != nil {
+		return err
+	}
+	spec.Tasks = tasks
+	return writeDAGFile(output, &spec)
 }
 
 // loadDbtManifest returns the dbt manifest.json bytes: a pre-built file when

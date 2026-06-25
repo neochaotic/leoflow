@@ -24,6 +24,7 @@ dbt:
   project: .
   manifest: manifest.json
   granularity: folder
+  schedule: "@daily"
 `
 	if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
@@ -57,6 +58,9 @@ dbt:
 	}
 	if spec.DagID != "sales" {
 		t.Errorf("dag_id = %q, want sales", spec.DagID)
+	}
+	if spec.Schedule == nil || *spec.Schedule != "@daily" {
+		t.Errorf("schedule = %v, want @daily", spec.Schedule)
 	}
 	if len(spec.Tasks) != 3 { // folder grouping: seeds, staging, marts
 		t.Fatalf("got %d tasks, want 3: %+v", len(spec.Tasks), spec.Tasks)

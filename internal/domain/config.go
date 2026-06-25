@@ -52,6 +52,10 @@ type DbtConfig struct {
 	// Manifest optionally points to a pre-built manifest.json (the Pro/CI baked
 	// path); empty means run `dbt parse` to generate it at compile time.
 	Manifest string `json:"manifest,omitempty" yaml:"manifest,omitempty"`
+	// Schedule is the DAG's cron expression or preset (e.g. "@daily",
+	// "0 6 * * *"). dbt carries no schedule, so it is declared here; empty means
+	// an unscheduled DAG (run on demand).
+	Schedule string `json:"schedule,omitempty" yaml:"schedule,omitempty"`
 }
 
 // TaskConfig holds the leoflow.yaml per-task overrides bound by task_id (ADR

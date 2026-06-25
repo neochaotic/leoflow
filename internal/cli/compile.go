@@ -135,6 +135,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		DagID:       cfg.DagID,
 		DagVersion:  o.dagVersion,
 		Image:       image,
+		Schedule:    cfg.Dbt.Schedule,
 		Granularity: dbt.Granularity(cfg.Dbt.Granularity),
 	})
 	if err != nil {

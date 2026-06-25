@@ -140,6 +140,10 @@ migrate-image: ## Build the migrate image (migrations + golang-migrate) for the 
 e2e: ## Run the k3d end-to-end smoke test (needs k3d, kubectl, docker, jq; run make dev-up + make build first)
 	bash test/e2e/e2e.sh
 
+.PHONY: e2e-dbt
+e2e-dbt: ## Run the k3d dbt pod-per-node e2e (ADR 0042; needs k3d, kubectl, docker, jq, dbt; run make dev-up + make build first)
+	bash test/e2e/dbt-e2e.sh
+
 .PHONY: test
 test: ## Run Go and Python tests with coverage
 	go test -race -coverprofile=coverage.out -covermode=atomic ./...

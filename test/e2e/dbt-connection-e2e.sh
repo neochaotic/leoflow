@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+#
+# End-to-end test for dbt MANAGED CONNECTIONS on a real Kubernetes cluster (k3d),
+# ADR 0043 #2. A dbt task gets its warehouse credentials from a Leoflow managed
+# connection (not a baked profiles.yml): the runtime generates profiles.yml in the
+# pod from the connection delivered over the agent seam.
+#
+# The proof is adversarial: the image bakes a DELIBERATELY BROKEN profiles.yml
+# (bad host). If every task still reaches success and the mart materializes, the
+# runtime must have generated the real profile from the managed connection before
+# dbt ran — the baked one is never used.
+#
+# Requirements: k3d, kubectl, docker, jq, curl, dbt (dbt-core + dbt-postgres on
+# PATH), `make build`, and a running dev database (`make dev-up`). Run from root.
+# On Linux/CI set LEOFLOW_E2E_HOST_ADDR=host.k3d.internal.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CLUSTER="${LEOFLOW_E2E_CLUSTER:-leoflow-dbt-conn-e2e}"
+HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
+HTTP_PORT="${LEOFLOW_E2E_HTTP_PORT:-8080}"
+GRPC_PORT="${LEOFLOW_E2E_GRPC_PORT:-9091}"
+METRICS_PORT="${LEOFLOW_E2E_METRICS_PORT:-9090}"
+WH_PORT="${LEOFLOW_E2E_WAREHOUSE_PORT:-15533}"
+PY_VERSION="${LEOFLOW_E2E_PY_VERSION:-3.11}"
+BASE_IMAGE="leoflow-base:py${PY_VERSION}"
+DAG_IMAGE="leoflow-dbt-conn-dag:dev"
+DAG_ID="dbt_conn"
+WAREHOUSE="leoflow-dbt-conn-wh"
+API="http://localhost:${HTTP_PORT}"
+WORKDIR="$(mktemp -d)"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+
+SERVER_PID=""
+cleanup() {
+  set +e
+  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  k3d cluster delete "$CLUSTER" >/dev/null 2>&1
+  docker rm -f "$WAREHOUSE" >/dev/null 2>&1
+  rm -rf "$WORKDIR"
+}
+trap cleanup EXIT
+
+for tool in k3d kubectl docker jq curl dbt; do
+  command -v "$tool" >/dev/null || fail "missing required tool: $tool"
+done
+[ -x "$ROOT/bin/leoflow" ] && [ -x "$ROOT/bin/leoflow-server" ] || fail "build first: make build"
+
+log "Starting the shared Postgres warehouse on :${WH_PORT}"
+docker rm -f "$WAREHOUSE" >/dev/null 2>&1 || true
+docker run -d --name "$WAREHOUSE" -p "${WH_PORT}:5432" \
+  -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=wh postgres:16-alpine >/dev/null
+for _ in $(seq 1 30); do
+  docker exec "$WAREHOUSE" pg_isready -U postgres >/dev/null 2>&1 && break
+  sleep 1
+done
+
+PROJ="$WORKDIR/$DAG_ID"
+mkdir -p "$PROJ/models" "$PROJ/seeds"
+cat >"$PROJ/dbt_project.yml" <<'YAML'
+name: 'shop'
+version: '1.0.0'
+profile: 'shop'
+model-paths: ["models"]
+seed-paths: ["seeds"]
+models: { shop: { +materialized: table } }
+YAML
+# The baked profiles.yml is DELIBERATELY BROKEN — if used, dbt cannot connect.
+cat >"$PROJ/profiles.yml" <<'YAML'
+shop:
+  target: dev
+  outputs:
+    dev: { type: postgres, host: BROKEN.invalid, port: 1, user: nope, password: nope, dbname: nope, schema: nope }
+YAML
+printf 'id,v\n1,10\n2,20\n3,30\n' >"$PROJ/seeds/raw.csv"
+echo "select id, v from {{ ref('raw') }}" >"$PROJ/models/stg.sql"
+echo "select id, sum(v) as total from {{ ref('stg') }} group by id" >"$PROJ/models/mart.sql"
+
+log "Generating the manifest (dbt parse is offline; the bad host is fine for parse)"
+( cd "$PROJ" && DBT_PROFILES_DIR="$PROJ" dbt parse >/dev/null 2>&1 ) || fail "dbt parse failed"
+
+cat >"$PROJ/leoflow.yaml" <<YAML
+schema_version: "1.0"
+dag_id: ${DAG_ID}
+dbt:
+  project: .
+  manifest: target/manifest.json
+  granularity: node
+  connection: warehouse_pg
+YAML
+cat >"$PROJ/Dockerfile" <<DOCKER
+FROM ${BASE_IMAGE}
+USER root
+RUN pip install --no-cache-dir "dbt-postgres==1.9.*"
+COPY . /home/leoflow/
+ENV DBT_PROFILES_DIR=/home/leoflow
+RUN chown -R leoflow:leoflow /home/leoflow
+USER leoflow
+WORKDIR /home/leoflow
+DOCKER
+
+log "Building the leoflow base image"
+docker build -q -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT" >/dev/null
+
+log "Creating k3d cluster '$CLUSTER' + the leoflow namespace"
+k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true
+k3d cluster create "$CLUSTER" --wait >/dev/null
+kubectl create namespace leoflow >/dev/null
+
+log "Starting the control plane (secret delivery enabled for the managed connection)"
+export LEOFLOW_AUTH_JWT_SECRET="e2e-secret"
+export LEOFLOW_BOOTSTRAP_PASSWORD="admin"
+export LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR="${HOST_ADDR}:${GRPC_PORT}"
+export LEOFLOW_LOGS_DIR="${WORKDIR}/logs"
+export LEOFLOW_SERVER_HTTP_ADDR="0.0.0.0:${HTTP_PORT}"
+export LEOFLOW_SERVER_METRICS_ADDR="0.0.0.0:${METRICS_PORT}"
+export LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true
+export LEOFLOW_SECRET_KEY="e2e-secret-key-32-bytes-padding!"
+"$ROOT/bin/leoflow-server" >"$WORKDIR/server.log" 2>&1 &
+SERVER_PID=$!
+sleep 5
+
+log "Compiling (commands must be wrapped with the --dbt-profile step) + building the image"
+"$ROOT/bin/leoflow" compile "$PROJ" --image "$DAG_IMAGE" --build --dockerfile Dockerfile -o "$PROJ/dag.json"
+jq -e '.tasks[] | select(.entrypoint | startswith("python -m leoflow_runtime --dbt-profile warehouse_pg shop &&"))' \
+  "$PROJ/dag.json" >/dev/null || fail "task commands are not wrapped with the managed-profile step"
+k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER" >/dev/null
+
+log "Pushing the DAG and creating the managed Postgres connection"
+TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"
+"$ROOT/bin/leoflow" push "$PROJ/dag.json" --server "$API" --token "$TOKEN"
+curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"connection_id\":\"warehouse_pg\",\"conn_type\":\"postgres\",\"host\":\"${HOST_ADDR}\",\"port\":${WH_PORT},\"login\":\"postgres\",\"password\":\"pw\",\"schema\":\"wh\"}" \
+  "$API/api/v2/connections" >/dev/null || fail "creating the warehouse_pg connection"
+
+log "Triggering a run"
+RUN_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{}' "$API/api/v2/dags/$DAG_ID/dagRuns" | jq -r '.dag_run_id')"
+[ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ] || fail "no dag_run_id returned"
+
+log "Waiting for success — the pods must generate profiles.yml from the connection (the baked one is broken)"
+deadline=$(( $(date +%s) + 300 ))
+while :; do
+  states="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances" | jq -r '.task_instances[].state')"
+  echo "  states: $(echo "$states" | tr '\n' ' ')"
+  if echo "$states" | grep -qE 'failed|upstream_failed'; then
+    echo "--- server.log tail ---"; tail -30 "$WORKDIR/server.log"
+    fail "a task failed — the managed-connection profile generation may be broken"
+  fi
+  if [ -n "$states" ] && ! echo "$states" | grep -qvE 'success'; then break; fi
+  [ "$(date +%s)" -lt "$deadline" ] || fail "timeout waiting for all tasks to succeed"
+  sleep 6
+done
+
+log "Asserting the mart materialized (proves the managed connection, not the broken baked profile)"
+rows="$(docker exec "$WAREHOUSE" psql -U postgres -d wh -tAc 'select count(*) from public.mart;' | tr -d '[:space:]')"
+[ "$rows" = "3" ] || fail "mart row count = $rows, want 3"
+
+log "dbt managed-connection e2e passed"

@@ -72,6 +72,21 @@ func TestRenderWrapsManagedConnection(t *testing.T) {
 	}
 }
 
+// A configured dbt target schema is passed to the runtime profile step.
+func TestRenderWrapsManagedConnectionWithSchema(t *testing.T) {
+	tasks, err := Render(loadManifest(t, "manifest_chain.json"), Options{
+		Granularity: GranularityNode, Connection: "wh", Profile: "p", Schema: "marts",
+	})
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	got := tasksByID(tasks)["stg"].Entrypoint
+	want := "python -m leoflow_runtime --dbt-profile wh p marts && dbt run --select stg"
+	if got != want {
+		t.Errorf("entrypoint = %q, want %q", got, want)
+	}
+}
+
 // TestRenderNodeGranularity feeds a real (trimmed) dbt manifest.json and asserts
 // the renderer emits one flat bash task per executable node, with the scoped dbt
 // command and the dependency edges carried over from depends_on.nodes.

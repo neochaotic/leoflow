@@ -91,6 +91,20 @@ func TestExpandGroups(t *testing.T) {
 	}
 }
 
+// A namespaced group task that collides with an existing task_id is a loud error.
+func TestExpandGroupsRejectsCollision(t *testing.T) {
+	tasks := []domain.TaskSpec{
+		{TaskID: "g", Type: domain.TaskTypeDbtGroup},
+		{TaskID: "g__raw", Type: domain.TaskTypePython}, // collides with the group's namespaced raw
+	}
+	render := func(string) ([]domain.TaskSpec, error) {
+		return []domain.TaskSpec{{TaskID: "raw", Type: domain.TaskTypeBash}}, nil
+	}
+	if _, err := ExpandGroups(tasks, render); err == nil {
+		t.Fatal("expected a task_id collision to be rejected")
+	}
+}
+
 // An error from render (e.g. no matching group config) is propagated loudly.
 func TestExpandGroupsRenderError(t *testing.T) {
 	tasks := []domain.TaskSpec{{TaskID: "g", Type: domain.TaskTypeDbtGroup}}

@@ -46,7 +46,7 @@ def dbt_profile_from_uri(uri: str) -> dict:
     }
 
 
-def write_dbt_profile(conn_id: str, profile_name: str, profiles_dir: str, env=None) -> str:
+def write_dbt_profile(conn_id: str, profile_name: str, profiles_dir: str, env=None, schema=None) -> str:
     """Generate ``<profiles_dir>/profiles.yml`` from the ``AIRFLOW_CONN_<conn_id>``
     the agent delivered, under the dbt project's ``profile_name``. Written as JSON,
     which is valid YAML, so dbt reads it without us depending on PyYAML. Returns the
@@ -59,7 +59,10 @@ def write_dbt_profile(conn_id: str, profile_name: str, profiles_dir: str, env=No
         raise RuntimeError(
             f"dbt connection {conn_id!r} was not delivered to the task ({key} is unset)"
         )
-    profile = {profile_name: {"target": "dev", "outputs": {"dev": dbt_profile_from_uri(uri)}}}
+    output = dbt_profile_from_uri(uri)
+    if schema:
+        output["schema"] = schema  # explicit leoflow.yaml schema wins over the URI/default
+    profile = {profile_name: {"target": "dev", "outputs": {"dev": output}}}
     path = os.path.join(profiles_dir, "profiles.yml")
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(profile, handle)

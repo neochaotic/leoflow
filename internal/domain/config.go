@@ -64,6 +64,9 @@ type DbtConfig struct {
 	// dbt task generates its profiles.yml from the connection delivered to the pod
 	// instead of a profiles.yml baked into the image — use one or the other.
 	Connection string `json:"connection,omitempty" yaml:"connection,omitempty"`
+	// Schema overrides the dbt target schema in the generated profile (where models
+	// materialize); empty uses the connection's or dbt's default.
+	Schema string `json:"schema,omitempty" yaml:"schema,omitempty"`
 }
 
 // TaskConfig holds the leoflow.yaml per-task overrides bound by task_id (ADR

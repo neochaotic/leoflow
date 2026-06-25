@@ -82,6 +82,41 @@ dbt:
 	}
 }
 
+// A dbt_group placeholder with no matching dbt_groups config gives an actionable
+// error (naming the group), not a cryptic invalid-type failure downstream.
+func TestExpandDbtGroupWithoutConfigIsActionable(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "dag.json")
+	if err := os.WriteFile(out, []byte(`{"schema_version":"1.0","dag_id":"d","dag_version":"v1","image":"img","tasks":[{"task_id":"analytics","type":"dbt_group"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	err := expandDbtGroupsInFile(cmd, dir, out, &domain.LeoflowConfig{DagID: "d"})
+	if err == nil || !strings.Contains(err.Error(), "analytics") {
+		t.Fatalf("want an actionable error naming the group, got: %v", err)
+	}
+}
+
+// With no dbt_group placeholders, expansion is a harmless no-op.
+func TestExpandDbtGroupsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "dag.json")
+	original := `{"schema_version":"1.0","dag_id":"d","dag_version":"v1","image":"img","tasks":[{"task_id":"x","type":"python","entrypoint":"m:x"}]}`
+	if err := os.WriteFile(out, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	if err := expandDbtGroupsInFile(cmd, dir, out, &domain.LeoflowConfig{DagID: "d"}); err != nil {
+		t.Fatalf("no-op expansion errored: %v", err)
+	}
+	data, _ := os.ReadFile(out)
+	if string(data) != original {
+		t.Errorf("no-op expansion should leave the file untouched")
+	}
+}
+
 // With a managed connection, the expanded dbt tasks' commands are wrapped with the
 // runtime profile-generation step, using the profile name read from dbt_project.yml.
 func TestExpandDbtGroupsWithManagedConnection(t *testing.T) {

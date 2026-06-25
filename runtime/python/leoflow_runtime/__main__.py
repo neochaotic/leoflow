@@ -24,14 +24,16 @@ def main(argv: list[str] | None = None) -> int:
         # Render the command with the run context, then exec bash in place (#382).
         run_bash(args[1])
         return 0
-    if len(args) == 3 and args[0] == "--dbt-profile":
+    if args and args[0] == "--dbt-profile" and len(args) in (3, 4):
         # Generate profiles.yml from the delivered managed connection (ADR 0043),
-        # so a dbt task needs no credential baked into the image.
+        # so a dbt task needs no credential baked into the image. An optional 4th
+        # arg overrides the dbt target schema.
         from leoflow_runtime.dbt import write_dbt_profile
 
         profiles_dir = os.environ.get("DBT_PROFILES_DIR", os.path.expanduser("~/.dbt"))
         os.makedirs(profiles_dir, exist_ok=True)
-        write_dbt_profile(args[1], args[2], profiles_dir)
+        schema = args[3] if len(args) == 4 else None
+        write_dbt_profile(args[1], args[2], profiles_dir, schema=schema)
         return 0
     if len(args) == 2 and args[0] == "--operator":
         raw = os.environ.get("LEOFLOW_OPERATOR_ARGS", "{}")

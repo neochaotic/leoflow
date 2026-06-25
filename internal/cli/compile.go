@@ -97,10 +97,8 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}); rerr != nil {
 		return rerr
 	}
-	if len(cfg.DbtGroups) > 0 {
-		if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg); eerr != nil {
-			return eerr
-		}
+	if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg); eerr != nil {
+		return eerr
 	}
 	if oerr := overlayProject(o.output, cfg); oerr != nil {
 		return oerr
@@ -152,6 +150,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Granularity: dbt.Granularity(cfg.Dbt.Granularity),
 		Connection:  conn,
 		Profile:     profile,
+		Schema:      cfg.Dbt.Schema,
 	})
 	if err != nil {
 		return fmt.Errorf("dbt compile: %w", err)
@@ -185,6 +184,16 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 	if uerr := json.Unmarshal(data, &spec); uerr != nil {
 		return fmt.Errorf("parsing %s: %w", output, uerr)
 	}
+	hasGroup := false
+	for _, t := range spec.Tasks {
+		if t.Type == domain.TaskTypeDbtGroup {
+			hasGroup = true
+			break
+		}
+	}
+	if !hasGroup {
+		return nil // no placeholders to expand — leave the dag.json untouched
+	}
 	render := func(group string) ([]domain.TaskSpec, error) {
 		gc, ok := cfg.DbtGroups[group]
 		if !ok {
@@ -202,6 +211,7 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 			Granularity: dbt.Granularity(gc.Granularity),
 			Connection:  conn,
 			Profile:     profile,
+			Schema:      gc.Schema,
 		})
 	}
 	tasks, err := dbt.ExpandGroups(spec.Tasks, render)

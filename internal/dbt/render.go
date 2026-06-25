@@ -40,6 +40,9 @@ type Options struct {
 	// Profile is the dbt project's profile name (dbt_project.yml `profile:`), used
 	// as the generated profiles.yml key. Meaningful only when Connection is set.
 	Profile string
+	// Schema, when set, overrides the dbt target schema in the generated profile
+	// (otherwise the connection's or the "public" default is used).
+	Schema string
 }
 
 // dbtVerb maps each executable dbt resource type to the dbt subcommand that runs
@@ -156,7 +159,11 @@ func Render(manifestJSON []byte, opts Options) ([]domain.TaskSpec, error) {
 		tasks = grouped
 	}
 	if opts.Connection != "" {
-		prefix := fmt.Sprintf("python -m leoflow_runtime --dbt-profile %s %s && ", opts.Connection, opts.Profile)
+		profileCmd := fmt.Sprintf("python -m leoflow_runtime --dbt-profile %s %s", opts.Connection, opts.Profile)
+		if opts.Schema != "" {
+			profileCmd += " " + opts.Schema
+		}
+		prefix := profileCmd + " && "
 		for i := range tasks {
 			tasks[i].Entrypoint = prefix + tasks[i].Entrypoint
 		}

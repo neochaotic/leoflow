@@ -22,6 +22,8 @@ type Meta struct {
 	// runtime step that writes profiles.yml from the managed connection (ADR 0043).
 	Connection string
 	Profile    string
+	// Schema overrides the dbt target schema in the generated profile.
+	Schema string
 }
 
 // Compile renders a dbt manifest.json into tasks and assembles a complete
@@ -35,6 +37,7 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		Granularity: meta.Granularity,
 		Connection:  meta.Connection,
 		Profile:     meta.Profile,
+		Schema:      meta.Schema,
 	})
 	if err != nil {
 		return domain.DAGSpec{}, err

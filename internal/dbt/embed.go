@@ -75,6 +75,13 @@ func ExpandGroups(tasks []domain.TaskSpec, render func(group string) ([]domain.T
 	for i := range out {
 		out[i].DependsOn = rewireDeps(out[i].DependsOn, leafReplacements)
 	}
+	seen := make(map[string]bool, len(out))
+	for _, t := range out {
+		if seen[t.TaskID] {
+			return nil, fmt.Errorf("task_id %q collides after expanding a dbt group; rename the conflicting task or group", t.TaskID)
+		}
+		seen[t.TaskID] = true
+	}
 	sortTasks(out)
 	return out, nil
 }

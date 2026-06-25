@@ -9,6 +9,30 @@ import (
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
+// Ephemeral models are inlined by dbt (no table), so they must not become tasks;
+// a downstream task is re-parented through them onto their executable ancestors
+// (chain raw -> stg[ephemeral] -> mart yields tasks {raw, mart} with mart<-raw).
+func TestRenderSkipsEphemeralWithReparenting(t *testing.T) {
+	tasks, err := Render(loadManifest(t, "manifest_ephemeral.json"), Options{})
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	byID := tasksByID(tasks)
+	if _, ok := byID["stg"]; ok {
+		t.Error("ephemeral model stg must not become a task")
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2 (raw, mart): %v", len(tasks), ids(byID))
+	}
+	mart, ok := byID["mart"]
+	if !ok {
+		t.Fatal("mart task missing")
+	}
+	if !reflect.DeepEqual(mart.DependsOn, []string{"raw"}) {
+		t.Errorf("mart depends_on = %v, want [raw] (re-parented through ephemeral stg)", mart.DependsOn)
+	}
+}
+
 // Two dbt nodes that share a name (e.g. the same model name across installed
 // packages) would silently produce duplicate task_ids. That is rejected loudly.
 func TestRenderRejectsDuplicateName(t *testing.T) {

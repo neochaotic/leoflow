@@ -1,0 +1,50 @@
+{
+  "nodes": {
+    "model.shop.mart": {
+      "config": {
+        "materialized": "table"
+      },
+      "depends_on": {
+        "nodes": [
+          "model.shop.stg"
+        ]
+      },
+      "fqn": [
+        "shop",
+        "mart"
+      ],
+      "name": "mart",
+      "resource_type": "model"
+    },
+    "model.shop.stg": {
+      "config": {
+        "materialized": "ephemeral"
+      },
+      "depends_on": {
+        "nodes": [
+          "seed.shop.raw"
+        ]
+      },
+      "fqn": [
+        "shop",
+        "stg"
+      ],
+      "name": "stg",
+      "resource_type": "model"
+    },
+    "seed.shop.raw": {
+      "config": {
+        "materialized": "seed"
+      },
+      "depends_on": {
+        "nodes": []
+      },
+      "fqn": [
+        "shop",
+        "raw"
+      ],
+      "name": "raw",
+      "resource_type": "seed"
+    }
+  }
+}

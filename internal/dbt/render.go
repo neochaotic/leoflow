@@ -54,9 +54,42 @@ type manifestNode struct {
 	ResourceType string   `json:"resource_type"`
 	Name         string   `json:"name"`
 	FQN          []string `json:"fqn"`
-	DependsOn    struct {
+	Config       struct {
+		Materialized string `json:"materialized"`
+	} `json:"config"`
+	DependsOn struct {
 		Nodes []string `json:"nodes"`
 	} `json:"depends_on"`
+}
+
+// isEphemeral reports whether a node is an ephemeral model — inlined by dbt as a
+// CTE, with no table, so it is not a task but a pass-through for dependencies.
+func (m manifest) isEphemeral(id string) bool {
+	n := m.Nodes[id]
+	return n.ResourceType == "model" && n.Config.Materialized == "ephemeral"
+}
+
+// taskParents resolves a node's executable parents, walking through ephemeral
+// parents (which are inlined) to inherit their executable ancestors. Returns
+// sorted parent ids drawn from taskSet.
+func (m manifest) taskParents(id string, taskSet map[string]execNode) []string {
+	result := map[string]bool{}
+	visited := map[string]bool{}
+	var walk func(nodeID string)
+	walk = func(nodeID string) {
+		for _, p := range m.Nodes[nodeID].DependsOn.Nodes {
+			if _, isTask := taskSet[p]; isTask {
+				result[p] = true
+				continue
+			}
+			if m.isEphemeral(p) && !visited[p] {
+				visited[p] = true
+				walk(p)
+			}
+		}
+	}
+	walk(id)
+	return sortedSetKeys(result)
 }
 
 // execNode is an executable dbt node with its executable parents resolved.
@@ -80,7 +113,7 @@ func Render(manifestJSON []byte, opts Options) ([]domain.TaskSpec, error) {
 
 	nodes := make(map[string]execNode, len(m.Nodes))
 	for id, n := range m.Nodes {
-		if _, ok := dbtVerb[n.ResourceType]; ok {
+		if _, ok := dbtVerb[n.ResourceType]; ok && !m.isEphemeral(id) {
 			nodes[id] = execNode{name: n.Name, rtype: n.ResourceType, fqn: n.FQN}
 		}
 	}
@@ -97,16 +130,11 @@ func Render(manifestJSON []byte, opts Options) ([]domain.TaskSpec, error) {
 		}
 		seen[name] = id
 	}
-	for id, n := range m.Nodes {
-		en, ok := nodes[id]
-		if !ok {
-			continue
-		}
-		for _, parent := range n.DependsOn.Nodes {
-			if _, ok := nodes[parent]; ok {
-				en.parents = append(en.parents, parent)
-			}
-		}
+	// Resolve each task's executable parents, walking through ephemeral models
+	// (inlined by dbt) so a downstream task keeps the correct upstream ordering.
+	for id := range nodes {
+		en := nodes[id]
+		en.parents = m.taskParents(id, nodes)
 		nodes[id] = en
 	}
 
@@ -116,7 +144,11 @@ func Render(manifestJSON []byte, opts Options) ([]domain.TaskSpec, error) {
 	return renderGrouped(nodes, opts.Granularity)
 }
 
-// renderNodes emits one task per node, scoped to that node's dbt verb.
+// renderNodes emits one task per node, scoped to that node's own dbt verb
+// (`dbt run`/`seed`/`snapshot`/`test`). A model and its tests are therefore
+// SEPARATE tasks — maximum per-model parallelism, retry, and observability. This
+// differs from the grouped path (renderGrouped), which uses `dbt build` to run a
+// whole group's mixed resource types in one invocation.
 func renderNodes(nodes map[string]execNode) []domain.TaskSpec {
 	tasks := make([]domain.TaskSpec, 0, len(nodes))
 	for _, n := range nodes {
@@ -139,8 +171,10 @@ func renderNodes(nodes map[string]execNode) []domain.TaskSpec {
 	return tasks
 }
 
-// renderGrouped partitions nodes by the strategy, contracts each group into one
-// `dbt build --select <members>` task, and fails if the quotient graph is cyclic.
+// renderGrouped partitions nodes by the strategy and contracts each group into
+// one `dbt build --select <members>` task — build runs the group's seeds, models,
+// snapshots, and tests in dbt's own internal order, so a group may mix resource
+// types. It fails if the resulting quotient graph is cyclic (see findCycle).
 func renderGrouped(nodes map[string]execNode, gran Granularity) ([]domain.TaskSpec, error) {
 	levels := topoLevels(nodes)
 	groupOf := make(map[string]string, len(nodes))

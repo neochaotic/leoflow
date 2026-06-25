@@ -173,6 +173,9 @@ func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig) ([]byt
 		return data, nil
 	}
 	projectDir := filepath.Join(dir, c.Project)
+	if _, lerr := exec.LookPath("dbt"); lerr != nil {
+		return nil, fmt.Errorf("dbt is not on PATH: install dbt-core and your adapter (e.g. `pip install dbt-postgres`), or set dbt.manifest in leoflow.yaml to a pre-built manifest.json")
+	}
 	pc := exec.CommandContext(cmdContext(cmd), "dbt", "parse")
 	pc.Dir = projectDir
 	pc.Stderr = cmd.ErrOrStderr()

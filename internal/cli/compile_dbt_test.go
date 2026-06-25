@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -20,6 +21,8 @@ func TestCompileDbtProject(t *testing.T) {
 	dir := t.TempDir()
 	yaml := `schema_version: "1.0"
 dag_id: sales
+owner: data-team
+tags: [analytics, dbt]
 dbt:
   project: .
   manifest: manifest.json
@@ -61,6 +64,12 @@ dbt:
 	}
 	if spec.Schedule == nil || *spec.Schedule != "@daily" {
 		t.Errorf("schedule = %v, want @daily", spec.Schedule)
+	}
+	if spec.Owner != "data-team" {
+		t.Errorf("owner = %q, want data-team (leoflow.yaml owner must overlay onto the dbt DAG)", spec.Owner)
+	}
+	if !reflect.DeepEqual(spec.Tags, []string{"analytics", "dbt"}) {
+		t.Errorf("tags = %v, want [analytics dbt]", spec.Tags)
 	}
 	if len(spec.Tasks) != 3 { // folder grouping: seeds, staging, marts
 		t.Fatalf("got %d tasks, want 3: %+v", len(spec.Tasks), spec.Tasks)

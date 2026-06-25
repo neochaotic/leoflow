@@ -20,13 +20,13 @@ type Granularity string
 
 // Granularity strategies. node is one task per dbt node; the rest contract a
 // group of nodes into one task (a quotient of the dbt DAG), which must stay
-// acyclic — semantic strategies (folder/tag) are validated, level is acyclic by
-// construction.
+// acyclic — the semantic strategy (folder) is validated, level is acyclic by
+// construction. Tag/selector grouping is tracked separately (issue #398) because
+// its overlap semantics (a node with several tags) needs a deliberate rule.
 const (
 	GranularityNode   Granularity = "node"
 	GranularityLevel  Granularity = "level"
 	GranularityFolder Granularity = "folder"
-	GranularityTag    Granularity = "tag"
 )
 
 // Options configures a Render call.
@@ -54,7 +54,6 @@ type manifestNode struct {
 	ResourceType string   `json:"resource_type"`
 	Name         string   `json:"name"`
 	FQN          []string `json:"fqn"`
-	Tags         []string `json:"tags"`
 	DependsOn    struct {
 		Nodes []string `json:"nodes"`
 	} `json:"depends_on"`
@@ -65,7 +64,6 @@ type execNode struct {
 	name    string
 	rtype   string
 	fqn     []string
-	tags    []string
 	parents []string // ids of executable parent nodes
 }
 
@@ -83,8 +81,21 @@ func Render(manifestJSON []byte, opts Options) ([]domain.TaskSpec, error) {
 	nodes := make(map[string]execNode, len(m.Nodes))
 	for id, n := range m.Nodes {
 		if _, ok := dbtVerb[n.ResourceType]; ok {
-			nodes[id] = execNode{name: n.Name, rtype: n.ResourceType, fqn: n.FQN, tags: n.Tags}
+			nodes[id] = execNode{name: n.Name, rtype: n.ResourceType, fqn: n.FQN}
 		}
+	}
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("dbt manifest has no executable nodes (need at least one seed/model/snapshot/test)")
+	}
+	// Two nodes that share a name (e.g. the same model across installed packages)
+	// would collide into one task_id. Reject loudly rather than silently drop one.
+	seen := make(map[string]string, len(nodes))
+	for _, id := range sortedSetKeys(nodes) {
+		name := nodes[id].name
+		if prev, dup := seen[name]; dup {
+			return nil, fmt.Errorf("dbt nodes %q and %q share the name %q; task_ids must be unique — rename one (cross-package collisions need unique_id namespacing, issue #398)", prev, id, name)
+		}
+		seen[name] = id
 	}
 	for id, n := range m.Nodes {
 		en, ok := nodes[id]
@@ -183,13 +194,6 @@ func groupKey(n execNode, gran Granularity, level int) string {
 			return n.fqn[1] // <package>/<folder>/.../<name>
 		}
 		return n.rtype + "s" // seeds/snapshots carry no folder segment
-	case GranularityTag:
-		if len(n.tags) > 0 {
-			tags := append([]string(nil), n.tags...)
-			sort.Strings(tags)
-			return "tag_" + tags[0]
-		}
-		return "untagged"
 	default:
 		return n.name
 	}

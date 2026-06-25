@@ -3,10 +3,32 @@ package dbt
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
+
+// Two dbt nodes that share a name (e.g. the same model name across installed
+// packages) would silently produce duplicate task_ids. That is rejected loudly.
+func TestRenderRejectsDuplicateName(t *testing.T) {
+	_, err := Render(loadManifest(t, "manifest_collision.json"), Options{})
+	if err == nil {
+		t.Fatal("expected duplicate-name rejection, got nil")
+	}
+	if !strings.Contains(err.Error(), "stg_orders") {
+		t.Errorf("error %q should name the colliding node", err)
+	}
+}
+
+// A manifest with no executable nodes is a loud error, not a silent empty DAG.
+func TestRenderEmptyManifestErrors(t *testing.T) {
+	for _, in := range []string{`{}`, `{"nodes":{}}`} {
+		if _, err := Render([]byte(in), Options{}); err == nil {
+			t.Errorf("Render(%s) = nil error, want an error for no executable nodes", in)
+		}
+	}
+}
 
 // TestRenderNodeGranularity feeds a real (trimmed) dbt manifest.json and asserts
 // the renderer emits one flat bash task per executable node, with the scoped dbt

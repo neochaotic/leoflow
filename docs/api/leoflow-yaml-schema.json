@@ -139,7 +139,7 @@
       "description": "Declares a dbt project as the DAG source (ADR 0042); its presence routes compile to the dbt renderer instead of the Python parser.",
       "properties": {
         "project": { "type": "string", "description": "Directory containing dbt_project.yml." },
-        "granularity": { "type": "string", "enum": ["node", "level", "folder", "tag"], "default": "node", "description": "Task partition strategy (ADR 0042)." },
+        "granularity": { "type": "string", "enum": ["node", "level", "folder"], "default": "node", "description": "Task partition strategy (ADR 0042). tag/selector grouping is tracked in issue #398." },
         "manifest": { "type": "string", "description": "Optional pre-built manifest.json path (Pro/CI baked); empty runs dbt parse." },
         "schedule": { "type": "string", "description": "Cron expression or preset (e.g. @daily); empty means unscheduled. dbt has no schedule, so it is declared here." }
       },

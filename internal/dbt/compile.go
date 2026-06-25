@@ -7,12 +7,15 @@ import (
 )
 
 // Meta carries the DAG metadata a dbt manifest does not provide: identity,
-// version, image, schedule, and the granularity strategy. These come from the
-// Leoflow project config, not from dbt.
+// version, image, ownership, schedule, and the granularity strategy. These come
+// from the Leoflow project config, not from dbt.
 type Meta struct {
 	DagID       string
 	DagVersion  string
 	Image       string
+	Owner       string
+	Description string
+	Tags        []string
 	Schedule    string
 	Granularity Granularity
 }
@@ -33,6 +36,9 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		DagID:         meta.DagID,
 		DagVersion:    meta.DagVersion,
 		Image:         meta.Image,
+		Owner:         meta.Owner,
+		Description:   meta.Description,
+		Tags:          meta.Tags,
 		Tasks:         tasks,
 	}
 	if meta.Schedule != "" {

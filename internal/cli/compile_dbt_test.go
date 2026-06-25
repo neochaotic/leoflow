@@ -99,13 +99,17 @@ func TestExpandDbtGroupsInFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if werr := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600); werr != nil {
+	// the manifest lives inside the project dir (manifest path is project-relative)
+	if mkErr := os.MkdirAll(filepath.Join(dir, "analytics"), 0o750); mkErr != nil {
+		t.Fatal(mkErr)
+	}
+	if werr := os.WriteFile(filepath.Join(dir, "analytics", "manifest.json"), manifest, 0o600); werr != nil {
 		t.Fatal(werr)
 	}
 	cfg := &domain.LeoflowConfig{
 		DagID: "sales",
 		DbtGroups: map[string]*domain.DbtConfig{
-			"analytics": {Project: ".", Manifest: "manifest.json", Granularity: "node"},
+			"analytics": {Project: "analytics", Manifest: "manifest.json", Granularity: "node"},
 		},
 	}
 	cmd := &cobra.Command{}

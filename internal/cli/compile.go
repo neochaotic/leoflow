@@ -199,17 +199,18 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 
 // loadDbtManifest returns the dbt manifest.json bytes: a pre-built file when
 // dbt.manifest is set (the Pro/CI baked path), else the output of running
-// `dbt parse` in the project directory (the Lite path).
+// `dbt parse` in the project directory (the Lite path). The manifest path is
+// resolved relative to the dbt project (where dbt writes target/manifest.json).
 func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig) ([]byte, error) {
+	projectDir := filepath.Join(dir, c.Project)
 	if c.Manifest != "" {
-		path := filepath.Join(dir, c.Manifest)
+		path := filepath.Join(projectDir, c.Manifest)
 		data, rerr := os.ReadFile(path) //nolint:gosec // G304: operator-supplied project path.
 		if rerr != nil {
 			return nil, fmt.Errorf("reading dbt manifest %s: %w", path, rerr)
 		}
 		return data, nil
 	}
-	projectDir := filepath.Join(dir, c.Project)
 	if _, lerr := exec.LookPath("dbt"); lerr != nil {
 		return nil, fmt.Errorf("dbt is not on PATH: install dbt-core and your adapter (e.g. `pip install dbt-postgres`), or set dbt.manifest in leoflow.yaml to a pre-built manifest.json")
 	}

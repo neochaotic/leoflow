@@ -43,6 +43,9 @@ type Options struct {
 	// Schema, when set, overrides the dbt target schema in the generated profile
 	// (otherwise the connection's or the "public" default is used).
 	Schema string
+	// ProjectDir scopes each command with --project-dir so dbt finds dbt_project.yml
+	// when the project is a subdirectory of the DAG (#401). "." or empty adds nothing.
+	ProjectDir string
 }
 
 // dbtVerb maps each executable dbt resource type to the dbt subcommand that runs
@@ -158,17 +161,29 @@ func Render(manifestJSON []byte, opts Options) ([]domain.TaskSpec, error) {
 		}
 		tasks = grouped
 	}
-	if opts.Connection != "" {
-		profileCmd := fmt.Sprintf("python -m leoflow_runtime --dbt-profile %s %s", opts.Connection, opts.Profile)
-		if opts.Schema != "" {
-			profileCmd += " " + opts.Schema
-		}
-		prefix := profileCmd + " && "
+	decorateCommands(tasks, opts)
+	return tasks, nil
+}
+
+// decorateCommands scopes each task's dbt command to a subdir project (--project-dir)
+// and, for a managed connection, prefixes the runtime profile-generation step.
+func decorateCommands(tasks []domain.TaskSpec, opts Options) {
+	if opts.ProjectDir != "" && opts.ProjectDir != "." {
 		for i := range tasks {
-			tasks[i].Entrypoint = prefix + tasks[i].Entrypoint
+			tasks[i].Entrypoint += " --project-dir " + opts.ProjectDir
 		}
 	}
-	return tasks, nil
+	if opts.Connection == "" {
+		return
+	}
+	profileCmd := fmt.Sprintf("python -m leoflow_runtime --dbt-profile %s %s", opts.Connection, opts.Profile)
+	if opts.Schema != "" {
+		profileCmd += " " + opts.Schema
+	}
+	prefix := profileCmd + " && "
+	for i := range tasks {
+		tasks[i].Entrypoint = prefix + tasks[i].Entrypoint
+	}
 }
 
 // renderNodes emits one task per node, scoped to that node's own dbt verb

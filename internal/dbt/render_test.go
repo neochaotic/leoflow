@@ -72,6 +72,33 @@ func TestRenderWrapsManagedConnection(t *testing.T) {
 	}
 }
 
+// A subdir dbt project (ProjectDir != ".") scopes each command with --project-dir
+// so dbt finds dbt_project.yml regardless of the pod's working dir (#401).
+func TestRenderScopesSubdirProject(t *testing.T) {
+	tasks, err := Render(loadManifest(t, "manifest_chain.json"), Options{
+		Granularity: GranularityNode, ProjectDir: "analytics",
+	})
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	got := tasksByID(tasks)["stg"].Entrypoint
+	want := "dbt run --select stg --project-dir analytics"
+	if got != want {
+		t.Errorf("entrypoint = %q, want %q", got, want)
+	}
+}
+
+// A root-level project (ProjectDir "." or empty) adds no --project-dir.
+func TestRenderRootProjectNoProjectDir(t *testing.T) {
+	tasks, err := Render(loadManifest(t, "manifest_chain.json"), Options{ProjectDir: "."})
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	if got := tasksByID(tasks)["stg"].Entrypoint; got != "dbt run --select stg" {
+		t.Errorf("entrypoint = %q, want no --project-dir", got)
+	}
+}
+
 // A configured dbt target schema is passed to the runtime profile step.
 func TestRenderWrapsManagedConnectionWithSchema(t *testing.T) {
 	tasks, err := Render(loadManifest(t, "manifest_chain.json"), Options{

@@ -24,6 +24,8 @@ type Meta struct {
 	Profile    string
 	// Schema overrides the dbt target schema in the generated profile.
 	Schema string
+	// ProjectDir scopes the dbt commands with --project-dir for a subdir project.
+	ProjectDir string
 }
 
 // Compile renders a dbt manifest.json into tasks and assembles a complete
@@ -38,6 +40,7 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		Connection:  meta.Connection,
 		Profile:     meta.Profile,
 		Schema:      meta.Schema,
+		ProjectDir:  meta.ProjectDir,
 	})
 	if err != nil {
 		return domain.DAGSpec{}, err

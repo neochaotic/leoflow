@@ -151,6 +151,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Connection:  conn,
 		Profile:     profile,
 		Schema:      cfg.Dbt.Schema,
+		ProjectDir:  cfg.Dbt.Project,
 	})
 	if err != nil {
 		return fmt.Errorf("dbt compile: %w", err)
@@ -212,6 +213,7 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 			Connection:  conn,
 			Profile:     profile,
 			Schema:      gc.Schema,
+			ProjectDir:  gc.Project,
 		})
 	}
 	tasks, err := dbt.ExpandGroups(spec.Tasks, render)

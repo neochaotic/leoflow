@@ -143,12 +143,14 @@ release:
     candidates gated by the E2E suite. Install **this exact release** with:
 
     ```bash
-    LEOFLOW_VERSION={{ .Tag }} curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/{{ .Tag }}/install.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/{{ .Tag }}/install.sh | LEOFLOW_VERSION={{ .Tag }} sh
     ```
 
     > A bare `curl … | sh` installs the latest **stable** release (`/releases/latest`
     > excludes pre-releases), so on a pre-release page it would NOT give you `{{ .Tag }}`.
-    > Pinning `LEOFLOW_VERSION` (and fetching `install.sh` from the tag) installs this build.
+    > `LEOFLOW_VERSION` must sit on the **`sh`** side of the pipe (not `curl`) — a
+    > `VAR=x curl … | sh` prefix sets the var for `curl` only, so `install.sh` would
+    > not see it and would fall back to latest-stable.
   footer: |
     ---
     Artifacts are checksummed (SHA-256) and the checksums file is cosign-signed

@@ -34,6 +34,23 @@ The catch: if the control plane is Go and never imports Airflow, how does it rea
 DAG written against the Airflow SDK? That's the shim — and it's the most interesting
 piece of v0.1.0.
 
+Here's the shape of it — your DAG becomes an immutable artifact, and a Go control
+plane schedules it onto a pod per task:
+
+```mermaid
+flowchart LR
+  subgraph dev["Dev / CI"]
+    src["leoflow.yaml · dag.py · Dockerfile"]
+  end
+  src -->|"leoflow compile"| art["dag.json + image"]
+  art --> api["API /api/v2 (Airflow 3.2)"]
+  ui["Airflow 3.2 UI"] --> api
+  api --> sched["Scheduler (Go, no GIL)"]
+  sched --> router["Executor router"]
+  router -->|"K8s · Docker · subprocess"| pod["Worker pod: agent ⇄ gRPC ⇄ your task"]
+  sched --- store[("Postgres + Redis")]
+```
+
 ## You write real Airflow DAGs
 
 No new DSL. This is a Leoflow DAG:
@@ -43,7 +60,7 @@ from airflow.sdk import DAG, task
 from airflow.providers.standard.operators.bash import BashOperator
 
 with DAG("sales", schedule="@daily"):
-    pull = BashOperator(task_id="pull", bash_command="curl -s $API > /tmp/raw.json")
+    pull = BashOperator(task_id="pull", bash_command="echo '[1, 2, 3]' > /tmp/raw.json")
 
     @task
     def transform() -> int:
@@ -67,19 +84,13 @@ Here's the trick (ADR 0024). The parser **exec's your `dag.py`** — but with a
 zero third-party deps. It reproduces *exactly* the attribute surface the compiler
 reads, and nothing else:
 
-```
-dag.py
-  │  runpy.run_path(dag.py)   # exec with the shim shadowing `airflow`
-  ▼
-shim (pure stdlib)
-  • DAG(...) is a context manager → pushes itself on a stack, registers in COLLECTED
-  • BaseOperator.__init__ → attaches to the active DAG, stores kwargs as attributes
-  • a >> b  → __rshift__ records upstream/downstream task_ids (the edges)
-  • @task   → builds STRUCTURE only; the function body never runs
-  ▼
-COLLECTED = { dag_id: DAG(tasks, edges, schedule, …) }
-  ▼
-compiler reads COLLECTED → emits dag.json  (tasks, depends_on, type, entrypoint)
+```mermaid
+flowchart TD
+  dag["dag.py"] -->|"runpy.run_path"| ex["exec — the shim shadows 'airflow'"]
+  ex --> reg["DAG ctx + operators register · '>>' records edges · @task = structure only"]
+  reg --> col[("COLLECTED: dag_id maps to DAG(tasks, edges, schedule)")]
+  col --> cmp["compiler"]
+  cmp --> json["dag.json (tasks, depends_on, type, entrypoint)"]
 ```
 
 Two consequences fall straight out of this design:
@@ -120,6 +131,15 @@ while the control plane that scheduled it never imported either. **Compile-time:
 structure, dependency-free. Run-time: the real thing, in a pod.** That seam is the
 whole design.
 
+```mermaid
+flowchart TD
+  op["provider operator import"] --> q{"native fast path?"}
+  q -->|"bash · python · http · empty"| native["Leoflow Go/runtime runs it — no Airflow in the pod"]
+  q -->|"everything else"| cap["shim captures class path + kwargs"]
+  cap --> dj["dag.json"]
+  dj --> run["pod: import_string(class)(kwargs).execute(context)"]
+```
+
 ## Operators, sensors & 86 connectors
 
 **A provider operator is just an import.** Anything outside the native fast path is
@@ -140,6 +160,11 @@ with DAG("rollup", schedule="@daily", tags=["example"]):
 
 (`BashOperator`/`PythonOperator`/`HttpOperator` are the *native* path — Leoflow runs
 those itself, no Airflow in the pod. Everything else takes the generic path above.)
+
+> **Run it locally:** in `leoflow lite`, add a `warehouse` Postgres connection
+> (Admin → Connections) plus `events`/`rollup` tables, then trigger the DAG — the
+> real `SQLExecuteQueryOperator` resolves the connection and writes the rollup. This
+> exact path is validated end-to-end.
 
 **Providers as a one-liner.** A DAG declares what it needs; `connectors:` is sugar
 (ADR 0038) that expands to the `apache-airflow-providers-*` packages and bakes them

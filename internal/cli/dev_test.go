@@ -250,7 +250,7 @@ func TestDevWatchLoopExitsOnCancel(t *testing.T) {
 	ws.RootCfg.ApplyDefaults()
 	reloads := 0
 	reload := func() error { reloads++; return nil }
-	if err := devWatchLoop(ctx, cmd, ws, reload, nil); err != nil {
+	if err := devWatchLoop(ctx, cmd, ws, reload, nil, nil); err != nil {
 		t.Errorf("devWatchLoop on canceled ctx = %v, want nil", err)
 	}
 	if reloads != 1 {

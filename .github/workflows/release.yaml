@@ -247,7 +247,7 @@ jobs:
           - { image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y -qq curl ca-certificates tar" }
           - { image: "fedora:41", prep: "dnf install -y -q tar curl --allowerasing" }
           - { image: "quay.io/rockylinux/rockylinux:9", prep: "dnf install -y -q tar curl --allowerasing" }
-          - { image: "opensuse/leap:15", prep: "zypper -n in -y curl tar gzip" }
+          - { image: "opensuse/leap:15", prep: "zypper --no-gpg-checks -n in -y curl tar gzip" }
           - { image: "archlinux:latest", prep: "pacman -Sy --noconfirm curl tar" }
           - { image: "alpine:3.20", prep: "apk add --no-cache curl tar" }
     steps:

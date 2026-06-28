@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -46,13 +47,39 @@ func autoDatastore(cmd *cobra.Command, flag string) string {
 	if flag != datastoreAuto {
 		return flag
 	}
-	mode := resolveDatastore(datastoreAuto, dockerAvailable())
-	if mode == datastoreManaged {
-		devPrintln(cmd.OutOrStdout(), "▸ no Docker detected — using a managed Postgres (downloaded under ~/.leoflow, no Docker). Install Docker for the postgres:16 container instead.")
-	} else {
-		devPrintln(cmd.OutOrStdout(), "▸ Docker detected — using the Docker Postgres (postgres:16). Pass --postgres managed for a Docker-free Postgres.")
-	}
+	present := dockerAvailable()
+	mode := resolveDatastore(datastoreAuto, present && dockerResponsive())
+	devPrintln(cmd.OutOrStdout(), datastoreNote(mode, present))
 	return mode
+}
+
+// dockerPingFn probes whether the Docker daemon actually answers — not just that
+// the `docker` binary is on PATH. A wedged Docker Desktop resolves on PATH but
+// returns an error from its socket (the 500s seen on macOS, #403); the ping
+// catches that. Package-level so tests can substitute it.
+var dockerPingFn = func() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", "version").Run()
+}
+
+// dockerResponsive reports whether the Docker daemon answered the ping. The auto
+// resolvers gate on this so a present-but-unresponsive daemon falls back to the
+// Docker-free path instead of failing later on `docker compose up` (#403).
+func dockerResponsive() bool { return dockerPingFn() == nil }
+
+// datastoreNote is the user-facing line for the resolved Postgres backend. It
+// distinguishes "no Docker at all" from "Docker present but not responding" so a
+// wedged daemon gets an actionable message instead of the misleading "no Docker".
+func datastoreNote(mode string, dockerPresent bool) string {
+	switch {
+	case mode == datastoreDocker:
+		return "▸ Docker detected — using the Docker Postgres (postgres:16). Pass --postgres managed for a Docker-free Postgres."
+	case dockerPresent:
+		return "▸ Docker detected but not responding — using a managed Postgres (no Docker). Fix Docker, or pass --postgres docker to force it."
+	default:
+		return "▸ no Docker detected — using a managed Postgres (downloaded under ~/.leoflow, no Docker). Install Docker for the postgres:16 container instead."
+	}
 }
 
 // managedPGPaths returns the managed Postgres bin dir and data dir, both per-user
@@ -249,13 +276,24 @@ func autoExecutor(cmd *cobra.Command, flag string) string {
 	if flag != "auto" {
 		return flag
 	}
-	mode := resolveExecutor("auto", dockerAvailable())
-	if mode == "subprocess" {
-		devPrintln(cmd.OutOrStdout(), "⚠ no Docker detected — running tasks via the subprocess executor (no isolation, dev-only). Install Docker for pod-per-task (k3d), or pass --executor k8s.")
-	} else {
-		devPrintln(cmd.OutOrStdout(), "▸ Docker detected — using the k3d executor (pod-per-task). Pass --executor subprocess for a no-Docker run.")
-	}
+	present := dockerAvailable()
+	mode := resolveExecutor("auto", present && dockerResponsive())
+	devPrintln(cmd.OutOrStdout(), executorNote(mode, present))
 	return mode
+}
+
+// executorNote is the user-facing line for the resolved executor, naming a
+// present-but-unresponsive Docker so the user fixes it (or forces a choice)
+// instead of seeing the misleading "no Docker detected" (#403).
+func executorNote(mode string, dockerPresent bool) string {
+	switch {
+	case mode != "subprocess":
+		return "▸ Docker detected — using the k3d executor (pod-per-task). Pass --executor subprocess for a no-Docker run."
+	case dockerPresent:
+		return "⚠ Docker detected but not responding — running tasks via the subprocess executor (no isolation, dev-only). Fix Docker for pod-per-task (k3d), or pass --executor k8s."
+	default:
+		return "⚠ no Docker detected — running tasks via the subprocess executor (no isolation, dev-only). Install Docker for pod-per-task (k3d), or pass --executor k8s."
+	}
 }
 
 // resolveExecutor maps the --executor flag to a concrete mode: "auto" picks k3d

@@ -1,6 +1,6 @@
 ---
 title: "Leoflow v0.1.0 — run your Airflow DAGs on a Go control plane (no Airflow in the hot path)"
-published: false
+published: true
 description: "Write standard Apache Airflow 3.2 DAGs in Python; Leoflow parses them with a dependency-free shim, runs each task as its own pod, and serves the Airflow UI — with a Go control plane that has no GIL and no Airflow in the scheduling path. v0.1.0 ships the shim, 86 connectors, generic provider operators + sensors, and a resilient local Lite edition."
 tags: 'airflow, go, dataengineering, kubernetes'
 series: Building Leoflow
@@ -257,6 +257,13 @@ v0.1.0 is the first **stable** release (the `v0.1.0-rc.N` series soaked and prom
 SemVer carries the maturity; no alpha/beta). It ships the shim, 86 connectors,
 generic provider operators + sensors (reschedule included), the resilient Lite
 edition, and the embedded Airflow 3.2 UI. dbt-native rendering is next (v0.1.1).
+
+**Try it in 30 seconds:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
+leoflow lite
+```
 
 **→ [github.com/neochaotic/leoflow](https://github.com/neochaotic/leoflow)** — point
 `leoflow lite` at a DAG and watch it light up the grid. Tell us where it bites.

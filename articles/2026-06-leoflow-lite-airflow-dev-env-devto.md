@@ -69,16 +69,39 @@ Lite runs the same Airflow-compatible engine as Leoflow's production mode:
 ## Your local cloud credentials just work
 
 Lite's subprocess executor runs each task as a **local process under your user**,
-inheriting your environment and `$HOME`. So your existing cloud credentials are used
-with no extra setup:
+inheriting your environment and `$HOME`. So whatever you've already signed into with
+your cloud's normal CLI is exactly what the task uses — authenticate once:
 
-- **GCP** — `GOOGLE_APPLICATION_CREDENTIALS` or `gcloud auth application-default login`.
-- **AWS** — `AWS_PROFILE`/`AWS_ACCESS_KEY_ID` or `~/.aws/credentials`.
-- **Azure** — `AZURE_*` or the Azure CLI cache.
+- **GCP** — `gcloud auth application-default login`
+  ([Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials)),
+  or set `GOOGLE_APPLICATION_CREDENTIALS`.
+- **AWS** — `aws configure` or `aws sso login`
+  ([AWS CLI configuration](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)),
+  or `AWS_PROFILE` / `AWS_ACCESS_KEY_ID` in the env.
+- **Azure** — `az login`
+  ([sign in with the Azure CLI](https://learn.microsoft.com/cli/azure/authenticate-azure-cli)),
+  or `AZURE_*` in the env.
 
-Author a DAG that hits BigQuery, S3, or Snowflake and run it against your **real**
-accounts, locally, in the dev loop. (In production/cluster mode the same DAG gets its
-credentials from managed Connections instead — pods don't inherit your laptop's env.)
+Then a task just uses the provider SDK — **no Connection needed for local dev**:
+
+```python
+from airflow.sdk import DAG, task
+
+with DAG("gcs_peek", schedule=None):
+    @task
+    def list_buckets() -> list[str]:
+        from google.cloud import storage              # leoflow.yaml: dependencies: [google-cloud-storage]
+        return [b.name for b in storage.Client().list_buckets()]   # uses your local ADC
+    list_buckets()
+```
+
+`storage.Client()` resolves your `gcloud` Application Default Credentials through
+Google's normal chain, exactly as it would in a script you run by hand — same idea
+for `boto3` (AWS) and the Azure SDKs. Author a DAG that hits BigQuery, S3, or Blob
+Storage and run it against your **real** accounts, locally, in the dev loop.
+
+> In production/cluster mode the same DAG gets its credentials from managed
+> **Connections** instead — pods don't inherit your laptop's env.
 
 ## Leoflow Lite vs the usual local-Airflow setups
 

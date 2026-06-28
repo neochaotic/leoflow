@@ -176,3 +176,38 @@ Fix the file and save — the watcher registers the next good version and the ba
   (or read the terminal) for the traceback, fix it, and save.
 - **A task ran red?** That's a runtime failure, not a parse error — open the run
   and read the task logs.
+
+## Local credentials — GCP, AWS, Azure
+
+`leoflow lite`'s subprocess executor runs each task as a **local process under your
+user**, inheriting your shell environment and `$HOME`. So your **local cloud
+credentials just work** — no managed Connection needed for local dev:
+
+- **GCP** — `GOOGLE_APPLICATION_CREDENTIALS`, or Application Default Credentials
+  (`gcloud auth application-default login` → `~/.config/gcloud`).
+- **AWS** — `AWS_ACCESS_KEY_ID`/`AWS_PROFILE` in the env, or `~/.aws/credentials`.
+- **Azure** — `AZURE_*` in the env, or the Azure CLI cache (`~/.azure`).
+
+The provider SDKs find these through their default credential chains, exactly as if
+you ran the task by hand. That makes Lite a genuine **local Airflow dev
+environment**: author a DAG, run it against your *real* cloud accounts, iterate.
+
+> In **Pro / cluster mode**, task pods are isolated and do **not** inherit your
+> local env — there you deliver credentials through managed **Connections** (see
+> [Variables & Connections](variables-connections.md)). Same DAG, two credential
+> sources: local env for the Lite loop, managed Connections in production.
+
+## Resilience (self-healing)
+
+Lite keeps its own state consistent without manual cleanup:
+
+- **Stale state self-heals on boot.** If a reused metadata DB still carries DAGs or
+  import errors from a previous run or workspace, on startup Lite reconciles them
+  against your workspace — deregistering DAGs whose files are gone and clearing
+  orphan import errors (fail-safe: if it cannot list the control plane, it removes
+  nothing).
+- **A DAG's per-DAG venv is reclaimed when the DAG is removed** (and re-created if
+  it comes back), so virtualenvs don't pile up on disk.
+- **Docker wedged? Lite still runs.** If Docker is present but unresponsive, Lite
+  falls back to a Docker-free managed Postgres and the subprocess executor instead
+  of aborting — or force it with `leoflow lite --postgres managed`.

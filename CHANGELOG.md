@@ -6,6 +6,37 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-rc.3] - 2026-06-28
+
+> Third release candidate of the **0.1.0** line. On top of rc.2 it hardens the
+> **install path** and makes the local **Lite** edition **resilient** — every item
+> here surfaced during hands-on testing of rc.2. The boot self-heal is end-to-end
+> gated in CI.
+
+### Added
+
+- **Lite self-heals stale state on boot (#404).** A reused metadata DB no longer
+  leaves "ghost" DAGs and orphan import errors that the UI showed but could not
+  remove: on startup Lite reconciles the registered DAGs against the workspace —
+  deregistering what is gone on disk and clearing stale import errors — fail-safe
+  (if the control plane can't be listed, it wipes nothing). A new end-to-end gate
+  (`lite-selfheal`) keeps it from regressing.
+- A DAG's **per-DAG venv is reclaimed when the DAG is deregistered** (and logged),
+  instead of lingering on disk with the Airflow SDK; a later reload re-creates it
+  if the DAG returns. The sweep of venvs orphaned while Lite was stopped is tracked
+  for a scheduled GC (#406).
+
+### Fixed
+
+- **Install:** the pinned-version command placed `LEOFLOW_VERSION` on `curl`
+  instead of `sh`, so `install.sh` resolved latest-stable and installed the
+  previous release rather than the pinned rc. The variable now sits on the `sh`
+  side of the pipe (#402).
+- **Lite falls back to a Docker-free Postgres when Docker is wedged (#403).** The
+  auto-resolvers now ping the Docker daemon; a present-but-unresponsive Docker
+  (e.g. a hung Docker Desktop returning 500s) falls back to the managed Postgres
+  and the subprocess executor instead of aborting on `docker compose up`.
+
 ## [0.1.0-rc.2] - 2026-06-24
 
 > Second release candidate of the **0.1.0** line. On top of rc.1 it ships
@@ -104,6 +135,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.2...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.3...HEAD
+[0.1.0-rc.3]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.2...v0.1.0-rc.3
 [0.1.0-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.1...v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/neochaotic/leoflow/releases/tag/v0.1.0-rc.1

@@ -42,6 +42,22 @@ func dagVenvDir(home, dagID string) string {
 	return filepath.Join(home, "venvs", sanitizeDagIDForFs(dagID))
 }
 
+// removeDagVenv deletes a DAG's per-DAG venv (the Airflow SDK lives there, tens of
+// MB) so the venv is reclaimed together with the DAG. Reports whether a venv was
+// actually present and removed, so the caller can log it; a missing venv is a
+// no-op, not an error (idempotent). A later reload re-creates the venv if the DAG
+// comes back, via ensureWorkspaceDagVenvs.
+func removeDagVenv(home, dagID string) (bool, error) {
+	dir := dagVenvDir(home, dagID)
+	if _, err := os.Stat(dir); err != nil {
+		return false, nil //nolint:nilerr // a missing venv is nothing to remove
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, fmt.Errorf("removing venv %s: %w", dir, err)
+	}
+	return true, nil
+}
+
 // dagVenvPython returns the Python interpreter inside the per-DAG venv,
 // honoring the platform layout (bin on Unix, Scripts on Windows).
 func dagVenvPython(home, dagID string) string {

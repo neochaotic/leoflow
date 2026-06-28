@@ -1,6 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 // TestLitePostgresDefaultIsAuto pins the default datastore selection: `leoflow
 // lite` resolves the Postgres backend for the host — the Docker postgres:16 when
@@ -36,6 +40,43 @@ func TestResolveDatastore(t *testing.T) {
 	for _, c := range cases {
 		if got := resolveDatastore(c.flag, c.dockerOK); got != c.want {
 			t.Errorf("resolveDatastore(%q, dockerOK=%v) = %q, want %q", c.flag, c.dockerOK, got, c.want)
+		}
+	}
+}
+
+// TestDockerResponsive: a present `docker` binary is not enough — the daemon must
+// answer. A wedged Docker Desktop (socket returns 500) makes the ping fail, which
+// is what lets Lite fall back to a Docker-free Postgres instead of aborting (#403).
+func TestDockerResponsive(t *testing.T) {
+	orig := dockerPingFn
+	defer func() { dockerPingFn = orig }()
+
+	dockerPingFn = func() error { return nil }
+	if !dockerResponsive() {
+		t.Error("dockerResponsive() = false, want true when the daemon answers")
+	}
+	dockerPingFn = func() error { return errors.New("500 Internal Server Error") }
+	if dockerResponsive() {
+		t.Error("dockerResponsive() = true, want false when the daemon errors (wedged)")
+	}
+}
+
+// TestDatastoreNote pins the user-facing line for the resolved Postgres backend,
+// distinguishing "no Docker at all" from "Docker present but not responding" so a
+// wedged daemon gets an actionable message, not the misleading "no Docker" one (#403).
+func TestDatastoreNote(t *testing.T) {
+	cases := []struct {
+		mode    string
+		present bool
+		wantSub string
+	}{
+		{datastoreDocker, true, "Docker detected"},
+		{datastoreManaged, true, "not responding"},
+		{datastoreManaged, false, "no Docker detected"},
+	}
+	for _, c := range cases {
+		if got := datastoreNote(c.mode, c.present); !strings.Contains(got, c.wantSub) {
+			t.Errorf("datastoreNote(%q, present=%v) = %q, want substring %q", c.mode, c.present, got, c.wantSub)
 		}
 	}
 }

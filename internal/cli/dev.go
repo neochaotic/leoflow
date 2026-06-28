@@ -649,7 +649,10 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if terr != nil {
 		return fmt.Errorf("minting dev token: %w", terr)
 	}
-	return devWatchLoop(ctx, cmd, ws, makeReload(token), makeDeleteDag(token, uiURL))
+	logf := func(format string, args ...any) { devPrintf(cmd.OutOrStdout(), format+"\n", args...) }
+	del := makeDeleteDag(token, uiURL, home, logf)
+	boot := makeBootReconcile(token, uiURL, ws.Path, projectDagIDs(ws), del, logf)
+	return devWatchLoop(ctx, cmd, ws, makeReload(token), del, boot)
 }
 
 // makeDeleteDag returns a callback the Lite watcher calls when it notices a
@@ -658,10 +661,20 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 // hard-delete variant (cascades versions/runs/TIs/XCom via the schema's
 // ON DELETE CASCADE) — because the user's intent in deleting the project
 // folder is to fully forget the DAG, not just clear its run history.
-func makeDeleteDag(token, uiURL string) func(dagID string) error {
+func makeDeleteDag(token, uiURL, home string, logf func(format string, args ...any)) func(dagID string) error {
 	return func(dagID string) error {
 		reqURL := fmt.Sprintf("%s/api/v2/dags/%s?deregister=true", uiURL, url.PathEscape(dagID))
-		return devImportErrorRequest(context.Background(), http.MethodDelete, reqURL, token, nil)
+		if err := devImportErrorRequest(context.Background(), http.MethodDelete, reqURL, token, nil); err != nil {
+			return err
+		}
+		// Reclaim the per-DAG venv with the DAG (it carries the Airflow SDK). A
+		// later reload re-creates it if the DAG comes back. Best-effort + logged.
+		if removed, rerr := removeDagVenv(home, dagID); rerr != nil {
+			logf("✗ removed dag %q but could not remove its venv: %v", dagID, rerr)
+		} else if removed {
+			logf("🧹 removed the per-DAG venv for %q", dagID)
+		}
+		return nil
 	}
 }
 
@@ -1427,7 +1440,7 @@ func devReadyOnce(ctx context.Context, baseURL string) bool {
 // build/register step. The set of watched files is re-derived from the
 // workspace on every tick so a new project subdir added at runtime is picked
 // up without restart.
-func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, reload func() error, deleteDag func(dagID string) error) error {
+func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, reload func() error, deleteDag func(dagID string) error, bootReconcile func() map[string]struct{}) error {
 	if rerr := reload(); rerr != nil {
 		devPrintf(cmd.ErrOrStderr(), "✗ %v\n", rerr)
 	}
@@ -1439,6 +1452,13 @@ func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, re
 	// must be deregistered (issue #345). Seeded from the initial reload by
 	// re-resolving the workspace one more time below.
 	lastSeenDagIDs := projectDagIDs(ws)
+	// Boot-time self-heal (#404): deregister ghost DAGs (registered but absent on
+	// disk) and clear stale import errors so a reused metadata DB or a previous
+	// workspace doesn't leave un-removable entries in the UI. The closure is built
+	// fail-safe by the caller; nil in tests.
+	if bootReconcile != nil {
+		lastSeenDagIDs = bootReconcile()
+	}
 	devPrintf(cmd.OutOrStdout(), "👀 watching %s — edit and save to reload (Ctrl-C to stop)\n", ws.Path)
 	ticker := time.NewTicker(devPollInterval)
 	defer ticker.Stop()

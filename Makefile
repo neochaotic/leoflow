@@ -126,6 +126,10 @@ rebrand-ui: ## Rewrite the embedded SPA's Docs/GitHub nav links from Airflow to 
 e2e-lite: ## End-to-end Lite happy path (setup -> control plane -> login); needs local Postgres+Redis (DESTRUCTIVE: resets leoflow_dev)
 	bash scripts/e2e-lite-login.sh
 
+.PHONY: e2e-lite-selfheal
+e2e-lite-selfheal: ## Lite boot self-heal gate (#404); needs local Postgres (DESTRUCTIVE: resets leoflow_dev)
+	PYTHONPATH=parser bash test/e2e/lite-selfheal.sh
+
 .PHONY: runtime-images
 runtime-images: ## Build the task base images for each supported Python version
 	for v in 3.10 3.11 3.12; do \

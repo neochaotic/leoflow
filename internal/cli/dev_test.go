@@ -541,7 +541,7 @@ func TestDevClusterSetupStubbed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("devClusterSetup: %v", err)
 	}
-	if makeReload == nil || makeReload("tok") == nil {
+	if makeReload == nil || makeReload(func() string { return "tok" }) == nil {
 		t.Fatal("expected a reload factory")
 	}
 	joined := strings.Join(env, "\n")

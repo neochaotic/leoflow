@@ -157,12 +157,14 @@ func reconcileImportErrors(
 // It returns the DAG-ID set the watcher seeds its per-tick diff from. Each step is
 // independently fail-safe — a failed list fetch skips that step, never wiping.
 func makeBootReconcile(
-	token, uiURL, workspaceRoot string,
+	mintToken func() string,
+	uiURL, workspaceRoot string,
 	workspace map[string]struct{},
 	deleteDag func(dagID string) error,
 	logf func(format string, args ...any),
 ) func() map[string]struct{} {
 	return func() map[string]struct{} {
+		token := mintToken()
 		registered, ferr := fetchRegisteredDagIDs(uiURL, token)
 		seen := reconcileStartup(registered, ferr, workspace, deleteDag, logf)
 		files, ierr := fetchImportErrorFiles(uiURL, token)

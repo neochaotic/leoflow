@@ -16,3 +16,21 @@ func TestMakeDeleteDagRemintsToken(t *testing.T) {
 		t.Errorf("token minted %d times across 2 deregisters, want 2 (fresh per call, #407)", calls)
 	}
 }
+
+// TestMakeBootReconcileMintsToken: the boot reconcile mints a fresh token when it
+// runs, rather than capturing one — same #407 guard, on the reconcile path. (The
+// control plane is unreachable here, so the fetches fail and reconcile no-ops, but
+// the token must still be minted at the top of the pass.)
+func TestMakeBootReconcileMintsToken(t *testing.T) {
+	var calls int
+	boot := makeBootReconcile(
+		func() string { calls++; return "" },
+		"http://127.0.0.1:0", t.TempDir(), set("a"),
+		func(string) error { return nil },
+		func(string, ...any) {},
+	)
+	_ = boot()
+	if calls != 1 {
+		t.Errorf("boot reconcile minted %d tokens, want 1 (fresh per boot, #407)", calls)
+	}
+}

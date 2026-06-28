@@ -53,7 +53,10 @@ printf 'from airflow.sdk import DAG\nwith DAG("broken", schedule=None)   # missi
 start_lite() { # $1=logfile
   "$TMP/leoflow" lite --no-up --executor subprocess --port "$PORT" "$WS" >"$1" 2>&1 &
   LITE_PID=$!
-  for _ in $(seq 1 60); do
+  # Lite provisions a per-DAG venv (pip-installs the Airflow SDK) before the server
+  # serves /readyz, so first boot waits on three venv installs — slow on a cold CI
+  # runner. Be patient (the reconcile we're testing is cheap; the venvs are not).
+  for _ in $(seq 1 "${LITE_READY_TRIES:-300}"); do
     curl -fsS "${BASE}/readyz" >/dev/null 2>&1 && return 0
     kill -0 "$LITE_PID" 2>/dev/null || { tail -40 "$1"; return 1; }
     sleep 1

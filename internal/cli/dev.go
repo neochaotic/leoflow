@@ -620,7 +620,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	// build/register strategy. k8s runs real pods on a dedicated k3d cluster;
 	// subprocess runs unsandboxed on the host (fast loop).
 	var serverEnv []string
-	var makeReload func(token string) func() error
+	var makeReload func(mintToken func() string) func() error
 	if o.executor == "subprocess" {
 		serverEnv, makeReload, err = devSubprocessSetup(ctx, cmd, ws, o, home)
 	} else {
@@ -642,14 +642,26 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	announceReady(out, o.host, o.port, o.adminEmail, ws.Path)
 	// Mint an admin token in-process signed with the dev JWT secret; the control
 	// plane validates it by signature + claims, so no login or seeded user is
-	// needed (works against a fresh or pre-existing dev database).
-	token, terr := auth.MintUserToken(resolveLiteJWTSecret(o.jwtSecret), time.Hour, auth.User{
-		ID: "leoflow-dev", TenantID: "default", Email: devAdminUser, Roles: []string{"admin"},
-	})
-	if terr != nil {
-		return fmt.Errorf("minting dev token: %w", terr)
+	// needed. Re-minted per operation (signing is cheap) so a Lite left running
+	// for hours never hits the token's expiry — hot-reload registration keeps
+	// working instead of silently 401-ing after an hour (#407).
+	logf := func(format string, args ...any) { devPrintf(cmd.OutOrStdout(), format+"\n", args...) }
+	mintToken := func() string {
+		tok, err := auth.MintUserToken(resolveLiteJWTSecret(o.jwtSecret), time.Hour, auth.User{
+			ID: "leoflow-dev", TenantID: "default", Email: devAdminUser, Roles: []string{"admin"},
+		})
+		if err != nil {
+			logf("✗ minting dev token: %v", err)
+			return ""
+		}
+		return tok
 	}
-	return devWatchLoop(ctx, cmd, ws, makeReload(token), makeDeleteDag(token, uiURL))
+	if mintToken() == "" {
+		return fmt.Errorf("minting the dev token failed — check the JWT secret")
+	}
+	del := makeDeleteDag(mintToken, uiURL, home, logf)
+	boot := makeBootReconcile(mintToken, uiURL, ws.Path, projectDagIDs(ws), del, logf)
+	return devWatchLoop(ctx, cmd, ws, makeReload(mintToken), del, boot)
 }
 
 // makeDeleteDag returns a callback the Lite watcher calls when it notices a
@@ -658,10 +670,20 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 // hard-delete variant (cascades versions/runs/TIs/XCom via the schema's
 // ON DELETE CASCADE) — because the user's intent in deleting the project
 // folder is to fully forget the DAG, not just clear its run history.
-func makeDeleteDag(token, uiURL string) func(dagID string) error {
+func makeDeleteDag(mintToken func() string, uiURL, home string, logf func(format string, args ...any)) func(dagID string) error {
 	return func(dagID string) error {
 		reqURL := fmt.Sprintf("%s/api/v2/dags/%s?deregister=true", uiURL, url.PathEscape(dagID))
-		return devImportErrorRequest(context.Background(), http.MethodDelete, reqURL, token, nil)
+		if err := devImportErrorRequest(context.Background(), http.MethodDelete, reqURL, mintToken(), nil); err != nil {
+			return err
+		}
+		// Reclaim the per-DAG venv with the DAG (it carries the Airflow SDK). A
+		// later reload re-creates it if the DAG comes back. Best-effort + logged.
+		if removed, rerr := removeDagVenv(home, dagID); rerr != nil {
+			logf("✗ removed dag %q but could not remove its venv: %v", dagID, rerr)
+		} else if removed {
+			logf("🧹 removed the per-DAG venv for %q", dagID)
+		}
+		return nil
 	}
 }
 
@@ -671,7 +693,7 @@ func makeDeleteDag(token, uiURL string) func(dagID string) error {
 // with user code running unsandboxed on the host. The venv is shared across
 // projects and uses the dependency-union from WorkspaceSpec.RootCfg so every
 // DAG's imports resolve from a single virtualenv.
-func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, o devOptions, home string) (env []string, makeReload func(string) func() error, err error) {
+func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, o devOptions, home string) (env []string, makeReload func(func() string) func() error, err error) {
 	agentBin, err := resolveBinary(o.agentBin, "leoflow-agent")
 	if err != nil {
 		return nil, nil, err
@@ -689,8 +711,9 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSp
 	venvsRoot := filepath.Join(home, "venvs")
 	env = subprocessServerEnv(o.host, o.port, agentBin, ws.Path, bootPy, venvsRoot, o.adminHash, o.adminEmail, o.jwtSecret)
 	env = append(env, liteEditorEnv(ws.Path, filepath.Dir(home))...)
-	makeReload = func(token string) func() error {
+	makeReload = func(mintToken func() string) func() error {
 		return func() error {
+			token := mintToken()
 			// Re-resolve the workspace on every reload so DAGs added or removed
 			// since boot are picked up (no need to restart lite to register a new
 			// subdir).
@@ -755,7 +778,7 @@ func ensureWorkspaceDagVenvs(ctx context.Context, cmd *cobra.Command, ws *Worksp
 // BuildKit cache; far worse cold). The function fails loud with a hint to use
 // --executor=subprocess. Cluster-mode multi-DAG is tracked as a follow-up
 // (the "Stage" mode design conversation).
-func devClusterSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, o devOptions, home string) (env []string, makeReload func(string) func() error, err error) {
+func devClusterSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, o devOptions, home string) (env []string, makeReload func(func() string) func() error, err error) {
 	if len(ws.Projects) != 1 {
 		paths := make([]string, 0, len(ws.Projects))
 		for _, p := range ws.Projects {
@@ -786,14 +809,17 @@ func devClusterSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec,
 		return nil, nil, derr
 	}
 	image := devDagImageRef(cfg.DagID)
-	makeReload = func(token string) func() error {
-		base := func() error {
-			opts := compileOptions{image: image, build: true, builder: "docker", dockerfile: "Dockerfile"}
-			return devCompileAndRegister(ctx, cmd, dir, opts, token, func() error {
-				return k3dImport(ctx, cmd, image)
-			}, devURL(o.port))
+	makeReload = func(mintToken func() string) func() error {
+		return func() error {
+			token := mintToken()
+			base := func() error {
+				opts := compileOptions{image: image, build: true, builder: "docker", dockerfile: "Dockerfile"}
+				return devCompileAndRegister(ctx, cmd, dir, opts, token, func() error {
+					return k3dImport(ctx, cmd, image)
+				}, devURL(o.port))
+			}
+			return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))()
 		}
-		return devReportingReload(ctx, base, devURL(o.port), token, dagSourcePath(dir, cfg))
 	}
 	env = clusterServerEnv(o.host, o.port, kubeconfig, o.adminHash, o.adminEmail, o.jwtSecret)
 	if wd, aerr := filepath.Abs(dir); aerr == nil {
@@ -1427,7 +1453,7 @@ func devReadyOnce(ctx context.Context, baseURL string) bool {
 // build/register step. The set of watched files is re-derived from the
 // workspace on every tick so a new project subdir added at runtime is picked
 // up without restart.
-func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, reload func() error, deleteDag func(dagID string) error) error {
+func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, reload func() error, deleteDag func(dagID string) error, bootReconcile func() map[string]struct{}) error {
 	if rerr := reload(); rerr != nil {
 		devPrintf(cmd.ErrOrStderr(), "✗ %v\n", rerr)
 	}
@@ -1439,6 +1465,13 @@ func devWatchLoop(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSpec, re
 	// must be deregistered (issue #345). Seeded from the initial reload by
 	// re-resolving the workspace one more time below.
 	lastSeenDagIDs := projectDagIDs(ws)
+	// Boot-time self-heal (#404): deregister ghost DAGs (registered but absent on
+	// disk) and clear stale import errors so a reused metadata DB or a previous
+	// workspace doesn't leave un-removable entries in the UI. The closure is built
+	// fail-safe by the caller; nil in tests.
+	if bootReconcile != nil {
+		lastSeenDagIDs = bootReconcile()
+	}
 	devPrintf(cmd.OutOrStdout(), "👀 watching %s — edit and save to reload (Ctrl-C to stop)\n", ws.Path)
 	ticker := time.NewTicker(devPollInterval)
 	defer ticker.Stop()

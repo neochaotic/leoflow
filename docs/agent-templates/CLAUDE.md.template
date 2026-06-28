@@ -149,7 +149,8 @@ The MVP is broken into 6 phases. Always check which phase is active before start
 - **Phase 5:** UI Integration — Airflow UI talking to Leoflow
 - **Phase 6:** Hardening — load tests, docs, Helm chart
 
-Each phase has a dedicated prompt file under `prompts/phase-N-*.md`.
+These phases were delivered through v0.1.0; they remain here as historical context
+for the project's shape.
 
 ## When You're Stuck
 

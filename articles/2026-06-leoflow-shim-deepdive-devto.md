@@ -1,9 +1,10 @@
 ---
-title: "How we parse Apache Airflow DAGs without importing Airflow"
+title: How we parse Apache Airflow DAGs without importing Airflow
 published: false
-description: "Leoflow's control plane is Go and never imports Apache Airflow — yet it reads standard airflow.sdk DAGs. The trick is a dependency-free structural shim that exec's your dag.py, records the graph, and lets the real provider operator run later in the pod. Here's the whole mechanism."
+description: 'Leoflow''s control plane is Go and never imports Apache Airflow — yet it reads standard airflow.sdk DAGs. The trick is a dependency-free structural shim that exec''s your dag.py, records the graph, and lets the real provider operator run later in the pod. Here''s the whole mechanism.'
 tags: 'airflow, python, go, dataengineering'
 series: Building Leoflow
+id: 4014550
 ---
 
 > **TL;DR** — Leoflow runs a Go control plane that **never imports Apache Airflow**,

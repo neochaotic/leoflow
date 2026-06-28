@@ -6,6 +6,7 @@ tags: 'airflow, go, kubernetes, dataengineering'
 cover_image: 'https://raw.githubusercontent.com/neochaotic/leoflow/main/docs/assets/screenshots/etl-graph.png'
 series: Building Leoflow
 id: 3838498
+date: '2026-06-07T03:22:29Z'
 ---
 
 > **TL;DR** — Leoflow `v0.0.2` just shipped, and the headline is one verb: **`leoflow deploy`**. It takes a DAG from `dag.py` on your laptop to a running pod on a Kubernetes control plane in a single command — compile → build → push to your registry → **pin the image by digest** → register the artifact. No bespoke CI pipeline required, no hand-rolled `docker build && docker push && curl`. The same command runs identically from your machine *or* from a CI runner. Login is `leoflow auth login` (token saved, password read hidden). GitHub: **[neochaotic/leoflow](https://github.com/neochaotic/leoflow)**.

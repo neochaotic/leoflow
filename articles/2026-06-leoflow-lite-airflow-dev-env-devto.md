@@ -1,9 +1,10 @@
 ---
-title: "Leoflow Lite: a local development environment for Apache Airflow"
+title: 'Leoflow Lite: a local development environment for Apache Airflow'
 published: false
-description: "Develop and test Apache Airflow DAGs locally with Leoflow Lite — no Docker, no Kubernetes, no heavy stack. Real Airflow 3.2 operators, sensors, connections and variables, hot-reload on save, the Airflow UI, and your local GCP/AWS/Azure credentials just work."
+description: 'Develop and test Apache Airflow DAGs locally with Leoflow Lite — no Docker, no Kubernetes, no heavy stack. Real Airflow 3.2 operators, sensors, connections and variables, hot-reload on save, the Airflow UI, and your local GCP/AWS/Azure credentials just work.'
 tags: 'airflow, dataengineering, python, devtools'
 series: Building Leoflow
+id: 4014551
 ---
 
 > **TL;DR** — **Leoflow Lite is a local development environment for Apache Airflow.**

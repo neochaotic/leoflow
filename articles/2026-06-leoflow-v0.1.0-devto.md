@@ -1,9 +1,11 @@
 ---
-title: "Leoflow v0.1.0 — run your Airflow DAGs on a Go control plane (no Airflow in the hot path)"
+title: Leoflow v0.1.0 — run your Airflow DAGs on a Go control plane (no Airflow in the hot path)
 published: true
-description: "Write standard Apache Airflow 3.2 DAGs in Python; Leoflow parses them with a dependency-free shim, runs each task as its own pod, and serves the Airflow UI — with a Go control plane that has no GIL and no Airflow in the scheduling path. v0.1.0 ships the shim, 86 connectors, generic provider operators + sensors, and a resilient local Lite edition."
+description: 'Write standard Apache Airflow 3.2 DAGs in Python; Leoflow parses them with a dependency-free shim, runs each task as its own pod, and serves the Airflow UI — with a Go control plane that has no GIL and no Airflow in the scheduling path. v0.1.0 ships the shim, 86 connectors, generic provider operators + sensors, and a resilient local Lite edition.'
 tags: 'airflow, go, dataengineering, kubernetes'
 series: Building Leoflow
+id: 4014552
+date: '2026-06-28T20:09:06Z'
 ---
 
 > **TL;DR** — Leoflow `v0.1.0` is the first stable release. You write **standard

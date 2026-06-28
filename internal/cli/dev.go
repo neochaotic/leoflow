@@ -649,9 +649,9 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if terr != nil {
 		return fmt.Errorf("minting dev token: %w", terr)
 	}
-	del := makeDeleteDag(token, uiURL)
-	boot := makeBootReconcile(token, uiURL, ws.Path, projectDagIDs(ws), del,
-		func(format string, args ...any) { devPrintf(cmd.OutOrStdout(), format+"\n", args...) })
+	logf := func(format string, args ...any) { devPrintf(cmd.OutOrStdout(), format+"\n", args...) }
+	del := makeDeleteDag(token, uiURL, home, logf)
+	boot := makeBootReconcile(token, uiURL, ws.Path, projectDagIDs(ws), del, logf)
 	return devWatchLoop(ctx, cmd, ws, makeReload(token), del, boot)
 }
 
@@ -661,10 +661,20 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 // hard-delete variant (cascades versions/runs/TIs/XCom via the schema's
 // ON DELETE CASCADE) — because the user's intent in deleting the project
 // folder is to fully forget the DAG, not just clear its run history.
-func makeDeleteDag(token, uiURL string) func(dagID string) error {
+func makeDeleteDag(token, uiURL, home string, logf func(format string, args ...any)) func(dagID string) error {
 	return func(dagID string) error {
 		reqURL := fmt.Sprintf("%s/api/v2/dags/%s?deregister=true", uiURL, url.PathEscape(dagID))
-		return devImportErrorRequest(context.Background(), http.MethodDelete, reqURL, token, nil)
+		if err := devImportErrorRequest(context.Background(), http.MethodDelete, reqURL, token, nil); err != nil {
+			return err
+		}
+		// Reclaim the per-DAG venv with the DAG (it carries the Airflow SDK). A
+		// later reload re-creates it if the DAG comes back. Best-effort + logged.
+		if removed, rerr := removeDagVenv(home, dagID); rerr != nil {
+			logf("✗ removed dag %q but could not remove its venv: %v", dagID, rerr)
+		} else if removed {
+			logf("🧹 removed the per-DAG venv for %q", dagID)
+		}
+		return nil
 	}
 }
 

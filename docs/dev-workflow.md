@@ -189,8 +189,8 @@ credentials just work** — no managed Connection needed for local dev:
 - **Azure** — `AZURE_*` in the env, or the Azure CLI cache (`~/.azure`).
 
 The provider SDKs find these through their default credential chains, exactly as if
-you ran the task by hand. That makes Lite a genuine **local Airflow dev
-environment**: author a DAG, run it against your *real* cloud accounts, iterate.
+you ran the task by hand — so iterating on a DAG that touches your *real* cloud
+accounts needs no extra credential wiring locally.
 
 > In **Pro / cluster mode**, task pods are isolated and do **not** inherit your
 > local env — there you deliver credentials through managed **Connections** (see

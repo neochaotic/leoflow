@@ -6,6 +6,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-rc.4] - 2026-06-28
+
+> Fourth release candidate of the **0.1.0** line — a single Lite fix found while
+> testing rc.3.
+
+### Fixed
+
+- **Lite hot-reload no longer stops registering after an hour (#407).** `leoflow
+  lite` minted one admin token at startup (one-hour expiry) and reused it for every
+  hot-reload registration, deregister, and the boot reconcile; after an hour the
+  token expired and every save silently failed to register — only a `✗ … invalid
+  token` in the log, with the UI just not updating. The watcher now re-mints a fresh
+  token per operation, so a Lite left running for the day keeps reloading.
+
 ## [0.1.0-rc.3] - 2026-06-28
 
 > Third release candidate of the **0.1.0** line. On top of rc.2 it hardens the
@@ -135,7 +149,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.3...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.4...HEAD
+[0.1.0-rc.4]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.3...v0.1.0-rc.4
 [0.1.0-rc.3]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.2...v0.1.0-rc.3
 [0.1.0-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.1...v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/neochaotic/leoflow/releases/tag/v0.1.0-rc.1

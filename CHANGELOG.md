@@ -6,6 +6,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-28
+
+> **First stable release.** Leoflow runs standard Apache Airflow 3.2 DAGs on a Go
+> control plane — no GIL, no Airflow in the scheduling path — one pod per task. This
+> promotes `v0.1.0-rc.4` verbatim: the same artifacts, soaked through the rc series.
+
+### The 0.1.0 line, in brief
+
+- **Standard Airflow 3.2 DAGs in Python.** A dependency-free structural shim (ADR
+  0024) parses `airflow.sdk` DAGs without importing Airflow; the real provider
+  operator runs in the task pod (ADR 0040).
+- **Provider operators & sensors.** A native fast path for `bash`/`python`/`http`,
+  generic capture for the long tail, and reschedule-mode sensors.
+- **86 connection types** generated from real Airflow (ADR 0038 / 0039), with the
+  `connectors:` one-liner that bakes providers into each DAG's image.
+- **Lite** — a Docker-free, Kubernetes-free local edition: hot-reload, the embedded
+  Airflow 3.2 UI, and resilience (Docker-wedged fallback, boot self-heal, per-DAG
+  venv reclaim, watcher-token refresh).
+
+Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
+
 ## [0.1.0-rc.4] - 2026-06-28
 
 > Fourth release candidate of the **0.1.0** line — a single Lite fix found while
@@ -149,7 +170,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.4...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.4...v0.1.0
 [0.1.0-rc.4]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.3...v0.1.0-rc.4
 [0.1.0-rc.3]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.2...v0.1.0-rc.3
 [0.1.0-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.1...v0.1.0-rc.2

@@ -39,19 +39,7 @@ piece of v0.1.0.
 Here's the shape of it — your DAG becomes an immutable artifact, and a Go control
 plane schedules it onto a pod per task:
 
-```mermaid
-flowchart LR
-  subgraph dev["Dev / CI"]
-    src["leoflow.yaml · dag.py · Dockerfile"]
-  end
-  src -->|"leoflow compile"| art["dag.json + image"]
-  art --> api["API /api/v2 (Airflow 3.2)"]
-  ui["Airflow 3.2 UI"] --> api
-  api --> sched["Scheduler (Go, no GIL)"]
-  sched --> router["Executor router"]
-  router -->|"K8s · Docker · subprocess"| pod["Worker pod: agent ⇄ gRPC ⇄ your task"]
-  sched --- store[("Postgres + Redis")]
-```
+![Leoflow architecture — dag.py compiles to dag.json + image, a Go control plane schedules one pod per task](https://raw.githubusercontent.com/neochaotic/leoflow/main/articles/assets/architecture.png)
 
 ## You write real Airflow DAGs
 
@@ -86,14 +74,7 @@ Here's the trick (ADR 0024). The parser **exec's your `dag.py`** — but with a
 zero third-party deps. It reproduces *exactly* the attribute surface the compiler
 reads, and nothing else:
 
-```mermaid
-flowchart TD
-  dag["dag.py"] -->|"runpy.run_path"| ex["exec — the shim shadows 'airflow'"]
-  ex --> reg["DAG ctx + operators register · '>>' records edges · @task = structure only"]
-  reg --> col[("COLLECTED: dag_id maps to DAG(tasks, edges, schedule)")]
-  col --> cmp["compiler"]
-  cmp --> json["dag.json (tasks, depends_on, type, entrypoint)"]
-```
+![The shim flow — dag.py is exec'd under a structural stand-in for airflow; DAG/operators register into COLLECTED, which the compiler turns into dag.json](https://raw.githubusercontent.com/neochaotic/leoflow/main/articles/assets/shim.png)
 
 Two consequences fall straight out of this design:
 
@@ -133,14 +114,7 @@ while the control plane that scheduled it never imported either. **Compile-time:
 structure, dependency-free. Run-time: the real thing, in a pod.** That seam is the
 whole design.
 
-```mermaid
-flowchart TD
-  op["provider operator import"] --> q{"native fast path?"}
-  q -->|"bash · python · http · empty"| native["Leoflow Go/runtime runs it — no Airflow in the pod"]
-  q -->|"everything else"| cap["shim captures class path + kwargs"]
-  cap --> dj["dag.json"]
-  dj --> run["pod: import_string(class)(kwargs).execute(context)"]
-```
+![Native fast path vs generic capture — bash/python/http run natively; everything else is captured by class+kwargs and the real operator runs in the pod](https://raw.githubusercontent.com/neochaotic/leoflow/main/articles/assets/operator.png)
 
 ## Operators, sensors & 86 connectors
 

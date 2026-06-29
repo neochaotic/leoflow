@@ -5,6 +5,7 @@ description: 'Leoflow''s control plane is Go and never imports Apache Airflow â€
 tags: 'airflow, python, go, dataengineering'
 series: Building Leoflow
 id: 4014550
+date: '2026-06-29T22:16:11Z'
 ---
 
 > **TL;DR** â€” Leoflow runs a Go control plane that **never imports Apache Airflow**,

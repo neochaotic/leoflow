@@ -73,6 +73,14 @@ operator objects and reads a handful of attributes. And it can't be trimmed:
 Dropping Airflow makes the parser **pure Python and small enough to embed in the Go
 binary** — no parser venv, no `pip` at install time, no Airflow-version coupling.
 
+To be precise: **this is the *parser's* weight, not the whole system's.** The real
+task SDK and a DAG's providers *do* get installed — in the **task image, per DAG**
+(`pip install` at build time, or the Lite venv), because that's where the operator
+actually runs them. Leoflow doesn't *delete* that weight; it moves it **off the
+scheduling hot path** (the Go control plane never installs or imports Airflow) and
+**splits it per DAG** (each image carries only its own providers — never one fat
+shared worker for all 1,500). The parser is the part that gets to be ~44 KB.
+
 ## The shim: a structural stand-in for `airflow`
 
 The parser ships a **pure-standard-library** package that *looks* like `airflow` —

@@ -1,6 +1,6 @@
 ---
 title: How we parse Apache Airflow DAGs without importing Airflow
-published: false
+published: true
 description: 'Leoflow''s control plane is Go and never imports Apache Airflow — yet it reads standard airflow.sdk DAGs. The trick is a dependency-free structural shim that exec''s your dag.py, records the graph, and lets the real provider operator run later in the pod. Here''s the whole mechanism.'
 tags: 'airflow, python, go, dataengineering'
 series: Building Leoflow
@@ -80,14 +80,7 @@ class BaseOperator:
         return other
 ```
 
-```mermaid
-flowchart TD
-  dag["dag.py"] -->|"runpy.run_path"| ex["exec — the shim shadows 'airflow'"]
-  ex --> reg["DAG ctx + operators register · '>>' records edges · @task = structure only"]
-  reg --> col[("COLLECTED: dag_id maps to DAG(tasks, edges, schedule)")]
-  col --> cmp["compiler"]
-  cmp --> json["dag.json (tasks, depends_on, type, entrypoint)"]
-```
+![The shim flow — dag.py is exec'd under a structural stand-in for airflow; DAG/operators register into COLLECTED, which the compiler turns into dag.json](https://raw.githubusercontent.com/neochaotic/leoflow/main/articles/assets/shim.png)
 
 `with DAG(...)` registers; constructing an operator attaches it to the active DAG and
 stores its kwargs; `>>` records edges; `@task` builds the node but **never runs the

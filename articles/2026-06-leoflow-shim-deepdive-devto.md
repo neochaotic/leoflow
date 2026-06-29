@@ -73,6 +73,14 @@ operator objects and reads a handful of attributes. And it can't be trimmed:
 Dropping Airflow makes the parser **pure Python and small enough to embed in the Go
 binary** — no parser venv, no `pip` at install time, no Airflow-version coupling.
 
+To be precise: **this is the *parser's* weight, not the whole system's.** The real
+task SDK and a DAG's providers *do* get installed — in the **task image, per DAG**
+(`pip install` at build time, or the Lite venv), because that's where the operator
+actually runs them. Leoflow doesn't *delete* that weight; it moves it **off the
+scheduling hot path** (the Go control plane never installs or imports Airflow) and
+**splits it per DAG** (each image carries only its own providers — never one fat
+shared worker for all 1,500). The parser is the part that gets to be ~44 KB.
+
 ## The shim: a structural stand-in for `airflow`
 
 The parser ships a **pure-standard-library** package that *looks* like `airflow` —
@@ -150,6 +158,27 @@ SQLExecuteQueryOperator(task_id="rollup", conn_id="warehouse", sql="insert into 
 
 No provider is installed in the parser. The dotted path and kwargs are just data in
 `dag.json`.
+
+## What the shim won't do (on purpose)
+
+The shim does *all* the structural parsing — but it draws three deliberate lines, and
+each one is a feature, not a gap:
+
+- **It never runs your task bodies.** `@task` and operators only *build structure* at
+  parse time; the code inside a task runs later, in the pod. Reading a DAG can't
+  trigger its work.
+- **It doesn't capture hooks.** `airflow.providers.*.hooks.*` is intentionally *not*
+  synthesized — a hook is a runtime client (it opens real connections), so it belongs
+  inside a `@task` body that runs in the pod, never at parse time. Operators and
+  sensors are captured; hooks are left to the runtime.
+- **It rejects what it can't model, loudly.** Anything outside the supported surface
+  and the generic provider path — an unknown `from airflow.<thing>`, or a file with no
+  `dag_id` / multiple DAGs — fails at compile time with a precise message, instead of
+  being silently mis-parsed.
+
+So *"does the shim do everything?"* — it does everything **structural**, and
+deliberately hands **execution** (and hooks) to the runtime. That boundary *is* the
+design.
 
 ## The seam: the *real* operator runs in the pod
 

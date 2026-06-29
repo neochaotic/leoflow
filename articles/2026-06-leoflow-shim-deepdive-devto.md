@@ -159,6 +159,27 @@ SQLExecuteQueryOperator(task_id="rollup", conn_id="warehouse", sql="insert into 
 No provider is installed in the parser. The dotted path and kwargs are just data in
 `dag.json`.
 
+## What the shim won't do (on purpose)
+
+The shim does *all* the structural parsing — but it draws three deliberate lines, and
+each one is a feature, not a gap:
+
+- **It never runs your task bodies.** `@task` and operators only *build structure* at
+  parse time; the code inside a task runs later, in the pod. Reading a DAG can't
+  trigger its work.
+- **It doesn't capture hooks.** `airflow.providers.*.hooks.*` is intentionally *not*
+  synthesized — a hook is a runtime client (it opens real connections), so it belongs
+  inside a `@task` body that runs in the pod, never at parse time. Operators and
+  sensors are captured; hooks are left to the runtime.
+- **It rejects what it can't model, loudly.** Anything outside the supported surface
+  and the generic provider path — an unknown `from airflow.<thing>`, or a file with no
+  `dag_id` / multiple DAGs — fails at compile time with a precise message, instead of
+  being silently mis-parsed.
+
+So *"does the shim do everything?"* — it does everything **structural**, and
+deliberately hands **execution** (and hooks) to the runtime. That boundary *is* the
+design.
+
 ## The seam: the *real* operator runs in the pod
 
 At runtime, inside the task's own pod — where the provider *is* installed, baked into

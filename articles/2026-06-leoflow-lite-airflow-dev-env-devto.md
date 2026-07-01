@@ -55,6 +55,11 @@ with DAG("hello", schedule="@daily"):
 
 Save the file and the DAG reloads in the UI in a couple of seconds.
 
+Prefer to stay in the browser? Lite ships an **in-browser IDE** — hit the **IDE**
+button in the UI (bottom-right in the screenshot above) to edit `dag.py` and
+`leoflow.yaml` right there. Or use your own editor; either way, every save
+hot-reloads.
+
 ## What's supported
 
 Lite runs the same Airflow-compatible engine as Leoflow's production mode:

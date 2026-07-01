@@ -5,6 +5,7 @@ description: 'Develop and test Apache Airflow DAGs locally with Leoflow Lite —
 tags: 'airflow, dataengineering, python, devtools'
 series: Building Leoflow
 id: 4014551
+date: '2026-07-01T11:54:06Z'
 ---
 
 > **TL;DR** — **Leoflow Lite is a local development environment for Apache Airflow.**

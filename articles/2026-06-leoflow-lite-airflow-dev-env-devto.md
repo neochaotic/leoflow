@@ -1,6 +1,6 @@
 ---
 title: 'Leoflow Lite: a local development environment for Apache Airflow'
-published: false
+published: true
 description: 'Develop and test Apache Airflow DAGs locally with Leoflow Lite — no Docker, no Kubernetes, no heavy stack. Real Airflow 3.2 operators, sensors, connections and variables, hot-reload on save, the Airflow UI, and your local GCP/AWS/Azure credentials just work.'
 tags: 'airflow, dataengineering, python, devtools'
 series: Building Leoflow
@@ -13,6 +13,8 @@ id: 4014551
 > connections, variables, XCom — with **hot-reload on save** and the **Airflow UI**,
 > and it picks up your **local GCP / AWS / Azure credentials** automatically. Install,
 > point it at a DAG, watch it run.
+
+![Leoflow Lite — the real Apache Airflow 3.2 UI running locally: the LITE badge, an all-green pipeline run, and an in-browser IDE button, with no Docker and no Kubernetes](https://raw.githubusercontent.com/neochaotic/leoflow/main/articles/assets/lite-ui.png)
 
 ---
 
@@ -27,8 +29,7 @@ editing a DAG and watching it run against the **real Airflow UI**:
 
 ```bash
 # install (pin the version on the sh side of the pipe)
-curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/v0.1.0-rc.3/install.sh \
-  | LEOFLOW_VERSION=v0.1.0-rc.3 sh
+curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
 
 leoflow lite --postgres managed     # embedded Postgres, no Docker needed
 # → scaffolds a starter DAG, serves the Airflow 3.2 UI at http://localhost:8088,
@@ -145,8 +146,7 @@ pod per task) for production. Same authoring, two runtimes.
 ## Try it
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/v0.1.0-rc.3/install.sh \
-  | LEOFLOW_VERSION=v0.1.0-rc.3 sh
+curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh
 leoflow lite --postgres managed
 ```
 

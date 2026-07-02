@@ -5,8 +5,9 @@
 # merges them into one dag.json, and the scheduler runs operators AND per-model
 # dbt pods in the right order, against a shared Postgres warehouse.
 #
-# Layout: the dbt project lives at the DAG root (project: .) alongside dag.py, so
-# each dbt pod finds dbt_project.yml in its working dir.
+# Layout: the dbt project is a subdir (transform/) next to dag.py — the realistic
+# mixing layout. Each dbt command is scoped with --project-dir (#401) so the pod
+# finds dbt_project.yml regardless of its working dir.
 #
 # Requirements: k3d, kubectl, docker, jq, curl, dbt, python3, `make build`, dev DB.
 # On Linux/CI: LEOFLOW_E2E_HOST_ADDR=host.k3d.internal and PYTHONPATH=parser. A
@@ -57,7 +58,7 @@ for _ in $(seq 1 30); do docker exec "$WAREHOUSE" pg_isready -U postgres >/dev/n
 
 # The DAG = a dbt project at the root + a dag.py that wires operators around it.
 PROJ="$WORKDIR/$DAG_ID"
-mkdir -p "$PROJ/models" "$PROJ/seeds"
+mkdir -p "$PROJ/transform/models" "$PROJ/transform/seeds"
 cat >"$PROJ/dag.py" <<'PY'
 from leoflow import dbt_group
 from airflow.providers.standard.operators.bash import BashOperator
@@ -65,7 +66,7 @@ from airflow.sdk import DAG
 
 with DAG("mix", schedule="@daily"):
     pre = BashOperator(task_id="pre", bash_command="echo pre")
-    models = dbt_group("analytics")
+    models = dbt_group("transform")
     post = BashOperator(task_id="post", bash_command="echo post")
     pre >> models >> post
 PY
@@ -73,12 +74,12 @@ cat >"$PROJ/leoflow.yaml" <<'YAML'
 schema_version: "1.0"
 dag_id: mix
 dbt_groups:
-  analytics:
-    project: .
+  transform:
+    project: ./transform
     manifest: target/manifest.json
     granularity: node
 YAML
-cat >"$PROJ/dbt_project.yml" <<'YAML'
+cat >"$PROJ/transform/dbt_project.yml" <<'YAML'
 name: 'shop'
 version: '1.0.0'
 profile: 'shop'
@@ -86,25 +87,25 @@ model-paths: ["models"]
 seed-paths: ["seeds"]
 models: { shop: { +materialized: table } }
 YAML
-cat >"$PROJ/profiles.yml" <<YAML
+cat >"$PROJ/transform/profiles.yml" <<YAML
 shop:
   target: dev
   outputs:
     dev: { type: postgres, host: ${HOST_ADDR}, port: ${WH_PORT}, user: postgres, password: pw, dbname: wh, schema: public, threads: 4 }
 YAML
-printf 'id,v\n1,10\n2,20\n3,30\n' >"$PROJ/seeds/raw.csv"
-echo "select id, v from {{ ref('raw') }}" >"$PROJ/models/stg.sql"
-echo "select id, sum(v) as total from {{ ref('stg') }} group by id" >"$PROJ/models/mart.sql"
+printf 'id,v\n1,10\n2,20\n3,30\n' >"$PROJ/transform/seeds/raw.csv"
+echo "select id, v from {{ ref('raw') }}" >"$PROJ/transform/models/stg.sql"
+echo "select id, sum(v) as total from {{ ref('stg') }} group by id" >"$PROJ/transform/models/mart.sql"
 
 log "Generating the manifest"
-( cd "$PROJ" && DBT_PROFILES_DIR="$PROJ" dbt parse >/dev/null 2>&1 ) || fail "dbt parse failed"
+( cd "$PROJ/transform" && DBT_PROFILES_DIR="$PROJ/transform" dbt parse >/dev/null 2>&1 ) || fail "dbt parse failed"
 
 cat >"$PROJ/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
 USER root
 RUN pip install --no-cache-dir "dbt-postgres==1.9.*"
 COPY . /home/leoflow/
-ENV DBT_PROFILES_DIR=/home/leoflow
+ENV DBT_PROFILES_DIR=/home/leoflow/transform
 RUN chown -R leoflow:leoflow /home/leoflow
 USER leoflow
 WORKDIR /home/leoflow
@@ -132,12 +133,12 @@ sleep 5
 log "Compiling (parser merges the operators with the dbt_group) + building the image"
 "$ROOT/bin/leoflow" compile "$PROJ" "${PARSER_CMD[@]}" --image "$DAG_IMAGE" --build --dockerfile Dockerfile -o "$PROJ/dag.json"
 log "Asserting the merge: operators + namespaced dbt tasks wired together"
-for want in pre post analytics__raw analytics__stg analytics__mart; do
+for want in pre post transform__raw transform__stg transform__mart; do
   jq -e --arg t "$want" '.tasks[] | select(.task_id==$t)' "$PROJ/dag.json" >/dev/null || fail "missing task $want"
 done
-jq -e '.tasks[] | select(.task_id=="analytics__raw") | .depends_on | index("pre")' "$PROJ/dag.json" >/dev/null \
-  || fail "group root analytics__raw is not wired to the upstream operator 'pre'"
-jq -e '.tasks[] | select(.task_id=="post") | .depends_on | index("analytics__mart")' "$PROJ/dag.json" >/dev/null \
+jq -e '.tasks[] | select(.task_id=="transform__raw") | .depends_on | index("pre")' "$PROJ/dag.json" >/dev/null \
+  || fail "group root transform__raw is not wired to the upstream operator 'pre'"
+jq -e '.tasks[] | select(.task_id=="post") | .depends_on | index("transform__mart")' "$PROJ/dag.json" >/dev/null \
   || fail "downstream operator 'post' is not wired to the group leaf"
 k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER" >/dev/null
 

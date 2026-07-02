@@ -18,28 +18,28 @@ func TestEmbedGroupNamespacesAndWires(t *testing.T) {
 		{TaskID: "mart", Type: domain.TaskTypeBash, Entrypoint: "dbt run --select mart", DependsOn: []string{"stg"}},
 	}
 
-	embedded, leaves, err := EmbedGroup("analytics", tasks, []string{"extract"})
+	embedded, leaves, err := EmbedGroup("transform", tasks, []string{"extract"})
 	if err != nil {
 		t.Fatalf("EmbedGroup() error: %v", err)
 	}
 	byID := tasksByID(embedded)
 
-	for _, id := range []string{"analytics__raw", "analytics__stg", "analytics__mart"} {
+	for _, id := range []string{"transform__raw", "transform__stg", "transform__mart"} {
 		if _, ok := byID[id]; !ok {
 			t.Errorf("missing namespaced task %q (have %v)", id, ids(byID))
 		}
 	}
 	// a root inherits the external upstream
-	if !reflect.DeepEqual(byID["analytics__raw"].DependsOn, []string{"extract"}) {
-		t.Errorf("root deps = %v, want [extract]", byID["analytics__raw"].DependsOn)
+	if !reflect.DeepEqual(byID["transform__raw"].DependsOn, []string{"extract"}) {
+		t.Errorf("root deps = %v, want [extract]", byID["transform__raw"].DependsOn)
 	}
 	// internal edges are namespaced
-	if !reflect.DeepEqual(byID["analytics__stg"].DependsOn, []string{"analytics__raw"}) {
-		t.Errorf("stg deps = %v, want [analytics__raw]", byID["analytics__stg"].DependsOn)
+	if !reflect.DeepEqual(byID["transform__stg"].DependsOn, []string{"transform__raw"}) {
+		t.Errorf("stg deps = %v, want [transform__raw]", byID["transform__stg"].DependsOn)
 	}
 	// the leaf is reported for downstream wiring
-	if !reflect.DeepEqual(leaves, []string{"analytics__mart"}) {
-		t.Errorf("leaves = %v, want [analytics__mart]", leaves)
+	if !reflect.DeepEqual(leaves, []string{"transform__mart"}) {
+		t.Errorf("leaves = %v, want [transform__mart]", leaves)
 	}
 }
 
@@ -55,11 +55,11 @@ func TestEmbedGroupRejectsEmptyName(t *testing.T) {
 func TestExpandGroups(t *testing.T) {
 	tasks := []domain.TaskSpec{
 		{TaskID: "extract", Type: domain.TaskTypePython},
-		{TaskID: "analytics", Type: domain.TaskTypeDbtGroup, DependsOn: []string{"extract"}},
-		{TaskID: "notify", Type: domain.TaskTypePython, DependsOn: []string{"analytics"}},
+		{TaskID: "transform", Type: domain.TaskTypeDbtGroup, DependsOn: []string{"extract"}},
+		{TaskID: "notify", Type: domain.TaskTypePython, DependsOn: []string{"transform"}},
 	}
 	render := func(group string) ([]domain.TaskSpec, error) {
-		if group != "analytics" {
+		if group != "transform" {
 			t.Fatalf("unexpected group %q", group)
 		}
 		return []domain.TaskSpec{
@@ -75,19 +75,19 @@ func TestExpandGroups(t *testing.T) {
 	}
 	byID := tasksByID(out)
 
-	if _, ok := byID["analytics"]; ok {
+	if _, ok := byID["transform"]; ok {
 		t.Error("the dbt_group placeholder should be gone after expansion")
 	}
-	for _, id := range []string{"extract", "notify", "analytics__raw", "analytics__stg", "analytics__mart"} {
+	for _, id := range []string{"extract", "notify", "transform__raw", "transform__stg", "transform__mart"} {
 		if _, ok := byID[id]; !ok {
 			t.Errorf("missing task %q (have %v)", id, ids(byID))
 		}
 	}
-	if !reflect.DeepEqual(byID["analytics__raw"].DependsOn, []string{"extract"}) {
-		t.Errorf("group root deps = %v, want [extract]", byID["analytics__raw"].DependsOn)
+	if !reflect.DeepEqual(byID["transform__raw"].DependsOn, []string{"extract"}) {
+		t.Errorf("group root deps = %v, want [extract]", byID["transform__raw"].DependsOn)
 	}
-	if !reflect.DeepEqual(byID["notify"].DependsOn, []string{"analytics__mart"}) {
-		t.Errorf("downstream deps = %v, want [analytics__mart] (rewired to the leaf)", byID["notify"].DependsOn)
+	if !reflect.DeepEqual(byID["notify"].DependsOn, []string{"transform__mart"}) {
+		t.Errorf("downstream deps = %v, want [transform__mart] (rewired to the leaf)", byID["notify"].DependsOn)
 	}
 }
 

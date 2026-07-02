@@ -88,7 +88,7 @@ def notify(): ...
 
 with DAG("sales", schedule="@daily"):
     pull   = PythonOperator(task_id="extract", python_callable=extract)
-    models = dbt_group("analytics")          # the dbt project, expanded
+    models = dbt_group("transform")          # the dbt project, expanded
     ping   = PythonOperator(task_id="notify", python_callable=notify)
 
     pull >> models >> ping
@@ -99,19 +99,19 @@ with DAG("sales", schedule="@daily"):
 dag_id: sales
 schedule: "@daily"
 dbt_groups:
-  analytics:                  # the name passed to dbt_group()
-    project: ./analytics
+  transform:                  # the name passed to dbt_group()
+    project: ./transform
     granularity: level
     connection: warehouse_pg  # managed connection (see §4)
 ```
 
 At compile, the operators and the dbt project become **one** `dag.json`. The dbt
-tasks are namespaced under the group (`analytics__stg`, `analytics__orders`, …),
+tasks are namespaced under the group (`transform__stg`, `transform__orders`, …),
 the group's **roots** depend on `extract`, and `notify` depends on the group's
 **leaves**:
 
 ```
-extract → analytics__level_0 → analytics__level_1 → analytics__level_2 → notify
+extract → transform__level_0 → transform__level_1 → transform__level_2 → notify
 ```
 
 > **vs Cosmos.** Cosmos puts the whole configuration in the `dag.py`
@@ -180,7 +180,7 @@ dbt:
 # create the connection once (UI, or the API)
 $ curl -X POST .../api/v2/connections -d '{
     "connection_id":"warehouse_pg","conn_type":"postgres",
-    "host":"db.internal","port":5432,"login":"etl","password":"…","schema":"analytics"}'
+    "host":"db.internal","port":5432,"login":"etl","password":"…","schema":"transform"}'
 ```
 
 The compiled command becomes:

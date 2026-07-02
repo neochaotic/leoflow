@@ -60,13 +60,13 @@ func TestRenderWrapsManagedConnection(t *testing.T) {
 	tasks, err := Render(loadManifest(t, "manifest_chain.json"), Options{
 		Granularity: GranularityNode,
 		Connection:  "warehouse_pg",
-		Profile:     "analytics",
+		Profile:     "transform",
 	})
 	if err != nil {
 		t.Fatalf("Render() error: %v", err)
 	}
 	got := tasksByID(tasks)["stg"].Entrypoint
-	want := "python -m leoflow_runtime --dbt-profile warehouse_pg analytics && dbt run --select stg"
+	want := "python -m leoflow_runtime --dbt-profile warehouse_pg transform && dbt run --select stg"
 	if got != want {
 		t.Errorf("entrypoint = %q, want %q", got, want)
 	}
@@ -76,13 +76,13 @@ func TestRenderWrapsManagedConnection(t *testing.T) {
 // so dbt finds dbt_project.yml regardless of the pod's working dir (#401).
 func TestRenderScopesSubdirProject(t *testing.T) {
 	tasks, err := Render(loadManifest(t, "manifest_chain.json"), Options{
-		Granularity: GranularityNode, ProjectDir: "analytics",
+		Granularity: GranularityNode, ProjectDir: "transform",
 	})
 	if err != nil {
 		t.Fatalf("Render() error: %v", err)
 	}
 	got := tasksByID(tasks)["stg"].Entrypoint
-	want := "dbt run --select stg --project-dir analytics"
+	want := "dbt run --select stg --project-dir transform"
 	if got != want {
 		t.Errorf("entrypoint = %q, want %q", got, want)
 	}

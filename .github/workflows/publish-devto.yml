@@ -27,17 +27,19 @@ on:
         default: true
 
 permissions:
-  contents: write # the action commits the returned article id back to the repo
+  contents: read
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # the publish step commits the returned article id back to the repo
     # Skip entirely if the token secret is not configured, so forks/CI stay green.
     if: ${{ github.repository == 'neochaotic/leoflow' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Publish articles on dev.to
-        uses: sinedied/publish-devto@v2
+        uses: sinedied/publish-devto@c713cc0934b35cb3df9fca759b98e36e6a540a85 # v2
         env:
           GIT_COMMITTER_NAME: neochaotic
           GIT_COMMITTER_EMAIL: alisson.david.rosa@gmail.com

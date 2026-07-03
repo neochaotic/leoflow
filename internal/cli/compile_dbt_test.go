@@ -92,7 +92,7 @@ func TestExpandDbtGroupWithoutConfigIsActionable(t *testing.T) {
 	}
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
-	err := expandDbtGroupsInFile(cmd, dir, out, &domain.LeoflowConfig{DagID: "d"})
+	err := expandDbtGroupsInFile(cmd, dir, out, &domain.LeoflowConfig{DagID: "d"}, false)
 	if err == nil || !strings.Contains(err.Error(), "analytics") {
 		t.Fatalf("want an actionable error naming the group, got: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestExpandDbtGroupsNoOp(t *testing.T) {
 	}
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
-	if err := expandDbtGroupsInFile(cmd, dir, out, &domain.LeoflowConfig{DagID: "d"}); err != nil {
+	if err := expandDbtGroupsInFile(cmd, dir, out, &domain.LeoflowConfig{DagID: "d"}, false); err != nil {
 		t.Fatalf("no-op expansion errored: %v", err)
 	}
 	data, _ := os.ReadFile(out)
@@ -151,7 +151,7 @@ func TestExpandDbtGroupsWithManagedConnection(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 
-	if eerr := expandDbtGroupsInFile(cmd, dir, out, cfg); eerr != nil {
+	if eerr := expandDbtGroupsInFile(cmd, dir, out, cfg, false); eerr != nil {
 		t.Fatalf("expandDbtGroupsInFile: %v", eerr)
 	}
 	data, _ := os.ReadFile(out)
@@ -201,7 +201,7 @@ func TestExpandDbtGroupsInFile(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 
-	if eerr := expandDbtGroupsInFile(cmd, dir, out, cfg); eerr != nil {
+	if eerr := expandDbtGroupsInFile(cmd, dir, out, cfg, false); eerr != nil {
 		t.Fatalf("expandDbtGroupsInFile: %v", eerr)
 	}
 	data, rerr := os.ReadFile(out)

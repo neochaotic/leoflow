@@ -101,7 +101,7 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}); rerr != nil {
 		return rerr
 	}
-	if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg); eerr != nil {
+	if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg, !o.build); eerr != nil {
 		return eerr
 	}
 	if oerr := overlayProject(o.output, cfg); oerr != nil {
@@ -176,11 +176,26 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	return werr
 }
 
+// dbtProjectDir returns the dbt --project-dir to bake into task commands. For an
+// image build (Pro) the project is baked at the relative path inside the image, so
+// the relative value is kept. For a local/subprocess build (Lite) the task runs on
+// the host from a per-task temp workdir, so it must be the ABSOLUTE workspace project
+// path — otherwise `dbt --project-dir ./transform` fails ("does not exist").
+func dbtProjectDir(dagDir, project string, local bool) string {
+	if !local || project == "" {
+		return project
+	}
+	if abs, err := filepath.Abs(filepath.Join(dagDir, project)); err == nil {
+		return abs
+	}
+	return project
+}
+
 // expandDbtGroupsInFile expands any dbt_group placeholders in the compiled dag.json
 // (ADR 0043): each is replaced by its dbt project's rendered tasks (namespaced) and
 // the group's downstream is rewired onto the group's leaves. Runs after the parser
 // and before validation, so the final dag.json carries no dbt_group type.
-func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.LeoflowConfig) error {
+func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.LeoflowConfig, local bool) error {
 	data, err := os.ReadFile(output) //nolint:gosec // G304: operator-supplied output path.
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", output, err)
@@ -217,7 +232,7 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 			Connection:  conn,
 			Profile:     profile,
 			Schema:      gc.Schema,
-			ProjectDir:  gc.Project,
+			ProjectDir:  dbtProjectDir(dir, gc.Project, local),
 		})
 	}
 	tasks, err := dbt.ExpandGroups(spec.Tasks, render)

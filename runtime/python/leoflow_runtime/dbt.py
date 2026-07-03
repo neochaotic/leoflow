@@ -3,7 +3,8 @@
 Connections are delivered to the task pod as ``AIRFLOW_CONN_<ID>`` (an Airflow
 connection URI). A dbt task generates its ``profiles.yml`` from that at runtime,
 so no warehouse credential is baked into the image. Supports postgres, snowflake,
-bigquery, and databricks (the official ``dbt-databricks`` adapter).
+bigquery, databricks (the official ``dbt-databricks`` adapter), and duckdb
+(embedded, for zero-server local development).
 """
 
 from __future__ import annotations
@@ -83,21 +84,30 @@ def _databricks(parts, ct, _login, password, path, extra):
     }
 
 
+def _duckdb(_parts, ct, _login, _password, path, extra):
+    # duckdb is an embedded, file-based warehouse — no host or credentials. The DB
+    # file comes from the `path` extra or the URI path (empty means in-memory). Ideal
+    # for zero-server local development.
+    db = _eget(extra, ct, "path") or (("/" + path) if path else ":memory:")
+    return {"type": "duckdb", "path": db, "threads": _threads(extra)}
+
+
 # conn_type -> dbt profile mapper. The official dbt-databricks adapter is used for
-# databricks (not the community dbt-spark).
+# databricks (not the community dbt-spark); duckdb backs zero-server local dev.
 _MAPPERS = {
     "postgres": _postgres,
     "postgresql": _postgres,
     "snowflake": _snowflake,
     "google_cloud_platform": _bigquery,
     "databricks": _databricks,
+    "duckdb": _duckdb,
 }
 
 
 def dbt_profile_from_uri(uri: str) -> dict:
     """Map an Airflow connection URI to a dbt ``outputs.<target>`` block, dispatching
     by connection type. Supports postgres, snowflake, bigquery
-    (``google_cloud_platform``), and databricks; any other type is a loud error.
+    (``google_cloud_platform``), databricks, and duckdb; any other type is a loud error.
     """
     parts = urlsplit(uri)
     conn_type = parts.scheme.lower().replace("-", "_")
@@ -105,7 +115,7 @@ def dbt_profile_from_uri(uri: str) -> dict:
     if mapper is None:
         raise ValueError(
             f"unsupported dbt adapter for connection type {conn_type!r} "
-            "(supported: postgres, snowflake, bigquery, databricks)"
+            "(supported: postgres, snowflake, bigquery, databricks, duckdb)"
         )
     extra = _uri_extra(parts.query)
     return mapper(

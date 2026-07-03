@@ -50,6 +50,19 @@ def test_url_encoded_credentials_are_decoded():
     assert out["password"] == "p:word"
 
 
+def test_duckdb_uri_maps_to_dbt_profile():
+    # duckdb is embedded/file-based — the URI path is the DB file (for local dev).
+    out = dbt_profile_from_uri("duckdb:///tmp/wh.duckdb?threads=2")
+    assert out == {"type": "duckdb", "path": "/tmp/wh.duckdb", "threads": 2}
+
+
+def test_duckdb_defaults_to_in_memory():
+    out = dbt_profile_from_uri("duckdb://")
+    assert out["type"] == "duckdb"
+    assert out["path"] == ":memory:"
+    assert out["threads"] == 4
+
+
 def test_unsupported_adapter_is_a_loud_error():
     with pytest.raises(ValueError):
         dbt_profile_from_uri("mysql://u:p@h/db")

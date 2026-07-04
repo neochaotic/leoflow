@@ -135,7 +135,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	if ierr := checkImageFlags(cmd, o.build, o.push, image); ierr != nil {
 		return ierr
 	}
-	manifest, err := loadDbtManifest(cmd, dir, cfg.Dbt)
+	manifest, err := loadDbtManifest(cmd, dir, cfg.Dbt, !o.build, cfg.DagID)
 	if err != nil {
 		return err
 	}
@@ -219,7 +219,7 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 		if !ok {
 			return nil, fmt.Errorf("dag uses dbt_group(%q) but leoflow.yaml has no dbt_groups.%s", group, group)
 		}
-		manifest, merr := loadDbtManifest(cmd, dir, gc)
+		manifest, merr := loadDbtManifest(cmd, dir, gc, local, cfg.DagID)
 		if merr != nil {
 			return nil, merr
 		}
@@ -278,11 +278,34 @@ func dbtProfileName(projectDir string) (string, error) {
 	return p.Profile, nil
 }
 
-// loadDbtManifest returns the dbt manifest.json bytes: a pre-built file when
-// dbt.manifest is set (the Pro/CI baked path), else the output of running
-// `dbt parse` in the project directory (the Lite path). The manifest path is
-// resolved relative to the dbt project (where dbt writes target/manifest.json).
-func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig) ([]byte, error) {
+// liteDbtBinAt returns the per-DAG venv's dbt under home when it exists, else "".
+func liteDbtBinAt(home, dagID string) string {
+	if home == "" || dagID == "" {
+		return ""
+	}
+	cand := filepath.Join(home, ".leoflow", "dev", "venvs", dagID, "bin", "dbt")
+	if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+		return cand
+	}
+	return ""
+}
+
+// liteDbtBin resolves liteDbtBinAt against the user's home, so a Lite compile parses
+// the manifest with the same dbt the task runs — not a system dbt the user may not
+// have (L1).
+func liteDbtBin(dagID string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return liteDbtBinAt(home, dagID)
+}
+
+// loadDbtManifest returns the dbt manifest.json bytes. A pinned dbt.manifest is used
+// as-is; otherwise it runs a fresh `dbt parse` so a model edit reflects on hot-reload
+// — and in Lite (local) it parses with the per-DAG venv's dbt rather than a system one
+// the user may not have (L1). The manifest is resolved relative to the dbt project.
+func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig, local bool, dagID string) ([]byte, error) {
 	projectDir := filepath.Join(dir, c.Project)
 	if c.Manifest != "" {
 		path := filepath.Join(projectDir, c.Manifest)
@@ -292,10 +315,18 @@ func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig) ([]byt
 		}
 		return data, nil
 	}
-	if _, lerr := exec.LookPath("dbt"); lerr != nil {
-		return nil, fmt.Errorf("dbt is not on PATH: install dbt-core and your adapter (e.g. `pip install dbt-postgres`), or set dbt.manifest in leoflow.yaml to a pre-built manifest.json")
+	dbtBin := "dbt"
+	if local {
+		if v := liteDbtBin(dagID); v != "" {
+			dbtBin = v
+		}
 	}
-	pc := exec.CommandContext(cmdContext(cmd), "dbt", "parse")
+	if dbtBin == "dbt" {
+		if _, lerr := exec.LookPath("dbt"); lerr != nil {
+			return nil, fmt.Errorf("dbt is not on PATH: install dbt-core and your adapter (e.g. `pip install dbt-postgres`), or set dbt.manifest in leoflow.yaml to a pre-built manifest.json")
+		}
+	}
+	pc := exec.CommandContext(cmdContext(cmd), dbtBin, "parse") //nolint:gosec // dbtBin is the resolved venv or PATH dbt
 	pc.Dir = projectDir
 	pc.Stderr = cmd.ErrOrStderr()
 	if rerr := pc.Run(); rerr != nil {

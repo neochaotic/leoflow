@@ -33,3 +33,18 @@ func TestLiteDbtBin(t *testing.T) {
 		t.Errorf("empty dag id: want empty, got %q", got)
 	}
 }
+
+// TestDbtProjectHasProfiles gates the L4 default duckdb: a project that ships its own
+// profiles.yml must report true so the compiler never overrides the user's warehouse.
+func TestDbtProjectHasProfiles(t *testing.T) {
+	dir := t.TempDir()
+	if dbtProjectHasProfiles(dir) {
+		t.Error("no profiles.yml: want false")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "profiles.yml"), []byte("x: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !dbtProjectHasProfiles(dir) {
+		t.Error("with profiles.yml: want true (L4 must not override a user-configured warehouse)")
+	}
+}

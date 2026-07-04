@@ -81,6 +81,17 @@ def test_default_duckdb_defaults_to_memory(tmp_path):
     assert prof["shop"]["outputs"]["dev"]["path"] == ":memory:"
 
 
+def test_profile_step_writes_to_cwd_not_home(tmp_path, monkeypatch):
+    # Regression: the profile-generation step must write to the task's CWD, never
+    # clobber the user's global ~/.dbt/profiles.yml (Lite runs on the host).
+    from leoflow_runtime.__main__ import main
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DBT_PROFILES_DIR", raising=False)
+    assert main(["--dbt-default-duckdb", "shop"]) == 0
+    assert (tmp_path / "profiles.yml").exists()
+
+
 def test_unsupported_adapter_is_a_loud_error():
     with pytest.raises(ValueError):
         dbt_profile_from_uri("mysql://u:p@h/db")

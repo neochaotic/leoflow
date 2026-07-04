@@ -233,7 +233,9 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 			Profile:     profile,
 			Schema:      gc.Schema,
 			ProjectDir:  dbtProjectDir(dir, gc.Project, local),
-			Local:       local,
+			// Auto-default duckdb (L4) only when the project has no profiles.yml of its
+			// own — never override a warehouse the user configured.
+			Local: local && !dbtProjectHasProfiles(filepath.Join(dir, gc.Project)),
 		})
 	}
 	tasks, err := dbt.ExpandGroups(spec.Tasks, render)
@@ -312,9 +314,16 @@ func liteDbtBin(dagID string) string {
 // compile-time half of the zero-config local warehouse (L4). Returns the temp
 // profiles dir (the caller removes it), or "" when the project already carries a
 // profiles.yml (respected) or its profile name can't be read.
+// dbtProjectHasProfiles reports whether a dbt project ships its own profiles.yml —
+// which the zero-config default duckdb (L4) must never override.
+func dbtProjectHasProfiles(projectDir string) bool {
+	_, err := os.Stat(filepath.Join(projectDir, "profiles.yml"))
+	return err == nil
+}
+
 func writeParseDuckdbProfile(dir string, c *domain.DbtConfig) string {
 	projectDir := filepath.Join(dir, c.Project)
-	if _, err := os.Stat(filepath.Join(projectDir, "profiles.yml")); err == nil {
+	if dbtProjectHasProfiles(projectDir) {
 		return ""
 	}
 	profile, err := dbtProfileName(projectDir)

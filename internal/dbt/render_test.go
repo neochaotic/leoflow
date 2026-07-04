@@ -72,6 +72,34 @@ func TestRenderWrapsManagedConnection(t *testing.T) {
 	}
 }
 
+// TestRenderDefaultDuckdbGatedOnLocal: with no connection, a local build prefixes the
+// default-duckdb step (L4 zero-config); a non-local build — including one whose Local
+// the compiler gated off because the project ships its own profiles.yml — adds NO
+// prefix, so a user-configured warehouse is never overridden (regression guard).
+func TestRenderDefaultDuckdbGatedOnLocal(t *testing.T) {
+	local, err := Render(loadManifest(t, "manifest_chain.json"), Options{
+		Granularity: GranularityNode, Profile: "transform", Local: true,
+	})
+	if err != nil {
+		t.Fatalf("Render(local) error: %v", err)
+	}
+	got := tasksByID(local)["stg"].Entrypoint
+	want := "python -m leoflow_runtime --dbt-default-duckdb transform leoflow_local.duckdb && dbt run --select stg"
+	if got != want {
+		t.Errorf("local entrypoint = %q, want %q", got, want)
+	}
+
+	nolocal, err := Render(loadManifest(t, "manifest_chain.json"), Options{
+		Granularity: GranularityNode, Profile: "transform", Local: false,
+	})
+	if err != nil {
+		t.Fatalf("Render(!local) error: %v", err)
+	}
+	if got := tasksByID(nolocal)["stg"].Entrypoint; got != "dbt run --select stg" {
+		t.Errorf("non-local entrypoint = %q, want no default-duckdb prefix", got)
+	}
+}
+
 // A subdir dbt project (ProjectDir != ".") scopes each command with --project-dir
 // so dbt finds dbt_project.yml regardless of the pod's working dir (#401).
 func TestRenderScopesSubdirProject(t *testing.T) {

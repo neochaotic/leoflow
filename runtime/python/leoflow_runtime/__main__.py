@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
         # arg overrides the dbt target schema.
         from leoflow_runtime.dbt import write_dbt_profile
 
-        profiles_dir = os.environ.get("DBT_PROFILES_DIR", os.path.expanduser("~/.dbt"))
+        profiles_dir = os.environ.get("DBT_PROFILES_DIR") or os.getcwd()
         os.makedirs(profiles_dir, exist_ok=True)
         schema = args[3] if len(args) == 4 else None
         write_dbt_profile(args[1], args[2], profiles_dir, schema=schema)
@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         # a dbt group has no managed connection. Optional 3rd arg is the DB file path.
         from leoflow_runtime.dbt import write_dbt_default_duckdb
 
-        profiles_dir = os.environ.get("DBT_PROFILES_DIR", os.path.expanduser("~/.dbt"))
+        profiles_dir = os.environ.get("DBT_PROFILES_DIR") or os.getcwd()
         os.makedirs(profiles_dir, exist_ok=True)
         db_path = args[2] if len(args) == 3 else ""
         write_dbt_default_duckdb(args[1], profiles_dir, db_path)

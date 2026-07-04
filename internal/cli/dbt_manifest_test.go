@@ -3,7 +3,10 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/neochaotic/leoflow/internal/domain"
 )
 
 // TestLiteDbtBin: a Lite compile parses the manifest with the per-DAG venv's dbt
@@ -46,5 +49,45 @@ func TestDbtProjectHasProfiles(t *testing.T) {
 	}
 	if !dbtProjectHasProfiles(dir) {
 		t.Error("with profiles.yml: want true (L4 must not override a user-configured warehouse)")
+	}
+}
+
+// TestWriteParseDuckdbProfile: the compile-time half of L4 respects a project's own
+// profiles.yml, and otherwise writes a temporary default-duckdb profile so `dbt parse`
+// succeeds zero-config (in a temp dir, never the user's ~/.dbt).
+func TestWriteParseDuckdbProfile(t *testing.T) {
+	dir := t.TempDir()
+	proj := filepath.Join(dir, "shop")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "dbt_project.yml"), []byte("profile: shop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &domain.DbtConfig{Project: "shop"}
+
+	// Project ships its own profiles.yml -> respected (no temp profile generated).
+	if err := os.WriteFile(filepath.Join(proj, "profiles.yml"), []byte("shop: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := writeParseDuckdbProfile(dir, c); got != "" {
+		t.Errorf("project has profiles.yml: want empty (respected), got %q", got)
+	}
+
+	// No project profiles.yml -> a temp dir carrying a generated duckdb profile.
+	if err := os.Remove(filepath.Join(proj, "profiles.yml")); err != nil {
+		t.Fatal(err)
+	}
+	got := writeParseDuckdbProfile(dir, c)
+	if got == "" {
+		t.Fatal("no profiles.yml: want a temp profiles dir, got empty")
+	}
+	defer func() { _ = os.RemoveAll(got) }()
+	data, err := os.ReadFile(filepath.Join(got, "profiles.yml"))
+	if err != nil {
+		t.Fatalf("temp profiles.yml missing: %v", err)
+	}
+	if !strings.Contains(string(data), "duckdb") || !strings.Contains(string(data), "shop") {
+		t.Errorf("temp profile = %s, want a duckdb profile under 'shop'", data)
 	}
 }

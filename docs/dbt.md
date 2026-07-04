@@ -162,7 +162,23 @@ pod startups**, while keeping in-pod parallelism. Rule of thumb:
 
 ## 4. The warehouse connection
 
-dbt needs a `profiles.yml`. You have two mutually-exclusive options:
+dbt needs a `profiles.yml`. Leoflow resolves it for you — pick the one that fits:
+
+### Zero-config local (Lite → duckdb)
+
+On **Lite**, a dbt project with **no `connection:` and no `profiles.yml` of its own**
+just runs — against an embedded **duckdb** file (`leoflow_local.duckdb`, in the project)
+with no setup at all:
+
+```console
+$ leoflow lite            # write models, hit Trigger — that's it
+```
+
+Leoflow generates the duckdb profile transparently at both compile (`dbt parse`) and run
+time, in the task's working dir — **never touching your global `~/.dbt`**. It's the
+ideal way to develop and test transformations before wiring a real warehouse. Add a
+`connection:` (below) or a project `profiles.yml` at any time and that wins instead — the
+default only kicks in when there's nothing configured.
 
 ### Managed connection (recommended for Pro)
 
@@ -202,9 +218,10 @@ image). Simple for Lite; you own the credential delivery.
 > Use **one or the other** — a `connection:` makes Leoflow generate the profile;
 > without it, your baked `profiles.yml` is used.
 
-**Adapters:** Postgres, Snowflake, BigQuery, and Databricks (the official
-`dbt-databricks` adapter, not the community one) are supported — Leoflow maps the
-managed connection to each adapter's profile. Declare the adapter package
+**Adapters:** Postgres, Snowflake, BigQuery, Databricks (the official
+`dbt-databricks` adapter, not the community one), and **duckdb** (embedded, for
+zero-server local dev) are supported — Leoflow maps the managed connection to each
+adapter's profile. Declare the adapter package
 (`dbt-snowflake`, `dbt-bigquery`, `dbt-databricks`, …) as a dependency so it lands
 in the image. BigQuery uses the connection's `keyfile_dict`; Snowflake its
 `account`/`warehouse`; Databricks its `http_path` — all from the connection's

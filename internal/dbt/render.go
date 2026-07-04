@@ -9,6 +9,7 @@ package dbt
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -46,6 +47,10 @@ type Options struct {
 	// ProjectDir scopes each command with --project-dir so dbt finds dbt_project.yml
 	// when the project is a subdirectory of the DAG (#401). "." or empty adds nothing.
 	ProjectDir string
+	// Local marks a Lite/host build: with no Connection, each task is prefixed with a
+	// step that writes a default duckdb profiles.yml — a zero-config local warehouse,
+	// no server and no connection needed (L4). Ignored on the Pro/image path.
+	Local bool
 }
 
 // dbtVerb maps each executable dbt resource type to the dbt subcommand that runs
@@ -173,14 +178,24 @@ func decorateCommands(tasks []domain.TaskSpec, opts Options) {
 			tasks[i].Entrypoint += " --project-dir " + opts.ProjectDir
 		}
 	}
-	if opts.Connection == "" {
-		return
+	var prefix string
+	switch {
+	case opts.Connection != "":
+		profileCmd := fmt.Sprintf("python -m leoflow_runtime --dbt-profile %s %s", opts.Connection, opts.Profile)
+		if opts.Schema != "" {
+			profileCmd += " " + opts.Schema
+		}
+		prefix = profileCmd + " && "
+	case opts.Local && opts.Profile != "":
+		// Zero-config local warehouse: a default duckdb, no connection needed (L4).
+		db := "leoflow_local.duckdb"
+		if opts.ProjectDir != "" && opts.ProjectDir != "." {
+			db = filepath.Join(opts.ProjectDir, db)
+		}
+		prefix = fmt.Sprintf("python -m leoflow_runtime --dbt-default-duckdb %s %s && ", opts.Profile, db)
+	default:
+		return // Pro/non-local without a connection: the image's baked profiles.yml
 	}
-	profileCmd := fmt.Sprintf("python -m leoflow_runtime --dbt-profile %s %s", opts.Connection, opts.Profile)
-	if opts.Schema != "" {
-		profileCmd += " " + opts.Schema
-	}
-	prefix := profileCmd + " && "
 	for i := range tasks {
 		tasks[i].Entrypoint = prefix + tasks[i].Entrypoint
 	}

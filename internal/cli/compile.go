@@ -233,6 +233,7 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 			Profile:     profile,
 			Schema:      gc.Schema,
 			ProjectDir:  dbtProjectDir(dir, gc.Project, local),
+			Local:       local,
 		})
 	}
 	tasks, err := dbt.ExpandGroups(spec.Tasks, render)
@@ -244,12 +245,17 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 }
 
 // dbtConnectionProfile resolves the managed connection id and the dbt profile name
-// for a dbt config (ADR 0043 #2). When no connection is configured it returns
-// empty strings (the image's baked profiles.yml is used instead). Otherwise the
-// profile name is read from the project's dbt_project.yml.
+// for a dbt config (ADR 0043 #2). With a connection, the profile name (from the
+// project's dbt_project.yml) is required. With no connection it still returns the
+// profile name so a Lite build can write a default duckdb profile under it (L4);
+// a project without a readable `profile:` falls back to empty (the baked profiles.yml).
 func dbtConnectionProfile(dir string, c *domain.DbtConfig) (conn, profile string, err error) {
 	if c.Connection == "" {
-		return "", "", nil
+		p, perr := dbtProfileName(filepath.Join(dir, c.Project))
+		if perr != nil {
+			return "", "", nil //nolint:nilerr // no readable profile: fall back to the baked profiles.yml, not an error
+		}
+		return "", p, nil
 	}
 	profile, err = dbtProfileName(filepath.Join(dir, c.Project))
 	if err != nil {
@@ -301,6 +307,33 @@ func liteDbtBin(dagID string) string {
 	return liteDbtBinAt(home, dagID)
 }
 
+// writeParseDuckdbProfile writes a temporary default-duckdb profiles.yml for
+// `dbt parse` when a Lite project has no connection and no profiles.yml — the
+// compile-time half of the zero-config local warehouse (L4). Returns the temp
+// profiles dir (the caller removes it), or "" when the project already carries a
+// profiles.yml (respected) or its profile name can't be read.
+func writeParseDuckdbProfile(dir string, c *domain.DbtConfig) string {
+	projectDir := filepath.Join(dir, c.Project)
+	if _, err := os.Stat(filepath.Join(projectDir, "profiles.yml")); err == nil {
+		return ""
+	}
+	profile, err := dbtProfileName(projectDir)
+	if err != nil {
+		return ""
+	}
+	tmp, err := os.MkdirTemp("", "leoflow-dbt-profiles-")
+	if err != nil {
+		return ""
+	}
+	db := filepath.Join(projectDir, "leoflow_local.duckdb")
+	content := fmt.Sprintf(`{%q:{"target":"dev","outputs":{"dev":{"type":"duckdb","path":%q,"threads":4}}}}`, profile, db)
+	if werr := os.WriteFile(filepath.Join(tmp, "profiles.yml"), []byte(content), 0o600); werr != nil {
+		_ = os.RemoveAll(tmp) //nolint:errcheck // best-effort cleanup of a temp dir
+		return ""
+	}
+	return tmp
+}
+
 // loadDbtManifest returns the dbt manifest.json bytes. A pinned dbt.manifest is used
 // as-is; otherwise it runs a fresh `dbt parse` so a model edit reflects on hot-reload
 // — and in Lite (local) it parses with the per-DAG venv's dbt rather than a system one
@@ -328,6 +361,16 @@ func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig, local 
 	}
 	pc := exec.CommandContext(cmdContext(cmd), dbtBin, "parse") //nolint:gosec // dbtBin is the resolved venv or PATH dbt
 	pc.Dir = projectDir
+	pc.Env = os.Environ()
+	// Zero-config local warehouse: `dbt parse` needs a profile too, so give it a
+	// default duckdb one when the Lite project has no connection and no profiles.yml
+	// — the compile-time half of L4 (the runtime writes the same at task time).
+	if local && c.Connection == "" {
+		if pdir := writeParseDuckdbProfile(dir, c); pdir != "" {
+			defer func() { _ = os.RemoveAll(pdir) }() //nolint:errcheck // best-effort cleanup of a temp dir
+			pc.Env = append(pc.Env, "DBT_PROFILES_DIR="+pdir)
+		}
+	}
 	pc.Stderr = cmd.ErrOrStderr()
 	if rerr := pc.Run(); rerr != nil {
 		return nil, fmt.Errorf("dbt parse in %s: %w", projectDir, rerr)

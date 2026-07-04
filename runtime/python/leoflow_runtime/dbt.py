@@ -148,3 +148,16 @@ def write_dbt_profile(
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(profile, handle)
     return path
+
+
+def write_dbt_default_duckdb(profile_name: str, profiles_dir: str, db_path: str = "") -> str:
+    """Write a default duckdb ``profiles.yml`` — Leoflow's zero-server local warehouse
+    when a dbt group has no managed connection (Lite). An empty db_path is in-memory.
+    Written as JSON (valid YAML) so dbt reads it with no PyYAML dependency.
+    """
+    output = {"type": "duckdb", "path": db_path or ":memory:", "threads": 4}
+    profile = {profile_name: {"target": "dev", "outputs": {"dev": output}}}
+    path = os.path.join(profiles_dir, "profiles.yml")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(profile, handle)
+    return path

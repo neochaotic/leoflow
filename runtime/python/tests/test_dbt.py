@@ -63,6 +63,24 @@ def test_duckdb_defaults_to_in_memory():
     assert out["threads"] == 4
 
 
+def test_default_duckdb_profile_is_written(tmp_path):
+    from leoflow_runtime.dbt import write_dbt_default_duckdb
+
+    db = str(tmp_path / "wh.duckdb")
+    path = write_dbt_default_duckdb("shop", str(tmp_path), db)
+    prof = json.load(open(path))
+    assert prof == {"shop": {"target": "dev", "outputs": {"dev": {
+        "type": "duckdb", "path": db, "threads": 4}}}}
+
+
+def test_default_duckdb_defaults_to_memory(tmp_path):
+    from leoflow_runtime.dbt import write_dbt_default_duckdb
+
+    path = write_dbt_default_duckdb("shop", str(tmp_path), "")
+    prof = json.load(open(path))
+    assert prof["shop"]["outputs"]["dev"]["path"] == ":memory:"
+
+
 def test_unsupported_adapter_is_a_loud_error():
     with pytest.raises(ValueError):
         dbt_profile_from_uri("mysql://u:p@h/db")

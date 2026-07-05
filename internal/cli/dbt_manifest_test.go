@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
@@ -89,5 +92,62 @@ func TestWriteParseDuckdbProfile(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "duckdb") || !strings.Contains(string(data), "shop") {
 		t.Errorf("temp profile = %s, want a duckdb profile under 'shop'", data)
+	}
+}
+
+// TestLoadDbtManifestBaked covers the pre-built-manifest path (Pro/CI) and its error;
+// the fresh `dbt parse` path is an external-binary orchestration, gated end-to-end by
+// the e2e-dbt job (ADR 0011), not unit-tested.
+func TestLoadDbtManifestBaked(t *testing.T) {
+	dir := t.TempDir()
+	proj := filepath.Join(dir, "shop")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "m.json"), []byte(`{"nodes":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	// A pinned manifest is read as-is (baked path), regardless of local.
+	data, err := loadDbtManifest(cmd, dir, &domain.DbtConfig{Project: "shop", Manifest: "m.json"}, false, "d")
+	if err != nil {
+		t.Fatalf("baked manifest: %v", err)
+	}
+	if string(data) != `{"nodes":{}}` {
+		t.Errorf("baked manifest = %q, want the file's bytes", data)
+	}
+
+	// A missing pinned manifest is a loud error.
+	if _, err := loadDbtManifest(cmd, dir, &domain.DbtConfig{Project: "shop", Manifest: "nope.json"}, false, "d"); err == nil {
+		t.Error("missing manifest: want an error")
+	}
+}
+
+// TestDbtConnectionProfile: the profile name is read for both a managed connection and
+// the no-connection case (so L4 can name its default duckdb), and it fails loudly only
+// when a connection is set but the project's dbt_project.yml is unreadable.
+func TestDbtConnectionProfile(t *testing.T) {
+	dir := t.TempDir()
+	proj := filepath.Join(dir, "p")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "dbt_project.yml"), []byte("profile: shop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if conn, prof, err := dbtConnectionProfile(dir, &domain.DbtConfig{Project: "p", Connection: "wh"}); err != nil || conn != "wh" || prof != "shop" {
+		t.Errorf("with conn = (%q, %q, %v), want (wh, shop, nil)", conn, prof, err)
+	}
+	if conn, prof, err := dbtConnectionProfile(dir, &domain.DbtConfig{Project: "p"}); err != nil || conn != "" || prof != "shop" {
+		t.Errorf("no conn = (%q, %q, %v), want ('', shop, nil) — the profile name feeds L4", conn, prof, err)
+	}
+	if conn, prof, err := dbtConnectionProfile(dir, &domain.DbtConfig{Project: "missing"}); err != nil || conn != "" || prof != "" {
+		t.Errorf("no project, no conn = (%q, %q, %v), want ('', '', nil) — graceful fallback", conn, prof, err)
+	}
+	if _, _, err := dbtConnectionProfile(dir, &domain.DbtConfig{Project: "missing", Connection: "wh"}); err == nil {
+		t.Error("conn set but no dbt_project.yml: want a loud error")
 	}
 }

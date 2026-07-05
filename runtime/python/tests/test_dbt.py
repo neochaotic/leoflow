@@ -1,10 +1,10 @@
 """Tests for the managed-connection -> dbt profile mapping (ADR 0043, #2)."""
 from __future__ import annotations
 
-import pytest
-
 import json
 from urllib.parse import urlencode
+
+import pytest
 
 from leoflow_runtime.dbt import dbt_profile_from_uri, write_dbt_profile
 
@@ -98,11 +98,14 @@ def test_unsupported_adapter_is_a_loud_error():
 
 
 def test_snowflake_uri_maps_to_dbt_profile():
-    uri = _conn_uri("snowflake", login="user", password="pass", schema="analytics",
-                    extra={"account": "ab12345", "warehouse": "WH", "database": "DB", "role": "TRANSFORMER"})
+    uri = _conn_uri(
+        "snowflake", login="user", password="pass", schema="analytics",
+        extra={"account": "ab12345", "warehouse": "WH", "database": "DB", "role": "TRANSFORMER"},
+    )
     assert dbt_profile_from_uri(uri) == {
         "type": "snowflake", "account": "ab12345", "user": "user", "password": "pass",
-        "role": "TRANSFORMER", "database": "DB", "warehouse": "WH", "schema": "analytics", "threads": 4,
+        "role": "TRANSFORMER", "database": "DB", "warehouse": "WH",
+        "schema": "analytics", "threads": 4,
     }
 
 
@@ -119,8 +122,10 @@ def test_bigquery_uri_maps_to_dbt_profile():
 
 
 def test_databricks_uri_maps_to_dbt_profile():
-    uri = _conn_uri("databricks", password="dapitoken", host="dbc.databricks.com", schema="analytics",
-                    extra={"http_path": "/sql/1.0/warehouses/abc", "catalog": "main"})
+    uri = _conn_uri(
+        "databricks", password="dapitoken", host="dbc.databricks.com", schema="analytics",
+        extra={"http_path": "/sql/1.0/warehouses/abc", "catalog": "main"},
+    )
     assert dbt_profile_from_uri(uri) == {
         "type": "databricks", "host": "dbc.databricks.com", "http_path": "/sql/1.0/warehouses/abc",
         "token": "dapitoken", "catalog": "main", "schema": "analytics", "threads": 4,

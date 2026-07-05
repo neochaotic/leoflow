@@ -44,4 +44,6 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0039: Generated connector catalog with full form fidelity](adr/0039-generated-connector-catalog.md)
 - [ADR 0040: Airflow operator + sensor execution — native fast path + generic executor](adr/0040-airflow-operator-support.md)
 - [ADR 0041: `leoflow deploy` — pipeline-less promotion from Lite to Pro](adr/0041-leoflow-deploy-pipelineless.md)
+- [ADR 0043: TaskGroup as a first-class construct with split/fused execution](adr/0043-taskgroup-split-fused-execution.md)
+- [ADR 0044: dbt multi-project — one project per business domain](adr/0044-dbt-multi-project-by-domain.md)
 <!-- END ADR INDEX -->

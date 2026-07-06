@@ -1528,6 +1528,55 @@
     "standard_fields": null
   },
   {
+    "connection_type": "duckdb",
+    "default_conn_name": "duckdb_default",
+    "extra_fields": {
+      "path": {
+        "description": "Path to the DuckDB database file (empty = in-memory).",
+        "schema": {
+          "title": "Path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": null,
+        "value": null
+      }
+    },
+    "hook_class_name": null,
+    "hook_name": "DuckDB (local file)",
+    "pip_package": null,
+    "standard_fields": {
+      "description": null,
+      "host": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "login": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "password": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "port": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      },
+      "schema": {
+        "hidden": true,
+        "placeholder": null,
+        "title": null
+      }
+    }
+  },
+  {
     "connection_type": "elasticsearch",
     "default_conn_name": null,
     "extra_fields": {},

@@ -1,0 +1,58 @@
+{
+  "nodes": {
+    "model.shop.mart": {
+      "depends_on": {
+        "nodes": [
+          "model.shop.stg"
+        ]
+      },
+      "fqn": [
+        "shop",
+        "mart"
+      ],
+      "name": "mart",
+      "resource_type": "model",
+      "tags": []
+    },
+    "model.shop.stg": {
+      "depends_on": {
+        "nodes": [
+          "seed.shop.raw"
+        ]
+      },
+      "fqn": [
+        "shop",
+        "stg"
+      ],
+      "name": "stg",
+      "resource_type": "model",
+      "tags": []
+    },
+    "seed.shop.raw": {
+      "depends_on": {
+        "nodes": []
+      },
+      "fqn": [
+        "shop",
+        "raw"
+      ],
+      "name": "raw",
+      "resource_type": "seed",
+      "tags": []
+    },
+    "test.shop.unique_mart_id.64fd3f9a60": {
+      "depends_on": {
+        "nodes": [
+          "model.shop.mart"
+        ]
+      },
+      "fqn": [
+        "shop",
+        "unique_mart_id"
+      ],
+      "name": "unique_mart_id",
+      "resource_type": "test",
+      "tags": []
+    }
+  }
+}

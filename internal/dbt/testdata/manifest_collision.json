@@ -1,0 +1,16 @@
+{
+  "nodes": {
+    "model.my_project.stg_orders": {
+      "resource_type": "model",
+      "name": "stg_orders",
+      "fqn": ["my_project", "staging", "stg_orders"],
+      "depends_on": { "nodes": [] }
+    },
+    "model.some_package.stg_orders": {
+      "resource_type": "model",
+      "name": "stg_orders",
+      "fqn": ["some_package", "staging", "stg_orders"],
+      "depends_on": { "nodes": [] }
+    }
+  }
+}

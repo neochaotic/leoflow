@@ -9,13 +9,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/neochaotic/leoflow/internal/config"
+	"github.com/neochaotic/leoflow/internal/dbt"
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
@@ -66,6 +69,13 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if verr := cfg.Validate(); verr != nil {
 		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
 	}
+	// Self-heal the extracted parser sources before running the parser, so a binary
+	// upgrade (new features like dbt vs a stale ~/.leoflow/pysrc) never surfaces as
+	// a confusing "not supported" error (#239).
+	ensurePysrc(cmd)
+	if cfg.Dbt != nil {
+		return runDbtCompile(cmd, dir, o, cfg)
+	}
 	command, err := resolveParserCommand(cmd, o.parserCmd)
 	if err != nil {
 		return err
@@ -91,6 +101,9 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}); rerr != nil {
 		return rerr
 	}
+	if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg, !o.build); eerr != nil {
+		return eerr
+	}
 	if oerr := overlayProject(o.output, cfg); oerr != nil {
 		return oerr
 	}
@@ -108,6 +121,238 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}
 	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(dagSourcePath(dir, cfg), o.output, image, o.dagVersion))
 	return werr
+}
+
+// runDbtCompile compiles a dbt project (ADR 0042) instead of a Python DAG: it
+// acquires the manifest.json (a baked file or a fresh `dbt parse`), renders it
+// into a dag.json via the dbt package, overlays the leoflow.yaml, validates, and
+// optionally builds/pushes the image — reusing the same tail as the parser path.
+func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.LeoflowConfig) error {
+	if o.dagVersion == "" {
+		o.dagVersion = gitVersion(cmdContext(cmd))
+	}
+	image := resolveBuildImage(o.image, cfg, o.dagVersion)
+	if ierr := checkImageFlags(cmd, o.build, o.push, image); ierr != nil {
+		return ierr
+	}
+	manifest, err := loadDbtManifest(cmd, dir, cfg.Dbt, !o.build, cfg.DagID)
+	if err != nil {
+		return err
+	}
+	conn, profile, perr := dbtConnectionProfile(dir, cfg.Dbt)
+	if perr != nil {
+		return perr
+	}
+	spec, err := dbt.Compile(manifest, dbt.Meta{
+		DagID:       cfg.DagID,
+		DagVersion:  o.dagVersion,
+		Image:       image,
+		Owner:       cfg.Owner,
+		Description: cfg.Description,
+		Tags:        cfg.Tags,
+		Schedule:    cfg.Dbt.Schedule,
+		Granularity: dbt.Granularity(cfg.Dbt.Granularity),
+		Connection:  conn,
+		Profile:     profile,
+		Schema:      cfg.Dbt.Schema,
+		ProjectDir:  cfg.Dbt.Project,
+	})
+	if err != nil {
+		return fmt.Errorf("dbt compile: %w", err)
+	}
+	if werr := writeDAGFile(o.output, &spec); werr != nil {
+		return werr
+	}
+	if oerr := overlayProject(o.output, cfg); oerr != nil {
+		return oerr
+	}
+	if verr := validateDAGFile(o.output); verr != nil {
+		return verr
+	}
+	if berr := buildAndPush(cmd, dir, o, cfg, image); berr != nil {
+		return berr
+	}
+	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(filepath.Join(dir, cfg.Dbt.Project), o.output, image, o.dagVersion))
+	return werr
+}
+
+// dbtProjectDir returns the dbt --project-dir to bake into task commands. For an
+// image build (Pro) the project is baked at the relative path inside the image, so
+// the relative value is kept. For a local/subprocess build (Lite) the task runs on
+// the host from a per-task temp workdir, so it must be the ABSOLUTE workspace project
+// path — otherwise `dbt --project-dir ./transform` fails ("does not exist").
+func dbtProjectDir(dagDir, project string, local bool) string {
+	if !local || project == "" {
+		return project
+	}
+	if abs, err := filepath.Abs(filepath.Join(dagDir, project)); err == nil {
+		return abs
+	}
+	return project
+}
+
+// expandDbtGroupsInFile expands any dbt_group placeholders in the compiled dag.json
+// (ADR 0043): each is replaced by its dbt project's rendered tasks (namespaced) and
+// the group's downstream is rewired onto the group's leaves. Runs after the parser
+// and before validation, so the final dag.json carries no dbt_group type.
+func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.LeoflowConfig, local bool) error {
+	data, err := os.ReadFile(output) //nolint:gosec // G304: operator-supplied output path.
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", output, err)
+	}
+	var spec domain.DAGSpec
+	if uerr := json.Unmarshal(data, &spec); uerr != nil {
+		return fmt.Errorf("parsing %s: %w", output, uerr)
+	}
+	hasGroup := false
+	for _, t := range spec.Tasks {
+		if t.Type == domain.TaskTypeDbtGroup {
+			hasGroup = true
+			break
+		}
+	}
+	if !hasGroup {
+		return nil // no placeholders to expand — leave the dag.json untouched
+	}
+	render := func(group string) ([]domain.TaskSpec, error) {
+		gc, ok := cfg.DbtGroups[group]
+		if !ok {
+			return nil, fmt.Errorf("dag uses dbt_group(%q) but leoflow.yaml has no dbt_groups.%s", group, group)
+		}
+		manifest, merr := loadDbtManifest(cmd, dir, gc, local, cfg.DagID)
+		if merr != nil {
+			return nil, merr
+		}
+		conn, profile, perr := dbtConnectionProfile(dir, gc)
+		if perr != nil {
+			return nil, perr
+		}
+		return dbt.Render(manifest, dbt.Options{
+			Granularity: dbt.Granularity(gc.Granularity),
+			Connection:  conn,
+			Profile:     profile,
+			Schema:      gc.Schema,
+			ProjectDir:  dbtProjectDir(dir, gc.Project, local),
+			// Auto-default duckdb (L4) only when the project has no profiles.yml of its
+			// own — never override a warehouse the user configured.
+			Local: local && !dbtProjectHasProfiles(filepath.Join(dir, gc.Project)),
+		})
+	}
+	tasks, err := dbt.ExpandGroups(spec.Tasks, render)
+	if err != nil {
+		return err
+	}
+	spec.Tasks = tasks
+	return writeDAGFile(output, &spec)
+}
+
+// dbtConnectionProfile resolves the managed connection id and the dbt profile name
+// for a dbt config (ADR 0043 #2). With a connection, the profile name (from the
+// project's dbt_project.yml) is required. With no connection it still returns the
+// profile name so a Lite build can write a default duckdb profile under it (L4);
+// a project without a readable `profile:` falls back to empty (the baked profiles.yml).
+func dbtConnectionProfile(dir string, c *domain.DbtConfig) (conn, profile string, err error) {
+	if c.Connection == "" {
+		p, perr := dbtProfileName(filepath.Join(dir, c.Project))
+		if perr != nil {
+			return "", "", nil //nolint:nilerr // no readable profile: fall back to the baked profiles.yml, not an error
+		}
+		return "", p, nil
+	}
+	profile, err = dbtProfileName(filepath.Join(dir, c.Project))
+	if err != nil {
+		return "", "", err
+	}
+	return c.Connection, profile, nil
+}
+
+// dbtProfileName reads the `profile:` field from a project's dbt_project.yml — the
+// key the generated profiles.yml must use.
+func dbtProfileName(projectDir string) (string, error) {
+	path := filepath.Join(projectDir, "dbt_project.yml")
+	data, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied project path.
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
+	var p struct {
+		Profile string `yaml:"profile"`
+	}
+	if uerr := yaml.Unmarshal(data, &p); uerr != nil {
+		return "", fmt.Errorf("parsing %s: %w", path, uerr)
+	}
+	if p.Profile == "" {
+		return "", fmt.Errorf("%s has no `profile:` field", path)
+	}
+	return p.Profile, nil
+}
+
+// liteDbtBinAt returns the per-DAG venv's dbt under home when it exists, else "".
+func liteDbtBinAt(home, dagID string) string {
+	if home == "" || dagID == "" {
+		return ""
+	}
+	cand := filepath.Join(home, ".leoflow", "dev", "venvs", dagID, "bin", "dbt")
+	if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+		return cand
+	}
+	return ""
+}
+
+// liteDbtBin resolves liteDbtBinAt against the user's home, so a Lite compile parses
+// the manifest with the same dbt the task runs — not a system dbt the user may not
+// have (L1).
+func liteDbtBin(dagID string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return liteDbtBinAt(home, dagID)
+}
+
+// writeParseDuckdbProfile writes a temporary default-duckdb profiles.yml for
+// `dbt parse` when a Lite project has no connection and no profiles.yml — the
+// compile-time half of the zero-config local warehouse (L4). Returns the temp
+// profiles dir (the caller removes it), or "" when the project already carries a
+// profiles.yml (respected) or its profile name can't be read.
+// dbtProjectHasProfiles reports whether a dbt project ships its own profiles.yml —
+// which the zero-config default duckdb (L4) must never override.
+func dbtProjectHasProfiles(projectDir string) bool {
+	_, err := os.Stat(filepath.Join(projectDir, "profiles.yml"))
+	return err == nil
+}
+
+func writeParseDuckdbProfile(dir string, c *domain.DbtConfig) string {
+	projectDir := filepath.Join(dir, c.Project)
+	if dbtProjectHasProfiles(projectDir) {
+		return ""
+	}
+	profile, err := dbtProfileName(projectDir)
+	if err != nil {
+		return ""
+	}
+	tmp, err := os.MkdirTemp("", "leoflow-dbt-profiles-")
+	if err != nil {
+		return ""
+	}
+	db := filepath.Join(projectDir, "leoflow_local.duckdb")
+	content := fmt.Sprintf(`{%q:{"target":"dev","outputs":{"dev":{"type":"duckdb","path":%q,"threads":4}}}}`, profile, db)
+	if werr := os.WriteFile(filepath.Join(tmp, "profiles.yml"), []byte(content), 0o600); werr != nil {
+		_ = os.RemoveAll(tmp) //nolint:errcheck // best-effort cleanup of a temp dir
+		return ""
+	}
+	return tmp
+}
+
+// writeDAGFile marshals a DAGSpec to path as indented dag.json.
+func writeDAGFile(path string, spec *domain.DAGSpec) error {
+	out, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding dag.json: %w", err)
+	}
+	if werr := os.WriteFile(path, append(out, '\n'), 0o600); werr != nil {
+		return fmt.Errorf("writing %s: %w", path, werr)
+	}
+	return nil
 }
 
 // buildAndPush optionally builds the DAG image and pushes it, honoring the

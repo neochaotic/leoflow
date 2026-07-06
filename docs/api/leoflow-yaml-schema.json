@@ -134,6 +134,36 @@
       "additionalProperties": false
     },
 
+    "dbt": {
+      "type": "object",
+      "description": "Declares a dbt project as the DAG source (ADR 0042); its presence routes compile to the dbt renderer instead of the Python parser.",
+      "properties": {
+        "project": { "type": "string", "description": "Directory containing dbt_project.yml." },
+        "granularity": { "type": "string", "enum": ["node", "level", "folder"], "default": "node", "description": "Task partition strategy (ADR 0042). tag/selector grouping is tracked in issue #398." },
+        "manifest": { "type": "string", "description": "Optional pre-built manifest.json path (Pro/CI baked); empty runs dbt parse." },
+        "schedule": { "type": "string", "description": "Cron expression or preset (e.g. @daily); empty means unscheduled. dbt has no schedule, so it is declared here." },
+        "connection": { "type": "string", "description": "Managed Leoflow connection id (ADR 0043); generates profiles.yml in the pod instead of a baked one. Use one or the other." },
+        "schema": { "type": "string", "description": "Overrides the dbt target schema in the generated profile (where models materialize)." }
+      },
+      "additionalProperties": false
+    },
+
+    "dbt_groups": {
+      "type": "object",
+      "description": "Named dbt projects embedded as task groups in a dag.py (ADR 0043); each key is the name passed to dbt_group(name).",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "project": { "type": "string", "description": "Directory containing dbt_project.yml." },
+          "granularity": { "type": "string", "enum": ["node", "level", "folder"], "default": "node", "description": "Task partition strategy (ADR 0042)." },
+          "manifest": { "type": "string", "description": "Optional pre-built manifest.json path; empty runs dbt parse." },
+          "connection": { "type": "string", "description": "Managed Leoflow connection id (ADR 0043); generates profiles.yml in the pod." },
+          "schema": { "type": "string", "description": "Overrides the dbt target schema in the generated profile." }
+        },
+        "additionalProperties": false
+      }
+    },
+
     "tasks": {
       "type": "object",
       "description": "Per-task overrides bound by task_id (ADR 0023). Each key MUST match a task_id in the compiled DAG; an unknown id fails the compile. A set field overrides the value compiled from the DAG (task override > DAG defaults).",

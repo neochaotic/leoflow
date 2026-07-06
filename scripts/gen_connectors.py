@@ -38,6 +38,37 @@ DEFAULT_OUT = os.path.join(
 )
 
 
+# Leoflow-native connection types absent from the Airflow providers introspection.
+# duckdb is an embedded, file-based warehouse — the zero-server backend for local dbt
+# development (ADR 0042/0043). Kept here so a catalog regeneration preserves it.
+_NATIVE_CONNECTIONS: list[dict] = [
+    {
+        "connection_type": "duckdb",
+        "hook_name": "DuckDB (local file)",
+        "hook_class_name": None,
+        "default_conn_name": "duckdb_default",
+        # dbt-duckdb is installed via the DAG's dependencies:, not the connection catalog
+        "pip_package": None,
+        "standard_fields": {
+            "description": None,
+            "host": {"hidden": True, "placeholder": None, "title": None},
+            "login": {"hidden": True, "placeholder": None, "title": None},
+            "password": {"hidden": True, "placeholder": None, "title": None},
+            "port": {"hidden": True, "placeholder": None, "title": None},
+            "schema": {"hidden": True, "placeholder": None, "title": None},
+        },
+        "extra_fields": {
+            "path": {
+                "description": "Path to the DuckDB database file (empty = in-memory).",
+                "schema": {"title": "Path", "type": ["string", "null"]},
+                "source": None,
+                "value": None,
+            }
+        },
+    }
+]
+
+
 def build() -> list[dict]:
     from airflow.api_fastapi.core_api.services.ui.connections import HookMetaService
     from airflow.providers_manager import ProvidersManager
@@ -63,6 +94,7 @@ def build() -> list[dict]:
                 "extra_fields": d.get("extra_fields") or {},
             }
         )
+    rows.extend(_NATIVE_CONNECTIONS)
     rows.sort(key=lambda r: r["connection_type"])
     return rows
 

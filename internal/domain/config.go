@@ -31,10 +31,42 @@ type LeoflowConfig struct {
 	// Leoflow deployment concern (not an Airflow DAG attribute), so it lives in
 	// leoflow.yaml and the compiler overlays it onto the produced dag.json.
 	Staging *StagingConfig `json:"staging,omitempty" yaml:"staging,omitempty"`
+	// Dbt declares a dbt project as the DAG source (ADR 0042). Its presence routes
+	// `leoflow compile` to the dbt renderer instead of the Python parser.
+	Dbt *DbtConfig `json:"dbt,omitempty" yaml:"dbt,omitempty"`
+	// DbtGroups configures dbt projects embedded as task groups in a dag.py (ADR
+	// 0043), keyed by the name passed to `dbt_group(name)`. Schedule does not apply
+	// to a group (the DAG owns the schedule).
+	DbtGroups map[string]*DbtConfig `json:"dbt_groups,omitempty" yaml:"dbt_groups,omitempty"`
 	// Tasks holds per-task overrides bound by task_id (ADR 0023). Each entry's
 	// key must match a task_id in the compiled DAG; the compiler errors on an
 	// unknown id rather than silently dropping it.
 	Tasks map[string]*TaskConfig `json:"tasks,omitempty" yaml:"tasks,omitempty"`
+}
+
+// DbtConfig declares a dbt project as the DAG source (ADR 0042). The compiler
+// reads the project's manifest.json and renders one task per dbt node (or per
+// group), so a dbt project becomes a Leoflow DAG with no Cosmos or Airflow.
+type DbtConfig struct {
+	// Project is the directory containing dbt_project.yml.
+	Project string `json:"project,omitempty" yaml:"project,omitempty"`
+	// Granularity is the task partition strategy: node, level, folder, or tag
+	// (ADR 0042 §5). Empty means node.
+	Granularity string `json:"granularity,omitempty" yaml:"granularity,omitempty"`
+	// Manifest optionally points to a pre-built manifest.json (the Pro/CI baked
+	// path); empty means run `dbt parse` to generate it at compile time.
+	Manifest string `json:"manifest,omitempty" yaml:"manifest,omitempty"`
+	// Schedule is the DAG's cron expression or preset (e.g. "@daily",
+	// "0 6 * * *"). dbt carries no schedule, so it is declared here; empty means
+	// an unscheduled DAG (run on demand).
+	Schedule string `json:"schedule,omitempty" yaml:"schedule,omitempty"`
+	// Connection is a managed Leoflow connection id (ADR 0043 #2). When set, the
+	// dbt task generates its profiles.yml from the connection delivered to the pod
+	// instead of a profiles.yml baked into the image — use one or the other.
+	Connection string `json:"connection,omitempty" yaml:"connection,omitempty"`
+	// Schema overrides the dbt target schema in the generated profile (where models
+	// materialize); empty uses the connection's or dbt's default.
+	Schema string `json:"schema,omitempty" yaml:"schema,omitempty"`
 }
 
 // TaskConfig holds the leoflow.yaml per-task overrides bound by task_id (ADR

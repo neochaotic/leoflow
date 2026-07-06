@@ -27,3 +27,13 @@ def test_main_bash_dispatch(monkeypatch):
 
     assert __main__.main(["--bash", "echo {{ ds }}"]) == 0
     assert calls == {"cmd": "echo {{ ds }}"}
+
+
+def test_main_dbt_profile_dispatch(tmp_path, monkeypatch):
+    # --dbt-profile <conn> <profile> writes profiles.yml from the delivered connection.
+    monkeypatch.setenv("AIRFLOW_CONN_WAREHOUSE_PG", "postgres://u:p@h:5432/wh?schema=analytics")
+    monkeypatch.setenv("DBT_PROFILES_DIR", str(tmp_path))
+
+    assert __main__.main(["--dbt-profile", "warehouse_pg", "analytics"]) == 0
+    data = json.loads((tmp_path / "profiles.yml").read_text())
+    assert data["analytics"]["outputs"]["dev"]["type"] == "postgres"

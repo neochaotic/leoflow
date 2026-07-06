@@ -94,6 +94,23 @@ func resolveLitePythonForDag(venvsRoot, dagID string) string {
 // the parent process's working directory.
 func (e *SubprocessExecutor) SetWorkDir(dir string) { e.workDir = dir }
 
+// prependVenvBin puts a per-DAG venv's bin dir ahead of basePATH so
+// venv-installed console scripts (e.g. `dbt`) resolve for bash tasks — the PATH
+// analog of resolveLitePythonForDag, which only wires `python` for Python
+// tasks. perDagPy is the venv interpreter (…/bin/python); an empty one returns
+// basePATH unchanged. Without this a dbt model task runs bare `dbt` against the
+// system PATH and fails with exit 127.
+func prependVenvBin(perDagPy, basePATH string) string {
+	if perDagPy == "" {
+		return basePATH
+	}
+	bin := filepath.Dir(perDagPy)
+	if basePATH == "" {
+		return bin
+	}
+	return bin + string(os.PathListSeparator) + basePATH
+}
+
 // agentEnv builds the environment injected into the agent process.
 func agentEnv(req Request) []string {
 	env := make([]string, 0, 3+len(req.Env))
@@ -147,7 +164,13 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
 	// DAG's own dependencies. Last write wins in os/exec, so appending here
 	// is enough to beat any earlier server-inherited LEOFLOW_PYTHON.
 	if perDagPy := resolveLitePythonForDag(e.liteVenvsRoot, req.DagID); perDagPy != "" {
-		cmd.Env = append(cmd.Env, "LEOFLOW_PYTHON="+perDagPy)
+		// Wire the per-DAG venv: LEOFLOW_PYTHON for `python -m ...` tasks, and the
+		// venv's bin ahead of PATH so venv console scripts (dbt, etc.) resolve for
+		// bash tasks. Last write wins in os/exec, so these beat the inherited env.
+		cmd.Env = append(cmd.Env,
+			"LEOFLOW_PYTHON="+perDagPy,
+			"PATH="+prependVenvBin(perDagPy, os.Getenv("PATH")),
+		)
 	}
 	cmd.Dir = workDir
 	// Surface the agent's own diagnostics (it logs to stderr); otherwise an agent

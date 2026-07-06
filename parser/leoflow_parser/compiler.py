@@ -309,6 +309,10 @@ def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
 
 def _operator_type(task) -> str:
     name = type(task).__name__
+    # A dbt group placeholder (ADR 0043): the Go compiler expands it into one task
+    # per dbt node after parsing. It carries no operator semantics here.
+    if getattr(type(task), "__leoflow_dbt_group__", False):
+        return "dbt_group"
     # Reject silent-wrong-execution shapes BEFORE the substring catch-alls below
     # (issue #225). BranchPythonOperator / ShortCircuitOperator / @task.branch
     # all carry "Python" in their class name, so the legacy substring match used

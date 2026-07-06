@@ -6,6 +6,40 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1-rc.1] - 2026-07-05
+
+> First release candidate of the **0.1.1** line — **dbt-native orchestration**. A dbt
+> project becomes a Leoflow DAG (one pod per model, no Cosmos at runtime, no Airflow in
+> the parser), and — new this line — a dbt project develops **locally with zero config**.
+
+### Added
+
+- **dbt projects as Leoflow DAGs (ADR 0042).** A dbt project compiles straight to
+  Leoflow tasks from its `manifest.json`, in Go — one task per model/seed/snapshot/test,
+  wired by dbt's own dependency graph. No Cosmos at runtime, no Airflow in the parser.
+- **Mix dbt with operators (ADR 0043).** `dbt_group("name")` embeds a dbt project as a
+  namespaced task group inside a normal `dag.py`, wired around your operators/sensors;
+  `granularity` (node/level/folder) is a pod-packing knob.
+- **Multiple dbt projects, one per business domain (ADR 0044).** A `dbt_groups` map lets
+  one DAG carry several domain projects (`sales__*`, `marketing__*`), namespaced so
+  identically-named models never collide.
+- **Adapters:** Postgres, Snowflake, BigQuery, Databricks (the official `dbt-databricks`
+  adapter), and **duckdb** — Leoflow maps a managed connection to each adapter's profile
+  at runtime, so no warehouse credential is baked into the image.
+- **Zero-config local dbt (Lite).** `leoflow lite` + a dbt project with no connection and
+  no `profiles.yml` just runs — against an embedded **duckdb** file, generated
+  transparently at compile and run time, never touching your global `~/.dbt`. Model
+  edits hot-reload (the manifest re-parses with the per-DAG venv's dbt).
+
+### Fixed
+
+- **Lite runs dbt end-to-end (subprocess):** the per-DAG venv's `bin` is now on the
+  task's PATH (so a bare `dbt` resolves), the dbt `--project-dir` is absolute for local
+  builds (so the project resolves from the task workdir), and the manifest parses with
+  the venv's dbt — the three gaps that stopped `leoflow lite` from running a dbt DAG.
+- **`leoflow compile` self-heals the extracted parser after a binary upgrade** (#239), so
+  a new build's features (like dbt) never fail against a stale `~/.leoflow/pysrc`.
+
 ## [0.1.0] - 2026-06-28
 
 > **First stable release.** Leoflow runs standard Apache Airflow 3.2 DAGs on a Go
@@ -170,7 +204,8 @@ Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.1-rc.1...HEAD
+[0.1.1-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.0...v0.1.1-rc.1
 [0.1.0]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.4...v0.1.0
 [0.1.0-rc.4]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.3...v0.1.0-rc.4
 [0.1.0-rc.3]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.2...v0.1.0-rc.3

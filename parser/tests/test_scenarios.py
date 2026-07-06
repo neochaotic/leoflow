@@ -118,6 +118,28 @@ def test_dag_id_selection_with_multiple_dags(monkeypatch, tmp_path):
     assert spec["dag_id"] == "second"
 
 
+def test_dbt_group_mixed_with_operators(monkeypatch, tmp_path):
+    # A dbt_group() placeholder coexists with real operators in one DAG (ADR 0043):
+    # it registers like a task, participates in >> wiring, and compiles to a
+    # `dbt_group` task the Go compiler later expands into one task per dbt node.
+    spec = _compile(monkeypatch, tmp_path, """
+        from leoflow import dbt_group
+        from airflow.providers.standard.operators.python import PythonOperator
+        from airflow.sdk import DAG
+        def work(): ...
+        with DAG("g"):
+            extract = PythonOperator(task_id="extract", python_callable=work)
+            transform = dbt_group("analytics")
+            notify = PythonOperator(task_id="notify", python_callable=work)
+            extract >> transform >> notify
+    """)
+    assert {t["task_id"] for t in spec["tasks"]} == {"extract", "analytics", "notify"}
+    grp = _task(spec, "analytics")
+    assert grp["type"] == "dbt_group"
+    assert grp["depends_on"] == ["extract"]
+    assert _task(spec, "notify")["depends_on"] == ["analytics"]
+
+
 # ────────────────────────── unsupported scenarios ──────────────────────────
 
 @pytest.mark.parametrize("body", [

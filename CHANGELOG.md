@@ -6,6 +6,35 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-10
+
+> **dbt-native orchestration.** A dbt project becomes a Leoflow DAG — one pod per
+> model, no Cosmos at runtime, no Airflow in the parser — and develops **locally with
+> zero config** against an embedded duckdb. This promotes `v0.1.1-rc.1` after a clean
+> Lite (arm64) end-to-end soak, plus a Go 1.26.5 toolchain bump for a newly-disclosed
+> standard-library advisory (below) — no functional change from the rc.
+
+### Security
+
+- **Go toolchain 1.26.4 → 1.26.5**, closing `GO-2026-4970` (root escape via symlink +
+  trailing slash in the standard-library `os` package), disclosed after the rc was cut
+  and reachable from the installer's download path.
+
+### The 0.1.1 line, in brief
+
+- **dbt projects as Leoflow DAGs (ADR 0042).** A dbt project compiles straight to
+  Leoflow tasks from its `manifest.json`, in Go — one task per model/seed/snapshot/test,
+  wired by dbt's own dependency graph.
+- **Mix dbt with operators (ADR 0043)** via `dbt_group("name")`, and **multiple dbt
+  projects, one per business domain (ADR 0044)** via a namespaced `dbt_groups` map.
+- **Adapters:** Postgres, Snowflake, BigQuery, Databricks, and **duckdb** — mapped from a
+  managed connection at runtime, so no warehouse credential is baked into the image.
+- **Zero-config local dbt (Lite):** a dbt project with no connection and no
+  `profiles.yml` just runs against an embedded duckdb, never touching your global
+  `~/.dbt`; model edits hot-reload.
+
+Per-rc detail is in the `0.1.1-rc.1` section below.
+
 ## [0.1.1-rc.1] - 2026-07-05
 
 > First release candidate of the **0.1.1** line — **dbt-native orchestration**. A dbt
@@ -204,7 +233,8 @@ Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.1-rc.1...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/neochaotic/leoflow/compare/v0.1.1-rc.1...v0.1.1
 [0.1.1-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.0...v0.1.1-rc.1
 [0.1.0]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.4...v0.1.0
 [0.1.0-rc.4]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.3...v0.1.0-rc.4

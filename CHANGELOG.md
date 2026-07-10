@@ -10,8 +10,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **dbt-native orchestration.** A dbt project becomes a Leoflow DAG — one pod per
 > model, no Cosmos at runtime, no Airflow in the parser — and develops **locally with
-> zero config** against an embedded duckdb. This promotes `v0.1.1-rc.1` verbatim: the
-> same artifacts, soaked on Lite (arm64) end-to-end.
+> zero config** against an embedded duckdb. This promotes `v0.1.1-rc.1` after a clean
+> Lite (arm64) end-to-end soak, plus a Go 1.26.5 toolchain bump for a newly-disclosed
+> standard-library advisory (below) — no functional change from the rc.
+
+### Security
+
+- **Go toolchain 1.26.4 → 1.26.5**, closing `GO-2026-4970` (root escape via symlink +
+  trailing slash in the standard-library `os` package), disclosed after the rc was cut
+  and reachable from the installer's download path.
 
 ### The 0.1.1 line, in brief
 

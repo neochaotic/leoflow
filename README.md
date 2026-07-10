@@ -11,7 +11,7 @@
 </p>
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/neochaotic/leoflow?v=2)](https://goreportcard.com/report/github.com/neochaotic/leoflow)
+[![Code quality: golangci-lint A+](https://img.shields.io/badge/golangci--lint-A%2B-00ADD8?logo=go&logoColor=white)](docs/adr/0012-code-quality-standards.md)
 [![CI](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml)
 [![Security](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/neochaotic/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/neochaotic/leoflow)
@@ -128,7 +128,7 @@ Leoflow is a **GitOps-first, container-native workflow orchestrator** written in
 - **GitOps-first.** Your DAG is a versioned artifact (`dag.json` + container image), not live source code. CI builds it. The registry stores it. Rollback is a tag change.
 - **Container-native.** Each DAG is its own container image, with its own dependencies, its own Python version, its own everything. Built automatically from a one-page `leoflow.yaml` — you never touch Docker unless you want to.
 - **Airflow-UI compatible.** The MVP runs the unmodified Apache Airflow 3.2.x UI. Your team's muscle memory survives the migration. No new tool to learn.
-- **Go performance, Go discipline.** Static binary. No GIL. Goroutines for concurrency. Test-driven from the first commit. Go Report Card A+ enforced in CI.
+- **Go performance, Go discipline.** Static binary. No GIL. Goroutines for concurrency. Test-driven from the first commit. The full `golangci-lint` A+ stack enforced in CI.
 
 ## What It Looks Like to Use
 
@@ -381,7 +381,7 @@ We borrow from Argo Workflows (container-native), from Prefect (modern developer
 Leoflow holds itself to a higher bar than most open source projects, because workflow orchestrators must be boring and reliable to be useful:
 
 - **Strict TDD** — every line of production code is preceded by a failing test ([ADR 0011](docs/adr/0011-tdd-strict.md))
-- **Go Report Card A+** — enforced in CI from the first commit ([ADR 0012](docs/adr/0012-code-quality-standards.md))
+- **golangci-lint A+ stack** — the goreportcard checks (gofmt, govet, gocyclo ≤ 15, golint, ineffassign, misspell) enforced in CI from the first commit ([ADR 0012](docs/adr/0012-code-quality-standards.md))
 - **GoDocs on every exported identifier** — no exceptions
 - **Supply chain security from day one** — govulncheck, gosec, Trivy, CodeQL, Scorecard, signed releases ([ADR 0014](docs/adr/0014-supply-chain-security.md))
 - **Per-phase coverage floors** — rising from 70% to 85% across the MVP phases

@@ -6,10 +6,14 @@ SHELL := /usr/bin/env bash
 
 # ─── Tool versions (pinned; see ADR 0012 / 0014) ───
 GOLANGCI_LINT_VERSION ?= v2.12.2
-GOREPORTCARD_VERSION  ?= latest
 GOVULNCHECK_VERSION   ?= latest
 MIGRATE_VERSION       ?= latest
 SQLC_VERSION          ?= latest
+# Go Report Card checkers (the site + its CLI were retired in 2026; we run the
+# same checks with maintained tools via scripts/reportcard.sh — see ADR 0012).
+GOCYCLO_VERSION       ?= latest
+INEFFASSIGN_VERSION   ?= latest
+MISSPELL_VERSION      ?= latest
 
 # ─── Pinned Airflow UI (see ADR 0017 / docs/ui-compatibility.md) ───
 AIRFLOW_UI_VERSION ?= 3.2.1
@@ -46,8 +50,10 @@ help: ## Show this help
 setup: ## Install Go tools, Python parser, and the pre-commit hook
 	go mod download
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-	go install github.com/gojp/goreportcard/cmd/goreportcard-cli@$(GOREPORTCARD_VERSION)
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	go install github.com/fzipp/gocyclo/cmd/gocyclo@$(GOCYCLO_VERSION)
+	go install github.com/gordonklaus/ineffassign@$(INEFFASSIGN_VERSION)
+	go install github.com/client9/misspell/cmd/misspell@$(MISSPELL_VERSION)
 	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 	command -v python3 >/dev/null && pip install -e "./parser[dev]" && pip install -e ./runtime/python || echo "skip parser/runtime install (python3 not found)"
@@ -188,8 +194,8 @@ fmt: ## Format Go code
 	gofmt -w .
 
 .PHONY: reportcard
-reportcard: ## Verify Go Report Card grade is A+ (ADR 0012)
-	goreportcard-cli -v
+reportcard: ## Verify the Go Report Card A+ floor (ADR 0012) with maintained tools
+	bash scripts/reportcard.sh
 
 .PHONY: vuln
 vuln: ## Run govulncheck (ADR 0014)

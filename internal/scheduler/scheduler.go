@@ -62,6 +62,10 @@ type RunState struct {
 	// means "skip the cooldown gate" so legacy callers + tests that don't set
 	// retry_delay get the previous (immediate-retry) behavior.
 	Now time.Time
+	// Alerts carries the DAG's native on-failure alerting config (#424), loaded
+	// from the dag.json alongside Tasks. nil means no alerting; the scheduler
+	// dispatches these rules once the run finalizes as failed.
+	Alerts *domain.AlertsConfig
 }
 
 // ScheduledDAG is a cron-scheduled DAG and the logical date of its latest run.
@@ -184,6 +188,7 @@ type Scheduler struct {
 	recorder              Recorder
 	dispatcher            Dispatcher
 	inline                InlineRunner
+	alerter               Alerter
 	orphanThreshold       time.Duration
 	agentLostThreshold    time.Duration
 	dispatchLostThreshold time.Duration
@@ -295,6 +300,20 @@ func (s *Scheduler) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 // SetInlineRunner attaches the inline http_api runner (optional; without it
 // inline http_api tasks fall back to the standard queued dispatch path).
 func (s *Scheduler) SetInlineRunner(r InlineRunner) { s.inline = r }
+
+// SetAlerter attaches the on-failure alerter (optional; #424). Without it, or
+// for a DAG with no alert rules, the scheduler finalizes failures silently.
+func (s *Scheduler) SetAlerter(a Alerter) { s.alerter = a }
+
+// Alerter dispatches a DAG's on-failure alert rules for a run that finalized in
+// the failed state. Implementations resolve each rule's managed connection to an
+// endpoint and send (Slack/webhook). The scheduler calls it from a detached
+// goroutine, so an implementation may block on network I/O without stalling the
+// tick; it MUST treat every send as best-effort — a delivery failure is logged,
+// never propagated, so alerting can never fail a run.
+type Alerter interface {
+	AlertRunFailed(ctx context.Context, run RunState)
+}
 
 // Run drives the scheduling loop until ctx is canceled. The loop is crash-proof:
 // a panic or error in a tick is recovered and logged, so the scheduler keeps
@@ -572,8 +591,24 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 		if err := s.store.SetRunState(ctx, run.RunID, state); err != nil {
 			return fmt.Errorf("finalizing run: %w", err)
 		}
+		s.maybeAlertFailure(ctx, state, run)
 	}
 	return nil
+}
+
+// maybeAlertFailure fires the DAG's on-failure alert rules when a run finalizes
+// failed. It runs in a detached goroutine (WithoutCancel) so a slow endpoint
+// never stalls the tick, and the alerter's own best-effort contract means a
+// delivery failure cannot fail the run. A nil alerter or a DAG without rules is
+// a no-op.
+func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunState, run RunState) {
+	if state != domain.DagRunStateFailed || s.alerter == nil {
+		return
+	}
+	if run.Alerts == nil || len(run.Alerts.OnFailure) == 0 {
+		return
+	}
+	go s.alerter.AlertRunFailed(context.WithoutCancel(ctx), run)
 }
 
 // applyPlanned launches a task as it becomes queued and records the resulting

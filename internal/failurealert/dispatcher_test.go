@@ -102,6 +102,25 @@ func TestAlertRunFailedIsBestEffort(t *testing.T) {
 	}
 }
 
+// A send failure on one rule is logged and swallowed; the run is never affected
+// and the remaining rule still sends (best-effort at the send layer too).
+func TestAlertRunFailedSwallowsSendError(t *testing.T) {
+	res := &fakeResolver{urls: map[string]string{
+		"slack_prod": "https://hooks.slack.com/services/xxx",
+		"pagerduty":  "https://events.pagerduty.com/enqueue",
+	}}
+	snd := &fakeSender{fail: map[string]error{
+		"https://hooks.slack.com/services/xxx": errors.New("slack 500"),
+	}}
+	d := New(snd, res, quietLogger())
+
+	d.AlertRunFailed(context.Background(), failedRun())
+
+	if len(snd.sent) != 1 || snd.sent[0].channelType != "webhook" {
+		t.Fatalf("a failed send must not drop the other rule; got %+v", snd.sent)
+	}
+}
+
 // The Dispatcher satisfies the scheduler's Alerter seam.
 func TestDispatcherImplementsAlerter(t *testing.T) {
 	var _ scheduler.Alerter = New(&fakeSender{}, &fakeResolver{}, quietLogger())

@@ -115,6 +115,7 @@ nav:
       - First Pro DAG (walkthrough): first-pro-dag.md
       - Airflow operators & sensors: airflow-operators.md
       - dbt projects as DAGs: dbt.md
+      - On-failure alerting: alerting.md
       - CI/CD & deploy examples: deploy.md
   - Reference:
       - reference.md

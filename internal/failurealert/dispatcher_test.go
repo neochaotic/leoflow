@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -12,6 +13,17 @@ import (
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 )
+
+type fakeRecorder struct {
+	mu    sync.Mutex
+	calls []string // "dag:type:result"
+}
+
+func (f *fakeRecorder) RecordAlert(dagID, channelType, result string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, dagID+":"+channelType+":"+result)
+}
 
 type fakeResolver struct {
 	urls map[string]string
@@ -70,7 +82,7 @@ func TestAlertRunFailedSendsEveryRule(t *testing.T) {
 		"pagerduty":  "https://events.pagerduty.com/enqueue",
 	}}
 	snd := &fakeSender{}
-	d := New(snd, res, quietLogger())
+	d := New(snd, res, nil, quietLogger())
 
 	d.AlertRunFailed(context.Background(), failedRun())
 
@@ -93,7 +105,7 @@ func TestAlertRunFailedIsBestEffort(t *testing.T) {
 		err:  map[string]error{"slack_prod": errors.New("no such connection")},
 	}
 	snd := &fakeSender{}
-	d := New(snd, res, quietLogger())
+	d := New(snd, res, nil, quietLogger())
 
 	d.AlertRunFailed(context.Background(), failedRun())
 
@@ -112,7 +124,7 @@ func TestAlertRunFailedSwallowsSendError(t *testing.T) {
 	snd := &fakeSender{fail: map[string]error{
 		"https://hooks.slack.com/services/xxx": errors.New("slack 500"),
 	}}
-	d := New(snd, res, quietLogger())
+	d := New(snd, res, nil, quietLogger())
 
 	d.AlertRunFailed(context.Background(), failedRun())
 
@@ -121,7 +133,47 @@ func TestAlertRunFailedSwallowsSendError(t *testing.T) {
 	}
 }
 
+// Each rule records a metric: "sent" on success, "failed" when the send errors —
+// so operators can alert on the alerter itself (observability, principle 10).
+func TestAlertRunFailedRecordsMetrics(t *testing.T) {
+	res := &fakeResolver{urls: map[string]string{
+		"slack_prod": "https://hooks.slack.com/services/xxx",
+		"pagerduty":  "https://events.pagerduty.com/enqueue",
+	}}
+	snd := &fakeSender{fail: map[string]error{
+		"https://events.pagerduty.com/enqueue": errors.New("pd 500"),
+	}}
+	rec := &fakeRecorder{}
+	d := New(snd, res, rec, quietLogger())
+
+	d.AlertRunFailed(context.Background(), failedRun())
+
+	got := strings.Join(rec.calls, ",")
+	if !strings.Contains(got, "etl:slack:sent") {
+		t.Errorf("missing slack sent metric: %v", rec.calls)
+	}
+	if !strings.Contains(got, "etl:webhook:failed") {
+		t.Errorf("missing webhook failed metric: %v", rec.calls)
+	}
+}
+
+// A resolver failure also records a "failed" metric (not a silent drop).
+func TestAlertRunFailedRecordsResolveFailure(t *testing.T) {
+	res := &fakeResolver{
+		urls: map[string]string{"pagerduty": "https://events.pagerduty.com/enqueue"},
+		err:  map[string]error{"slack_prod": errors.New("no such connection")},
+	}
+	rec := &fakeRecorder{}
+	d := New(&fakeSender{}, res, rec, quietLogger())
+
+	d.AlertRunFailed(context.Background(), failedRun())
+
+	if !strings.Contains(strings.Join(rec.calls, ","), "etl:slack:failed") {
+		t.Errorf("a resolve failure must record failed: %v", rec.calls)
+	}
+}
+
 // The Dispatcher satisfies the scheduler's Alerter seam.
 func TestDispatcherImplementsAlerter(t *testing.T) {
-	var _ scheduler.Alerter = New(&fakeSender{}, &fakeResolver{}, quietLogger())
+	var _ scheduler.Alerter = New(&fakeSender{}, &fakeResolver{}, nil, quietLogger())
 }

@@ -20,6 +20,7 @@ type Metrics struct {
 	TasksUndispatchable   *prometheus.CounterVec
 	SchedulerStepDowns    *prometheus.CounterVec // #311 leader churn observability
 	SchedulerReacquire    prometheus.Histogram   // #311 step-down → re-acquire latency
+	AlertsDispatched      *prometheus.CounterVec // #424 on-failure alerts, by outcome
 
 	// Task lifecycle
 	TaskStateTransitions    *prometheus.CounterVec
@@ -105,6 +106,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		QueuedTasks: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "leoflow_queued_tasks", Help: "Queued task instances by dag.",
 		}, []string{"dag_id"}),
+		AlertsDispatched: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "leoflow_alerts_dispatched_total",
+			Help: "Native on-failure alerts dispatched, by channel type and outcome (sent, failed). " +
+				"Operators alert on rate of result=\"failed\" to catch a broken alert path (#424).",
+		}, []string{"dag_id", "type", "result"}),
 
 		TaskStateTransitions: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "leoflow_task_state_transitions_total", Help: "Task state transitions.",
@@ -244,6 +250,12 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, dur time.Du
 // RecordSchedulerDecision records one scheduler decision by type.
 func (m *Metrics) RecordSchedulerDecision(decisionType string) {
 	m.SchedulerDecisions.WithLabelValues(decisionType).Inc()
+}
+
+// RecordAlert counts one on-failure alert dispatch (#424) by dag, channel type,
+// and outcome ("sent" or "failed"). Satisfies failurealert.Recorder.
+func (m *Metrics) RecordAlert(dagID, channelType, result string) {
+	m.AlertsDispatched.WithLabelValues(dagID, channelType, result).Inc()
 }
 
 // RecordSchedulerStepDown increments the leader step-down counter (#311). The

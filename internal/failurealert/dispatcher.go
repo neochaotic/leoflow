@@ -29,18 +29,39 @@ type sender interface {
 	Send(ctx context.Context, channelType, url, message string, ev alerts.Event) error
 }
 
+// Recorder counts alert dispatches for observability (principle 10). result is
+// "sent" on a successful POST or "failed" when the connection can't be resolved
+// or the send errors. A nil Recorder disables metrics.
+type Recorder interface {
+	RecordAlert(dagID, channelType, result string)
+}
+
+// alert dispatch outcomes reported to the Recorder.
+const (
+	resultSent   = "sent"
+	resultFailed = "failed"
+)
+
 // Dispatcher implements scheduler.Alerter by resolving and sending a run's
 // on-failure alert rules.
 type Dispatcher struct {
 	notifier sender
 	resolver EndpointResolver
+	recorder Recorder
 	logger   *slog.Logger
 }
 
-// New builds a Dispatcher over the given notifier, connection resolver, and
-// logger.
-func New(notifier sender, resolver EndpointResolver, logger *slog.Logger) *Dispatcher {
-	return &Dispatcher{notifier: notifier, resolver: resolver, logger: logger}
+// New builds a Dispatcher over the given notifier, connection resolver, metrics
+// recorder (nil disables metrics), and logger.
+func New(notifier sender, resolver EndpointResolver, recorder Recorder, logger *slog.Logger) *Dispatcher {
+	return &Dispatcher{notifier: notifier, resolver: resolver, recorder: recorder, logger: logger}
+}
+
+// record reports an alert outcome to the Recorder when one is configured.
+func (d *Dispatcher) record(dagID, channelType, result string) {
+	if d.recorder != nil {
+		d.recorder.RecordAlert(dagID, channelType, result)
+	}
 }
 
 // AlertRunFailed dispatches every on_failure rule of a failed run. Each rule is
@@ -56,16 +77,19 @@ func (d *Dispatcher) AlertRunFailed(ctx context.Context, run scheduler.RunState)
 		if err != nil {
 			d.logger.Error("resolving alert connection",
 				"dag", run.DagID, "run", run.RunID, "conn", rule.Conn, "error", err)
+			d.record(run.DagID, rule.Type, resultFailed)
 			continue
 		}
 		message := alerts.Render(rule.Message, ev)
 		if serr := d.notifier.Send(ctx, rule.Type, url, message, ev); serr != nil {
 			d.logger.Error("sending on-failure alert",
 				"dag", run.DagID, "run", run.RunID, "type", rule.Type, "conn", rule.Conn, "error", serr)
+			d.record(run.DagID, rule.Type, resultFailed)
 			continue
 		}
 		d.logger.Info("on-failure alert sent",
 			"dag", run.DagID, "run", run.RunID, "type", rule.Type, "conn", rule.Conn)
+		d.record(run.DagID, rule.Type, resultSent)
 	}
 }
 

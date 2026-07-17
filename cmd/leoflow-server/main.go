@@ -604,6 +604,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 	sched.SetAlerter(failurealert.New(
 		alerts.NewNotifier(&http.Client{Timeout: alertHTTPTimeout}),
 		connEndpointResolver{repo},
+		metrics,
 		logger,
 	))
 	podDispatch := setupDispatch(ctx, cfg, sched, execStore, authn, store, logger, metrics)

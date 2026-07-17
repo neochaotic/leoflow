@@ -860,6 +860,33 @@ func (r *Repository) SecretConnectionURIs(ctx context.Context, tenantID string) 
 	return out, nil
 }
 
+// ConnectionSecret returns a connection's decrypted password for a tenant UUID.
+// On-failure alerting (#424) stores the full channel webhook URL there (secret,
+// so it stays encrypted), and the resolver hands it straight to the notifier. An
+// absent or empty secret is an error — a misconfigured alert connection must fail
+// loud (best-effort at the send layer, not here). Never expose this in UI/API.
+func (r *Repository) ConnectionSecret(ctx context.Context, tenantID, connID string) (string, error) {
+	tid, err := parseUUID(tenantID)
+	if err != nil {
+		return "", err
+	}
+	row, err := r.q.GetConnection(ctx, queries.GetConnectionParams{TenantID: tid, ConnID: connID})
+	if err != nil {
+		return "", mapNotFound(err)
+	}
+	if row.Password == nil {
+		return "", fmt.Errorf("connection %q has no secret to resolve", connID)
+	}
+	pass, err := r.decryptExtra(row.Password)
+	if err != nil {
+		return "", fmt.Errorf("decrypting connection %q secret: %w", connID, err)
+	}
+	if pass == "" {
+		return "", fmt.Errorf("connection %q secret is empty", connID)
+	}
+	return pass, nil
+}
+
 // AddFavorite marks a DAG as a favorite for the user (idempotent).
 func (r *Repository) AddFavorite(ctx context.Context, tenant, userID, dagID string) error {
 	if err := r.q.AddFavorite(ctx, queries.AddFavoriteParams{Tenant: tenant, UserID: userID, DagID: dagID}); err != nil {

@@ -95,6 +95,7 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			RetryDelaySeconds: retryDelay,
 			RescheduleAt:      rescheduleAt,
 			Now:               time.Now(),
+			Alerts:            spec.Alerts,
 		})
 	}
 	return out, nil

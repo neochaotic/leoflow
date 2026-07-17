@@ -304,10 +304,13 @@ def _check_callbacks(task, task_type: str, entry: dict) -> None:
     if task_type in _CALLBACK_CAPABLE_TYPES:
         entry[_ON_FAILURE_CALLBACK] = True
         return
+    # bash execs bash in place (no Python left); http_api runs inline in the Go
+    # control plane (no Python at all). Neither can run a Python callback.
     raise ValueError(
         f"on_failure_callback on task {task.task_id!r} (type {task_type}) cannot run: "
-        "a bash task replaces its process with bash, so no Python is left to call it. "
-        "Use an alerts: block in leoflow.yaml, or a downstream @task with "
+        "only a Python-executed task runs it in-process (a provider operator or a "
+        "@task). For HTTP use HttpOperator (a provider operator, which runs it); "
+        "otherwise use an alerts: block in leoflow.yaml, or a downstream @task with "
         "trigger_rule='one_failed'.")
 
 

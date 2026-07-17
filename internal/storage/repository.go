@@ -860,31 +860,61 @@ func (r *Repository) SecretConnectionURIs(ctx context.Context, tenantID string) 
 	return out, nil
 }
 
-// ConnectionSecret returns a connection's decrypted password for a tenant UUID.
-// On-failure alerting (#424) stores the full channel webhook URL there (secret,
-// so it stays encrypted), and the resolver hands it straight to the notifier. An
-// absent or empty secret is an error — a misconfigured alert connection must fail
-// loud (best-effort at the send layer, not here). Never expose this in UI/API.
-func (r *Repository) ConnectionSecret(ctx context.Context, tenantID, connID string) (string, error) {
+// AlertEndpoint resolves an alert channel connection (#424) to its endpoint for a
+// tenant UUID: the decrypted password is the channel URL (the full webhook URL,
+// kept encrypted at rest), and an optional `headers` object in the connection's
+// extra becomes request headers (e.g. an Authorization header for an endpoint
+// whose token is not in the URL). An absent/empty URL is an error — a
+// misconfigured alert connection must fail loud. Never expose these in UI/API.
+func (r *Repository) AlertEndpoint(ctx context.Context, tenantID, connID string) (endpointURL string, headers map[string]string, err error) {
 	tid, err := parseUUID(tenantID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	row, err := r.q.GetConnection(ctx, queries.GetConnectionParams{TenantID: tid, ConnID: connID})
 	if err != nil {
-		return "", mapNotFound(err)
+		return "", nil, mapNotFound(err)
 	}
 	if row.Password == nil {
-		return "", fmt.Errorf("connection %q has no secret to resolve", connID)
+		return "", nil, fmt.Errorf("connection %q has no secret to resolve", connID)
 	}
-	pass, err := r.decryptExtra(row.Password)
+	endpointURL, err = r.decryptExtra(row.Password)
 	if err != nil {
-		return "", fmt.Errorf("decrypting connection %q secret: %w", connID, err)
+		return "", nil, fmt.Errorf("decrypting connection %q secret: %w", connID, err)
 	}
-	if pass == "" {
-		return "", fmt.Errorf("connection %q secret is empty", connID)
+	if endpointURL == "" {
+		return "", nil, fmt.Errorf("connection %q secret is empty", connID)
 	}
-	return pass, nil
+	headers, err = r.alertHeaders(connID, row.Extra)
+	if err != nil {
+		return "", nil, err
+	}
+	return endpointURL, headers, nil
+}
+
+// alertHeaders decrypts a connection's extra and extracts its optional `headers`
+// object (a string→string map), the conventional Airflow HTTP-connection shape.
+// A nil/empty or headerless extra yields an empty map (not an error), so the
+// caller can range over it unconditionally.
+func (r *Repository) alertHeaders(connID string, enc *string) (map[string]string, error) {
+	headers := map[string]string{}
+	extra, err := r.decryptExtra(enc)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting connection %q extra: %w", connID, err)
+	}
+	if extra == "" {
+		return headers, nil
+	}
+	var parsed struct {
+		Headers map[string]string `json:"headers"`
+	}
+	if uerr := json.Unmarshal([]byte(extra), &parsed); uerr != nil {
+		return nil, fmt.Errorf("parsing connection %q extra: %w", connID, uerr)
+	}
+	for k, v := range parsed.Headers {
+		headers[k] = v
+	}
+	return headers, nil
 }
 
 // AddFavorite marks a DAG as a favorite for the user (idempotent).

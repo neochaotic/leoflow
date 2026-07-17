@@ -15,18 +15,26 @@ import (
 	"github.com/neochaotic/leoflow/internal/scheduler"
 )
 
-// EndpointResolver maps a managed connection id to the channel endpoint URL to
-// POST to (including any secret carried by the connection). tenantID scopes the
-// lookup. The connection→URL contract lives in the implementation so this
-// package needs no storage dependency.
+// Endpoint is a resolved alert channel: the URL to POST to and any headers the
+// endpoint requires (e.g. an Authorization header when the token is not carried
+// in the URL, as with Opsgenie).
+type Endpoint struct {
+	URL     string
+	Headers map[string]string
+}
+
+// EndpointResolver maps a managed connection id to its channel Endpoint
+// (including any secret the connection carries). tenantID scopes the lookup. The
+// connection→endpoint contract lives in the implementation so this package needs
+// no storage dependency.
 type EndpointResolver interface {
-	ResolveAlertEndpoint(ctx context.Context, tenantID, connID string) (string, error)
+	ResolveAlertEndpoint(ctx context.Context, tenantID, connID string) (Endpoint, error)
 }
 
 // sender is the subset of *alerts.Notifier this package needs, named locally so
 // it can be faked in tests.
 type sender interface {
-	Send(ctx context.Context, channelType, url, message string, ev alerts.Event) error
+	Send(ctx context.Context, channelType, url string, headers map[string]string, message string, ev alerts.Event) error
 }
 
 // Recorder counts alert dispatches for observability (principle 10). result is
@@ -73,7 +81,7 @@ func (d *Dispatcher) AlertRunFailed(ctx context.Context, run scheduler.RunState)
 	}
 	ev := alerts.Event{DagID: run.DagID, RunID: run.RunID, FailedTasks: failedTasks(run)}
 	for _, rule := range run.Alerts.OnFailure {
-		url, err := d.resolver.ResolveAlertEndpoint(ctx, run.TenantID, rule.Conn)
+		endpoint, err := d.resolver.ResolveAlertEndpoint(ctx, run.TenantID, rule.Conn)
 		if err != nil {
 			d.logger.Error("resolving alert connection",
 				"dag", run.DagID, "run", run.RunID, "conn", rule.Conn, "error", err)
@@ -81,7 +89,7 @@ func (d *Dispatcher) AlertRunFailed(ctx context.Context, run scheduler.RunState)
 			continue
 		}
 		message := alerts.Render(rule.Message, ev)
-		if serr := d.notifier.Send(ctx, rule.Type, url, message, ev); serr != nil {
+		if serr := d.notifier.Send(ctx, rule.Type, endpoint.URL, endpoint.Headers, message, ev); serr != nil {
 			d.logger.Error("sending on-failure alert",
 				"dag", run.DagID, "run", run.RunID, "type", rule.Type, "conn", rule.Conn, "error", serr)
 			d.record(run.DagID, rule.Type, resultFailed)

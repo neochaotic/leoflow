@@ -41,7 +41,7 @@ func TestSendSlackPostsText(t *testing.T) {
 	defer srv.Close()
 
 	n := NewNotifier(&http.Client{Timeout: 2 * time.Second})
-	if err := n.Send(context.Background(), "slack", srv.URL, "boom", Event{DagID: "d", RunID: "r"}); err != nil {
+	if err := n.Send(context.Background(), "slack", srv.URL, nil, "boom", Event{DagID: "d", RunID: "r"}); err != nil {
 		t.Fatalf("Send slack: %v", err)
 	}
 	if body["text"] != "boom" {
@@ -60,11 +60,29 @@ func TestSendWebhookPostsStructuredPayload(t *testing.T) {
 
 	n := NewNotifier(&http.Client{Timeout: 2 * time.Second})
 	ev := Event{DagID: "sales", RunID: "run-1", FailedTasks: []string{"load"}}
-	if err := n.Send(context.Background(), "webhook", srv.URL, "sales failed", ev); err != nil {
+	if err := n.Send(context.Background(), "webhook", srv.URL, nil, "sales failed", ev); err != nil {
 		t.Fatalf("Send webhook: %v", err)
 	}
 	if body["dag_id"] != "sales" || body["run_id"] != "run-1" || body["message"] != "sales failed" {
 		t.Fatalf("webhook payload = %v, want dag_id/run_id/message set", body)
+	}
+}
+
+func TestSendAppliesAuthHeader(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := NewNotifier(&http.Client{Timeout: 2 * time.Second})
+	headers := map[string]string{"Authorization": "GenieKey abc123"}
+	if err := n.Send(context.Background(), "webhook", srv.URL, headers, "ping", Event{}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if gotAuth != "GenieKey abc123" {
+		t.Fatalf("Authorization header = %q, want it applied", gotAuth)
 	}
 }
 
@@ -75,14 +93,14 @@ func TestSendNon2xxIsError(t *testing.T) {
 	defer srv.Close()
 
 	n := NewNotifier(&http.Client{Timeout: 2 * time.Second})
-	if err := n.Send(context.Background(), "slack", srv.URL, "x", Event{}); err == nil {
+	if err := n.Send(context.Background(), "slack", srv.URL, nil, "x", Event{}); err == nil {
 		t.Fatal("expected error on non-2xx response")
 	}
 }
 
 func TestSendUnknownChannelIsError(t *testing.T) {
 	n := NewNotifier(&http.Client{Timeout: 2 * time.Second})
-	if err := n.Send(context.Background(), "carrier-pigeon", "http://x", "m", Event{}); err == nil {
+	if err := n.Send(context.Background(), "carrier-pigeon", "http://x", nil, "m", Event{}); err == nil {
 		t.Fatal("expected error on unknown channel type")
 	}
 }

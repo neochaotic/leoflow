@@ -624,10 +624,15 @@ const alertHTTPTimeout = 10 * time.Second
 // an alert channel's endpoint URL is the connection's decrypted secret (#424).
 type connEndpointResolver struct{ repo *storage.Repository }
 
-// ResolveAlertEndpoint returns the connection's secret (the full channel webhook
-// URL) for the tenant, or an error when it is missing/undecryptable.
-func (c connEndpointResolver) ResolveAlertEndpoint(ctx context.Context, tenantID, connID string) (string, error) {
-	return c.repo.ConnectionSecret(ctx, tenantID, connID)
+// ResolveAlertEndpoint returns the connection's endpoint — its secret URL and any
+// headers from the connection extra — for the tenant, or an error when it is
+// missing/undecryptable.
+func (c connEndpointResolver) ResolveAlertEndpoint(ctx context.Context, tenantID, connID string) (failurealert.Endpoint, error) {
+	url, headers, err := c.repo.AlertEndpoint(ctx, tenantID, connID)
+	if err != nil {
+		return failurealert.Endpoint{}, err
+	}
+	return failurealert.Endpoint{URL: url, Headers: headers}, nil
 }
 
 // leaderCheckInterval is how often we both poll for leadership (as a follower)

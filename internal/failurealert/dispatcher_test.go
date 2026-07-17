@@ -26,19 +26,21 @@ func (f *fakeRecorder) RecordAlert(dagID, channelType, result string) {
 }
 
 type fakeResolver struct {
-	urls map[string]string
-	err  map[string]error
+	urls    map[string]string
+	headers map[string]map[string]string
+	err     map[string]error
 }
 
-func (f *fakeResolver) ResolveAlertEndpoint(_ context.Context, _, connID string) (string, error) {
+func (f *fakeResolver) ResolveAlertEndpoint(_ context.Context, _, connID string) (Endpoint, error) {
 	if e := f.err[connID]; e != nil {
-		return "", e
+		return Endpoint{}, e
 	}
-	return f.urls[connID], nil
+	return Endpoint{URL: f.urls[connID], Headers: f.headers[connID]}, nil
 }
 
 type capturedSend struct {
 	channelType, url, message string
+	headers                   map[string]string
 	ev                        alerts.Event
 }
 
@@ -48,13 +50,13 @@ type fakeSender struct {
 	fail map[string]error // keyed by url
 }
 
-func (f *fakeSender) Send(_ context.Context, channelType, url, message string, ev alerts.Event) error {
+func (f *fakeSender) Send(_ context.Context, channelType, url string, headers map[string]string, message string, ev alerts.Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.fail[url]; e != nil {
 		return e
 	}
-	f.sent = append(f.sent, capturedSend{channelType, url, message, ev})
+	f.sent = append(f.sent, capturedSend{channelType, url, message, headers, ev})
 	return nil
 }
 
@@ -170,6 +172,25 @@ func TestAlertRunFailedRecordsResolveFailure(t *testing.T) {
 
 	if !strings.Contains(strings.Join(rec.calls, ","), "etl:slack:failed") {
 		t.Errorf("a resolve failure must record failed: %v", rec.calls)
+	}
+}
+
+// The resolver's headers reach the sender, so an endpoint that needs an auth
+// header (e.g. Opsgenie) gets one.
+func TestAlertRunFailedForwardsHeaders(t *testing.T) {
+	res := &fakeResolver{
+		urls:    map[string]string{"slack_prod": "u1", "pagerduty": "u2"},
+		headers: map[string]map[string]string{"pagerduty": {"Authorization": "GenieKey k"}},
+	}
+	snd := &fakeSender{}
+	d := New(snd, res, nil, quietLogger())
+
+	d.AlertRunFailed(context.Background(), failedRun())
+
+	for _, s := range snd.sent {
+		if s.channelType == "webhook" && s.headers["Authorization"] != "GenieKey k" {
+			t.Fatalf("webhook send missing auth header: %+v", s)
+		}
 	}
 }
 

@@ -67,10 +67,11 @@ func NewNotifier(client *http.Client) *Notifier {
 
 // Send posts message to url for the given channel type: "slack" sends Slack's
 // {"text": …} incoming-webhook shape; "webhook" sends a structured JSON payload
-// carrying the run context. A non-2xx response or an unknown channel type is an
-// error; the caller decides whether that is fatal (it should not be — an alert
-// failure must not fail the run).
-func (n *Notifier) Send(ctx context.Context, channelType, url, message string, ev Event) error {
+// carrying the run context. Any headers are applied to the request (e.g. an
+// Authorization header for an endpoint whose token is not in the URL). A non-2xx
+// response or an unknown channel type is an error; the caller decides whether
+// that is fatal (it should not be — an alert failure must not fail the run).
+func (n *Notifier) Send(ctx context.Context, channelType, url string, headers map[string]string, message string, ev Event) error {
 	var payload any
 	switch channelType {
 	case "slack":
@@ -95,6 +96,9 @@ func (n *Notifier) Send(ctx context.Context, channelType, url, message string, e
 		return fmt.Errorf("building %s alert request: %w", channelType, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := n.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("sending %s alert: %w", channelType, err)

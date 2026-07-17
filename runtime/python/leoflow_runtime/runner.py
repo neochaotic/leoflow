@@ -156,6 +156,9 @@ def run(entrypoint: str) -> None:
         # ordering in the log panel matches the wall-clock order.
         sys.stdout.flush()
         sys.stderr.flush()
+        # Run the @task's on_failure_callback on its terminal attempt, before the
+        # re-raise, so the task's own failed outcome is unchanged (#424 inc 4b).
+        _maybe_fire_on_failure_callback(context)
         # Re-raise so Python's default handler emits the traceback to stderr —
         # the agent captures it.
         raise

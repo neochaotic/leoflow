@@ -264,22 +264,51 @@ def _map_task(task, source: str) -> dict[str, Any]:
             entry["xcom_input"] = xcom_input
         if operator_args:
             entry["operator_args"] = operator_args
-    if _has_on_failure_callback(task):
-        entry["on_failure_callback"] = True
+    _check_callbacks(task, task_type, entry)
     return entry
 
 
-# _ON_FAILURE_CALLBACK is the one Airflow callback kwarg Leoflow runs (#424 inc
-# 4); the others (on_success/on_retry) stay a loud reject until wired.
+# _ON_FAILURE_CALLBACK is the one Airflow callback kwarg Leoflow runs (#424); the
+# others stay a loud reject until wired.
 _ON_FAILURE_CALLBACK = "on_failure_callback"
 
+# Task types whose runtime path is Python with a real try/except, so an
+# on_failure_callback can run in-process on the task's final failure (#424). A
+# bash task execs bash in place (os.execvp), leaving no Python to run it.
+_CALLBACK_CAPABLE_TYPES = ("airflow_operator", "python")
 
-def _has_on_failure_callback(task) -> bool:
-    """Report whether the task declares a callable on_failure_callback. It is not
-    serialised into dag.json (a callable can't be); the runtime re-imports dag.py
-    and calls it in the task process on failure."""
-    cb = (getattr(task, "__leoflow_args__", {}) or {}).get(_ON_FAILURE_CALLBACK)
-    return callable(cb)
+
+def _has_callback(task, name: str) -> bool:
+    """Report whether the task declares a callable ``name``. Native tasks store it
+    as an attribute (the shim setattrs every kwarg); a generically-captured operator
+    carries it in ``__leoflow_args__``. Check both."""
+    if callable(getattr(task, name, None)):
+        return True
+    return callable((getattr(task, "__leoflow_args__", {}) or {}).get(name))
+
+
+def _check_callbacks(task, task_type: str, entry: dict) -> None:
+    """Resolve Airflow lifecycle callbacks (#424). ``on_failure_callback`` is marked
+    on a Python-path task (operator or @task) so the runtime runs it; on a bash task
+    it is a loud reject (no Python is left to run it). ``on_success_callback`` /
+    ``on_retry_callback`` are unsupported everywhere and always a loud reject —
+    never a silent drop, which would leave the author thinking their callback runs."""
+    for name in ("on_success_callback", "on_retry_callback"):
+        if _has_callback(task, name):
+            raise ValueError(
+                f"{name} on task {task.task_id!r} is not supported by Leoflow yet — "
+                "refusing to silently drop it. Use an alerts: block in leoflow.yaml, "
+                "or a downstream @task with a trigger_rule.")
+    if not _has_callback(task, _ON_FAILURE_CALLBACK):
+        return
+    if task_type in _CALLBACK_CAPABLE_TYPES:
+        entry[_ON_FAILURE_CALLBACK] = True
+        return
+    raise ValueError(
+        f"on_failure_callback on task {task.task_id!r} (type {task_type}) cannot run: "
+        "a bash task replaces its process with bash, so no Python is left to call it. "
+        "Use an alerts: block in leoflow.yaml, or a downstream @task with "
+        "trigger_rule='one_failed'.")
 
 
 def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:

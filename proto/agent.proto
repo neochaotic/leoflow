@@ -106,6 +106,8 @@ message TaskSpec {
     string data_interval_end = 19;                 // The DagRun's data interval end, RFC3339. Stamped as LEOFLOW_DATA_INTERVAL_END -> context data_interval_end. Empty leaves it unset.
     string params_json = 20;                        // The DagRun's params/conf, JSON-encoded (#148). Stamped as LEOFLOW_PARAMS so the standalone operator context exposes context['params'] / {{ params.X }}. Empty leaves params={}.
     string first_reschedule_at = 21;                 // For a reschedule-mode sensor re-dispatched after poking not-ready (#380): the time it FIRST entered reschedule, RFC3339. Stamped as LEOFLOW_FIRST_RESCHEDULE_AT so get_first_reschedule_date returns the real value and the sensor honors its cumulative timeout. Empty on the first attempt.
+    int32 max_tries = 22;                            // The task's total attempt budget (retries + 1). The agent stamps LEOFLOW_MAX_TRIES so the runtime fires on_failure_callback only on the terminal attempt (try_number == max_tries), never on an intermediate retry (#424).
+    bool on_failure_callback = 23;                   // The task declares an Airflow on_failure_callback (#424). The agent stamps LEOFLOW_ON_FAILURE_CALLBACK=1 so the runtime re-imports dag.py and runs it in-process on the task's final failure. The callable itself is not carried.
 }
 
 // XComUpstreams is the list of upstream task_ids whose return_values feed one

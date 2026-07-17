@@ -108,7 +108,18 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		DataIntervalEnd:   dataIntervalEnd,
 		ParamsJSON:        paramsJSON,
 		FirstRescheduleAt: firstRescheduleAt,
+		MaxTries:          maxTries(task),
+		OnFailureCallback: task.OnFailureCallback,
 	}, nil
+}
+
+// maxTries is a task's total attempt budget: retries + 1 (a task with no retries
+// runs once). It gates on_failure_callback to the terminal attempt (#424).
+func maxTries(task domain.TaskSpec) int {
+	if task.Retries != nil {
+		return *task.Retries + 1
+	}
+	return 1
 }
 
 // ReportState records a state transition reported by the agent, persisting the

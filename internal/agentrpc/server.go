@@ -63,6 +63,14 @@ type TaskSpec struct {
 	// get_first_reschedule_date returns it and cumulative timeout works. Empty on
 	// the first attempt (not yet rescheduled).
 	FirstRescheduleAt string
+	// MaxTries is the task's total attempt budget (retries + 1). The agent stamps
+	// LEOFLOW_MAX_TRIES so the runtime fires on_failure_callback only on the
+	// terminal attempt (#424). Zero is treated as 1 (no retries).
+	MaxTries int
+	// OnFailureCallback marks that the task declares an Airflow on_failure_callback
+	// (#424). The agent stamps LEOFLOW_ON_FAILURE_CALLBACK=1 so the runtime runs it
+	// in-process on the task's final failure.
+	OnFailureCallback bool
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.
@@ -171,6 +179,8 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		DataIntervalEnd:         spec.DataIntervalEnd,
 		ParamsJson:              spec.ParamsJSON,
 		FirstRescheduleAt:       spec.FirstRescheduleAt,
+		MaxTries:                clampInt32(spec.MaxTries),
+		OnFailureCallback:       spec.OnFailureCallback,
 	}, nil
 }
 

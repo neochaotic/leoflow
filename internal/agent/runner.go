@@ -249,6 +249,14 @@ func runContextEnv(spec *agentv1.TaskSpec) []string {
 	if n := spec.GetTryNumber(); n > 0 {
 		env = append(env, fmt.Sprintf("LEOFLOW_TRY_NUMBER=%d", n))
 	}
+	if n := spec.GetMaxTries(); n > 0 {
+		env = append(env, fmt.Sprintf("LEOFLOW_MAX_TRIES=%d", n))
+	}
+	// Signal the runtime to run the task's on_failure_callback on its final failure
+	// (#424); the runtime re-imports dag.py for the callable only when this is set.
+	if spec.GetOnFailureCallback() {
+		env = append(env, "LEOFLOW_ON_FAILURE_CALLBACK=1")
+	}
 	if ld := spec.GetLogicalDate(); ld != "" {
 		env = append(env, "LEOFLOW_TS="+ld)
 		if t, perr := time.Parse(time.RFC3339, ld); perr == nil {

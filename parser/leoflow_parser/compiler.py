@@ -264,7 +264,22 @@ def _map_task(task, source: str) -> dict[str, Any]:
             entry["xcom_input"] = xcom_input
         if operator_args:
             entry["operator_args"] = operator_args
+    if _has_on_failure_callback(task):
+        entry["on_failure_callback"] = True
     return entry
+
+
+# _ON_FAILURE_CALLBACK is the one Airflow callback kwarg Leoflow runs (#424 inc
+# 4); the others (on_success/on_retry) stay a loud reject until wired.
+_ON_FAILURE_CALLBACK = "on_failure_callback"
+
+
+def _has_on_failure_callback(task) -> bool:
+    """Report whether the task declares a callable on_failure_callback. It is not
+    serialised into dag.json (a callable can't be); the runtime re-imports dag.py
+    and calls it in the task process on failure."""
+    cb = (getattr(task, "__leoflow_args__", {}) or {}).get(_ON_FAILURE_CALLBACK)
+    return callable(cb)
 
 
 def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
@@ -287,6 +302,12 @@ def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
     xcom: dict[str, list[str]] = {}
     operator_args: dict[str, Any] = {}
     for name, value in raw.items():
+        # on_failure_callback is a callable that cannot be serialised into
+        # dag.json, but it is SUPPORTED (#424 inc 4): the runtime re-imports dag.py
+        # and calls it in the task process on failure. Accept it here as a marker
+        # (see _has_on_failure_callback) instead of the non-serialisable reject.
+        if name == _ON_FAILURE_CALLBACK and callable(value):
+            continue
         single_upstream = getattr(getattr(value, "operator", None), "task_id", None)
         if single_upstream:
             xcom[name] = [single_upstream]

@@ -141,6 +141,11 @@ type TaskSpec struct {
 	// The agent serializes them as the env var LEOFLOW_OPERATOR_ARGS; the runtime
 	// instantiates the operator with them.
 	OperatorArgs map[string]any `json:"operator_args,omitempty"`
+	// OnFailureCallback marks that the task declares an Airflow on_failure_callback
+	// (#424). The callable itself is not carried (it can't be serialized); the
+	// runtime re-imports dag.py and runs it in the task process on failure. The
+	// flag lets the agent/UI know a callback will run without importing user code.
+	OnFailureCallback bool `json:"on_failure_callback,omitempty"`
 }
 
 // HTTPRequest is the request executed directly by the control plane for

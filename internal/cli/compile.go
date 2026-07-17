@@ -608,13 +608,14 @@ func parserErrorSummary(stderr string) string {
 	return last
 }
 
-// overlayProject writes the leoflow.yaml Leoflow-specific config (staging and
-// per-task overrides) onto the produced dag.json. These are deployment concerns,
-// not Airflow DAG attributes, so the parser does not emit them (ADR 0022, 0023).
+// overlayProject writes the leoflow.yaml Leoflow-specific config (staging,
+// on-failure alerts, and per-task overrides) onto the produced dag.json. These
+// are deployment concerns, not Airflow DAG attributes, so the parser does not
+// emit them (ADR 0022, 0023; #424).
 // Per-task overrides are bound by task_id; an entry naming a task absent from the
 // DAG is a hard error (no silent drop). No-op when nothing is configured.
 func overlayProject(dagJSONPath string, cfg *domain.LeoflowConfig) error {
-	if cfg.Staging == nil && len(cfg.Tasks) == 0 {
+	if cfg.Staging == nil && cfg.Alerts == nil && len(cfg.Tasks) == 0 {
 		return nil
 	}
 	data, err := os.ReadFile(dagJSONPath) //nolint:gosec // G304: output path is operator-supplied on the CLI.
@@ -627,6 +628,9 @@ func overlayProject(dagJSONPath string, cfg *domain.LeoflowConfig) error {
 	}
 	if cfg.Staging != nil {
 		spec.Staging = cfg.Staging
+	}
+	if cfg.Alerts != nil {
+		spec.Alerts = cfg.Alerts
 	}
 	if verr := validateTaskBindings(cfg.Tasks, spec.Tasks); verr != nil {
 		return verr

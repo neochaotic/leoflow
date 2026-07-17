@@ -165,6 +165,12 @@ const maxCatchupSlotsPerTick = 100
 // that a real orphan is reaped before the operator looks at the dashboard.
 const defaultOrphanThreshold = 5 * time.Minute
 
+// defaultAlertConcurrency caps concurrent on-failure alert dispatches (#424) so a
+// mass failure can't spawn an unbounded burst of alert goroutines/POSTs. Each
+// dispatch is short (bounded by the notifier's HTTP timeout), so a small pool
+// absorbs normal bursts; beyond it, extra alerts are dropped best-effort.
+const defaultAlertConcurrency = 8
+
 // defaultAgentLostThreshold is how long a running TI may go without an agent
 // heartbeat before the TI reaper declares the agent lost. 90 s is 6x the
 // default agent heartbeat interval (15 s, see cmd/leoflow-agent/main.go),
@@ -181,14 +187,19 @@ const defaultDispatchLostThreshold = 3 * time.Minute
 
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
-	store                 Store
-	logger                *slog.Logger
-	interval              time.Duration
-	stepTimeout           time.Duration
-	recorder              Recorder
-	dispatcher            Dispatcher
-	inline                InlineRunner
-	alerter               Alerter
+	store       Store
+	logger      *slog.Logger
+	interval    time.Duration
+	stepTimeout time.Duration
+	recorder    Recorder
+	dispatcher  Dispatcher
+	inline      InlineRunner
+	alerter     Alerter
+	// alertSem bounds concurrent on-failure alert dispatches (#424): a mass
+	// failure must not spawn an unbounded burst of alert goroutines/POSTs. A
+	// buffered channel used as a counting semaphore; a saturated slot drops the
+	// alert (best-effort) rather than blocking the tick.
+	alertSem              chan struct{}
 	orphanThreshold       time.Duration
 	agentLostThreshold    time.Duration
 	dispatchLostThreshold time.Duration
@@ -212,6 +223,7 @@ func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Sch
 		agentLostThreshold:    defaultAgentLostThreshold,
 		dispatchLostThreshold: defaultDispatchLostThreshold,
 		warnedSchedules:       map[string]string{},
+		alertSem:              make(chan struct{}, defaultAlertConcurrency),
 	}
 }
 
@@ -304,6 +316,16 @@ func (s *Scheduler) SetInlineRunner(r InlineRunner) { s.inline = r }
 // SetAlerter attaches the on-failure alerter (optional; #424). Without it, or
 // for a DAG with no alert rules, the scheduler finalizes failures silently.
 func (s *Scheduler) SetAlerter(a Alerter) { s.alerter = a }
+
+// SetAlertConcurrency caps how many on-failure alert dispatches may run at once
+// (#424). n < 1 is treated as 1. Mainly a config/test seam; the default is
+// defaultAlertConcurrency.
+func (s *Scheduler) SetAlertConcurrency(n int) {
+	if n < 1 {
+		n = 1
+	}
+	s.alertSem = make(chan struct{}, n)
+}
 
 // Alerter dispatches a DAG's on-failure alert rules for a run that finalized in
 // the failed state. Implementations resolve each rule's managed connection to an
@@ -608,7 +630,19 @@ func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunSt
 	if run.Alerts == nil || len(run.Alerts.OnFailure) == 0 {
 		return
 	}
-	go s.alerter.AlertRunFailed(context.WithoutCancel(ctx), run)
+	// Acquire a dispatch slot without blocking the tick. A saturated semaphore
+	// means a burst of failures is already sending; dropping this one (with a
+	// warning) is the best-effort trade-off that protects the scheduler.
+	select {
+	case s.alertSem <- struct{}{}:
+		go func() {
+			defer func() { <-s.alertSem }()
+			s.alerter.AlertRunFailed(context.WithoutCancel(ctx), run)
+		}()
+	default:
+		s.logger.Warn("dropping on-failure alert: dispatch saturated",
+			"dag", run.DagID, "run", run.RunID, "limit", cap(s.alertSem))
+	}
 }
 
 // applyPlanned launches a task as it becomes queued and records the resulting

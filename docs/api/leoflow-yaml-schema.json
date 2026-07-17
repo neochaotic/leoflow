@@ -164,6 +164,28 @@
       }
     },
 
+    "alerts": {
+      "type": "object",
+      "description": "Native on-failure alerting (#424). The scheduler fires these rules when a DagRun reaches the terminal failed state — in Go, with no task pod.",
+      "properties": {
+        "on_failure": {
+          "type": "array",
+          "description": "Rules dispatched when the DagRun fails.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["slack", "webhook"], "description": "Channel: slack (incoming webhook) or webhook (generic HTTP POST)." },
+              "conn": { "type": "string", "minLength": 1, "description": "Managed Leoflow connection id holding the endpoint and its secret. Required — no literal URLs/tokens in leoflow.yaml." },
+              "message": { "type": "string", "description": "Optional notification body, templated with run context ({{dag}}, {{run_id}}, {{task}})." }
+            },
+            "required": ["type", "conn"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
     "tasks": {
       "type": "object",
       "description": "Per-task overrides bound by task_id (ADR 0023). Each key MUST match a task_id in the compiled DAG; an unknown id fails the compile. A set field overrides the value compiled from the DAG (task override > DAG defaults).",

@@ -156,6 +156,9 @@ def run(entrypoint: str) -> None:
         # ordering in the log panel matches the wall-clock order.
         sys.stdout.flush()
         sys.stderr.flush()
+        # Run the @task's on_failure_callback on its terminal attempt, before the
+        # re-raise, so the task's own failed outcome is unchanged (#424 inc 4b).
+        _maybe_fire_on_failure_callback(context)
         # Re-raise so Python's default handler emits the traceback to stderr —
         # the agent captures it.
         raise
@@ -397,6 +400,72 @@ def _merge_operator_xcom(args: dict) -> dict:
     return args
 
 
+def _run_on_failure_callback(get_callback, context, try_number, max_tries) -> None:
+    """Run a task's Airflow ``on_failure_callback`` on its FINAL failed attempt
+    (#424 inc 4b).
+
+    Airflow calls the callback only when the task instance reaches terminal
+    ``failed`` (retries exhausted), never on an intermediate ``up_for_retry``
+    attempt. The runtime runs per attempt, so gate on ``try_number >= max_tries``:
+    for ``retries: 3``, a fail→fail→success run fires it zero times, and a
+    fail×3 run fires it once (on the last).
+
+    ``get_callback`` is a zero-arg resolver (it imports dag.py and finds the
+    task's callback) called lazily, only when this attempt is terminal. It is
+    best-effort + anti-loop: a callback that raises is logged and swallowed so it
+    can never re-trigger itself or change the task's own failed outcome.
+    """
+    if try_number < max_tries:
+        return
+    callback = get_callback()
+    if callback is None:
+        return
+    _lifecycle("running on_failure_callback")
+    try:
+        callback(context)
+    except Exception as exc:  # noqa: BLE001 — best-effort; never fail the task on its callback
+        _lifecycle(f"on_failure_callback raised {type(exc).__name__}: {exc} (ignored)")
+
+
+def _resolve_on_failure_callback():
+    """Import the DAG module and return the current task's ``on_failure_callback``
+    (or None). The callable can't be serialised into dag.json, so the compiler only
+    marks its presence (#424 inc 4a); here we re-import dag.py — real Airflow is
+    present at runtime, so the operator carries the real attribute — and read it off
+    the task. Any import/lookup problem yields None (best-effort: a resolution miss
+    must never turn into a task failure)."""
+    task_id = os.environ.get("LEOFLOW_TASK_ID", "")
+    module_name = os.environ.get("LEOFLOW_DAG_MODULE", "dag")
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as exc:  # noqa: BLE001 — dag.py must not break failure handling
+        _lifecycle(f"on_failure_callback: cannot import {module_name!r} ({exc}); skipping")
+        return None
+    for obj in vars(module).values():
+        task_dict = getattr(obj, "task_dict", None)  # an Airflow DAG object
+        if isinstance(task_dict, dict) and task_id in task_dict:
+            return getattr(task_dict[task_id], "on_failure_callback", None)
+    return None
+
+
+def _maybe_fire_on_failure_callback(context) -> None:
+    """Fire the task's on_failure_callback if the compiler marked one
+    (LEOFLOW_ON_FAILURE_CALLBACK, set by the agent) and this attempt is terminal.
+    Reads try_number/max_tries from the env; a missing max_tries defaults to
+    try_number (treat as final). Fully guarded — never raises."""
+    if os.environ.get("LEOFLOW_ON_FAILURE_CALLBACK") != "1":
+        return
+    try:
+        try_number = int(os.environ.get("LEOFLOW_TRY_NUMBER", "1"))
+    except ValueError:
+        try_number = 1
+    try:
+        max_tries = int(os.environ.get("LEOFLOW_MAX_TRIES", str(try_number)))
+    except ValueError:
+        max_tries = try_number
+    _run_on_failure_callback(_resolve_on_failure_callback, context, try_number, max_tries)
+
+
 def run_operator(operator_class: str, args: dict) -> None:
     """Instantiate and execute a captured Airflow operator/sensor (ADR 0040 Phase
     A): ``import_string(class)(task_id, **args) → render_template_fields → execute``.
@@ -428,6 +497,10 @@ def run_operator(operator_class: str, args: dict) -> None:
                 f"{class_name} asked to defer (deferrable=True), which Leoflow does not "
                 f"support yet (ADR 0040 Phase C — no triggerer). Pass deferrable=False — "
                 f"the operator runs synchronously in the pod (poke-style).") from exc
+        # A genuine failure (not a reschedule/deferral): run the on_failure_callback
+        # on the terminal attempt before re-raising, so the task's failed state is
+        # unchanged (#424 inc 4b).
+        _maybe_fire_on_failure_callback(context)
         raise
     _write_return(result)
     _write_extra_links(op, context["ti"].pushed)

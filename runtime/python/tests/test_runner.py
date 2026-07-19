@@ -404,3 +404,86 @@ def test_standalone_ti_get_first_reschedule_date(monkeypatch):
     monkeypatch.setenv("LEOFLOW_FIRST_RESCHEDULE_AT", "2099-01-02T03:04:05+00:00")
     got = runner._StandaloneTaskInstance().get_first_reschedule_date({})
     assert got == datetime(2099, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+# --- on_failure_callback core (#424 inc 4b) -------------------------------------
+
+def test_on_failure_callback_fires_on_final_attempt():
+    calls = []
+    runner._run_on_failure_callback(
+        lambda: (lambda ctx: calls.append(ctx)), {"dag_id": "d"}, try_number=3, max_tries=3)
+    assert calls == [{"dag_id": "d"}]
+
+
+def test_on_failure_callback_skipped_when_retries_remain():
+    calls = []
+    runner._run_on_failure_callback(
+        lambda: (lambda ctx: calls.append(ctx)), {}, try_number=1, max_tries=3)
+    assert calls == []  # a retry will follow — not a terminal failure
+
+
+def test_on_failure_callback_swallows_error():
+    def boom(_ctx):
+        raise RuntimeError("nope")
+    # best-effort: must NOT raise, so the task's own failure is unaffected
+    runner._run_on_failure_callback(lambda: boom, {}, try_number=1, max_tries=1)
+
+
+def test_on_failure_callback_noop_when_absent():
+    # get_callback returns None (no callback declared) → no-op, no error
+    runner._run_on_failure_callback(lambda: None, {}, try_number=1, max_tries=1)
+
+
+def _fake_dag_module(monkeypatch, name, task_id, cb):
+    import sys
+    import types
+
+    class _Op:
+        def __init__(self, c):
+            self.on_failure_callback = c
+
+    class _Dag:
+        def __init__(self, td):
+            self.task_dict = td
+
+    mod = types.ModuleType(name)
+    mod.d = _Dag({task_id: _Op(cb)})
+    monkeypatch.setitem(sys.modules, name, mod)
+
+
+def test_resolve_on_failure_callback_reads_the_task_attr(monkeypatch):
+    def notify(_ctx):
+        pass
+    _fake_dag_module(monkeypatch, "fakedag_res", "t", notify)
+    monkeypatch.setenv("LEOFLOW_DAG_MODULE", "fakedag_res")
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
+    assert runner._resolve_on_failure_callback() is notify
+
+
+def test_maybe_fire_noop_without_marker(monkeypatch):
+    monkeypatch.delenv("LEOFLOW_ON_FAILURE_CALLBACK", raising=False)
+    runner._maybe_fire_on_failure_callback({})  # must not raise, must not import
+
+
+def test_maybe_fire_runs_on_final_attempt(monkeypatch):
+    calls = []
+    _fake_dag_module(monkeypatch, "fakedag_fire", "t", lambda ctx: calls.append(ctx))
+    monkeypatch.setenv("LEOFLOW_ON_FAILURE_CALLBACK", "1")
+    monkeypatch.setenv("LEOFLOW_DAG_MODULE", "fakedag_fire")
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
+    monkeypatch.setenv("LEOFLOW_TRY_NUMBER", "2")
+    monkeypatch.setenv("LEOFLOW_MAX_TRIES", "2")
+    runner._maybe_fire_on_failure_callback({"dag_id": "d"})
+    assert calls == [{"dag_id": "d"}]
+
+
+def test_maybe_fire_skips_when_retries_remain(monkeypatch):
+    calls = []
+    _fake_dag_module(monkeypatch, "fakedag_skip", "t", lambda ctx: calls.append(ctx))
+    monkeypatch.setenv("LEOFLOW_ON_FAILURE_CALLBACK", "1")
+    monkeypatch.setenv("LEOFLOW_DAG_MODULE", "fakedag_skip")
+    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
+    monkeypatch.setenv("LEOFLOW_TRY_NUMBER", "1")
+    monkeypatch.setenv("LEOFLOW_MAX_TRIES", "3")
+    runner._maybe_fire_on_failure_callback({})
+    assert calls == []

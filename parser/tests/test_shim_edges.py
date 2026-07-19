@@ -192,6 +192,82 @@ def test_operator_non_serialisable_arg_is_loud_reject(monkeypatch, tmp_path):
         """)
 
 
+def test_operator_on_failure_callback_is_marked_not_rejected(monkeypatch, tmp_path):
+    """on_failure_callback is a callable Leoflow cannot serialise into dag.json,
+    but instead of the general non-serialisable reject (ADR 0040 A1.1) it is
+    ACCEPTED and marked on the task (#424 inc 4): the runtime re-imports dag.py and
+    runs it in the task process on failure. The callable itself is not carried."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+        def notify(context):
+            pass
+        with DAG("g"):
+            SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1",
+                                    on_failure_callback=notify)
+    """)
+    q = _task(spec, "q")
+    assert q["type"] == "airflow_operator"
+    assert q.get("on_failure_callback") is True
+    # the callable must NOT leak into the serialised operator args
+    assert "on_failure_callback" not in q.get("operator_args", {})
+
+
+def test_python_task_on_failure_callback_is_marked(monkeypatch, tmp_path):
+    """A native @task runs in Python (run() has an except), so on_failure_callback
+    is supported and marked — same as a provider operator (#424)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, task
+        def notify(ctx): pass
+        @task(on_failure_callback=notify)
+        def a() -> None: ...
+        with DAG("g"):
+            a()
+    """)
+    a = _task(spec, "a")
+    assert a["type"] == "python"
+    assert a.get("on_failure_callback") is True
+
+
+def test_bash_task_on_failure_callback_is_loud_reject(monkeypatch, tmp_path):
+    """A bash task replaces its process with bash (os.execvp), so no Python is left
+    to run a callback — refuse loud rather than silently drop it (#424)."""
+    with pytest.raises(ValueError):
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG
+            from airflow.providers.standard.operators.bash import BashOperator
+            def notify(ctx): pass
+            with DAG("g"):
+                BashOperator(task_id="b", bash_command="false", on_failure_callback=notify)
+        """)
+
+
+def test_native_task_on_success_callback_is_loud_reject(monkeypatch, tmp_path):
+    """on_success/on_retry callbacks are unsupported everywhere; on a native task
+    they must fail loud too (not be silently dropped)."""
+    with pytest.raises(ValueError):
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG
+            from airflow.providers.standard.operators.bash import BashOperator
+            def notify(ctx): pass
+            with DAG("g"):
+                BashOperator(task_id="b", bash_command="true", on_success_callback=notify)
+        """)
+
+
+def test_operator_on_success_callback_still_rejected(monkeypatch, tmp_path):
+    """Only on_failure_callback is wired (#424 inc 4); other callback kwargs stay a
+    loud reject so we never silently drop them."""
+    with pytest.raises(ValueError):
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG
+            from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+            with DAG("g"):
+                SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1",
+                                        on_success_callback=lambda ctx: None)
+        """)
+
+
 def test_http_sensor_is_generic_operator_not_native_http(monkeypatch, tmp_path):
     """A SENSOR whose name contains 'Http' (HttpSensor) must be captured as a
     generic airflow_operator (poke in a pod), NOT mistranslated to the native

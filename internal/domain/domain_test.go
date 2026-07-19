@@ -43,6 +43,16 @@ func TestDAGSpecValidateAcceptsValidSpec(t *testing.T) {
 	}
 }
 
+// A task marked with on_failure_callback (#424) validates: the compiler emits
+// the boolean flag (the callable stays in dag.py), and the schema accepts it.
+func TestDAGSpecValidateAcceptsOnFailureCallback(t *testing.T) {
+	spec := validDAGSpec()
+	spec.Tasks[0].OnFailureCallback = true
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate() with on_failure_callback = %v, want nil", err)
+	}
+}
+
 func TestDAGSpecValidateRejectsInvalidSpecs(t *testing.T) {
 	cases := map[string]func(*DAGSpec){
 		"missing dag_id":       func(d *DAGSpec) { d.DagID = "" },

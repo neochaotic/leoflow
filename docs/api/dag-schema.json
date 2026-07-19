@@ -168,6 +168,10 @@
           "type": "object",
           "description": "For type=airflow_operator: the operator's constructor kwargs captured at compile time."
         },
+        "on_failure_callback": {
+          "type": "boolean",
+          "description": "Marks that the task declares an Airflow on_failure_callback (#424); the runtime runs it in the task process on failure. The callable itself is not carried."
+        },
         "depends_on": {
           "type": "array",
           "items": {

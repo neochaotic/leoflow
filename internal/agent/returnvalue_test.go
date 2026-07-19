@@ -35,6 +35,35 @@ func TestNewReturnValuePathUnique(t *testing.T) {
 	}
 }
 
+// TestBuildEnvSignalsOnFailureCallback: when the task declares an
+// on_failure_callback, the agent stamps LEOFLOW_MAX_TRIES + LEOFLOW_ON_FAILURE_
+// CALLBACK so the runtime can fire it on the terminal attempt only (#424). A task
+// without the marker stamps neither signal.
+func TestBuildEnvSignalsOnFailureCallback(t *testing.T) {
+	r := newRunner(&fakeClient{}, &fakeCmd{}, &recordingSink{})
+	env, err := r.buildEnv(context.Background(),
+		&agentv1.TaskSpec{TryNumber: 3, MaxTries: 3, OnFailureCallback: true})
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if !contains(env, "LEOFLOW_MAX_TRIES=3") {
+		t.Errorf("buildEnv must stamp LEOFLOW_MAX_TRIES, got %v", env)
+	}
+	if !contains(env, "LEOFLOW_ON_FAILURE_CALLBACK=1") {
+		t.Errorf("buildEnv must signal on_failure_callback, got %v", env)
+	}
+
+	plain, err := r.buildEnv(context.Background(), &agentv1.TaskSpec{TryNumber: 1, MaxTries: 1})
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	for _, kv := range plain {
+		if strings.HasPrefix(kv, "LEOFLOW_ON_FAILURE_CALLBACK=") {
+			t.Errorf("must not signal the callback without the marker, got %q", kv)
+		}
+	}
+}
+
 // TestBuildEnvInjectsReturnValuePath: the runner tells the runtime where to write
 // the return value (the agent's per-task path), and injects nothing when there is
 // no return path.

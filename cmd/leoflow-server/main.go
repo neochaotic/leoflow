@@ -24,12 +24,14 @@ import (
 
 	leoflow "github.com/neochaotic/leoflow"
 	"github.com/neochaotic/leoflow/internal/agentrpc"
+	"github.com/neochaotic/leoflow/internal/alerts"
 	"github.com/neochaotic/leoflow/internal/api"
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/dispatch"
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/executor"
+	"github.com/neochaotic/leoflow/internal/failurealert"
 	"github.com/neochaotic/leoflow/internal/logs"
 	"github.com/neochaotic/leoflow/internal/observability"
 	"github.com/neochaotic/leoflow/internal/scheduler"
@@ -124,7 +126,7 @@ func run() error {
 	var schedulerHealth api.Heartbeater
 	podDispatch := false
 	if cfg.Scheduler.Enabled {
-		sched, dispatchOn, serr := startScheduler(ctx, cfg, pg, execStore, authn, xcomSvc, logSink, tel.Logger, tel.Metrics)
+		sched, dispatchOn, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, xcomSvc, logSink, tel.Logger, tel.Metrics)
 		if serr != nil {
 			return serr
 		}
@@ -578,7 +580,7 @@ func startStagingGC(ctx context.Context, cs kubernetes.Interface, store executor
 	}()
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, error) {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, error) {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
 		return nil, false, fmt.Errorf("leader pool: %w", err)
@@ -596,6 +598,15 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		MaxSeconds:  cfg.Executor.HTTP.InlineMaxDurationSeconds,
 		UserAgent:   cfg.Executor.HTTP.UserAgent,
 	}))
+	// Native on-failure alerting (#424): the scheduler fires Slack/webhook rules
+	// declared in leoflow.yaml when a run finalizes failed, resolving each rule's
+	// managed connection to its endpoint URL. Best-effort, off the tick path.
+	sched.SetAlerter(failurealert.New(
+		alerts.NewNotifier(&http.Client{Timeout: alertHTTPTimeout}),
+		connEndpointResolver{repo},
+		metrics,
+		logger,
+	))
 	podDispatch := setupDispatch(ctx, cfg, sched, execStore, authn, store, logger, metrics)
 	leader := scheduler.NewLeader(leaderPool)
 	go func() {
@@ -603,6 +614,25 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		campaignAndRun(ctx, leader, sched, logger)
 	}()
 	return sched, podDispatch, nil
+}
+
+// alertHTTPTimeout bounds each on-failure alert POST so a slow or hung channel
+// endpoint cannot pile up detached alert goroutines (#424).
+const alertHTTPTimeout = 10 * time.Second
+
+// connEndpointResolver adapts the connection store to failurealert.EndpointResolver:
+// an alert channel's endpoint URL is the connection's decrypted secret (#424).
+type connEndpointResolver struct{ repo *storage.Repository }
+
+// ResolveAlertEndpoint returns the connection's endpoint — its secret URL and any
+// headers from the connection extra — for the tenant, or an error when it is
+// missing/undecryptable.
+func (c connEndpointResolver) ResolveAlertEndpoint(ctx context.Context, tenantID, connID string) (failurealert.Endpoint, error) {
+	url, headers, err := c.repo.AlertEndpoint(ctx, tenantID, connID)
+	if err != nil {
+		return failurealert.Endpoint{}, err
+	}
+	return failurealert.Endpoint{URL: url, Headers: headers}, nil
 }
 
 // leaderCheckInterval is how often we both poll for leadership (as a follower)

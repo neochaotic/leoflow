@@ -62,6 +62,10 @@ type RunState struct {
 	// means "skip the cooldown gate" so legacy callers + tests that don't set
 	// retry_delay get the previous (immediate-retry) behavior.
 	Now time.Time
+	// Alerts carries the DAG's native on-failure alerting config (#424), loaded
+	// from the dag.json alongside Tasks. nil means no alerting; the scheduler
+	// dispatches these rules once the run finalizes as failed.
+	Alerts *domain.AlertsConfig
 }
 
 // ScheduledDAG is a cron-scheduled DAG and the logical date of its latest run.
@@ -161,6 +165,12 @@ const maxCatchupSlotsPerTick = 100
 // that a real orphan is reaped before the operator looks at the dashboard.
 const defaultOrphanThreshold = 5 * time.Minute
 
+// defaultAlertConcurrency caps concurrent on-failure alert dispatches (#424) so a
+// mass failure can't spawn an unbounded burst of alert goroutines/POSTs. Each
+// dispatch is short (bounded by the notifier's HTTP timeout), so a small pool
+// absorbs normal bursts; beyond it, extra alerts are dropped best-effort.
+const defaultAlertConcurrency = 8
+
 // defaultAgentLostThreshold is how long a running TI may go without an agent
 // heartbeat before the TI reaper declares the agent lost. 90 s is 6x the
 // default agent heartbeat interval (15 s, see cmd/leoflow-agent/main.go),
@@ -177,13 +187,19 @@ const defaultDispatchLostThreshold = 3 * time.Minute
 
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
-	store                 Store
-	logger                *slog.Logger
-	interval              time.Duration
-	stepTimeout           time.Duration
-	recorder              Recorder
-	dispatcher            Dispatcher
-	inline                InlineRunner
+	store       Store
+	logger      *slog.Logger
+	interval    time.Duration
+	stepTimeout time.Duration
+	recorder    Recorder
+	dispatcher  Dispatcher
+	inline      InlineRunner
+	alerter     Alerter
+	// alertSem bounds concurrent on-failure alert dispatches (#424): a mass
+	// failure must not spawn an unbounded burst of alert goroutines/POSTs. A
+	// buffered channel used as a counting semaphore; a saturated slot drops the
+	// alert (best-effort) rather than blocking the tick.
+	alertSem              chan struct{}
 	orphanThreshold       time.Duration
 	agentLostThreshold    time.Duration
 	dispatchLostThreshold time.Duration
@@ -207,6 +223,7 @@ func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Sch
 		agentLostThreshold:    defaultAgentLostThreshold,
 		dispatchLostThreshold: defaultDispatchLostThreshold,
 		warnedSchedules:       map[string]string{},
+		alertSem:              make(chan struct{}, defaultAlertConcurrency),
 	}
 }
 
@@ -295,6 +312,30 @@ func (s *Scheduler) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 // SetInlineRunner attaches the inline http_api runner (optional; without it
 // inline http_api tasks fall back to the standard queued dispatch path).
 func (s *Scheduler) SetInlineRunner(r InlineRunner) { s.inline = r }
+
+// SetAlerter attaches the on-failure alerter (optional; #424). Without it, or
+// for a DAG with no alert rules, the scheduler finalizes failures silently.
+func (s *Scheduler) SetAlerter(a Alerter) { s.alerter = a }
+
+// SetAlertConcurrency caps how many on-failure alert dispatches may run at once
+// (#424). n < 1 is treated as 1. Mainly a config/test seam; the default is
+// defaultAlertConcurrency.
+func (s *Scheduler) SetAlertConcurrency(n int) {
+	if n < 1 {
+		n = 1
+	}
+	s.alertSem = make(chan struct{}, n)
+}
+
+// Alerter dispatches a DAG's on-failure alert rules for a run that finalized in
+// the failed state. Implementations resolve each rule's managed connection to an
+// endpoint and send (Slack/webhook). The scheduler calls it from a detached
+// goroutine, so an implementation may block on network I/O without stalling the
+// tick; it MUST treat every send as best-effort — a delivery failure is logged,
+// never propagated, so alerting can never fail a run.
+type Alerter interface {
+	AlertRunFailed(ctx context.Context, run RunState)
+}
 
 // Run drives the scheduling loop until ctx is canceled. The loop is crash-proof:
 // a panic or error in a tick is recovered and logged, so the scheduler keeps
@@ -572,8 +613,36 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 		if err := s.store.SetRunState(ctx, run.RunID, state); err != nil {
 			return fmt.Errorf("finalizing run: %w", err)
 		}
+		s.maybeAlertFailure(ctx, state, run)
 	}
 	return nil
+}
+
+// maybeAlertFailure fires the DAG's on-failure alert rules when a run finalizes
+// failed. It runs in a detached goroutine (WithoutCancel) so a slow endpoint
+// never stalls the tick, and the alerter's own best-effort contract means a
+// delivery failure cannot fail the run. A nil alerter or a DAG without rules is
+// a no-op.
+func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunState, run RunState) {
+	if state != domain.DagRunStateFailed || s.alerter == nil {
+		return
+	}
+	if run.Alerts == nil || len(run.Alerts.OnFailure) == 0 {
+		return
+	}
+	// Acquire a dispatch slot without blocking the tick. A saturated semaphore
+	// means a burst of failures is already sending; dropping this one (with a
+	// warning) is the best-effort trade-off that protects the scheduler.
+	select {
+	case s.alertSem <- struct{}{}:
+		go func() {
+			defer func() { <-s.alertSem }()
+			s.alerter.AlertRunFailed(context.WithoutCancel(ctx), run)
+		}()
+	default:
+		s.logger.Warn("dropping on-failure alert: dispatch saturated",
+			"dag", run.DagID, "run", run.RunID, "limit", cap(s.alertSem))
+	}
 }
 
 // applyPlanned launches a task as it becomes queued and records the resulting

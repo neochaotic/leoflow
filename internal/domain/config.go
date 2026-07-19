@@ -42,6 +42,35 @@ type LeoflowConfig struct {
 	// key must match a task_id in the compiled DAG; the compiler errors on an
 	// unknown id rather than silently dropping it.
 	Tasks map[string]*TaskConfig `json:"tasks,omitempty" yaml:"tasks,omitempty"`
+	// Alerts declares native on-failure alerting (#424): the scheduler fires the
+	// listed rules when a DagRun reaches the terminal failed state, in Go, with no
+	// task pod and no Python in the hot path. A Leoflow deployment concern (not an
+	// Airflow DAG attribute), so it lives in leoflow.yaml and the compiler overlays
+	// it onto the produced dag.json.
+	Alerts *AlertsConfig `json:"alerts,omitempty" yaml:"alerts,omitempty"`
+}
+
+// AlertsConfig groups alert rules by the lifecycle event that fires them. Only
+// on_failure is wired today (#424); on_success/on_retry are reserved for a later
+// increment so the surface can grow without a breaking change.
+type AlertsConfig struct {
+	// OnFailure lists the rules dispatched when a DagRun reaches failed.
+	OnFailure []AlertRule `json:"on_failure,omitempty" yaml:"on_failure,omitempty"`
+}
+
+// AlertRule is one channel to notify on an alert event. The endpoint and its
+// secret always come from a managed connection (Conn), never a literal URL or
+// token in leoflow.yaml — that keeps credentials out of the compiled dag.json and
+// mirrors the env-ref secret discipline.
+type AlertRule struct {
+	// Type is the channel: "slack" (Slack incoming webhook) or "webhook" (a generic
+	// HTTP POST, e.g. PagerDuty/Opsgenie/Teams). Validated by the schema enum.
+	Type string `json:"type" yaml:"type"`
+	// Conn is the managed Leoflow connection id holding the endpoint (and secret).
+	Conn string `json:"conn" yaml:"conn"`
+	// Message is the optional notification body; it is templated at fire time with
+	// run context ({{dag}}, {{run_id}}, {{task}}, …). Empty uses a default summary.
+	Message string `json:"message,omitempty" yaml:"message,omitempty"`
 }
 
 // DbtConfig declares a dbt project as the DAG source (ADR 0042). The compiler

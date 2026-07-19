@@ -106,6 +106,26 @@
       },
       "additionalProperties": false
     },
+    "alerts": {
+      "type": "object",
+      "description": "Native on-failure alerting (#424), overlaid from leoflow.yaml; the scheduler fires it when the DagRun reaches failed.",
+      "properties": {
+        "on_failure": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["slack", "webhook"] },
+              "conn": { "type": "string", "minLength": 1 },
+              "message": { "type": "string" }
+            },
+            "required": ["type", "conn"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "tasks": {
       "type": "array",
       "minItems": 1,

@@ -126,3 +126,26 @@ func TestOverlayProjectPreservesStaging(t *testing.T) {
 		t.Errorf("staging = %+v, want enabled 5Gi", got.Staging)
 	}
 }
+
+// The overlay carries the leoflow.yaml alerts: block onto the compiled dag.json
+// (#424), so the scheduler can fire it without re-reading leoflow.yaml.
+func TestOverlayProjectCarriesAlerts(t *testing.T) {
+	path := writeDagJSON(t)
+	cfg := &domain.LeoflowConfig{
+		DagID: "proj",
+		Alerts: &domain.AlertsConfig{OnFailure: []domain.AlertRule{
+			{Type: "slack", Conn: "slack_prod", Message: "{{dag}} failed"},
+			{Type: "webhook", Conn: "pagerduty"},
+		}},
+	}
+	if err := overlayProject(path, cfg); err != nil {
+		t.Fatalf("overlayProject: %v", err)
+	}
+	got := readSpec(t, path)
+	if got.Alerts == nil || len(got.Alerts.OnFailure) != 2 {
+		t.Fatalf("alerts not carried: %+v", got.Alerts)
+	}
+	if got.Alerts.OnFailure[0].Type != "slack" || got.Alerts.OnFailure[0].Conn != "slack_prod" {
+		t.Errorf("first rule = %+v", got.Alerts.OnFailure[0])
+	}
+}

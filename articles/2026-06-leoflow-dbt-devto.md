@@ -1,10 +1,11 @@
 ---
-title: "Run dbt as pods, not as a monolith — dbt-native orchestration without Cosmos"
+title: 'Run dbt as pods, not as a monolith — dbt-native orchestration without Cosmos'
 published: false
-description: "Leoflow v0.1.1 turns a dbt project into a real DAG: one pod per model, mixed with your operators, with the warehouse connection generated in-pod and never baked into the image. Here's the architecture, the trade-offs, and how it compares to Cosmos."
+description: 'Leoflow v0.1.1 turns a dbt project into a real DAG: one pod per model, mixed with your operators, with the warehouse connection generated in-pod and never baked into the image. Here''s the architecture, the trade-offs, and how it compares to Cosmos.'
 tags: 'dbt, dataengineering, airflow, go'
 cover_image: 'https://raw.githubusercontent.com/neochaotic/leoflow/main/docs/assets/screenshots/etl-graph.png'
 series: Building Leoflow
+id: 4181914
 ---
 
 > **TL;DR** — Leoflow `v0.1.1` runs a **dbt project as a native DAG**: it reads

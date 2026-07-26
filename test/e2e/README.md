@@ -15,6 +15,7 @@ gate-and-release policy these tests implement.
 | `lite-login.sh` | Lite happy path: `leoflow setup` → control plane → admin login → JWT → web editor | ~15 s | `ci.yaml` job `e2e-lite` on every PR + push |
 | `lite-multidag.sh` | The multi-DAG materialization contract: subdir DAG → `dag.json.source` carries `dag.py` verbatim (the property the subprocess executor depends on to materialize per-TI work dirs) | ~5 s | `ci.yaml` job `e2e-lite-multidag` on every PR + push |
 | `lite-selfheal.sh` | Lite **boot self-heal** (#404): two `leoflow lite` sessions share one Postgres; session 2's boot reconcile deregisters a DAG whose files were removed **and** clears its orphan import error, while keeping a valid DAG. Guards the regression where the watcher seeded its set-diff from the workspace instead of the control plane, leaving un-removable ghosts | ~30 s | `ci.yaml` job `e2e-lite-selfheal` on every PR + push |
+| `lite-alerts.sh` | Native **on-failure alerting** (#424): a DAG with an `alerts:` block and one `http_api` task that fails (500) is triggered; the scheduler must fire a real webhook `POST` — resolved from an **encrypted managed connection** and rendered from the message template — to a local receiver. Exercises the whole Go control-plane chain (compile → `dag.json` → scheduler → dispatcher → notifier) against a real DB and real connection encryption, which the unit tests can't | ~1 min | `ci.yaml` job `e2e-lite-alerts` on every PR + push |
 | `e2e.sh` | Pod-path E2E on k3d: build images, k3d import, agent-over-gRPC, real pod-per-task. Regression guards for the ADR 0040 features in the real pod path: generic operator/sensor execution, `ti.xcom_pull` chaining, `@task` run-context (`ds`), Admin Variable delivery, **multi-key XCom** (`LEOFLOW_PUSHES_PATH`), **native bash Jinja templating** (`{{ ds }}`, #382), and **cloud connection delivery** — a user-pasted credential (GCP `keyfile_dict`, AWS access keys, Azure client secret) created via the API survives encrypted-at-rest storage (ADR 0019) and is recovered intact inside the pod task, and **reschedule-mode sensors** (#380) — a `DateTimeSensor(mode='reschedule')` releases its pod on each not-ready poke (passes through `up_for_reschedule`) and is re-dispatched to success | minutes | `ci.yaml` job `e2e-operators` (k3d) on every PR + push |
 | `deploy-e2e.sh` | The real `leoflow deploy` path (ADR 0041): `auth login` → one `leoflow deploy` that builds for the cluster arch, **pushes to a registry the cluster pulls from**, captures the digest, re-pins `dag.json`, registers — then the cluster pulls the digest-pinned image and runs it | minutes | Manual / separate workflow |
 | `dbt-e2e.sh` | dbt support (ADR 0042): `leoflow compile` renders a dbt project's `manifest.json` into one task per dbt node, then the scheduler dispatches a **pod per node** whose agent runs `dbt seed/run --select <node>` against a shared Postgres warehouse, in dependency order, until every task succeeds and the mart materializes | minutes | Manual (needs `dbt` on PATH) |
@@ -31,14 +32,16 @@ leave to e2e).
 ### Lite tests (Postgres + Redis required for `lite-login.sh`)
 
 ```bash
-make dev-up                          # Postgres + Redis on the host
-bash test/e2e/lite-login.sh          # ~15 s
-bash test/e2e/lite-multidag.sh       # ~5 s — no DB needed
+make dev-up                                  # Postgres + Redis on the host
+bash test/e2e/lite-login.sh                  # ~15 s
+bash test/e2e/lite-multidag.sh               # ~5 s — no DB needed
+PYTHONPATH=parser bash test/e2e/lite-alerts.sh   # ~1 min — needs Postgres (leoflow_dev)
 ```
 
 `lite-login.sh` is destructive — it resets `leoflow_dev`.
 `lite-multidag.sh` runs entirely in a tmpdir and needs nothing but Go +
-Python.
+Python. `lite-alerts.sh` also resets `leoflow_dev` and needs the parser on
+`PYTHONPATH` (it boots `leoflow lite`, which compiles the DAG).
 
 ### Pod-path test (k3d + Docker)
 

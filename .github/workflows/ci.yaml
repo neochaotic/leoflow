@@ -311,6 +311,40 @@ jobs:
         run: bash test/e2e/lite-alerts.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # Airflow on_failure_callback gate (#424). A @task that raises must run its
+  # native on_failure_callback in the task process, once, on the terminal failure —
+  # resolved off the loaded task object (works for an unbound `with DAG():`) and
+  # called even though Airflow normalises it to a list. The callback POSTs the real
+  # Airflow context to a local receiver; asserts it fired exactly once. Guards the
+  # two integration bugs the unit tests (fake resolver/callback) missed.
+  # ─────────────────────────────────────────────────────────────────────
+  e2e-lite-callback:
+    name: E2E Lite (on_failure_callback gate)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: leoflow
+          POSTGRES_PASSWORD: leoflow
+          POSTGRES_DB: leoflow_dev
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      # leoflow lite spawns the parser via `python3 -m leoflow_parser`; ship its
+      # source on PYTHONPATH so the import resolves on a bare runner.
+      PYTHONPATH: parser
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Airflow on_failure_callback (#424)
+        run: bash test/e2e/lite-callback.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # Headless SPA crash smoke (test/e2e/ui-smoke.js): boots Lite (managed PG, no
   # Docker), drives the embedded Airflow 3.2 UI with a real browser, and fails on
   # any uncaught React error. The Go tests cannot see the React layer — the

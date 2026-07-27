@@ -62,12 +62,13 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────
   # Trivy: container image scanning (ADR 0014)
-  # Runs only on tags or main; not on every PR to avoid noise.
+  # Runs on PRs too (#437): a fixable dependency CVE must fail its own PR check,
+  # not slip through and redden main on the post-merge run (as it did in #436 and
+  # #439). ignore-unfixed keeps the gate to actionable, fixable findings only.
   # ─────────────────────────────────────────────────────────────────────
   trivy:
     name: Trivy (image scan)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'schedule'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -85,9 +86,13 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
 
+      # Upload the SARIF baseline to the Security tab only on push/schedule. On a
+      # PR the scan still gates the check (exit-code 1 above), but we do not upload
+      # so a PR run cannot collide with or overwrite the main branch baseline under
+      # the shared trivy-fs category (#437).
       - name: Upload Trivy SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs

@@ -128,6 +128,52 @@ Trade-off: a task runs a pod and is itself a task in the graph (it can be skippe
 if the whole run is torn down), whereas the native `alerts:` block always fires on
 the terminal failure, in the control plane, for free.
 
+## The Airflow `on_failure_callback`
+
+If you already write Airflow, you can also use its native **per-task**
+`on_failure_callback` — a Python callable set on the operator or `@task`. Leoflow
+runs it **in-process, inside the task's own pod**, on the task's **terminal**
+failure:
+
+```python
+def alert(context):
+    # your code: enrich, page, post — runs in the task pod on final failure
+    print("failed:", context["task_instance"].task_id)
+
+@task(on_failure_callback=alert, retries=2)
+def transform(): ...
+```
+
+How it differs from the `alerts:` block:
+
+| | `alerts:` block | `on_failure_callback` |
+| --- | --- | --- |
+| Scope | the whole **DagRun** | one **task** |
+| Runs where | control plane (Go) | the task's **pod** (your Python) |
+| Fires when | the run reaches `failed` | that task's **final** attempt fails |
+| Needs a pod | no | yes (it's your task's pod) |
+
+**Only the terminal attempt fires it.** The callback runs only once retries are
+exhausted (`try_number >= max_tries`), matching Airflow. With `retries: 2` a
+`fail → fail → success` run fires it **zero** times; a `fail × 3` run fires it
+**once**, on the last attempt. It's best-effort and anti-loop: a callback that
+raises is logged and swallowed — it never changes the task's own `failed` outcome
+and can't re-trigger itself.
+
+**Where it works — and where the compiler stops you.** It runs on any
+Python-executed task: a provider **operator** or a **`@task`**. It **cannot** run
+on the two task types that leave no Python to run it, and the compiler rejects
+those **loudly** rather than dropping the callback silently:
+
+- **`bash`** — the runtime `exec`s bash in place, so no Python is left.
+- **`http_api`** — runs inline in the Go control plane, so there's no pod. For an
+  HTTP call that needs a callback, use `HttpOperator` (a provider operator, which
+  runs in a pod) instead of the native `http_api` fast path.
+
+`on_success_callback` and `on_retry_callback` aren't wired yet — they're a loud
+compile error everywhere, never a silent drop. Reach for the `alerts:` block or a
+downstream `@task` with a `trigger_rule` instead.
+
 ## Reference
 
 | Field                      | Required | Notes                                              |
@@ -137,7 +183,9 @@ the terminal failure, in the control plane, for free.
 | `alerts.on_failure[].message` | no    | templated (see above); empty → default summary     |
 
 !!! note "Scope today"
-    Only `on_failure` is wired, firing on the terminal **DagRun** failure.
-    `on_success` / `on_retry` / SLA-miss alerts and a genuine Airflow
-    `on_failure_callback` (run in a dedicated pod) are planned — tracked in
+    Two on-failure surfaces ship: the native `alerts:` block (this page's focus,
+    firing on the terminal **DagRun** failure) and Airflow's per-task
+    `on_failure_callback` (above), which runs in the task's pod on its terminal
+    failure. `on_success` / `on_retry` callbacks and SLA-miss alerts are not wired
+    yet (a loud compile error, never a silent drop) — tracked in
     [#424](https://github.com/neochaotic/leoflow/issues/424).

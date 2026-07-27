@@ -402,4 +402,75 @@ done
 [ -n "$glog" ] || fail "greet did not render {{ ds }} to a date — native bash Jinja templating broke (#382)"
 log "bash Jinja OK: greet rendered a real ds"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# on_failure_callback on the REAL pod path (#424). The Lite e2e (lite-callback.sh)
+# covers the runtime logic; this proves the pod wiring: the k8s executor's pod →
+# the agent (PID 1) stamps LEOFLOW_ON_FAILURE_CALLBACK/MAX_TRIES from the gRPC
+# TaskSpec → the runtime resolves the callback off the loaded task object (works
+# for an unbound `with DAG():`) and runs it, once, on the terminal failure. A
+# separate DAG whose only task raises — kept out of the all-success run above.
+# Proof needs no receiver: the callback prints a marker to the task log.
+log "Callback pod-path (#424): a failing @task must run its on_failure_callback IN the pod"
+CBID="cbdag"
+mkdir -p "$WORKDIR/$CBID"
+cat > "$WORKDIR/$CBID/leoflow.yaml" <<YAML
+schema_version: "1.0"
+dag_id: cbdag
+YAML
+cat > "$WORKDIR/$CBID/dag.py" <<'PY'
+from airflow.sdk import DAG, task
+
+
+def on_fail(context):
+    # Runs in the pod on the terminal failure. Print a marker to the task log so
+    # the e2e can assert it ran (no receiver / pod networking needed).
+    print("E2E_CALLBACK_FIRED task=" + context["ti"].task_id, flush=True)
+
+
+with DAG("cbdag", schedule=None):
+
+    @task(on_failure_callback=on_fail)
+    def boom():
+        raise RuntimeError("intentional e2e failure for the on_failure_callback pod-path")
+
+    boom()
+PY
+cat > "$WORKDIR/$CBID/Dockerfile" <<DOCKER
+FROM ${BASE_IMAGE}
+COPY dag.py /home/leoflow/dag.py
+ENV PYTHONPATH=/home/leoflow
+DOCKER
+CB_IMAGE="leoflow-e2e-cbdag:local"
+"$ROOT/bin/leoflow" compile "$WORKDIR/$CBID" --image "$CB_IMAGE" \
+  --build --dockerfile Dockerfile -o "$WORKDIR/$CBID/dag.json"
+jq -e '.tasks[] | select(.task_id=="boom" and .on_failure_callback==true)' \
+  "$WORKDIR/$CBID/dag.json" >/dev/null || fail "boom did not compile with on_failure_callback=true"
+k3d image import "$CB_IMAGE" --cluster "$CLUSTER"
+"$ROOT/bin/leoflow" push "$WORKDIR/$CBID/dag.json" --server "$API" --token "$TOKEN"
+CB_RUN="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{}' "$API/api/v2/dags/cbdag/dagRuns" | jq -r '.dag_run_id')"
+[ -n "$CB_RUN" ] && [ "$CB_RUN" != "null" ] || fail "no cbdag dag_run_id returned"
+log "cbdag run = $CB_RUN"
+cb_deadline=$(( $(date +%s) + 240 ))
+while :; do
+  cb_state="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/cbdag/dagRuns/$CB_RUN/taskInstances" \
+    | jq -r '.task_instances[] | select(.task_id=="boom") | .state')"
+  [ "$cb_state" = "failed" ] && break
+  echo "${cb_state:-}" | grep -qE 'success' && fail "cbdag boom unexpectedly succeeded"
+  [ "$(date +%s)" -gt "$cb_deadline" ] && fail "cbdag boom did not reach failed (state=${cb_state:-<none>})"
+  sleep 3
+done
+log "cbdag boom failed terminally (pod ran)"
+cblog=""
+for try in 1 0 2; do
+  body="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/cbdag/dagRuns/$CB_RUN/taskInstances/boom/logs/$try" 2>/dev/null || true)"
+  if echo "$body" | grep -q "E2E_CALLBACK_FIRED"; then cblog="$body"; break; fi
+done
+[ -n "$cblog" ] || fail "on_failure_callback did not run in the pod (#424): no E2E_CALLBACK_FIRED in boom's log"
+echo "$cblog" | grep -q "running on_failure_callback" \
+  || fail "runtime did not log the on_failure_callback lifecycle in the pod (#424)"
+log "callback pod-path OK: on_failure_callback ran in the pod on terminal failure (#424)"
+
 log "E2E passed"

@@ -407,83 +407,102 @@ def test_standalone_ti_get_first_reschedule_date(monkeypatch):
 
 
 # --- on_failure_callback core (#424 inc 4b) -------------------------------------
+#
+# Reality anchors (regression guards for the two integration bugs the e2e caught):
+#   1. Airflow 3 normalises a task's on_failure_callback to a LIST, e.g.
+#      ``on_failure_callback=[fn]`` — never a bare callable on the operator. The
+#      runtime must call each element, not the list.
+#   2. The callback is resolved from the loaded task OBJECT (a @task decorator keeps
+#      it in ``.kwargs``; an operator exposes it as an attribute), NOT by scanning
+#      module globals for a bound DAG — so an unbound ``with DAG():`` still works.
+
+def test_normalize_callbacks_accepts_bare_list_and_none():
+    def a(_ctx):
+        pass
+
+    def b(_ctx):
+        pass
+    assert runner._normalize_callbacks(None) == []
+    assert runner._normalize_callbacks(a) == [a]
+    assert runner._normalize_callbacks([a, b]) == [a, b]          # Airflow's list shape
+    assert runner._normalize_callbacks((a,)) == [a]
+    assert runner._normalize_callbacks([a, "not-callable", None]) == [a]  # filters junk
+
+
+def test_on_failure_from_task_object_reads_decorator_kwargs_and_operator_attr():
+    class _Decorator:  # a TaskFlow @task keeps its kwargs here
+        kwargs = {"on_failure_callback": ["cb-from-decorator"], "task_id": "t"}
+
+    class _Operator:  # an operator exposes the (list-normalised) attribute
+        on_failure_callback = ["cb-from-operator"]
+
+    class _Bare:
+        pass
+    assert runner._on_failure_from_task_object(_Decorator()) == ["cb-from-decorator"]
+    assert runner._on_failure_from_task_object(_Operator()) == ["cb-from-operator"]
+    assert runner._on_failure_from_task_object(_Bare()) is None
+
 
 def test_on_failure_callback_fires_on_final_attempt():
     calls = []
     runner._run_on_failure_callback(
-        lambda: (lambda ctx: calls.append(ctx)), {"dag_id": "d"}, try_number=3, max_tries=3)
+        lambda ctx: calls.append(ctx), {"dag_id": "d"}, try_number=3, max_tries=3)
     assert calls == [{"dag_id": "d"}]
+
+
+def test_on_failure_callback_list_all_fire():
+    # Bug #2 guard: Airflow hands a LIST; every callback in it must run.
+    calls = []
+    runner._run_on_failure_callback(
+        [lambda ctx: calls.append("a"), lambda ctx: calls.append("b")],
+        {}, try_number=1, max_tries=1)
+    assert calls == ["a", "b"]
 
 
 def test_on_failure_callback_skipped_when_retries_remain():
     calls = []
     runner._run_on_failure_callback(
-        lambda: (lambda ctx: calls.append(ctx)), {}, try_number=1, max_tries=3)
+        lambda ctx: calls.append(ctx), {}, try_number=1, max_tries=3)
     assert calls == []  # a retry will follow — not a terminal failure
 
 
-def test_on_failure_callback_swallows_error():
+def test_on_failure_callback_swallows_error_and_still_runs_the_rest():
+    calls = []
+
     def boom(_ctx):
         raise RuntimeError("nope")
-    # best-effort: must NOT raise, so the task's own failure is unaffected
-    runner._run_on_failure_callback(lambda: boom, {}, try_number=1, max_tries=1)
+    # best-effort: a raising callback must NOT stop the others, nor fail the task.
+    runner._run_on_failure_callback(
+        [boom, lambda ctx: calls.append("ran")], {}, try_number=1, max_tries=1)
+    assert calls == ["ran"]
 
 
 def test_on_failure_callback_noop_when_absent():
-    # get_callback returns None (no callback declared) → no-op, no error
-    runner._run_on_failure_callback(lambda: None, {}, try_number=1, max_tries=1)
-
-
-def _fake_dag_module(monkeypatch, name, task_id, cb):
-    import sys
-    import types
-
-    class _Op:
-        def __init__(self, c):
-            self.on_failure_callback = c
-
-    class _Dag:
-        def __init__(self, td):
-            self.task_dict = td
-
-    mod = types.ModuleType(name)
-    mod.d = _Dag({task_id: _Op(cb)})
-    monkeypatch.setitem(sys.modules, name, mod)
-
-
-def test_resolve_on_failure_callback_reads_the_task_attr(monkeypatch):
-    def notify(_ctx):
-        pass
-    _fake_dag_module(monkeypatch, "fakedag_res", "t", notify)
-    monkeypatch.setenv("LEOFLOW_DAG_MODULE", "fakedag_res")
-    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
-    assert runner._resolve_on_failure_callback() is notify
+    # None (no callback declared) → no-op, no error
+    runner._run_on_failure_callback(None, {}, try_number=1, max_tries=1)
 
 
 def test_maybe_fire_noop_without_marker(monkeypatch):
     monkeypatch.delenv("LEOFLOW_ON_FAILURE_CALLBACK", raising=False)
-    runner._maybe_fire_on_failure_callback({})  # must not raise, must not import
+    calls = []
+    runner._maybe_fire_on_failure_callback({}, [lambda ctx: calls.append(ctx)])
+    assert calls == []  # marker absent → never fires
 
 
 def test_maybe_fire_runs_on_final_attempt(monkeypatch):
     calls = []
-    _fake_dag_module(monkeypatch, "fakedag_fire", "t", lambda ctx: calls.append(ctx))
     monkeypatch.setenv("LEOFLOW_ON_FAILURE_CALLBACK", "1")
-    monkeypatch.setenv("LEOFLOW_DAG_MODULE", "fakedag_fire")
-    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
     monkeypatch.setenv("LEOFLOW_TRY_NUMBER", "2")
     monkeypatch.setenv("LEOFLOW_MAX_TRIES", "2")
-    runner._maybe_fire_on_failure_callback({"dag_id": "d"})
+    # Pass the callback the way real Airflow carries it: a list.
+    runner._maybe_fire_on_failure_callback({"dag_id": "d"}, [lambda ctx: calls.append(ctx)])
     assert calls == [{"dag_id": "d"}]
 
 
 def test_maybe_fire_skips_when_retries_remain(monkeypatch):
     calls = []
-    _fake_dag_module(monkeypatch, "fakedag_skip", "t", lambda ctx: calls.append(ctx))
     monkeypatch.setenv("LEOFLOW_ON_FAILURE_CALLBACK", "1")
-    monkeypatch.setenv("LEOFLOW_DAG_MODULE", "fakedag_skip")
-    monkeypatch.setenv("LEOFLOW_TASK_ID", "t")
     monkeypatch.setenv("LEOFLOW_TRY_NUMBER", "1")
     monkeypatch.setenv("LEOFLOW_MAX_TRIES", "3")
-    runner._maybe_fire_on_failure_callback({})
+    runner._maybe_fire_on_failure_callback({}, [lambda ctx: calls.append(ctx)])
     assert calls == []

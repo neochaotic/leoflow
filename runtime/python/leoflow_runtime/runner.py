@@ -133,6 +133,10 @@ def run(entrypoint: str) -> None:
     _lifecycle(f"loading {entrypoint}")
     module = importlib.import_module(module_name)
     fn = getattr(module, fn_name)
+    # Read the task's on_failure_callback off the loaded @task decorator (it keeps
+    # it in .kwargs) BEFORE unwrapping to the raw function — resolving from the
+    # object we already hold works even for an unbound `with DAG():` (#424 inc 4b).
+    on_failure_callback = _on_failure_from_task_object(fn)
     # Airflow TaskFlow @task decorators are not executed when called directly —
     # calling them returns an XComArg (a task reference), not the function's
     # result. Unwrap to the underlying Python function so we run the user's code
@@ -158,7 +162,7 @@ def run(entrypoint: str) -> None:
         sys.stderr.flush()
         # Run the @task's on_failure_callback on its terminal attempt, before the
         # re-raise, so the task's own failed outcome is unchanged (#424 inc 4b).
-        _maybe_fire_on_failure_callback(context)
+        _maybe_fire_on_failure_callback(context, on_failure_callback)
         # Re-raise so Python's default handler emits the traceback to stderr —
         # the agent captures it.
         raise
@@ -400,7 +404,34 @@ def _merge_operator_xcom(args: dict) -> dict:
     return args
 
 
-def _run_on_failure_callback(get_callback, context, try_number, max_tries) -> None:
+def _normalize_callbacks(on_failure_callback) -> list:
+    """Return a task's on_failure_callback(s) as a list of callables. Airflow 3
+    normalises a task's ``on_failure_callback`` to a list (e.g. ``[fn]``); a raw
+    ``@task`` decorator keeps whatever was passed to ``@task`` (a callable or a
+    list). Accept a bare callable, a list/tuple, or None, and drop anything
+    non-callable — so a real Airflow list is called element-by-element, never as a
+    (non-callable) list."""
+    if on_failure_callback is None:
+        return []
+    items = (on_failure_callback if isinstance(on_failure_callback, (list, tuple))
+             else [on_failure_callback])
+    return [c for c in items if callable(c)]
+
+
+def _on_failure_from_task_object(obj):
+    """Pull ``on_failure_callback`` off the loaded task object. A TaskFlow ``@task``
+    decorator keeps it in ``.kwargs``; an operator instance exposes it as an
+    attribute (Airflow-normalised to a list). Returns the raw value (callable /
+    list / None). Resolving from the object the runtime already holds — instead of
+    scanning module globals for a bound DAG — is what makes an unbound
+    ``with DAG():`` (no module-level DAG variable) work."""
+    kwargs = getattr(obj, "kwargs", None)
+    if isinstance(kwargs, dict) and "on_failure_callback" in kwargs:
+        return kwargs["on_failure_callback"]
+    return getattr(obj, "on_failure_callback", None)
+
+
+def _run_on_failure_callback(on_failure_callback, context, try_number, max_tries) -> None:
     """Run a task's Airflow ``on_failure_callback`` on its FINAL failed attempt
     (#424 inc 4b).
 
@@ -410,49 +441,30 @@ def _run_on_failure_callback(get_callback, context, try_number, max_tries) -> No
     for ``retries: 3``, a fail→fail→success run fires it zero times, and a
     fail×3 run fires it once (on the last).
 
-    ``get_callback`` is a zero-arg resolver (it imports dag.py and finds the
-    task's callback) called lazily, only when this attempt is terminal. It is
-    best-effort + anti-loop: a callback that raises is logged and swallowed so it
-    can never re-trigger itself or change the task's own failed outcome.
+    ``on_failure_callback`` is whatever the task carries — a callable, or (as
+    Airflow normalises it) a list of them. Every callable runs, best-effort and
+    anti-loop: one that raises is logged and swallowed so it can neither stop the
+    others nor change the task's own failed outcome.
     """
     if try_number < max_tries:
         return
-    callback = get_callback()
-    if callback is None:
+    callbacks = _normalize_callbacks(on_failure_callback)
+    if not callbacks:
         return
     _lifecycle("running on_failure_callback")
-    try:
-        callback(context)
-    except Exception as exc:  # noqa: BLE001 — best-effort; never fail the task on its callback
-        _lifecycle(f"on_failure_callback raised {type(exc).__name__}: {exc} (ignored)")
+    for callback in callbacks:
+        try:
+            callback(context)
+        except Exception as exc:  # noqa: BLE001 — best-effort; never fail the task on its callback
+            _lifecycle(f"on_failure_callback raised {type(exc).__name__}: {exc} (ignored)")
 
 
-def _resolve_on_failure_callback():
-    """Import the DAG module and return the current task's ``on_failure_callback``
-    (or None). The callable can't be serialised into dag.json, so the compiler only
-    marks its presence (#424 inc 4a); here we re-import dag.py — real Airflow is
-    present at runtime, so the operator carries the real attribute — and read it off
-    the task. Any import/lookup problem yields None (best-effort: a resolution miss
-    must never turn into a task failure)."""
-    task_id = os.environ.get("LEOFLOW_TASK_ID", "")
-    module_name = os.environ.get("LEOFLOW_DAG_MODULE", "dag")
-    try:
-        module = importlib.import_module(module_name)
-    except Exception as exc:  # noqa: BLE001 — dag.py must not break failure handling
-        _lifecycle(f"on_failure_callback: cannot import {module_name!r} ({exc}); skipping")
-        return None
-    for obj in vars(module).values():
-        task_dict = getattr(obj, "task_dict", None)  # an Airflow DAG object
-        if isinstance(task_dict, dict) and task_id in task_dict:
-            return getattr(task_dict[task_id], "on_failure_callback", None)
-    return None
-
-
-def _maybe_fire_on_failure_callback(context) -> None:
+def _maybe_fire_on_failure_callback(context, on_failure_callback) -> None:
     """Fire the task's on_failure_callback if the compiler marked one
     (LEOFLOW_ON_FAILURE_CALLBACK, set by the agent) and this attempt is terminal.
-    Reads try_number/max_tries from the env; a missing max_tries defaults to
-    try_number (treat as final). Fully guarded — never raises."""
+    ``on_failure_callback`` is the raw value read off the loaded task object (a
+    callable, a list, or None). Reads try_number/max_tries from the env; a missing
+    max_tries defaults to try_number (treat as final). Fully guarded — never raises."""
     if os.environ.get("LEOFLOW_ON_FAILURE_CALLBACK") != "1":
         return
     try:
@@ -463,7 +475,7 @@ def _maybe_fire_on_failure_callback(context) -> None:
         max_tries = int(os.environ.get("LEOFLOW_MAX_TRIES", str(try_number)))
     except ValueError:
         max_tries = try_number
-    _run_on_failure_callback(_resolve_on_failure_callback, context, try_number, max_tries)
+    _run_on_failure_callback(on_failure_callback, context, try_number, max_tries)
 
 
 def run_operator(operator_class: str, args: dict) -> None:
@@ -499,8 +511,9 @@ def run_operator(operator_class: str, args: dict) -> None:
                 f"the operator runs synchronously in the pod (poke-style).") from exc
         # A genuine failure (not a reschedule/deferral): run the on_failure_callback
         # on the terminal attempt before re-raising, so the task's failed state is
-        # unchanged (#424 inc 4b).
-        _maybe_fire_on_failure_callback(context)
+        # unchanged (#424 inc 4b). The operator instance carries the (list-normalised)
+        # callback as an attribute.
+        _maybe_fire_on_failure_callback(context, _on_failure_from_task_object(op))
         raise
     _write_return(result)
     _write_extra_links(op, context["ti"].pushed)

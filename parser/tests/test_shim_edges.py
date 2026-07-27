@@ -378,3 +378,37 @@ def test_no_scheduling_attrs_emits_no_keys(monkeypatch, tmp_path):
     assert "retries" not in b
     assert "retry_delay_seconds" not in b
     assert "execution_timeout_seconds" not in b
+
+
+def test_task_decorator_retries_are_captured(monkeypatch, tmp_path):
+    """@task(retries=…, retry_delay=…) — the common TaskFlow style — is captured too
+    (the decorator kwargs flow to the underlying python operator, #434)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from datetime import timedelta
+        from airflow.sdk import DAG, task
+        @task(retries=2, retry_delay=timedelta(seconds=10))
+        def a() -> None: ...
+        with DAG("g"):
+            a()
+    """)
+    a = _task(spec, "a")
+    assert a["type"] == "python"
+    assert a["retries"] == 2
+    assert a["retry_delay_seconds"] == 10
+
+
+def test_provider_operator_retries_are_captured(monkeypatch, tmp_path):
+    """A generic provider operator (type=airflow_operator) also carries its retries
+    /timeout, so a captured operator is not exempt from the #434 fix."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from datetime import timedelta
+        from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+        from airflow.sdk import DAG
+        with DAG("g"):
+            SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1",
+                                    retries=4, execution_timeout=timedelta(minutes=2))
+    """)
+    q = _task(spec, "q")
+    assert q["type"] == "airflow_operator"
+    assert q["retries"] == 4
+    assert q["execution_timeout_seconds"] == 120

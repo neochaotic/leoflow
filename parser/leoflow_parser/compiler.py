@@ -274,6 +274,14 @@ def _map_task(task, source: str, dag=None) -> dict[str, Any]:
 # others stay a loud reject until wired.
 _ON_FAILURE_CALLBACK = "on_failure_callback"
 
+# Airflow scheduling attributes captured by the compiler outside a generic
+# operator's constructor kwargs (#434): trigger_rule via _trigger_rule, the rest
+# via _apply_scheduling_attrs. _split_operator_args skips them so they are not
+# mistaken for the operator's own args (and a timedelta does not trip its reject).
+_SCHEDULING_ATTR_NAMES = frozenset(
+    {"trigger_rule", "retries", "retry_delay", "execution_timeout"}
+)
+
 # Task types whose runtime path is Python with a real try/except, so an
 # on_failure_callback can run in-process on the task's final failure (#424). A
 # bash task execs bash in place (os.execvp), leaving no Python to run it.
@@ -336,6 +344,14 @@ def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
     xcom: dict[str, list[str]] = {}
     operator_args: dict[str, Any] = {}
     for name, value in raw.items():
+        # Airflow scheduling attributes (trigger_rule + retries/retry_delay/
+        # execution_timeout) are captured separately — _trigger_rule and
+        # _apply_scheduling_attrs (#434) — NOT as operator constructor args. Skip
+        # them here: they are not the operator's own kwargs, and a timedelta
+        # (retry_delay/execution_timeout) would otherwise trip the non-serialisable
+        # reject below and fail an otherwise-valid provider operator at compile.
+        if name in _SCHEDULING_ATTR_NAMES:
+            continue
         # on_failure_callback is a callable that cannot be serialised into
         # dag.json, but it is SUPPORTED (#424 inc 4): the runtime re-imports dag.py
         # and calls it in the task process on failure. Accept it here as a marker

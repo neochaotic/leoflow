@@ -1,8 +1,36 @@
 # ADR 0036: Airflow 3.X runtime compatibility shim — one model, one policy seam
 
-**Status:** Accepted
+**Status:** Accepted — **implementation deferred** (see "Status update" below)
 **Date:** 2026-06-03
 **Companions:** ADR 0014 (no provider hooks in core), ADR 0019 (encryption at rest), ADR 0021 (`AIRFLOW_CONN_*` wire format), ADR 0024 (parser structural shim), ADR 0035 (cloud connector auth — keyless-first)
+
+## Status update (2026-06-03): deferred — use the real Airflow Task SDK for now
+
+This ADR was fully prototyped on the branch **`vanity/airflow-runtime-shim`** (a
+~1,700-line runtime shim: `airflow.sdk` hooks/connection/variable surface, the
+authoring surface, a `--no-deps` BYO-provider install, two CI gates, and a real
+`PostgresHook` executing a query with no `apache-airflow` installed). The prototype
+**worked** and shrank the per-task airflow surface from ~260 MB to ~0.16 MB.
+
+We are **not shipping it for now.** Building it exposed the real cost: growing the
+shim provider-by-provider is **whack-a-mole** — each provider drags more `airflow.*`
+surface and every Airflow minor drifts, so the maintenance debt is **ours, ongoing,
+and unbounded**. Meanwhile the base image already installs `apache-airflow-task-sdk`,
+under which **provider hooks already work today** (the env-secrets backend reads
+`AIRFLOW_CONN_*`) — at the cost of a heavier image, not of our code.
+
+**Decision:** keep the **real Airflow Task SDK** in the task image (status quo).
+Migrating Airflow DAGs get the maximum compatibility (any provider hook) with
+**~zero maintenance debt on our side**. The slim shim is an **image-size
+optimization deferred until the product is mature** and the maintenance is worth
+it — the branch and the two planning docs
+(`docs/planning/airflow-connector-compatibility.md`,
+`docs/planning/connectors-two-tier-model.md`) are the blueprint for that day. The
+branch is kept as a reference (it is, affectionately, the "vanity branch").
+
+ADR 0035 (cloud keyless-first) stands as the direction for **future Leoflow-native
+connectors**; it does not govern the Airflow-compat path. Everything below this line
+is the original (still-valid) design of the shim, retained for when we revisit it.
 
 ## Context
 

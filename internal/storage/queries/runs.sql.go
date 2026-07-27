@@ -155,7 +155,7 @@ func (q *Queries) CountTaskInstanceStatesInWindow(ctx context.Context, arg Count
 const createDagRun = `-- name: CreateDagRun :one
 INSERT INTO dag_runs (tenant_id, dag_id, dag_version_id, run_id, logical_date, state, trigger, note)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note
+RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at
 `
 
 type CreateDagRunParams struct {
@@ -198,6 +198,7 @@ func (q *Queries) CreateDagRun(ctx context.Context, arg CreateDagRunParams) (Dag
 		&i.StartedAt,
 		&i.EndedAt,
 		&i.Note,
+		&i.AlertedAt,
 	)
 	return i, err
 }
@@ -321,7 +322,7 @@ func (q *Queries) FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInst
 }
 
 const getDagRun = `-- name: GetDagRun :one
-SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs WHERE dag_id = $1 AND run_id = $2
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at FROM dag_runs WHERE dag_id = $1 AND run_id = $2
 `
 
 type GetDagRunParams struct {
@@ -349,12 +350,13 @@ func (q *Queries) GetDagRun(ctx context.Context, arg GetDagRunParams) (DagRun, e
 		&i.StartedAt,
 		&i.EndedAt,
 		&i.Note,
+		&i.AlertedAt,
 	)
 	return i, err
 }
 
 const getDagRunByID = `-- name: GetDagRunByID :one
-SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs WHERE id = $1
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at FROM dag_runs WHERE id = $1
 `
 
 func (q *Queries) GetDagRunByID(ctx context.Context, id pgtype.UUID) (DagRun, error) {
@@ -377,6 +379,7 @@ func (q *Queries) GetDagRunByID(ctx context.Context, id pgtype.UUID) (DagRun, er
 		&i.StartedAt,
 		&i.EndedAt,
 		&i.Note,
+		&i.AlertedAt,
 	)
 	return i, err
 }
@@ -463,7 +466,7 @@ func (q *Queries) LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsPa
 }
 
 const listActiveDagRuns = `-- name: ListActiveDagRuns :many
-SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at FROM dag_runs
 WHERE state IN ('queued', 'running')
 ORDER BY queued_at
 `
@@ -494,6 +497,7 @@ func (q *Queries) ListActiveDagRuns(ctx context.Context) ([]DagRun, error) {
 			&i.StartedAt,
 			&i.EndedAt,
 			&i.Note,
+			&i.AlertedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -561,7 +565,7 @@ func (q *Queries) ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostC
 }
 
 const listDagRunsByDag = `-- name: ListDagRunsByDag :many
-SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note FROM dag_runs
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at FROM dag_runs
 WHERE dag_id = $1
 ORDER BY logical_date DESC
 LIMIT $2 OFFSET $3
@@ -599,6 +603,7 @@ func (q *Queries) ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagPara
 			&i.StartedAt,
 			&i.EndedAt,
 			&i.Note,
+			&i.AlertedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -938,6 +943,25 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 	return items, nil
 }
 
+const markRunAlerted = `-- name: MarkRunAlerted :one
+UPDATE dag_runs
+SET alerted_at = now()
+WHERE id = $1 AND alerted_at IS NULL
+RETURNING id
+`
+
+// Atomically claim the on-failure alert for a run (#431): set alerted_at once,
+// only while it is NULL, and return the row iff this call won the claim. A second
+// call (same failed episode, no clear) matches no row and reports "already
+// alerted", so the scheduler skips the duplicate page. A clear nulls alerted_at,
+// letting the next genuine failure re-claim.
+func (q *Queries) MarkRunAlerted(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, markRunAlerted, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const markRunOrphanedRun = `-- name: MarkRunOrphanedRun :execrows
 UPDATE dag_runs
 SET state = 'failed',
@@ -1193,7 +1217,8 @@ func (q *Queries) ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgty
 
 const resetDagRunToVersion = `-- name: ResetDagRunToVersion :exec
 UPDATE dag_runs
-SET state = 'queued', started_at = NULL, ended_at = NULL, dag_version_id = $2
+SET state = 'queued', started_at = NULL, ended_at = NULL, alerted_at = NULL,
+    dag_version_id = $2
 WHERE id = $1
 `
 
@@ -1205,7 +1230,9 @@ type ResetDagRunToVersionParams struct {
 // Clear re-binds the run to the DAG's current registered version (ADR 0020): a
 // re-run after a code/yaml fix picks up the newest image and config — in dev that
 // is the last hot-reload, in prod the last deploy — while everything within a
-// version stays reproducible.
+// version stays reproducible. Clearing alerted_at (#431) makes the clear a new
+// failure episode, so a genuine re-failure re-pages while a re-tick of the same
+// failed state does not.
 func (q *Queries) ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVersionParams) error {
 	_, err := q.db.Exec(ctx, resetDagRunToVersion, arg.ID, arg.DagVersionID)
 	return err
@@ -1439,7 +1466,7 @@ const updateDagRunState = `-- name: UpdateDagRunState :one
 UPDATE dag_runs
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note
+RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at
 `
 
 type UpdateDagRunStateParams struct {
@@ -1474,6 +1501,7 @@ func (q *Queries) UpdateDagRunState(ctx context.Context, arg UpdateDagRunStatePa
 		&i.StartedAt,
 		&i.EndedAt,
 		&i.Note,
+		&i.AlertedAt,
 	)
 	return i, err
 }

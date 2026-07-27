@@ -253,3 +253,48 @@ func taskInstanceID(t *testing.T, sched *storage.SchedulerStore, ctx context.Con
 	t.Fatalf("task instance id not found for %s/%s", runUUID, taskID)
 	return ""
 }
+
+// TestOnFailureAlertDedupResetsOnClearIntegration pins the #431 "once per failure
+// episode" contract at the SQL layer: MarkRunAlerted is an atomic claim (wins once
+// while alerted_at is NULL, loses on a re-tick of the same episode), and a Clear
+// (ResetDagRunToVersion) NULLs alerted_at so a genuine re-failure re-claims. A unit
+// test on a fake store can't prove the CAS or the reset — they live in the SQL.
+func TestOnFailureAlertDedupResetsOnClearIntegration(t *testing.T) {
+	repo, sched, ctx := openRepo(t)
+
+	dagID := fmt.Sprintf("alert_dedup_%d", time.Now().UnixNano())
+	tasks := []domain.TaskSpec{{TaskID: "hello", Type: domain.TaskTypePython}}
+	registerSpec(t, repo, ctx, dagID, tasks)
+	if _, err := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
+		RunID: "r1", State: domain.DagRunStateRunning, RunType: "manual",
+		LogicalDate: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("CreateDagRun: %v", err)
+	}
+	runUUID := resolveRunUUID(t, sched, ctx, dagID)
+	if err := sched.MaterializeTasks(ctx, runUUID, tasks); err != nil {
+		t.Fatalf("MaterializeTasks: %v", err)
+	}
+	if err := sched.ApplyTransition(ctx, runUUID, "hello", domain.TaskStateFailed); err != nil {
+		t.Fatalf("ApplyTransition to failed: %v", err)
+	}
+
+	// First claim wins; the immediate re-tick (same failed episode, no clear) loses.
+	if won, err := sched.MarkRunAlerted(ctx, runUUID); err != nil || !won {
+		t.Fatalf("first MarkRunAlerted = (%v, %v), want (true, nil)", won, err)
+	}
+	if won, err := sched.MarkRunAlerted(ctx, runUUID); err != nil || won {
+		t.Fatalf("re-tick MarkRunAlerted = (%v, %v), want (false, nil) — no duplicate page", won, err)
+	}
+
+	// A Clear (resetDagRun=true) opens a new failure episode by NULLing alerted_at.
+	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1",
+		[]string{"hello"}, true /*onlyFailed*/, true /*resetDagRun*/); err != nil {
+		t.Fatalf("ClearTaskInstances: %v", err)
+	}
+
+	// The genuine re-failure after the clear re-claims and re-alerts.
+	if won, err := sched.MarkRunAlerted(ctx, runUUID); err != nil || !won {
+		t.Fatalf("post-clear MarkRunAlerted = (%v, %v), want (true, nil) — a clear must re-open the episode (#431)", won, err)
+	}
+}

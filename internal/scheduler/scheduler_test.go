@@ -35,6 +35,10 @@ type fakeStore struct {
 	agentLostMarked    []string
 	staleQueuedCands   []StaleQueuedCandidate
 	dispatchLostMarked []string
+	// alertedRuns mirrors the real once-per-episode CAS (#431): the first
+	// MarkRunAlerted per runID wins (true), a repeat loses (false).
+	alertedRuns    map[string]bool
+	markAlertedErr bool
 	// activeRunsCalls counts ActiveRuns invocations so the follower-side gate
 	// can be asserted: a follower must NOT read run state (single-writer
 	// invariant, ADR 0031 / issue #208).
@@ -78,6 +82,19 @@ func (f *fakeStore) RedispatchReschedule(_ context.Context, runID, taskID string
 func (f *fakeStore) SetRunState(_ context.Context, runID string, state domain.DagRunState) error {
 	f.runStates[runID] = state
 	return nil
+}
+func (f *fakeStore) MarkRunAlerted(_ context.Context, runID string) (bool, error) {
+	if f.markAlertedErr {
+		return false, errors.New("mark alerted failed")
+	}
+	if f.alertedRuns == nil {
+		f.alertedRuns = map[string]bool{}
+	}
+	if f.alertedRuns[runID] {
+		return false, nil // already claimed this failure episode
+	}
+	f.alertedRuns[runID] = true
+	return true, nil
 }
 func (f *fakeStore) SetTaskNote(_ context.Context, _, taskID, note string) error {
 	if f.notes == nil {

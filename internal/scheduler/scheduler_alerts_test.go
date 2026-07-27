@@ -86,6 +86,52 @@ func TestStepRecordsDroppedAlertWhenSaturated(t *testing.T) {
 	}
 }
 
+// Dedup per failure episode (#431): a run whose failed state is re-ticked without
+// a clear alerts only once — the second MarkRunAlerted loses the CAS.
+func TestStepDedupsAlertPerEpisode(t *testing.T) {
+	store := newFakeStore(exhaustedFailedRun("r1"))
+	al := &recordingAlerter{ch: make(chan RunState, 2)}
+	s := newScheduler(store)
+	s.SetAlerter(al)
+	// First tick: the run finalizes failed and claims the alert (fires once).
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-al.ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the first failure to alert")
+	}
+	// Second tick: the fake still returns the run as active (re-tick of the same
+	// failed episode, no clear). The claim is already held, so no second page.
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-al.ch:
+		t.Fatal("a re-tick of the same failed episode must not re-alert (#431)")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// Fail-open (#431): if the dedup CAS errors, the alert still fires — a missed page
+// is worse than a rare duplicate.
+func TestStepAlertsWhenDedupErrors(t *testing.T) {
+	store := newFakeStore(exhaustedFailedRun("r1"))
+	store.markAlertedErr = true
+	al := &recordingAlerter{ch: make(chan RunState, 1)}
+	s := newScheduler(store)
+	s.SetAlerter(al)
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-al.ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a dedup error must fail open and still alert")
+	}
+}
+
 // A run that finalizes failed with on_failure rules fires the alerter exactly once.
 func TestStepAlertsOnFailedFinalize(t *testing.T) {
 	store := newFakeStore(RunState{

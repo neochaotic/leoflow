@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -193,6 +194,24 @@ func (s *SchedulerStore) SetRunState(ctx context.Context, runID string, state do
 		ID:    rid,
 		State: queries.DagRunState(state),
 	})
+}
+
+// MarkRunAlerted atomically claims a run's on-failure alert (#431): the UPDATE
+// sets alerted_at only while it is NULL and returns the row iff this call won.
+// pgx.ErrNoRows means the row already had alerted_at (already alerted this
+// episode) — not an error, just a lost claim, so report won=false.
+func (s *SchedulerStore) MarkRunAlerted(ctx context.Context, runID string) (bool, error) {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return false, err
+	}
+	if _, err := s.q.MarkRunAlerted(ctx, rid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // ScheduledDAGs returns active, unpaused, cron-scheduled DAGs with the logical

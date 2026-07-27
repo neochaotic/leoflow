@@ -134,6 +134,10 @@ type Recorder interface {
 	// → re-acquire cycle (#311). Operators alert on P99 to spot churn that
 	// starts to delay scheduling latency.
 	ObserveSchedulerReacquire(d time.Duration)
+	// RecordAlert counts one on-failure alert outcome by dag, channel type, and
+	// result. The scheduler records result="dropped" when its dispatch semaphore
+	// is saturated (#435); the dispatcher records "sent"/"failed" for deliveries.
+	RecordAlert(dagID, channelType, result string)
 }
 
 // Dispatcher launches a task instance for execution. The scheduler dispatches a
@@ -642,8 +646,21 @@ func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunSt
 	default:
 		s.logger.Warn("dropping on-failure alert: dispatch saturated",
 			"dag", run.DagID, "run", run.RunID, "limit", cap(s.alertSem))
+		// Record the drop per rule (mirrors the dispatcher's per-rule sent/failed),
+		// so a burst of saturation-drops is a metric operators can alert on, not
+		// just a log line (#435). Best-effort: a nil recorder is a no-op.
+		if s.recorder != nil {
+			for _, rule := range run.Alerts.OnFailure {
+				s.recorder.RecordAlert(run.DagID, rule.Type, alertResultDropped)
+			}
+		}
 	}
 }
+
+// alertResultDropped is the RecordAlert result for an on-failure alert the
+// scheduler drops because its dispatch semaphore is saturated (#435). It sits
+// alongside the dispatcher's "sent"/"failed" on the same metric.
+const alertResultDropped = "dropped"
 
 // applyPlanned launches a task as it becomes queued and records the resulting
 // transition. Non-queued transitions are recorded directly.

@@ -117,6 +117,7 @@ func (f *flakyStore) snapshotMaterialized() []string {
 type capturingRecorder struct {
 	mu        sync.Mutex
 	decisions []string
+	alerts    []string // "<dag>/<type>/<result>" per RecordAlert call
 }
 
 func (r *capturingRecorder) RecordSchedulerDecision(d string) {
@@ -128,6 +129,23 @@ func (r *capturingRecorder) RecordTaskTransition(_, _, _ string)       {}
 func (r *capturingRecorder) RecordUndispatchable(string)               {}
 func (r *capturingRecorder) RecordSchedulerStepDown(string)            {}
 func (r *capturingRecorder) ObserveSchedulerReacquire(_ time.Duration) {}
+func (r *capturingRecorder) RecordAlert(dagID, channelType, result string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.alerts = append(r.alerts, dagID+"/"+channelType+"/"+result)
+}
+
+func (r *capturingRecorder) alertCount(entry string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, a := range r.alerts {
+		if a == entry {
+			n++
+		}
+	}
+	return n
+}
 
 func (r *capturingRecorder) count(decision string) int {
 	r.mu.Lock()

@@ -617,6 +617,7 @@ func (r *fakeRecorder) RecordSchedulerStepDown(reason string) {
 func (r *fakeRecorder) ObserveSchedulerReacquire(d time.Duration) {
 	r.reacquireSamples = append(r.reacquireSamples, d)
 }
+func (r *fakeRecorder) RecordAlert(_, _, _ string) {}
 
 func freshRun() *fakeStore {
 	// 'a' starts scheduled so a single Step plans it none->queued via launchQueued

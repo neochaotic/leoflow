@@ -60,6 +60,32 @@ func TestStepBoundsAlertConcurrency(t *testing.T) {
 	}
 }
 
+// When the dispatch semaphore is saturated the dropped alert is not just logged —
+// it is recorded as result="dropped" so operators can alert on a burst (#435).
+func TestStepRecordsDroppedAlertWhenSaturated(t *testing.T) {
+	al := &blockingAlerter{started: make(chan RunState, 4), release: make(chan struct{})}
+	defer close(al.release)
+	rec := &capturingRecorder{}
+	store := newFakeStore(exhaustedFailedRun("r1"), exhaustedFailedRun("r2"))
+	s := newScheduler(store)
+	s.SetAlerter(al)
+	s.SetRecorder(rec)
+	s.SetAlertConcurrency(1)
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// One dispatch acquired the slot and blocks; the other run's alert is dropped.
+	select {
+	case <-al.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected one alert to start")
+	}
+	// The drop is recorded synchronously in the finalize path (etl DAG, slack rule).
+	if got := rec.alertCount("etl/slack/dropped"); got != 1 {
+		t.Fatalf("dropped-alert records = %d, want 1 (%v)", got, rec.alerts)
+	}
+}
+
 // A run that finalizes failed with on_failure rules fires the alerter exactly once.
 func TestStepAlertsOnFailedFinalize(t *testing.T) {
 	store := newFakeStore(RunState{

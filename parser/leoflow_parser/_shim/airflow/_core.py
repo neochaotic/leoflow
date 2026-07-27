@@ -84,6 +84,10 @@ class DAG:
         self.schedule = schedule
         self.tags = list(tags or [])
         self.task_dict: dict = {}
+        # Airflow applies default_args to every operator in the DAG; the compiler
+        # reads it as the fallback for a task's retries/retry_delay/execution_timeout
+        # (#434). Kept as a plain dict; empty when not given.
+        self.default_args: dict = dict(kwargs.get("default_args") or {})
         # Collect on construction too, so DAGs defined without `with` (e.g.
         # module-level `dag = DAG(...)` with operators attached via dag=) are seen.
         COLLECTED[dag_id] = self

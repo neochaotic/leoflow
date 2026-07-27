@@ -91,6 +91,7 @@ func (f *flakyStore) SetRunState(_ context.Context, runID string, state domain.D
 	f.runStates[runID] = state
 	return nil
 }
+func (f *flakyStore) MarkRunAlerted(context.Context, string) (bool, error) { return true, nil }
 
 func (f *flakyStore) SetTaskNote(context.Context, string, string, string) error { return nil }
 

@@ -99,6 +99,11 @@ type Store interface {
 	// re-dispatch, PRESERVING try_number (reschedule is not a retry; #380).
 	RedispatchReschedule(ctx context.Context, runID, taskID string) error
 	SetRunState(ctx context.Context, runID string, state domain.DagRunState) error
+	// MarkRunAlerted atomically claims a run's on-failure alert (#431): it reports
+	// true iff this call is the one that set alerted_at (it was NULL), and false
+	// when the run was already alerted for this failure episode. A clear resets
+	// the marker, so a genuine re-failure re-claims. Dedups duplicate pages.
+	MarkRunAlerted(ctx context.Context, runID string) (bool, error)
 	ScheduledDAGs(ctx context.Context) ([]ScheduledDAG, error)
 	CreateScheduledRun(ctx context.Context, dagID string, logical time.Time) error
 	// SetTaskNote attaches operational context to a task instance (shown in the
@@ -632,6 +637,16 @@ func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunSt
 		return
 	}
 	if run.Alerts == nil || len(run.Alerts.OnFailure) == 0 {
+		return
+	}
+	// Dedup per failure episode (#431): atomically claim the alert. Skip if this
+	// episode was already alerted (a re-tick of the same failed state); a clear
+	// resets the marker so a genuine re-failure re-claims. Fail OPEN on a store
+	// error — a missed page is worse than a rare duplicate — but log it.
+	if won, err := s.store.MarkRunAlerted(ctx, run.RunID); err != nil {
+		s.logger.Error("claiming on-failure alert (alerting anyway)",
+			"dag", run.DagID, "run", run.RunID, "error", err)
+	} else if !won {
 		return
 	}
 	// Acquire a dispatch slot without blocking the tick. A saturated semaphore

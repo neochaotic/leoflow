@@ -117,6 +117,12 @@ type Querier interface {
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
+	// Atomically claim the on-failure alert for a run (#431): set alerted_at once,
+	// only while it is NULL, and return the row iff this call won the claim. A second
+	// call (same failed episode, no clear) matches no row and reports "already
+	// alerted", so the scheduler skips the duplicate page. A clear nulls alerted_at,
+	// letting the next genuine failure re-claim.
+	MarkRunAlerted(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
 	// Fails an orphaned dag run. The `state = 'running'` guard makes the reap a
 	// safety net, never a takeover: a competing finalizer (the normal scheduler
 	// path) cannot be overwritten. Idempotent: a second call on a run already
@@ -177,7 +183,9 @@ type Querier interface {
 	// Clear re-binds the run to the DAG's current registered version (ADR 0020): a
 	// re-run after a code/yaml fix picks up the newest image and config — in dev that
 	// is the last hot-reload, in prod the last deploy — while everything within a
-	// version stays reproducible.
+	// version stays reproducible. Clearing alerted_at (#431) makes the clear a new
+	// failure episode, so a genuine re-failure re-pages while a re-tick of the same
+	// failed state does not.
 	ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVersionParams) error
 	// Archives the current attempt into task_instance_history then resets the
 	// live row. See ResetTaskInstanceToNone for the per-attempt rationale.

@@ -225,6 +225,7 @@ type DagRun struct {
 	StartedAt         pgtype.Timestamptz `json:"started_at"`
 	EndedAt           pgtype.Timestamptz `json:"ended_at"`
 	Note              *string            `json:"note"`
+	AlertedAt         pgtype.Timestamptz `json:"alerted_at"`
 }
 
 type DagVersion struct {

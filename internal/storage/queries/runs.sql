@@ -69,10 +69,24 @@ RETURNING *;
 -- Clear re-binds the run to the DAG's current registered version (ADR 0020): a
 -- re-run after a code/yaml fix picks up the newest image and config — in dev that
 -- is the last hot-reload, in prod the last deploy — while everything within a
--- version stays reproducible.
+-- version stays reproducible. Clearing alerted_at (#431) makes the clear a new
+-- failure episode, so a genuine re-failure re-pages while a re-tick of the same
+-- failed state does not.
 UPDATE dag_runs
-SET state = 'queued', started_at = NULL, ended_at = NULL, dag_version_id = $2
+SET state = 'queued', started_at = NULL, ended_at = NULL, alerted_at = NULL,
+    dag_version_id = $2
 WHERE id = $1;
+
+-- name: MarkRunAlerted :one
+-- Atomically claim the on-failure alert for a run (#431): set alerted_at once,
+-- only while it is NULL, and return the row iff this call won the claim. A second
+-- call (same failed episode, no clear) matches no row and reports "already
+-- alerted", so the scheduler skips the duplicate page. A clear nulls alerted_at,
+-- letting the next genuine failure re-claim.
+UPDATE dag_runs
+SET alerted_at = now()
+WHERE id = $1 AND alerted_at IS NULL
+RETURNING id;
 
 -- name: StampDagRunState :exec
 -- Transitions a run's state and stamps the run's own timestamps so the UI can

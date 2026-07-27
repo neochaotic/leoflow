@@ -45,7 +45,7 @@ def compile_dag(
         "dag_id": dag.dag_id,
         "dag_version": dag_version,
         "image": image,
-        "tasks": [_map_task(task, source) for task in _ordered_tasks(dag)],
+        "tasks": [_map_task(task, source, dag) for task in _ordered_tasks(dag)],
     }
 
     schedule = _schedule(dag)
@@ -234,7 +234,7 @@ def _ordered_tasks(dag) -> list[Any]:
     return [dag.task_dict[task_id] for task_id in sorted(dag.task_dict)]
 
 
-def _map_task(task, source: str) -> dict[str, Any]:
+def _map_task(task, source: str, dag=None) -> dict[str, Any]:
     task_type = _operator_type(task)
     entry: dict[str, Any] = {"task_id": task.task_id, "type": task_type}
 
@@ -245,6 +245,8 @@ def _map_task(task, source: str) -> dict[str, Any]:
     rule = _trigger_rule(task)
     if rule != "all_success":
         entry["trigger_rule"] = rule
+
+    _apply_scheduling_attrs(task, dag, entry)
 
     if task_type == "python":
         entry["entrypoint"] = _python_entrypoint(task, source)
@@ -271,6 +273,14 @@ def _map_task(task, source: str) -> dict[str, Any]:
 # _ON_FAILURE_CALLBACK is the one Airflow callback kwarg Leoflow runs (#424); the
 # others stay a loud reject until wired.
 _ON_FAILURE_CALLBACK = "on_failure_callback"
+
+# Airflow scheduling attributes captured by the compiler outside a generic
+# operator's constructor kwargs (#434): trigger_rule via _trigger_rule, the rest
+# via _apply_scheduling_attrs. _split_operator_args skips them so they are not
+# mistaken for the operator's own args (and a timedelta does not trip its reject).
+_SCHEDULING_ATTR_NAMES = frozenset(
+    {"trigger_rule", "retries", "retry_delay", "execution_timeout"}
+)
 
 # Task types whose runtime path is Python with a real try/except, so an
 # on_failure_callback can run in-process on the task's final failure (#424). A
@@ -334,6 +344,14 @@ def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
     xcom: dict[str, list[str]] = {}
     operator_args: dict[str, Any] = {}
     for name, value in raw.items():
+        # Airflow scheduling attributes (trigger_rule + retries/retry_delay/
+        # execution_timeout) are captured separately — _trigger_rule and
+        # _apply_scheduling_attrs (#434) — NOT as operator constructor args. Skip
+        # them here: they are not the operator's own kwargs, and a timedelta
+        # (retry_delay/execution_timeout) would otherwise trip the non-serialisable
+        # reject below and fail an otherwise-valid provider operator at compile.
+        if name in _SCHEDULING_ATTR_NAMES:
+            continue
         # on_failure_callback is a callable that cannot be serialised into
         # dag.json, but it is SUPPORTED (#424 inc 4): the runtime re-imports dag.py
         # and calls it in the task process on failure. Accept it here as a marker
@@ -417,6 +435,41 @@ def _trigger_rule(task) -> str:
     if value not in _SUPPORTED_TRIGGER_RULES:
         raise ValueError(f"unsupported trigger rule {value!r} on task {task.task_id}")
     return value
+
+
+def _sched_attr(task, dag, name: str):
+    """Resolve an Airflow scheduling attribute (retries/retry_delay/execution_timeout)
+    the way Airflow does: the value set on the operator wins; otherwise the DAG's
+    default_args supplies it (#434). Returns None when neither sets it, so the task
+    emits no key and the Go side's leoflow.yaml defaults still apply."""
+    value = getattr(task, name, None)
+    if value is None and dag is not None:
+        value = (getattr(dag, "default_args", None) or {}).get(name)
+    return value
+
+
+def _seconds(value) -> int | None:
+    """Coerce an Airflow duration (a timedelta, or a bare int/float of seconds) to a
+    whole number of seconds. None stays None."""
+    if value is None:
+        return None
+    total = value.total_seconds() if hasattr(value, "total_seconds") else value
+    return int(total)
+
+
+def _apply_scheduling_attrs(task, dag, entry: dict[str, Any]) -> None:
+    """Capture retries / retry_delay / execution_timeout (operator or default_args)
+    onto the task entry, converting durations to seconds. Silently dropping these —
+    the pre-#434 behavior — made a migrated DAG's retries=3 run once with no retry."""
+    retries = _sched_attr(task, dag, "retries")
+    if retries is not None:
+        entry["retries"] = int(retries)
+    retry_delay = _seconds(_sched_attr(task, dag, "retry_delay"))
+    if retry_delay is not None:
+        entry["retry_delay_seconds"] = retry_delay
+    execution_timeout = _seconds(_sched_attr(task, dag, "execution_timeout"))
+    if execution_timeout is not None:
+        entry["execution_timeout_seconds"] = execution_timeout
 
 
 def _python_entrypoint(task, source: str) -> str:

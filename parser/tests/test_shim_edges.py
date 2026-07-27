@@ -316,3 +316,99 @@ def test_generic_operator_with_native_substring_name_is_captured(
     t = _task(spec, "t")
     assert t["type"] == "airflow_operator"
     assert t["operator_class"] == f"airflow.providers.acme.operators.run.{class_name}"
+
+
+# --- Airflow scheduling attrs on the operator / default_args (#434) --------------
+# retries / retry_delay / execution_timeout set the Airflow way must be captured, not
+# silently dropped (a DAG migrated with retries=3 must not run once with no retry).
+
+def test_operator_retries_and_timeouts_are_captured(monkeypatch, tmp_path):
+    """retries / retry_delay / execution_timeout set ON the operator reach dag.json
+    (converted to seconds), instead of being silently dropped (#434)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from datetime import timedelta
+        from airflow.providers.standard.operators.bash import BashOperator
+        from airflow.sdk import DAG
+        with DAG("g"):
+            BashOperator(task_id="b", bash_command="false",
+                         retries=3, retry_delay=timedelta(seconds=30),
+                         execution_timeout=timedelta(minutes=5))
+    """)
+    b = _task(spec, "b")
+    assert b["retries"] == 3
+    assert b["retry_delay_seconds"] == 30
+    assert b["execution_timeout_seconds"] == 300
+
+
+def test_dag_default_args_retries_are_captured(monkeypatch, tmp_path):
+    """default_args on the DAG apply to a task that does not set its own (#434)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from datetime import timedelta
+        from airflow.providers.standard.operators.bash import BashOperator
+        from airflow.sdk import DAG
+        with DAG("g", default_args={"retries": 2, "retry_delay": timedelta(seconds=15)}):
+            BashOperator(task_id="b", bash_command="false")
+    """)
+    b = _task(spec, "b")
+    assert b["retries"] == 2
+    assert b["retry_delay_seconds"] == 15
+
+
+def test_operator_retries_win_over_default_args(monkeypatch, tmp_path):
+    """A per-operator value is more specific than default_args and wins (#434)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.providers.standard.operators.bash import BashOperator
+        from airflow.sdk import DAG
+        with DAG("g", default_args={"retries": 2}):
+            BashOperator(task_id="b", bash_command="false", retries=5)
+    """)
+    assert _task(spec, "b")["retries"] == 5
+
+
+def test_no_scheduling_attrs_emits_no_keys(monkeypatch, tmp_path):
+    """A task with no retries/timeout emits none — so the Go side's default_args /
+    leoflow.yaml defaults still apply (nil, not a forced 0)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.providers.standard.operators.bash import BashOperator
+        from airflow.sdk import DAG
+        with DAG("g"):
+            BashOperator(task_id="b", bash_command="false")
+    """)
+    b = _task(spec, "b")
+    assert "retries" not in b
+    assert "retry_delay_seconds" not in b
+    assert "execution_timeout_seconds" not in b
+
+
+def test_task_decorator_retries_are_captured(monkeypatch, tmp_path):
+    """@task(retries=…, retry_delay=…) — the common TaskFlow style — is captured too
+    (the decorator kwargs flow to the underlying python operator, #434)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from datetime import timedelta
+        from airflow.sdk import DAG, task
+        @task(retries=2, retry_delay=timedelta(seconds=10))
+        def a() -> None: ...
+        with DAG("g"):
+            a()
+    """)
+    a = _task(spec, "a")
+    assert a["type"] == "python"
+    assert a["retries"] == 2
+    assert a["retry_delay_seconds"] == 10
+
+
+def test_provider_operator_retries_are_captured(monkeypatch, tmp_path):
+    """A generic provider operator (type=airflow_operator) also carries its retries
+    /timeout, so a captured operator is not exempt from the #434 fix."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from datetime import timedelta
+        from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+        from airflow.sdk import DAG
+        with DAG("g"):
+            SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1",
+                                    retries=4, execution_timeout=timedelta(minutes=2))
+    """)
+    q = _task(spec, "q")
+    assert q["type"] == "airflow_operator"
+    assert q["retries"] == 4
+    assert q["execution_timeout_seconds"] == 120

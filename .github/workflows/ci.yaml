@@ -277,6 +277,40 @@ jobs:
         run: bash test/e2e/lite-selfheal.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # Native on-failure alerting gate (#424). A DAG with an `alerts:` block and a
+  # single http_api task that fails (500) is triggered; the scheduler must fire a
+  # real webhook POST — resolved from an encrypted managed connection, rendered
+  # from the message template — to a local receiver. Exercises the whole Go
+  # control-plane chain (compile → dag.json → scheduler → dispatcher → notifier)
+  # against a real DB and real connection encryption, which the unit tests can't.
+  # ─────────────────────────────────────────────────────────────────────
+  e2e-lite-alerts:
+    name: E2E Lite (on-failure alerting gate)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: leoflow
+          POSTGRES_PASSWORD: leoflow
+          POSTGRES_DB: leoflow_dev
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      # leoflow lite spawns the parser via `python3 -m leoflow_parser`; ship its
+      # source on PYTHONPATH so the import resolves on a bare runner.
+      PYTHONPATH: parser
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Native on-failure alerting (#424)
+        run: bash test/e2e/lite-alerts.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # Headless SPA crash smoke (test/e2e/ui-smoke.js): boots Lite (managed PG, no
   # Docker), drives the embedded Airflow 3.2 UI with a real browser, and fails on
   # any uncaught React error. The Go tests cannot see the React layer — the

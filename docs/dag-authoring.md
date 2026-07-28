@@ -146,6 +146,12 @@ How it works, and the Phase-A limits:
   (wired as XCom, like `sql=build_sql()` above). A non-serializable arg — a
   callable, a `datetime`, an arbitrary object — is a **loud compile error**; move
   that logic into a `@task`.
+- Literal args are for **small constants**. A task's literal args (`@task`
+  `call_args` and operator `operator_args`) ride as a **single environment
+  variable** at dispatch, which POSIX caps at ~128 KiB; `leoflow compile` rejects a
+  payload over **100 KiB** with a clear error naming the task. For large data, pass
+  a **Connection** or an **external-storage** reference (S3/GCS) and fetch it inside
+  the task — never a big dict/list literal.
 - The provider must be declared in `leoflow.yaml` (`connectors:` or
   `dependencies:`). If it isn't, `leoflow compile` fails and prints the exact line
   to add — no surprise `ModuleNotFoundError` in the pod.

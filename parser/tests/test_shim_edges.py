@@ -412,3 +412,51 @@ def test_provider_operator_retries_are_captured(monkeypatch, tmp_path):
     assert q["type"] == "airflow_operator"
     assert q["retries"] == 4
     assert q["execution_timeout_seconds"] == 120
+
+
+# --- oversized literal args exceed the env-var limit at dispatch (#149) -----------
+
+def test_oversized_task_literal_arg_is_a_loud_compile_error(monkeypatch, tmp_path):
+    """A @task bound to a huge literal rides as a single LEOFLOW_CALL_ARGS_JSON env
+    var and would blow the POSIX per-var limit at dispatch — the compiler must
+    reject it with an actionable message (#149)."""
+    with pytest.raises(ValueError) as ei:
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG, task
+            @task
+            def consume(rows) -> None: ...
+            with DAG("g"):
+                consume(["x" * 1024] * 200)   # ~200 KiB literal
+        """)
+    msg = str(ei.value)
+    assert "consume" in msg                                   # names the task
+    assert "call_args" in msg
+    assert "limit" in msg.lower() or "exceed" in msg.lower()  # says it's too big
+    assert "Connection" in msg or "external" in msg           # points at the fix
+
+
+def test_small_task_literal_arg_compiles(monkeypatch, tmp_path):
+    """A small literal is fine — the cap only rejects oversized payloads (#149)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, task
+        @task
+        def consume(rows) -> None: ...
+        with DAG("g"):
+            consume([1, 2, 3])
+    """)
+    assert _task(spec, "consume")["call_args"] == {"rows": [1, 2, 3]}
+
+
+def test_oversized_operator_arg_is_a_loud_compile_error(monkeypatch, tmp_path):
+    """The same env-var limit applies to a generic operator's literal kwargs
+    (LEOFLOW_OPERATOR_ARGS) — the cap covers operator_args too (#149)."""
+    with pytest.raises(ValueError) as ei:
+        _compile(monkeypatch, tmp_path, """
+            from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+            from airflow.sdk import DAG
+            with DAG("g"):
+                SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="x" * (200 * 1024))
+        """)
+    msg = str(ei.value)
+    assert "q" in msg and "operator_args" in msg
+    assert "Connection" in msg or "external" in msg

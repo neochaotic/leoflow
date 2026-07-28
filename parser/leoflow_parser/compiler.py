@@ -234,6 +234,31 @@ def _ordered_tasks(dag) -> list[Any]:
     return [dag.task_dict[task_id] for task_id in sorted(dag.task_dict)]
 
 
+# A task's literal args (call_args / operator_args) ride as a SINGLE environment
+# variable at dispatch (LEOFLOW_CALL_ARGS_JSON / LEOFLOW_OPERATOR_ARGS). POSIX caps
+# a single env var at ~128 KiB on Linux; 100 KiB leaves headroom for the rest of
+# the process environment. Over that, dispatch fails with a cryptic OS error — so
+# gate it at compile with a clear pointer to the right pattern (#149).
+_MAX_LITERAL_ARG_BYTES = 100 * 1024
+
+
+def _check_literal_payload_size(task_id: str, kind: str, payload: dict[str, Any]) -> None:
+    """Reject a literal-arg payload too large to ride in one env var at dispatch
+    (#149). ``kind`` is "call_args" or "operator_args"; the error names the task,
+    the size, and the fix (small constants only; large data via a Connection or
+    external storage fetched inside the task)."""
+    size = len(json.dumps(payload).encode("utf-8"))
+    if size > _MAX_LITERAL_ARG_BYTES:
+        raise ValueError(
+            f"{kind} on task {task_id!r} is {size} bytes, over the "
+            f"{_MAX_LITERAL_ARG_BYTES}-byte compile limit: it rides as a single "
+            f"environment variable at dispatch and would exceed the POSIX env-var "
+            f"limit, failing the task with a cryptic OS error. Pass small constants "
+            f"only — for large data use a Connection or external storage (e.g. S3/GCS) "
+            f"and fetch it inside the task."
+        )
+
+
 def _map_task(task, source: str, dag=None) -> dict[str, Any]:
     task_type = _operator_type(task)
     entry: dict[str, Any] = {"task_id": task.task_id, "type": task_type}
@@ -254,6 +279,7 @@ def _map_task(task, source: str, dag=None) -> dict[str, Any]:
         if xcom_input:
             entry["xcom_input"] = xcom_input
         if call_args:
+            _check_literal_payload_size(task.task_id, "call_args", call_args)
             entry["call_args"] = call_args
     elif task_type == "bash":
         entry["entrypoint"] = _bash_command(task)
@@ -265,6 +291,7 @@ def _map_task(task, source: str, dag=None) -> dict[str, Any]:
         if xcom_input:
             entry["xcom_input"] = xcom_input
         if operator_args:
+            _check_literal_payload_size(task.task_id, "operator_args", operator_args)
             entry["operator_args"] = operator_args
     _check_callbacks(task, task_type, entry)
     return entry

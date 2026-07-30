@@ -288,3 +288,34 @@ func TestBuffered_Close_DrainsPendingWork(t *testing.T) {
 		t.Errorf("after Close, inner saw %d calls, want 4 (every accepted Dispatch must drain)", inner.callCount.Load())
 	}
 }
+
+// TestBuffered_DispatchAfterClose_ReturnsAtCapacity: a Dispatch after Close must
+// return ErrAtCapacity, not panic on send-to-closed-channel (#133 race fix).
+func TestBuffered_DispatchAfterClose_ReturnsAtCapacity(t *testing.T) {
+	d := dispatch.NewBuffered(&recordingInner{}, &recordingSink{}, discardLogger(), nil,
+		dispatch.BufferConfig{BufferSize: 4, Workers: 1})
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close err = %v", err)
+	}
+	err := d.Dispatch(context.Background(), "r", "d", domain.TaskSpec{TaskID: "t"})
+	if !errors.Is(err, dispatch.ErrAtCapacity) {
+		t.Fatalf("Dispatch after Close = %v, want ErrAtCapacity (must not panic)", err)
+	}
+}
+
+// TestBuffered_ConcurrentDispatchAndClose_NoPanic: Dispatch racing Close must never
+// panic (send-on-closed). Run with -race to also catch the data race (#133).
+func TestBuffered_ConcurrentDispatchAndClose_NoPanic(t *testing.T) {
+	d := dispatch.NewBuffered(&recordingInner{}, &recordingSink{}, discardLogger(), nil,
+		dispatch.BufferConfig{BufferSize: 8, Workers: 2})
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = d.Dispatch(context.Background(), "r", "d", domain.TaskSpec{TaskID: "t"})
+		}()
+	}
+	_ = d.Close() // races with the in-flight Dispatch goroutines
+	wg.Wait()     // no panic reaching here = pass
+}

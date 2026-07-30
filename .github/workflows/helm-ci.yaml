@@ -95,12 +95,16 @@ jobs:
         run: |
           curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
             | tar xz -C /usr/local/bin kubeconform
+          # agentTLS.enabled defaults to true (#263), so exercise the TLS-on render
+          # path with BOTH the server cert and the CA trust bundle — the chart now
+          # requires the pair (#280), mirroring a real cert-manager Pro install.
           helm template leoflow helm/leoflow \
             --set database.url='postgres://x:x@x/x' \
             --set redis.url='redis://x/0' \
             --set auth.jwtSecret=x \
             --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
             --set agentTLS.serverCertSecret=leoflow-agent-tls-ci \
+            --set agentTLS.caConfigMap=leoflow-agent-ca-ci \
             | kubeconform -strict -summary -ignore-missing-schemas \
                 -schema-location default
 
@@ -140,6 +144,26 @@ jobs:
           kubectl -n leoflow exec deploy/postgres -- pg_isready -U leoflow -d leoflow -t 60
           kubectl -n leoflow exec deploy/redis -- redis-cli ping | grep -q PONG
 
+      # Self-signed agent-gRPC TLS fixture. The Pro edition refuses to boot
+      # without TLS on the agent channel (#281) — booting insecure would look
+      # healthy but every secrets RPC to a task pod would fail closed. So the
+      # kind smoke must exercise the REAL Pro path (agentTLS.enabled=true), not
+      # a mode we never ship. Mint a throwaway self-signed cert and hand it to
+      # the chart as the server cert Secret + CA ConfigMap. This is the CI side
+      # of #265's faithful TLS fixture. (Previously this step set
+      # agentTLS.enabled=false, which #281 now correctly rejects.)
+      - name: Self-signed agent TLS fixture (#281 / #265)
+        run: |
+          set -euo pipefail
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout /tmp/agent-tls.key -out /tmp/agent-tls.crt \
+            -subj "/CN=leoflow.leoflow.svc.cluster.local" \
+            -addext "subjectAltName=DNS:leoflow,DNS:leoflow.leoflow.svc.cluster.local"
+          kubectl -n leoflow create secret tls leoflow-agent-tls \
+            --cert=/tmp/agent-tls.crt --key=/tmp/agent-tls.key
+          kubectl -n leoflow create configmap leoflow-agent-ca \
+            --from-file=ca.crt=/tmp/agent-tls.crt
+
       - name: helm install
         run: |
           helm install leoflow helm/leoflow -n leoflow \
@@ -151,7 +175,9 @@ jobs:
             --set redis.url='redis://redis:6379/0' \
             --set auth.jwtSecret=ci-jwt-secret \
             --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
-            --set agentTLS.enabled=false \
+            --set agentTLS.enabled=true \
+            --set agentTLS.serverCertSecret=leoflow-agent-tls \
+            --set agentTLS.caConfigMap=leoflow-agent-ca \
             --set bootstrap.password=ci-admin \
             --wait --timeout 240s
           kubectl -n leoflow rollout status deploy/leoflow --timeout=120s

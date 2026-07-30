@@ -115,6 +115,11 @@ func run() error {
 	if err := guardInsecureSecretsForEdition(cfg.UI.Edition, allowInsecureSecrets); err != nil {
 		return err
 	}
+	// A Pro deployment without agent-gRPC TLS boots but can't deliver secrets —
+	// refuse it loudly rather than fail every secrets RPC cryptically (#281).
+	if err := guardTLSForEdition(cfg.UI.Edition, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey); err != nil {
+		return err
+	}
 	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, tel.Logger)
 	if gerr != nil {
 		return gerr

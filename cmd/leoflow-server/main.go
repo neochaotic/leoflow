@@ -391,12 +391,22 @@ func buildK8sClient() (kubernetes.Interface, error) {
 			return nil, fmt.Errorf("no in-cluster config or kubeconfig: %w", err)
 		}
 	}
+	// Bound every API call. Workers dispatch with a detached context (they
+	// already accepted responsibility for the task), so without a client-side
+	// deadline an apiserver that accepts the connection and never answers hangs
+	// a worker for good — and with it the shutdown drain (#463).
+	cfg.Timeout = k8sClientTimeout
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("building kubernetes client: %w", err)
 	}
 	return cs, nil
 }
+
+// k8sClientTimeout caps a single Kubernetes API call. Generous enough for a pod
+// create against a loaded apiserver, short enough that a hung call is cut well
+// inside the dispatch drain timeout.
+const k8sClientTimeout = 10 * time.Second
 
 // reconcileInterval is how often the pod reconciler sweeps for failed pods.
 const reconcileInterval = 30 * time.Second

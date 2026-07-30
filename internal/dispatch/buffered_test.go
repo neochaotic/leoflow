@@ -343,3 +343,45 @@ func TestBuffered_Close_DrainsAllBufferedRequests(t *testing.T) {
 		t.Fatalf("after Close the inner saw %d of %d requests — Close dropped buffered work (would strand TIs `queued`, #133)", got, n)
 	}
 }
+
+// blockingInner hangs in Dispatch until released. It stands in for the real
+// failure this guards: a kube-apiserver that accepts the connection and never
+// answers, with no client-side deadline to cut it short.
+type blockingInner struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingInner) Dispatch(context.Context, string, string, domain.TaskSpec) error {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return nil
+}
+
+// TestBuffered_Close_ReturnsWhenWorkerHangs: Close must not wait forever on a
+// worker stuck in the inner dispatcher. Wiring Close() into shutdown (#133)
+// turned a leaked worker into a blocked shutdown: the pod then rides out its
+// termination grace period and is SIGKILLed, losing the very drain #133 added.
+// Close bounds the wait and reports what it abandoned (#463).
+func TestBuffered_Close_ReturnsWhenWorkerHangs(t *testing.T) {
+	inner := &blockingInner{entered: make(chan struct{}), release: make(chan struct{})}
+	defer close(inner.release)
+	d := dispatch.NewBuffered(inner, &recordingSink{}, discardLogger(), nil,
+		dispatch.BufferConfig{BufferSize: 4, Workers: 1, DrainTimeout: 100 * time.Millisecond})
+	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "stuck"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	<-inner.entered // the worker is now inside the hanging inner dispatcher
+
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Close returned nil; want an error naming the abandoned dispatches")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return within 3s while a worker was hung — shutdown would block until SIGKILL")
+	}
+}

@@ -1,6 +1,13 @@
 suite: production hardening toggles (HPA / PDB / NetworkPolicy / ServiceMonitor)
 release:
   name: leoflow
+# The chart always deploys the Pro edition and now refuses to render without agent
+# TLS (#459). These cases assert HPA / PDB / NetworkPolicy / ServiceMonitor shape,
+# not TLS wiring, so satisfy the guard once here.
+set:
+  agentTLS.enabled: true
+  agentTLS.serverCertSecret: leoflow-tls
+  agentTLS.caConfigMap: leoflow-ca
 tests:
   # ─── HPA ────────────────────────────────────────────────────────────────
   - it: HPA not rendered when autoscaling.enabled is false (default)
@@ -9,7 +16,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -20,7 +26,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       autoscaling.enabled: true
       autoscaling.minReplicas: 3
       autoscaling.maxReplicas: 9
@@ -50,7 +55,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -61,7 +65,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       podDisruptionBudget.enabled: true
       podDisruptionBudget.minAvailable: 2
     asserts:
@@ -80,7 +83,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -91,7 +93,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       networkPolicy.enabled: true
     asserts:
       - hasDocuments:
@@ -122,7 +123,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - hasDocuments:
           count: 0
@@ -133,7 +133,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       metrics.serviceMonitor.enabled: true
     asserts:
       - hasDocuments:

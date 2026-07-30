@@ -170,7 +170,32 @@ type Querier interface {
 	// enum type from `state = $3` but text from the literal comparisons below and
 	// rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
 	// agent path is the first to exercise this query end-to-end.
-	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) error
+	//
+	// Guarded on both the source state and the attempt, matching the other three
+	// writes to this table (FailTaskInstanceIfActive, RescheduleTaskInstance,
+	// RecordHeartbeat). Two writers touch task_instances — the scheduler tick and
+	// this report — so an unguarded UPDATE lets a report that arrives late land
+	// wherever the row happens to be:
+	//   * after a reaper settled the row, it resurrects a terminal state (a run
+	//     reports success on work the system already abandoned, and downstream
+	//     tasks fire on it);
+	//   * after a retry, it lands on the next attempt, because ResetTaskInstanceToNone
+	//     bumps try_number in place rather than inserting a new row.
+	// The agent token already carries the try_number it was dispatched with, so the
+	// value that tells the attempts apart is present at the call site.
+	// Returns the affected row count so the caller can tell a real write from a
+	// rejected late report instead of dropping it silently.
+	//
+	// The state set is deliberately wider than the siblings' ('scheduled','queued',
+	// 'running'): it also admits 'none'. Those writes are driven by the scheduler,
+	// which only touches rows it has already advanced; this one is driven by the
+	// agent, which starts reporting earlier. launchQueued dispatches the pod BEFORE
+	// recording `queued`, so between those two statements a fast-starting task —
+	// routine under the Lite subprocess executor — legitimately reports `running`
+	// while the row is still `none`. Excluding it would reject a correct report,
+	// trading a rare silent corruption for a frequent one. The settled states
+	// (success/failed/skipped/upstream_failed) are what this guard is for.
+	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) (int64, error)
 	// A reschedule-mode sensor (mode='reschedule') poked not-ready: park the active TI
 	// in up_for_reschedule with its next-poke time ($3) so the scheduler re-dispatches
 	// it once reschedule_at passes (#380), without consuming retry budget. Guarded to

@@ -131,15 +131,27 @@ func (s *ExecutionStore) ReportState(ctx context.Context, id auth.AgentIdentity,
 	}
 	code := toInt32(exitCode)
 	params := queries.ReportTaskResultParams{
-		DagRunID: rid,
-		TaskID:   id.TaskID,
-		Column3:  queries.TaskState(state), // sqlc names the $3::task_state cast param Column3.
-		ExitCode: &code,
+		DagRunID:  rid,
+		TaskID:    id.TaskID,
+		Column3:   queries.TaskState(state), // sqlc names the $3::task_state cast param Column3.
+		ExitCode:  &code,
+		TryNumber: toInt32(id.TryNumber),
 	}
 	if errMsg != "" {
 		params.ErrorMessage = &errMsg
 	}
-	return s.q.ReportTaskResult(ctx, params)
+	rows, err := s.q.ReportTaskResult(ctx, params)
+	if err != nil {
+		return err
+	}
+	// The UPDATE is guarded on the source state and the attempt, so zero rows
+	// means the report arrived after the row moved on — not that anything
+	// failed. Surface it as a distinct condition so the caller can acknowledge
+	// the agent without pretending the write happened.
+	if rows == 0 {
+		return agentrpc.ErrStaleReport
+	}
+	return nil
 }
 
 // Reschedule parks an active task instance in up_for_reschedule with its next-poke

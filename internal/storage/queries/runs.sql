@@ -267,11 +267,36 @@ UPDATE task_instances
 SET state = 'failed', ended_at = now(), error_message = $2
 WHERE id = $1 AND state IN ('scheduled', 'queued', 'running');
 
--- name: ReportTaskResult :exec
+-- name: ReportTaskResult :execrows
 -- $3 is cast to task_state in every usage: without the cast Postgres deduces an
 -- enum type from `state = $3` but text from the literal comparisons below and
 -- rejects the parameter as having inconsistent types (SQLSTATE 42P08). The pod
 -- agent path is the first to exercise this query end-to-end.
+--
+-- Guarded on both the source state and the attempt, matching the other three
+-- writes to this table (FailTaskInstanceIfActive, RescheduleTaskInstance,
+-- RecordHeartbeat). Two writers touch task_instances — the scheduler tick and
+-- this report — so an unguarded UPDATE lets a report that arrives late land
+-- wherever the row happens to be:
+--   * after a reaper settled the row, it resurrects a terminal state (a run
+--     reports success on work the system already abandoned, and downstream
+--     tasks fire on it);
+--   * after a retry, it lands on the next attempt, because ResetTaskInstanceToNone
+--     bumps try_number in place rather than inserting a new row.
+-- The agent token already carries the try_number it was dispatched with, so the
+-- value that tells the attempts apart is present at the call site.
+-- Returns the affected row count so the caller can tell a real write from a
+-- rejected late report instead of dropping it silently.
+--
+-- The state set is deliberately wider than the siblings' ('scheduled','queued',
+-- 'running'): it also admits 'none'. Those writes are driven by the scheduler,
+-- which only touches rows it has already advanced; this one is driven by the
+-- agent, which starts reporting earlier. launchQueued dispatches the pod BEFORE
+-- recording `queued`, so between those two statements a fast-starting task —
+-- routine under the Lite subprocess executor — legitimately reports `running`
+-- while the row is still `none`. Excluding it would reject a correct report,
+-- trading a rare silent corruption for a frequent one. The settled states
+-- (success/failed/skipped/upstream_failed) are what this guard is for.
 UPDATE task_instances
 SET state = $3::task_state,
     exit_code = $4,
@@ -280,7 +305,9 @@ SET state = $3::task_state,
     ended_at = CASE WHEN $3::task_state IN ('success', 'failed', 'skipped', 'upstream_failed') THEN now() ELSE ended_at END,
     duration_seconds = CASE WHEN $3::task_state IN ('success', 'failed') AND started_at IS NOT NULL
         THEN EXTRACT(EPOCH FROM (now() - started_at)) ELSE duration_seconds END
-WHERE dag_run_id = $1 AND task_id = $2;
+WHERE dag_run_id = $1 AND task_id = $2
+  AND try_number = sqlc.arg(try_number)
+  AND state IN ('none', 'scheduled', 'queued', 'running');
 
 -- name: RescheduleTaskInstance :exec
 -- A reschedule-mode sensor (mode='reschedule') poked not-ready: park the active TI

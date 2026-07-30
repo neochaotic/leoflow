@@ -78,6 +78,14 @@ type Authenticator interface {
 	AuthenticateAgent(token string) (*auth.AgentIdentity, error)
 }
 
+// ErrStaleReport is returned by Store.ReportState when the report did not apply
+// because the task instance had already moved on — a reaper settled it, or a
+// retry advanced past the attempt the reporting agent was dispatched for. It is
+// not a failure of the RPC: the agent did nothing wrong and must not retry, so
+// the handler acknowledges and logs. Declared here rather than in the storage
+// package because storage implements this interface, not the reverse.
+var ErrStaleReport = errors.New("task state report did not apply: the task instance already moved on")
+
 // Store is the server's view of persistent task state.
 type Store interface {
 	// TaskSpec returns the execution spec for the identified task instance.
@@ -204,6 +212,17 @@ func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateReques
 		return nil, err
 	}
 	if rerr := s.store.ReportState(ctx, *id, state, int(req.GetExitCode()), req.GetErrorMessage()); rerr != nil {
+		// A stale report is the guard working, not a fault: the row was already
+		// settled or already on a later attempt. Acknowledge so the agent stops
+		// (retrying would never apply either), but log it — a late report is
+		// evidence of a partition or a slow pod, and dropping it silently is the
+		// failure mode the guard exists to end.
+		if errors.Is(rerr, ErrStaleReport) {
+			slog.Warn("ignoring stale task state report",
+				"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID,
+				"try", id.TryNumber, "reported_state", state)
+			return &agentv1.ReportStateResponse{Acknowledged: true}, nil
+		}
 		return nil, status.Errorf(codes.Internal, "recording state: %v", rerr)
 	}
 	return &agentv1.ReportStateResponse{Acknowledged: true}, nil

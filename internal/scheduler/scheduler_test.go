@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,9 @@ type fakeStore struct {
 	alertAttempts  map[string]int
 	deliveredRuns  map[string]bool
 	markAlertedErr bool
+	// alertMu guards the two maps above: the tick claims while the detached send
+	// goroutine stamps. Real Postgres serializes this; the fake must too.
+	alertMu sync.Mutex
 	// activeRunsCalls counts ActiveRuns invocations so the follower-side gate
 	// can be asserted: a follower must NOT read run state (single-writer
 	// invariant, ADR 0031 / issue #208).
@@ -86,29 +90,60 @@ func (f *fakeStore) SetRunState(_ context.Context, runID string, state domain.Da
 	f.runStates[runID] = state
 	return nil
 }
-func (f *fakeStore) ClaimAlertAttempt(_ context.Context, runID string, maxAttempts int, _ time.Duration) (bool, error) {
+
+// The alert bookkeeping is the one part of this fake touched from two
+// goroutines: the tick claims an attempt, while the detached send goroutine
+// stamps delivery. Postgres serializes that in production; here a mutex stands
+// in for it, so `-race` reports real defects rather than the fake's own.
+func (f *fakeStore) ClaimAlertAttempt(_ context.Context, runID string, maxAttempts int, _ time.Duration) (int, error) {
+	f.alertMu.Lock()
+	defer f.alertMu.Unlock()
 	if f.markAlertedErr {
-		return false, errors.New("mark alerted failed")
+		return 0, errors.New("mark alerted failed")
 	}
 	if f.alertAttempts == nil {
 		f.alertAttempts = map[string]int{}
 	}
 	if f.deliveredRuns[runID] {
-		return false, nil // already paged for this failure episode
+		return 0, nil // already paged for this failure episode
 	}
 	if f.alertAttempts[runID] >= maxAttempts {
-		return false, nil // attempt budget spent; stop hammering the endpoint
+		return 0, nil // attempt budget spent; stop hammering the endpoint
 	}
+	// Backoff is deliberately not simulated: this fake exercises the state
+	// machine, and the timing predicate is proven against real Postgres in
+	// internal/storage's integration suite.
 	f.alertAttempts[runID]++
-	return true, nil
+	return f.alertAttempts[runID], nil
 }
 
-func (f *fakeStore) MarkRunAlertDelivered(_ context.Context, runID string) error {
+func (f *fakeStore) MarkRunAlertDelivered(_ context.Context, runID string, attempt int) error {
+	f.alertMu.Lock()
+	defer f.alertMu.Unlock()
+	if f.alertAttempts[runID] != attempt {
+		// Mirrors the SQL guard: a stamp from a superseded episode matches no row.
+		return nil
+	}
 	if f.deliveredRuns == nil {
 		f.deliveredRuns = map[string]bool{}
 	}
 	f.deliveredRuns[runID] = true
 	return nil
+}
+
+// attemptsFor reports how many attempts a run has consumed, under the same lock
+// the scheduler's two goroutines contend on.
+func (f *fakeStore) attemptsFor(runID string) int {
+	f.alertMu.Lock()
+	defer f.alertMu.Unlock()
+	return f.alertAttempts[runID]
+}
+
+// wasDelivered reports whether the episode was stamped as paged.
+func (f *fakeStore) wasDelivered(runID string) bool {
+	f.alertMu.Lock()
+	defer f.alertMu.Unlock()
+	return f.deliveredRuns[runID]
 }
 func (f *fakeStore) SetTaskNote(_ context.Context, _, taskID, note string) error {
 	if f.notes == nil {

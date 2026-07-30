@@ -104,11 +104,14 @@ type Store interface {
 	// delivered, when the attempt budget is spent, or when the backoff has not
 	// elapsed — so a dead endpoint stops being retried instead of being hit once
 	// per tick for the life of the run (#431, and the delivery split below).
-	ClaimAlertAttempt(ctx context.Context, runID string, maxAttempts int, backoff time.Duration) (bool, error)
-	// MarkRunAlertDelivered stamps the episode as paged. Called only after a
-	// successful send: claiming and stamping were once the same operation, which
-	// meant every failed send was a page lost with no retry.
-	MarkRunAlertDelivered(ctx context.Context, runID string) error
+	// It returns the attempt number won, or 0 when the claim was refused.
+	ClaimAlertAttempt(ctx context.Context, runID string, maxAttempts int, backoff time.Duration) (int, error)
+	// MarkRunAlertDelivered stamps the episode as paged, for the attempt the
+	// caller won. Claiming and stamping were once the same operation, which meant
+	// every failed send was a page lost with no retry. The attempt is part of the
+	// call because the send is detached from the tick: an operator clear can start
+	// a new episode mid-send, and a stamp from the superseded one must not land.
+	MarkRunAlertDelivered(ctx context.Context, runID string, attempt int) error
 	ScheduledDAGs(ctx context.Context) ([]ScheduledDAG, error)
 	CreateScheduledRun(ctx context.Context, dagID string, logical time.Time) error
 	// SetTaskNote attaches operational context to a task instance (shown in the
@@ -649,6 +652,13 @@ const alertMaxAttempts = 5
 // correlated with the incident being reported, so retrying hard makes both worse.
 const alertRetryBackoff = 2 * time.Minute
 
+// alertAttemptUnknown is the attempt number used when the claim itself errored
+// and we alert anyway (fail open). It is deliberately outside the real attempt
+// range so the delivery stamp, which is guarded on the attempt, matches no row —
+// the page goes out, but a bookkeeping write derived from an unknown attempt
+// never overwrites state we cannot reason about.
+const alertAttemptUnknown = -1
+
 // maybeAlertFailure fires the DAG's on-failure alert rules when a run finalizes
 // failed. It runs in a detached goroutine (WithoutCancel) so a slow endpoint
 // never stalls the tick, and the alerter's own best-effort contract means a
@@ -666,11 +676,22 @@ func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunSt
 	// episode claimable and the next tick retries it after the backoff. Refused
 	// when already delivered, out of budget, or still backing off. Fail OPEN on a
 	// store error: a missed page is worse than a rare duplicate.
-	if won, err := s.store.ClaimAlertAttempt(ctx, run.RunID, alertMaxAttempts, alertRetryBackoff); err != nil {
+	attempt, err := s.store.ClaimAlertAttempt(ctx, run.RunID, alertMaxAttempts, alertRetryBackoff)
+	if err != nil {
 		s.logger.Error("claiming on-failure alert attempt (alerting anyway)",
 			"dag", run.DagID, "run", run.RunID, "error", err)
-	} else if !won {
+		attempt = alertAttemptUnknown
+	} else if attempt == 0 {
 		return
+	}
+	// The last attempt is the one nobody hears about if it fails, so say so while
+	// it is still happening. Without this, a run whose every attempt failed is
+	// indistinguishable in the database from one that has not been tried — the
+	// alerting system failing silently, which is the same shape as the failure it
+	// exists to report.
+	if attempt >= alertMaxAttempts {
+		s.logger.Warn("final on-failure alert attempt for this run; no further retries after this one",
+			"dag", run.DagID, "run", run.RunID, "attempt", attempt, "max", alertMaxAttempts)
 	}
 	// Acquire a dispatch slot without blocking the tick. A saturated semaphore
 	// means a burst of failures is already sending; dropping this one (with a
@@ -684,11 +705,20 @@ func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunSt
 			// backoff elapses — until the attempt budget runs out.
 			detached := context.WithoutCancel(ctx)
 			if !s.alerter.AlertRunFailed(detached, run) {
+				if attempt >= alertMaxAttempts {
+					// Terminal: the budget is spent and nothing got through. This is
+					// the line an operator needs when asking "why was I never paged",
+					// so it says exactly that rather than reporting a failed send.
+					s.logger.Error("on-failure alert GAVE UP: no attempt was delivered, nobody was paged",
+						"dag", run.DagID, "run", run.RunID, "attempts", attempt)
+					return
+				}
 				s.logger.Warn("on-failure alert not fully delivered; will retry after backoff",
-					"dag", run.DagID, "run", run.RunID, "backoff", alertRetryBackoff)
+					"dag", run.DagID, "run", run.RunID,
+					"attempt", attempt, "max", alertMaxAttempts, "backoff", alertRetryBackoff)
 				return
 			}
-			if err := s.store.MarkRunAlertDelivered(detached, run.RunID); err != nil {
+			if err := s.store.MarkRunAlertDelivered(detached, run.RunID, attempt); err != nil {
 				// The page went out; failing to record it costs a duplicate on the
 				// next tick, which is the trade-off this path already prefers.
 				s.logger.Error("recording on-failure alert delivery",

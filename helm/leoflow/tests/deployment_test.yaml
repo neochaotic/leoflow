@@ -335,7 +335,41 @@ tests:
       logs.persistence.accessMode: ReadWriteOnce
     asserts:
       - failedTemplate:
-          errorMessage: "replicaCount > 1 with logs.persistence.accessMode=ReadWriteOnce silently breaks HA: a ReadWriteOnce logs PVC attaches to only one pod, so the second replica hangs in ContainerCreating (Multi-Attach error). Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore), or keep replicaCount=1. See #282."
+          errorMessage: "a ReadWriteOnce logs PVC attaches to only one pod, so more than one control-plane replica — replicaCount > 1, or autoscaling.enabled with maxReplicas > 1 — hangs the extra pods in ContainerCreating (Multi-Attach error), silently. Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore); or keep a single replica; or set logs.persistence.enabled=false (ephemeral emptyDir). See #282."
+
+  # #282 (HPA path): autoscaling.enabled ignores replicaCount and can scale past 1
+  # at RUNTIME, hitting the same Multi-Attach on a ReadWriteOnce PVC — the static
+  # replicaCount check alone would miss it (found in the criterious review).
+  - it: fails when autoscaling.maxReplicas>1 with a ReadWriteOnce logs PVC (#282)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+      replicaCount: 1                 # ignored when autoscaling is on
+      autoscaling.enabled: true
+      autoscaling.maxReplicas: 3
+      logs.persistence.enabled: true
+      logs.persistence.accessMode: ReadWriteOnce
+    asserts:
+      - failedTemplate:
+          errorMessage: "a ReadWriteOnce logs PVC attaches to only one pod, so more than one control-plane replica — replicaCount > 1, or autoscaling.enabled with maxReplicas > 1 — hangs the extra pods in ContainerCreating (Multi-Attach error), silently. Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore); or keep a single replica; or set logs.persistence.enabled=false (ephemeral emptyDir). See #282."
+
+  - it: renders with autoscaling.maxReplicas>1 when the logs PVC is ReadWriteMany (#282)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+      autoscaling.enabled: true
+      autoscaling.maxReplicas: 3
+      logs.persistence.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - hasDocuments:
+          count: 1
 
   - it: renders when replicaCount>1 with a ReadWriteMany logs PVC (#282)
     template: deployment.yaml

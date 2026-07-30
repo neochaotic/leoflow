@@ -25,6 +25,9 @@ tests:
       autoscaling.minReplicas: 3
       autoscaling.maxReplicas: 9
       autoscaling.targetCPUUtilizationPercentage: 80
+      # maxReplicas>1 needs an RWX logs PVC, else the #282 guard (rightly) fails
+      # the whole render — set it so this test exercises the HPA, not that guard.
+      logs.persistence.accessMode: ReadWriteMany
     asserts:
       - hasDocuments:
           count: 1

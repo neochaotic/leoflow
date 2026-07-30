@@ -37,12 +37,19 @@ pods fail the cert chain (x509: unknown authority) and hang. See #280.
 {{- fail "agentTLS.caConfigMap is required when agentTLS.enabled: task pods need the CA trust-bundle ConfigMap to verify the server cert (otherwise the agent's gRPC dial fails x509: certificate signed by unknown authority and tasks hang). Point it at cert-manager's trust bundle (the ConfigMap holding the CA that signed agentTLS.serverCertSecret). See #280." -}}
 {{- end -}}
 {{- /*
-A ReadWriteOnce logs PVC attaches to a single node, so scaling replicaCount past
-1 leaves the extra pods stuck on a Multi-Attach error — silently, from helm's
-view. Fail the install with the RWX pointer instead. See #282.
+A ReadWriteOnce logs PVC attaches to a single node, so more than one replica —
+whether static (replicaCount > 1) or via the HPA (autoscaling.enabled with
+maxReplicas > 1, where replicaCount is ignored) — leaves the extra pods stuck on a
+Multi-Attach error, silently from helm's view. The effective ceiling is
+maxReplicas when autoscaling is on, else replicaCount. Fail with the RWX pointer.
+See #282.
 */ -}}
-{{- if and (gt (int .Values.replicaCount) 1) .Values.logs.persistence.enabled (eq .Values.logs.persistence.accessMode "ReadWriteOnce") -}}
-{{- fail "replicaCount > 1 with logs.persistence.accessMode=ReadWriteOnce silently breaks HA: a ReadWriteOnce logs PVC attaches to only one pod, so the second replica hangs in ContainerCreating (Multi-Attach error). Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore), or keep replicaCount=1. See #282." -}}
+{{- $maxReplicas := .Values.replicaCount -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- $maxReplicas = .Values.autoscaling.maxReplicas -}}
+{{- end -}}
+{{- if and (gt (int $maxReplicas) 1) .Values.logs.persistence.enabled (eq .Values.logs.persistence.accessMode "ReadWriteOnce") -}}
+{{- fail "a ReadWriteOnce logs PVC attaches to only one pod, so more than one control-plane replica — replicaCount > 1, or autoscaling.enabled with maxReplicas > 1 — hangs the extra pods in ContainerCreating (Multi-Attach error), silently. Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore); or keep a single replica; or set logs.persistence.enabled=false (ephemeral emptyDir). See #282." -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment

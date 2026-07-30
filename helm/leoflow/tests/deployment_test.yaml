@@ -292,3 +292,61 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
           value: false
+
+  # #280: agentTLS.enabled with an empty caConfigMap silently ships a control
+  # plane whose task pods can't verify the server cert → x509 unknown-authority.
+  - it: fails when agentTLS.enabled but caConfigMap is empty (#280)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: true
+      agentTLS.serverCertSecret: leoflow-tls
+      agentTLS.caConfigMap: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "agentTLS.caConfigMap is required when agentTLS.enabled: task pods need the CA trust-bundle ConfigMap to verify the server cert (otherwise the agent's gRPC dial fails x509: certificate signed by unknown authority and tasks hang). Point it at cert-manager's trust bundle (the ConfigMap holding the CA that signed agentTLS.serverCertSecret). See #280."
+
+  - it: renders when agentTLS.enabled with both serverCertSecret and caConfigMap (#280)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: true
+      agentTLS.serverCertSecret: leoflow-tls
+      agentTLS.caConfigMap: leoflow-ca
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # #282: replicaCount>1 with a ReadWriteOnce logs PVC → the second pod hangs on
+  # a Multi-Attach error, silently.
+  - it: fails when replicaCount>1 with a ReadWriteOnce logs PVC (#282)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+      replicaCount: 2
+      logs.persistence.enabled: true
+      logs.persistence.accessMode: ReadWriteOnce
+    asserts:
+      - failedTemplate:
+          errorMessage: "replicaCount > 1 with logs.persistence.accessMode=ReadWriteOnce silently breaks HA: a ReadWriteOnce logs PVC attaches to only one pod, so the second replica hangs in ContainerCreating (Multi-Attach error). Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore), or keep replicaCount=1. See #282."
+
+  - it: renders when replicaCount>1 with a ReadWriteMany logs PVC (#282)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+      replicaCount: 2
+      logs.persistence.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - hasDocuments:
+          count: 1

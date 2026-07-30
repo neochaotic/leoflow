@@ -95,12 +95,16 @@ jobs:
         run: |
           curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
             | tar xz -C /usr/local/bin kubeconform
+          # agentTLS.enabled defaults to true (#263), so exercise the TLS-on render
+          # path with BOTH the server cert and the CA trust bundle — the chart now
+          # requires the pair (#280), mirroring a real cert-manager Pro install.
           helm template leoflow helm/leoflow \
             --set database.url='postgres://x:x@x/x' \
             --set redis.url='redis://x/0' \
             --set auth.jwtSecret=x \
             --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
             --set agentTLS.serverCertSecret=leoflow-agent-tls-ci \
+            --set agentTLS.caConfigMap=leoflow-agent-ca-ci \
             | kubeconform -strict -summary -ignore-missing-schemas \
                 -schema-location default
 

@@ -47,6 +47,19 @@ rbac:
   # -- Create the Role + RoleBinding granting the control plane create/get/list/watch/delete on pods + get on pods/log in `taskNamespace`. Required for the pod-per-task executor.
   create: true
 
+# Hardening applied to the pods that run task code. Task images come from DAG
+# authors, so this is the boundary between the platform and code it does not
+# control. The defaults make every task pod admissible under Pod Security
+# Admission's `restricted` profile — enable PSA on taskNamespace and tasks keep
+# running. Both switches below relax that, and both are cluster-operator
+# decisions on purpose: they are not exposed in the DAG spec, so an author
+# cannot elevate their own task.
+taskPodSecurity:
+  # -- Let task pods run as root. Leave `false` unless your task images genuinely require it (a legacy base, or a task that installs packages at run time). Turning it on drops `runAsNonRoot`, which makes the pod inadmissible under a `restricted` namespace — that rejection is the intended signal. The rest of the hardening (no privilege escalation, all capabilities dropped, RuntimeDefault seccomp) stays on regardless, since none of it depends on the UID.
+  allowRoot: false
+  # -- Mount every task container's root filesystem read-only. Off by default deliberately: `restricted` does not require it, and it breaks ordinary Python tasks that write to `/tmp`, the pip cache, or a matplotlib config dir. Turn it on for a fleet of tasks known to write only to their mounted volumes.
+  readOnlyRootFilesystem: false
+
 # -- Ports the leoflow-server listens on. http: API + UI, metrics: Prometheus
 # /metrics, grpc: agent ↔ control plane channel (task pods dial back here).
 ports:

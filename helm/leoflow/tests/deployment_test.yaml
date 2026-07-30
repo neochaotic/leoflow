@@ -399,3 +399,44 @@ tests:
     asserts:
       - hasDocuments:
           count: 1
+
+  # Task-pod hardening is cluster-operator policy, so it must reach the control
+  # plane the way the operator sets it: through the chart. A field that exists in
+  # values.yaml but never renders is an escape hatch nobody can pull.
+  - it: stamps the task-pod hardening defaults (secure when unset)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_ALLOW_ROOT_TASKS
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM
+            value: "false"
+
+  - it: propagates the task-pod hardening opt-outs when the operator sets them
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskPodSecurity.allowRoot: true
+      taskPodSecurity.readOnlyRootFilesystem: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_ALLOW_ROOT_TASKS
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM
+            value: "true"

@@ -8,6 +8,24 @@ import (
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
+// PodSecurity holds the task-pod hardening knobs whose defaults are behavioral
+// rather than free. Both zero values are the safe choice, so a Request that
+// never touches this struct gets a pod that Pod Security Admission's
+// `restricted` profile admits.
+type PodSecurity struct {
+	// AllowRoot clears runAsNonRoot for images that genuinely need root — a
+	// legacy base, or a task that installs packages at run time. Such a pod is
+	// rejected by a `restricted` namespace, which is the intended signal: the
+	// operator is opting out of the profile for that task, visibly.
+	AllowRoot bool
+
+	// ReadOnlyRootFilesystem mounts the container root read-only. Off by
+	// default on purpose: `restricted` does not require it, and it breaks
+	// ordinary Python tasks that write to /tmp, the pip cache or a matplotlib
+	// config dir. Opt in for a task that is known not to write.
+	ReadOnlyRootFilesystem bool
+}
+
 // Request bundles everything an executor needs to run a single task instance.
 type Request struct {
 	TaskInstanceID string
@@ -25,6 +43,12 @@ type Request struct {
 	Resources       domain.Resources
 	Execution       domain.Execution
 	TimeoutSeconds  int
+
+	// PodSecurity carries the two hardening choices that can change how a task
+	// runs. Everything else BuildPod applies is unconditional, because dropping
+	// capabilities, blocking privilege escalation and setting a seccomp profile
+	// cost a normal task nothing. Zero value is the secure default.
+	PodSecurity PodSecurity
 
 	// Source is the dag.py text captured at compile time. The SubprocessExecutor
 	// materializes it to a per-TI temp dir so `python -m leoflow_runtime

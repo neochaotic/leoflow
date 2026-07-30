@@ -55,6 +55,12 @@ type PlatformDefaults struct {
 	// Resources defaults a task's requests/limits when neither the task override
 	// nor the DAG set any.
 	Resources *domain.Resources
+	// PodSecurity relaxes the task-pod hardening defaults. It lives here, not in
+	// the DAG spec, on purpose: whether untrusted task code may run as root is a
+	// cluster-operator decision. Exposing it per-DAG would let an author elevate
+	// their own task, which is the same self-service escalation as picking an
+	// arbitrary service_account. Zero value is the secure default.
+	PodSecurity executor.PodSecurity
 }
 
 // Dispatcher builds executor requests for queued pod-path tasks and runs them.
@@ -128,6 +134,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 		HTTPRequest:      task.HTTPRequest,
 		ControlPlaneAddr: d.controlAddr,
 		AgentToken:       token,
+		// Cluster-operator policy, not a per-task choice — see PlatformDefaults.
+		PodSecurity: d.defaults.PodSecurity,
 	}
 	if task.ExecutionTimeoutSeconds != nil {
 		req.TimeoutSeconds = *task.ExecutionTimeoutSeconds

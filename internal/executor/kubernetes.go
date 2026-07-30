@@ -77,12 +77,18 @@ func BuildPod(req Request) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			NodeSelector:  req.Execution.NodeSelector,
+			// The task pod authenticates to the control plane with its own
+			// per-task token over gRPC and never calls the Kubernetes API, so a
+			// mounted ServiceAccount token is a credential handed to untrusted
+			// code for no reason.
+			AutomountServiceAccountToken: ptr(false),
 			Containers: []corev1.Container{{
 				Name:            "task",
 				Image:           req.Image,
 				ImagePullPolicy: pullPolicy,
 				Env:             podEnv(req),
 				Resources:       buildResources(req.Resources),
+				SecurityContext: buildSecurityContext(req.PodSecurity),
 			}},
 		},
 	}
@@ -194,6 +200,39 @@ func podEnv(req Request) []corev1.EnvVar {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}
 	return env
+}
+
+// ptr returns a pointer to v. The Kubernetes API models optional booleans as
+// *bool, where nil means "cluster default" and is not the same as false.
+func ptr[T any](v T) *T { return &v }
+
+// buildSecurityContext produces a container SecurityContext that Pod Security
+// Admission's `restricted` profile admits. Without one the API server rejects
+// the pod in a namespace that enforces the profile, so this is what lets a task
+// run there at all — not an incremental hardening.
+//
+// The unconditional three cost an ordinary task nothing: a task process does not
+// escalate privileges, does not need a Linux capability, and runs fine under the
+// runtime's default seccomp filter. They stay on even when root is allowed,
+// because none of them depend on the UID.
+//
+// runAsNonRoot is the one that can break an image, so it has an explicit opt-out
+// rather than being quietly omitted. readOnlyRootFilesystem is opt-in for the
+// opposite reason: `restricted` does not ask for it, and turning it on by
+// default would break every task that writes to /tmp for no admission gain.
+func buildSecurityContext(ps PodSecurity) *corev1.SecurityContext {
+	sc := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr(false),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+	if !ps.AllowRoot {
+		sc.RunAsNonRoot = ptr(true)
+	}
+	if ps.ReadOnlyRootFilesystem {
+		sc.ReadOnlyRootFilesystem = ptr(true)
+	}
+	return sc
 }
 
 func buildResources(r domain.Resources) corev1.ResourceRequirements {

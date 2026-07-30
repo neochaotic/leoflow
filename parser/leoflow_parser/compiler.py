@@ -315,13 +315,37 @@ _SCHEDULING_ATTR_NAMES = frozenset(
 _CALLBACK_CAPABLE_TYPES = ("airflow_operator", "python")
 
 
-def _has_callback(task, name: str) -> bool:
-    """Report whether the task declares a callable ``name``. Native tasks store it
-    as an attribute (the shim setattrs every kwarg); a generically-captured operator
-    carries it in ``__leoflow_args__``. Check both."""
-    if callable(getattr(task, name, None)):
+def _is_callback(value) -> bool:
+    """Report whether ``value`` declares at least one callback.
+
+    Airflow 3 normalises a task's callback attributes to a LIST (``[fn]``), while a
+    bare ``@task(on_failure_callback=fn)`` keeps whatever was passed. Both forms are
+    real, so both count. This mirrors the runtime's ``_normalize_callbacks``
+    (#442) — the two must agree, or the compiler marks what the runtime cannot run,
+    or drops what it could.
+
+    An empty list declares nothing: marking it would make the runtime re-import
+    dag.py on every failure to call no one."""
+    if callable(value):
         return True
-    return callable((getattr(task, "__leoflow_args__", {}) or {}).get(name))
+    if isinstance(value, (list, tuple)):
+        return any(callable(item) for item in value)
+    return False
+
+
+def _has_callback(task, name: str) -> bool:
+    """Report whether the task declares ``name``. Native tasks store it as an
+    attribute (the shim setattrs every kwarg); a generically-captured operator
+    carries it in ``__leoflow_args__``. Check both, in either shape.
+
+    Recognising the list shape matters twice over: it is what marks a supported
+    callback so the runtime runs it, AND what makes an UNSUPPORTED one hit the loud
+    reject below. A predicate that only accepted a bare callable let the list form
+    slip past both — the callback silently never ran, and the error promising that
+    would never happen never fired (#470)."""
+    if _is_callback(getattr(task, name, None)):
+        return True
+    return _is_callback((getattr(task, "__leoflow_args__", {}) or {}).get(name))
 
 
 def _check_callbacks(task, task_type: str, entry: dict) -> None:
@@ -379,11 +403,16 @@ def _split_operator_args(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
         # reject below and fail an otherwise-valid provider operator at compile.
         if name in _SCHEDULING_ATTR_NAMES:
             continue
-        # on_failure_callback is a callable that cannot be serialised into
-        # dag.json, but it is SUPPORTED (#424 inc 4): the runtime re-imports dag.py
-        # and calls it in the task process on failure. Accept it here as a marker
-        # (see _has_on_failure_callback) instead of the non-serialisable reject.
-        if name == _ON_FAILURE_CALLBACK and callable(value):
+        # on_failure_callback cannot be serialised into dag.json, but it is
+        # SUPPORTED (#424 inc 4): the runtime re-imports dag.py and calls it in the
+        # task process on failure. Accept it here as a marker (see _has_callback)
+        # instead of the non-serialisable reject.
+        #
+        # Both shapes, because Airflow 3 normalises the attribute to a list. Testing
+        # only `callable` sent the list form on to the serialiser, which rejected it
+        # as "a list Leoflow cannot carry" — an error naming the wrong cause for a
+        # construct that is in fact supported (#470).
+        if name == _ON_FAILURE_CALLBACK and _is_callback(value):
             continue
         single_upstream = getattr(getattr(value, "operator", None), "task_id", None)
         if single_upstream:

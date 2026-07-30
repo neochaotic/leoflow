@@ -6,6 +6,49 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2-rc.2] - 2026-07-30
+
+> Respin of `0.1.2-rc.1` for one defect, found by hands-on validation of that
+> candidate: a task declaring `on_failure_callback` as a **list** — the shape Airflow
+> itself produces — had it dropped silently. Nothing else changed; every other item
+> in the 0.1.2 line is described in the `0.1.2-rc.1` section below and was verified
+> against that candidate.
+
+### Fixed
+
+- **`on_failure_callback` written as a list now runs (#470).** Airflow 3 normalises a
+  task's callback attributes to a list, so `@task(on_failure_callback=[notify])` — and
+  any DAG copied from a real Airflow deployment — carries `[fn]`, not `fn`. The runtime
+  already accepted both shapes; the compiler's gate tested only `callable()`, so the
+  list form produced no marker in `dag.json`, no warning, and no callback at run time.
+  A bare callable was unaffected.
+- **An *unsupported* callback written as a list is loudly rejected again (#470).** The
+  same gate guards the compile-time refusal for `on_success_callback` and
+  `on_retry_callback`. In list form they slipped past it and were dropped in silence —
+  the precise outcome the refusal exists to prevent, and worse than the case it was
+  written for, because the author was told nothing.
+
+### Known issues
+
+- **Shutdown can hang when the Kubernetes API stops answering (#463).** The 0.1.2
+  line wires the buffered dispatch drain into shutdown (#133) so in-flight dispatches
+  settle instead of leaking — but the wait is unbounded and the Kubernetes client
+  carries no per-call timeout. An apiserver that accepts the connection and never
+  answers pins a worker, and with it the drain, until the runtime kills the process.
+  In that specific case shutdown is worse than in 0.1.1, where the drain never ran at
+  all. The fix is written and held for the next release rather than folded in here,
+  to keep this candidate a targeted respin. Workaround: none needed unless your
+  apiserver hangs; the pod is SIGKILLed at the end of its termination grace period.
+- **A task can be marked `dispatch_lost` while its pod is still `Running` (#461)** —
+  carried over from rc.1, still under investigation.
+
+### Corrected from the rc.1 notes
+
+The `0.1.2-rc.1` section claims, under Fixed, that `on_failure_callback` runs for
+"list-normalised callbacks". Unbound DAGs did work; **lists did not**. Tags are
+immutable (ADR 0033), so that section stands as published — the claim it makes is true
+of this candidate, not of rc.1.
+
 ## [0.1.2-rc.1] - 2026-07-30
 
 > First release candidate of the **0.1.2** line — **native on-failure alerting** and a
@@ -310,7 +353,8 @@ Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.1...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.2...HEAD
+[0.1.2-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.1...v0.1.2-rc.2
 [0.1.2-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.1...v0.1.2-rc.1
 [0.1.1]: https://github.com/neochaotic/leoflow/compare/v0.1.1-rc.1...v0.1.1
 [0.1.1-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.0...v0.1.1-rc.1

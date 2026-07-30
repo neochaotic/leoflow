@@ -460,3 +460,68 @@ def test_oversized_operator_arg_is_a_loud_compile_error(monkeypatch, tmp_path):
     msg = str(ei.value)
     assert "q" in msg and "operator_args" in msg
     assert "Connection" in msg or "external" in msg
+
+
+def test_python_task_on_failure_callback_as_list_is_marked(monkeypatch, tmp_path):
+    """Airflow 3 normalises a task's on_failure_callback to a LIST, so a DAG copied
+    from a real Airflow deployment carries `[fn]`, not `fn`. The runtime already
+    handles both (_normalize_callbacks, #442); the compiler gate must too, or the
+    flag never reaches dag.json and the callback is dropped in silence — the exact
+    outcome _check_callbacks' docstring promises will never happen (#470)."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, task
+        def notify_a(ctx): pass
+        def notify_b(ctx): pass
+        @task(on_failure_callback=[notify_a, notify_b])
+        def a() -> None: ...
+        with DAG("g"):
+            a()
+    """)
+    a = _task(spec, "a")
+    assert a["type"] == "python"
+    assert a.get("on_failure_callback") is True
+
+
+def test_operator_on_failure_callback_as_list_is_marked(monkeypatch, tmp_path):
+    """Same for a generically-captured provider operator, whose kwargs arrive via
+    __leoflow_args__ rather than as attributes."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.snowflake.operators.snowflake import SQLExecuteQueryOperator
+        def notify(context): pass
+        with DAG("g"):
+            SQLExecuteQueryOperator(task_id="q", conn_id="sf", sql="SELECT 1",
+                                    on_failure_callback=[notify])
+    """)
+    q = _task(spec, "q")
+    assert q.get("on_failure_callback") is True
+    assert "on_failure_callback" not in q.get("operator_args", {})
+
+
+def test_unsupported_callback_as_list_is_still_loudly_rejected(monkeypatch, tmp_path):
+    """The same predicate guards the loud reject for callbacks Leoflow does not
+    support. In list form they slipped past it and were dropped silently, which is
+    worse than the unsupported case it was written for: the author is told nothing
+    while the error text promises they would be (ADR 0024, #470)."""
+    with pytest.raises(ValueError, match="on_success_callback"):
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG, task
+            def notify(ctx): pass
+            @task(on_success_callback=[notify])
+            def a() -> None: ...
+            with DAG("g"):
+                a()
+        """)
+
+
+def test_empty_callback_list_is_not_marked(monkeypatch, tmp_path):
+    """An empty list declares no callback. Marking it would make the runtime
+    re-import dag.py on every failure to call nothing."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, task
+        @task(on_failure_callback=[])
+        def a() -> None: ...
+        with DAG("g"):
+            a()
+    """)
+    assert _task(spec, "a").get("on_failure_callback") is None

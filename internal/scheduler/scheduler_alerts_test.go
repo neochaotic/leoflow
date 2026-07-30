@@ -12,7 +12,10 @@ import (
 // test can observe the scheduler's fire-and-forget dispatch deterministically.
 type recordingAlerter struct{ ch chan RunState }
 
-func (r *recordingAlerter) AlertRunFailed(_ context.Context, run RunState) { r.ch <- run }
+func (r *recordingAlerter) AlertRunFailed(_ context.Context, run RunState) bool {
+	r.ch <- run
+	return true
+}
 
 // blockingAlerter signals when a dispatch starts and then holds the concurrency
 // slot until released, so a test can prove the scheduler bounds concurrency.
@@ -21,9 +24,10 @@ type blockingAlerter struct {
 	release chan struct{}
 }
 
-func (b *blockingAlerter) AlertRunFailed(_ context.Context, run RunState) {
+func (b *blockingAlerter) AlertRunFailed(_ context.Context, run RunState) bool {
 	b.started <- run
 	<-b.release
+	return true
 }
 
 func exhaustedFailedRun(id string) RunState {

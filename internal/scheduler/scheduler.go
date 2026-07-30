@@ -99,11 +99,16 @@ type Store interface {
 	// re-dispatch, PRESERVING try_number (reschedule is not a retry; #380).
 	RedispatchReschedule(ctx context.Context, runID, taskID string) error
 	SetRunState(ctx context.Context, runID string, state domain.DagRunState) error
-	// MarkRunAlerted atomically claims a run's on-failure alert (#431): it reports
-	// true iff this call is the one that set alerted_at (it was NULL), and false
-	// when the run was already alerted for this failure episode. A clear resets
-	// the marker, so a genuine re-failure re-claims. Dedups duplicate pages.
-	MarkRunAlerted(ctx context.Context, runID string) (bool, error)
+	// ClaimAlertAttempt atomically claims ONE on-failure send attempt, reporting
+	// true iff this call won it. It refuses when the episode was already
+	// delivered, when the attempt budget is spent, or when the backoff has not
+	// elapsed — so a dead endpoint stops being retried instead of being hit once
+	// per tick for the life of the run (#431, and the delivery split below).
+	ClaimAlertAttempt(ctx context.Context, runID string, maxAttempts int, backoff time.Duration) (bool, error)
+	// MarkRunAlertDelivered stamps the episode as paged. Called only after a
+	// successful send: claiming and stamping were once the same operation, which
+	// meant every failed send was a page lost with no retry.
+	MarkRunAlertDelivered(ctx context.Context, runID string) error
 	ScheduledDAGs(ctx context.Context) ([]ScheduledDAG, error)
 	CreateScheduledRun(ctx context.Context, dagID string, logical time.Time) error
 	// SetTaskNote attaches operational context to a task instance (shown in the
@@ -343,7 +348,10 @@ func (s *Scheduler) SetAlertConcurrency(n int) {
 // tick; it MUST treat every send as best-effort — a delivery failure is logged,
 // never propagated, so alerting can never fail a run.
 type Alerter interface {
-	AlertRunFailed(ctx context.Context, run RunState)
+	// AlertRunFailed sends every on_failure rule and reports whether all of them
+	// were delivered. The caller stamps delivery only on true, so a failed send
+	// stays retryable instead of being marked and lost.
+	AlertRunFailed(ctx context.Context, run RunState) bool
 }
 
 // Run drives the scheduling loop until ctx is canceled. The loop is crash-proof:
@@ -627,6 +635,20 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) error {
 	return nil
 }
 
+// alertMaxAttempts bounds how many times one failure episode may be sent before
+// Leoflow gives up. A failed run stays failed forever, so without a ceiling a dead
+// alert endpoint is retried once per scheduler tick for the life of the run — the
+// alert path would DoS the very endpoint it is trying to reach. Five attempts
+// spread over the backoff below survives a restart or a brief outage of the
+// channel without becoming a hammer.
+const alertMaxAttempts = 5
+
+// alertRetryBackoff is the wait between attempts for one episode. Deliberately far
+// longer than the scheduler tick (1s by default): the retry exists to ride out a
+// transient channel outage, and an outage of the alert channel is frequently
+// correlated with the incident being reported, so retrying hard makes both worse.
+const alertRetryBackoff = 2 * time.Minute
+
 // maybeAlertFailure fires the DAG's on-failure alert rules when a run finalizes
 // failed. It runs in a detached goroutine (WithoutCancel) so a slow endpoint
 // never stalls the tick, and the alerter's own best-effort contract means a
@@ -639,12 +661,13 @@ func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunSt
 	if run.Alerts == nil || len(run.Alerts.OnFailure) == 0 {
 		return
 	}
-	// Dedup per failure episode (#431): atomically claim the alert. Skip if this
-	// episode was already alerted (a re-tick of the same failed state); a clear
-	// resets the marker so a genuine re-failure re-claims. Fail OPEN on a store
-	// error — a missed page is worse than a rare duplicate — but log it.
-	if won, err := s.store.MarkRunAlerted(ctx, run.RunID); err != nil {
-		s.logger.Error("claiming on-failure alert (alerting anyway)",
+	// Claim one ATTEMPT for this failure episode. The claim no longer means
+	// "paged" — it means "we are about to try" — so a send that fails leaves the
+	// episode claimable and the next tick retries it after the backoff. Refused
+	// when already delivered, out of budget, or still backing off. Fail OPEN on a
+	// store error: a missed page is worse than a rare duplicate.
+	if won, err := s.store.ClaimAlertAttempt(ctx, run.RunID, alertMaxAttempts, alertRetryBackoff); err != nil {
+		s.logger.Error("claiming on-failure alert attempt (alerting anyway)",
 			"dag", run.DagID, "run", run.RunID, "error", err)
 	} else if !won {
 		return
@@ -656,7 +679,21 @@ func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunSt
 	case s.alertSem <- struct{}{}:
 		go func() {
 			defer func() { <-s.alertSem }()
-			s.alerter.AlertRunFailed(context.WithoutCancel(ctx), run)
+			// Stamp delivery only when every rule landed. On anything less the
+			// episode stays unstamped, so the next tick retries it once the
+			// backoff elapses — until the attempt budget runs out.
+			detached := context.WithoutCancel(ctx)
+			if !s.alerter.AlertRunFailed(detached, run) {
+				s.logger.Warn("on-failure alert not fully delivered; will retry after backoff",
+					"dag", run.DagID, "run", run.RunID, "backoff", alertRetryBackoff)
+				return
+			}
+			if err := s.store.MarkRunAlertDelivered(detached, run.RunID); err != nil {
+				// The page went out; failing to record it costs a duplicate on the
+				// next tick, which is the trade-off this path already prefers.
+				s.logger.Error("recording on-failure alert delivery",
+					"dag", run.DagID, "run", run.RunID, "error", err)
+			}
 		}()
 	default:
 		s.logger.Warn("dropping on-failure alert: dispatch saturated",

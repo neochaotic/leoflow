@@ -35,9 +35,12 @@ type fakeStore struct {
 	agentLostMarked    []string
 	staleQueuedCands   []StaleQueuedCandidate
 	dispatchLostMarked []string
-	// alertedRuns mirrors the real once-per-episode CAS (#431): the first
-	// MarkRunAlerted per runID wins (true), a repeat loses (false).
-	alertedRuns    map[string]bool
+	// alertAttempts mirrors the real per-episode attempt claim: each call
+	// consumes one, and the claim is refused once the budget is spent or the
+	// episode is already delivered. Backoff is not simulated — the fake is for
+	// the state machine; the timing predicate is proven in integration.
+	alertAttempts  map[string]int
+	deliveredRuns  map[string]bool
 	markAlertedErr bool
 	// activeRunsCalls counts ActiveRuns invocations so the follower-side gate
 	// can be asserted: a follower must NOT read run state (single-writer
@@ -83,18 +86,29 @@ func (f *fakeStore) SetRunState(_ context.Context, runID string, state domain.Da
 	f.runStates[runID] = state
 	return nil
 }
-func (f *fakeStore) MarkRunAlerted(_ context.Context, runID string) (bool, error) {
+func (f *fakeStore) ClaimAlertAttempt(_ context.Context, runID string, maxAttempts int, _ time.Duration) (bool, error) {
 	if f.markAlertedErr {
 		return false, errors.New("mark alerted failed")
 	}
-	if f.alertedRuns == nil {
-		f.alertedRuns = map[string]bool{}
+	if f.alertAttempts == nil {
+		f.alertAttempts = map[string]int{}
 	}
-	if f.alertedRuns[runID] {
-		return false, nil // already claimed this failure episode
+	if f.deliveredRuns[runID] {
+		return false, nil // already paged for this failure episode
 	}
-	f.alertedRuns[runID] = true
+	if f.alertAttempts[runID] >= maxAttempts {
+		return false, nil // attempt budget spent; stop hammering the endpoint
+	}
+	f.alertAttempts[runID]++
 	return true, nil
+}
+
+func (f *fakeStore) MarkRunAlertDelivered(_ context.Context, runID string) error {
+	if f.deliveredRuns == nil {
+		f.deliveredRuns = map[string]bool{}
+	}
+	f.deliveredRuns[runID] = true
+	return nil
 }
 func (f *fakeStore) SetTaskNote(_ context.Context, _, taskID, note string) error {
 	if f.notes == nil {

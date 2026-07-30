@@ -1,0 +1,32 @@
+# values-pro-tls.yaml — a Pro install with agent-gRPC TLS via cert-manager.
+#
+# Use with:  helm install leoflow leoflow/leoflow -n leoflow -f values-pro-tls.yaml
+#
+# Prerequisites (see docs/helm-chart.md):
+#   1. cert-manager installed in the cluster.
+#   2. A (self-signed or ACME) Issuer/ClusterIssuer.
+#   3. A Certificate whose Secret name matches agentTLS.serverCertSecret below,
+#      and a ConfigMap holding the signing CA whose name matches agentTLS.caConfigMap.
+#
+# The Pro edition refuses to boot without TLS on the agent channel (#281), and the
+# chart refuses to install when agentTLS.enabled but the cert Secret / CA ConfigMap
+# are missing (#280) — so this file wires all three together.
+
+# External datastores are mandatory for Pro (the embedded ones are Lite-only).
+database:
+  url: "postgres://leoflow:CHANGEME@postgres:5432/leoflow?sslmode=require"
+redis:
+  url: "redis://redis:6379/0"
+
+auth:
+  jwtSecret: "CHANGEME-jwt-signing-secret"
+# 32 raw bytes or 64-char hex. Generate: openssl rand -hex 16
+secretKey: "CHANGEME-leoflow-secret-key-32by"
+
+agentTLS:
+  enabled: true
+  # kubernetes.io/tls Secret produced by the cert-manager Certificate below.
+  serverCertSecret: "leoflow-agent-tls"
+  # ConfigMap holding the CA that signed serverCertSecret, so task pods verify the
+  # server cert. With cert-manager, point this at the trust-bundle ConfigMap.
+  caConfigMap: "leoflow-agent-ca"

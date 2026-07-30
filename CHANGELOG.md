@@ -28,6 +28,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the precise outcome the refusal exists to prevent, and worse than the case it was
   written for, because the author was told nothing.
 
+### Known issues
+
+- **Shutdown can hang when the Kubernetes API stops answering (#463).** The 0.1.2
+  line wires the buffered dispatch drain into shutdown (#133) so in-flight dispatches
+  settle instead of leaking — but the wait is unbounded and the Kubernetes client
+  carries no per-call timeout. An apiserver that accepts the connection and never
+  answers pins a worker, and with it the drain, until the runtime kills the process.
+  In that specific case shutdown is worse than in 0.1.1, where the drain never ran at
+  all. The fix is written and held for the next release rather than folded in here,
+  to keep this candidate a targeted respin. Workaround: none needed unless your
+  apiserver hangs; the pod is SIGKILLed at the end of its termination grace period.
+- **A task can be marked `dispatch_lost` while its pod is still `Running` (#461)** —
+  carried over from rc.1, still under investigation.
+
 ### Corrected from the rc.1 notes
 
 The `0.1.2-rc.1` section claims, under Fixed, that `on_failure_callback` runs for

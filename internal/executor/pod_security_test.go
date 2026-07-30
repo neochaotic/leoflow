@@ -6,19 +6,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// Pod Security Admission's `restricted` profile requires exactly four things of
-// a container: it must not run as root, it must not allow privilege escalation,
-// it must drop every capability, and it must carry a seccomp profile. A cluster
-// with `restricted` enforced on the task namespace REJECTS pods that omit them —
-// so without these the executor cannot place a task at all, which makes this an
-// admission blocker rather than hardening.
+// Pod Security Admission's `restricted` profile requires four things of a
+// container: no privilege escalation, every capability dropped, a seccomp
+// profile, and a non-root user. The first three cost an ordinary task nothing
+// and are applied unconditionally; the fourth is opt-in until the images this
+// repo ships can satisfy it (see PodSecurity.RunAsNonRoot).
 //
-// readOnlyRootFilesystem is deliberately NOT in this list. `restricted` does not
-// require it, and it is the single field most likely to break an ordinary Python
-// task (pip cache, /tmp, matplotlib config). Setting it by default would cost
-// compatibility for no admission benefit; it stays opt-in.
+// readOnlyRootFilesystem is not part of `restricted` at all, and it is the field
+// most likely to break an ordinary Python task (pip cache, /tmp, matplotlib
+// config). Opt-in for that reason, not this one.
 
-func TestBuildPodSatisfiesRestrictedPSA(t *testing.T) {
+func TestBuildPodAppliesUnconditionalHardening(t *testing.T) {
 	pod := BuildPod(sampleReq())
 	if len(pod.Spec.Containers) != 1 {
 		t.Fatalf("containers = %d, want 1", len(pod.Spec.Containers))
@@ -26,9 +24,6 @@ func TestBuildPodSatisfiesRestrictedPSA(t *testing.T) {
 	sc := pod.Spec.Containers[0].SecurityContext
 	if sc == nil {
 		t.Fatal("container SecurityContext is nil — PSA restricted rejects the pod outright")
-	}
-	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
-		t.Error("RunAsNonRoot must be true: untrusted task code must not run as root")
 	}
 	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
 		t.Error("AllowPrivilegeEscalation must be false")
@@ -66,24 +61,34 @@ func TestBuildPodLeavesRootFilesystemWritableByDefault(t *testing.T) {
 	}
 }
 
-// An image that genuinely needs root (a legacy base, a task that installs
-// packages at runtime) must stay runnable. The escape hatch is explicit and
-// per-request, so choosing it is a visible decision rather than a silent default.
-func TestBuildPodAllowsOptingOutOfRunAsNonRoot(t *testing.T) {
-	req := sampleReq()
-	req.PodSecurity.AllowRoot = true
-	pod := BuildPod(req)
+// runAsNonRoot stays off unless asked for. Every examples/*/Dockerfile in this
+// repo runs as root and runtime/Dockerfile declares a non-numeric USER, so
+// defaulting it on would stop every shipped example from scheduling. This pins
+// the sequencing: fix the images first, then flip the default.
+func TestBuildPodLeavesRunAsNonRootOptIn(t *testing.T) {
+	pod := BuildPod(sampleReq())
 	sc := pod.Spec.Containers[0].SecurityContext
 	if sc.RunAsNonRoot != nil && *sc.RunAsNonRoot {
-		t.Error("AllowRoot must clear RunAsNonRoot so a root image still runs")
+		t.Error("RunAsNonRoot must stay opt-in until the shipped images carry numeric non-root UIDs")
 	}
-	// Everything that costs nothing stays on even when root is allowed: dropping
-	// capabilities and blocking escalation do not depend on the UID.
+	// The protections that cost nothing apply regardless of the UID.
 	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
-		t.Error("AllowPrivilegeEscalation must stay false even when root is allowed")
+		t.Error("AllowPrivilegeEscalation must be false whatever the image runs as")
 	}
 	if sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 {
-		t.Error("capabilities must still be dropped even when root is allowed")
+		t.Error("capabilities must be dropped whatever the image runs as")
+	}
+}
+
+// An operator whose images do carry numeric non-root UIDs can complete the
+// `restricted` set.
+func TestBuildPodHonorsRunAsNonRootOptIn(t *testing.T) {
+	req := sampleReq()
+	req.PodSecurity.RunAsNonRoot = true
+	pod := BuildPod(req)
+	sc := pod.Spec.Containers[0].SecurityContext
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Error("RunAsNonRoot opt-in was not honored")
 	}
 }
 

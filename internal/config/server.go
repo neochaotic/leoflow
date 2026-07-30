@@ -84,17 +84,17 @@ type PlatformDefaultsSection struct {
 	// override nor the DAG set any (Kubernetes quantities, e.g. "250m"/"256Mi").
 	ResourcesCPU    string `mapstructure:"resources_cpu"`
 	ResourcesMemory string `mapstructure:"resources_memory"`
-	// AllowRootTasks lets task pods run as root. Off by default: task pods carry
-	// a container SecurityContext that Pod Security Admission's `restricted`
-	// profile admits, and running as root is the one part of it that an image can
-	// be incompatible with. Turn it on only for a cluster whose task images
-	// genuinely need root — such pods are then rejected by a `restricted`
-	// namespace, which is the correct signal.
+	// RunTasksAsNonRoot refuses to start a task container whose image resolves
+	// to UID 0, completing Pod Security Admission's `restricted` set. Off by
+	// default because the images this repo ships cannot satisfy it yet: every
+	// examples/*/Dockerfile runs as root and runtime/Dockerfile declares a
+	// non-numeric USER the kubelet cannot verify. Turn it on for a cluster whose
+	// task images carry numeric non-root UIDs.
 	//
 	// Deliberately a cluster setting rather than a DAG field: whether untrusted
 	// task code may run as root belongs to whoever operates the cluster, not to
 	// whoever authors the DAG.
-	AllowRootTasks bool `mapstructure:"allow_root_tasks"`
+	RunTasksAsNonRoot bool `mapstructure:"run_tasks_as_non_root"`
 	// ReadOnlyTaskRootFilesystem mounts every task container's root filesystem
 	// read-only. Off by default because `restricted` does not require it and it
 	// breaks ordinary Python tasks (pip cache, /tmp, matplotlib config); turn it
@@ -271,7 +271,7 @@ var serverDefaults = map[string]any{
 	"executor.task_secret_name":                        "",
 	"executor.task_secret_mount_path":                  "/etc/leoflow/secrets",
 	"executor.defaults.staging_access_mode":            "ReadWriteMany",
-	"executor.defaults.allow_root_tasks":               false,
+	"executor.defaults.run_tasks_as_non_root":          false,
 	"executor.defaults.read_only_task_root_filesystem": false,
 	"logs.dir":                    "/var/log/leoflow",
 	"observability.otel.enabled":  true,

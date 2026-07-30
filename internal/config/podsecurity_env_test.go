@@ -14,14 +14,14 @@ import (
 // env var is ignored, and the escape hatch does not exist. This pins both keys
 // against that.
 func TestPodSecurityDefaultsBindFromEnv(t *testing.T) {
-	t.Setenv("LEOFLOW_EXECUTOR_DEFAULTS_ALLOW_ROOT_TASKS", "true")
+	t.Setenv("LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT", "true")
 	t.Setenv("LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM", "true")
 	c, err := config.LoadServer("", nil)
 	if err != nil {
 		t.Fatalf("LoadServer: %v", err)
 	}
-	if !c.Executor.Defaults.AllowRootTasks {
-		t.Error("LEOFLOW_EXECUTOR_DEFAULTS_ALLOW_ROOT_TASKS did not bind: the root escape hatch would be unreachable")
+	if !c.Executor.Defaults.RunTasksAsNonRoot {
+		t.Error("LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT did not bind: the non-root opt-in would be unreachable")
 	}
 	if !c.Executor.Defaults.ReadOnlyTaskRootFilesystem {
 		t.Error("LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM did not bind")
@@ -34,8 +34,8 @@ func TestPodSecurityDefaultsAreSecureWhenUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadServer: %v", err)
 	}
-	if c.Executor.Defaults.AllowRootTasks {
-		t.Error("AllowRootTasks must default to false")
+	if c.Executor.Defaults.RunTasksAsNonRoot {
+		t.Error("RunTasksAsNonRoot must default to false until the shipped images carry numeric non-root UIDs")
 	}
 	if c.Executor.Defaults.ReadOnlyTaskRootFilesystem {
 		t.Error("ReadOnlyTaskRootFilesystem must default to false (restricted does not require it)")

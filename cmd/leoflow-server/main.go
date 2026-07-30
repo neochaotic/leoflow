@@ -893,7 +893,7 @@ func platformDefaults(c config.PlatformDefaultsSection) dispatch.PlatformDefault
 		StagingStorageClass: c.StagingStorageClass,
 		StagingAccessMode:   c.StagingAccessMode,
 		PodSecurity: executor.PodSecurity{
-			AllowRoot:              c.AllowRootTasks,
+			RunAsNonRoot:           c.RunTasksAsNonRoot,
 			ReadOnlyRootFilesystem: c.ReadOnlyTaskRootFilesystem,
 		},
 	}

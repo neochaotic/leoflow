@@ -206,27 +206,29 @@ func podEnv(req Request) []corev1.EnvVar {
 // *bool, where nil means "cluster default" and is not the same as false.
 func ptr[T any](v T) *T { return &v }
 
-// buildSecurityContext produces a container SecurityContext that Pod Security
-// Admission's `restricted` profile admits. Without one the API server rejects
-// the pod in a namespace that enforces the profile, so this is what lets a task
-// run there at all — not an incremental hardening.
+// buildSecurityContext hardens the task container toward Pod Security
+// Admission's `restricted` profile, which requires four things: no privilege
+// escalation, every capability dropped, a seccomp profile, and a non-root user.
 //
-// The unconditional three cost an ordinary task nothing: a task process does not
-// escalate privileges, does not need a Linux capability, and runs fine under the
-// runtime's default seccomp filter. They stay on even when root is allowed,
-// because none of them depend on the UID.
+// The first three are unconditional because they cost an ordinary task nothing:
+// a task process does not escalate privileges, needs no Linux capability, and
+// runs fine under the runtime's default seccomp filter. None of them depend on
+// the UID, so they apply whatever the image runs as.
 //
-// runAsNonRoot is the one that can break an image, so it has an explicit opt-out
-// rather than being quietly omitted. readOnlyRootFilesystem is opt-in for the
-// opposite reason: `restricted` does not ask for it, and turning it on by
-// default would break every task that writes to /tmp for no admission gain.
+// The fourth, runAsNonRoot, is opt-in — see PodSecurity for why the images this
+// repo ships cannot satisfy it yet. Until that flips, a `restricted` namespace
+// still rejects task pods; what this buys today is every protection that does
+// not require changing the images.
+//
+// readOnlyRootFilesystem is opt-in for a different reason: `restricted` never
+// asks for it, and turning it on by default breaks any task that writes to /tmp.
 func buildSecurityContext(ps PodSecurity) *corev1.SecurityContext {
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: ptr(false),
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
-	if !ps.AllowRoot {
+	if ps.RunAsNonRoot {
 		sc.RunAsNonRoot = ptr(true)
 	}
 	if ps.ReadOnlyRootFilesystem {

@@ -13,11 +13,20 @@ import (
 // never touches this struct gets a pod that Pod Security Admission's
 // `restricted` profile admits.
 type PodSecurity struct {
-	// AllowRoot clears runAsNonRoot for images that genuinely need root — a
-	// legacy base, or a task that installs packages at run time. Such a pod is
-	// rejected by a `restricted` namespace, which is the intended signal: the
-	// operator is opting out of the profile for that task, visibly.
-	AllowRoot bool
+	// RunAsNonRoot refuses to start a task container whose image resolves to
+	// UID 0. It completes the `restricted` set, and it is opt-in rather than
+	// default for a reason that is about this repo, not about the profile:
+	// none of the images Leoflow ships can satisfy it yet. Every
+	// examples/*/Dockerfile runs as root, and runtime/Dockerfile declares
+	// `USER leoflow` — a name, which the kubelet cannot resolve to a UID, so it
+	// rejects the container even though the user is not root. Turning this on
+	// by default would mean no example DAG runs on Pro.
+	//
+	// Flipping the default is tracked as its own change: give the images
+	// numeric non-root UIDs, add an fsGroup so the staging PVC stays writable,
+	// then make this the default. A secure default the platform's own images
+	// cannot meet is not a secure default.
+	RunAsNonRoot bool
 
 	// ReadOnlyRootFilesystem mounts the container root read-only. Off by
 	// default on purpose: `restricted` does not require it, and it breaks

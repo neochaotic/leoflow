@@ -288,3 +288,58 @@ func TestBuffered_Close_DrainsPendingWork(t *testing.T) {
 		t.Errorf("after Close, inner saw %d calls, want 4 (every accepted Dispatch must drain)", inner.callCount.Load())
 	}
 }
+
+// TestBuffered_DispatchAfterClose_ReturnsAtCapacity: a Dispatch after Close must
+// return ErrAtCapacity, not panic on send-to-closed-channel (#133 race fix).
+func TestBuffered_DispatchAfterClose_ReturnsAtCapacity(t *testing.T) {
+	d := dispatch.NewBuffered(&recordingInner{}, &recordingSink{}, discardLogger(), nil,
+		dispatch.BufferConfig{BufferSize: 4, Workers: 1})
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close err = %v", err)
+	}
+	err := d.Dispatch(context.Background(), "r", "d", domain.TaskSpec{TaskID: "t"})
+	if !errors.Is(err, dispatch.ErrAtCapacity) {
+		t.Fatalf("Dispatch after Close = %v, want ErrAtCapacity (must not panic)", err)
+	}
+}
+
+// TestBuffered_ConcurrentDispatchAndClose_NoPanic: Dispatch racing Close must never
+// panic (send-on-closed). Run with -race to also catch the data race (#133).
+func TestBuffered_ConcurrentDispatchAndClose_NoPanic(t *testing.T) {
+	d := dispatch.NewBuffered(&recordingInner{}, &recordingSink{}, discardLogger(), nil,
+		dispatch.BufferConfig{BufferSize: 8, Workers: 2})
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = d.Dispatch(context.Background(), "r", "d", domain.TaskSpec{TaskID: "t"})
+		}()
+	}
+	_ = d.Close() // races with the in-flight Dispatch goroutines
+	wg.Wait()     // no panic reaching here = pass
+}
+
+// TestBuffered_Close_DrainsAllBufferedRequests (Level A, #133): a Close with
+// requests still sitting in the buffer must process every one (via the inner /
+// sink) before returning — never drop them, which is what left TIs stuck
+// `queued`. One slow worker guarantees the buffer is non-empty at Close time.
+func TestBuffered_Close_DrainsAllBufferedRequests(t *testing.T) {
+	inner := &recordingInner{delay: 15 * time.Millisecond}
+	d := dispatch.NewBuffered(inner, &recordingSink{}, discardLogger(), nil,
+		dispatch.BufferConfig{BufferSize: 8, Workers: 1})
+	const n = 8
+	for i := 0; i < n; i++ {
+		if err := d.Dispatch(context.Background(), "r", "etl", domain.TaskSpec{TaskID: "t"}); err != nil {
+			t.Fatalf("Dispatch %d: %v (all %d should fit the buffer)", i, err, n)
+		}
+	}
+	// Close must BLOCK until the single slow worker has drained every buffered
+	// request (~8 x 15ms), then return — nothing dropped.
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close err = %v", err)
+	}
+	if got := inner.callCount.Load(); got != n {
+		t.Fatalf("after Close the inner saw %d of %d requests — Close dropped buffered work (would strand TIs `queued`, #133)", got, n)
+	}
+}

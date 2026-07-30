@@ -71,8 +71,12 @@ type BufferedDispatcher struct {
 	cfg     BufferConfig
 	queue   chan dispatchRequest
 	wg      sync.WaitGroup
-	closed  chan struct{}
-	once    sync.Once
+	// mu guards closed and serializes Dispatch's send against Close's channel
+	// close, so a Dispatch racing Close returns ErrAtCapacity instead of
+	// panicking on send-to-closed-channel (#133).
+	mu     sync.RWMutex
+	closed bool
+	once   sync.Once
 }
 
 // NewBuffered constructs a BufferedDispatcher. BufferSize=0 returns a
@@ -85,7 +89,6 @@ func NewBuffered(inner Inner, sink FailureSink, logger *slog.Logger, metrics Met
 		logger:  logger,
 		metrics: metrics,
 		cfg:     cfg,
-		closed:  make(chan struct{}),
 	}
 	if cfg.BufferSize <= 0 {
 		return b
@@ -111,6 +114,17 @@ func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID string, 
 	if b.queue == nil {
 		return b.inner.Dispatch(ctx, runID, dagID, task)
 	}
+	// RLock pairs with Close's Lock: while any Dispatch holds it, Close can't
+	// close the queue channel, so the non-blocking send below can never hit a
+	// closed channel. Once Close has run, closed is true and we refuse (#133).
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.closed {
+		if b.metrics != nil {
+			b.metrics.RecordDispatchAtCapacity()
+		}
+		return ErrAtCapacity
+	}
 	select {
 	case b.queue <- dispatchRequest{runID: runID, dagID: dagID, task: task}:
 		if b.metrics != nil {
@@ -125,16 +139,22 @@ func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID string, 
 	}
 }
 
-// Close stops accepting new dispatches, drains the in-flight queue, and waits
-// for every worker to finish. Calling Close more than once is safe.
-func (b *BufferedDispatcher) Close() {
+// Close stops accepting new dispatches, drains the in-flight queue (each buffered
+// request is still processed by the inner dispatcher — or failed via the sink —
+// so no TI is left stuck `queued`), and waits for every worker to finish. Under
+// mu so a concurrent Dispatch never sends on the closed channel. Idempotent;
+// returns error to satisfy io.Closer (it never errors). #133.
+func (b *BufferedDispatcher) Close() error {
 	b.once.Do(func() {
+		b.mu.Lock()
+		b.closed = true
 		if b.queue != nil {
 			close(b.queue)
 		}
-		close(b.closed)
+		b.mu.Unlock()
 	})
 	b.wg.Wait()
+	return nil
 }
 
 // worker drains the queue, calling the inner dispatcher and reporting failures

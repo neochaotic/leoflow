@@ -79,10 +79,14 @@ $ helm install leoflow leoflow/leoflow -n leoflow \
 ## Troubleshooting
 
 - **`the Pro edition requires TLS on the agent gRPC channel, but it is off`** — the
-  server refused to boot because `LEOFLOW_SERVER_GRPC_TLS_CERT`/`_KEY` are unset
-  (i.e. `agentTLS.enabled=false`, or the cert Secret didn't mount). Provide the
-  cert as above; **do not** work around it with `agentTLS.enabled=false` — that
-  ships secrets over plaintext (#281).
+  server refused to boot because `LEOFLOW_SERVER_GRPC_TLS_CERT`/`_KEY` are unset:
+  the cert Secret didn't mount, or the server was started outside this chart.
+  Provide the cert as above (#281).
+- **`agentTLS.enabled=false is not a supported configuration`** — helm refused the
+  install. This chart only deploys the Pro edition, and that edition cannot boot
+  without a cert, so turning TLS off buys a `CrashLoopBackOff`, not a plaintext
+  deployment. Provision the cert as above; for a plaintext local loop use the Lite
+  dev server (`leoflow dev lite`), not this chart (#459).
 - **`agentTLS.caConfigMap is required when agentTLS.enabled`** — helm refused the
   install because the CA ConfigMap is missing. Without it task pods fail the cert
   chain (`x509: certificate signed by unknown authority`) and hang (#280). Do step 4.

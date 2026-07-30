@@ -28,6 +28,19 @@ out-of-band Secret to validate its contents (operator's responsibility).
 {{- end -}}
 {{- end -}}
 {{- /*
+LEOFLOW_UI_EDITION below is the literal "pro" — this chart has no Lite mode — and
+guardTLSForEdition refuses boot when a Pro control plane has no gRPC cert/key. So
+agentTLS.enabled=false does not deploy a plaintext control plane, it deploys a
+crash-looping one, and the operator only learns why from container logs. Refuse at
+render instead. Keep the edition literal: it is the sole marker both boot guards
+key on, so turning it into a value would hand operators a free one-flag bypass of
+the TLS requirement AND of the insecure-secrets rejection. See #459, ADR 0014.
+*/ -}}
+{{- $agentTLS := .Values.agentTLS | default dict -}}
+{{- if not $agentTLS.enabled -}}
+{{- fail "agentTLS.enabled=false is not a supported configuration: this chart always deploys the Pro edition (LEOFLOW_UI_EDITION=pro) and the Pro control plane refuses to boot without a gRPC cert/key, so disabling TLS yields a CrashLoopBackOff (\"the Pro edition requires TLS on the agent gRPC channel\"), not a plaintext deployment. Provision a cert (cert-manager) and set agentTLS.serverCertSecret + agentTLS.caConfigMap. For a plaintext local loop use the Lite dev server (`leoflow dev lite`), not this chart." -}}
+{{- end -}}
+{{- /*
 agentTLS pairs a server cert with a CA the task pods trust. serverCertSecret is
 required inline where it mounts; validate caConfigMap here too, so an install with
 TLS "on" but no CA fails loudly instead of shipping a control plane whose task

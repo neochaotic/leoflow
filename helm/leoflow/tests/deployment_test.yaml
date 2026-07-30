@@ -8,13 +8,19 @@ templates:
   - secret.yaml
 release:
   name: leoflow
+# The chart always deploys the Pro edition and now refuses to render without agent
+# TLS (#459), so every case needs a cert pair. Set it once here; the cases that
+# exercise the TLS wiring itself override these per-test.
+set:
+  agentTLS.enabled: true
+  agentTLS.serverCertSecret: leoflow-tls
+  agentTLS.caConfigMap: leoflow-ca
 tests:
   - it: fails the install if database.url AND database.existingSecret are both empty
     template: deployment.yaml
     set:
       redis.url: redis://host/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - failedTemplate:
           errorMessage: "database.url or database.existingSecret is required: the Pro edition needs an external Postgres (the embedded datastore is Lite-only)."
@@ -24,7 +30,6 @@ tests:
     set:
       database.url: postgres://h/d
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - failedTemplate:
           errorMessage: "redis.url or redis.existingSecret is required: the Pro edition needs an external Redis (the embedded XCom + log tailer is Lite-only)."
@@ -35,7 +40,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       # NOT setting secretKey / secretKeyExistingSecret
     asserts:
       - hasDocuments:
@@ -51,7 +55,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       secretKey: leoflow-unittest-secretkey-32by!
     asserts:
       - contains:
@@ -69,7 +72,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       secretKeyExistingSecret: my-external-key
     asserts:
       - contains:
@@ -87,7 +89,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       secretKey: too-short-12345
     asserts:
       - failedTemplate:
@@ -99,7 +100,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       secretKey: leoflow-unittest-secretkey-32by!
     asserts:
       - hasDocuments:
@@ -111,7 +111,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       secretKey: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  # gitleaks:allow — fixture, all-hex zeros pattern, not a credential
     asserts:
       - hasDocuments:
@@ -123,7 +122,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       secretKey: too-short-12345          # would normally fail
       secretKeyExistingSecret: my-key     # but the existingSecret takes precedence; chart can't validate it
     asserts:
@@ -142,7 +140,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - exists:
           path: spec.template.metadata.annotations["checksum/secret"]
@@ -158,7 +155,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt-original-value
-      agentTLS.enabled: false
     asserts:
       - matchRegex:
           path: spec.template.metadata.annotations["checksum/secret"]
@@ -179,7 +175,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - notExists:
           path: spec.template.spec.volumes[?(@.name == 'db-ca')]
@@ -193,7 +188,6 @@ tests:
       database.caConfigMap: managed-pg-ca
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       # Volume: a ConfigMap named after the operator's ConfigMap, exposing
       # just the ca.crt key.
@@ -225,7 +219,6 @@ tests:
       database.url: postgres://h/d
       redis.url: rediss://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - notContains:
           path: spec.template.spec.containers[0].env
@@ -248,7 +241,6 @@ tests:
       database.url: postgres://h/d
       redis.url: rediss://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       redis.caConfigMap: redis-ca-bundle
     asserts:
       - contains:
@@ -275,7 +267,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
     asserts:
       - equal:
           path: spec.template.spec.securityContext.runAsNonRoot
@@ -292,6 +283,34 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
           value: false
+
+  # The chart hardcodes LEOFLOW_UI_EDITION=pro, and the Pro server refuses to
+  # boot without a gRPC cert/key. So agentTLS.enabled=false cannot produce a
+  # plaintext deployment — only a crash-looping one. Fail at render instead.
+  - it: fails when agentTLS.enabled is false (chart is always Pro)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "agentTLS.enabled=false is not a supported configuration: this chart always deploys the Pro edition (LEOFLOW_UI_EDITION=pro) and the Pro control plane refuses to boot without a gRPC cert/key, so disabling TLS yields a CrashLoopBackOff (\"the Pro edition requires TLS on the agent gRPC channel\"), not a plaintext deployment. Provision a cert (cert-manager) and set agentTLS.serverCertSecret + agentTLS.caConfigMap. For a plaintext local loop use the Lite dev server (`leoflow dev lite`), not this chart."
+
+  # Nulling the whole map (`--set agentTLS=null`) used to render a raw
+  # "nil pointer evaluating interface {}.enabled" instead of the guard message.
+  # It must land on the same actionable error as enabled=false.
+  - it: fails with the guard message when agentTLS is nulled entirely
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "agentTLS.enabled=false is not a supported configuration: this chart always deploys the Pro edition (LEOFLOW_UI_EDITION=pro) and the Pro control plane refuses to boot without a gRPC cert/key, so disabling TLS yields a CrashLoopBackOff (\"the Pro edition requires TLS on the agent gRPC channel\"), not a plaintext deployment. Provision a cert (cert-manager) and set agentTLS.serverCertSecret + agentTLS.caConfigMap. For a plaintext local loop use the Lite dev server (`leoflow dev lite`), not this chart."
 
   # #280: agentTLS.enabled with an empty caConfigMap silently ships a control
   # plane whose task pods can't verify the server cert → x509 unknown-authority.
@@ -329,7 +348,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       replicaCount: 2
       logs.persistence.enabled: true
       logs.persistence.accessMode: ReadWriteOnce
@@ -346,7 +364,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       replicaCount: 1                 # ignored when autoscaling is on
       autoscaling.enabled: true
       autoscaling.maxReplicas: 3
@@ -362,7 +379,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       autoscaling.enabled: true
       autoscaling.maxReplicas: 3
       logs.persistence.enabled: true
@@ -377,7 +393,6 @@ tests:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      agentTLS.enabled: false
       replicaCount: 2
       logs.persistence.enabled: true
       logs.persistence.accessMode: ReadWriteMany

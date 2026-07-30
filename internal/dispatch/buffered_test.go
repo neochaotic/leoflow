@@ -319,3 +319,27 @@ func TestBuffered_ConcurrentDispatchAndClose_NoPanic(t *testing.T) {
 	_ = d.Close() // races with the in-flight Dispatch goroutines
 	wg.Wait()     // no panic reaching here = pass
 }
+
+// TestBuffered_Close_DrainsAllBufferedRequests (Level A, #133): a Close with
+// requests still sitting in the buffer must process every one (via the inner /
+// sink) before returning — never drop them, which is what left TIs stuck
+// `queued`. One slow worker guarantees the buffer is non-empty at Close time.
+func TestBuffered_Close_DrainsAllBufferedRequests(t *testing.T) {
+	inner := &recordingInner{delay: 15 * time.Millisecond}
+	d := dispatch.NewBuffered(inner, &recordingSink{}, discardLogger(), nil,
+		dispatch.BufferConfig{BufferSize: 8, Workers: 1})
+	const n = 8
+	for i := 0; i < n; i++ {
+		if err := d.Dispatch(context.Background(), "r", "etl", domain.TaskSpec{TaskID: "t"}); err != nil {
+			t.Fatalf("Dispatch %d: %v (all %d should fit the buffer)", i, err, n)
+		}
+	}
+	// Close must BLOCK until the single slow worker has drained every buffered
+	// request (~8 x 15ms), then return — nothing dropped.
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close err = %v", err)
+	}
+	if got := inner.callCount.Load(); got != n {
+		t.Fatalf("after Close the inner saw %d of %d requests — Close dropped buffered work (would strand TIs `queued`, #133)", got, n)
+	}
+}

@@ -6,6 +6,83 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2-rc.1] - 2026-07-30
+
+> First release candidate of the **0.1.2** line — **native on-failure alerting** and a
+> **Pro install that can no longer be misconfigured into silence**. A failed task now
+> notifies on its own, without an Airflow callback in the loop; and the three Pro
+> misconfigurations that used to produce a healthy-looking-but-broken deployment now
+> fail loudly at `helm install` or at boot.
+
+### ⚠️ Upgrade note for Pro operators
+
+**`agentTLS.enabled: false` no longer yields a running deployment.** It was never a
+plaintext deployment — the control plane marks itself as the Pro edition and every
+secrets RPC to a task pod was rejected, so tasks queued and hung with no visible
+cause. That failure is now surfaced where you can act on it:
+
+- `helm install`/`upgrade` **refuses to render** with `agentTLS.enabled=false`.
+- The control plane **refuses to boot** without `LEOFLOW_SERVER_GRPC_TLS_CERT`/`_KEY`
+  when `LEOFLOW_UI_EDITION=pro`.
+
+**If your values override `agentTLS.enabled` to `false`,** provision a cert before
+upgrading — cert-manager `Certificate` + CA trust bundle, then set
+`agentTLS.serverCertSecret` and `agentTLS.caConfigMap`. Step-by-step in
+[`docs/pro-tls.md`](docs/pro-tls.md). Installs on the `agentTLS.enabled: true` default
+(unchanged since 0.1.1) are unaffected. For a plaintext local loop, use the Lite dev
+server (`leoflow dev lite`), which is not subject to the Pro guards.
+
+### Added
+
+- **Native on-failure alerting (#424).** A DAG declares its alert targets and the
+  control plane notifies on final task failure from a Go notifier — no Airflow
+  callback in the request path. Configuration, `dag.json` fields and the notifier
+  ship together; see [`docs/alerting.md`](docs/alerting.md).
+- **Airflow `on_failure_callback`, in-process on final failure (#424).** The familiar
+  Airflow hook runs where Leoflow already knows the task reached its terminal state,
+  so existing DAG code keeps working alongside native alerting.
+- **Alerts dedup per failure episode (#431).** Retries within one failure episode
+  produce one notification, not one per attempt.
+- **Saturation-drop metric (#435).** Drops caused by a saturated alert path are now a
+  metric you can alert on, not just a log line.
+
+### Changed
+
+- **The Pro edition refuses to boot without TLS on the agent gRPC channel (#281).**
+  Booting looked healthy while every secrets RPC failed; it now fails at boot with the
+  reason. See the upgrade note above.
+- **The Helm chart fails at render on the silent Pro misconfigs** — `agentTLS.enabled`
+  with an empty `caConfigMap` (#280), a `ReadWriteOnce` logs PVC under more than one
+  replica whether static or HPA-driven (#282), and `agentTLS.enabled=false` on a chart
+  that only ever deploys Pro (#459). Each fails in about a second with an actionable
+  message instead of a `CrashLoopBackOff` or a `Multi-Attach` hang.
+
+### Fixed
+
+- **Buffered dispatch drains on shutdown, and `Close()` is no longer racy (#133).**
+  In-flight dispatches are no longer dropped when the control plane stops.
+- **The parser rejects an oversized literal task argument at compile time (#149)**,
+  instead of failing later in the pod.
+- **The parser captures `retries`, `retry_delay` and `execution_timeout` from
+  operators (#434)** — previously dropped, so a task silently ran with defaults.
+- **`on_failure_callback` runs for unbound DAGs and list-normalised callbacks (#424).**
+
+### Security
+
+- **grpc → v1.82.1**, clearing `GHSA-hrxh-6v49-42gf`.
+- **`x/net` and `x/text` bumped**, clearing `CVE-2026-46600` and `CVE-2026-56852`.
+- **Trivy filesystem scan now runs on pull requests (#437)**, not only on push and
+  schedule, so a vulnerable dependency is caught before merge.
+- Nine further dependency bumps in the minor-and-patch group.
+
+### Known issues
+
+- **A task can be marked `dispatch_lost` while its pod is still `Running` (#461).**
+  Observed once in CI and not reproducible on rerun; the pod is dispatched and alive,
+  but its agent never reports in, and the control plane fails the task at the dispatch
+  threshold. In production this risks a false failure (and its alert) on work that may
+  still be executing. Under investigation — please report occurrences with the run id.
+
 ## [0.1.1] - 2026-07-10
 
 > **dbt-native orchestration.** A dbt project becomes a Leoflow DAG — one pod per
@@ -233,7 +310,8 @@ Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.1...HEAD
+[0.1.2-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.1...v0.1.2-rc.1
 [0.1.1]: https://github.com/neochaotic/leoflow/compare/v0.1.1-rc.1...v0.1.1
 [0.1.1-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.0...v0.1.1-rc.1
 [0.1.0]: https://github.com/neochaotic/leoflow/compare/v0.1.0-rc.4...v0.1.0

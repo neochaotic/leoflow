@@ -181,13 +181,15 @@ migrations:
     capabilities:
       drop: ["ALL"]
 
-# TLS for the agent <-> control plane gRPC channel (issue #58). Off by default
-# (the per-task token still authenticates each call). When enabled, the control
-# plane serves gRPC over TLS using serverCertSecret, and task pods mount caConfigMap
-# so the agent verifies the server cert. Typically both are produced by
-# cert-manager (a Certificate Secret + a trust-bundle/CA ConfigMap).
+# TLS for the agent <-> control plane gRPC channel (issue #58). Mandatory here,
+# not optional: this chart hardcodes LEOFLOW_UI_EDITION=pro (deployment.yaml)
+# and the Pro server refuses to boot without a gRPC cert/key, so there is no
+# plaintext deployment to opt into. The control plane serves gRPC over TLS using
+# serverCertSecret, and task pods mount caConfigMap so the agent verifies the
+# server cert. Typically both are produced by cert-manager (a Certificate Secret
+# + a trust-bundle/CA ConfigMap).
 agentTLS:
-  # -- Enable TLS on the agent ↔ control plane gRPC channel (#58). Default ON for the Pro alpha: the chart marks this deployment as the production edition, and the server refuses to boot with `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true` so secrets cannot accidentally travel a plaintext channel. Disable only for an isolated, in-cluster test where the threat model accepts plaintext.
+  # -- Enable TLS on the agent ↔ control plane gRPC channel (#58). Keep this `true`: the chart marks every deployment as the production edition (`LEOFLOW_UI_EDITION=pro`), and that edition refuses to boot without a gRPC cert/key — setting this to `false` yields a crash-looping control plane ("the Pro edition requires TLS on the agent gRPC channel"), not a plaintext deployment. The same edition marker also rejects `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true`, so secrets cannot accidentally travel a plaintext channel. For a plaintext local loop use the Lite dev server, not this chart.
   enabled: true
   # -- Name of a `kubernetes.io/tls` Secret (with `tls.crt`/`tls.key`) for the gRPC server. Typically produced by a cert-manager `Certificate`. Required when `enabled: true`.
   serverCertSecret: ""

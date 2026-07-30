@@ -23,3 +23,24 @@ func guardInsecureSecretsForEdition(edition string, allowInsecure bool) error {
 		"either set agentTLS.enabled=true in the Helm values (with cert-manager) or unset the env var " +
 		"(see ADR 0014 and issue #58)")
 }
+
+// guardTLSForEdition refuses boot when a Pro deployment has no TLS on the agent
+// gRPC channel (#281). Without it the control plane boots and looks healthy, but
+// guardSecretChannel then rejects every secrets RPC to a task pod
+// ("refusing to send secrets over an insecure channel") — tasks queue/fail with
+// no obvious cause. An operator who overrides agentTLS.enabled=false hits exactly
+// this. Fail loudly at boot instead. Lite (edition=lite) and the unmarked default
+// keep the plaintext dev loop.
+func guardTLSForEdition(edition, grpcTLSCert, grpcTLSKey string) error {
+	if edition != "pro" {
+		return nil
+	}
+	if grpcTLSCert != "" && grpcTLSKey != "" {
+		return nil
+	}
+	return errors.New("the Pro edition requires TLS on the agent gRPC channel, but it is off: " +
+		"set both LEOFLOW_SERVER_GRPC_TLS_CERT and LEOFLOW_SERVER_GRPC_TLS_KEY (the Helm chart " +
+		"sets them from agentTLS.enabled=true + cert-manager). Booting without them would look " +
+		"healthy but every secrets RPC to a task pod would fail (PermissionDenied: refusing to " +
+		"send secrets over an insecure channel), leaving tasks stuck. See ADR 0014, #58, #281")
+}

@@ -87,6 +87,15 @@ Configuration excludes generated code (sqlc output, protobuf-generated, `interna
 | CI: every PR | Runs full `golangci-lint run` plus `goreportcard-cli`. Blocks merge on any check below 99%. |
 | Periodic | Weekly job verifies the public Go Report Card endpoint still reports A+. Opens an issue automatically if degraded. |
 
+> **Correction — 2026-07-30.** The two CI rows above describe checks that no
+> longer exist. Go Report Card was retired as a dead service (see the `reportcard`
+> target in the Makefile, now a local validator), so `goreportcard-cli` does not
+> run on PRs and there is no weekly endpoint job. The *decision* this ADR records
+> — A+ as a floor enforced by linting, not a target — still holds and is enforced
+> by `golangci-lint` in CI. Only the named tooling is stale. Left in place rather
+> than rewritten: an ADR records what was decided when, and the correction belongs
+> beside it.
+
 ## Why "A+ as a floor, not a target"
 
 The seven checks set a minimum hygiene bar. They do NOT catch:

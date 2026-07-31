@@ -47,4 +47,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0042: dbt support via native-Go manifest rendering](adr/0042-dbt-support-native-rendering.md)
 - [ADR 0043: TaskGroup as a first-class construct with split/fused execution](adr/0043-taskgroup-split-fused-execution.md)
 - [ADR 0044: dbt multi-project — one project per business domain](adr/0044-dbt-multi-project-by-domain.md)
+- [ADR 0045: Secrets reach a task because it declared them](adr/0045-declared-secret-delivery.md)
 <!-- END ADR INDEX -->

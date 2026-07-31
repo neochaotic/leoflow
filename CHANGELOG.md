@@ -39,6 +39,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   offending placeholder and listing the supported set. Airflow-style names
   (`{{ ds }}`) are reported by name rather than passing through as text.
 
+- **`leoflow compile` now rejects a `dbt.project` path it cannot use.** The value
+  is resolved with `filepath.Join(dagDir, project)` and, for a Pro image build,
+  baked at that same relative path inside the image — so both an absolute path and
+  one escaping upward were broken, and broken silently.
+
+  `filepath.Join` does not treat an absolute second element specially:
+  `Join("/dags/sales", "/opt/dbt/proj")` is `/dags/sales/opt/dbt/proj`. The
+  leading slash was swallowed and dbt was pointed at a directory nobody named. A
+  path like `../../../etc` resolved outside the DAG directory, and therefore
+  outside the Docker build context, so the image could not contain it either.
+
+  Both surfaced only when dbt ran inside a pod, as "project directory does not
+  exist", with nothing connecting it back to `leoflow.yaml`. The error now says
+  which value is wrong, what it resolves to, and why that cannot work. `.`,
+  `transform`, `./transform`, `dbt/transform` and paths that normalise back inside
+  are unaffected.
+
 ### Fixed
 
 - **Alert messages carried a UUID where the run id belongs.** `{{run_id}}`

@@ -295,6 +295,14 @@ func (s *Scheduler) SetLeading(on bool) {
 	s.leading.Store(on)
 }
 
+// IsLeading reports whether this instance currently holds scheduler leadership.
+// Background sweeps that mutate cluster state — the pod reconciler and the
+// staging-volume GC — gate on this so that at replicaCount>1 only the leader
+// sweeps; otherwise every replica would reconcile and delete the same pods.
+func (s *Scheduler) IsLeading() bool {
+	return s.leading.Load()
+}
+
 // MarkSteppingDown records that a graceful step-down has begun. The campaign
 // loop calls this BEFORE canceling the scheduler's run-context, so any
 // in-flight reaper/Step that returns "context canceled" inside the window logs

@@ -6,19 +6,6 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- **The pod reconciler could garbage-collect a failed pod before its failure was
-  recorded.** `Reconcile` reported a failed pod's task instance and then deleted
-  the pod if it had aged out — but the delete ran whether or not the report
-  succeeded. A transient metadatabase error during `FailTask` meant the pod (the
-  only signal that would let the next tick retry) was deleted anyway, stranding
-  the task instance in `running` until the slower heartbeat reaper caught it. The
-  reconciler now defers collection of a failed pod until its failure is durably
-  recorded; a succeeded pod, which has nothing to record, is still collected on
-  age alone. (One component was both the state-recorder and the garbage-collector
-  with no ordering between them.)
-
 ### Added
 
 - **`leoflow compile` now rejects a task graph that cannot execute.** Three
@@ -75,6 +62,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   back inside are unaffected.
 
 ### Fixed
+
+- **The pod reconciler could garbage-collect a failed pod before its failure was
+  recorded.** `Reconcile` reported a failed pod's task instance and then deleted
+  the pod if it had aged out — but the delete ran whether or not the report
+  succeeded. A transient metadatabase error during `FailTask` meant the pod (the
+  only signal that would let the next tick retry) was deleted anyway, stranding
+  the task instance in `running` until the slower heartbeat reaper caught it. The
+  reconciler now defers collection of a failed pod until its failure is durably
+  recorded; a succeeded pod, which has nothing to record, is still collected on
+  age alone. (One component was both the state-recorder and the garbage-collector
+  with no ordering between them.)
+
+- **The pod reconciler and staging-volume GC ran on every replica, not just the
+  leader.** The scheduler loop and its reapers are leader-gated (ADR 0009), but
+  `startReconciler` and `startStagingGC` spawned unconditional tickers, so at
+  `replicaCount > 1` every replica would list, reconcile, and delete the same task
+  pods and staging PVCs — a follower racing the leader's provisioning. Both now
+  gate on the same leadership signal (`scheduler.IsLeading`) the scheduler loop
+  uses. No behaviour change at the default `replicaCount: 1`, where the single
+  replica is always the leader; this is the correctness base that makes running
+  Pro with more than one replica safe.
 
 - **Alert messages carried a UUID where the run id belongs.** `{{run_id}}`
   rendered `RunState.RunID`, which is the `dag_runs` primary key — not the

@@ -559,24 +559,44 @@ func startXComSweep(ctx context.Context, backend *xcom.PostgresBackend, logger *
 
 // startReconciler runs a periodic pod reconciler that marks task instances
 // failed when their pod failed without the agent reporting (feeding retries).
-func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter executor.FailureReporter, logger *slog.Logger) {
-	rec := executor.NewReconciler(cs, podNamespace, reporter)
+// startGatedTicker runs fn every interval on a background goroutine, but only
+// while leading() reports this instance holds leadership. It stops when ctx is
+// done. The pod reconciler and staging GC mutate cluster state, so at
+// replicaCount>1 they must run on the leader alone (ADR 0009/0031); a nil gate
+// means "always run" (single-replica / no election).
+func startGatedTicker(ctx context.Context, name string, interval time.Duration, leading func() bool, logger *slog.Logger, fn func()) {
+	t := time.NewTicker(interval)
 	go func() {
-		t := time.NewTicker(reconcileInterval)
 		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				safeCycle("pod-reconcile", logger, func() {
-					if err := rec.Reconcile(ctx); err != nil {
-						logger.Error("pod reconcile", "error", err)
-					}
-				})
-			}
-		}
+		runGatedTicker(ctx, name, t.C, leading, logger, fn)
 	}()
+}
+
+// runGatedTicker is the loop of startGatedTicker with the tick source injected,
+// so the leadership gate is testable without a real timer. Each cycle is
+// panic-isolated by safeCycle. A tick that arrives while not leading is dropped,
+// not queued.
+func runGatedTicker(ctx context.Context, name string, ticks <-chan time.Time, leading func() bool, logger *slog.Logger, fn func()) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			if leading != nil && !leading() {
+				continue
+			}
+			safeCycle(name, logger, fn)
+		}
+	}
+}
+
+func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter executor.FailureReporter, leading func() bool, logger *slog.Logger) {
+	rec := executor.NewReconciler(cs, podNamespace, reporter)
+	startGatedTicker(ctx, "pod-reconcile", reconcileInterval, leading, logger, func() {
+		if err := rec.Reconcile(ctx); err != nil {
+			logger.Error("pod reconcile", "error", err)
+		}
+	})
 }
 
 // stagingGCInterval is how often the per-run staging-volume GC sweeps; stagingTTL
@@ -591,25 +611,14 @@ const (
 // startStagingGC periodically reclaims per-run staging PVCs from the
 // metadatabase-tracked lifecycle: succeeded runs immediately, failed runs after
 // the TTL, orphaned volumes (run gone) on sight (ADR 0022).
-func startStagingGC(ctx context.Context, cs kubernetes.Interface, store executor.StagingStore, logger *slog.Logger) {
+func startStagingGC(ctx context.Context, cs kubernetes.Interface, store executor.StagingStore, leading func() bool, logger *slog.Logger) {
 	exec := executor.NewKubernetesExecutor(cs, podNamespace)
 	exec.SetStagingStore(store)
-	go func() {
-		t := time.NewTicker(stagingGCInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				safeCycle("staging-gc", logger, func() {
-					if err := exec.GCStagingClaims(ctx, stagingTTL); err != nil {
-						logger.Error("staging gc", "error", err)
-					}
-				})
-			}
+	startGatedTicker(ctx, "staging-gc", stagingGCInterval, leading, logger, func() {
+		if err := exec.GCStagingClaims(ctx, stagingTTL); err != nil {
+			logger.Error("staging gc", "error", err)
 		}
-	}()
+	})
 }
 
 func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, io.Closer, error) {
@@ -876,8 +885,8 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 	disp, closer := wrapBuffered(dispatcher, store, logger, metrics, cfg.Scheduler.Dispatch) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	sched.SetDispatcher(disp)
-	startReconciler(ctx, cs, execStore, logger)
-	startStagingGC(ctx, cs, store, logger)
+	startReconciler(ctx, cs, execStore, sched.IsLeading, logger)
+	startStagingGC(ctx, cs, store, sched.IsLeading, logger)
 	logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
 	return true, closer
 }

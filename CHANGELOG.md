@@ -6,6 +6,39 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Hardened the log sink against path escape.** `DiskSink` interpolated every
+  `logs.Ref` field straight into a filesystem path
+  (`{root}/{tenant}/{dag}/{run}/{task}/{try}.log`) with no containment, so any
+  Ref carrying `../` or a separator read and wrote outside the log root. Both
+  filesystem calls were annotated
+  `//nolint:gosec // path is built from validated identity fields`, asserting a
+  validation step that existed nowhere in `internal/` — which is why static
+  analysis stayed quiet on those lines for the life of the repository.
+
+  **Not reachable in any released version.** All five `logs.Ref` construction
+  sites pass the database UUID as `RunID`: the scheduler builds `RunState.RunID`
+  from `uuidToString(run.ID)`, dispatch mints that same value into the agent
+  token, and both read paths resolve the caller's `run_id` through
+  `ResolveRunRef` to `ref.DagRunID` before touching the sink. `dag_id` and
+  `task_id` carry a charset pattern in the DAG schema, enforced at compile and
+  again at registration. No release shipped an exploitable path. What shipped was
+  a sink whose safety rested entirely on every current caller happening to pass a
+  UUID, under a comment claiming a guarantee that was absent.
+
+  The sink now performs all filesystem work through `os.Root` pinned to the log
+  directory, so escape is refused by the runtime rather than by convention. That
+  also closes a case no string check can see: a symlink inside the log root whose
+  every path component is a legal name, where the traversal happens during kernel
+  resolution. `logs.Ref` is additionally validated field by field, which names the
+  offending field in the error.
+
+  Separately, `POST /api/v2/dags/{dag_id}/dagRuns` accepted `dag_run_id` verbatim
+  from the request body with no validation at all. It now rejects a value that is
+  not a usable single path segment. Airflow-generated ids embed an RFC3339
+  timestamp and keep working: separators are banned, punctuation is not.
+
 ## [0.1.2] - 2026-07-30
 
 > **On-failure alerting, and a Pro install that can no longer be misconfigured into

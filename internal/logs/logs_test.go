@@ -187,3 +187,86 @@ func TestEncodeLineRoundTrip(t *testing.T) {
 		t.Errorf("timestamp lost: got %v want %v", got.Time, ev.Time)
 	}
 }
+
+// A Ref component is a path segment. Any component carrying a separator or a
+// parent reference escapes the log root, which turns a task's own log stream
+// into an arbitrary file write by the control-plane process. run_id is the
+// reachable one: the API takes it verbatim from the caller's JSON body.
+func TestDiskSinkRejectsPathEscapingComponents(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ref  Ref
+	}{
+		{"run id parent traversal", Ref{TenantID: "acme", DagID: "etl", RunID: "../../../../pwned", TaskID: "extract", TryNumber: 1}},
+		{"run id nested separator", Ref{TenantID: "acme", DagID: "etl", RunID: "a/../../b", TaskID: "extract", TryNumber: 1}},
+		{"run id absolute", Ref{TenantID: "acme", DagID: "etl", RunID: "/etc/cron.d", TaskID: "extract", TryNumber: 1}},
+		{"tenant traversal", Ref{TenantID: "..", DagID: "etl", RunID: "r", TaskID: "extract", TryNumber: 1}},
+		{"dag traversal", Ref{TenantID: "acme", DagID: "../..", RunID: "r", TaskID: "extract", TryNumber: 1}},
+		{"task traversal", Ref{TenantID: "acme", DagID: "etl", RunID: "r", TaskID: "../../x", TryNumber: 1}},
+		{"empty component", Ref{TenantID: "acme", DagID: "", RunID: "r", TaskID: "extract", TryNumber: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "logs")
+			sink := NewDiskSink(root)
+
+			w, err := sink.Open(tc.ref)
+			if err == nil {
+				_ = w.Close()
+				t.Fatalf("Open accepted an escaping ref; wrote outside %s", root)
+			}
+			if _, rerr := sink.Read(tc.ref); rerr == nil {
+				t.Error("Read accepted an escaping ref")
+			}
+			// Nothing may exist above the root, whether or not Open errored.
+			if entries, derr := os.ReadDir(filepath.Dir(root)); derr == nil {
+				for _, e := range entries {
+					if e.Name() != "logs" {
+						t.Errorf("created %s outside the log root", e.Name())
+					}
+				}
+			}
+		})
+	}
+}
+
+// Airflow-generated run ids carry RFC3339 timestamps, so colons and plus signs
+// must keep working; the guard rejects separators, not punctuation.
+func TestDiskSinkAcceptsAirflowStyleRunID(t *testing.T) {
+	root := t.TempDir()
+	r := Ref{TenantID: "acme", DagID: "etl", RunID: "scheduled__2026-07-30T12:00:00+00:00", TaskID: "extract", TryNumber: 1}
+	w, err := NewDiskSink(root).Open(r)
+	if err != nil {
+		t.Fatalf("rejected a legitimate Airflow run id: %v", err)
+	}
+	_ = w.Close()
+}
+
+// Segment validation cannot see a symlink: every component is a legal name, and
+// the escape happens in the kernel when the path is resolved. os.Root refuses to
+// traverse a link that leaves the root, which is why the sink uses it rather
+// than relying on the string check alone.
+func TestDiskSinkRefusesSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "logs")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// A tenant directory that is really a link out of the root.
+	if err := os.Symlink(outside, filepath.Join(root, "acme")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	sink := NewDiskSink(root)
+	ref := Ref{TenantID: "acme", DagID: "etl", RunID: "r1", TaskID: "extract", TryNumber: 1}
+	if w, err := sink.Open(ref); err == nil {
+		_ = w.Close()
+		t.Fatal("Open followed a symlink out of the log root")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "etl")); err == nil {
+		t.Error("wrote through the symlink into the outside directory")
+	}
+}

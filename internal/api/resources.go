@@ -350,6 +350,13 @@ func createDagRunHandler(repo DagRunRepository, audit AuditWriter) gin.HandlerFu
 			logical = *body.LogicalDate
 		}
 		runID := body.DagRunID
+		if runID != "" {
+			// A caller-supplied run id becomes a path segment in the log sink.
+			if err := domain.ValidateRunID(runID); err != nil {
+				AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
+				return
+			}
+		}
 		if runID == "" {
 			// Airflow-style identifier; also avoids an empty/duplicate run_id,
 			// which dag_runs forbids via UNIQUE (dag_id, run_id).

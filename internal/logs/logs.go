@@ -143,19 +143,103 @@ type DiskSink struct {
 // NewDiskSink builds a DiskSink rooted at dir.
 func NewDiskSink(dir string) *DiskSink { return &DiskSink{root: dir} }
 
-func (d *DiskSink) path(ref Ref) string {
-	return filepath.Join(d.root, ref.TenantID, ref.DagID, ref.RunID, ref.TaskID, fmt.Sprintf("%d.log", ref.TryNumber))
+// withRoot runs fn against a descriptor pinned to the sink root and hands back
+// the file fn opened. The root is closed before returning — an already-opened
+// file stays valid — so the descriptor does not outlive the call, and a Close
+// failure is reported rather than dropped.
+func (d *DiskSink) withRoot(fn func(*os.Root) (*os.File, error)) (*os.File, error) {
+	root, err := os.OpenRoot(d.root)
+	if err != nil {
+		return nil, fmt.Errorf("opening log root: %w", err)
+	}
+	f, ferr := fn(root)
+	cerr := root.Close()
+	switch {
+	case ferr != nil:
+		return nil, ferr
+	case cerr != nil:
+		return nil, errors.Join(fmt.Errorf("closing log root: %w", cerr), f.Close())
+	}
+	return f, nil
+}
+
+// rel is the storage location relative to the sink root, for use with os.Root.
+func (d *DiskSink) rel(ref Ref) string {
+	return filepath.Join(ref.TenantID, ref.DagID, ref.RunID, ref.TaskID, fmt.Sprintf("%d.log", ref.TryNumber))
+}
+
+// ErrUnsafeRef reports a Ref whose fields cannot be used as path segments.
+var ErrUnsafeRef = errors.New("unsafe log reference")
+
+// validate rejects a Ref that would not resolve inside the sink root.
+//
+// Every field is interpolated into the storage path, so a field carrying a
+// separator or a parent reference escapes the root — and since the caller also
+// controls the bytes written, that is an arbitrary file write performed by the
+// control plane. The reachable field is RunID: the trigger endpoint takes
+// dag_run_id verbatim from the request body, and it travels to here inside the
+// agent's own signed token, so nothing downstream sees it as caller input.
+//
+// This is the readable-error layer, not the containment: os.Root is what makes
+// an escape impossible, including the case a string check cannot see — a symlink
+// inside the root whose every path component is a legal name. Both are kept
+// because they fail differently. validate names the offending field, and os.Root
+// holds even if this charset later turns out to be incomplete.
+func (r Ref) validate() error {
+	for _, f := range []struct{ name, value string }{
+		{"tenant_id", r.TenantID},
+		{"dag_id", r.DagID},
+		{"run_id", r.RunID},
+		{"task_id", r.TaskID},
+	} {
+		if err := safeSegment(f.value); err != nil {
+			return fmt.Errorf("%w: %s: %w", ErrUnsafeRef, f.name, err)
+		}
+	}
+	return nil
+}
+
+// safeSegment accepts a value usable as exactly one path segment. It bans
+// separators and parent references, not punctuation: Airflow-generated run ids
+// embed an RFC3339 timestamp ("scheduled__2026-07-30T12:00:00+00:00"), and
+// rejecting ':' or '+' would break every scheduled run.
+func safeSegment(v string) error {
+	switch {
+	case v == "":
+		return errors.New("is empty")
+	case v == "." || v == "..":
+		return errors.New("is a parent or current directory reference")
+	case strings.ContainsAny(v, `/\`):
+		return errors.New("contains a path separator")
+	case strings.ContainsRune(v, 0):
+		return errors.New("contains a null byte")
+	case len(v) > 255:
+		return errors.New("exceeds 255 bytes")
+	}
+	return nil
 }
 
 // Open creates the log file (appending if it exists) and returns a buffered writer.
 func (d *DiskSink) Open(ref Ref) (LogWriter, error) {
-	p := d.path(ref)
-	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
-		return nil, fmt.Errorf("creating log directory: %w", err)
+	if err := ref.validate(); err != nil {
+		return nil, err
 	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640) //nolint:gosec // path is built from validated identity fields
+	if err := os.MkdirAll(d.root, 0o750); err != nil {
+		return nil, fmt.Errorf("creating log root: %w", err)
+	}
+	f, err := d.withRoot(func(root *os.Root) (*os.File, error) {
+		rel := d.rel(ref)
+		if merr := root.MkdirAll(filepath.Dir(rel), 0o750); merr != nil {
+			return nil, fmt.Errorf("creating log directory: %w", merr)
+		}
+		file, oerr := root.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+		if oerr != nil {
+			return nil, fmt.Errorf("opening log file: %w", oerr)
+		}
+		return file, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("opening log file: %w", err)
+		return nil, err
 	}
 	return &diskWriter{f: f, buf: bufio.NewWriterSize(f, flushThreshold)}, nil
 }
@@ -191,9 +275,18 @@ func (d *DiskSink) Prune(now time.Time, retention time.Duration) error {
 
 // Read opens the log file for reading.
 func (d *DiskSink) Read(ref Ref) (io.ReadCloser, error) {
-	f, err := os.Open(d.path(ref)) //nolint:gosec // path is built from validated identity fields
+	if err := ref.validate(); err != nil {
+		return nil, err
+	}
+	f, err := d.withRoot(func(root *os.Root) (*os.File, error) {
+		file, oerr := root.Open(d.rel(ref))
+		if oerr != nil {
+			return nil, fmt.Errorf("opening log file: %w", oerr)
+		}
+		return file, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("opening log file: %w", err)
+		return nil, err
 	}
 	return f, nil
 }

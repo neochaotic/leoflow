@@ -43,3 +43,32 @@ func TestToDagRunDTODuration(t *testing.T) {
 		t.Errorf("conf should default to {}, got %s", dto.Conf)
 	}
 }
+
+// dag_run_id is taken verbatim from the request body and becomes a path segment
+// in the log sink, so a caller who can trigger a run could otherwise steer the
+// control plane's writes outside the log root. The sink rejects it too; this
+// keeps the run from being created at all, so the failure is a 400 the caller
+// can read rather than a run whose logs silently never land.
+func TestTriggerDagRunRejectsUnsafeRunID(t *testing.T) {
+	for _, body := range []string{
+		`{"dag_run_id":"../../../../tmp/pwned"}`,
+		`{"dag_run_id":"a/b"}`,
+		`{"dag_run_id":"/etc/cron.d/x"}`,
+		`{"dag_run_id":".."}`,
+		`{"dag_run_id":"back\\slash"}`,
+	} {
+		rec := authGet(authedServer(), http.MethodPost, "/api/v2/dags/etl/dagRuns", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s = %d, want 400", body, rec.Code)
+		}
+	}
+}
+
+// The guard must not reject the identifiers Airflow itself generates.
+func TestTriggerDagRunAcceptsAirflowStyleRunID(t *testing.T) {
+	rec := authGet(authedServer(), http.MethodPost, "/api/v2/dags/etl/dagRuns",
+		`{"dag_run_id":"manual__2026-07-30T12:00:00+00:00"}`)
+	if rec.Code == http.StatusBadRequest {
+		t.Errorf("rejected a legitimate Airflow run id: %s", rec.Body.String())
+	}
+}

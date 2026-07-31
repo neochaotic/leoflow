@@ -6,6 +6,32 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`leoflow compile` now rejects a task graph that cannot execute.** Three
+  defects shared one symptom, and it was the worst one available: the run
+  started, no task in the affected region ever became ready, and the run sat in
+  `running` indefinitely with nothing on screen explaining why. There was no
+  error to read — from the scheduler's side nothing had gone wrong, it was
+  waiting on a predecessor, correctly, forever.
+
+  - a **cycle** (`a >> b >> c >> a`, or a self-dependency). Airflow does not
+    reject this: the parser emits a perfectly well-formed `dag.json`.
+  - a **`depends_on` naming a task that is not declared** — the more common typo.
+  - a **duplicated `task_id`**, which is the same family for a different reason:
+    the graph keys by id, so the losing definition was silently dropped and the
+    DAG ran a subset of what was written.
+
+  The error names the tasks involved (`cyclic task graph: a -> c -> b -> a`),
+  because "cycle detected" alone leaves the author to find it by hand in a
+  200-task DAG. Cycle detection is a three-color DFS rather than a visited set: a
+  visited set reports a diamond — two paths rejoining at one task, one of the most
+  ordinary shapes a real DAG has — as a cycle. Traversal follows declared task
+  order, so the same DAG always reports the same cycle.
+
+  Validated at compile and again at registration, so a hand-written or
+  machine-generated `dag.json` cannot bypass the compiler.
+
 ### Security
 
 - **Hardened the log sink against path escape.** `DiskSink` interpolated every

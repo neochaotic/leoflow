@@ -54,6 +54,39 @@ The opaque regex is replaced by a list where each entry states why it is there. 
 
 **6. Coverage rides the work.** A wave that opens a package raises it, rather than coverage being a separate campaign. Tests written by whoever just understood the code are better tests, and a standalone coverage push produces the mock theatre ADR 0011 already warns against.
 
+**7. The floor is 85%, one number, with a dated exception list.**
+
+Per-package floors negotiated individually would make every package's bar a
+separate conversation, which is the opposite of consistent. So 85% is the rule.
+
+Eight packages sit below it today, so a flat 85% enforced immediately would land
+red. They get named exceptions rather than a softer rule:
+
+| Package | Today | Gap |
+|---|---|---|
+| `internal/scheduler` | 84.4% | 0.6 |
+| `internal/agentrpc` | 84.3% | 0.7 |
+| `internal/domain` | 83.4% | 1.6 |
+| `internal/config` | 83.1% | 1.9 |
+| `internal/secrets` | 82.6% | 2.4 |
+| `internal/logs` | 78.9% | 6.1 |
+| `internal/setup` | 77.8% | 7.2 |
+| `internal/workspace` | 75.4% | 9.6 |
+| `internal/cli` | 77.9% | see §5 — separate, larger, and not closing as a side effect |
+
+Each exception is pinned at its measured value, so the package cannot regress
+while it waits. Each needs an issue. The list is expected to shrink to `cli`
+alone, and an entry that has not moved in two releases is a decision to revisit,
+not a permanent floor.
+
+The first five are within 2.5 points and should close as their onda touches them.
+The last three are real but bounded work.
+
+**8. Percentage is not applied below 10 functions.** `migrations` is 75% of one
+function; a single statement moves it 100 points. Small packages get the
+function-lock treatment instead, for the same reason glue does: the number
+carries no signal.
+
 ## Consequences
 
 **CI will fail on packages that pass today**, since per-package is stricter than an aggregate. The floors above are set from measured values so the change is a small step, not a cliff — but it must land with the floors, not before.
@@ -74,4 +107,6 @@ The opaque regex is replaced by a list where each entry states why it is there. 
 
 ## Open
 
-- The exact floors per package in the floored tier: one shared 85%, or per-package values recorded from today's measurement and ratcheted upward. A single number is simpler; per-package values allow the gate to land immediately with no package failing on day one.
+Nothing blocking. The exception table is the one thing that dates quickly — it is
+a snapshot of 2026-07-30 and should be re-measured when the gate lands, not
+copied forward on trust.

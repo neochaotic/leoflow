@@ -44,7 +44,7 @@ serviceAccount:
   annotations: {}
 
 rbac:
-  # -- Create the Role + RoleBinding granting the control plane create/get/list/watch/delete on pods + get on pods/log in `taskNamespace`. Required for the pod-per-task executor.
+  # -- Create the Role + RoleBinding the pod-per-task executor needs in `taskNamespace`: create/get/list/watch/delete on pods, get on pods/log, and create/delete on persistentvolumeclaims for the per-run staging volume (ADR 0022). The grant is checked against the executor's actual API calls by `scripts/rbac-covers-executor.sh` in CI, so this list cannot silently fall behind the code again. Set `false` only if you bring your own Role — and then that check does not protect you.
   create: true
 
 # -- Ports the leoflow-server listens on. http: API + UI, metrics: Prometheus

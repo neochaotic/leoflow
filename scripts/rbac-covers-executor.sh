@@ -78,8 +78,19 @@ while read -r method verb; do
 		continue
 	fi
 	lverb="$(echo "$verb" | tr '[:upper:]' '[:lower:]')"
-	# The rule block for this resource, from `resources:` to the end of `verbs:`.
-	if ! echo "$role" | grep -A3 "\"$res\"" | grep -q "\"$lverb\""; then
+	# Pair each rule's `resources:` with its own `verbs:`, one line per rule.
+	#
+	# A proximity match (grep -A<n>) was the first attempt and is wrong for a
+	# security check: the window bleeds into the NEXT rule, so a verb granted on
+	# some other resource can satisfy the test. That fails open — the one
+	# direction a permission check must never fail in. Whether it happens to be
+	# correct depends on how many lines apart two rules sit, which is not a
+	# property anyone maintains on purpose.
+	pairs="$(echo "$role" | awk '
+		/^[[:space:]]*-?[[:space:]]*resources:/ { r = $0 }
+		/^[[:space:]]*verbs:/ { if (r != "") { print r " || " $0; r = "" } }
+	')"
+	if ! echo "$pairs" | grep "\"$res\"" | grep -q "\"$lverb\""; then
 		echo "FAIL: the executor calls $method.$verb but the Role does not grant $lverb on $res" >&2
 		echo "      -> add it to $CHART/templates/rbac.yaml, or stop making the call" >&2
 		fail=1

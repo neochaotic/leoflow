@@ -229,6 +229,9 @@ func (d *DAGSpec) Validate() error {
 	if err := validateAgainst(s.dag, d); err != nil {
 		return err
 	}
+	if err := d.validateGraph(); err != nil {
+		return err
+	}
 	return d.validateResourceQuantities()
 }
 

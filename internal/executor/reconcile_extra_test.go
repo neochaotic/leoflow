@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
@@ -82,5 +83,58 @@ func TestReconcileToleratesGCDeleteError(t *testing.T) {
 	r.ttl = 10 * time.Minute
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Errorf("a GC delete error must not fail the reconcile, got %v", err)
+	}
+}
+
+// TestReconcileKeepsFailedPodWhenReportErrors: a failed pod must not be
+// garbage-collected until its failure has been durably recorded. The pod is the
+// only signal that lets the next tick retry the report; deleting it after a
+// failed FailTask strands the task instance in `running` until the heartbeat
+// reaper (the slower backstop) catches it. So a failed report on an aged pod
+// skips collection and the next tick tries again. Never let one component be
+// both the state-recorder and the garbage-collector without ordering the two.
+func TestReconcileKeepsFailedPodWhenReportErrors(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	cs := fake.NewClientset(agedPod("old-failed", corev1.PodFailed, now.Add(-30*time.Minute)))
+	r := NewReconciler(cs, "leoflow", errReporter{})
+	r.now = func() time.Time { return now }
+	r.ttl = 10 * time.Minute
+
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	pods, _ := cs.CoreV1().Pods("leoflow").List(context.Background(), metav1.ListOptions{})
+	found := false
+	for _, p := range pods.Items {
+		if p.Name == "old-failed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a failed pod whose report errored was garbage-collected; it must be kept so the next tick can retry the report")
+	}
+}
+
+// TestReconcileCollectsAgedOrphanFailedPod: a failed pod with no task-instance
+// annotation has no terminal state to preserve, so reportFailure reports "nothing
+// to do" (nil) and the aged orphan is still collected — the report-before-collect
+// ordering must not strand orphan garbage.
+func TestReconcileCollectsAgedOrphanFailedPod(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	orphan := managedPod("orphan", "", corev1.PodFailed) // empty tiID
+	orphan.CreationTimestamp = metav1.NewTime(now.Add(-30 * time.Minute))
+	cs := fake.NewClientset(orphan)
+	r := NewReconciler(cs, "leoflow", &fakeReporter{})
+	r.now = func() time.Time { return now }
+	r.ttl = 10 * time.Minute
+
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	pods, _ := cs.CoreV1().Pods("leoflow").List(context.Background(), metav1.ListOptions{})
+	for _, p := range pods.Items {
+		if p.Name == "orphan" {
+			t.Error("an aged orphan failed pod (no task instance) should still be garbage-collected")
+		}
 	}
 }

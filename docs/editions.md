@@ -1,10 +1,18 @@
 # Editions
 
-!!! warning "Pre-alpha"
-    Leoflow is **pre-alpha**. Only the **Lite** edition is officially supported
-    today (local iteration on a trusted network — not durable or production
-    use). The **Pro** chart is installable + chart-test gated, but not
-    cleared for official use until the v0.1.0-alpha cut.
+!!! info "Both editions are supported"
+    **Lite** is the local single-host edition; **Pro** is the Helm/Kubernetes
+    deployment. Both are supported today, and the README says the same.
+
+    This page previously warned that Leoflow was pre-alpha and that Pro was
+    "not cleared for official use until the v0.1.0-alpha cut". That milestone
+    does not exist — ADR 0037 removed alpha and beta from the version scheme
+    entirely, and `v0.1.0` stable shipped on 2026-06-28. The warning outlived
+    the plan it referenced and contradicted the README for weeks.
+
+    Pro is pre-1.0, which under SemVer means breaking changes ship between
+    minor versions with a migration note (ADR 0037). Read the release notes
+    before upgrading; that is the caveat, not an unsupported edition.
 
 > See also [Operating modes](operating-modes.md) for the Lite/Pro/Demo
 > runtime view (this page is the per-edition distribution + posture view).
@@ -15,7 +23,7 @@ DAG once and it runs on either.
 
 | | **Lite** | **Pro** |
 |---|---|---|
-| Status | **Available now** (pre-alpha) | **Chart installable** (gated); officially supported after v0.1.0-alpha |
+| Status | **Supported** — single host | **Supported** — Helm on Kubernetes |
 | Install | one command (`curl … \| sh`) on one machine | [Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md) on your cluster |
 | Command | `leoflow lite` | the deployed control plane |
 | Auth | a single local **admin** login (password shown once at setup) | enterprise: SSO/OIDC, full RBAC, multi-tenant |
@@ -93,11 +101,7 @@ in mind.
 
 ## Which one? (recommendation)
 
-**Today:** there is only one thing to run — **Lite**, and it's **pre-alpha**, for
-local iteration on a trusted network. Pro (the enterprise edition) is not
-released yet.
-
-**When both ship, choose by deployment, not by feature checklist:**
+**Choose by deployment, not by feature checklist:**
 
 - **Choose Lite** when you run on **one machine** (laptop, a small VM, an
   internal box), want a **one-command, Docker-free install**, and your workload

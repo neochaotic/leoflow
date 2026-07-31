@@ -87,8 +87,16 @@ dockers:
   # GoReleaser default) AND `v{{ .Version }}` (the raw git tag). The migrate
   # workflow already publishes both forms via docker/metadata-action; keeping
   # server symmetric means a chart `--set image.tag=<X>` pin works no matter
-  # which convention the operator follows. Both shapes are signed by cosign
-  # below (cosign sign by digest, so duplicate tags share signatures).
+  # which convention the operator follows.
+  #
+  # NOT signed. This comment used to claim "both shapes are signed by cosign
+  # below" — there is no `docker_signs` block anywhere in this file, and the
+  # release workflow signs only leoflow-migrate and leoflow-runtime. The
+  # `signs:` block above covers the checksums file, which protects the
+  # ARCHIVES, not these images. So the control-plane image the Helm chart
+  # deploys is the one image that is unsigned, and a comment asserted the
+  # opposite. Tracked as its own decision: add docker_signs, or say so in the
+  # supply-chain docs (ADR 0014).
   - id: server-amd64
     ids: [leoflow-server]
     goarch: amd64

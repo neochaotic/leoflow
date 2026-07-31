@@ -849,7 +849,7 @@ func TestReportStateRecordsResultIntegration(t *testing.T) {
 		t.Fatalf("MaterializeTasks: %v", err)
 	}
 
-	id := auth.AgentIdentity{RunID: runUUID, TaskID: "t"}
+	id := auth.AgentIdentity{RunID: runUUID, TaskID: "t", TryNumber: 1} // production always stamps the dispatched attempt
 	// running then success — exactly the transitions the agent reports; both
 	// must record without a type-deduction error.
 	if err := exec.ReportState(ctx, id, domain.TaskStateRunning, 0, ""); err != nil {

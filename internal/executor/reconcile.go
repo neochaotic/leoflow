@@ -101,24 +101,42 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		outcome, reason := classifyPod(pod)
-		if outcome == podFailed {
-			r.reportFailure(ctx, pod, reason)
+		if outcome == podPending {
+			continue
 		}
-		if outcome != podPending && r.now().Sub(pod.CreationTimestamp.Time) > r.ttl {
+		// A failed pod must have its failure durably recorded before it is
+		// collected: the pod is the only signal that lets the next tick retry the
+		// report, so deleting it after a failed report strands the task instance
+		// in `running` until the heartbeat reaper catches it. If the report does
+		// not succeed, leave the pod and try again next tick. A succeeded pod has
+		// nothing to record, so it is collected on age alone.
+		if outcome == podFailed {
+			if err := r.reportFailure(ctx, pod, reason); err != nil {
+				continue
+			}
+		}
+		if r.now().Sub(pod.CreationTimestamp.Time) > r.ttl {
 			r.collect(ctx, pod)
 		}
 	}
 	return nil
 }
 
-func (r *Reconciler) reportFailure(ctx context.Context, pod *corev1.Pod, reason string) {
+// reportFailure records the pod's failure against its task instance. It returns
+// nil when there is nothing to record (a pod with no task-instance annotation is
+// an orphan with no terminal state to preserve, so its caller may collect it) and
+// the reporter's error otherwise, so the caller can defer collection until the
+// failure is durably recorded.
+func (r *Reconciler) reportFailure(ctx context.Context, pod *corev1.Pod, reason string) error {
 	tiID := pod.Annotations["leoflow.io/task-instance-id"]
 	if tiID == "" {
-		return
+		return nil
 	}
 	if err := r.reporter.FailTask(ctx, tiID, reason); err != nil {
 		slog.Error("reporting failed pod", "pod", pod.Name, "task_instance", tiID, "error", err)
+		return err
 	}
+	return nil
 }
 
 func (r *Reconciler) collect(ctx context.Context, pod *corev1.Pod) {

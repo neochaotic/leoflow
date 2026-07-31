@@ -6,6 +6,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The pod reconciler could garbage-collect a failed pod before its failure was
+  recorded.** `Reconcile` reported a failed pod's task instance and then deleted
+  the pod if it had aged out — but the delete ran whether or not the report
+  succeeded. A transient metadatabase error during `FailTask` meant the pod (the
+  only signal that would let the next tick retry) was deleted anyway, stranding
+  the task instance in `running` until the slower heartbeat reaper caught it. The
+  reconciler now defers collection of a failed pod until its failure is durably
+  recorded; a succeeded pod, which has nothing to record, is still collected on
+  age alone. (One component was both the state-recorder and the garbage-collector
+  with no ordering between them.)
+
 ### Added
 
 - **`leoflow compile` now rejects a task graph that cannot execute.** Three

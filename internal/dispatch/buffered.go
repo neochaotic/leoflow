@@ -3,9 +3,11 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
@@ -16,6 +18,11 @@ import (
 // the next tick re-tries. It is the backpressure signal that bounds tick
 // latency under load (ADR 0031: tick rate decoupled from executor latency).
 var ErrAtCapacity = errors.New("dispatch buffer at capacity; will retry next tick")
+
+// ErrDrainTimeout is returned by Close when workers did not finish within the
+// drain timeout. Shutdown continues: blocking forever is worse, because the
+// runtime then kills the process and no drain happens at all (#463).
+var ErrDrainTimeout = errors.New("drain timed out")
 
 // Inner is the underlying synchronous dispatcher BufferedDispatcher wraps —
 // matches scheduler.Dispatcher exactly so production wires through one type.
@@ -48,7 +55,17 @@ type MetricsRecorder interface {
 type BufferConfig struct {
 	BufferSize int
 	Workers    int
+	// DrainTimeout bounds how long Close waits for workers to finish. Zero
+	// selects defaultDrainTimeout. Without a bound, one worker stuck in a
+	// remote call that never answers blocks shutdown until the runtime kills
+	// the process, which loses the drain entirely (#463).
+	DrainTimeout time.Duration
 }
+
+// defaultDrainTimeout leaves room for an in-flight dispatch to finish while
+// staying well inside a typical Kubernetes terminationGracePeriodSeconds (30s),
+// so an abandoned drain is still reported before the pod is SIGKILLed.
+const defaultDrainTimeout = 15 * time.Second
 
 // dispatchRequest carries one queued dispatch from the scheduler to a worker.
 // runID, dagID, task are the same arguments the synchronous interface takes;
@@ -142,8 +159,15 @@ func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID string, 
 // Close stops accepting new dispatches, drains the in-flight queue (each buffered
 // request is still processed by the inner dispatcher — or failed via the sink —
 // so no TI is left stuck `queued`), and waits for every worker to finish. Under
-// mu so a concurrent Dispatch never sends on the closed channel. Idempotent;
-// returns error to satisfy io.Closer (it never errors). #133.
+// mu so a concurrent Dispatch never sends on the closed channel. Idempotent.
+//
+// The wait is bounded by cfg.DrainTimeout (#463). A worker sits in the inner
+// dispatcher with a detached context, so a remote API that accepts the
+// connection and never answers would otherwise block shutdown forever — the
+// process then dies by SIGKILL and loses the drain #133 added. On expiry Close
+// returns an error naming how many workers were abandoned; the caller logs it
+// and proceeds with shutdown rather than hanging. The abandoned goroutines die
+// with the process.
 func (b *BufferedDispatcher) Close() error {
 	b.once.Do(func() {
 		b.mu.Lock()
@@ -153,8 +177,23 @@ func (b *BufferedDispatcher) Close() error {
 		}
 		b.mu.Unlock()
 	})
-	b.wg.Wait()
-	return nil
+	timeout := b.cfg.DrainTimeout
+	if timeout <= 0 {
+		timeout = defaultDrainTimeout
+	}
+	drained := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("draining dispatch pool: %w after %s; in-flight dispatches were abandoned "+
+			"(their task instances stay queued until the stale-queued reaper picks them up)",
+			ErrDrainTimeout, timeout)
+	}
 }
 
 // worker drains the queue, calling the inner dispatcher and reporting failures
@@ -183,8 +222,9 @@ func (b *BufferedDispatcher) dispatchOne(req dispatchRequest) {
 	// Use a background context: the caller's ctx may already be canceled by
 	// the time the worker picks the request up (a long tick has rolled over),
 	// but we already accepted responsibility for this dispatch — abandoning it
-	// would leave a `queued` TI without a runner. The inner dispatcher's own
-	// timeout protects against hanging.
+	// would leave a `queued` TI without a runner. Hanging is bounded from two
+	// sides instead: the Kubernetes client carries a per-call timeout, and
+	// Close stops waiting after cfg.DrainTimeout (#463).
 	if err := b.inner.Dispatch(context.Background(), req.runID, req.dagID, req.task); err != nil { //nolint:contextcheck // worker intentionally detaches from the caller's ctx
 		b.logger.Error("dispatch failed in worker",
 			"run", req.runID, "dag", req.dagID, "task", req.task.TaskID, "error", err)

@@ -69,7 +69,7 @@ flowchart TB
 | `airflow_operator` | `python -m leoflow_runtime --operator <dotted.class>` | a captured provider operator/sensor (ADR 0040) |
 | `bash` (plain) | `bash -c <cmd>` | a shell command, no Python needed |
 | `bash` (templated) | `python -m leoflow_runtime --bash <cmd>` | shell command after Jinja rendering |
-| `http_api` | *(executed by the control plane, not the agent)* | a lightweight inline HTTP call |
+| ~~`http_api`~~ | *(deprecated — ADR 0047; HttpOperator now runs in a pod as `airflow_operator`)* | — |
 
 Only classes the shim actually captured carry the `__leoflow_operator_class__`
 marker, so the compiler routes them to `airflow_operator`; everything else stays

@@ -37,12 +37,23 @@ func logSchedulerError(logger *slog.Logger, msg string, err error, inStepDown bo
 // RunState is the scheduler's snapshot of a dag run: its topology and the
 // current state of each task.
 type RunState struct {
-	RunID    string
-	DagID    string
-	TenantID string
-	State    domain.DagRunState
-	Tasks    []domain.TaskSpec
-	States   map[string]domain.TaskState
+	// RunID is the dag_runs primary key (a UUID). It is what dispatch, the agent
+	// token and the log sink key on, so it must not be swapped for the
+	// user-facing id.
+	RunID string
+	// DisplayRunID is the dag_runs.run_id column — the identifier an operator
+	// sees in the UI and passes to the API ("manual__2026-07-30T12:00:00+00:00").
+	// Alerts render this one: a UUID is not something anyone can act on.
+	DisplayRunID string
+	// LogicalDate is the run's logical date in RFC3339, empty for an unscheduled
+	// run. Carried here so an alert can say which interval failed without a
+	// second query.
+	LogicalDate string
+	DagID       string
+	TenantID    string
+	State       domain.DagRunState
+	Tasks       []domain.TaskSpec
+	States      map[string]domain.TaskState
 	// Tries and MaxTries hold the current and maximum attempt counts per task,
 	// driving retry decisions. Absent entries mean no retry budget.
 	Tries    map[string]int

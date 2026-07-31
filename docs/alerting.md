@@ -88,11 +88,21 @@ time; when omitted, Leoflow sends a default one-line summary.
 
 | Placeholder        | Becomes                                             |
 | ------------------ | --------------------------------------------------- |
-| `{{dag}}`          | the DAG id                                          |
-| `{{run_id}}`       | the failed run id                                   |
-| `{{logical_date}}` | the run's logical date (empty for unscheduled runs) |
-| `{{task}}`         | the first task that failed                          |
-| `{{tasks}}`        | every failed task, comma-separated                  |
+| `{{dag}}`          | the DAG id                                              |
+| `{{run_id}}`       | the run id you see in the UI (`manual__2026-07-30T…`)   |
+| `{{logical_date}}` | the run's logical date, RFC3339                         |
+| `{{task}}`         | the first task that failed                              |
+| `{{tasks}}`        | every failed task, comma-separated                      |
+
+A placeholder with no value for this run renders `(none)` rather than an empty
+string — `{{logical_date}}` on a manually triggered run, for example. An alert
+reading `failed for logical date ` is indistinguishable from a truncated one, so
+the marker is deliberate.
+
+Anything else in `{{…}}` is a **compile error**, naming the offending placeholder
+and listing what is available. A typo used to survive compile and reach the
+alert verbatim, which meant discovering it in the message that was supposed to
+explain an outage.
 
 **What each channel receives:**
 

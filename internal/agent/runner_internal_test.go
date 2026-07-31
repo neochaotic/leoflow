@@ -171,3 +171,34 @@ func TestMergeEnvKeepsInjectedRuntimeVariables(t *testing.T) {
 		}
 	}
 }
+
+// In Lite the agent is spawned by the server as a subprocess, inheriting the
+// SERVER's environment (internal/executor/subprocess.go:161 appends to
+// os.Environ()). That environment holds the AES key encrypting connections at
+// rest and the HMAC secret signing every user and agent token. The signing
+// secret is the worse of the two: with it, task code mints an admin token.
+//
+// A denylist naming today's secrets would not have caught these, and would not
+// catch tomorrow's. Within the LEOFLOW_ prefix the filter is an allowlist, so a
+// variable added later is stripped by default rather than leaked by default.
+func TestMergeEnvStripsServerSecretsInheritedInLite(t *testing.T) {
+	got := mergeEnv([]string{
+		"LEOFLOW_SECRET_KEY=0123456789abcdef0123456789abcdef",
+		"LEOFLOW_AUTH_JWT_SECRET=hmac-signing-secret",
+		"LEOFLOW_DATABASE_URL=postgres://leoflow:hunter2@db/leoflow",
+		"LEOFLOW_REDIS_URL=redis://cache:6379/0",
+		"LEOFLOW_BOOTSTRAP_PASSWORD=admin",
+	}, nil, nil)
+	if len(got) != 0 {
+		t.Fatalf("server secrets reached the task environment: %v", got)
+	}
+}
+
+// A LEOFLOW_ variable nobody has thought of yet must not reach task code either.
+// This is the property a denylist cannot have.
+func TestMergeEnvStripsUnknownLeoflowVariablesByDefault(t *testing.T) {
+	got := mergeEnv([]string{"LEOFLOW_SOME_FUTURE_CREDENTIAL=shhh"}, nil, nil)
+	if len(got) != 0 {
+		t.Fatalf("an unrecognised LEOFLOW_ variable was passed through: %v", got)
+	}
+}

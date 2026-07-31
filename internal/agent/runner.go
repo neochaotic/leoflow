@@ -619,34 +619,52 @@ func (r *Runner) reportReschedule(ctx context.Context, when time.Time) error {
 	})
 }
 
-// agentOnlyEnv names the variables the agent needs and the task must never see.
+// leoflowEnvPrefix marks the variables Leoflow itself owns in an inherited
+// environment. Everything under it is stripped unless explicitly kept.
+const leoflowEnvPrefix = "LEOFLOW_"
+
+// taskVisibleLeoflowEnv is the complete set of LEOFLOW_ variables a task is
+// allowed to inherit. Everything else under the prefix is removed.
 //
-// The agent runs inside the task's own pod (ADR 0004), so its environment IS the
-// task's environment unless something removes the difference. LEOFLOW_AGENT_TOKEN
-// is a bearer credential authorizing GetVariables and GetConnections for the whole
-// tenant, and identify() validates only its signature — so a task that reads it
-// fetches every decrypted connection URI, for the token's full lifetime, running
-// or not. LEOFLOW_CONTROL_PLANE_ADDR is the endpoint to aim that at, and the task
-// has no use for it either; the agent does the dialing.
+// The agent runs inside the task's pod (ADR 0004), so its environment IS the
+// task's environment unless something removes the difference — and in Lite it is
+// worse: the server spawns the agent with its own environment
+// (internal/executor/subprocess.go:161 appends to os.Environ()), so the agent
+// inherits LEOFLOW_SECRET_KEY (the AES key encrypting connections at rest),
+// LEOFLOW_AUTH_JWT_SECRET (which signs every user and agent token — read it and
+// you mint an admin), LEOFLOW_DATABASE_URL with its password, and more.
 //
-// This is a denylist rather than an allowlist on purpose. The variables the task
-// legitimately needs — the runtime's own, plus AIRFLOW_VAR_*/AIRFLOW_CONN_* — are
-// added by mergeEnv's later arguments rather than inherited, so the base needs
-// only its secrets removed. An allowlist would additionally have to enumerate
-// PATH, HOME, TZ, LANG, proxy settings and whatever the user's base image relies
-// on, and would break quietly the first time one was missed.
-var agentOnlyEnv = []string{
-	"LEOFLOW_AGENT_TOKEN",
-	"LEOFLOW_CONTROL_PLANE_ADDR",
+// Hence an allowlist, scoped to the prefix. A denylist naming today's secrets
+// would not have caught those, and would not catch tomorrow's: it leaks by
+// default and is only as good as the last person to remember it. Scoping the
+// allowlist to LEOFLOW_ keeps the fail-closed property where the secrets live,
+// without having to enumerate PATH, HOME, TZ, LANG, proxies and whatever a
+// user's base image depends on — those pass through untouched.
+//
+// Only two entries qualify, and both are set by podEnv for the task's own use:
+// the staging mount path user code reads, and the task-instance id it may log.
+// Everything the runtime needs beyond these is INJECTED by mergeEnv's later
+// arguments rather than inherited, so it never passes through this filter —
+// verified by cross-checking every LEOFLOW_ name the Python runtime reads
+// against what the agent injects.
+//
+// LEOFLOW_PYTHON is the case worth knowing about before adding to this list: the
+// Lite subprocess executor sets it on the AGENT's environment, the agent reads it
+// (BuildCommand) and resolves the interpreter into argv, and the task never needs
+// it. The venv's PATH, which bash tasks do need for console scripts like dbt,
+// carries no LEOFLOW_ prefix and passes through untouched.
+var taskVisibleLeoflowEnv = []string{
+	"LEOFLOW_STAGING_DIR",
+	"LEOFLOW_TASK_INSTANCE_ID",
 }
 
-// stripAgentOnly removes the agent's own credentials from an inherited
-// environment before it is handed to user code.
+// stripAgentOnly removes Leoflow's own variables from an inherited environment
+// before it is handed to user code, keeping only those a task legitimately needs.
 func stripAgentOnly(base []string) []string {
 	out := make([]string, 0, len(base))
 	for _, kv := range base {
 		name, _, _ := strings.Cut(kv, "=")
-		if slices.Contains(agentOnlyEnv, name) {
+		if strings.HasPrefix(name, leoflowEnvPrefix) && !slices.Contains(taskVisibleLeoflowEnv, name) {
 			continue
 		}
 		out = append(out, kv)

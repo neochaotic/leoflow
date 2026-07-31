@@ -50,6 +50,31 @@ Two tag conventions, distinguished by suffix:
 | `vX.Y.Z-rc.N` | Release Candidate | DRAFT | No (drafts are skipped) |
 | `vX.Y.Z` | Final (or `-alpha.N`, `-beta.N`, etc.) | PRE-RELEASE or RELEASE | Yes |
 
+> **Correction — 2026-07-30.** The Visibility column describes a mechanism that
+> was never built. An `-rc.N` tag publishes as a **pre-release, not a draft**:
+> `.goreleaser.yaml` sets `prerelease: auto`, and every rc since `v0.1.0-rc.3`
+> has shipped that way.
+>
+> The *property* this row exists to guarantee holds regardless — `install.sh`
+> resolves through `GET /releases/latest`, which excludes pre-releases by
+> definition (`install.sh:77-80` says so in a comment), so a candidate is never
+> installed by someone asking for the latest version. The retraction path also
+> still works: the gate job flips a published pre-release back to a draft when a
+> smoke fails, which is what the workflow does today.
+>
+> Recorded here rather than by changing the workflow to match the table: the
+> table is the stale artifact, and someone reading it might otherwise "fix" a
+> release pipeline that is behaving correctly.
+>
+> **Pre-release is now the intended state, not a tolerated deviation.** A draft is
+> visible only to maintainers, so implementing the table as written would erase
+> every candidate from the public releases page. Those candidates are part of how
+> the project's history reads — `v0.1.0` took four of them, `v0.1.2` needed a
+> respin for one defect — and that record is worth keeping. `prune-prealpha.yaml`
+> is already scoped to tags containing `-prealpha.` and never touches `-rc.N`, so
+> nothing deletes them today. Anyone changing either of these should treat
+> candidate visibility as a property to preserve.
+
 **Cutting a release:**
 
 ```text

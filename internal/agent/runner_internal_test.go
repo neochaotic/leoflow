@@ -183,7 +183,7 @@ func TestMergeEnvKeepsInjectedRuntimeVariables(t *testing.T) {
 // variable added later is stripped by default rather than leaked by default.
 func TestMergeEnvStripsServerSecretsInheritedInLite(t *testing.T) {
 	got := mergeEnv([]string{
-		"LEOFLOW_SECRET_KEY=0123456789abcdef0123456789abcdef",
+		"LEOFLOW_SECRET_KEY=0123456789abcdef0123456789abcdef", // gitleaks:allow — fixture; the point is the KEY NAME, and any realistic value trips generic-api-key
 		"LEOFLOW_AUTH_JWT_SECRET=hmac-signing-secret",
 		"LEOFLOW_DATABASE_URL=postgres://leoflow:hunter2@db/leoflow",
 		"LEOFLOW_REDIS_URL=redis://cache:6379/0",

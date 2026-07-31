@@ -49,4 +49,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0044: dbt multi-project — one project per business domain](adr/0044-dbt-multi-project-by-domain.md)
 - [ADR 0045: Secrets reach a task because it declared them](adr/0045-declared-secret-delivery.md)
 - [ADR 0046: Coverage — one rule, per package, counting the tests we already wrote](adr/0046-coverage-policy.md)
+- [ADR 0047: Deprecate the native inline http_api; run HTTP through the generic pod executor](adr/0047-deprecate-native-inline-http.md)
 <!-- END ADR INDEX -->

@@ -86,3 +86,20 @@ tests:
       - equal:
           path: roleRef.kind
           value: Role
+
+  # The executor provisions and garbage-collects the per-run staging PVC
+  # (internal/executor/staging.go), so the Role has to allow it. It did not:
+  # every DAG opting into staging (ADR 0022) failed with a 403 on PVC create,
+  # in any cluster where RBAC is actually enforced.
+  - it: grants the PVC verbs the staging volume needs
+    template: rbac.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["create", "delete"]

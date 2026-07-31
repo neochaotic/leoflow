@@ -21,6 +21,7 @@ on:
     paths:
       - "helm/**"
       - "scripts/helm-template-checks.sh"
+      - "scripts/rbac-covers-executor.sh"
       - ".github/workflows/helm-ci.yaml"
       - ".github/ci/kind-datastores.yaml"
       - "deploy/Dockerfile.server"
@@ -32,6 +33,11 @@ on:
       # this gate also runs on config changes. Small dir (4 files); the
       # false-positive cost from test-only edits is bounded.
       - "internal/config/**"
+      # internal/executor makes the Kubernetes calls the Role must permit.
+      # A new clientset call added there without a matching rule is exactly
+      # the drift rbac-covers-executor.sh exists to catch, so it has to run
+      # when that package changes too.
+      - "internal/executor/**"
 
 permissions:
   contents: read
@@ -90,6 +96,14 @@ jobs:
       # a configuration key without updating the chart side.
       - name: helm-template-checks (contract)
         run: bash scripts/helm-template-checks.sh
+
+      # Contract test in the other direction: the Role must permit every
+      # Kubernetes call the executor makes. Nothing else compares the two — the
+      # staging PVC calls shipped without their permission and every DAG using
+      # ADR 0022 staging 403'd, while helm unittest stayed green because it
+      # asserts what renders, never what the code needs.
+      - name: rbac-covers-executor (Role vs executor calls)
+        run: bash scripts/rbac-covers-executor.sh
 
       - name: Render manifests + kubeconform schema
         run: |

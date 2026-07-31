@@ -6,6 +6,33 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-30
+
+> **On-failure alerting, and a Pro install that can no longer be misconfigured into
+> silence.** A failed task notifies on its own, without an Airflow callback in the
+> loop; and three Pro misconfigurations that used to produce a healthy-looking but
+> broken deployment now fail loudly at `helm install` or at boot.
+>
+> This promotes `v0.1.2-rc.2` unchanged. The candidate was exercised by hand on
+> darwin/arm64 — the platform no CI job covers — including the alerting paths, both
+> Pro guards, and the callback fix that prompted the respin. Per-candidate detail is
+> in the `0.1.2-rc.2` and `0.1.2-rc.1` sections below.
+
+### ⚠️ Upgrade note for Pro operators
+
+`agentTLS.enabled: false` no longer yields a running deployment — it never yielded a
+working one, and now says so at install time instead of crash-looping. Full detail and
+the migration in the `0.1.2-rc.1` section below.
+
+### Known issues carried into this release
+
+- **A task can be marked `dispatch_lost` while its pod is still `Running` (#461).** The
+  mechanism is now understood (#474): no reaper consults Kubernetes, nothing deletes the
+  pod, and the `should_terminate` signal the agent honours is never sent. A slow image
+  pull is enough to trigger it. Fix in progress.
+- **Shutdown can hang when the Kubernetes API stops answering (#463).** Described in the
+  `0.1.2-rc.2` section; the fix is written and lands next.
+
 ## [0.1.2-rc.2] - 2026-07-30
 
 > Respin of `0.1.2-rc.1` for one defect, found by hands-on validation of that
@@ -353,7 +380,8 @@ Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.2...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.2...v0.1.2
 [0.1.2-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.1...v0.1.2-rc.2
 [0.1.2-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.1...v0.1.2-rc.1
 [0.1.1]: https://github.com/neochaotic/leoflow/compare/v0.1.1-rc.1...v0.1.1

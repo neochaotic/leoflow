@@ -11,7 +11,7 @@
 #     ─► resolve the managed connection to its (encrypted) endpoint URL
 #     ─► render the message ─► POST the structured webhook payload
 #
-# A single http_api task drives the failure: it runs INLINE in the control plane
+# A single Python task raises to drive the failure (ADR 0047: no inline http_api).
 # (maxRetries=0, so a non-2xx fails it at once — no pod, no venv, no backoff),
 # which makes the run fail, which fires the alert. One tiny Go receiver plays both
 # roles: /fail returns 500 (fails the task) and /alert captures the alert POST.
@@ -59,7 +59,7 @@ export PATH="$TMP:$PATH"
 echo "==> building the webhook receiver (/fail -> 500, /alert -> capture)"
 cat > "$TMP/receiver.go" <<'GO'
 // Standalone test webhook receiver for the alerting e2e. /fail returns 500 so the
-// http_api task under test fails; /alert appends each POST body (one JSON object
+// the task under test fails (raises); /alert appends each POST body (one JSON object
 // per line) to the capture file so the test can assert what the alerter sent.
 package main
 
@@ -105,7 +105,7 @@ done
 echo "==> resetting the database (migrated, empty)"
 "$TMP/leoflow" db reset --yes >/dev/null
 
-echo "==> workspace: a DAG whose single http_api task fails, with a webhook alert rule"
+echo "==> workspace: a DAG whose single task raises, with a webhook alert rule"
 mkdir -p "$WS/alertdag"
 cat > "$WS/alertdag/leoflow.yaml" <<YAML
 schema_version: "1.0"
@@ -116,12 +116,14 @@ alerts:
       conn: alerthook
       message: "boom {{dag}}/{{task}} run={{run_id}}"
 YAML
-cat > "$WS/alertdag/dag.py" <<PY
-from airflow.providers.http.operators.http import HttpOperator
-from airflow.sdk import DAG
+cat > "$WS/alertdag/dag.py" <<'PY'
+from airflow.sdk import DAG, task
 
 with DAG("alertdag", schedule=None):
-    HttpOperator(task_id="call", method="GET", endpoint="${RECV}/fail")
+    @task
+    def call():
+        raise RuntimeError("boom: intentional failure to drive the on-failure alert")
+    call()
 PY
 
 start_lite() { # $1=logfile
@@ -150,7 +152,7 @@ code="$(curl -s -o "$TMP/conn.json" -w '%{http_code}' -X POST "${BASE}/api/v2/co
 [ "$code" = "200" ] || [ "$code" = "201" ] || fail "creating alerthook returned $code\n$(cat "$TMP/conn.json")"
 pass "alerthook connection created (endpoint stored as the encrypted secret)"
 
-echo "==> triggering a run (its http_api task will fail -> run fails -> alert fires)"
+echo "==> triggering a run (its task raises -> run fails -> alert fires)"
 RUN_ID="$(curl -fsS -X POST "${BASE}/api/v2/dags/alertdag/dagRuns" \
   -H 'content-type: application/json' -d '{}' | jq -r '.dag_run_id')"
 [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ] || fail "no dag_run_id returned"

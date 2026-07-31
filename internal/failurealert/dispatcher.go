@@ -88,7 +88,14 @@ func (d *Dispatcher) AlertRunFailed(ctx context.Context, run scheduler.RunState)
 		return true
 	}
 	delivered := true
-	ev := alerts.Event{DagID: run.DagID, RunID: run.RunID, FailedTasks: failedTasks(run)}
+	ev := alerts.Event{
+		DagID: run.DagID,
+		// The user-facing run id, not RunState.RunID: an operator cannot paste a
+		// UUID into the UI or the API.
+		RunID:       run.DisplayRunID,
+		LogicalDate: run.LogicalDate,
+		FailedTasks: failedTasks(run),
+	}
 	for _, rule := range run.Alerts.OnFailure {
 		endpoint, err := d.resolver.ResolveAlertEndpoint(ctx, run.TenantID, rule.Conn)
 		if err != nil {

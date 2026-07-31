@@ -85,6 +85,8 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		}
 		out = append(out, scheduler.RunState{
 			RunID:             uuidToString(run.ID),
+			DisplayRunID:      run.RunID,
+			LogicalDate:       rfc3339OrEmpty(run.LogicalDate),
 			DagID:             spec.DagID,
 			TenantID:          uuidToString(run.TenantID),
 			State:             domain.DagRunState(run.State),
@@ -499,4 +501,14 @@ func (s *SchedulerStore) ListActiveStagingVolumes(ctx context.Context) ([]domain
 		})
 	}
 	return out, nil
+}
+
+// rfc3339OrEmpty renders a nullable timestamp for display, empty when absent.
+// Alerts show this value, so the format is the one the API already emits rather
+// than Go's default.
+func rfc3339OrEmpty(ts pgtype.Timestamptz) string {
+	if !ts.Valid {
+		return ""
+	}
+	return ts.Time.UTC().Format(time.RFC3339)
 }

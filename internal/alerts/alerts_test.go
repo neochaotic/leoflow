@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,4 +113,40 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// Placeholders and value() are two halves of one vocabulary. If a name is added
+// to the list without a case in value(), Render substitutes an empty string and
+// the alert silently loses a field; if it is added to value() without the list,
+// template validation rejects a placeholder that actually works. This ties them.
+func TestEveryPlaceholderIsSubstituted(t *testing.T) {
+	ev := Event{
+		DagID:       "etl",
+		RunID:       "manual__2026-07-30T12:00:00+00:00",
+		LogicalDate: "2026-07-30T00:00:00Z",
+		FailedTasks: []string{"extract", "load"},
+	}
+	for _, name := range Placeholders {
+		tmpl := "{{" + name + "}}"
+		got := Render(tmpl, ev)
+		if got == tmpl {
+			t.Errorf("%s was left literal — declared in Placeholders with no case in value()", tmpl)
+		}
+		if got == "" {
+			t.Errorf("%s rendered empty on a fully-populated event", tmpl)
+		}
+	}
+}
+
+// A populated event must never render the absent marker.
+func TestAbsentMarkerOnlyForMissingValues(t *testing.T) {
+	full := Event{DagID: "etl", RunID: "r1", LogicalDate: "2026-07-30T00:00:00Z", FailedTasks: []string{"x"}}
+	if got := Render("{{dag}} {{run_id}} {{logical_date}} {{task}} {{tasks}}", full); strings.Contains(got, "(none)") {
+		t.Errorf("a fully-populated event rendered the absent marker: %q", got)
+	}
+	empty := Event{}
+	got := Render("{{dag}}|{{run_id}}|{{logical_date}}|{{task}}|{{tasks}}", empty)
+	if got != "(none)|(none)|(none)|(none)|(none)" {
+		t.Errorf("empty event rendered %q, want the marker for every field", got)
+	}
 }

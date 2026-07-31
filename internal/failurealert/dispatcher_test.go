@@ -198,3 +198,59 @@ func TestAlertRunFailedForwardsHeaders(t *testing.T) {
 func TestDispatcherImplementsAlerter(t *testing.T) {
 	var _ scheduler.Alerter = New(&fakeSender{}, &fakeResolver{}, nil, quietLogger())
 }
+
+// An operator reading the alert needs the run identifier they can paste into the
+// UI or the API. RunState.RunID is the database UUID; the user-facing id is the
+// dag_runs.run_id column, which is what {{run_id}} must render.
+func TestAlertRunFailedRendersUserFacingRunID(t *testing.T) {
+	run := failedRun()
+	run.RunID = "018f3a1c-7e6b-7c3a-9f21-4d5e6f7a8b9c" // the UUID the scheduler carries
+	run.DisplayRunID = "manual__2026-07-30T12:00:00+00:00"
+	run.Alerts.OnFailure = []domain.AlertRule{{Type: "slack", Conn: "slack_prod", Message: "run {{run_id}}"}}
+
+	snd := &fakeSender{}
+	d := New(snd, &fakeResolver{urls: map[string]string{"slack_prod": "https://example.invalid/hook"}}, nil, quietLogger())
+	d.AlertRunFailed(context.Background(), run)
+
+	if len(snd.sent) != 1 {
+		t.Fatalf("sent %d alerts, want 1", len(snd.sent))
+	}
+	if got := snd.sent[0].message; got != "run manual__2026-07-30T12:00:00+00:00" {
+		t.Errorf("message = %q, want the user-facing run id, not the UUID", got)
+	}
+}
+
+// {{logical_date}} is a documented placeholder, so it must not render empty on a
+// scheduled run: an alert saying "failed for logical date " is worse than useless
+// for the operator deciding whether to backfill.
+func TestAlertRunFailedRendersLogicalDate(t *testing.T) {
+	run := failedRun()
+	run.LogicalDate = "2026-07-30T00:00:00Z"
+	run.Alerts.OnFailure = []domain.AlertRule{{Type: "slack", Conn: "slack_prod", Message: "for {{logical_date}}"}}
+
+	snd := &fakeSender{}
+	d := New(snd, &fakeResolver{urls: map[string]string{"slack_prod": "https://example.invalid/hook"}}, nil, quietLogger())
+	d.AlertRunFailed(context.Background(), run)
+
+	if len(snd.sent) != 1 {
+		t.Fatalf("sent %d alerts, want 1", len(snd.sent))
+	}
+	if got := snd.sent[0].message; got != "for 2026-07-30T00:00:00Z" {
+		t.Errorf("message = %q, want the logical date substituted", got)
+	}
+}
+
+// An unscheduled run has no logical date. Rather than leaving a dangling "for ",
+// the placeholder renders a legible marker.
+func TestAlertRunFailedLogicalDateAbsent(t *testing.T) {
+	run := failedRun()
+	run.Alerts.OnFailure = []domain.AlertRule{{Type: "slack", Conn: "slack_prod", Message: "for {{logical_date}}"}}
+
+	snd := &fakeSender{}
+	d := New(snd, &fakeResolver{urls: map[string]string{"slack_prod": "https://example.invalid/hook"}}, nil, quietLogger())
+	d.AlertRunFailed(context.Background(), run)
+
+	if got := snd.sent[0].message; got != "for (none)" {
+		t.Errorf("message = %q, want a legible marker for an absent logical date", got)
+	}
+}

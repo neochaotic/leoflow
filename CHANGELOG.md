@@ -32,6 +32,29 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Validated at compile and again at registration, so a hand-written or
   machine-generated `dag.json` cannot bypass the compiler.
 
+- **A typo in an alert template is now a compile error.** An unknown placeholder
+  is not a rendering failure — `Render` leaves it alone — so `{{taskk}}` used to
+  survive compile and reach the operator verbatim, discovered in the alert that
+  was supposed to explain an outage. `leoflow compile` now rejects it, naming the
+  offending placeholder and listing the supported set. Airflow-style names
+  (`{{ ds }}`) are reported by name rather than passing through as text.
+
+### Fixed
+
+- **Alert messages carried a UUID where the run id belongs.** `{{run_id}}`
+  rendered `RunState.RunID`, which is the `dag_runs` primary key — not the
+  `run_id` an operator sees in the UI and passes to the API. The alert named a
+  run nobody could look up. It now renders the user-facing id.
+
+- **`{{logical_date}}` always rendered empty.** The placeholder was documented and
+  substituted, but the dispatcher never populated the field, so every alert using
+  it produced a dangling `for `. `RunState` now carries the logical date and the
+  dispatcher passes it through.
+
+- **A placeholder with no value renders `(none)`** instead of an empty string —
+  `{{logical_date}}` on a manually triggered run, for example. `failed for
+  logical date ` is indistinguishable from a truncated message.
+
 ### Security
 
 - **Hardened the log sink against path escape.** `DiskSink` interpolated every

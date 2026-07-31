@@ -40,18 +40,54 @@ func Render(tmpl string, ev Event) string {
 			tmpl += ": {{tasks}}"
 		}
 	}
-	firstTask := ""
-	if len(ev.FailedTasks) > 0 {
-		firstTask = ev.FailedTasks[0]
+	pairs := make([]string, 0, 2*len(Placeholders))
+	for _, name := range Placeholders {
+		pairs = append(pairs, "{{"+name+"}}", ev.value(name))
 	}
-	r := strings.NewReplacer(
-		"{{dag}}", ev.DagID,
-		"{{run_id}}", ev.RunID,
-		"{{logical_date}}", ev.LogicalDate,
-		"{{task}}", firstTask,
-		"{{tasks}}", strings.Join(ev.FailedTasks, ", "),
-	)
-	return r.Replace(tmpl)
+	return strings.NewReplacer(pairs...).Replace(tmpl)
+}
+
+// Placeholders names every substitution Render performs, in the order it
+// documents them. Template validation reads this list, so a placeholder added to
+// value() and here is supported everywhere at once — and one added to only one of
+// them fails the round-trip test rather than silently half-working.
+var Placeholders = []string{"dag", "run_id", "logical_date", "task", "tasks"}
+
+// absent is what a placeholder renders when the run carries no value for it. A
+// literal marker beats an empty string: "failed for logical date " reads as a
+// broken alert, and an operator cannot tell it from a truncated one.
+const absent = "(none)"
+
+// value resolves one placeholder name against the event.
+func (ev Event) value(name string) string {
+	switch name {
+	case "dag":
+		return orAbsent(ev.DagID)
+	case "run_id":
+		return orAbsent(ev.RunID)
+	case "logical_date":
+		// Empty on an unscheduled (manually triggered) run, which is legitimate.
+		return orAbsent(ev.LogicalDate)
+	case "task":
+		if len(ev.FailedTasks) == 0 {
+			return absent
+		}
+		return ev.FailedTasks[0]
+	case "tasks":
+		if len(ev.FailedTasks) == 0 {
+			return absent
+		}
+		return strings.Join(ev.FailedTasks, ", ")
+	default:
+		return ""
+	}
+}
+
+func orAbsent(v string) string {
+	if v == "" {
+		return absent
+	}
+	return v
 }
 
 // Notifier posts resolved alerts over HTTP. It is safe for concurrent use.

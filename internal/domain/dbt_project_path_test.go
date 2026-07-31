@@ -70,3 +70,43 @@ func TestValidateAcceptsUsableDbtProject(t *testing.T) {
 		})
 	}
 }
+
+// dbt.manifest goes through the same filepath.Join as project
+// (dbt_manifest.go:26 joins it onto the already-joined project dir), so an
+// absolute manifest path is mangled the same way and needs the same rejection.
+// The first version of this validation checked only project, which left half the
+// reported bug in place.
+func TestValidateRejectsUnusableDbtManifest(t *testing.T) {
+	for _, tc := range []struct{ name, manifest, wants string }{
+		{"absolute", "/tmp/proj/target/manifest.json", "absolute"},
+		{"escapes", "../../../etc/passwd", "outside"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := dbtCfg("transform")
+			cfg.Dbt.Manifest = tc.manifest
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate accepted dbt.manifest = %q", tc.manifest)
+			}
+			if !errors.Is(err, ErrInvalidDbtProject) {
+				t.Fatalf("error does not wrap ErrInvalidDbtProject: %v", err)
+			}
+			if !strings.Contains(err.Error(), "manifest") {
+				t.Errorf("error %q should name the manifest field, not just the project", err)
+			}
+			if !strings.Contains(err.Error(), tc.wants) {
+				t.Errorf("error %q should explain the problem (%q)", err, tc.wants)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsUsableDbtManifest(t *testing.T) {
+	for _, m := range []string{"", "target/manifest.json", "./target/manifest.json"} {
+		cfg := dbtCfg("transform")
+		cfg.Dbt.Manifest = m
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("rejected a usable dbt.manifest %q: %v", m, err)
+		}
+	}
+}

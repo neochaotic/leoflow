@@ -1,6 +1,6 @@
 # ADR 0043: TaskGroup as a first-class construct with split/fused execution
 
-**Status:** Proposed — fused parallelism PoC-validated; implementation post-0042, dbt-first
+**Status:** Accepted — implementation partial. The dbt-domain split ships (`internal/dbt/`, ADR 0044); the **generic** `TaskGroup` construct in a `dag.py` remains deliberately rejected by the parser (it is in `test_unsupported_constructs_error_clearly`), so an author cannot yet use TaskGroup outside dbt. The decision — TaskGroup as a first-class construct with split/fused execution — is accepted; the general-purpose implementation is deferred. Do not read "Accepted" as "TaskGroup is available."
 **Date:** 2026-06-25
 **Companions:** ADR 0003 (DAG as immutable artifact), ADR 0024 (parser shim — currently rejects TaskGroup), ADR 0040 (operator support), ADR 0042 (dbt support), the editions split (Lite/Pro)
 

@@ -1,7 +1,8 @@
 # ADR 0031: Scheduler Architecture — Reconciliation Loop, Two-Phase Dispatch, Two-Layer Reaping
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-28
+**Accepted:** 2026-07-31 — all three mechanisms are in production: the reconciliation loop (`internal/scheduler/`), two-phase dispatch (`launchQueued` + `BufferedDispatcher`), and two-layer reaping (`reap.go`, `heartbeat_reap.go`, `stale_queued_reap.go`). Cited as the authority for scheduler behaviour in 17 places across code and docs.
 
 ## Context
 

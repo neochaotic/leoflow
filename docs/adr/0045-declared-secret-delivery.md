@@ -1,9 +1,19 @@
 # ADR 0045: Secrets reach a task because it declared them
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-30
+**Accepted:** 2026-07-31
 **Relates:** ADR 0019 (encryption at rest), ADR 0021 (exposing variables/connections to pods), ADR 0004 (thin agent), ADR 0035 (Leoflow is not a key manager)
 **Issues:** #59, #388, #476, #486
+
+> **This completes the follow-up ADR 0021 scheduled**, not a defect it missed.
+> ADR 0021 (Accepted) chose on-demand fetch, shipped fetch-all as its MVP, and
+> named the gap in its own text: *"Fetch-all at boot = no least-privilege… Tracked
+> as a follow-up (scope to referenced secrets)"*, under the stated trust model
+> *"do not run untrusted code/images"*. What changed is the target — multiple
+> teams in one Pro install cannot keep "trusted code" as the model — not a
+> discovery that the old code was wrong. This ADR supersedes only ADR 0021's
+> scoping clause; the fetch mechanism and TLS prerequisite stand.
 
 ## Context
 
@@ -111,9 +121,39 @@ container it is filtering for, so anything it can fetch, user code can fetch.
 **Encrypt per task with a task-scoped key.** Moves the problem — the task needs
 its key, and the key is delivered the same way the secrets were.
 
-## Open
+## Settled (2026-07-31)
 
-- Whether declaration is per DAG, per task, or both. Per task is tighter; per DAG
-  is far less to write and matches how most DAGs actually use credentials.
-- Whether an undeclared use fails the compile or the registration. Compile is
-  friendlier, but only registration knows which connections exist.
+The two questions left open above are decided, plus four points that surfaced
+when the codebase was traced against this ADR (`leoflow-research/adr-0045-readiness.md`):
+
+1. **Per DAG, with optional per-task narrowing.** The blast radius that matters
+   is "another team's credentials", which DAG-level declaration closes. Per-task
+   is available for authors who want it tighter. Note: the existing
+   `TaskSpec.Secrets` field (`{name, source, reference}`) is the `secretKeyRef`
+   shape this ADR §4 rejects — it is dead code and is deleted here, not reused. A
+   new per-task field is added if per-task narrowing is exercised.
+
+2. **Both compile and registration reject an undeclared use** — different checks,
+   not a choice: compile knows whether a name is declared in `leoflow.yaml`;
+   only the server knows whether that connection exists.
+
+3. **Two-release arc, because this is breaking.** Eight of the 22 examples
+   (`http_load`, `postgres_load`, `mysql_load`, `mssql_load`, `redis_load`,
+   `sqlite_load`, `gcp_gcs_load`, `postgres_hook_load`) use a connection without
+   declaring one. Release N ships the declaration field + **warn-and-deliver**
+   (behaviour unchanged, but every undeclared use is recorded and surfaced) and
+   declares those examples. Release N+1 flips warn to enforce. Shipping
+   enforcement in one step would red the project's own CI.
+
+4. **The migration warning records real runtime use, not static inference.**
+   `get_connection` / `Variable.get` inside a TaskFlow `@task` is arbitrary
+   Python the parser cannot see (verified: no handling in `parser/`), so static
+   inference cannot carry the migration. The warn phase instruments the runtime's
+   resolution path so the author is told which connections a task actually read.
+   This recording is net-new runtime work and lands with the declaration field.
+
+5. **Naming: keep `connections:` / `variables:`.** They are the Airflow-native
+   words. `leoflow.yaml` already has `connectors:` (pip provider packages, ADR
+   0038) one letter away — the compile fails loud when a known provider name
+   appears under `connections`, turning the collision into an actionable error
+   rather than a silent mistake.

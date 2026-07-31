@@ -99,7 +99,7 @@ executor**, native-first by type. Nothing is silently dropped or mistranslated.
 |---|---|---|---|
 | `python` | `@task` (TaskFlow) **or** `PythonOperator` | agent in a pod (Pro) / subprocess (Lite) | The general-purpose escape hatch — any provider library you `pip install` is callable from inside a `@task`. |
 | `bash` | `BashOperator` | agent | Executes a shell command. |
-| `http_api` | `HttpOperator` (`airflow.providers.http`) | **inline in the control plane** (no pod, no agent) | Synchronous outbound HTTP. For retries/throughput/custom auth, prefer `@task` + `requests` in `python`. |
+| ~~`http_api`~~ (deprecated) | — | — | **Deprecated (ADR 0047).** `HttpOperator` now compiles to `airflow_operator` and runs in a **pod**, like any other provider operator — declare `connectors: [http]`. The old inline path ran the request in the control-plane process (an SSRF surface) and is being removed. |
 | `airflow_operator` | **any provider operator/sensor** (Snowflake, S3, Postgres, BigQuery, …) | agent in a pod | The generic executor (ADR 0040): the runtime imports the class, instantiates it with your args, and calls `execute()`. Declare the provider or compile fails. |
 
 Also supported:
@@ -160,7 +160,7 @@ How it works, and the Phase-A limits:
 - **Jinja templating** is best-effort (`render_template_fields` runs with a
   minimal context); for rich macros (`{{ ds }}`, `{{ ti }}`, custom params),
   compute the value in a `@task` and pass it in.
-- A native task type (`bash`/`http_api`/`python`) always wins when it matches, so
+- A native task type (`bash`/`python`) always wins when it matches, so
   `BashOperator`/`HttpOperator`/`PythonOperator` keep their fast path.
 
 ### Not supported — `leoflow compile` rejects these

@@ -20,8 +20,9 @@ flowchart LR
 **Control plane (Go).** Gin HTTP serving the Airflow-compatible `/api/v2/*` and
 `/ui/*`; a goroutine-based scheduler (state machine, leader-elected via Postgres
 advisory locks — [ADR 0009](adr/0009-leader-election.md)); an
-executor router (Kubernetes via client-go, subprocess for dev, inline for
-http_api — [ADR 0002](adr/0002-pod-per-task.md)).
+executor router (Kubernetes via client-go, subprocess for dev —
+[ADR 0002](adr/0002-pod-per-task.md); the inline http_api path is deprecated,
+[ADR 0047](adr/0047-deprecate-native-inline-http.md)).
 
 **Worker pod.** Each task runs in its own pod from the DAG's image. The
 **agent** (Go, PID 1) talks gRPC to the control plane: fetches the task spec,

@@ -98,9 +98,9 @@ These files are part of the security posture and ship with v0.1.0:
 
 | File | Purpose |
 |---|---|
-| `SECURITY.md` | Vulnerability disclosure process. Email address for private reports, response time commitment, supported versions, GPG key. |
+| `SECURITY.md` | Vulnerability disclosure process: GitHub private vulnerability reporting (not an email address, and no GPG key — the reporting channel is authenticated and encrypted in transit by GitHub), response-time commitment, supported versions. |
 | `CONTRIBUTING.md` | How to contribute, including security review expectations for PRs touching auth, executor, or storage. |
-| `CODE_OF_CONDUCT.md` | Contributor Covenant 2.1. |
+| `CODE_OF_CONDUCT.md` | A short single-maintainer policy. Previously Contributor Covenant 2.1, whose enforcement ladder described a governance structure this project does not have; the OpenSSF badge criterion asks for *a* code of conduct, not a specific text. |
 | `LICENSE` | Apache 2.0 (sealed by earlier ADRs). |
 | `.github/dependabot.yaml` | Dependabot configuration. |
 | `.github/workflows/security.yaml` | govulncheck + gosec + Trivy + CodeQL workflow. |

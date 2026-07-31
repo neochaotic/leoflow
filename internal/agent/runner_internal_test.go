@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -114,5 +115,59 @@ func TestLogWriterSurvivesSinkErrors(t *testing.T) {
 	w.flush()
 	if sink.sends != 2 {
 		t.Errorf("both lines should have been attempted, got %d sends", sink.sends)
+	}
+}
+
+// The agent runs inside the task's own pod, so its environment IS the task's
+// environment unless something removes the difference. LEOFLOW_AGENT_TOKEN is a
+// bearer credential that authorizes GetVariables and GetConnections for the whole
+// tenant, and identify() checks only its signature — so any task that can read it
+// can fetch every decrypted connection URI, for the token's full lifetime, whether
+// or not the task is still running.
+//
+// This is upstream of scoping secret delivery: a task handed only its own
+// connections can read the token and ask for the rest directly (#476, #59).
+func TestMergeEnvStripsTheAgentToken(t *testing.T) {
+	got := mergeEnv(
+		[]string{"PATH=/usr/bin", "LEOFLOW_AGENT_TOKEN=eyJhbGciOi.secret.sig", "HOME=/tmp"},
+		nil, nil)
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "LEOFLOW_AGENT_TOKEN=") {
+			t.Fatalf("the agent token reached the task environment: %q", kv)
+		}
+	}
+	// Everything the task legitimately needs must survive the filter.
+	if !slices.Contains(got, "PATH=/usr/bin") || !slices.Contains(got, "HOME=/tmp") {
+		t.Fatalf("the filter removed unrelated variables: %v", got)
+	}
+}
+
+// The control-plane address is dialed by the agent, never by the task. Leaving it
+// hands user code the endpoint to point a stolen or forged credential at.
+func TestMergeEnvStripsTheControlPlaneAddress(t *testing.T) {
+	got := mergeEnv([]string{"LEOFLOW_CONTROL_PLANE_ADDR=leoflow:9091"}, nil, nil)
+	if len(got) != 0 {
+		t.Fatalf("the control-plane address reached the task environment: %v", got)
+	}
+}
+
+// The variables the agent *injects* for the runtime are added by mergeEnv's later
+// arguments, not inherited from os.Environ, so they must pass through untouched.
+// A filter that caught them would break XCom, TaskFlow args and the staging path.
+func TestMergeEnvKeepsInjectedRuntimeVariables(t *testing.T) {
+	got := mergeEnv(
+		[]string{"LEOFLOW_STAGING_DIR=/staging", "LEOFLOW_TASK_INSTANCE_ID=ti-1"},
+		map[string]string{"AIRFLOW_VAR_GREETING": "hi"},
+		[]string{"LEOFLOW_XCOM_VALUE=42"},
+	)
+	for _, want := range []string{
+		"LEOFLOW_STAGING_DIR=/staging", // user code reads this
+		"LEOFLOW_TASK_INSTANCE_ID=ti-1",
+		"AIRFLOW_VAR_GREETING=hi",
+		"LEOFLOW_XCOM_VALUE=42",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("missing %q from %v", want, got)
+		}
 	}
 }

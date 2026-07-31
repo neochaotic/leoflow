@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -618,9 +619,47 @@ func (r *Runner) reportReschedule(ctx context.Context, when time.Time) error {
 	})
 }
 
+// agentOnlyEnv names the variables the agent needs and the task must never see.
+//
+// The agent runs inside the task's own pod (ADR 0004), so its environment IS the
+// task's environment unless something removes the difference. LEOFLOW_AGENT_TOKEN
+// is a bearer credential authorizing GetVariables and GetConnections for the whole
+// tenant, and identify() validates only its signature — so a task that reads it
+// fetches every decrypted connection URI, for the token's full lifetime, running
+// or not. LEOFLOW_CONTROL_PLANE_ADDR is the endpoint to aim that at, and the task
+// has no use for it either; the agent does the dialing.
+//
+// This is a denylist rather than an allowlist on purpose. The variables the task
+// legitimately needs — the runtime's own, plus AIRFLOW_VAR_*/AIRFLOW_CONN_* — are
+// added by mergeEnv's later arguments rather than inherited, so the base needs
+// only its secrets removed. An allowlist would additionally have to enumerate
+// PATH, HOME, TZ, LANG, proxy settings and whatever the user's base image relies
+// on, and would break quietly the first time one was missed.
+var agentOnlyEnv = []string{
+	"LEOFLOW_AGENT_TOKEN",
+	"LEOFLOW_CONTROL_PLANE_ADDR",
+}
+
+// stripAgentOnly removes the agent's own credentials from an inherited
+// environment before it is handed to user code.
+func stripAgentOnly(base []string) []string {
+	out := make([]string, 0, len(base))
+	for _, kv := range base {
+		name, _, _ := strings.Cut(kv, "=")
+		if slices.Contains(agentOnlyEnv, name) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // mergeEnv combines the base environment with the task spec variables (sorted for
-// determinism) and the fetched XCom input variables.
+// determinism) and the fetched XCom input variables. The base is filtered first:
+// it is the agent's own environment, which carries credentials the task must not
+// inherit (see agentOnlyEnv).
 func mergeEnv(base []string, spec map[string]string, xcom []string) []string {
+	base = stripAgentOnly(base)
 	out := make([]string, 0, len(base)+len(spec)+len(xcom))
 	out = append(out, base...)
 	keys := make([]string, 0, len(spec))

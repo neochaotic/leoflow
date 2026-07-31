@@ -1,9 +1,15 @@
 {{- if .Values.rbac.create -}}
 {{/*
-The pod-per-task executor creates, watches, and deletes task pods in
-taskNamespace and reads their logs. The Role lives in taskNamespace (which may
-differ from the release namespace); the RoleBinding grants it to the control
-plane's ServiceAccount.
+The pod-per-task executor creates, lists, and deletes task pods in taskNamespace,
+reads their logs, and provisions the per-run staging PVC. The Role lives in
+taskNamespace (which may differ from the release namespace); the RoleBinding
+grants it to the control plane's ServiceAccount.
+
+Every rule below corresponds to a call the executor actually makes. Nothing here
+is speculative, and nothing the executor calls is missing — scripts/rbac-covers-executor.sh
+checks that both ways on every CI run, because this file and the code drifted
+apart once already: the staging PVC calls shipped without their permission and
+every DAG using ADR 0022's staging volume 403'd.
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -19,6 +25,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # The per-run staging volume (ADR 0022): ensureStagingClaim creates the PVC on
+  # first use and the GC deletes it when the run ends. Create is idempotent by
+  # tolerating AlreadyExists rather than reading first, so no `get` is needed.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

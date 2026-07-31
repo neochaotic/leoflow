@@ -22,26 +22,40 @@ updates:
       day: monday
     labels: ["dependencies", "ci"]
 
-  # Docker base images
+  # Docker base images.
+  #
+  # These three entries previously pointed at /runtime/python-3.10, -3.11 and
+  # -3.12, none of which exist in this repository. Dependabot silently finds no
+  # manifest at a missing directory, so base-image updates never ran at all —
+  # the config looked configured and did nothing. scripts/check-dependabot-dirs.sh
+  # now fails CI on a path that does not resolve.
+  #
+  # Scoped to the images that ship: the two deploy images and the task runtime
+  # base. examples/*/Dockerfile is deliberately excluded — 24 demo images would
+  # produce weekly PR noise for artifacts nobody deploys, and each is generated
+  # from its leoflow.yaml by scripts/sync-example-dockerfiles.sh anyway.
   - package-ecosystem: docker
-    directory: "/runtime/python-3.10"
+    directories:
+      - "/deploy"
+      - "/runtime"
     schedule:
       interval: weekly
-    labels: ["dependencies", "docker"]
-  - package-ecosystem: docker
-    directory: "/runtime/python-3.11"
-    schedule:
-      interval: weekly
-    labels: ["dependencies", "docker"]
-  - package-ecosystem: docker
-    directory: "/runtime/python-3.12"
-    schedule:
-      interval: weekly
+      day: monday
+    groups:
+      docker-base-images:
+        patterns: ["*"]
     labels: ["dependencies", "docker"]
 
-  # Python parser dependencies
+  # Python dependencies. Both projects carry their own pyproject.toml; only
+  # /parser was covered before, so runtime/python's dependencies went unwatched.
   - package-ecosystem: pip
-    directory: "/parser"
+    directories:
+      - "/parser"
+      - "/runtime/python"
     schedule:
       interval: weekly
+      day: monday
+    groups:
+      python:
+        patterns: ["*"]
     labels: ["dependencies", "python"]

@@ -2,7 +2,11 @@
 // and validates them against the canonical JSON Schemas in docs/api.
 package domain
 
-import "fmt"
+import (
+	"fmt"
+
+	"k8s.io/apimachinery/pkg/api/resource"
+)
 
 // DefaultInlineMaxDurationSeconds is the fallback cap on inline http_api task
 // duration when the server does not configure one. See ADR 0002.
@@ -222,5 +226,55 @@ func (d *DAGSpec) Validate() error {
 	if err != nil {
 		return err
 	}
-	return validateAgainst(s.dag, d)
+	if err := validateAgainst(s.dag, d); err != nil {
+		return err
+	}
+	return d.validateResourceQuantities()
+}
+
+// validateResourceQuantities rejects a CPU or memory value Kubernetes cannot
+// parse. The schema types these as strings — a JSON Schema cannot express the
+// quantity grammar — so without this they pass validation and are dropped at pod
+// build (executor.quantities keeps only what ParseQuantity accepts).
+//
+// Dropping is the dangerous outcome, not the parse failure: a task declaring
+// `memory: 2GB` got a pod with NO memory limit, which is the opposite of what it
+// asked for, on a shared node, silently. And `2GB` is the plausible typo — it is
+// how memory is written everywhere except Kubernetes, which wants `2Gi` or `2G`.
+//
+// Checked here so `leoflow compile` fails while the author is still looking at
+// it, rather than at registration or, worse, at dispatch.
+func (d *DAGSpec) validateResourceQuantities() error {
+	for _, t := range d.Tasks {
+		if t.Resources == nil {
+			continue
+		}
+		for _, q := range []struct {
+			field string
+			val   *ResourceQuantity
+		}{
+			{"requests", t.Resources.Requests},
+			{"limits", t.Resources.Limits},
+		} {
+			if q.val == nil {
+				continue
+			}
+			for _, f := range []struct{ name, value string }{
+				{"cpu", q.val.CPU},
+				{"memory", q.val.Memory},
+			} {
+				if f.value == "" {
+					continue
+				}
+				if _, err := resource.ParseQuantity(f.value); err != nil {
+					return fmt.Errorf(
+						"task %q declares resources.%s.%s = %q, which is not a valid Kubernetes quantity: %w. "+
+							"Use Kubernetes notation — CPU as cores or millicores (\"2\", \"500m\"), memory with a binary or decimal suffix (\"2Gi\", \"2G\", \"512Mi\"). "+
+							"Note \"2GB\" is not valid; Kubernetes spells it \"2Gi\" (1024-based) or \"2G\" (1000-based)",
+						t.TaskID, q.field, f.name, f.value, err)
+				}
+			}
+		}
+	}
+	return nil
 }

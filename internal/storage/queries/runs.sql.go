@@ -11,6 +11,48 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimAlertAttempt = `-- name: ClaimAlertAttempt :one
+UPDATE dag_runs
+SET alert_attempts = alert_attempts + 1,
+    next_alert_attempt_at = now() + $2::interval
+WHERE id = $1
+  AND alerted_at IS NULL
+  AND alert_attempts < $3
+  AND (next_alert_attempt_at IS NULL OR next_alert_attempt_at <= now())
+RETURNING id, alert_attempts
+`
+
+type ClaimAlertAttemptParams struct {
+	ID          pgtype.UUID     `json:"id"`
+	Backoff     pgtype.Interval `json:"backoff"`
+	MaxAttempts int32           `json:"max_attempts"`
+}
+
+type ClaimAlertAttemptRow struct {
+	ID            pgtype.UUID `json:"id"`
+	AlertAttempts int32       `json:"alert_attempts"`
+}
+
+// Atomically claim one on-failure ATTEMPT for a run, returning the row iff this
+// call won it. Replaces the old claim-then-send (#431), which set alerted_at
+// before the send and so lost the page whenever the send failed.
+//
+// Three predicates, one per way an attempt should be refused:
+//   - alerted_at IS NULL  — already delivered; never page twice for one episode.
+//   - alert_attempts < $2 — the budget is spent; a dead endpoint stops being
+//     retried instead of being hit once per tick for the life of the run.
+//   - next_alert_attempt_at — backoff has not elapsed yet.
+//
+// The attempt is consumed up front, before the send, so a crash mid-send costs one
+// attempt rather than looping. A clear resets all three (ResetDagRunToVersion),
+// making the next genuine failure a fresh episode with a fresh budget.
+func (q *Queries) ClaimAlertAttempt(ctx context.Context, arg ClaimAlertAttemptParams) (ClaimAlertAttemptRow, error) {
+	row := q.db.QueryRow(ctx, claimAlertAttempt, arg.ID, arg.Backoff, arg.MaxAttempts)
+	var i ClaimAlertAttemptRow
+	err := row.Scan(&i.ID, &i.AlertAttempts)
+	return i, err
+}
+
 const countActiveDagRunsByDagID = `-- name: CountActiveDagRunsByDagID :one
 SELECT count(*) FROM dag_runs
 WHERE dag_id = $1 AND state IN ('queued', 'running')
@@ -155,7 +197,7 @@ func (q *Queries) CountTaskInstanceStatesInWindow(ctx context.Context, arg Count
 const createDagRun = `-- name: CreateDagRun :one
 INSERT INTO dag_runs (tenant_id, dag_id, dag_version_id, run_id, logical_date, state, trigger, note)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at
+RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at, alert_attempts, next_alert_attempt_at
 `
 
 type CreateDagRunParams struct {
@@ -199,6 +241,8 @@ func (q *Queries) CreateDagRun(ctx context.Context, arg CreateDagRunParams) (Dag
 		&i.EndedAt,
 		&i.Note,
 		&i.AlertedAt,
+		&i.AlertAttempts,
+		&i.NextAlertAttemptAt,
 	)
 	return i, err
 }
@@ -322,7 +366,7 @@ func (q *Queries) FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInst
 }
 
 const getDagRun = `-- name: GetDagRun :one
-SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at FROM dag_runs WHERE dag_id = $1 AND run_id = $2
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at, alert_attempts, next_alert_attempt_at FROM dag_runs WHERE dag_id = $1 AND run_id = $2
 `
 
 type GetDagRunParams struct {
@@ -351,12 +395,14 @@ func (q *Queries) GetDagRun(ctx context.Context, arg GetDagRunParams) (DagRun, e
 		&i.EndedAt,
 		&i.Note,
 		&i.AlertedAt,
+		&i.AlertAttempts,
+		&i.NextAlertAttemptAt,
 	)
 	return i, err
 }
 
 const getDagRunByID = `-- name: GetDagRunByID :one
-SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at FROM dag_runs WHERE id = $1
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at, alert_attempts, next_alert_attempt_at FROM dag_runs WHERE id = $1
 `
 
 func (q *Queries) GetDagRunByID(ctx context.Context, id pgtype.UUID) (DagRun, error) {
@@ -380,6 +426,8 @@ func (q *Queries) GetDagRunByID(ctx context.Context, id pgtype.UUID) (DagRun, er
 		&i.EndedAt,
 		&i.Note,
 		&i.AlertedAt,
+		&i.AlertAttempts,
+		&i.NextAlertAttemptAt,
 	)
 	return i, err
 }
@@ -466,7 +514,7 @@ func (q *Queries) LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsPa
 }
 
 const listActiveDagRuns = `-- name: ListActiveDagRuns :many
-SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at FROM dag_runs
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at, alert_attempts, next_alert_attempt_at FROM dag_runs
 WHERE state IN ('queued', 'running')
 ORDER BY queued_at
 `
@@ -498,6 +546,8 @@ func (q *Queries) ListActiveDagRuns(ctx context.Context) ([]DagRun, error) {
 			&i.EndedAt,
 			&i.Note,
 			&i.AlertedAt,
+			&i.AlertAttempts,
+			&i.NextAlertAttemptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -565,7 +615,7 @@ func (q *Queries) ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostC
 }
 
 const listDagRunsByDag = `-- name: ListDagRunsByDag :many
-SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at FROM dag_runs
+SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at, alert_attempts, next_alert_attempt_at FROM dag_runs
 WHERE dag_id = $1
 ORDER BY logical_date DESC
 LIMIT $2 OFFSET $3
@@ -604,6 +654,8 @@ func (q *Queries) ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagPara
 			&i.EndedAt,
 			&i.Note,
 			&i.AlertedAt,
+			&i.AlertAttempts,
+			&i.NextAlertAttemptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -943,23 +995,31 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 	return items, nil
 }
 
-const markRunAlerted = `-- name: MarkRunAlerted :one
+const markRunAlertDelivered = `-- name: MarkRunAlertDelivered :exec
 UPDATE dag_runs
-SET alerted_at = now()
-WHERE id = $1 AND alerted_at IS NULL
-RETURNING id
+SET alerted_at = now(), next_alert_attempt_at = NULL
+WHERE id = $1 AND alert_attempts = $2
 `
 
-// Atomically claim the on-failure alert for a run (#431): set alerted_at once,
-// only while it is NULL, and return the row iff this call won the claim. A second
-// call (same failed episode, no clear) matches no row and reports "already
-// alerted", so the scheduler skips the duplicate page. A clear nulls alerted_at,
-// letting the next genuine failure re-claim.
-func (q *Queries) MarkRunAlerted(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, markRunAlerted, id)
-	var id_2 pgtype.UUID
-	err := row.Scan(&id_2)
-	return id_2, err
+type MarkRunAlertDeliveredParams struct {
+	ID      pgtype.UUID `json:"id"`
+	Attempt int32       `json:"attempt"`
+}
+
+// Stamp a run's on-failure alert as DELIVERED. Called only after a successful
+// send, which is the whole point of the split: alerted_at now answers "did the
+// page get through", not "did we try".
+//
+// Guarded on the attempt it is reporting for. The send runs in a goroutine
+// detached from the tick, so an operator clear can land between the claim and the
+// stamp: the clear resets alert_attempts to 0 and starts a NEW failure episode,
+// and an unguarded stamp from the old in-flight send would mark that new episode
+// delivered without ever paging it. Requiring the attempt to still match means a
+// stamp from a superseded episode simply matches no row. Same shape as the guard
+// on ReportTaskResult: a late writer must never clobber newer state.
+func (q *Queries) MarkRunAlertDelivered(ctx context.Context, arg MarkRunAlertDeliveredParams) error {
+	_, err := q.db.Exec(ctx, markRunAlertDelivered, arg.ID, arg.Attempt)
+	return err
 }
 
 const markRunOrphanedRun = `-- name: MarkRunOrphanedRun :execrows
@@ -1251,6 +1311,7 @@ func (q *Queries) ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgty
 const resetDagRunToVersion = `-- name: ResetDagRunToVersion :exec
 UPDATE dag_runs
 SET state = 'queued', started_at = NULL, ended_at = NULL, alerted_at = NULL,
+    alert_attempts = 0, next_alert_attempt_at = NULL,
     dag_version_id = $2
 WHERE id = $1
 `
@@ -1263,9 +1324,12 @@ type ResetDagRunToVersionParams struct {
 // Clear re-binds the run to the DAG's current registered version (ADR 0020): a
 // re-run after a code/yaml fix picks up the newest image and config — in dev that
 // is the last hot-reload, in prod the last deploy — while everything within a
-// version stays reproducible. Clearing alerted_at (#431) makes the clear a new
-// failure episode, so a genuine re-failure re-pages while a re-tick of the same
-// failed state does not.
+// version stays reproducible. Clearing the alert bookkeeping (#431) makes the clear
+// a new failure episode, so a genuine re-failure re-pages while a re-tick of the
+// same failed state does not. All three columns reset together: leaving
+// alert_attempts behind would carry a spent retry budget into an episode that has
+// not been attempted, so a cleared run could exhaust its attempts without ever
+// having tried.
 func (q *Queries) ResetDagRunToVersion(ctx context.Context, arg ResetDagRunToVersionParams) error {
 	_, err := q.db.Exec(ctx, resetDagRunToVersion, arg.ID, arg.DagVersionID)
 	return err
@@ -1499,7 +1563,7 @@ const updateDagRunState = `-- name: UpdateDagRunState :one
 UPDATE dag_runs
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at
+RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at, alert_attempts, next_alert_attempt_at
 `
 
 type UpdateDagRunStateParams struct {
@@ -1535,6 +1599,8 @@ func (q *Queries) UpdateDagRunState(ctx context.Context, arg UpdateDagRunStatePa
 		&i.EndedAt,
 		&i.Note,
 		&i.AlertedAt,
+		&i.AlertAttempts,
+		&i.NextAlertAttemptAt,
 	)
 	return i, err
 }

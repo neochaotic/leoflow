@@ -72,13 +72,22 @@ func (d *Dispatcher) record(dagID, channelType, result string) {
 	}
 }
 
-// AlertRunFailed dispatches every on_failure rule of a failed run. Each rule is
-// resolved, rendered, and sent independently: a resolver or send error on one
-// rule is logged and skipped so the remaining rules still fire (best-effort).
-func (d *Dispatcher) AlertRunFailed(ctx context.Context, run scheduler.RunState) {
+// AlertRunFailed dispatches every on_failure rule of a failed run and reports
+// whether ALL of them were delivered. Each rule is resolved, rendered, and sent
+// independently: a resolver or send error on one rule is logged and skipped so
+// the remaining rules still fire.
+//
+// The boolean is what lets the caller distinguish a delivered page from a lost
+// one. Before it existed the caller marked the run alerted before sending, so any
+// failure here was permanent (#470 validation: a 500 left the run marked with no
+// retry). All-or-nothing is deliberate: a partial success is retried in full, so
+// a rule that already landed pages twice. That is the trade-off this code already
+// declares — a duplicate beats a missed page.
+func (d *Dispatcher) AlertRunFailed(ctx context.Context, run scheduler.RunState) bool {
 	if run.Alerts == nil {
-		return
+		return true
 	}
+	delivered := true
 	ev := alerts.Event{DagID: run.DagID, RunID: run.RunID, FailedTasks: failedTasks(run)}
 	for _, rule := range run.Alerts.OnFailure {
 		endpoint, err := d.resolver.ResolveAlertEndpoint(ctx, run.TenantID, rule.Conn)
@@ -86,6 +95,7 @@ func (d *Dispatcher) AlertRunFailed(ctx context.Context, run scheduler.RunState)
 			d.logger.Error("resolving alert connection",
 				"dag", run.DagID, "run", run.RunID, "conn", rule.Conn, "error", err)
 			d.record(run.DagID, rule.Type, resultFailed)
+			delivered = false
 			continue
 		}
 		message := alerts.Render(rule.Message, ev)
@@ -93,12 +103,14 @@ func (d *Dispatcher) AlertRunFailed(ctx context.Context, run scheduler.RunState)
 			d.logger.Error("sending on-failure alert",
 				"dag", run.DagID, "run", run.RunID, "type", rule.Type, "conn", rule.Conn, "error", serr)
 			d.record(run.DagID, rule.Type, resultFailed)
+			delivered = false
 			continue
 		}
 		d.logger.Info("on-failure alert sent",
 			"dag", run.DagID, "run", run.RunID, "type", rule.Type, "conn", rule.Conn)
 		d.record(run.DagID, rule.Type, resultSent)
 	}
+	return delivered
 }
 
 // failedTasks returns the task_ids that actually failed (not merely upstream-

@@ -196,22 +196,49 @@ func (s *SchedulerStore) SetRunState(ctx context.Context, runID string, state do
 	})
 }
 
-// MarkRunAlerted atomically claims a run's on-failure alert (#431): the UPDATE
-// sets alerted_at only while it is NULL and returns the row iff this call won.
-// pgx.ErrNoRows means the row already had alerted_at (already alerted this
-// episode) — not an error, just a lost claim, so report won=false.
-func (s *SchedulerStore) MarkRunAlerted(ctx context.Context, runID string) (bool, error) {
+// ClaimAlertAttempt atomically claims one on-failure send attempt for a run
+// (#431). The UPDATE consumes an attempt and sets the next-attempt time, but only
+// while the episode is undelivered, within budget, and past its backoff — see the
+// query for why each predicate exists. pgx.ErrNoRows means the claim was refused
+// on one of those grounds: not an error, just a lost claim, so report won=false.
+//
+// Claiming an attempt is NOT the same as recording delivery; that is
+// MarkRunAlertDelivered. Conflating the two is what made a failed send a
+// permanently lost page.
+// Returns the attempt number won (0 when the claim was refused), which the caller
+// passes back to MarkRunAlertDelivered so a superseded send cannot stamp.
+func (s *SchedulerStore) ClaimAlertAttempt(ctx context.Context, runID string, maxAttempts int, backoff time.Duration) (int, error) {
 	rid, err := parseUUID(runID)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	if _, err := s.q.MarkRunAlerted(ctx, rid); err != nil {
+	iv := pgtype.Interval{Microseconds: backoff.Microseconds(), Valid: true}
+	row, err := s.q.ClaimAlertAttempt(ctx, queries.ClaimAlertAttemptParams{
+		ID:          rid,
+		Backoff:     iv,
+		MaxAttempts: int32(maxAttempts), //nolint:gosec // a small configured constant, never attacker-controlled
+	})
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return 0, nil
 		}
-		return false, err
+		return 0, err
 	}
-	return true, nil
+	return int(row.AlertAttempts), nil
+}
+
+// MarkRunAlertDelivered stamps a run's on-failure alert as delivered, for the
+// attempt the caller won. The attempt is part of the predicate so a stamp from a
+// send that an operator clear has since superseded matches no row — see the query.
+func (s *SchedulerStore) MarkRunAlertDelivered(ctx context.Context, runID string, attempt int) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.MarkRunAlertDelivered(ctx, queries.MarkRunAlertDeliveredParams{
+		ID:      rid,
+		Attempt: int32(attempt), //nolint:gosec // a small bounded counter, never attacker-controlled
+	})
 }
 
 // ScheduledDAGs returns active, unpaused, cron-scheduled DAGs with the logical

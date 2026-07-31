@@ -12,7 +12,10 @@ import (
 // test can observe the scheduler's fire-and-forget dispatch deterministically.
 type recordingAlerter struct{ ch chan RunState }
 
-func (r *recordingAlerter) AlertRunFailed(_ context.Context, run RunState) { r.ch <- run }
+func (r *recordingAlerter) AlertRunFailed(_ context.Context, run RunState) bool {
+	r.ch <- run
+	return true
+}
 
 // blockingAlerter signals when a dispatch starts and then holds the concurrency
 // slot until released, so a test can prove the scheduler bounds concurrency.
@@ -21,9 +24,10 @@ type blockingAlerter struct {
 	release chan struct{}
 }
 
-func (b *blockingAlerter) AlertRunFailed(_ context.Context, run RunState) {
+func (b *blockingAlerter) AlertRunFailed(_ context.Context, run RunState) bool {
 	b.started <- run
 	<-b.release
+	return true
 }
 
 func exhaustedFailedRun(id string) RunState {
@@ -196,4 +200,99 @@ func TestStepNoAlertWhenNoRules(t *testing.T) {
 		t.Fatal("no alert expected without on_failure rules")
 	case <-time.After(150 * time.Millisecond):
 	}
+}
+
+// failingAlerter reports that delivery did not complete, the way the real
+// dispatcher does when a channel returns 500 or a rule's connection cannot be
+// resolved.
+type failingAlerter struct{ calls chan RunState }
+
+func (f *failingAlerter) AlertRunFailed(_ context.Context, run RunState) bool {
+	f.calls <- run
+	return false
+}
+
+// A send that fails must leave the episode CLAIMABLE. Before the delivery split,
+// the claim was taken before sending, so a 500 marked the run alerted and the
+// page was lost for good — measured on v0.1.2-rc.1: a receiver answering 500 left
+// the run marked with no retry, and a burst of 15 failures marked all 15 while
+// delivering none.
+func TestStepDoesNotMarkDeliveredWhenSendFails(t *testing.T) {
+	store := newFakeStore(exhaustedFailedRun("r1"))
+	al := &failingAlerter{calls: make(chan RunState, 4)}
+	s := newScheduler(store)
+	s.SetAlerter(al)
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-al.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the alerter to be called")
+	}
+	// The goroutine stamps (or does not) after the alerter returns; give it a beat.
+	waitFor(t, func() bool { return store.attemptsFor("r1") == 1 })
+	if store.wasDelivered("r1") {
+		t.Fatal("a failed send must NOT be recorded as delivered — that is what loses the page")
+	}
+}
+
+// The counterpart: a successful send IS recorded, so the next tick does not
+// re-page for the same episode.
+func TestStepMarksDeliveredWhenSendSucceeds(t *testing.T) {
+	store := newFakeStore(exhaustedFailedRun("r1"))
+	al := &recordingAlerter{ch: make(chan RunState, 2)}
+	s := newScheduler(store)
+	s.SetAlerter(al)
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-al.ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the alerter to be called")
+	}
+	waitFor(t, func() bool { return store.wasDelivered("r1") })
+}
+
+// A failed episode is retried, but not forever: a run stays failed for good, so
+// without a ceiling a dead endpoint would be hit once per tick for the life of
+// the run — the alert path DoSing the endpoint it is trying to reach.
+func TestStepStopsRetryingAfterAttemptBudget(t *testing.T) {
+	store := newFakeStore(exhaustedFailedRun("r1"))
+	al := &failingAlerter{calls: make(chan RunState, 32)}
+	s := newScheduler(store)
+	s.SetAlerter(al)
+	// Tick well past the budget. The fake does not simulate backoff, so every
+	// tick that is allowed to claim will claim — which makes the ceiling the only
+	// thing that can stop it.
+	for i := 0; i < alertMaxAttempts+4; i++ {
+		if err := s.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool { return len(al.calls) > 0 || store.attemptsFor("r1") >= alertMaxAttempts })
+		for len(al.calls) > 0 {
+			<-al.calls
+		}
+	}
+	if got := store.attemptsFor("r1"); got != alertMaxAttempts {
+		t.Fatalf("attempts = %d, want exactly %d — the budget must cap retries", got, alertMaxAttempts)
+	}
+	if store.wasDelivered("r1") {
+		t.Fatal("nothing was ever delivered; the episode must not be marked paged")
+	}
+}
+
+// waitFor polls a condition briefly. The send runs in a goroutine detached from
+// the tick, so an assertion about its effect cannot be made synchronously.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition not met within 2s")
 }

@@ -255,10 +255,15 @@ func taskInstanceID(t *testing.T, sched *storage.SchedulerStore, ctx context.Con
 }
 
 // TestOnFailureAlertDedupResetsOnClearIntegration pins the #431 "once per failure
-// episode" contract at the SQL layer: MarkRunAlerted is an atomic claim (wins once
-// while alerted_at is NULL, loses on a re-tick of the same episode), and a Clear
-// (ResetDagRunToVersion) NULLs alerted_at so a genuine re-failure re-claims. A unit
-// test on a fake store can't prove the CAS or the reset — they live in the SQL.
+// episode" contract at the SQL layer: a delivered episode is never claimed again
+// (no duplicate page on a re-tick), and a Clear (ResetDagRunToVersion) reopens the
+// episode so a genuine re-failure pages again. A unit test on a fake store can't
+// prove either — both live in the UPDATE's WHERE clause.
+//
+// The contract survived the claim/deliver split unchanged; only what "alerted"
+// means moved. It used to be stamped BEFORE the send, so a failed send counted as
+// a page. Now the claim consumes an attempt and delivery is stamped after a
+// successful send, so this test delivers explicitly where it used to just claim.
 func TestOnFailureAlertDedupResetsOnClearIntegration(t *testing.T) {
 	repo, sched, ctx := openRepo(t)
 
@@ -279,12 +284,19 @@ func TestOnFailureAlertDedupResetsOnClearIntegration(t *testing.T) {
 		t.Fatalf("ApplyTransition to failed: %v", err)
 	}
 
-	// First claim wins; the immediate re-tick (same failed episode, no clear) loses.
-	if won, err := sched.MarkRunAlerted(ctx, runUUID); err != nil || !won {
-		t.Fatalf("first MarkRunAlerted = (%v, %v), want (true, nil)", won, err)
+	// First claim wins and the send succeeds, so the episode is stamped delivered.
+	attempt, err := sched.ClaimAlertAttempt(ctx, runUUID, 5, -time.Minute)
+	if err != nil || attempt != 1 {
+		t.Fatalf("first ClaimAlertAttempt = (%d, %v), want (1, nil)", attempt, err)
 	}
-	if won, err := sched.MarkRunAlerted(ctx, runUUID); err != nil || won {
-		t.Fatalf("re-tick MarkRunAlerted = (%v, %v), want (false, nil) — no duplicate page", won, err)
+	if err := sched.MarkRunAlertDelivered(ctx, runUUID, attempt); err != nil {
+		t.Fatalf("MarkRunAlertDelivered: %v", err)
+	}
+	// The immediate re-tick (same failed episode, no clear) must not page again.
+	// The backoff is set negative so an elapsed backoff cannot be what refuses the
+	// claim — delivery has to be the reason, which is the contract under test.
+	if got, err := sched.ClaimAlertAttempt(ctx, runUUID, 5, -time.Minute); err != nil || got != 0 {
+		t.Fatalf("re-tick claim = (%d, %v), want (0, nil) — no duplicate page", got, err)
 	}
 
 	// A Clear (resetDagRun=true) opens a new failure episode by NULLing alerted_at.
@@ -293,8 +305,14 @@ func TestOnFailureAlertDedupResetsOnClearIntegration(t *testing.T) {
 		t.Fatalf("ClearTaskInstances: %v", err)
 	}
 
-	// The genuine re-failure after the clear re-claims and re-alerts.
-	if won, err := sched.MarkRunAlerted(ctx, runUUID); err != nil || !won {
-		t.Fatalf("post-clear MarkRunAlerted = (%v, %v), want (true, nil) — a clear must re-open the episode (#431)", won, err)
+	// The genuine re-failure after the clear re-claims and re-alerts. The attempt
+	// counter resets too, so the new episode gets a full retry budget rather than
+	// inheriting a spent one.
+	got, err := sched.ClaimAlertAttempt(ctx, runUUID, 5, -time.Minute)
+	if err != nil {
+		t.Fatalf("post-clear claim: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("post-clear claim = %d, want 1 — a clear must reopen the episode with a fresh budget (#431)", got)
 	}
 }

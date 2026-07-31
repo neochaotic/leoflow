@@ -209,23 +209,25 @@ type DagFavorite struct {
 }
 
 type DagRun struct {
-	ID                pgtype.UUID        `json:"id"`
-	TenantID          pgtype.UUID        `json:"tenant_id"`
-	DagID             pgtype.UUID        `json:"dag_id"`
-	DagVersionID      pgtype.UUID        `json:"dag_version_id"`
-	RunID             string             `json:"run_id"`
-	LogicalDate       pgtype.Timestamptz `json:"logical_date"`
-	DataIntervalStart pgtype.Timestamptz `json:"data_interval_start"`
-	DataIntervalEnd   pgtype.Timestamptz `json:"data_interval_end"`
-	State             DagRunState        `json:"state"`
-	Trigger           DagRunTrigger      `json:"trigger"`
-	Conf              []byte             `json:"conf"`
-	TriggeredBy       pgtype.UUID        `json:"triggered_by"`
-	QueuedAt          pgtype.Timestamptz `json:"queued_at"`
-	StartedAt         pgtype.Timestamptz `json:"started_at"`
-	EndedAt           pgtype.Timestamptz `json:"ended_at"`
-	Note              *string            `json:"note"`
-	AlertedAt         pgtype.Timestamptz `json:"alerted_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	DagID              pgtype.UUID        `json:"dag_id"`
+	DagVersionID       pgtype.UUID        `json:"dag_version_id"`
+	RunID              string             `json:"run_id"`
+	LogicalDate        pgtype.Timestamptz `json:"logical_date"`
+	DataIntervalStart  pgtype.Timestamptz `json:"data_interval_start"`
+	DataIntervalEnd    pgtype.Timestamptz `json:"data_interval_end"`
+	State              DagRunState        `json:"state"`
+	Trigger            DagRunTrigger      `json:"trigger"`
+	Conf               []byte             `json:"conf"`
+	TriggeredBy        pgtype.UUID        `json:"triggered_by"`
+	QueuedAt           pgtype.Timestamptz `json:"queued_at"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	EndedAt            pgtype.Timestamptz `json:"ended_at"`
+	Note               *string            `json:"note"`
+	AlertedAt          pgtype.Timestamptz `json:"alerted_at"`
+	AlertAttempts      int32              `json:"alert_attempts"`
+	NextAlertAttemptAt pgtype.Timestamptz `json:"next_alert_attempt_at"`
 }
 
 type DagVersion struct {

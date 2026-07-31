@@ -227,5 +227,8 @@ func (c *LeoflowConfig) Validate() error {
 	if err := validateAgainst(s.leoflow, c); err != nil {
 		return err
 	}
-	return c.validateAlertTemplates()
+	if err := c.validateAlertTemplates(); err != nil {
+		return err
+	}
+	return c.validateDbtProject()
 }

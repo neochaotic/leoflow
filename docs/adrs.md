@@ -50,4 +50,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0045: Secrets reach a task because it declared them](adr/0045-declared-secret-delivery.md)
 - [ADR 0046: Coverage — one rule, per package, counting the tests we already wrote](adr/0046-coverage-policy.md)
 - [ADR 0047: Deprecate the native inline http_api; run HTTP through the generic pod executor](adr/0047-deprecate-native-inline-http.md)
+- [ADR 0048: The control plane executes no user-influenced code or network requests](adr/0048-no-user-code-in-control-plane.md)
 <!-- END ADR INDEX -->

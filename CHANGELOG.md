@@ -8,6 +8,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A synchronous dispatch failure now backs off and eventually gives up, instead
+  of retrying every tick forever** (ADR 0031 Amendment A). When `Dispatch` failed
+  synchronously — kube-apiserver unreachable, RBAC denied, quota, an admission
+  webhook reject — the task stayed `scheduled` and the planner re-attempted it on
+  every tick, with no backoff, surfaced by no reaper (the dispatch-lost reaper
+  only sees `queued`). A permanent misconfiguration became a silent tight loop.
+
+  The task instance now records `dispatch_attempts` and `next_dispatch_at` (two new
+  columns, mirroring `reschedule_at`); the planner does not re-dispatch until the
+  exponential, capped backoff elapses, and after the attempt budget is spent the
+  task fails as `dispatch_failed` so the run finalizes. A dispatch failure does
+  **not** consume the task's `try_number` — it is infrastructure, not a task
+  failure, so a `retries: 0` task is not killed by a transient blip.
+  `dispatch_failed` is distinct from `dispatch_lost` (dispatched then vanished) and
+  from a task's own `failed` (the code ran and failed).
+
 - **`leoflow compile` now rejects a task graph that cannot execute.** Three
   defects shared one symptom, and it was the worst one available: the run
   started, no task in the affected region ever became ready, and the run sat in

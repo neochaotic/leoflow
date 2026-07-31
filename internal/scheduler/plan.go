@@ -34,42 +34,7 @@ func PlanRun(run RunState) []PlannedTransition {
 	decided := make(map[string]bool, len(run.Tasks))
 	out := make([]PlannedTransition, 0, len(run.Tasks))
 
-	for _, t := range run.Tasks {
-		switch run.States[t.TaskID] {
-		case domain.TaskStateFailed:
-			if retriable(run, t.TaskID) {
-				out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateUpForRetry})
-				effective[t.TaskID] = domain.TaskStateUpForRetry
-				decided[t.TaskID] = true
-			}
-		case domain.TaskStateUpForRetry:
-			if !readyToRetry(run, t.TaskID) {
-				// Cooldown still active — keep the task in up_for_retry. Mark
-				// decided so the second loop also leaves it alone (otherwise
-				// decideStart would re-evaluate based on effective state and
-				// re-emit a transition).
-				decided[t.TaskID] = true
-				continue
-			}
-			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
-			effective[t.TaskID] = domain.TaskStateNone
-			decided[t.TaskID] = true
-		case domain.TaskStateUpForReschedule:
-			// A reschedule-mode sensor parked here by the agent: re-dispatch once
-			// reschedule_at passes, WITHOUT consuming retry budget (reschedule is not
-			// a failure). Until then keep it parked so downstream waits. Mirrors the
-			// up_for_retry rail, gated on reschedule_at instead of retry_delay (#380).
-			if !readyToReschedule(run, t.TaskID) {
-				decided[t.TaskID] = true
-				continue
-			}
-			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
-			effective[t.TaskID] = domain.TaskStateNone
-			decided[t.TaskID] = true
-		default:
-			// none/scheduled/queued/running/terminal: no retry decision here.
-		}
-	}
+	out = append(out, planRetryTransitions(run, effective, decided)...)
 
 	for _, t := range run.Tasks {
 		if decided[t.TaskID] {
@@ -81,9 +46,55 @@ func PlanRun(run RunState) []PlannedTransition {
 				out = append(out, PlannedTransition{TaskID: t.TaskID, To: to})
 			}
 		case domain.TaskStateScheduled:
+			// A previous dispatch may have failed; hold off re-dispatch until the
+			// backoff elapses (ADR 0031 Amendment A), mirroring the reschedule gate.
+			if !readyToDispatch(run, t.TaskID) {
+				continue
+			}
 			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateQueued})
 		default:
 			// queued/running/terminal/up_for_retry: nothing to plan here.
+		}
+	}
+	return out
+}
+
+// planRetryTransitions handles the retry/reschedule rail: a failed task with
+// budget moves to up_for_retry; an up_for_retry or up_for_reschedule task resets
+// to none once its cooldown/poke time elapses. It records the effective state and
+// marks each handled task decided so the main loop leaves it alone, and returns
+// the transitions to emit.
+func planRetryTransitions(run RunState, effective map[string]domain.TaskState, decided map[string]bool) []PlannedTransition {
+	out := make([]PlannedTransition, 0, len(run.Tasks))
+	for _, t := range run.Tasks {
+		switch run.States[t.TaskID] {
+		case domain.TaskStateFailed:
+			if retriable(run, t.TaskID) {
+				out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateUpForRetry})
+				effective[t.TaskID] = domain.TaskStateUpForRetry
+				decided[t.TaskID] = true
+			}
+		case domain.TaskStateUpForRetry:
+			if !readyToRetry(run, t.TaskID) {
+				decided[t.TaskID] = true
+				continue
+			}
+			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
+			effective[t.TaskID] = domain.TaskStateNone
+			decided[t.TaskID] = true
+		case domain.TaskStateUpForReschedule:
+			// Re-dispatch once reschedule_at passes, WITHOUT consuming retry budget
+			// (reschedule is not a failure); until then keep it parked so downstream
+			// waits. Mirrors the up_for_retry rail, gated on reschedule_at (#380).
+			if !readyToReschedule(run, t.TaskID) {
+				decided[t.TaskID] = true
+				continue
+			}
+			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
+			effective[t.TaskID] = domain.TaskStateNone
+			decided[t.TaskID] = true
+		default:
+			// none/scheduled/queued/running/terminal: no retry decision here.
 		}
 	}
 	return out
@@ -119,6 +130,22 @@ func readyToRetry(run RunState, taskID string) bool {
 		return true
 	}
 	return !run.Now.Before(ended.Add(time.Duration(delay) * time.Second))
+}
+
+// readyToDispatch reports whether a `scheduled` task may be dispatched now: true
+// unless a prior synchronous dispatch failure set next_dispatch_at in the future.
+// Honors the "absent data / zero clock falls back to immediate" convention
+// (mirroring readyToReschedule), so the common case (never failed) and tests that
+// do not populate NextDispatchAt/Now dispatch immediately.
+func readyToDispatch(run RunState, taskID string) bool {
+	at := run.NextDispatchAt[taskID]
+	if at == nil {
+		return true
+	}
+	if run.Now.IsZero() {
+		return true
+	}
+	return !run.Now.Before(*at)
 }
 
 // readyToReschedule reports whether a task parked in up_for_reschedule may be

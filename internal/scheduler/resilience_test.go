@@ -84,6 +84,10 @@ func (f *flakyStore) ApplyTransition(_ context.Context, runID, taskID string, to
 
 func (f *flakyStore) ResetForRetry(context.Context, string, string) error        { return nil }
 func (f *flakyStore) RedispatchReschedule(context.Context, string, string) error { return nil }
+func (f *flakyStore) RecordDispatchFailure(context.Context, string, string, time.Time) error {
+	return nil
+}
+func (f *flakyStore) FailDispatchExhausted(context.Context, string, string, string) error { return nil }
 
 func (f *flakyStore) SetRunState(_ context.Context, runID string, state domain.DagRunState) error {
 	f.mu.Lock()

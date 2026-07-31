@@ -251,3 +251,48 @@ func TestFinalizeRunWaitsForRetriableFailure(t *testing.T) {
 		t.Error("must not finalize the run while a failed task can still retry")
 	}
 }
+
+// A scheduled task whose next_dispatch_at is in the future is NOT promoted to
+// queued this tick — its previous dispatch failed and the backoff has not
+// elapsed (ADR 0031 Amendment A). Mirrors the up_for_reschedule gate.
+func TestPlanRunDefersScheduledDuringDispatchBackoff(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	future := now.Add(30 * time.Second)
+	run := RunState{
+		Tasks:          linear(),
+		States:         map[string]domain.TaskState{"a": domain.TaskStateScheduled},
+		Now:            now,
+		NextDispatchAt: map[string]*time.Time{"a": &future},
+	}
+	if got := planMap(run)["a"]; got == domain.TaskStateQueued {
+		t.Error("a scheduled task still in dispatch backoff must not be promoted to queued")
+	}
+}
+
+// Once next_dispatch_at has passed, the scheduled task is promoted to queued so
+// the dispatch is re-attempted.
+func TestPlanRunRedispatchesAfterBackoffElapses(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-1 * time.Second)
+	run := RunState{
+		Tasks:          linear(),
+		States:         map[string]domain.TaskState{"a": domain.TaskStateScheduled},
+		Now:            now,
+		NextDispatchAt: map[string]*time.Time{"a": &past},
+	}
+	if got := planMap(run)["a"]; got != domain.TaskStateQueued {
+		t.Errorf("a scheduled task past its backoff should be queued, got %s", got)
+	}
+}
+
+// Absent next_dispatch_at (the common case: never failed to dispatch) promotes
+// immediately, preserving today's behavior.
+func TestPlanRunSchedulesImmediatelyWithoutBackoff(t *testing.T) {
+	run := RunState{
+		Tasks:  linear(),
+		States: map[string]domain.TaskState{"a": domain.TaskStateScheduled},
+	}
+	if got := planMap(run)["a"]; got != domain.TaskStateQueued {
+		t.Errorf("a scheduled task with no backoff should be queued, got %s", got)
+	}
+}

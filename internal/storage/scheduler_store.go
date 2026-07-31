@@ -59,6 +59,8 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		maxTries := make(map[string]int, len(tis))
 		endedAt := make(map[string]*time.Time, len(tis))
 		rescheduleAt := make(map[string]*time.Time, len(tis))
+		dispatchAttempts := make(map[string]int, len(tis))
+		nextDispatchAt := make(map[string]*time.Time, len(tis))
 		for _, ti := range tis {
 			states[ti.TaskID] = domain.TaskState(ti.State)
 			tries[ti.TaskID] = int(ti.TryNumber)
@@ -72,6 +74,15 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			if ti.RescheduleAt.Valid {
 				ts := ti.RescheduleAt.Time
 				rescheduleAt[ti.TaskID] = &ts
+			}
+			// dispatch_attempts / next_dispatch_at gate scheduled → queued re-dispatch
+			// after a synchronous dispatch failure (ADR 0031 Amendment A).
+			if ti.DispatchAttempts > 0 {
+				dispatchAttempts[ti.TaskID] = int(ti.DispatchAttempts)
+			}
+			if ti.NextDispatchAt.Valid {
+				ts := ti.NextDispatchAt.Time
+				nextDispatchAt[ti.TaskID] = &ts
 			}
 		}
 		// Build per-task retry_delay_seconds from the DAG spec so the planner
@@ -97,6 +108,8 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			EndedAt:           endedAt,
 			RetryDelaySeconds: retryDelay,
 			RescheduleAt:      rescheduleAt,
+			NextDispatchAt:    nextDispatchAt,
+			DispatchAttempts:  dispatchAttempts,
 			Now:               time.Now(),
 			Alerts:            spec.Alerts,
 		})
@@ -172,9 +185,36 @@ func (s *SchedulerStore) ResetForRetry(ctx context.Context, runID, taskID string
 	})
 }
 
+// RecordDispatchFailure increments a scheduled task's dispatch-failure counter
+// and backs off its next attempt to nextAt (ADR 0031 Amendment A).
+func (s *SchedulerStore) RecordDispatchFailure(ctx context.Context, runID, taskID string, nextAt time.Time) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.RecordDispatchFailure(ctx, queries.RecordDispatchFailureParams{
+		DagRunID:       rid,
+		TaskID:         taskID,
+		NextDispatchAt: pgtype.Timestamptz{Time: nextAt, Valid: true},
+	})
+}
+
+// FailDispatchExhausted fails a scheduled task as dispatch_failed once its
+// dispatch-attempt budget is spent (ADR 0031 Amendment A).
+func (s *SchedulerStore) FailDispatchExhausted(ctx context.Context, runID, taskID, reason string) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.FailDispatchExhausted(ctx, queries.FailDispatchExhaustedParams{
+		DagRunID:     rid,
+		TaskID:       taskID,
+		ErrorMessage: &reason,
+	})
+}
+
 // RedispatchReschedule returns a task parked in up_for_reschedule to 'none' for
-// re-dispatch, clearing its per-attempt timestamps and reschedule_at but PRESERVING
-// try_number — reschedule is not a retry, so it consumes no attempt (#380).
+// re-dispatch, preserving try_number (reschedule is not a retry; #380).
 func (s *SchedulerStore) RedispatchReschedule(ctx context.Context, runID, taskID string) error {
 	rid, err := parseUUID(runID)
 	if err != nil {

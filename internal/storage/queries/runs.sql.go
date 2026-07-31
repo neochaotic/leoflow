@@ -276,7 +276,7 @@ func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateSched
 const createTaskInstance = `-- name: CreateTaskInstance :one
 INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
 VALUES ($1, $2, $3, $4, $5, $6, 1)
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at
 `
 
 type CreateTaskInstanceParams struct {
@@ -327,6 +327,8 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 		&i.LastHeartbeatAt,
 		&i.RescheduleAt,
 		&i.FirstRescheduleAt,
+		&i.DispatchAttempts,
+		&i.NextDispatchAt,
 	)
 	return i, err
 }
@@ -347,6 +349,29 @@ func (q *Queries) DeleteDagRun(ctx context.Context, arg DeleteDagRunParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const failDispatchExhausted = `-- name: FailDispatchExhausted :exec
+UPDATE task_instances
+SET state = 'failed', ended_at = now(), error_message = $3,
+    next_dispatch_at = NULL
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'scheduled'
+`
+
+type FailDispatchExhaustedParams struct {
+	DagRunID     pgtype.UUID `json:"dag_run_id"`
+	TaskID       string      `json:"task_id"`
+	ErrorMessage *string     `json:"error_message"`
+}
+
+// The dispatch-attempt budget is spent (ADR 0031 Amendment A): fail the task with
+// a dispatch_failed reason so the run can finalize instead of looping forever.
+// error_message carries the underlying cause. Guarded to 'scheduled' for the same
+// reason as RecordDispatchFailure. This is distinct from dispatch_lost (a TI that
+// reached 'queued' then vanished) and from a task's own 'failed' (the code ran).
+func (q *Queries) FailDispatchExhausted(ctx context.Context, arg FailDispatchExhaustedParams) error {
+	_, err := q.db.Exec(ctx, failDispatchExhausted, arg.DagRunID, arg.TaskID, arg.ErrorMessage)
+	return err
 }
 
 const failTaskInstanceIfActive = `-- name: FailTaskInstanceIfActive :exec
@@ -944,7 +969,7 @@ func (q *Queries) ListTaskInstanceAttempts(ctx context.Context, arg ListTaskInst
 }
 
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
-SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at FROM task_instances
+SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at FROM task_instances
 WHERE dag_run_id = $1
 ORDER BY task_id
 `
@@ -984,6 +1009,8 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 			&i.LastHeartbeatAt,
 			&i.RescheduleAt,
 			&i.FirstRescheduleAt,
+			&i.DispatchAttempts,
+			&i.NextDispatchAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1120,6 +1147,30 @@ WHERE id = $1 AND state = 'queued'
 // never overwriting a more meaningful state.
 func (q *Queries) MarkTaskDispatchLost(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, markTaskDispatchLost, id)
+	return err
+}
+
+const recordDispatchFailure = `-- name: RecordDispatchFailure :exec
+UPDATE task_instances
+SET dispatch_attempts = dispatch_attempts + 1,
+    next_dispatch_at = $3
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'scheduled'
+`
+
+type RecordDispatchFailureParams struct {
+	DagRunID       pgtype.UUID        `json:"dag_run_id"`
+	TaskID         string             `json:"task_id"`
+	NextDispatchAt pgtype.Timestamptz `json:"next_dispatch_at"`
+}
+
+// A synchronous dispatch attempt failed (ADR 0031 Amendment A). Increment the
+// consecutive-failure counter and back off the next attempt to $3, so the planner
+// (which gates scheduled->queued on next_dispatch_at) does not re-attempt every
+// tick. Guarded to 'scheduled' so a report that raced the dispatch cannot clobber
+// a row that has since progressed. try_number is untouched: this is infra, not a
+// task failure.
+func (q *Queries) RecordDispatchFailure(ctx context.Context, arg RecordDispatchFailureParams) error {
+	_, err := q.db.Exec(ctx, recordDispatchFailure, arg.DagRunID, arg.TaskID, arg.NextDispatchAt)
 	return err
 }
 
@@ -1293,6 +1344,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry')
@@ -1358,6 +1411,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry')
@@ -1400,6 +1455,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
     reschedule_at = NULL,
     first_reschedule_at = NULL,
     try_number = ti.try_number + 1
@@ -1609,7 +1666,7 @@ const updateTaskInstanceState = `-- name: UpdateTaskInstanceState :one
 UPDATE task_instances
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at
 `
 
 type UpdateTaskInstanceStateParams struct {
@@ -1653,6 +1710,8 @@ func (q *Queries) UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskIns
 		&i.LastHeartbeatAt,
 		&i.RescheduleAt,
 		&i.FirstRescheduleAt,
+		&i.DispatchAttempts,
+		&i.NextDispatchAt,
 	)
 	return i, err
 }

@@ -69,6 +69,16 @@ type RunState struct {
 	// reschedule_at — without consuming retry budget (#380). Absent/zero entries
 	// re-dispatch immediately (preserves the test seam, like EndedAt).
 	RescheduleAt map[string]*time.Time
+	// NextDispatchAt holds the earliest time a `scheduled` task may be dispatched
+	// again after a synchronous dispatch failure (ADR 0031 Amendment A). The
+	// planner does not promote scheduled→queued while Now < next_dispatch_at.
+	// Absent/zero entries dispatch immediately (the common case: never failed).
+	NextDispatchAt map[string]*time.Time
+	// DispatchAttempts counts consecutive synchronous dispatch failures per task.
+	// It is a separate counter from try_number — a dispatch failure is infra, not
+	// a task failure — and drives the dispatch_failed give-up at
+	// dispatchMaxAttempts. Absent entries mean zero.
+	DispatchAttempts map[string]int
 	// Now is the wall-clock value the planner compares against EndedAt. Zero
 	// means "skip the cooldown gate" so legacy callers + tests that don't set
 	// retry_delay get the previous (immediate-retry) behavior.
@@ -109,6 +119,13 @@ type Store interface {
 	// RedispatchReschedule returns a task parked in up_for_reschedule to 'none' for
 	// re-dispatch, PRESERVING try_number (reschedule is not a retry; #380).
 	RedispatchReschedule(ctx context.Context, runID, taskID string) error
+	// RecordDispatchFailure backs off a scheduled task after a synchronous dispatch
+	// failure: it increments dispatch_attempts and sets next_dispatch_at so the
+	// planner does not re-attempt until the backoff elapses (ADR 0031 Amendment A).
+	RecordDispatchFailure(ctx context.Context, runID, taskID string, nextAt time.Time) error
+	// FailDispatchExhausted fails a scheduled task as dispatch_failed once its
+	// dispatch-attempt budget is spent, so the run finalizes instead of looping.
+	FailDispatchExhausted(ctx context.Context, runID, taskID, reason string) error
 	SetRunState(ctx context.Context, runID string, state domain.DagRunState) error
 	// ClaimAlertAttempt atomically claims ONE on-failure send attempt, reporting
 	// true iff this call won it. It refuses when the episode was already
@@ -820,8 +837,7 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 	}
 	if s.dispatcher != nil {
 		if err := s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task); err != nil {
-			s.logger.Error("dispatching task", "run", run.RunID, "task", t.TaskID, "error", err)
-			return nil
+			return s.handleDispatchFailure(ctx, run, t.TaskID, err)
 		}
 		return s.recordTransition(ctx, run, t.TaskID, domain.TaskStateQueued)
 	}
@@ -832,6 +848,36 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 // disabled and it is not an inline http_api task). The condition is
 // deterministic for the process lifetime, so failing fast — with the reason on
 // the task note for the UI — beats leaving the run "running" forever (#46, #50).
+// handleDispatchFailure records a synchronous dispatch failure: it backs the task
+// off for a growing interval, or fails it as dispatch_failed once the attempt
+// budget is spent (ADR 0031 Amendment A). It returns nil in both cases — the
+// failure is recorded in the DB, not propagated, so one task's dispatch trouble
+// does not abort the tick. A dispatch failure is infrastructure, not a task
+// failure, so it never consumes the task's try_number.
+func (s *Scheduler) handleDispatchFailure(ctx context.Context, run RunState, taskID string, cause error) error {
+	attempts := run.DispatchAttempts[taskID] + 1
+	if attempts >= dispatchMaxAttempts {
+		reason := fmt.Sprintf("dispatch_failed after %d attempts: %v", attempts, cause)
+		s.logger.Error("dispatch attempts exhausted; failing task",
+			"run", run.RunID, "task", taskID, "attempts", attempts, "error", cause)
+		if err := s.store.FailDispatchExhausted(ctx, run.RunID, taskID, reason); err != nil {
+			s.logger.Error("failing dispatch-exhausted task", "run", run.RunID, "task", taskID, "error", err)
+		}
+		return nil
+	}
+	now := run.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	nextAt := now.Add(dispatchBackoff(attempts))
+	s.logger.Warn("dispatch failed; backing off before re-attempt",
+		"run", run.RunID, "task", taskID, "attempt", attempts, "next_dispatch_at", nextAt, "error", cause)
+	if err := s.store.RecordDispatchFailure(ctx, run.RunID, taskID, nextAt); err != nil {
+		s.logger.Error("recording dispatch failure", "run", run.RunID, "task", taskID, "error", err)
+	}
+	return nil
+}
+
 func (s *Scheduler) failUndispatchable(ctx context.Context, run RunState, taskID string, taskType domain.TaskType) error {
 	s.logger.Warn("task has no available executor; failing it (it can never run)",
 		"run", run.RunID, "dag", run.DagID, "task", taskID, "task_type", taskType,

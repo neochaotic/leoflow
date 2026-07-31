@@ -52,19 +52,31 @@ We use CVSS 3.1 to score vulnerabilities:
 
 | Severity | CVSS Score | Response |
 |---|---|---|
-| Critical | 9.0-10.0 | Emergency patch, within 7 days |
-| High | 7.0-8.9 | Patch in next minor release, within 14 days |
-| Medium | 4.0-6.9 | Patch in next planned release |
-| Low | 0.1-3.9 | Patch when convenient, documented in release notes |
+| Critical | 9.0-10.0 | Fix merged to `main` within 7 days; release cut as soon as it is verified |
+| High | 7.0-8.9 | Fix merged to `main` within 14 days; shipped in the next release |
+| Medium | 4.0-6.9 | Fixed in the next planned release |
+| Low | 0.1-3.9 | Fixed when convenient, noted in the release notes |
+
+The timelines are on **merging the fix**, not on cutting a release, because those
+are different decisions here. A release is cut when it has been verified, and
+rushing one to satisfy a clock has its own risk. When a fix is on `main` but not
+yet released, the advisory says so and you can build from source in the
+meantime — the commit is public either way, which is itself a reason not to sit
+on the disclosure.
 
 ### Supported Versions
 
-We provide security fixes for:
+**Only the latest release.** Leoflow is pre-1.0 and ships patches on a single
+line (v0.1.0 → v0.1.1 → v0.1.2); there is no previous minor to support, and
+under SemVer's 0.x contract a breaking change may land between any two releases
+(ADR 0037). Backporting to an older tag is not offered.
 
-- The current stable release (latest minor version of the latest major)
-- The previous minor version, for 90 days after the current release
+Upgrading to the latest release is the remediation. If that is not possible for
+you, say so in the report — a targeted patch may be possible, but it is a
+case-by-case answer rather than a policy.
 
-Older versions receive critical-severity fixes only, on a best-effort basis. Upgrading to a supported version is the recommended remediation.
+This section previously promised support for "the previous minor version, for 90
+days", which described a versioning shape the project does not have.
 
 ## Recognition
 

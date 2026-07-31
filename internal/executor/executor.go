@@ -8,6 +8,33 @@ import (
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
+// PodSecurity holds the task-pod hardening knobs whose defaults are behavioral
+// rather than free. Both zero values are the safe choice, so a Request that
+// never touches this struct gets a pod that Pod Security Admission's
+// `restricted` profile admits.
+type PodSecurity struct {
+	// RunAsNonRoot refuses to start a task container whose image resolves to
+	// UID 0. It completes the `restricted` set, and it is opt-in rather than
+	// default for a reason that is about this repo, not about the profile:
+	// none of the images Leoflow ships can satisfy it yet. Every
+	// examples/*/Dockerfile runs as root, and runtime/Dockerfile declares
+	// `USER leoflow` — a name, which the kubelet cannot resolve to a UID, so it
+	// rejects the container even though the user is not root. Turning this on
+	// by default would mean no example DAG runs on Pro.
+	//
+	// Flipping the default is tracked as its own change: give the images
+	// numeric non-root UIDs, add an fsGroup so the staging PVC stays writable,
+	// then make this the default. A secure default the platform's own images
+	// cannot meet is not a secure default.
+	RunAsNonRoot bool
+
+	// ReadOnlyRootFilesystem mounts the container root read-only. Off by
+	// default on purpose: `restricted` does not require it, and it breaks
+	// ordinary Python tasks that write to /tmp, the pip cache or a matplotlib
+	// config dir. Opt in for a task that is known not to write.
+	ReadOnlyRootFilesystem bool
+}
+
 // Request bundles everything an executor needs to run a single task instance.
 type Request struct {
 	TaskInstanceID string
@@ -25,6 +52,12 @@ type Request struct {
 	Resources       domain.Resources
 	Execution       domain.Execution
 	TimeoutSeconds  int
+
+	// PodSecurity carries the two hardening choices that can change how a task
+	// runs. Everything else BuildPod applies is unconditional, because dropping
+	// capabilities, blocking privilege escalation and setting a seccomp profile
+	// cost a normal task nothing. Zero value is the secure default.
+	PodSecurity PodSecurity
 
 	// Source is the dag.py text captured at compile time. The SubprocessExecutor
 	// materializes it to a per-TI temp dir so `python -m leoflow_runtime

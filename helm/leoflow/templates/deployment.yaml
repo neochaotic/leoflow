@@ -175,6 +175,13 @@ spec:
             - name: LEOFLOW_EXECUTOR_TASK_SECRET_MOUNT_PATH
               value: {{ .Values.taskSecret.mountPath | quote }}
             {{- end }}
+            # Task-pod hardening. Always stamped, both directions: leaving the
+            # secure value implicit would mean a chart upgrade could not turn an
+            # opt-out back off without an operator noticing.
+            - name: LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT
+              value: {{ .Values.taskPodSecurity.runAsNonRoot | quote }}
+            - name: LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM
+              value: {{ .Values.taskPodSecurity.readOnlyRootFilesystem | quote }}
             - name: LEOFLOW_DATABASE_URL
               valueFrom:
                 secretKeyRef:

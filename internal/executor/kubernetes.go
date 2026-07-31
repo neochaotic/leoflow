@@ -77,12 +77,18 @@ func BuildPod(req Request) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			NodeSelector:  req.Execution.NodeSelector,
+			// The task pod authenticates to the control plane with its own
+			// per-task token over gRPC and never calls the Kubernetes API, so a
+			// mounted ServiceAccount token is a credential handed to untrusted
+			// code for no reason.
+			AutomountServiceAccountToken: ptr(false),
 			Containers: []corev1.Container{{
 				Name:            "task",
 				Image:           req.Image,
 				ImagePullPolicy: pullPolicy,
 				Env:             podEnv(req),
 				Resources:       buildResources(req.Resources),
+				SecurityContext: buildSecurityContext(req.PodSecurity),
 			}},
 		},
 	}
@@ -194,6 +200,41 @@ func podEnv(req Request) []corev1.EnvVar {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}
 	return env
+}
+
+// ptr returns a pointer to v. The Kubernetes API models optional booleans as
+// *bool, where nil means "cluster default" and is not the same as false.
+func ptr[T any](v T) *T { return &v }
+
+// buildSecurityContext hardens the task container toward Pod Security
+// Admission's `restricted` profile, which requires four things: no privilege
+// escalation, every capability dropped, a seccomp profile, and a non-root user.
+//
+// The first three are unconditional because they cost an ordinary task nothing:
+// a task process does not escalate privileges, needs no Linux capability, and
+// runs fine under the runtime's default seccomp filter. None of them depend on
+// the UID, so they apply whatever the image runs as.
+//
+// The fourth, runAsNonRoot, is opt-in — see PodSecurity for why the images this
+// repo ships cannot satisfy it yet. Until that flips, a `restricted` namespace
+// still rejects task pods; what this buys today is every protection that does
+// not require changing the images.
+//
+// readOnlyRootFilesystem is opt-in for a different reason: `restricted` never
+// asks for it, and turning it on by default breaks any task that writes to /tmp.
+func buildSecurityContext(ps PodSecurity) *corev1.SecurityContext {
+	sc := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr(false),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+	if ps.RunAsNonRoot {
+		sc.RunAsNonRoot = ptr(true)
+	}
+	if ps.ReadOnlyRootFilesystem {
+		sc.ReadOnlyRootFilesystem = ptr(true)
+	}
+	return sc
 }
 
 func buildResources(r domain.Resources) corev1.ResourceRequirements {

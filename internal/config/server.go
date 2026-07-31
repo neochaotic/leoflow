@@ -84,6 +84,22 @@ type PlatformDefaultsSection struct {
 	// override nor the DAG set any (Kubernetes quantities, e.g. "250m"/"256Mi").
 	ResourcesCPU    string `mapstructure:"resources_cpu"`
 	ResourcesMemory string `mapstructure:"resources_memory"`
+	// RunTasksAsNonRoot refuses to start a task container whose image resolves
+	// to UID 0, completing Pod Security Admission's `restricted` set. Off by
+	// default because the images this repo ships cannot satisfy it yet: every
+	// examples/*/Dockerfile runs as root and runtime/Dockerfile declares a
+	// non-numeric USER the kubelet cannot verify. Turn it on for a cluster whose
+	// task images carry numeric non-root UIDs.
+	//
+	// Deliberately a cluster setting rather than a DAG field: whether untrusted
+	// task code may run as root belongs to whoever operates the cluster, not to
+	// whoever authors the DAG.
+	RunTasksAsNonRoot bool `mapstructure:"run_tasks_as_non_root"`
+	// ReadOnlyTaskRootFilesystem mounts every task container's root filesystem
+	// read-only. Off by default because `restricted` does not require it and it
+	// breaks ordinary Python tasks (pip cache, /tmp, matplotlib config); turn it
+	// on for a fleet of tasks known not to write outside their volumes.
+	ReadOnlyTaskRootFilesystem bool `mapstructure:"read_only_task_root_filesystem"`
 }
 
 // UISection configures the embedded Airflow UI.
@@ -242,28 +258,30 @@ var serverDefaults = map[string]any{
 	// Default: synchronous dispatch (BufferSize=0). Safe and zero-overhead for
 	// Lite. Pro deployments should set buffer_size>=1 + workers>=1 in their
 	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).
-	"scheduler.dispatch.buffer_size":            0,
-	"scheduler.dispatch.workers":                0,
-	"executor.http.inline_max_duration_seconds": 300,
-	"executor.http.inline_concurrency_limit":    256,
-	"executor.http.user_agent":                  "leoflow/0.1",
-	"executor.type":                             "kubernetes",
-	"executor.agent_path":                       "leoflow-agent",
-	"executor.subprocess_workdir":               "",
-	"executor.agent_control_plane_addr":         "",
-	"executor.agent_tls_ca_configmap":           "",
-	"executor.task_secret_name":                 "",
-	"executor.task_secret_mount_path":           "/etc/leoflow/secrets",
-	"executor.defaults.staging_access_mode":     "ReadWriteMany",
-	"logs.dir":                                  "/var/log/leoflow",
-	"observability.otel.enabled":                true,
-	"observability.otel.endpoint":               "localhost:4317",
-	"observability.log_level":                   "info",
-	"observability.log_format":                  "json",
-	"ui.instance_name":                          "Leoflow",
-	"ui.edition":                                "",
-	"ui.workspace":                              "",
-	"ui.monaco_dir":                             "",
+	"scheduler.dispatch.buffer_size":                   0,
+	"scheduler.dispatch.workers":                       0,
+	"executor.http.inline_max_duration_seconds":        300,
+	"executor.http.inline_concurrency_limit":           256,
+	"executor.http.user_agent":                         "leoflow/0.1",
+	"executor.type":                                    "kubernetes",
+	"executor.agent_path":                              "leoflow-agent",
+	"executor.subprocess_workdir":                      "",
+	"executor.agent_control_plane_addr":                "",
+	"executor.agent_tls_ca_configmap":                  "",
+	"executor.task_secret_name":                        "",
+	"executor.task_secret_mount_path":                  "/etc/leoflow/secrets",
+	"executor.defaults.staging_access_mode":            "ReadWriteMany",
+	"executor.defaults.run_tasks_as_non_root":          false,
+	"executor.defaults.read_only_task_root_filesystem": false,
+	"logs.dir":                    "/var/log/leoflow",
+	"observability.otel.enabled":  true,
+	"observability.otel.endpoint": "localhost:4317",
+	"observability.log_level":     "info",
+	"observability.log_format":    "json",
+	"ui.instance_name":            "Leoflow",
+	"ui.edition":                  "",
+	"ui.workspace":                "",
+	"ui.monaco_dir":               "",
 	// Must appear here even though the zero value is meaningful (the handler
 	// falls back to api.DefaultUIAutoRefreshIntervalSeconds when ≤ 0): viper's
 	// AutomaticEnv only binds env vars for keys it has seen via SetDefault or

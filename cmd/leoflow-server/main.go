@@ -902,6 +902,10 @@ func platformDefaults(c config.PlatformDefaultsSection) dispatch.PlatformDefault
 		StagingSize:         c.StagingSize,
 		StagingStorageClass: c.StagingStorageClass,
 		StagingAccessMode:   c.StagingAccessMode,
+		PodSecurity: executor.PodSecurity{
+			RunAsNonRoot:           c.RunTasksAsNonRoot,
+			ReadOnlyRootFilesystem: c.ReadOnlyTaskRootFilesystem,
+		},
 	}
 	if c.ResourcesCPU != "" || c.ResourcesMemory != "" {
 		d.Resources = &domain.Resources{

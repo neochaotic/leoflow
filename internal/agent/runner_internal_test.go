@@ -199,6 +199,6 @@ func TestMergeEnvStripsServerSecretsInheritedInLite(t *testing.T) {
 func TestMergeEnvStripsUnknownLeoflowVariablesByDefault(t *testing.T) {
 	got := mergeEnv([]string{"LEOFLOW_SOME_FUTURE_CREDENTIAL=shhh"}, nil, nil)
 	if len(got) != 0 {
-		t.Fatalf("an unrecognised LEOFLOW_ variable was passed through: %v", got)
+		t.Fatalf("an unrecognized LEOFLOW_ variable was passed through: %v", got)
 	}
 }

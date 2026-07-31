@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func ptr[T any](v T) *T { return &v }
 
@@ -194,5 +197,58 @@ func TestLeoflowConfigValidateRejectsInvalidConfigs(t *testing.T) {
 				t.Errorf("Validate() = nil, want error for %q", name)
 			}
 		})
+	}
+}
+
+// A resource quantity Kubernetes cannot parse must be rejected where the author
+// is still watching. It used to be dropped in silence at pod build
+// (internal/executor/kubernetes.go quantities()), so a DAG asking for a 2 GB
+// memory limit got a pod with NO limit — the opposite of what was requested, on
+// a shared node, with nothing said. "2GB" is exactly the plausible typo: it is
+// how memory is written everywhere except Kubernetes, which wants 2Gi or 2G.
+func TestDAGSpecValidateRejectsUnparseableResourceQuantities(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  Resources
+		want string
+	}{
+		{"memory limit", Resources{Limits: &ResourceQuantity{Memory: "2GB"}}, "2GB"},
+		{"cpu limit", Resources{Limits: &ResourceQuantity{CPU: "half"}}, "half"},
+		{"memory request", Resources{Requests: &ResourceQuantity{Memory: "512 MB"}}, "512 MB"},
+		{"cpu request", Resources{Requests: &ResourceQuantity{CPU: "1 core"}}, "1 core"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := validDAGSpec()
+			spec.Tasks[0].Resources = &tc.res
+			err := spec.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil, want an error naming %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not quote the offending value %q", err, tc.want)
+			}
+			if !strings.Contains(err.Error(), spec.Tasks[0].TaskID) {
+				t.Errorf("error %q does not name the task", err)
+			}
+		})
+	}
+}
+
+// The forms Kubernetes accepts must keep working — this validation must not
+// become a second, stricter grammar that rejects legitimate specs.
+func TestDAGSpecValidateAcceptsKubernetesQuantities(t *testing.T) {
+	for _, q := range []Resources{
+		{Limits: &ResourceQuantity{CPU: "500m", Memory: "512Mi"}},
+		{Limits: &ResourceQuantity{CPU: "2", Memory: "2Gi"}},
+		{Requests: &ResourceQuantity{CPU: "0.5", Memory: "1G"}},
+		{Limits: &ResourceQuantity{Memory: "1500k"}},
+		{}, // nothing declared is valid: the platform default applies
+	} {
+		spec := validDAGSpec()
+		r := q
+		spec.Tasks[0].Resources = &r
+		if err := spec.Validate(); err != nil {
+			t.Errorf("Validate() with %+v = %v, want nil", q, err)
+		}
 	}
 }

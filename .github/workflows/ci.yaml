@@ -651,6 +651,24 @@ jobs:
         run: bash scripts/sync-example-dockerfiles.sh --check
 
   # ─────────────────────────────────────────────────────────────────────
+  # Dependabot directory check. Dependabot does not report a directory
+  # with no manifest — it finds nothing and says nothing — so an entry
+  # for a renamed or nonexistent path looks configured and updates
+  # nothing. Three docker entries pointed at /runtime/python-3.1{0,1,2},
+  # none of which are in the tree, and no base image was ever updated.
+  # A missing update is invisible by definition, so it needs a gate.
+  # ─────────────────────────────────────────────────────────────────────
+  dependabot-dirs:
+    name: Dependabot directories resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+      - name: Check every dependabot directory exists
+        run: bash scripts/check-dependabot-dirs.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # Python parser tests — matrix across every Python the host detector
   # claims to support (`internal/setup/detect.go` pythonCandidates). If a
   # new minor is added to that list, add it here too — otherwise the

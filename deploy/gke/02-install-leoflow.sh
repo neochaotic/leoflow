@@ -71,7 +71,10 @@ else
   log "Generating credentials -> $VALUES_LOCAL (gitignored, never committed)"
   PG_PASSWORD="$(openssl rand -hex 16)"
   JWT_SECRET="$(openssl rand -base64 64 | tr -d '\n')"
-  SECRET_KEY="$(openssl rand -hex 16)"          # 32 bytes (64 hex) for AES-256
+  # -hex 32, not -hex 16: `-hex 16` emits 32 characters, which the server accepts
+  # as 32 RAW bytes — a valid AES-256 key holding only 128 bits of entropy, with
+  # nothing to say so. -hex 32 emits 64 characters that decode to 32 real bytes.
+  SECRET_KEY="$(openssl rand -hex 32)"          # 64 hex chars -> 32 bytes for AES-256
   BOOTSTRAP_PASSWORD="$(openssl rand -hex 12)"  # initial admin password
 
   cat > "$VALUES_LOCAL" <<EOF

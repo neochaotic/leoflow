@@ -24,7 +24,7 @@ out-of-band Secret to validate its contents (operator's responsibility).
 {{- if and .Values.secretKey (not .Values.secretKeyExistingSecret) -}}
 {{- $len := len .Values.secretKey -}}
 {{- if and (ne $len 32) (ne $len 64) -}}
-{{- fail (printf "secretKey must be exactly 32 raw bytes or 64-char hex (got %d chars). Generate with: openssl rand -hex 16. See ADR 0019." $len) -}}
+{{- fail (printf "secretKey must be exactly 32 raw bytes or 64-char hex (got %d chars). Generate with: openssl rand -hex 32 (64 hex chars). See ADR 0019." $len) -}}
 {{- end -}}
 {{- end -}}
 {{- /*

@@ -77,3 +77,28 @@ func TestParseKey(t *testing.T) {
 		t.Error("expected error for short key")
 	}
 }
+
+// A 32-character key made entirely of hex digits is almost certainly the output
+// of `openssl rand -hex 16` — the command the docs used to recommend. ParseKey
+// accepts it as 32 RAW bytes, so the cipher is AES-256 over 128 bits of
+// entropy, and nothing says so. The two shapes are indistinguishable by length,
+// so this cannot be a rejection without also rejecting a legitimate 32-character
+// passphrase; it is a warning the caller can surface.
+func TestLooksLikeHalfEntropyHexKey(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{"openssl rand -hex 16 output", "0123456789abcdef0123456789abcdef", true},
+		{"uppercase hex is the same mistake", "0123456789ABCDEF0123456789ABCDEF", true},
+		{"a real 32-char passphrase is not", "leoflow-unittest-secretkey-32by!", false},
+		{"64-char hex is the correct form", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false},
+		{"short strings are someone else's problem", "abc", false},
+		{"empty", "", false},
+	} {
+		if got := LooksLikeHalfEntropyHexKey(tc.key); got != tc.want {
+			t.Errorf("%s: LooksLikeHalfEntropyHexKey(%q) = %v, want %v", tc.name, tc.key, got, tc.want)
+		}
+	}
+}

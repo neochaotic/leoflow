@@ -96,3 +96,33 @@ func (c *aesGCM) Decrypt(ciphertext string) (string, error) {
 	}
 	return string(plain), nil
 }
+
+// LooksLikeHalfEntropyHexKey reports whether a key is 32 characters of pure
+// hexadecimal — the signature of `openssl rand -hex 16`, which the project's own
+// docs recommended until they were corrected.
+//
+// ParseKey accepts a 32-character string as 32 RAW bytes, so such a key is used
+// as an AES-256 key carrying 128 bits of entropy. The cipher is still AES-256;
+// the secret behind it is half the size intended, and nothing about the
+// configuration says so.
+//
+// This is a warning and not a rejection because the two shapes cannot be told
+// apart with certainty: a legitimate 32-character passphrase made only of the
+// characters 0-9a-f is unlikely but perfectly valid, and refusing it would break
+// an operator who did nothing wrong. Reporting it lets the caller say something
+// while still starting.
+func LooksLikeHalfEntropyHexKey(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}

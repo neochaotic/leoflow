@@ -31,7 +31,8 @@ redis:
 # 256-GCM init in the server succeeds out-of-the-box; without that, the
 # server logs a warning and the Connections API returns 503 — the recipe's
 # Connection-management evaluation fails silently. Generate a real key
-# with `openssl rand -hex 16` (64 hex chars = 32 bytes).
+# with `openssl rand -hex 32` (64 hex chars = 32 bytes). NOT -hex 16: that
+# emits 32 chars, taken as 32 RAW bytes — 128 bits of entropy, silently.
 auth:
   jwtSecret: leoflow-poc-jwt-please-replace-32B
 secretKey: leoflow-poc-replace-with-32B-key

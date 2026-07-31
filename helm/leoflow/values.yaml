@@ -129,7 +129,10 @@ auth:
 # Connection management is disabled and the API rejects writes with 503
 # (Variables still work). Set it, or reference an existing secret.
 #
-# Generate one with:  openssl rand -hex 16   (64 hex chars = 32 bytes)
+# Generate one with:  openssl rand -hex 32   (64 hex chars = 32 bytes)
+# NOT `-hex 16`: that yields 32 characters, which the server accepts as 32
+# RAW bytes — a valid AES-256 key carrying only 128 bits of entropy, with
+# nothing to tell you. The server warns at boot if it sees that shape.
 # -- AES-256 key encrypting Connection passwords + Extra at rest (ADR 0019). MUST be exactly 32 raw bytes OR 64-char hex OR base64-of-32-bytes. Without it, Connection management is disabled (Variables still work).
 secretKey: ""
 # -- Name of a Secret with key `secretKey` (takes precedence over `secretKey`).

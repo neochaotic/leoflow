@@ -20,7 +20,7 @@ redis:
 
 auth:
   jwtSecret: "CHANGEME-jwt-signing-secret"
-# 32 raw bytes or 64-char hex. Generate: openssl rand -hex 16
+# 32 raw bytes or 64-char hex. Generate: openssl rand -hex 32
 secretKey: "CHANGEME-leoflow-secret-key-32by"
 
 agentTLS:

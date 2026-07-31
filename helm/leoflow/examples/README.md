@@ -183,7 +183,7 @@ helm install leoflow ./helm/leoflow -n leoflow \
   --set database.url='postgres://...@<managed-pg>:5432/leoflow?sslmode=require' \
   --set redis.url='rediss://...@<managed-redis>:6380/0' \
   --set auth.jwtSecret="$(openssl rand -base64 64)" \
-  --set secretKey="$(openssl rand -hex 16)"  # 32 raw bytes via hex
+  --set secretKey="$(openssl rand -hex 32)"  # 64 hex chars -> 32 bytes
 ```
 
 See the main chart README (`helm/leoflow/README.md`) for the full values

@@ -280,6 +280,18 @@ func configureSecretCipher(repo *storage.Repository, secretKey string, logger *s
 		return fmt.Errorf("building secret cipher: %w", cerr)
 	}
 	repo.SetCipher(cipher)
+	// A 32-character all-hex key is what `openssl rand -hex 16` produces, which
+	// this project's own docs recommended until they were corrected. ParseKey
+	// takes those 32 characters as 32 raw bytes, so the cipher is AES-256 over
+	// 128 bits of entropy and nothing else would ever mention it. Warn rather
+	// than refuse: the shape is indistinguishable from a legitimate 32-character
+	// passphrase, and breaking an operator who did nothing wrong is worse.
+	if secrets.LooksLikeHalfEntropyHexKey(secretKey) {
+		logger.Warn("LEOFLOW_SECRET_KEY looks like `openssl rand -hex 16` output: "+
+			"32 hex characters are consumed as 32 raw bytes, giving 128 bits of entropy where AES-256 expects 256. "+
+			"Generate a replacement with `openssl rand -hex 32` (64 characters) and re-encrypt existing connections",
+			"key_length", len(secretKey))
+	}
 	logger.Info("connection secret encryption enabled (AES-256-GCM)")
 	return nil
 }

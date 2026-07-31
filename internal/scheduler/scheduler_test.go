@@ -36,6 +36,8 @@ type fakeStore struct {
 	agentLostMarked    []string
 	staleQueuedCands   []StaleQueuedCandidate
 	dispatchLostMarked []string
+	dispatchFailures   []transition
+	dispatchExhausted  []string
 	// alertAttempts mirrors the real per-episode attempt claim: each call
 	// consumes one, and the claim is refused once the budget is spent or the
 	// episode is already delivered. Backoff is not simulated — the fake is for
@@ -82,6 +84,16 @@ func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) error
 	f.retried = append(f.retried, transition{runID, taskID, domain.TaskStateNone})
 	return nil
 }
+func (f *fakeStore) RecordDispatchFailure(_ context.Context, runID, taskID string, _ time.Time) error {
+	f.dispatchFailures = append(f.dispatchFailures, transition{runID, taskID, ""})
+	return nil
+}
+
+func (f *fakeStore) FailDispatchExhausted(_ context.Context, runID, taskID, _ string) error {
+	f.dispatchExhausted = append(f.dispatchExhausted, taskID)
+	return nil
+}
+
 func (f *fakeStore) RedispatchReschedule(_ context.Context, runID, taskID string) error {
 	f.redispatched = append(f.redispatched, transition{runID, taskID, domain.TaskStateNone})
 	return nil

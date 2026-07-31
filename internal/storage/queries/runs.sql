@@ -266,6 +266,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
     reschedule_at = NULL,
     first_reschedule_at = NULL,
     try_number = ti.try_number + 1
@@ -437,6 +439,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry');
@@ -466,6 +470,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry');
@@ -588,3 +594,26 @@ SET state = 'failed',
     ended_at = now(),
     note = 'orphaned: no scheduler activity within the orphan window — see #120'
 WHERE id = $1 AND state = 'running';
+
+-- name: RecordDispatchFailure :exec
+-- A synchronous dispatch attempt failed (ADR 0031 Amendment A). Increment the
+-- consecutive-failure counter and back off the next attempt to $3, so the planner
+-- (which gates scheduled->queued on next_dispatch_at) does not re-attempt every
+-- tick. Guarded to 'scheduled' so a report that raced the dispatch cannot clobber
+-- a row that has since progressed. try_number is untouched: this is infra, not a
+-- task failure.
+UPDATE task_instances
+SET dispatch_attempts = dispatch_attempts + 1,
+    next_dispatch_at = $3
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'scheduled';
+
+-- name: FailDispatchExhausted :exec
+-- The dispatch-attempt budget is spent (ADR 0031 Amendment A): fail the task with
+-- a dispatch_failed reason so the run can finalize instead of looping forever.
+-- error_message carries the underlying cause. Guarded to 'scheduled' for the same
+-- reason as RecordDispatchFailure. This is distinct from dispatch_lost (a TI that
+-- reached 'queued' then vanished) and from a task's own 'failed' (the code ran).
+UPDATE task_instances
+SET state = 'failed', ended_at = now(), error_message = $3,
+    next_dispatch_at = NULL
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'scheduled';

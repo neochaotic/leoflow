@@ -234,6 +234,54 @@ to write. The scheduler is designed to be correct across this window:
   is too high. Two narrow reapers with strong positive signals win on
   user trust.
 
+## Amendment A (2026-07-31): dispatch-failure backoff
+
+The two-phase dispatch above handles a dispatch that *succeeds* (TI → `queued`,
+pod created) and a dispatch that is *lost* after success (the dispatch-lost
+reaper fails a `queued` TI whose pod never appeared). It did not handle a
+dispatch that *fails synchronously*: `launchQueued` logged the error and returned
+nil, leaving the TI in `scheduled`. The planner re-plans that TI every tick, so a
+permanently-failing dispatch (RBAC denial, quota, an admission webhook reject, a
+nonexistent image rejected at create) becomes a tight retry loop that never backs
+off, never surfaces, and is covered by no reaper (the dispatch-lost reaper only
+sees `queued`).
+
+**Decision.** A synchronous dispatch failure records a bounded, backed-off retry
+on the TI, and after the bound is exhausted the TI fails as `dispatch_failed`.
+
+- **State lives in Postgres, on `task_instances`** — two columns, `dispatch_attempts`
+  and `next_dispatch_at`, mirroring the existing `reschedule_at` backoff (migration
+  017). This is the DB-as-truth rule of this ADR, not an exception to it: the
+  scheduler holds nothing in memory, so the backoff must survive a leader failover
+  or a restart to actually bound the loop. **Redis was considered and rejected**:
+  it is per-TI durable metadata, not XCom throughput or multi-node locking (ADR
+  0006/0026); Redis eviction would drop the backoff and resume the tight loop; and
+  Lite has no Redis (ADR 0026) yet suffers the same loop, so a Postgres column
+  fixes both editions from one path — consistent with "same architecture across
+  editions".
+
+- **The planner gates and decides**, no new reaper. A `scheduled` TI with
+  `next_dispatch_at > now` is not planned for dispatch this tick (identical to the
+  `reschedule_at` gate). A TI whose `dispatch_attempts` has reached the bound is
+  planned `scheduled → failed`. Reusing the planner keeps the decision pure and
+  testable and avoids a fourth background sweep.
+
+- **A dispatch failure does NOT consume the task's `try_number`.** It is an
+  infrastructure failure, not a task failure; consuming a user retry on a
+  kube-apiserver blip would be wrong, and a `retries: 0` task must not die on one.
+  `dispatch_attempts` is a separate counter, and the terminal state is
+  `dispatch_failed` — distinct from `dispatch_lost` (dispatched-then-vanished) and
+  from a task's own `failed` (the code ran and failed). This mirrors Airflow's
+  separation of queue/executor failures from task retries.
+
+- **Backoff** is exponential from a small base, capped, over a small bounded number
+  of attempts — long enough to ride out a transient control-plane blip, short
+  enough that a permanent misconfiguration surfaces in minutes, not never.
+
+This is a third failure-handling concern layered onto two-phase dispatch, not a
+new phase: it is the "the dispatch call itself failed" case the original two
+layers left open.
+
 ## References
 
 - ADR 0009 — Leader election via Postgres advisory locks.

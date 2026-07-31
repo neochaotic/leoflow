@@ -56,6 +56,12 @@ type Querier interface {
 	DeleteExpiredXComIndex(ctx context.Context) error
 	DeleteImportError(ctx context.Context, arg DeleteImportErrorParams) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
+	// The dispatch-attempt budget is spent (ADR 0031 Amendment A): fail the task with
+	// a dispatch_failed reason so the run can finalize instead of looping forever.
+	// error_message carries the underlying cause. Guarded to 'scheduled' for the same
+	// reason as RecordDispatchFailure. This is distinct from dispatch_lost (a TI that
+	// reached 'queued' then vanished) and from a task's own 'failed' (the code ran).
+	FailDispatchExhausted(ctx context.Context, arg FailDispatchExhaustedParams) error
 	FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInstanceIfActiveParams) error
 	GetConnection(ctx context.Context, arg GetConnectionParams) (GetConnectionRow, error)
 	GetCurrentDagSpec(ctx context.Context, arg GetCurrentDagSpecParams) ([]byte, error)
@@ -170,6 +176,13 @@ type Querier interface {
 	// since transitioned (real dispatch landed, or already failed) is a no-op,
 	// never overwriting a more meaningful state.
 	MarkTaskDispatchLost(ctx context.Context, id pgtype.UUID) error
+	// A synchronous dispatch attempt failed (ADR 0031 Amendment A). Increment the
+	// consecutive-failure counter and back off the next attempt to $3, so the planner
+	// (which gates scheduled->queued on next_dispatch_at) does not re-attempt every
+	// tick. Guarded to 'scheduled' so a report that raced the dispatch cannot clobber
+	// a row that has since progressed. try_number is untouched: this is infra, not a
+	// task failure.
+	RecordDispatchFailure(ctx context.Context, arg RecordDispatchFailureParams) error
 	RecordStagingVolume(ctx context.Context, arg RecordStagingVolumeParams) error
 	// Stamps last_heartbeat_at on the active TI of an attempt. Bounded by the
 	// (dag_run_id, task_id, try_number) tuple to match the agent's identity. The

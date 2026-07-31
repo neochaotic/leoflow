@@ -92,7 +92,7 @@ tests:
       secretKey: too-short-12345
     asserts:
       - failedTemplate:
-          errorMessage: "secretKey must be exactly 32 raw bytes or 64-char hex (got 15 chars). Generate with: openssl rand -hex 16. See ADR 0019."
+          errorMessage: "secretKey must be exactly 32 raw bytes or 64-char hex (got 15 chars). Generate with: openssl rand -hex 32 (64 hex chars). See ADR 0019."
 
   - it: accepts 32-byte raw secretKey (AES-256)
     template: deployment.yaml

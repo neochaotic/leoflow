@@ -234,7 +234,7 @@ helm install lf ./helm/leoflow -n leoflow \
   --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
   --set redis.url='rediss://HOST:6380/0' \
   --set auth.jwtSecret="$(openssl rand -base64 64)" \
-  --set secretKey="$(openssl rand -hex 16)" \
+  --set secretKey="$(openssl rand -hex 32)" \
   --set bootstrap.password='change-me'
 ```
 

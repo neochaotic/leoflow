@@ -184,7 +184,7 @@ helm template lf ./helm/leoflow -n leoflow \
   --set database.url=postgres://x \
   --set redis.url=redis://r/0 \
   --set auth.jwtSecret=s \
-  --set "secretKey=$(openssl rand -hex 16)"
+  --set "secretKey=$(openssl rand -hex 32)"
 bash scripts/helm-template-checks.sh   # contract assertions (env wiring, Job hardening, fixture lengths)
 ```
 

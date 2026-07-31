@@ -65,6 +65,15 @@ Two tag conventions, distinguished by suffix:
 > Recorded here rather than by changing the workflow to match the table: the
 > table is the stale artifact, and someone reading it might otherwise "fix" a
 > release pipeline that is behaving correctly.
+>
+> **Pre-release is now the intended state, not a tolerated deviation.** A draft is
+> visible only to maintainers, so implementing the table as written would erase
+> every candidate from the public releases page. Those candidates are part of how
+> the project's history reads — `v0.1.0` took four of them, `v0.1.2` needed a
+> respin for one defect — and that record is worth keeping. `prune-prealpha.yaml`
+> is already scoped to tags containing `-prealpha.` and never touches `-rc.N`, so
+> nothing deletes them today. Anyone changing either of these should treat
+> candidate visibility as a property to preserve.
 
 **Cutting a release:**
 

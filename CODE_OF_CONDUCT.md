@@ -37,7 +37,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at conduct@leoflow.io (placeholder — replace with the project's real address). All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement by contacting the maintainer, [@neochaotic](https://github.com/neochaotic), directly on GitHub. There is deliberately no email address here: the `conduct@leoflow.io` this file used to publish sat next to the word "placeholder" and never existed, so a report following it reached nobody. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

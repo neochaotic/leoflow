@@ -8,9 +8,22 @@ The Leoflow team takes security issues seriously. We appreciate your efforts to 
 
 ### How to Report
 
-Email reports to **security@leoflow.io** (placeholder — replace with the project's real address). For sensitive reports, encrypt your message using the PGP key published at [keybase.io/leoflow](https://keybase.io/leoflow) (placeholder).
+**Use GitHub's private vulnerability reporting:**
+[**Report a vulnerability**](https://github.com/neochaotic/leoflow/security/advisories/new)
 
-Alternatively, use GitHub's private vulnerability reporting: navigate to the [Security tab](../../security) and click "Report a vulnerability."
+The report is visible only to the maintainer until an advisory is published. No
+account beyond GitHub is needed, and it threads the discussion, the fix and the
+eventual advisory in one place.
+
+There is deliberately no email address here. This file used to publish
+`security@leoflow.io` alongside the word "placeholder" — the domain does not
+exist and never received anything, so a reporter following the policy reached
+nobody. A channel that does not work is worse than no channel: it looks like
+diligence and absorbs the report. The same went for the Keybase link.
+
+If GitHub is not an option for you, open a public issue saying only that you
+have a security report and asking for a contact — no details — and you will get
+a private channel.
 
 ### What to Include
 

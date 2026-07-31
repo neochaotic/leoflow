@@ -462,7 +462,15 @@ func TestEnsureProjectDockerfile(t *testing.T) {
 }
 
 func TestDevSubprocessSetupMissingAgent(t *testing.T) {
-	t.Chdir(t.TempDir()) // no agent on PATH or ./bin
+	// The comment used to promise "no agent on PATH or ./bin" while only changing
+	// the working directory, so on any machine with leoflow installed the agent
+	// WAS on PATH and this test failed — green in CI, red for every developer who
+	// had run the installer. A test that is red locally for an unrelated reason
+	// trains people to ignore a red suite, which is how a real failure gets waved
+	// through. Isolate all three lookup locations, not one.
+	t.Chdir(t.TempDir())          // nothing in ./bin
+	t.Setenv("PATH", t.TempDir()) // nothing on PATH
+	t.Setenv("HOME", t.TempDir()) // nothing in ~/.leoflow/bin
 	cmd := devTestCmd()
 	ws := &WorkspaceSpec{Path: ".", RootCfg: &domain.LeoflowConfig{DagID: "p"}}
 	ws.RootCfg.ApplyDefaults()
@@ -573,5 +581,108 @@ func TestK3dImportStubbed(t *testing.T) {
 	}
 	if !strings.Contains(got, "image import leoflow-dev-etl:dev") || !strings.Contains(got, "--cluster "+devClusterName) {
 		t.Errorf("k3dImport invoked %q", got)
+	}
+}
+
+// resolveBinary used to consult PATH before anything else, so `leoflow lite` ran
+// whatever leoflow-server happened to be installed first — however old. A
+// validation run against v0.1.2-rc.1 spent its first boot exercising a
+// v0.1.0-rc.4 server that predated every feature under test, and only noticed
+// afterwards. The binaries are co-versioned (ADR 0028), so the one shipped
+// beside the running CLI is the one it was built and tested against; an older
+// copy earlier on PATH is never the intended answer (#471).
+func TestResolveBinaryPrefersTheSiblingOverPATH(t *testing.T) {
+	name := "leoflow-sibling-probe"
+	// A stale copy on PATH, which the old order would have returned.
+	pathDir := t.TempDir()
+	writeFakeBinary(t, filepath.Join(pathDir, name))
+	t.Setenv("PATH", pathDir)
+
+	// The one shipped beside the running executable.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("os.Executable unavailable: %v", err)
+	}
+	sibling := filepath.Join(filepath.Dir(exe), name)
+	writeFakeBinary(t, sibling)
+	t.Cleanup(func() { _ = os.Remove(sibling) })
+	// resolveBinary canonicalises through EvalSymlinks, and on macOS /var is a
+	// symlink to /private/var — compare canonical forms, not the raw strings.
+	if resolved, rerr := filepath.EvalSymlinks(sibling); rerr == nil {
+		sibling = resolved
+	}
+
+	got, err := resolveBinary("", name)
+	if err != nil {
+		t.Fatalf("resolveBinary: %v", err)
+	}
+	if got != sibling {
+		t.Errorf("resolveBinary = %q, want the sibling %q — a stale copy on PATH must not win", got, sibling)
+	}
+}
+
+// With no sibling present, the installer's directory is consulted before PATH:
+// `curl | sh` puts the matching trio in ~/.leoflow/bin, and those belong
+// together too.
+func TestResolveBinaryPrefersInstallDirOverPATH(t *testing.T) {
+	name := "leoflow-installdir-probe"
+	pathDir := t.TempDir()
+	writeFakeBinary(t, filepath.Join(pathDir, name))
+	t.Setenv("PATH", pathDir)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	installed := filepath.Join(home, ".leoflow", "bin", name)
+	if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeBinary(t, installed)
+
+	got, err := resolveBinary("", name)
+	if err != nil {
+		t.Fatalf("resolveBinary: %v", err)
+	}
+	if got != installed {
+		t.Errorf("resolveBinary = %q, want the install dir %q", got, installed)
+	}
+}
+
+// PATH still works when nothing better exists — this must not become a
+// regression for anyone relying on it.
+func TestResolveBinaryStillFallsBackToPATH(t *testing.T) {
+	name := "leoflow-pathonly-probe"
+	pathDir := t.TempDir()
+	want := filepath.Join(pathDir, name)
+	writeFakeBinary(t, want)
+	t.Setenv("PATH", pathDir)
+	t.Setenv("HOME", t.TempDir())
+
+	got, err := resolveBinary("", name)
+	if err != nil {
+		t.Fatalf("resolveBinary: %v", err)
+	}
+	if got != want {
+		t.Errorf("resolveBinary = %q, want %q from PATH", got, want)
+	}
+}
+
+// A directory named like the binary must not be mistaken for it.
+func TestResolveBinaryIgnoresDirectories(t *testing.T) {
+	name := "leoflow-dir-probe"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	if err := os.MkdirAll(filepath.Join(home, ".leoflow", "bin", name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveBinary("", name); err == nil {
+		t.Error("a directory with the binary's name must not resolve as the binary")
+	}
+}
+
+func writeFakeBinary(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }

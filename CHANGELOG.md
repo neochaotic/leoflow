@@ -100,6 +100,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **The inline `http_api` executor could be steered at internal addresses (SSRF).**
+  An inline task runs in the control-plane process, so a DAG author (`write:dag`)
+  could point its request at the cloud metadata endpoint (169.254.169.254), the
+  kube-apiserver, or any private/in-cluster service and read the response back as
+  XCom. The executor now allows only `http`/`https` schemes and refuses to connect
+  to a loopback, link-local, private (RFC1918/IPv6-ULA), or unspecified address.
+  The address check runs on the resolved IP at dial time, so it also defeats DNS
+  rebinding and applies to redirects.
+
 - **Hardened the log sink against path escape.** `DiskSink` interpolated every
   `logs.Ref` field straight into a filesystem path
   (`{root}/{tenant}/{dag}/{run}/{task}/{try}.log`) with no containment, so any

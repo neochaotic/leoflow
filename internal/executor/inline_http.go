@@ -26,7 +26,7 @@ type InlineHTTPExecutor struct {
 // (nil uses a default) and retry count.
 func NewInlineHTTPExecutor(client *http.Client, maxRetries int) *InlineHTTPExecutor {
 	if client == nil {
-		client = &http.Client{}
+		client = newGuardedHTTPClient()
 	}
 	return &InlineHTTPExecutor{client: client, maxRetries: maxRetries}
 }
@@ -71,6 +71,9 @@ func (e *InlineHTTPExecutor) do(ctx context.Context, hr *domain.HTTPRequest) (st
 	timeout := time.Duration(hr.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 60 * time.Second
+	}
+	if serr := allowedScheme(hr.URL); serr != nil {
+		return 0, nil, serr
 	}
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

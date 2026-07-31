@@ -105,6 +105,10 @@ func newInline(t *testing.T) (*InlineRunner, *fakeSink, *fakeXComPusher, *fakeLo
 		Sink: sink, Metrics: &fakeMetrics{}, XCom: px, Logs: ls,
 		Concurrency: 4, MaxSeconds: 300, UserAgent: "leoflow/test",
 	})
+	// The tests hit a loopback httptest server, which the production SSRF guard
+	// (rightly) blocks; use an unguarded client for the local test server. The
+	// guard itself is covered by ssrf_guard_test.go.
+	r.exec = NewInlineHTTPExecutor(&http.Client{}, 0).Run
 	return r, sink, px, ls
 }
 

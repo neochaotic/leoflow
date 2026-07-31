@@ -20,7 +20,7 @@ func TestInlineHTTPRunSuccess(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
-	body, err := NewInlineHTTPExecutor(nil, 0).Run(context.Background(),
+	body, err := NewInlineHTTPExecutor(&http.Client{}, 0).Run(context.Background(),
 		inlineReq(&domain.HTTPRequest{Method: http.MethodGet, URL: srv.URL}))
 	if err != nil || string(body) != `{"ok":true}` {
 		t.Fatalf("Run = %q, err=%v", body, err)
@@ -28,7 +28,7 @@ func TestInlineHTTPRunSuccess(t *testing.T) {
 }
 
 func TestInlineHTTPRunNoRequest(t *testing.T) {
-	if _, err := NewInlineHTTPExecutor(nil, 0).Run(context.Background(), inlineReq(nil)); err == nil {
+	if _, err := NewInlineHTTPExecutor(&http.Client{}, 0).Run(context.Background(), inlineReq(nil)); err == nil {
 		t.Error("a task with no http_request must error")
 	}
 }
@@ -38,7 +38,7 @@ func TestInlineHTTPRunNon2xxFails(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	if _, err := NewInlineHTTPExecutor(nil, 0).Run(context.Background(),
+	if _, err := NewInlineHTTPExecutor(&http.Client{}, 0).Run(context.Background(),
 		inlineReq(&domain.HTTPRequest{Method: http.MethodGet, URL: srv.URL})); err == nil {
 		t.Error("a 500 must fail the task")
 	}
@@ -49,7 +49,7 @@ func TestInlineHTTPRunHonorsCustomSuccessCodes(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot) // 418
 	}))
 	defer srv.Close()
-	if _, err := NewInlineHTTPExecutor(nil, 0).Run(context.Background(),
+	if _, err := NewInlineHTTPExecutor(&http.Client{}, 0).Run(context.Background(),
 		inlineReq(&domain.HTTPRequest{Method: http.MethodGet, URL: srv.URL, SuccessStatusCodes: []int{418}})); err != nil {
 		t.Errorf("418 should be a success when declared, got %v", err)
 	}
@@ -57,7 +57,7 @@ func TestInlineHTTPRunHonorsCustomSuccessCodes(t *testing.T) {
 
 func TestInlineHTTPRunBuildRequestError(t *testing.T) {
 	// An invalid method makes http.NewRequestWithContext fail (a build error).
-	if _, err := NewInlineHTTPExecutor(nil, 0).Run(context.Background(),
+	if _, err := NewInlineHTTPExecutor(&http.Client{}, 0).Run(context.Background(),
 		inlineReq(&domain.HTTPRequest{Method: "INVALID METHOD", URL: "http://x"})); err == nil {
 		t.Error("an invalid method should produce a build error")
 	}
@@ -65,14 +65,14 @@ func TestInlineHTTPRunBuildRequestError(t *testing.T) {
 
 func TestInlineHTTPRunMarshalError(t *testing.T) {
 	// A body that cannot be JSON-encoded (a channel) fails before sending.
-	if _, err := NewInlineHTTPExecutor(nil, 0).Run(context.Background(),
+	if _, err := NewInlineHTTPExecutor(&http.Client{}, 0).Run(context.Background(),
 		inlineReq(&domain.HTTPRequest{Method: http.MethodPost, URL: "http://x", Body: make(chan int)})); err == nil {
 		t.Error("an unmarshalable body should error")
 	}
 }
 
 func TestInlineHTTPRunNetworkError(t *testing.T) {
-	if _, err := NewInlineHTTPExecutor(nil, 0).Run(context.Background(),
+	if _, err := NewInlineHTTPExecutor(&http.Client{}, 0).Run(context.Background(),
 		inlineReq(&domain.HTTPRequest{Method: http.MethodGet, URL: "http://127.0.0.1:1"})); err == nil {
 		t.Error("an unreachable host should error")
 	}
@@ -87,7 +87,7 @@ func TestInlineHTTPRunSendsHeadersAndBody(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer srv.Close()
-	_, err := NewInlineHTTPExecutor(nil, 0).Run(context.Background(), inlineReq(&domain.HTTPRequest{
+	_, err := NewInlineHTTPExecutor(&http.Client{}, 0).Run(context.Background(), inlineReq(&domain.HTTPRequest{
 		Method: http.MethodPost, URL: srv.URL,
 		Headers: map[string]string{"Authorization": "Bearer xyz"},
 		Body:    map[string]any{"k": "v"},

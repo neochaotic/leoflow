@@ -50,7 +50,7 @@ func TestInlineHTTPSuccess(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	if err := NewInlineHTTPExecutor(nil, 2).Execute(context.Background(), httpReq(srv.URL, http.MethodGet, nil)); err != nil {
+	if err := NewInlineHTTPExecutor(&http.Client{}, 2).Execute(context.Background(), httpReq(srv.URL, http.MethodGet, nil)); err != nil {
 		t.Errorf("2xx should succeed: %v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestInlineHTTPRetriesThenFails(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	err := NewInlineHTTPExecutor(nil, 2).Execute(context.Background(), httpReq(srv.URL, http.MethodPost, nil))
+	err := NewInlineHTTPExecutor(&http.Client{}, 2).Execute(context.Background(), httpReq(srv.URL, http.MethodPost, nil))
 	if err == nil {
 		t.Error("persistent 500 should fail")
 	}
@@ -76,13 +76,13 @@ func TestInlineHTTPCustomSuccessCode(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
 	defer srv.Close()
-	if err := NewInlineHTTPExecutor(nil, 0).Execute(context.Background(), httpReq(srv.URL, http.MethodGet, []int{http.StatusTeapot})); err != nil {
+	if err := NewInlineHTTPExecutor(&http.Client{}, 0).Execute(context.Background(), httpReq(srv.URL, http.MethodGet, []int{http.StatusTeapot})); err != nil {
 		t.Errorf("418 should succeed when listed as a success code: %v", err)
 	}
 }
 
 func TestInlineHTTPMissingRequest(t *testing.T) {
-	if err := NewInlineHTTPExecutor(nil, 0).Execute(context.Background(), Request{Operator: "http_api"}); err == nil {
+	if err := NewInlineHTTPExecutor(&http.Client{}, 0).Execute(context.Background(), Request{Operator: "http_api"}); err == nil {
 		t.Error("missing http_request should error")
 	}
 }

@@ -1,0 +1,77 @@
+{{- /*
+Task-pod egress NetworkPolicy (ADR 0047/0048; Argo/KFP both recommend it as the
+network-layer control). Task pods run untrusted, author-supplied code, so this is
+where the "a pod can reach cloud metadata / the apiserver / other services" risk
+is contained — not in the control plane (ADR 0048). The control-plane policy
+(networkpolicy.yaml) does NOT cover task pods; this one selects them by the
+leoflow.io/run-id label every task pod carries (executor/kubernetes.go).
+
+Off by default and CNI-dependent, like the control-plane policy. When enabled:
+- ingress is denied (nothing dials into a task pod);
+- egress allows DNS and the control-plane gRPC (the agent dials back), then all
+  other egress EXCEPT the cloud metadata endpoint (169.254.0.0/16) — always,
+  the one unambiguous SSRF target, never a legitimate http_api destination;
+- blockPrivateNetworks additionally denies RFC1918 + the apiserver. It is OPT-IN,
+  because a DAG calling an internal service is a legitimate orchestration pattern
+  and the app cannot tell that from the apiserver by IP (ADR 0047). High-security
+  deployments turn it on; the control-plane gRPC is re-allowed explicitly so the
+  agent still reports.
+*/ -}}
+{{- if .Values.taskNetworkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "leoflow.fullname" . }}-tasks
+  namespace: {{ .Values.taskNamespace }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: leoflow.io/run-id
+        operator: Exists
+  policyTypes:
+    - Ingress
+    - Egress
+  # Ingress: none. Nothing connects into a task pod (the agent dials OUT).
+  ingress: []
+  egress:
+    # DNS — always required.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # The control-plane gRPC: the agent dials back to report state (ADR 0004).
+    # Explicit so it survives blockPrivateNetworks (the control plane is in-cluster).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "leoflow.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.grpc }}
+          protocol: TCP
+    # All other egress, EXCEPT the blocked ranges. cloud metadata is always
+    # blocked; private/apiserver only when blockPrivateNetworks is set.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Cloud metadata is always blocked while this policy is on — never a
+              # legitimate http_api destination, the classic SSRF crown jewel.
+              - 169.254.0.0/16
+              {{- if .Values.taskNetworkPolicy.blockPrivateNetworks }}
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              {{- end }}
+              {{- with .Values.taskNetworkPolicy.extraExcept }}
+              {{- toYaml . | nindent 14 }}
+              {{- end }}
+    {{- with .Values.taskNetworkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

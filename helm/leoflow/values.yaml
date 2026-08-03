@@ -277,6 +277,19 @@ podDisruptionBudget:
 # NetworkPolicy for the control plane (requires a CNI that enforces it). The
 # template defaults to permissive egress so enabling it doesn't silently break
 # DB/Redis/kube-apiserver access — tighten per environment after install.
+# Task-pod egress NetworkPolicy (ADR 0047/0048). Contains the SSRF/metadata risk
+# at the network layer for the pods that run untrusted code — the control plane
+# never runs it (ADR 0048). Off by default; requires a CNI that enforces policy.
+taskNetworkPolicy:
+  # -- Enable the task-pod egress NetworkPolicy in `taskNamespace`. Denies ingress, allows DNS + the control-plane gRPC, then all other egress except the blocked ranges below.
+  enabled: false
+  # -- ALSO deny RFC1918 private ranges + the apiserver. OFF by default: a DAG calling an internal service is legitimate, and the policy cannot tell that from the apiserver by IP (ADR 0047). Turn on for high-security clusters; the control-plane gRPC is re-allowed explicitly.
+  blockPrivateNetworks: false
+  # -- Extra CIDRs to add to the egress `except` list (e.g. a specific internal admin subnet).
+  extraExcept: []
+  # -- Extra raw egress rules appended verbatim (e.g. allow a specific data store when blockPrivateNetworks is on).
+  extraEgress: []
+
 networkPolicy:
   # -- Enable NetworkPolicy gating ingress + egress on the control-plane pods. Requires a CNI that enforces policies (Calico/Cilium/etc.).
   enabled: false

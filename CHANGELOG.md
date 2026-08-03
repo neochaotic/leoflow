@@ -8,6 +8,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A task-pod egress NetworkPolicy** (`taskNetworkPolicy`, off by default). Task
+  pods run untrusted author code, so this is where the "a pod can reach cloud
+  metadata / the apiserver / another service" risk is contained — at the network
+  layer, for every task type — not in the control plane (ADR 0048). When enabled
+  it denies ingress, allows DNS and the control-plane gRPC (the agent dials back),
+  then all other egress **except the cloud metadata endpoint** (`169.254.0.0/16`),
+  which is always blocked — the one unambiguous SSRF target. `blockPrivateNetworks`
+  additionally denies RFC1918 + the apiserver; it is opt-in because a DAG calling
+  an internal service is legitimate and the policy cannot tell that from the
+  apiserver by IP (ADR 0047). This is the network-layer control ADR 0047/0048 point
+  to, and the same one Argo and Kubeflow recommend.
+
+### Added
+
 - **A synchronous dispatch failure now backs off and eventually gives up, instead
   of retrying every tick forever** (ADR 0031 Amendment A). When `Dispatch` failed
   synchronously — kube-apiserver unreachable, RBAC denied, quota, an admission

@@ -101,9 +101,10 @@ def test_mixed_operators(monkeypatch, tmp_path, dag_schema):
     assert tasks["extract"]["entrypoint"] == "echo extract"
     assert tasks["transform"]["type"] == "python"
     assert tasks["transform"]["depends_on"] == ["extract"]
-    assert tasks["notify"]["type"] == "http_api"
-    assert tasks["notify"]["http_request"]["method"] == "POST"
-    assert tasks["notify"]["http_request"]["url"] == "https://example.com/hook"
+    assert tasks["notify"]["type"] == "airflow_operator"  # ADR 0047: HttpOperator runs in a pod
+    assert tasks["notify"]["operator_class"] == "airflow.providers.http.operators.http.HttpOperator"
+    assert tasks["notify"]["operator_args"]["method"] == "POST"
+    assert tasks["notify"]["operator_args"]["endpoint"] == "https://example.com/hook"
     assert tasks["notify"]["depends_on"] == ["transform"]
 
 

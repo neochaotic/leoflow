@@ -25,7 +25,7 @@ leoflow lite examples/<name>      # hot-reload at http://localhost:8088, then Tr
 | `postgres_load` | load to external Postgres via a Connection | python | psycopg2 |
 | `csv_report` | **scheduled** (cron `0 6 * * *`) report | python | — |
 | `bash_pipeline` | shell tasks | **bash** (BashOperator) | — |
-| `http_operator` | HTTP request run **inline** | **http_api** (HttpOperator) | — |
+| `http_operator` | HTTP request run **in a pod** | **airflow_operator** (HttpOperator, ADR 0047) | — |
 
 All three Leoflow task types are represented — **python** (TaskFlow `@task` /
 PythonOperator), **bash** (BashOperator), and **http_api** (HttpOperator, executed

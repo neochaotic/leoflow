@@ -176,9 +176,9 @@ on the two task types that leave no Python to run it, and the compiler rejects
 those **loudly** rather than dropping the callback silently:
 
 - **`bash`** — the runtime `exec`s bash in place, so no Python is left.
-- **`http_api`** — runs inline in the Go control plane, so there's no pod. For an
-  HTTP call that needs a callback, use `HttpOperator` (a provider operator, which
-  runs in a pod) instead of the native `http_api` fast path.
+- **`http_api`** — *deprecated (ADR 0047).* `HttpOperator` now runs in a pod like
+  any provider operator (declare `connectors: [http]`); the old inline path ran in
+  the control-plane process and is being removed.
 
 `on_success_callback` and `on_retry_callback` aren't wired yet — they're a loud
 compile error everywhere, never a silent drop. Reach for the `alerts:` block or a

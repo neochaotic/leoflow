@@ -479,8 +479,9 @@ def _operator_type(task) -> str:
     if not name.endswith("Sensor"):
         if "Bash" in name:
             return "bash"
-        if "Http" in name:
-            return "http_api"
+        # "Http" no longer maps to the native inline http_api (ADR 0047): an
+        # HttpOperator is a captured provider operator (handled above) and runs in
+        # a pod. The native inline path was the control-plane SSRF surface (H5).
         if "Python" in name:
             return "python"
     raise ValueError(f"unsupported operator {name!r} on task {task.task_id}")

@@ -283,15 +283,19 @@ def test_http_sensor_is_generic_operator_not_native_http(monkeypatch, tmp_path):
     assert probe["operator_class"] == "airflow.providers.http.sensors.http.HttpSensor"
 
 
-def test_http_operator_stays_native_http_api(monkeypatch, tmp_path):
-    """HttpOperator (an operator, not a sensor) keeps its native http_api fast path."""
+def test_http_operator_runs_in_pod_not_inline(monkeypatch, tmp_path):
+    """HttpOperator runs through the generic pod executor (ADR 0047), NOT the
+    native inline http_api path (the control-plane SSRF surface, H5). The author's
+    DAG is unchanged; it compiles to type=airflow_operator with the real class."""
     spec = _compile(monkeypatch, tmp_path, """
         from airflow.sdk import DAG
         from airflow.providers.http.operators.http import HttpOperator
         with DAG("g"):
             HttpOperator(task_id="call", method="GET", endpoint="https://example.com/x")
     """)
-    assert _task(spec, "call")["type"] == "http_api"
+    t = _task(spec, "call")
+    assert t["type"] == "airflow_operator"
+    assert t["operator_class"] == "airflow.providers.http.operators.http.HttpOperator"
 
 
 @pytest.mark.parametrize("class_name", [

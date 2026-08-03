@@ -1,8 +1,10 @@
 schema_version: "1.0"
 dag_id: http_operator
-description: HttpOperator hitting a public API inline (the http_api task type).
+description: HttpOperator hitting a public API, run in a pod via the http provider (ADR 0047).
 owner: examples
 tags:
   - example
 python_version: "3.11"
+connectors:
+  - http
 dependencies: []

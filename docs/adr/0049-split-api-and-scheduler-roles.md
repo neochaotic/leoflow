@@ -36,8 +36,10 @@ the enterprise scale now targeted.
 
 ## Decision
 
-**One binary, selectable roles.** `leoflow-server` gains a role
-(`LEOFLOW_ROLE` / `--role`):
+**One binary, selectable roles.** `leoflow-server` gains a role, set via the
+`server.role` config key or the `LEOFLOW_SERVER_ROLE` environment variable (the
+server reads config from file + env only; it registers no CLI flags today, so
+there is no `--role` flag):
 
 - **`api`** — HTTP API + UI (the embedded Airflow SPA, ADR 0007/0017 unchanged) +
   `/metrics`. Serves users. **Active-active** (HPA). Given a **restricted network

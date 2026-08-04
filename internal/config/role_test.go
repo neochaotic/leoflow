@@ -2,6 +2,31 @@ package config
 
 import "testing"
 
+// TestLoadServerRoleFromEnv locks the env binding for server.role. viper's
+// AutomaticEnv only binds keys it has seen via SetDefault, so the role field is
+// silently dropped from LEOFLOW_SERVER_ROLE unless "server.role" is in
+// serverDefaults — the same trap the ui.auto_refresh default comment documents.
+func TestLoadServerRoleFromEnv(t *testing.T) {
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Server.EffectiveRole() != RoleAll {
+		t.Errorf("default EffectiveRole() = %q, want %q", c.Server.EffectiveRole(), RoleAll)
+	}
+	t.Setenv("LEOFLOW_SERVER_ROLE", RoleScheduler)
+	c, err = LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Server.Role != RoleScheduler {
+		t.Errorf("server.role from env = %q, want %q", c.Server.Role, RoleScheduler)
+	}
+	if c.Server.ServesAPI() {
+		t.Error("scheduler role from env must not serve the API")
+	}
+}
+
 func TestServerRoleDefaultsToAll(t *testing.T) {
 	c := &ServerConfig{}
 	if got := c.Server.EffectiveRole(); got != RoleAll {

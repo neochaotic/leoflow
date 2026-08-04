@@ -273,6 +273,9 @@ type OTelSection struct {
 // serverDefaults lists every leaf key with its default so that AutomaticEnv and
 // Unmarshal resolve nested keys correctly.
 var serverDefaults = map[string]any{
+	// Empty defaults to RoleAll (EffectiveRole). This entry must exist so viper's
+	// AutomaticEnv binds LEOFLOW_SERVER_ROLE — see the ui.auto_refresh note below.
+	"server.role":                 "",
 	"server.http_addr":            "0.0.0.0:8080",
 	"server.metrics_addr":         "0.0.0.0:9090",
 	"server.grpc_addr":            "0.0.0.0:9091",

@@ -70,6 +70,21 @@ suffix so the two Deployments, Services, SAs, etc. do not collide.
 {{- end -}}
 {{- end -}}
 
+{{/*
+Role-aware ServiceAccount name (ADR 0049). Takes {ctx, role}. "all" keeps the
+existing leoflow.serviceAccountName (honoring serviceAccount.create/name), so the
+non-split chart is unchanged. api/scheduler each get their own SA named after the
+role, so the api can carry a RESTRICTED identity (no pod-create/apiserver RBAC)
+while the scheduler keeps the privileged one — the split's security payoff.
+*/}}
+{{- define "leoflow.roleServiceAccountName" -}}
+{{- if and .role (ne .role "all") -}}
+{{- include "leoflow.roleName" (dict "ctx" .ctx "role" .role) -}}
+{{- else -}}
+{{- include "leoflow.serviceAccountName" .ctx -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Name of the Secret holding generated/inline credentials. */}}
 {{- define "leoflow.secretName" -}}
 {{- printf "%s-secrets" (include "leoflow.fullname" .) -}}

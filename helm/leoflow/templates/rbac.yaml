@@ -43,8 +43,15 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "leoflow.fullname" . }}-executor
+{{- /*
+ADR 0049: in split mode ONLY the scheduler SA is granted the executor Role — the
+scheduler is what creates task pods. The api SA is deliberately left unbound so a
+compromised/SSRF'd API cannot reach the apiserver. Non-split binds the single
+"all" SA, unchanged. (A template comment, not a "#" line, so the non-split
+rendered output stays byte-identical to the pre-0049 chart.)
+*/}}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "leoflow.serviceAccountName" . }}
+    name: {{ include "leoflow.roleServiceAccountName" (dict "ctx" . "role" (ternary "scheduler" "all" .Values.split.enabled)) }}
     namespace: {{ .Release.Namespace }}
 {{- end -}}

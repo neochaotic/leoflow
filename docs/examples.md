@@ -27,10 +27,11 @@ leoflow lite examples/<name>      # hot-reload at http://localhost:8088, then Tr
 | `bash_pipeline` | shell tasks | **bash** (BashOperator) | — |
 | `http_operator` | HTTP request run **in a pod** | **airflow_operator** (HttpOperator, ADR 0047) | — |
 
-All three Leoflow task types are represented — **python** (TaskFlow `@task` /
-PythonOperator), **bash** (BashOperator), and **http_api** (HttpOperator, executed
-inline by the control plane). For a measured ~1 GB pipeline see the
-[ETL case study](etl-staging-case-study.md).
+The core Leoflow task types are represented — **python** (TaskFlow `@task` /
+PythonOperator) and **bash** (BashOperator), both run in a pod. An `HttpOperator`
+compiles to an **`airflow_operator`** and runs in a pod too (ADR 0040); the old
+native inline `http_api` type is deprecated and being removed (ADR 0047, #512).
+For a measured ~1 GB pipeline see the [ETL case study](etl-staging-case-study.md).
 
 !!! tip "Import heavy deps inside the task"
     `import duckdb` / `import requests` go **inside** the task function — the DAG

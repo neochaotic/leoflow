@@ -219,6 +219,26 @@ func (d *DAGSpec) ValidateInlineExecution(maxInlineSeconds int) error {
 	return nil
 }
 
+// DeprecationWarnings returns non-fatal warnings for a spec that registers
+// successfully but uses a deprecated shape. Today the only one is the native
+// inline http_api task type (ADR 0047): the parser no longer emits it, so it can
+// only arrive via a hand-written dag.json — and it runs the request inline in the
+// control plane (the SSRF surface, H5). It is deprecated for one release, then
+// rejected and its inline executor removed (issue #512). The registration handler
+// surfaces these through the API response so `leoflow push` shows the author.
+func (d *DAGSpec) DeprecationWarnings() []string {
+	var warns []string
+	for _, t := range d.Tasks {
+		if t.Type == TaskTypeHTTPAPI {
+			warns = append(warns, fmt.Sprintf(
+				"task %q uses the deprecated task type %q, which runs the request inline in the control plane; "+
+					"it will be removed next release (issue #512). Use an HttpOperator, which runs in a task pod (ADR 0047).",
+				t.TaskID, TaskTypeHTTPAPI))
+		}
+	}
+	return warns
+}
+
 // Validate checks the DAGSpec against the canonical dag.json schema and
 // returns a joined error describing every schema violation, or nil when valid.
 func (d *DAGSpec) Validate() error {

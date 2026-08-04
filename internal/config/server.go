@@ -139,6 +139,11 @@ type HTTPExecutorSection struct {
 
 // ServerSection configures the HTTP, metrics, and agent gRPC listeners.
 type ServerSection struct {
+	// Role selects which components this process runs (ADR 0049): "all" (default;
+	// the monolith Lite always runs), "api" (HTTP + UI, restricted identity), or
+	// "scheduler" (reconciler + dispatch + agent gRPC, privileged). Splitting is a
+	// Pro-only topology; "all" is behavior-identical to the pre-0049 monolith.
+	Role        string      `mapstructure:"role"`
 	HTTPAddr    string      `mapstructure:"http_addr"`
 	MetricsAddr string      `mapstructure:"metrics_addr"`
 	GRPCAddr    string      `mapstructure:"grpc_addr"`
@@ -147,6 +152,38 @@ type ServerSection struct {
 	// When both are set the channel is encrypted; empty means plaintext (dev).
 	GRPCTLSCert string `mapstructure:"grpc_tls_cert"`
 	GRPCTLSKey  string `mapstructure:"grpc_tls_key"`
+}
+
+// Server roles (ADR 0049).
+const (
+	// RoleAll runs every component in one process (the default; Lite's only mode).
+	RoleAll = "all"
+	// RoleAPI runs the HTTP API + UI only (restricted network identity).
+	RoleAPI = "api"
+	// RoleScheduler runs the reconciler + dispatch + agent gRPC (privileged).
+	RoleScheduler = "scheduler"
+)
+
+// EffectiveRole returns the configured role, defaulting empty to RoleAll so an
+// unset role (Lite, and every pre-0049 deployment) keeps the monolith behavior.
+func (s ServerSection) EffectiveRole() string {
+	if s.Role == "" {
+		return RoleAll
+	}
+	return s.Role
+}
+
+// ServesAPI reports whether this process runs the HTTP API + UI.
+func (s ServerSection) ServesAPI() bool {
+	r := s.EffectiveRole()
+	return r == RoleAll || r == RoleAPI
+}
+
+// ServesScheduler reports whether this process runs the scheduler, dispatch, and
+// the agent gRPC endpoint.
+func (s ServerSection) ServesScheduler() bool {
+	r := s.EffectiveRole()
+	return r == RoleAll || r == RoleScheduler
 }
 
 // CORSSection configures cross-origin access.
@@ -236,6 +273,9 @@ type OTelSection struct {
 // serverDefaults lists every leaf key with its default so that AutomaticEnv and
 // Unmarshal resolve nested keys correctly.
 var serverDefaults = map[string]any{
+	// Empty defaults to RoleAll (EffectiveRole). This entry must exist so viper's
+	// AutomaticEnv binds LEOFLOW_SERVER_ROLE — see the ui.auto_refresh note below.
+	"server.role":                 "",
 	"server.http_addr":            "0.0.0.0:8080",
 	"server.metrics_addr":         "0.0.0.0:9090",
 	"server.grpc_addr":            "0.0.0.0:9091",
@@ -325,6 +365,9 @@ func LoadServer(configFile string, flags *pflag.FlagSet) (*ServerConfig, error) 
 
 // Validate reports configuration errors that must abort startup.
 func (c *ServerConfig) Validate() error {
+	if err := c.validateRole(); err != nil {
+		return err
+	}
 	if c.Auth.Provider == "jwt" && c.Auth.JWT.Secret == "" {
 		return errors.New("auth.jwt.secret is required (set LEOFLOW_AUTH_JWT_SECRET)")
 	}
@@ -349,4 +392,16 @@ func isLoopbackListenAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// validateRole rejects an unknown server.role (ADR 0049). Empty is valid (defaults
+// to "all"). A typo like "worker" is a loud boot failure, not a silent monolith.
+func (c *ServerConfig) validateRole() error {
+	switch c.Server.Role {
+	case "", RoleAll, RoleAPI, RoleScheduler:
+		return nil
+	default:
+		return fmt.Errorf("invalid server.role %q: must be one of %q, %q, %q (or empty = %q)",
+			c.Server.Role, RoleAll, RoleAPI, RoleScheduler, RoleAll)
+	}
 }

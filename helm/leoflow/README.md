@@ -301,6 +301,9 @@ differ from what's committed.
 | serviceAccount.annotations | object | `{}` | ServiceAccount annotations (e.g. AWS IAM role: `eks.amazonaws.com/role-arn`). |
 | serviceAccount.create | bool | `true` | Create a dedicated ServiceAccount for the leoflow-server. Set `false` only if you bring your own via `name`. |
 | serviceAccount.name | string | `""` | Override the ServiceAccount name. Defaults to the chart fullname when empty. |
+| split.api.replicaCount | int | `2` | API Deployment replicas (active-active; HPA-friendly). Ignored unless split.enabled. |
+| split.enabled | bool | `false` | Render separate `api` and `scheduler` Deployments instead of one `all` Deployment. Pro-only (Lite is single-host and never splits). |
+| split.scheduler.replicaCount | int | `1` | Scheduler Deployment replicas. Pinned to 1 by the chart regardless of this value — the scheduler is a single leader (ADR 0009); a field is kept only for clarity. Ignored unless split.enabled. |
 | taskNamespace | string | `"leoflow"` | Namespace where the control plane creates task pods. MUST match the namespace the server expects (server code currently targets `leoflow`). The chart grants the control plane RBAC to manage pods here; if you override this, the RBAC follows but the server still looks at `leoflow`. |
 | taskNetworkPolicy.blockPrivateNetworks | bool | `false` | ALSO deny RFC1918 private ranges + the apiserver. OFF by default: a DAG calling an internal service is legitimate, and the policy cannot tell that from the apiserver by IP (ADR 0047). Turn on for high-security clusters; the control-plane gRPC is re-allowed explicitly. |
 | taskNetworkPolicy.enabled | bool | `false` | Enable the task-pod egress NetworkPolicy in `taskNamespace`. Denies ingress, allows DNS + the control-plane gRPC, then all other egress except the blocked ranges below. |

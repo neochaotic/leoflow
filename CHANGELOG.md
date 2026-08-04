@@ -8,6 +8,39 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Optional api/scheduler split for Pro (`split.enabled`, off by default; ADR
+  0049).** `leoflow-server` gains a role (`LEOFLOW_SERVER_ROLE`: `all` (default,
+  and Lite's only mode — behavior-identical to before), `api`, `scheduler`). When
+  the chart's `split.enabled` is set, it renders a restricted-identity api
+  Deployment (HTTP + UI, active-active, its ServiceAccount unbound from the
+  pod-create Role) and a privileged single-leader scheduler Deployment (reconciler
+  + dispatch + agent gRPC), each with its own Service/RBAC/NetworkPolicy and
+  role-appropriate probes. Isolates API load from scheduling and shrinks the
+  API's blast radius. Lite and existing monolith installs are unaffected.
+
+### Changed
+
+- **The metrics listener (`:9090`) now also serves `/healthz` and `/readyz`**, and
+  is scoped to those plus `/metrics` (a request to another path returns 404,
+  where the bare Prometheus handler previously answered on any path). This gives a
+  scheduler-only pod a probe target (ADR 0049) and is additive for the standard
+  `/metrics` scrape; adjust any scrape configured against `:9090/` (non-`/metrics`).
+
+### Deprecated
+
+- **The native inline `http_api` task type is deprecated and will be removed next
+  release** (ADR 0047, issue #512). It runs an author-supplied HTTP request
+  *inline in the control-plane process*, which carries the control plane's network
+  position — the SSRF surface (audit finding H5). The parser no longer emits it
+  (an `HttpOperator` compiles to a captured provider operator that runs in a task
+  pod, ADR 0040), so it can now only arrive via a hand-written `dag.json`.
+  Registering a spec that still uses it succeeds but returns a deprecation warning
+  that `leoflow push` prints; next release the registration rejects it and the
+  inline executor is removed (the guard becomes structural, ADR 0048). Migrate to
+  an `HttpOperator`, which runs in a pod.
+
+### Added
+
 - **A task-pod egress NetworkPolicy** (`taskNetworkPolicy`, off by default). Task
   pods run untrusted author code, so this is where the "a pod can reach cloud
   metadata / the apiserver / another service" risk is contained — at the network

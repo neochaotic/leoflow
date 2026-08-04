@@ -28,7 +28,9 @@ spec:
             pathType: {{ .pathType }}
             backend:
               service:
-                name: {{ include "leoflow.fullname" $ }}
+                # ADR 0049: in split mode the HTTP API lives on the api Service
+                # ("<fullname>-api"); the bare fullname Service does not exist.
+                name: {{ include "leoflow.roleName" (dict "ctx" $ "role" (ternary "api" "all" $.Values.split.enabled)) }}
                 port:
                   name: http
           {{- end }}

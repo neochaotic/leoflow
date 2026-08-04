@@ -1,0 +1,161 @@
+suite: control-plane split into api + scheduler Deployments (ADR 0049)
+templates:
+  - deployment.yaml
+  - secret.yaml
+release:
+  name: leoflow
+# Every case needs the mandatory Pro cert pair (the chart refuses to render
+# without agent TLS, #459) and external datastores.
+set:
+  database.url: postgres://h/d
+  redis.url: redis://h/0
+  auth.jwtSecret: jwt
+  agentTLS.enabled: true
+  agentTLS.serverCertSecret: leoflow-tls
+  agentTLS.caConfigMap: leoflow-ca
+tests:
+  # --- Default (split OFF): one "all" Deployment, byte-identical shape to pre-0049.
+  - it: renders a single Deployment with no role env or component label when split is off
+    template: deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: leoflow
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SERVER_ROLE
+            value: all
+      # The selector must NOT gain a component label — it is immutable, and adding
+      # one would break `helm upgrade` from a pre-split install.
+      - notExists:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+
+  # --- Split ON: two Deployments. Logs PVC must be RWX (both roles share it).
+  - it: renders two Deployments (api + scheduler) when split.enabled
+    template: deployment.yaml
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: the api Deployment serves the HTTP API — role=api, http+metrics ports, http probes, active-active
+    template: deployment.yaml
+    documentIndex: 0
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+      split.api.replicaCount: 4
+    asserts:
+      - equal:
+          path: metadata.name
+          value: leoflow-api
+      - equal:
+          path: spec.replicas
+          value: 4
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: api
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: api
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SERVER_ROLE
+            value: api
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: http
+            containerPort: 8080
+      # The api serves no agent gRPC — that endpoint belongs to the scheduler.
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: grpc
+            containerPort: 9091
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: http
+
+  - it: the scheduler Deployment is a single leader — role=scheduler, grpc+metrics ports, health probed on the metrics port (no HTTP API)
+    template: deployment.yaml
+    documentIndex: 1
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+      # Even if an operator bumps this, the scheduler stays a single leader (ADR 0009).
+      split.scheduler.replicaCount: 5
+    asserts:
+      - equal:
+          path: metadata.name
+          value: leoflow-scheduler
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: scheduler
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SERVER_ROLE
+            value: scheduler
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: grpc
+            containerPort: 9091
+      # The scheduler serves no HTTP API, so it exposes no http port …
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: http
+            containerPort: 8080
+      # … and its kubelet probes hit /healthz + /readyz on the metrics port
+      # (served by api.ObservabilityHandler in every role).
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: metrics
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: metrics
+
+  # Task pods must dial the scheduler Service for the agent gRPC — not the bare
+  # fullname (which is the api Service in split mode and serves no gRPC). The
+  # helper derives this from leoflow.roleName, the same source the scheduler
+  # Service name uses, so the two always agree even under the 63-char truncation.
+  - it: task pods are told to dial the scheduler Service for the agent gRPC
+    template: deployment.yaml
+    documentIndex: 0
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR
+            value: leoflow-scheduler.NAMESPACE.svc.cluster.local:9091
+          # helm-unittest renders release namespace as "NAMESPACE" in tests.
+
+  # --- Split with the default ReadWriteOnce logs PVC must fail loudly: the
+  # scheduler writes logs and the api replicas read them from the SAME PVC, so
+  # >=2 pods mount it at once and RWO can never satisfy that (#282 generalized).
+  - it: fails when split.enabled with a ReadWriteOnce logs PVC (shared by both roles)
+    template: deployment.yaml
+    set:
+      split.enabled: true
+      logs.persistence.enabled: true
+      logs.persistence.accessMode: ReadWriteOnce
+    asserts:
+      - failedTemplate:
+          errorMessage: "a ReadWriteOnce logs PVC attaches to only one pod, so more than one control-plane replica — replicaCount > 1, or autoscaling.enabled with maxReplicas > 1 — hangs the extra pods in ContainerCreating (Multi-Attach error), silently. Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore); or keep a single replica; or set logs.persistence.enabled=false (ephemeral emptyDir). See #282."

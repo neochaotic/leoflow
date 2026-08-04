@@ -10,7 +10,7 @@ Leoflow control plane "{{ include "leoflow.fullname" . }}" is installing into na
 {{- if .Values.ingress.enabled }}
      via the configured Ingress host(s).
 {{- else }}
-     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "leoflow.fullname" . }} {{ .Values.ports.http }}:{{ .Values.ports.http }}
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "leoflow.roleName" (dict "ctx" . "role" (ternary "api" "all" .Values.split.enabled)) }} {{ .Values.ports.http }}:{{ .Values.ports.http }}
      # then open http://localhost:{{ .Values.ports.http }}
 {{- end }}
 

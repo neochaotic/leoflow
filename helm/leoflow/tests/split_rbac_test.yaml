@@ -1,0 +1,50 @@
+suite: split gives the API a restricted identity, the scheduler the privileged one (ADR 0049)
+templates:
+  - serviceaccount.yaml
+  - rbac.yaml
+release:
+  name: leoflow
+  namespace: leoflow
+set:
+  split.enabled: true
+tests:
+  - it: renders a ServiceAccount per role
+    template: serviceaccount.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: leoflow-api
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: leoflow-scheduler
+        documentIndex: 1
+
+  - it: binds the executor Role ONLY to the scheduler SA — the api SA stays unbound (restricted)
+    template: rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      # The privileged pod-create grant goes to the scheduler, never the api.
+      - equal:
+          path: subjects[0].name
+          value: leoflow-scheduler
+      - equal:
+          path: subjects[0].namespace
+          value: leoflow
+
+  - it: still binds the single SA in non-split mode (regression)
+    template: rbac.yaml
+    documentIndex: 1
+    set:
+      split.enabled: false
+    asserts:
+      - equal:
+          path: subjects[0].name
+          value: leoflow

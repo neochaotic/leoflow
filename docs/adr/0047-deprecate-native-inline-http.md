@@ -47,8 +47,17 @@ generic pod executor (ADR 0040 Phase A), like any other provider operator.**
 
 2. **Deprecate the inline path.** The `http_api` task type and its inline executor
    (`internal/executor/inline_http.go`, `inline_runner.go`, the scheduler's
-   `s.inline`/`runInline` wiring) are deprecated: kept one release behind a compile
+   `s.inline`/`runInline` wiring) are deprecated: kept one release behind a
    warning, then removed.
+
+   *Cadence (maintainer decision, 2026-08-04).* One-release deprecation, not an
+   immediate break. Because the parser no longer emits `http_api` (step 1), it can
+   only arrive via a hand-written `dag.json`, so the warning lives at
+   **registration**, not compile: `DAGSpec.DeprecationWarnings()` feeds the
+   register response and `leoflow push` prints it (the CLI is the only place the
+   author sees it). The **removal** — reject `http_api` at registration (400) and
+   delete the inline executor + scheduler wiring so the guard is structural (ADR
+   0048) — is tracked in **issue #512** for the next release.
 
 3. **Remove the app-level SSRF guard.** The inline dial-control (#504) goes with
    the inline executor. It is unnecessary once HTTP runs in a pod.

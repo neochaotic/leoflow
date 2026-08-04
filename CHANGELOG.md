@@ -6,6 +6,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Deprecated
+
+- **The native inline `http_api` task type is deprecated and will be removed next
+  release** (ADR 0047, issue #512). It runs an author-supplied HTTP request
+  *inline in the control-plane process*, which carries the control plane's network
+  position — the SSRF surface (audit finding H5). The parser no longer emits it
+  (an `HttpOperator` compiles to a captured provider operator that runs in a task
+  pod, ADR 0040), so it can now only arrive via a hand-written `dag.json`.
+  Registering a spec that still uses it succeeds but returns a deprecation warning
+  that `leoflow push` prints; next release the registration rejects it and the
+  inline executor is removed (the guard becomes structural, ADR 0048). Migrate to
+  an `HttpOperator`, which runs in a pod.
+
 ### Added
 
 - **A task-pod egress NetworkPolicy** (`taskNetworkPolicy`, off by default). Task

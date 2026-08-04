@@ -22,6 +22,9 @@ type versionResponse struct {
 	Version  string `json:"version"`
 	SpecHash string `json:"spec_hash"`
 	Created  bool   `json:"created"`
+	// Warnings carries non-fatal deprecation notices (e.g. the http_api task
+	// type, ADR 0047) so `leoflow push` can show the author. Omitted when empty.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func registerVersionHandler(repo DagVersionRepository, inlineMaxSeconds int) gin.HandlerFunc {
@@ -60,6 +63,6 @@ func registerVersionHandler(repo DagVersionRepository, inlineMaxSeconds int) gin
 		if created {
 			status = http.StatusCreated
 		}
-		c.JSON(status, versionResponse{DagID: spec.DagID, Version: spec.DagVersion, SpecHash: hash, Created: created})
+		c.JSON(status, versionResponse{DagID: spec.DagID, Version: spec.DagVersion, SpecHash: hash, Created: created, Warnings: spec.DeprecationWarnings()})
 	}
 }

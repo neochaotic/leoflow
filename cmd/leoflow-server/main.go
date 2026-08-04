@@ -121,28 +121,24 @@ func run() error {
 	if err := guardTLSForEdition(cfg.UI.Edition, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey); err != nil {
 		return err
 	}
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, tel.Logger)
-	if gerr != nil {
-		return gerr
-	}
-	defer grpcSrv.GracefulStop()
+	// Role gating (ADR 0049). "all" (the default, and Lite's only mode) serves both
+	// sides, so both predicates are true and the wiring below is identical to the
+	// pre-0049 monolith. The "scheduler" role runs the agent gRPC, the scheduler
+	// loop, and the janitors; the "api" role runs the HTTP API + UI. Metrics run in
+	// every role. The Helm two-Deployment rendering that lets an operator select a
+	// role is a later phase; today the flag is process-level and covered by tests.
+	servesAPI := cfg.Server.ServesAPI()
+	servesScheduler := cfg.Server.ServesScheduler()
 
-	startCleanup(ctx, storage.NewXComIndex(pg), logSink, cfg.Logs.Dir, tel.Logger)
-
-	var schedulerHealth api.Heartbeater
-	podDispatch := false
-	if cfg.Scheduler.Enabled {
-		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, xcomSvc, logSink, tel.Logger, tel.Metrics)
-		if serr != nil {
-			return serr
-		}
-		// On shutdown, drain the buffered dispatch pool (if any) so in-flight
-		// dispatches settle (success or failed via the sink) instead of leaking
-		// workers and leaving TIs stuck `queued` (#133). nil in Lite/passthrough.
-		defer drainDispatch(dispatchCloser, tel.Logger)
-		schedulerHealth = sched
-		podDispatch = dispatchOn
+	// Start the scheduler-role components (agent gRPC, janitors, scheduler loop +
+	// dispatch). In the api role this starts nothing and returns a nil health handle
+	// + no-op stop; in "all"/"scheduler" it is the pre-0049 wiring unchanged.
+	schedulerHealth, podDispatch, stopScheduler, serr := startSchedulerSide(ctx, cfg, pg, repo, execStore, authn, xcomSvc, logSink, logTailer, allowInsecureSecrets, servesScheduler, tel.Logger, tel.Metrics)
+	if serr != nil {
+		return serr
 	}
+	defer stopScheduler()
+
 	agentAddr := cfg.Executor.AgentControlPlaneAddr
 	if agentAddr == "" {
 		agentAddr = cfg.Server.GRPCAddr
@@ -210,12 +206,8 @@ func run() error {
 	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	metricsSrv := &http.Server{Addr: cfg.Server.MetricsAddr, Handler: promhttp.HandlerFor(tel.Registry, promhttp.HandlerOpts{}), ReadHeaderTimeout: 10 * time.Second}
 
-	errCh := make(chan error, 2)
-	go serve(apiSrv, errCh)
-	go serve(metricsSrv, errCh)
-	tel.Logger.Info("leoflow-server started", "http_addr", cfg.Server.HTTPAddr, "metrics_addr", cfg.Server.MetricsAddr)
-
-	return awaitShutdown(ctx, errCh, tel.Logger, apiSrv, metricsSrv)
+	tel.Logger.Info("leoflow-server started", "role", cfg.Server.EffectiveRole(), "http_addr", cfg.Server.HTTPAddr, "metrics_addr", cfg.Server.MetricsAddr, "serves_api", servesAPI, "serves_scheduler", servesScheduler)
+	return serveHTTP(ctx, tel.Logger, servesAPI, apiSrv, metricsSrv)
 }
 
 // awaitShutdown blocks until a server errors or the context is canceled, then
@@ -349,6 +341,62 @@ type inlineStateSink struct{ store *storage.SchedulerStore }
 
 func (s inlineStateSink) Transition(ctx context.Context, runID, taskID string, state domain.TaskState) error {
 	return s.store.ApplyTransition(ctx, runID, taskID, state)
+}
+
+// startSchedulerSide starts the scheduler-role components (ADR 0049): the agent
+// gRPC endpoint, the XCom/log janitors, and — when cfg.Scheduler.Enabled — the
+// scheduler loop + dispatch pool. It returns the scheduler's health handle (nil
+// when the loop is off; the API reports scheduler health as healthy on nil),
+// whether pod dispatch is on, and a stop func to defer. When servesScheduler is
+// false (the api role) it starts nothing and returns a nil handle + no-op stop, so
+// the caller defers unconditionally. The stop func fires drain-then-gRPC-stop,
+// matching the pre-0049 defer order (LIFO: drainDispatch before GracefulStop).
+func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc *xcom.Service, logSink *logs.DiskSink, logTailer logs.Tailer, allowInsecureSecrets bool, servesScheduler bool, logger *slog.Logger, metrics *observability.Metrics) (health api.Heartbeater, podDispatch bool, stop func(), err error) {
+	if !servesScheduler {
+		return nil, false, func() {}, nil
+	}
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, logger)
+	if gerr != nil {
+		return nil, false, nil, gerr
+	}
+	// XCom-TTL and log-retention janitors are maintenance the scheduler owns; the
+	// api role runs no background writers.
+	startCleanup(ctx, storage.NewXComIndex(pg), logSink, cfg.Logs.Dir, logger)
+
+	drain := func() {}
+	if cfg.Scheduler.Enabled {
+		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, xcomSvc, logSink, logger, metrics)
+		if serr != nil {
+			grpcSrv.GracefulStop()
+			return nil, false, nil, serr
+		}
+		// On shutdown, drain the buffered dispatch pool (if any) so in-flight
+		// dispatches settle (success or failed via the sink) instead of leaking
+		// workers and leaving TIs stuck `queued` (#133). nil in Lite/passthrough.
+		drain = func() { drainDispatch(dispatchCloser, logger) }
+		health = sched
+		podDispatch = dispatchOn
+	}
+	stop = func() {
+		drain()
+		grpcSrv.GracefulStop()
+	}
+	return health, podDispatch, stop, nil
+}
+
+// serveHTTP starts the process's HTTP listeners — the api role's API+UI (when
+// servesAPI) plus /metrics in every role, so a scheduler-only pod stays scrapable
+// — and blocks until one errors or ctx is canceled, then shuts them down.
+func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv, metricsSrv *http.Server) error {
+	servers := []*http.Server{metricsSrv}
+	if servesAPI {
+		servers = append([]*http.Server{apiSrv}, servers...)
+	}
+	errCh := make(chan error, len(servers))
+	for _, srv := range servers {
+		go serve(srv, errCh)
+	}
+	return awaitShutdown(ctx, errCh, logger, servers...)
 }
 
 // startAgentGRPC starts the AgentService gRPC server and returns it for graceful

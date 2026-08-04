@@ -61,241 +61,26 @@ See #282.
 {{- if .Values.autoscaling.enabled -}}
 {{- $maxReplicas = .Values.autoscaling.maxReplicas -}}
 {{- end -}}
+{{- /* Split (ADR 0049): the scheduler writes logs and every api replica reads
+them from the same PVC, so at least scheduler+api pods mount it at once — RWO can
+never satisfy that. Treat the mounter count as api replicas + 1 (the scheduler). */ -}}
+{{- if .Values.split.enabled -}}
+{{- $maxReplicas = add (int .Values.split.api.replicaCount) 1 -}}
+{{- end -}}
 {{- if and (gt (int $maxReplicas) 1) .Values.logs.persistence.enabled (eq .Values.logs.persistence.accessMode "ReadWriteOnce") -}}
 {{- fail "a ReadWriteOnce logs PVC attaches to only one pod, so more than one control-plane replica — replicaCount > 1, or autoscaling.enabled with maxReplicas > 1 — hangs the extra pods in ContainerCreating (Multi-Attach error), silently. Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore); or keep a single replica; or set logs.persistence.enabled=false (ephemeral emptyDir). See #282." -}}
 {{- end -}}
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ include "leoflow.fullname" . }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "leoflow.labels" . | nindent 4 }}
-spec:
-  replicas: {{ .Values.replicaCount }}
-  selector:
-    matchLabels:
-      {{- include "leoflow.selectorLabels" . | nindent 6 }}
-  template:
-    metadata:
-      labels:
-        {{- include "leoflow.selectorLabels" . | nindent 8 }}
-      annotations:
-        # #316: tie the podTemplate hash to the rendered Secret so `helm
-        # upgrade` rolls the pod whenever a Secret-backed value
-        # (database.url, redis.url, auth.jwtSecret, secretKey,
-        # bootstrap.password) changes. Without this annotation the Secret
-        # is updated but K8s leaves the running pod on the OLD values
-        # until a manual `kubectl rollout restart`. Note: this only covers
-        # the chart-managed Secret; credentials wired via
-        # `*.existingSecret` are outside the chart's visibility and still
-        # require a manual restart on rotation (callout in chart README).
-        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
-        {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-    spec:
-      serviceAccountName: {{ include "leoflow.serviceAccountName" . }}
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      containers:
-        - name: leoflow-server
-          image: {{ include "leoflow.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          ports:
-            - name: http
-              containerPort: {{ .Values.ports.http }}
-            - name: metrics
-              containerPort: {{ .Values.ports.metrics }}
-            - name: grpc
-              containerPort: {{ .Values.ports.grpc }}
-          env:
-            # Mark this deployment as the Pro edition. The control plane uses
-            # this signal for two things: (a) refuse the
-            # LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true dev escape hatch at boot
-            # (#58 / ADR 0014) so a Pro install cannot accidentally ship secrets
-            # over a plaintext gRPC channel; (b) inject the gold PRO badge into
-            # the served SPA shell, mirroring Lite's silver LITE pill.
-            - name: LEOFLOW_UI_EDITION
-              value: "pro"
-            - name: LEOFLOW_SERVER_HTTP_ADDR
-              value: ":{{ .Values.ports.http }}"
-            - name: LEOFLOW_SERVER_METRICS_ADDR
-              value: ":{{ .Values.ports.metrics }}"
-            - name: LEOFLOW_SERVER_GRPC_ADDR
-              value: ":{{ .Values.ports.grpc }}"
-            - name: LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR
-              value: {{ include "leoflow.agentControlPlaneAddr" . | quote }}
-            - name: LEOFLOW_LOGS_DIR
-              value: {{ .Values.config.logsDir | quote }}
-            - name: LEOFLOW_SCHEDULER_ENABLED
-              value: {{ .Values.config.scheduler.enabled | quote }}
-            - name: LEOFLOW_SCHEDULER_LOOP_INTERVAL_MS
-              value: {{ .Values.config.scheduler.loopIntervalMs | quote }}
-            - name: LEOFLOW_DATABASE_MAX_OPEN_CONNS
-              value: {{ .Values.database.maxOpenConns | quote }}
-            - name: LEOFLOW_DATABASE_MAX_IDLE_CONNS
-              value: {{ .Values.database.maxIdleConns | quote }}
-            - name: LEOFLOW_AUTH_JWT_TOKEN_TTL_SECONDS
-              value: {{ .Values.auth.tokenTtlSeconds | quote }}
-            - name: LEOFLOW_OBSERVABILITY_LOG_FORMAT
-              value: {{ .Values.observability.logFormat | quote }}
-            - name: LEOFLOW_OBSERVABILITY_LOG_LEVEL
-              value: {{ .Values.observability.logLevel | quote }}
-            {{- if .Values.observability.otel.enabled }}
-            - name: LEOFLOW_OBSERVABILITY_OTEL_ENABLED
-              value: "true"
-            - name: LEOFLOW_OBSERVABILITY_OTEL_ENDPOINT
-              value: {{ .Values.observability.otel.endpoint | quote }}
-            {{- end }}
-            {{- if .Values.agentTLS.enabled }}
-            # TLS on the agent gRPC channel (issue #58). The server cert is
-            # mounted from agentTLS.serverCertSecret; the agent CA is delivered to
-            # task pods via agentTLS.caConfigMap (the dispatcher mounts + selects it).
-            - name: LEOFLOW_SERVER_GRPC_TLS_CERT
-              value: /etc/leoflow/grpc-tls/tls.crt
-            - name: LEOFLOW_SERVER_GRPC_TLS_KEY
-              value: /etc/leoflow/grpc-tls/tls.key
-            - name: LEOFLOW_EXECUTOR_AGENT_TLS_CA_CONFIGMAP
-              value: {{ .Values.agentTLS.caConfigMap | quote }}
-            {{- end }}
-            {{- if .Values.taskSecret.name }}
-            # Mount a Kubernetes Secret read-only into every task pod so a task can
-            # read a credential (e.g. a GCP service-account key referenced by a
-            # connection's key_path) from the cluster's secret store — Leoflow
-            # never stores the key itself (ADR 0035).
-            - name: LEOFLOW_EXECUTOR_TASK_SECRET_NAME
-              value: {{ .Values.taskSecret.name | quote }}
-            - name: LEOFLOW_EXECUTOR_TASK_SECRET_MOUNT_PATH
-              value: {{ .Values.taskSecret.mountPath | quote }}
-            {{- end }}
-            # Task-pod hardening. Always stamped, both directions: leaving the
-            # secure value implicit would mean a chart upgrade could not turn an
-            # opt-out back off without an operator noticing.
-            - name: LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT
-              value: {{ .Values.taskPodSecurity.runAsNonRoot | quote }}
-            - name: LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM
-              value: {{ .Values.taskPodSecurity.readOnlyRootFilesystem | quote }}
-            - name: LEOFLOW_DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.existingSecret | default (include "leoflow.secretName" .) }}
-                  key: databaseUrl
-            - name: LEOFLOW_REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.redis.existingSecret | default (include "leoflow.secretName" .) }}
-                  key: redisUrl
-            {{- if .Values.redis.caConfigMap }}
-            # #312 — Verified TLS to managed Redis (Memorystore
-            # SERVER_AUTHENTICATION, ElastiCache in-transit, Azure Cache).
-            # The CA bundle from the named ConfigMap is mounted read-only at
-            # /etc/leoflow/redis-ca/ca.crt and the server is told where to
-            # find it via LEOFLOW_REDIS_CA_FILE.
-            - name: LEOFLOW_REDIS_CA_FILE
-              value: /etc/leoflow/redis-ca/ca.crt
-            {{- end }}
-            - name: LEOFLOW_AUTH_JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.existingSecret | default (include "leoflow.secretName" .) }}
-                  key: jwtSecret
-            {{- if or .Values.secretKeyExistingSecret .Values.secretKey }}
-            # LEOFLOW_SECRET_KEY (ADR 0019) — Connection password / Extra
-            # encryption-at-rest key. Without it, the API refuses Connection
-            # writes (Variables still work). Optional so users who only use
-            # Variables can omit it; recommended for any real Pro install.
-            - name: LEOFLOW_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secretKeyExistingSecret | default (include "leoflow.secretName" .) }}
-                  key: secretKey
-            {{- end }}
-            {{- if or .Values.bootstrap.existingSecret .Values.bootstrap.password }}
-            - name: LEOFLOW_BOOTSTRAP_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.bootstrap.existingSecret | default (include "leoflow.secretName" .) }}
-                  key: bootstrapPassword
-            {{- end }}
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 20
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            - name: logs
-              mountPath: {{ .Values.config.logsDir }}
-            {{- if .Values.agentTLS.enabled }}
-            - name: grpc-tls
-              mountPath: /etc/leoflow/grpc-tls
-              readOnly: true
-            {{- end }}
-            {{- if .Values.database.caConfigMap }}
-            # Managed-Postgres CA bundle (#315). The DSN references this path
-            # via `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` —
-            # pgx reads sslrootcert natively, so no Go-side wiring is needed.
-            - name: db-ca
-              mountPath: /etc/leoflow/db-ca
-              readOnly: true
-            {{- end }}
-            {{- if .Values.redis.caConfigMap }}
-            - name: redis-ca
-              mountPath: /etc/leoflow/redis-ca
-              readOnly: true
-            {{- end }}
-      volumes:
-        - name: logs
-          {{- if .Values.logs.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ include "leoflow.fullname" . }}-logs
-          {{- else }}
-          # Dev-only fallback: logs vanish on pod restart. Enable
-          # `logs.persistence.enabled` for durable storage (#227).
-          emptyDir: {}
-          {{- end }}
-        {{- if .Values.agentTLS.enabled }}
-        - name: grpc-tls
-          secret:
-            secretName: {{ required "agentTLS.serverCertSecret is required when agentTLS.enabled" .Values.agentTLS.serverCertSecret }}
-        {{- end }}
-        {{- if .Values.database.caConfigMap }}
-        - name: db-ca
-          configMap:
-            name: {{ .Values.database.caConfigMap }}
-            items:
-              - key: ca.crt
-                path: ca.crt
-        {{- end }}
-        {{- if .Values.redis.caConfigMap }}
-        - name: redis-ca
-          configMap:
-            name: {{ .Values.redis.caConfigMap }}
-        {{- end }}
-      {{- with .Values.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+
+{{- /*
+Render one "all" Deployment (default, byte-identical to the pre-0049 monolith) or,
+when split.enabled, separate api and scheduler Deployments — ADR 0049. The
+scheduler is always a single leader (ADR 0009), so its replica count is pinned to 1
+here regardless of split.scheduler.replicaCount.
+*/ -}}
+{{- if .Values.split.enabled }}
+{{- include "leoflow.controlPlaneDeployment" (dict "ctx" . "role" "api" "replicas" .Values.split.api.replicaCount) | nindent 0 }}
+---
+{{- include "leoflow.controlPlaneDeployment" (dict "ctx" . "role" "scheduler" "replicas" 1) | nindent 0 }}
+{{- else }}
+{{- include "leoflow.controlPlaneDeployment" (dict "ctx" . "role" "all" "replicas" .Values.replicaCount) | nindent 0 }}
+{{- end }}

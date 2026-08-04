@@ -33,6 +33,35 @@ app.kubernetes.io/name: {{ include "leoflow.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/*
+Role-aware selector labels (ADR 0049). Takes a dict {ctx, role}. For the "all"
+role (the default, non-split monolith) this is EXACTLY leoflow.selectorLabels —
+no extra label — so the single Deployment's immutable selector is unchanged and
+`helm upgrade` from a pre-split install does not trip "field is immutable". For
+the api/scheduler roles it adds app.kubernetes.io/component so each Deployment
+selects only its own pods and Services can target one role.
+*/}}
+{{- define "leoflow.roleSelectorLabels" -}}
+{{ include "leoflow.selectorLabels" .ctx }}
+{{- if and .role (ne .role "all") }}
+app.kubernetes.io/component: {{ .role }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Role-suffixed resource name. "all" keeps the bare fullname (byte-identical to the
+non-split Deployment/Service names); api/scheduler get a "-api"/"-scheduler"
+suffix so the two Deployments, Services, SAs, etc. do not collide.
+*/}}
+{{- define "leoflow.roleName" -}}
+{{- $full := include "leoflow.fullname" .ctx -}}
+{{- if and .role (ne .role "all") -}}
+{{- printf "%s-%s" $full .role | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $full -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "leoflow.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "leoflow.fullname" .) .Values.serviceAccount.name -}}

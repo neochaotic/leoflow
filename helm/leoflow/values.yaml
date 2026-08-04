@@ -11,6 +11,24 @@ imagePullSecrets: []
 # -- Number of control-plane replicas. The scheduler leader-elects (ADR 0009), so `>1` is HA-safe (active-passive scheduler, active-active API).
 replicaCount: 1
 
+# ADR 0049 — split the control plane into two Deployments by role. OFF by default:
+# the chart renders a single `all`-role Deployment that is byte-identical to the
+# pre-0049 monolith, so existing installs upgrade in place with no topology change.
+# Turn it on for enterprise scale: the API (HTTP + UI) becomes its own active-active
+# Deployment with a RESTRICTED identity (no pod-create / apiserver RBAC), and the
+# scheduler (reconciler + dispatch + agent gRPC) becomes a single-leader Deployment
+# that keeps the privileged identity. The security payoff is that a compromised or
+# SSRF'd API cannot reach the apiserver — see ADR 0048/0049.
+split:
+  # -- Render separate `api` and `scheduler` Deployments instead of one `all` Deployment. Pro-only (Lite is single-host and never splits).
+  enabled: false
+  api:
+    # -- API Deployment replicas (active-active; HPA-friendly). Ignored unless split.enabled.
+    replicaCount: 2
+  scheduler:
+    # -- Scheduler Deployment replicas. Pinned to 1 by the chart regardless of this value — the scheduler is a single leader (ADR 0009); a field is kept only for clarity. Ignored unless split.enabled.
+    replicaCount: 1
+
 # -- Namespace where the control plane creates task pods. MUST match the
 # namespace the server expects (server code currently targets `leoflow`).
 # The chart grants the control plane RBAC to manage pods here; if you

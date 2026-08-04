@@ -671,6 +671,21 @@ func (r *Repository) BootstrapAdminHash(ctx context.Context, tenant, email, hash
 	// No such admin yet — create it and grant the admin role.
 	uid, err := r.q.CreateUser(ctx, queries.CreateUserParams{TenantID: tid, Email: email, PasswordHash: strPtr(hash)})
 	if err != nil {
+		// Concurrent bootstrap race: between the reconcile check above and this
+		// insert, another process created the admin. This is expected under ADR
+		// 0049 (the api and scheduler roles boot at once) and with multiple
+		// active-active api replicas — every replica runs bootstrap on startup.
+		// It is not a failure: reconcile to the configured hash and report "not
+		// newly created", so no process crashes on the unique-constraint 23505.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			if _, uerr := r.q.UpdateUserPassword(ctx, queries.UpdateUserPasswordParams{
+				Name: tenant, Email: email, PasswordHash: strPtr(hash),
+			}); uerr != nil {
+				return false, fmt.Errorf("reconciling admin after concurrent create: %w", uerr)
+			}
+			return false, nil
+		}
 		return false, fmt.Errorf("creating admin user: %w", err)
 	}
 	roleID, err := r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: "admin"})

@@ -108,7 +108,10 @@ the api Service and serves no gRPC).
 {{- else -}}
 {{- $svc := include "leoflow.fullname" . -}}
 {{- if .Values.split.enabled -}}
-{{- $svc = printf "%s-scheduler" $svc -}}
+{{- /* Use roleName (not a raw printf) so this DNS name matches the scheduler
+Service exactly, including its trunc-63 — a long release name would otherwise
+diverge and agents would dial a name no Service answers to. */ -}}
+{{- $svc = include "leoflow.roleName" (dict "ctx" . "role" "scheduler") -}}
 {{- end -}}
 {{- printf "%s.%s.svc.cluster.local:%d" $svc .Release.Namespace (int .Values.ports.grpc) -}}
 {{- end -}}

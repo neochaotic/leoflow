@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"k8s.io/client-go/kubernetes"
@@ -150,61 +149,23 @@ func run() error {
 		InlineConcurrency:     cfg.Executor.HTTP.InlineConcurrencyLimit,
 	}
 
-	if cfg.Auth.DevNoAuth {
-		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
+	// Dependency health probes (Postgres, and Redis when configured). Built once
+	// and shared read-only by the API's /readyz and the metrics-port /readyz.
+	checks := healthChecks(pg, redisHealth)
+
+	// The API side (HTTP + embedded UI) is built only in the api/"all" role. The
+	// scheduler role serves no API, so none of the UI/handler machinery is even
+	// constructed — apiSrv stays nil and serveHTTP omits it.
+	var apiSrv *http.Server
+	if servesAPI {
+		apiSrv = buildAPIServer(cfg, tel, authn, pg, repo, xcomReader, logSink, logTailer, checks, executorInfo, schedulerHealth)
 	}
-	// Show the LITE badge for the Lite edition (independent of the auth mode), and
-	// also when the legacy dev auth bypass is on. The demo/production show neither.
-	uiSrv := ui.New()
-	uiSrv.SetLiteBanner(showLiteBadge(cfg))
-	uiSrv.SetProBanner(showProBadge(cfg))
-	uiSrv.SetInstanceName(cfg.UI.InstanceName)
 
-	editorFS := liteEditorFS(cfg, tel.Logger)
-	uiSrv.SetEditorButton(editorFS != nil)
-
-	handler := api.NewServer(api.Dependencies{
-		Logger:                       tel.Logger,
-		Authenticator:                authn,
-		RateLimiter:                  auth.NewRateLimiter(loginRateLimit(cfg), time.Minute),
-		Registry:                     tel.Registry,
-		Metrics:                      tel.Metrics,
-		Tracer:                       tel.Tracer,
-		HealthChecks:                 healthChecks(pg, redisHealth),
-		CORSOrigins:                  cfg.Server.CORS.AllowedOrigins,
-		TokenTTLSecs:                 cfg.Auth.JWT.TokenTTLSeconds,
-		InstanceName:                 cfg.UI.InstanceName,
-		UIAutoRefreshIntervalSeconds: cfg.UI.AutoRefreshIntervalSeconds,
-		DevNoAuth:                    cfg.Auth.DevNoAuth,
-
-		InlineHTTPMaxDurationSeconds: cfg.Executor.HTTP.InlineMaxDurationSeconds,
-		Dags:                         repo,
-		DagRuns:                      repo,
-		Tasks:                        repo,
-		Versions:                     repo,
-		Xcoms:                        xcomReader,
-		Logs:                         storage.NewLogReader(pg, logSink, logTailer),
-		Specs:                        repo,
-		LatestRuns:                   repo,
-		TaskSummary:                  repo,
-		DagVersions:                  repo,
-		DashboardStats:               repo,
-		AuditLog:                     repo,
-		Variables:                    repo,
-		Connections:                  repo,
-		Favorites:                    repo,
-		ImportErrors:                 repo,
-		Audit:                        repo,
-		ExecutorInfo:                 executorInfo,
-		SchedulerHealth:              schedulerHealth,
-		UI:                           uiSrv,
-		Workspace:                    editorFS,
-		MonacoDir:                    cfg.UI.MonacoDir,
-		ExamplesFS:                   leoflow.ExampleDAGs(),
-	})
-
-	apiSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	metricsSrv := &http.Server{Addr: cfg.Server.MetricsAddr, Handler: promhttp.HandlerFor(tel.Registry, promhttp.HandlerOpts{}), ReadHeaderTimeout: 10 * time.Second}
+	// The metrics listener also serves /healthz + /readyz in every role so a
+	// scheduler-only pod (ADR 0049), which serves no API, still has a probe target
+	// for the kubelet. Additive on the api/"all" role, whose probes still hit the
+	// HTTP port.
+	metricsSrv := &http.Server{Addr: cfg.Server.MetricsAddr, Handler: api.ObservabilityHandler(tel.Registry, checks), ReadHeaderTimeout: 10 * time.Second}
 
 	tel.Logger.Info("leoflow-server started", "role", cfg.Server.EffectiveRole(), "http_addr", cfg.Server.HTTPAddr, "metrics_addr", cfg.Server.MetricsAddr, "serves_api", servesAPI, "serves_scheduler", servesScheduler)
 	return serveHTTP(ctx, tel.Logger, servesAPI, apiSrv, metricsSrv)
@@ -382,6 +343,66 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 		grpcSrv.GracefulStop()
 	}
 	return health, podDispatch, stop, nil
+}
+
+// buildAPIServer assembles the HTTP API + embedded UI server for the api/"all"
+// role (ADR 0049). It is called only when the role serves the API, so the UI
+// shell, editor FS, rate limiter, and full route set are never constructed in a
+// scheduler-only process.
+func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, authn *auth.JWTAuthenticator, pg *storage.Postgres, repo *storage.Repository, xcomReader *storage.XComReader, logSink *logs.DiskSink, logTailer logs.Tailer, checks map[string]api.HealthChecker, executorInfo api.ExecutorInfo, schedulerHealth api.Heartbeater) *http.Server {
+	if cfg.Auth.DevNoAuth {
+		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
+	}
+	// Show the LITE badge for the Lite edition (independent of the auth mode), and
+	// also when the legacy dev auth bypass is on. The demo/production show neither.
+	uiSrv := ui.New()
+	uiSrv.SetLiteBanner(showLiteBadge(cfg))
+	uiSrv.SetProBanner(showProBadge(cfg))
+	uiSrv.SetInstanceName(cfg.UI.InstanceName)
+
+	editorFS := liteEditorFS(cfg, tel.Logger)
+	uiSrv.SetEditorButton(editorFS != nil)
+
+	handler := api.NewServer(api.Dependencies{
+		Logger:                       tel.Logger,
+		Authenticator:                authn,
+		RateLimiter:                  auth.NewRateLimiter(loginRateLimit(cfg), time.Minute),
+		Registry:                     tel.Registry,
+		Metrics:                      tel.Metrics,
+		Tracer:                       tel.Tracer,
+		HealthChecks:                 checks,
+		CORSOrigins:                  cfg.Server.CORS.AllowedOrigins,
+		TokenTTLSecs:                 cfg.Auth.JWT.TokenTTLSeconds,
+		InstanceName:                 cfg.UI.InstanceName,
+		UIAutoRefreshIntervalSeconds: cfg.UI.AutoRefreshIntervalSeconds,
+		DevNoAuth:                    cfg.Auth.DevNoAuth,
+
+		InlineHTTPMaxDurationSeconds: cfg.Executor.HTTP.InlineMaxDurationSeconds,
+		Dags:                         repo,
+		DagRuns:                      repo,
+		Tasks:                        repo,
+		Versions:                     repo,
+		Xcoms:                        xcomReader,
+		Logs:                         storage.NewLogReader(pg, logSink, logTailer),
+		Specs:                        repo,
+		LatestRuns:                   repo,
+		TaskSummary:                  repo,
+		DagVersions:                  repo,
+		DashboardStats:               repo,
+		AuditLog:                     repo,
+		Variables:                    repo,
+		Connections:                  repo,
+		Favorites:                    repo,
+		ImportErrors:                 repo,
+		Audit:                        repo,
+		ExecutorInfo:                 executorInfo,
+		SchedulerHealth:              schedulerHealth,
+		UI:                           uiSrv,
+		Workspace:                    editorFS,
+		MonacoDir:                    cfg.UI.MonacoDir,
+		ExamplesFS:                   leoflow.ExampleDAGs(),
+	})
+	return &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 }
 
 // serveHTTP starts the process's HTTP listeners — the api role's API+UI (when

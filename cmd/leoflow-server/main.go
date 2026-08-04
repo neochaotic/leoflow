@@ -153,6 +153,16 @@ func run() error {
 	// and shared read-only by the API's /readyz and the metrics-port /readyz.
 	checks := healthChecks(pg, redisHealth)
 
+	// In the split api role the scheduler runs in another process, so
+	// startSchedulerSide returned a nil health handle. Reporting the scheduler as
+	// healthy from nil would be a lie (finding F1) — instead read its liveness
+	// from shared DB state: a live scheduler leader holds the leadership advisory
+	// lock (ADR 0009). The "all" role keeps its in-process handle (real tick
+	// health), unchanged.
+	if servesAPI && !servesScheduler {
+		schedulerHealth = scheduler.NewLeaderHealthReader(pg.Pool)
+	}
+
 	// The API side (HTTP + embedded UI) is built only in the api/"all" role. The
 	// scheduler role serves no API, so none of the UI/handler machinery is even
 	// constructed — apiSrv stays nil and serveHTTP omits it.

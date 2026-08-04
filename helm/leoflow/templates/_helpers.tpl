@@ -49,17 +49,28 @@ app.kubernetes.io/component: {{ .role }}
 {{- end -}}
 
 {{/*
+suffixRole appends "-<role>" to a base name. It truncates the BASE to 53 first,
+so even with a max-length base the result fits in 63 chars AND the "-api" /
+"-scheduler" suffix survives — without this, a ~62-char base truncates the suffix
+off and api and scheduler collapse to the same name (an install-time collision).
+An empty or "all" role returns the base unchanged (byte-identical to non-split).
+Takes {base, role}.
+*/}}
+{{- define "leoflow.suffixRole" -}}
+{{- if and .role (ne .role "all") -}}
+{{- printf "%s-%s" (.base | trunc 53 | trimSuffix "-") .role | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- .base -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Role-suffixed resource name. "all" keeps the bare fullname (byte-identical to the
 non-split Deployment/Service names); api/scheduler get a "-api"/"-scheduler"
-suffix so the two Deployments, Services, SAs, etc. do not collide.
+suffix so the two Deployments, Services, SAs, etc. do not collide. Takes {ctx, role}.
 */}}
 {{- define "leoflow.roleName" -}}
-{{- $full := include "leoflow.fullname" .ctx -}}
-{{- if and .role (ne .role "all") -}}
-{{- printf "%s-%s" $full .role | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- $full -}}
-{{- end -}}
+{{- include "leoflow.suffixRole" (dict "base" (include "leoflow.fullname" .ctx) "role" .role) -}}
 {{- end -}}
 
 {{- define "leoflow.serviceAccountName" -}}
@@ -79,7 +90,11 @@ while the scheduler keeps the privileged one — the split's security payoff.
 */}}
 {{- define "leoflow.roleServiceAccountName" -}}
 {{- if and .role (ne .role "all") -}}
-{{- include "leoflow.roleName" (dict "ctx" .ctx "role" .role) -}}
+{{- /* Honor serviceAccount.name as the base (default fullname), then suffix by
+role. So `serviceAccount.name=X` yields X-api / X-scheduler — the names an
+operator using create=false must pre-provision (IRSA / Workload Identity). */ -}}
+{{- $base := default (include "leoflow.fullname" .ctx) .ctx.Values.serviceAccount.name -}}
+{{- include "leoflow.suffixRole" (dict "base" $base "role" .role) -}}
 {{- else -}}
 {{- include "leoflow.serviceAccountName" .ctx -}}
 {{- end -}}

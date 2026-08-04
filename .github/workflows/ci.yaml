@@ -453,6 +453,15 @@ jobs:
       - name: Run the k3d operator e2e
         run: bash test/e2e/e2e.sh
 
+      # ADR 0049: the same runner, datastores, and images also gate the two-process
+      # api/scheduler split — boots role=api + role=scheduler as separate processes
+      # against the shared Postgres/Redis and asserts a run flows across them via
+      # the DB (the api accepts the trigger; the SEPARATE scheduler dispatches the
+      # pods). Runs its own k3d cluster; reuses the admin the operator e2e seeded,
+      # which also exercises the concurrent-bootstrap idempotency fix.
+      - name: Run the k3d two-process split e2e (ADR 0049)
+        run: bash test/e2e/split-two-process.sh
+
   # e2e-dbt: dbt-native orchestration on a real k3d cluster (test/e2e/dbt-e2e.sh +
   # dbt-mixing-e2e.sh). A dbt project compiles to one pod per model; the mixing
   # script proves a dbt project in a subdir (transform/) wired around operators,

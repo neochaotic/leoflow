@@ -1,6 +1,6 @@
 # ADR 0049: Split the API/UI and scheduler into separate roles of one binary
 
-**Status:** Accepted
+**Status:** Accepted — implemented (role gating + Helm split + two-process e2e), behind `split.enabled` (off by default).
 **Accepted:** 2026-08-03 — maintainer greenlit the split for enterprise scale, a conscious override of the KFP study's "keep the monolith" (correct at small scale). Implementation is phased and must be well-tested before it rides a release.
 **Date:** 2026-08-03
 **Relates:** ADR 0001 (one Go control plane), ADR 0007 + 0017 (single binary, embedded SPA), ADR 0028 (one tag = both editions), ADR 0031 (DB-as-truth scheduler), ADR 0048 (no user code in the control plane), ADR 0009 (leader election)
@@ -130,6 +130,53 @@ not from memory — a small behaviour change to name in the upgrade notes.
    security invariant), and the `scheduler` role can.
 5. **Upgrade** — a monolith (`all`) deployment upgraded to split roles keeps
    serving (no data migration; it is a topology change).
+
+## Known residuals (the split does not close these)
+
+The split inverts privilege×exposure (the exposed API gets the restricted
+identity; the privileged scheduler gets the least exposure). It does **not** make
+the control plane fully isolated. Two residuals are stated here so they are not
+mistaken as solved:
+
+1. **The scheduler trusts the DB (indirect blast radius).** The api holds DB write
+   credentials, and the scheduler acts on what it reads from the DB (DB-as-truth,
+   ADR 0031). So a compromised api cannot reach the apiserver *directly* (its SA is
+   unbound), but it can still influence what the scheduler dispatches by writing to
+   the DB. The restricted identity shrinks the direct blast radius, not this
+   indirect one. A tighter design would have the scheduler re-authorize/validate
+   task specs (e.g. only dispatch registered, integrity-checked specs) rather than
+   trust DB rows. Tracked as future hardening.
+
+2. **Task logs on a shared RWX PVC.** The scheduler writes task logs to disk (from
+   the agent gRPC stream) and the api reads them for the UI — today via the same
+   RWX logs PVC. At scale, N api replicas + the scheduler contending on one RWX
+   volume is an I/O bottleneck, and it is the one seam that is *not* DB-as-truth
+   (shared filesystem). The fix is reading logs via an object store / the tailer,
+   not a shared PVC. Tracked separately.
+
+Lesser notes: one binary carries both roles' code (ADR 0028 one-tag simplicity
+over a minimal per-role artifact — a deliberate trade), and the api mutates some
+run state directly (should stay "desired state" the scheduler reconciles, not
+imperative actions).
+
+## Verification
+
+Implemented and proven live, not just rendered:
+
+- **Unit** — role parsing/defaulting/validation (`internal/config`), and the
+  every-role `/healthz`+`/readyz` on the metrics port (`api.ObservabilityHandler`).
+- **Helm** — `helm-unittest` locks the per-role Deployment/Service/RBAC/SA/
+  NetworkPolicy/HPA/PDB split; the non-split render stays byte-identical (existing
+  suite is the regression guard).
+- **Integration (real Postgres)** — `TestBootstrapAdminConcurrentIntegration`
+  reproduces and guards the concurrent-bootstrap race the split exposed (several
+  processes/replicas bootstrapping the admin at once).
+- **E2E (k3d, two processes)** — `test/e2e/split-two-process.sh` (`make e2e-split`,
+  gated in CI) boots `role=api` + `role=scheduler` as separate processes against a
+  shared Postgres/Redis, asserts socket-level role isolation (api serves no gRPC,
+  scheduler serves no HTTP API, both answer `/healthz` on the metrics port), and
+  drives a run whose task pods the *separate* scheduler process dispatches — the
+  api accepts the trigger and serves the terminal state, all through the DB.
 
 ## Alternatives rejected
 

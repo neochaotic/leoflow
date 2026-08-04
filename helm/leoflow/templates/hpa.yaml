@@ -4,10 +4,14 @@ Safe because the scheduler leader-elects (ADR 0009): scaling the Deployment adds
 API/UI replicas while exactly one scheduler stays active. Disabled by default.
 */ -}}
 {{- if .Values.autoscaling.enabled }}
+{{- /* ADR 0049: in split mode the autoscaler targets the api Deployment (the
+active-active role). The scheduler is a single leader (ADR 0009) and is never
+autoscaled. Non-split targets the single "all" Deployment, unchanged. */ -}}
+{{- $role := ternary "api" "all" .Values.split.enabled -}}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "leoflow.fullname" . }}
+  name: {{ include "leoflow.roleName" (dict "ctx" . "role" $role) }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "leoflow.labels" . | nindent 4 }}
@@ -15,7 +19,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "leoflow.fullname" . }}
+    name: {{ include "leoflow.roleName" (dict "ctx" . "role" $role) }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

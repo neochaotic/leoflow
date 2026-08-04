@@ -4,10 +4,15 @@ drains, upgrades) keep enough control-plane replicas serving the API. Disabled b
 default; set replicaCount > 1 (HA, leader-elected) before enabling.
 */ -}}
 {{- if .Values.podDisruptionBudget.enabled }}
+{{- /* ADR 0049: in split mode the PDB protects the api Deployment (the
+multi-replica, active-active role). The scheduler is a single leader (ADR 0009);
+a PDB over one pod would block node drains, so it is deliberately excluded.
+Non-split covers the single "all" Deployment, unchanged. */ -}}
+{{- $role := ternary "api" "all" .Values.split.enabled -}}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "leoflow.fullname" . }}
+  name: {{ include "leoflow.roleName" (dict "ctx" . "role" $role) }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "leoflow.labels" . | nindent 4 }}
@@ -20,5 +25,5 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "leoflow.selectorLabels" . | nindent 6 }}
+      {{- include "leoflow.roleSelectorLabels" (dict "ctx" . "role" $role) | nindent 6 }}
 {{- end }}

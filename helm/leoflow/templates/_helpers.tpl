@@ -81,11 +81,20 @@ suffix so the two Deployments, Services, SAs, etc. do not collide.
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end -}}
 
-{{/* In-cluster gRPC address task pods dial, unless overridden. */}}
+{{/*
+In-cluster gRPC address task pods dial, unless overridden. When split.enabled
+(ADR 0049) the agent gRPC endpoint lives on the scheduler Service, so task pods
+must dial "<fullname>-scheduler", not the bare fullname (which in split mode is
+the api Service and serves no gRPC).
+*/}}
 {{- define "leoflow.agentControlPlaneAddr" -}}
 {{- if .Values.config.agentControlPlaneAddr -}}
 {{- .Values.config.agentControlPlaneAddr -}}
 {{- else -}}
-{{- printf "%s.%s.svc.cluster.local:%d" (include "leoflow.fullname" .) .Release.Namespace (int .Values.ports.grpc) -}}
+{{- $svc := include "leoflow.fullname" . -}}
+{{- if .Values.split.enabled -}}
+{{- $svc = printf "%s-scheduler" $svc -}}
+{{- end -}}
+{{- printf "%s.%s.svc.cluster.local:%d" $svc .Release.Namespace (int .Values.ports.grpc) -}}
 {{- end -}}
 {{- end -}}

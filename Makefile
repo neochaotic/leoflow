@@ -146,6 +146,10 @@ runtime-images: ## Build the task base images for each supported Python version
 migrate-image: ## Build the migrate image (migrations + golang-migrate) for the Helm migration Job
 	docker build -f deploy/Dockerfile.migrate -t leoflow-migrate:$(VERSION) .
 
+.PHONY: rc-smoke
+rc-smoke: ## Run the full RC pre-cut smoke battery (gates + k3d e2es). SKIP_E2E=1 for gates only.
+	bash scripts/rc-smoke.sh
+
 .PHONY: e2e
 e2e: ## Run the k3d end-to-end smoke test (needs k3d, kubectl, docker, jq; run make dev-up + make build first)
 	bash test/e2e/e2e.sh

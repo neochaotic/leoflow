@@ -17,7 +17,13 @@ type AgentLostCandidate struct {
 	DagRunID       string
 	DagID          string
 	TaskID         string
-	LastHeartbeat  time.Time
+	// TryNumber is the attempt the candidate row is on, so the reaper can
+	// tear down EXACTLY that attempt's pod after failing it (#474). A retry
+	// bumps try_number in place and dispatches a new pod with a new
+	// try-number label, so pinning it here means a newer live attempt's pod
+	// can never be deleted by mistake.
+	TryNumber     int
+	LastHeartbeat time.Time
 }
 
 // IsAgentLost reports whether the agent has been silent long enough to be
@@ -57,6 +63,10 @@ type agentLostReaper struct {
 	logger    *slog.Logger
 	threshold time.Duration
 	recorder  Recorder
+	// pods tears down the reaped TI's pod after the DB transition (#474). A
+	// silent agent may be a network-partitioned but still-running container;
+	// deleting the pod is what actually stops the abandoned work. Nil in Lite.
+	pods PodManager
 }
 
 func newAgentLostReaper(store HeartbeatReapStore, logger *slog.Logger, threshold time.Duration, rec Recorder) *agentLostReaper {
@@ -92,6 +102,17 @@ func (r *agentLostReaper) run(ctx context.Context) error {
 			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID,
 			"last_heartbeat", c.LastHeartbeat)
 		r.record("agent_lost")
+		// The TI is now durably failed; delete its pod so a partitioned-but-alive
+		// container stops (#474). Pinned to (run, task, try) so a retry's newer
+		// pod is never touched. Only reached after the DB mark, so we never delete
+		// a pod for a TI we did not settle. Best-effort: a delete error is logged.
+		if r.pods != nil {
+			if derr := r.pods.DeleteTaskPod(ctx, c.DagRunID, c.TaskID, c.TryNumber); derr != nil {
+				r.logger.Error("deleting agent-lost task pod",
+					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "try", c.TryNumber, "error", derr)
+				r.record("agent_lost_pod_delete_error")
+			}
+		}
 	}
 	return nil
 }

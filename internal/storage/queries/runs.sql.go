@@ -589,6 +589,7 @@ SELECT ti.id AS task_instance_id,
        ti.dag_run_id AS dag_run_id,
        d.dag_id AS dag_id_text,
        ti.task_id AS task_id,
+       ti.try_number AS try_number,
        ti.last_heartbeat_at AS last_heartbeat_at
 FROM task_instances ti
 JOIN dag_runs dr ON dr.id = ti.dag_run_id
@@ -604,6 +605,7 @@ type ListAgentLostCandidatesRow struct {
 	DagRunID        pgtype.UUID        `json:"dag_run_id"`
 	DagIDText       string             `json:"dag_id_text"`
 	TaskID          string             `json:"task_id"`
+	TryNumber       int32              `json:"try_number"`
 	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
 }
 
@@ -627,6 +629,7 @@ func (q *Queries) ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostC
 			&i.DagRunID,
 			&i.DagIDText,
 			&i.TaskID,
+			&i.TryNumber,
 			&i.LastHeartbeatAt,
 		); err != nil {
 			return nil, err
@@ -805,6 +808,7 @@ SELECT ti.id AS task_instance_id,
        ti.dag_run_id,
        d.dag_id AS dag_id_text,
        ti.task_id,
+       ti.try_number,
        ti.queued_at
 FROM task_instances ti
 JOIN dag_runs dr ON dr.id = ti.dag_run_id
@@ -819,6 +823,7 @@ type ListStaleQueuedTaskInstancesRow struct {
 	DagRunID       pgtype.UUID        `json:"dag_run_id"`
 	DagIDText      string             `json:"dag_id_text"`
 	TaskID         string             `json:"task_id"`
+	TryNumber      int32              `json:"try_number"`
 	QueuedAt       pgtype.Timestamptz `json:"queued_at"`
 }
 
@@ -841,6 +846,7 @@ func (q *Queries) ListStaleQueuedTaskInstances(ctx context.Context) ([]ListStale
 			&i.DagRunID,
 			&i.DagIDText,
 			&i.TaskID,
+			&i.TryNumber,
 			&i.QueuedAt,
 		); err != nil {
 			return nil, err
@@ -1174,7 +1180,7 @@ func (q *Queries) RecordDispatchFailure(ctx context.Context, arg RecordDispatchF
 	return err
 }
 
-const recordTaskHeartbeat = `-- name: RecordTaskHeartbeat :exec
+const recordTaskHeartbeat = `-- name: RecordTaskHeartbeat :execrows
 UPDATE task_instances
 SET last_heartbeat_at = now()
 WHERE dag_run_id = $1
@@ -1194,9 +1200,18 @@ type RecordTaskHeartbeatParams struct {
 // state IN guard avoids stamping a heartbeat on a TI the scheduler already
 // transitioned to terminal between the agent's last heartbeat and now — a
 // terminal TI must stay terminal even if a late heartbeat arrives.
-func (q *Queries) RecordTaskHeartbeat(ctx context.Context, arg RecordTaskHeartbeatParams) error {
-	_, err := q.db.Exec(ctx, recordTaskHeartbeat, arg.DagRunID, arg.TaskID, arg.TryNumber)
-	return err
+//
+// Returns the affected row count. Zero means the heartbeating agent's attempt
+// no longer matches the live row — its try_number is behind, or a reaper
+// already settled the row terminal — the same "moved on" predicate the state
+// report is guarded by (#467). The agent RPC turns a zero here into a
+// should_terminate signal so a reaped-but-alive pod stops itself (#474).
+func (q *Queries) RecordTaskHeartbeat(ctx context.Context, arg RecordTaskHeartbeatParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordTaskHeartbeat, arg.DagRunID, arg.TaskID, arg.TryNumber)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const redispatchRescheduledTaskInstance = `-- name: RedispatchRescheduledTaskInstance :exec

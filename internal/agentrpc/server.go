@@ -218,10 +218,16 @@ func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateReques
 		// evidence of a partition or a slow pod, and dropping it silently is the
 		// failure mode the guard exists to end.
 		if errors.Is(rerr, ErrStaleReport) {
-			slog.Warn("ignoring stale task state report",
+			slog.Warn("ignoring stale task state report; signaling terminate",
 				"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID,
 				"try", id.TryNumber, "reported_state", state)
-			return &agentv1.ReportStateResponse{Acknowledged: true}, nil
+			// The row already moved on (a reaper settled it, or a later attempt
+			// bumped try_number). Acknowledge so the agent stops retrying, and set
+			// should_terminate so a reaped-but-still-running pod cancels its work —
+			// the at-most-once kill switch (#474). Safe by construction: the report
+			// applies (rows>0, not stale) for the live, matching attempt, so a live
+			// execution is never told to terminate.
+			return &agentv1.ReportStateResponse{Acknowledged: true, ShouldTerminate: true}, nil
 		}
 		return nil, status.Errorf(codes.Internal, "recording state: %v", rerr)
 	}
@@ -240,6 +246,19 @@ func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*a
 		return nil, err
 	}
 	if hbErr := s.store.RecordHeartbeat(ctx, *id); hbErr != nil {
+		// A stale heartbeat is the guard working, not a fault: the row moved on —
+		// a reaper settled it, or a later attempt bumped try_number past this one
+		// (the same "moved on" predicate the state report is guarded by, #467).
+		// Signal terminate so a reaped-but-alive pod stops itself (#474). The live,
+		// matching attempt stamps a row (no error), so it never gets the signal.
+		if errors.Is(hbErr, ErrStaleReport) {
+			slog.Warn("stale heartbeat from a superseded attempt; signaling terminate",
+				"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "try", id.TryNumber)
+			return &agentv1.HeartbeatResponse{ServerTime: timestamppb.New(s.now()), ShouldTerminate: true}, nil
+		}
+		// A genuine (non-stale) store error is logged but does not fail the RPC or
+		// signal terminate — failing would risk the agent killing a live task on a
+		// transient DB blip. The scheduler's heartbeat reaper is the backstop.
 		slog.Warn("recording heartbeat",
 			"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "error", hbErr)
 	}

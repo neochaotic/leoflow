@@ -189,7 +189,13 @@ type Querier interface {
 	// state IN guard avoids stamping a heartbeat on a TI the scheduler already
 	// transitioned to terminal between the agent's last heartbeat and now — a
 	// terminal TI must stay terminal even if a late heartbeat arrives.
-	RecordTaskHeartbeat(ctx context.Context, arg RecordTaskHeartbeatParams) error
+	//
+	// Returns the affected row count. Zero means the heartbeating agent's attempt
+	// no longer matches the live row — its try_number is behind, or a reaper
+	// already settled the row terminal — the same "moved on" predicate the state
+	// report is guarded by (#467). The agent RPC turns a zero here into a
+	// should_terminate signal so a reaped-but-alive pod stops itself (#474).
+	RecordTaskHeartbeat(ctx context.Context, arg RecordTaskHeartbeatParams) (int64, error)
 	RecordXCom(ctx context.Context, arg RecordXComParams) error
 	// Re-dispatch a task parked in up_for_reschedule once its reschedule_at has passed:
 	// back to 'none' with the per-attempt timestamps cleared (so the next dispatch

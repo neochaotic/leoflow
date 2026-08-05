@@ -460,6 +460,87 @@ func TestHeartbeatSucceedsWhenStoreFails(t *testing.T) {
 	}
 }
 
+// TestHeartbeatSignalsTerminateOnStaleAttempt is the #474 kill switch: when the
+// heartbeating agent's attempt no longer matches the live row (a reaper settled
+// it, or try_number moved on), RecordHeartbeat reports ErrStaleReport and the
+// handler answers should_terminate=true so the reaped-but-alive pod stops
+// itself. The predicate is exactly #467's "moved on" guard — no second notion
+// of stale. A stale heartbeat must NEVER be a hard RPC error (the agent would
+// then keep running), only a terminate signal.
+func TestHeartbeatSignalsTerminateOnStaleAttempt(t *testing.T) {
+	store := &fakeStore{heartbeatErr: ErrStaleReport}
+	srv, authn := newServer(store)
+	resp, err := srv.Heartbeat(ctxWithToken(t, authn), &agentv1.HeartbeatRequest{})
+	if err != nil {
+		t.Fatalf("stale heartbeat must not be an RPC error: %v", err)
+	}
+	if !resp.GetShouldTerminate() {
+		t.Errorf("stale heartbeat: should_terminate = false, want true")
+	}
+}
+
+// TestHeartbeatDoesNotTerminateLiveAttempt: the live, matching attempt (the
+// happy path, nil store error) must get should_terminate=false — the invariant
+// that a live execution is never told to stop.
+func TestHeartbeatDoesNotTerminateLiveAttempt(t *testing.T) {
+	srv, authn := newServer(&fakeStore{})
+	resp, err := srv.Heartbeat(ctxWithToken(t, authn), &agentv1.HeartbeatRequest{})
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if resp.GetShouldTerminate() {
+		t.Errorf("live heartbeat: should_terminate = true, want false")
+	}
+}
+
+// TestHeartbeatTransientErrorDoesNotTerminate: a genuine (non-stale) DB error is
+// logged and swallowed, and must NOT signal terminate — otherwise a DB blip
+// would kill a live task. Distinct from the stale case above.
+func TestHeartbeatTransientErrorDoesNotTerminate(t *testing.T) {
+	srv, authn := newServer(&fakeStore{heartbeatErr: errors.New("db transient blip")})
+	resp, err := srv.Heartbeat(ctxWithToken(t, authn), &agentv1.HeartbeatRequest{})
+	if err != nil {
+		t.Fatalf("transient heartbeat error must not surface as RPC error: %v", err)
+	}
+	if resp.GetShouldTerminate() {
+		t.Errorf("transient DB error: should_terminate = true, want false")
+	}
+}
+
+// TestReportStateSignalsTerminateOnStaleReport: a state report from an attempt
+// that has moved on (ErrStaleReport from the #467 guard) is acknowledged AND
+// carries should_terminate=true, so a reaped pod stops (#474).
+func TestReportStateSignalsTerminateOnStaleReport(t *testing.T) {
+	srv, authn := newServer(&fakeStore{reportErr: ErrStaleReport})
+	resp, err := srv.ReportState(ctxWithToken(t, authn), &agentv1.ReportStateRequest{
+		State: agentv1.TaskState_TASK_STATE_RUNNING,
+	})
+	if err != nil {
+		t.Fatalf("stale report must be acknowledged, not errored: %v", err)
+	}
+	if !resp.GetAcknowledged() {
+		t.Errorf("stale report: acknowledged = false, want true")
+	}
+	if !resp.GetShouldTerminate() {
+		t.Errorf("stale report: should_terminate = false, want true")
+	}
+}
+
+// TestReportStateDoesNotTerminateLiveAttempt: a report that applies (live
+// attempt) must not carry should_terminate — the live-execution invariant.
+func TestReportStateDoesNotTerminateLiveAttempt(t *testing.T) {
+	srv, authn := newServer(&fakeStore{})
+	resp, err := srv.ReportState(ctxWithToken(t, authn), &agentv1.ReportStateRequest{
+		State: agentv1.TaskState_TASK_STATE_RUNNING,
+	})
+	if err != nil {
+		t.Fatalf("ReportState: %v", err)
+	}
+	if resp.GetShouldTerminate() {
+		t.Errorf("live report: should_terminate = true, want false")
+	}
+}
+
 func TestRegisterAndHeartbeatReturnServerTime(t *testing.T) {
 	srv, a := newServer(&fakeStore{})
 	ctx := ctxWithToken(t, a)

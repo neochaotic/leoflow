@@ -178,11 +178,23 @@ func (s *ExecutionStore) RecordHeartbeat(ctx context.Context, id auth.AgentIdent
 	if err != nil {
 		return err
 	}
-	return s.q.RecordTaskHeartbeat(ctx, queries.RecordTaskHeartbeatParams{
+	rows, err := s.q.RecordTaskHeartbeat(ctx, queries.RecordTaskHeartbeatParams{
 		DagRunID:  rid,
 		TaskID:    id.TaskID,
 		TryNumber: toInt32(id.TryNumber),
 	})
+	if err != nil {
+		return err
+	}
+	// Zero rows means the heartbeat did not apply: the row moved on — a reaper
+	// settled it terminal, or a later attempt bumped try_number past this one.
+	// Same "moved on" predicate ReportState uses; surfaced as ErrStaleReport so
+	// the agent RPC turns it into a should_terminate signal (#474). Nothing
+	// failed, so this is not a DB error.
+	if rows == 0 {
+		return agentrpc.ErrStaleReport
+	}
+	return nil
 }
 
 // FailTask marks a task instance failed by its ID, but only while it is still

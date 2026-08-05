@@ -445,6 +445,7 @@ func (s *SchedulerStore) ListAgentLostCandidates(ctx context.Context) ([]schedul
 			DagRunID:       uuidToString(r.DagRunID),
 			DagID:          r.DagIDText,
 			TaskID:         r.TaskID,
+			TryNumber:      int(r.TryNumber),
 			LastHeartbeat:  last,
 		})
 	}
@@ -503,6 +504,7 @@ func (s *SchedulerStore) ListStaleQueuedCandidates(ctx context.Context) ([]sched
 			DagRunID:       uuidToString(r.DagRunID),
 			DagID:          r.DagIDText,
 			TaskID:         r.TaskID,
+			TryNumber:      int(r.TryNumber),
 			QueuedAt:       qed,
 		})
 	}

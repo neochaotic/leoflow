@@ -479,6 +479,30 @@ func TestRunnerHeartbeatCancelsOnTerminate(t *testing.T) {
 	}
 }
 
+// TestRunnerStopsOnReportStateTerminate covers the #474 kill switch on the
+// report path: when the control plane answers a state report with
+// should_terminate (the reporting attempt no longer matches the live row — a
+// reaper settled it, or a retry moved past it), the agent must abort rather than
+// keep running abandoned work. The very first report is RUNNING, so a terminate
+// there stops the task before the user process ever runs.
+func TestRunnerStopsOnReportStateTerminate(t *testing.T) {
+	client := &fakeClient{
+		spec:        &agentv1.TaskSpec{Operator: "bash", Entrypoint: "sleep 1000"},
+		terminateAt: agentv1.TaskState_TASK_STATE_RUNNING,
+	}
+	cmd := &fakeCmd{blockUntilCancel: true}
+	r := newRunner(client, cmd, &recordingSink{})
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a task told to terminate on its RUNNING report must not proceed")
+	}
+	// The user command must never have been invoked: terminate fired on the
+	// RUNNING report, before execute() runs the process.
+	if cmd.argv != nil {
+		t.Errorf("user command ran despite terminate signal: argv=%v", cmd.argv)
+	}
+}
+
 // TestRunnerEnforcesExecutionTimeout covers issue #194: the pod-path agent must
 // stop a task that exceeds its declared execution_timeout_seconds, not rely on
 // the scheduler's 90 s heartbeat reaper (which leaves the wedged user code

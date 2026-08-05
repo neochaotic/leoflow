@@ -8,6 +8,31 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Reaping a task now actually stops it** (#474). The three scheduler reapers
+  (`agent_lost`, `dispatch_lost`, `orphaned`) only wrote metadatabase state, so a
+  reaped task's pod kept running user code to completion — breaking at-most-once
+  execution when that work committed or a retry re-ran it. Each reaper now tears
+  the pod down **after** the durable DB transition: the per-TI reapers delete
+  exactly the reaped `(run-id, task-id, try-number)` pod (a retry's newer pod has
+  a different try-number label, so it can never be the one deleted), and the
+  orphan-run reaper deletes every pod of the abandoned run. As a belt-and-suspenders
+  layer for pods we couldn't delete (e.g. a K8s API outage), the control plane now
+  answers a **stale** agent `ReportState`/`Heartbeat` — one whose attempt no longer
+  matches the live row — with `should_terminate`, so a reaped-but-alive pod cancels
+  its own work. The "stale" test reuses the exact source-state + `try_number` guard
+  the state write already carries (#467): a live, matching attempt always applies,
+  so a live execution is never torn down or told to stop. Deletion uses only the
+  `list`+`delete` pod verbs the executor Role already grants; Lite (subprocess) has
+  no pods, so only the DB transition and the terminate signal apply.
+- **Dispatch-lost reaper is now pod-aware, ending the cold-node false positive**
+  (#461). A slow image pull on a cold node could leave a TI in `queued` past the
+  3-minute threshold while its pod was actually `Pending`/`Running`, so the reaper
+  failed a live dispatch as `dispatch_lost`. On Kubernetes the reaper now checks
+  pod liveness first: if a pod for the TI is `Pending`/`Running` (the dispatch
+  landed, the node is just slow) — or if liveness can't be read (K8s API error) —
+  it defers instead of reaping. It only fails a TI when no live pod exists. Lite
+  keeps the pure time-threshold behavior. New metrics: `dispatch_lost_deferred`,
+  `dispatch_lost_pod_query_error`.
 - **`taskNamespace` now actually moves the control plane** (#480). The chart
   granted the executor Role in `.Values.taskNamespace` while the server created
   task pods in a hardcoded `leoflow` namespace, so any override installed cleanly

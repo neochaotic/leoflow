@@ -20,7 +20,10 @@ type StaleQueuedCandidate struct {
 	DagRunID       string
 	DagID          string
 	TaskID         string
-	QueuedAt       time.Time
+	// TryNumber is the attempt the queued row is on, so a best-effort pod
+	// delete after the mark targets exactly that attempt's pod (#474).
+	TryNumber int
+	QueuedAt  time.Time
 }
 
 // IsDispatchLost reports whether a queued TI has been waiting long enough to
@@ -58,6 +61,12 @@ type dispatchLostReaper struct {
 	logger    *slog.Logger
 	threshold time.Duration
 	recorder  Recorder
+	// pods makes the reaper K8s-aware (#461): before failing a past-threshold
+	// queued TI, it checks whether the TI's pod is actually live (Pending/
+	// Running) — a slow image pull on a cold node means the dispatch DID land,
+	// so the reaper must DEFER. Nil in Lite: with no pods, the reaper falls
+	// back to the pure time-threshold behavior.
+	pods PodManager
 }
 
 func newDispatchLostReaper(store DispatchLostReapStore, logger *slog.Logger, threshold time.Duration, rec Recorder) *dispatchLostReaper {
@@ -83,6 +92,30 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 		if !IsDispatchLost(c, r.threshold, now) {
 			continue
 		}
+		// K8s-aware liveness gate (#461): a TI can sit in `queued` past the
+		// threshold while its pod is alive and just slow to pull the image on a
+		// cold node. The pure time threshold cannot tell that apart from a truly
+		// lost dispatch, so before failing, consult the pod:
+		//   * pod Pending/Running  -> the dispatch landed; DEFER (do not reap).
+		//   * pod query failed      -> liveness unknown; DEFER ("do no harm").
+		//   * no/terminal pod       -> dispatch is genuinely lost; proceed.
+		// Nil pods (Lite) has no pod concept, so it falls through to the
+		// threshold behavior unchanged.
+		if r.pods != nil {
+			active, perr := r.pods.TaskPodActive(ctx, c.DagRunID, c.TaskID)
+			if perr != nil {
+				r.logger.Warn("dispatch-lost: pod liveness unknown; deferring",
+					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "error", perr)
+				r.record("dispatch_lost_pod_query_error")
+				continue
+			}
+			if active {
+				r.logger.Info("dispatch-lost: pod is live (slow start); deferring",
+					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID)
+				r.record("dispatch_lost_deferred")
+				continue
+			}
+		}
 		if ferr := r.store.MarkTaskDispatchLost(ctx, c.TaskInstanceID); ferr != nil {
 			r.logger.Error("marking task dispatch-lost",
 				"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
@@ -93,6 +126,16 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID,
 			"queued_at", c.QueuedAt)
 		r.record("dispatch_lost")
+		// Best-effort teardown of any lingering pod for this attempt (#474). By
+		// here TaskPodActive said no live pod exists (or pods is nil), so this
+		// only cleans up a terminal/failed pod; pinned to (run, task, try).
+		if r.pods != nil {
+			if derr := r.pods.DeleteTaskPod(ctx, c.DagRunID, c.TaskID, c.TryNumber); derr != nil {
+				r.logger.Error("deleting dispatch-lost task pod",
+					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "try", c.TryNumber, "error", derr)
+				r.record("dispatch_lost_pod_delete_error")
+			}
+		}
 	}
 	return nil
 }

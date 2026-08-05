@@ -4,6 +4,7 @@ package storage_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -44,7 +45,11 @@ func TestDispatchBackoffPersists(t *testing.T) {
 	sched.SetDispatcher(failingDispatcher{})
 	sched.SetLeading(true)
 
-	dagID := "dispatch_backoff_test"
+	// Unique per invocation so a reused (dirty) test DB never collides on the
+	// dag-run insert — the fixed "backoff-run" id had no cleanup and failed the
+	// second run with "resource already exists".
+	suffix := time.Now().UnixNano()
+	dagID := fmt.Sprintf("dispatch_backoff_test_%d", suffix)
 	spec := domain.DAGSpec{
 		SchemaVersion: "1.0", DagID: dagID, DagVersion: "v1", Image: "img:v1",
 		Tasks: []domain.TaskSpec{{TaskID: "a", Type: domain.TaskTypePython, Entrypoint: "dag:a"}},
@@ -57,7 +62,7 @@ func TestDispatchBackoffPersists(t *testing.T) {
 		t.Fatalf("register version: %v", rerr)
 	}
 	if _, rerr := repo.CreateDagRun(ctx, "default", dagID, domain.DagRun{
-		RunID: "backoff-run", State: domain.DagRunStateQueued, RunType: "manual", LogicalDate: time.Now().UTC(),
+		RunID: fmt.Sprintf("backoff-run-%d", suffix), State: domain.DagRunStateQueued, RunType: "manual", LogicalDate: time.Now().UTC(),
 	}); rerr != nil {
 		t.Fatalf("create run: %v", rerr)
 	}

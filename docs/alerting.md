@@ -176,7 +176,7 @@ on the two task types that leave no Python to run it, and the compiler rejects
 those **loudly** rather than dropping the callback silently:
 
 - **`bash`** — the runtime `exec`s bash in place, so no Python is left.
-- **`http_api`** — *deprecated (ADR 0047).* `HttpOperator` now runs in a pod like
+- **`http_api`** — *removed (ADR 0047/0048).* `HttpOperator` now runs in a pod like
   any provider operator (declare `connectors: [http]`); the old inline path ran in
   the control-plane process and is being removed.
 

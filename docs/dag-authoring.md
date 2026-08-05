@@ -99,7 +99,7 @@ executor**, native-first by type. Nothing is silently dropped or mistranslated.
 |---|---|---|---|
 | `python` | `@task` (TaskFlow) **or** `PythonOperator` | agent in a pod (Pro) / subprocess (Lite) | The general-purpose escape hatch — any provider library you `pip install` is callable from inside a `@task`. |
 | `bash` | `BashOperator` | agent | Executes a shell command. |
-| ~~`http_api`~~ (deprecated) | — | — | **Deprecated (ADR 0047).** `HttpOperator` now compiles to `airflow_operator` and runs in a **pod**, like any other provider operator — declare `connectors: [http]`. The old inline path ran the request in the control-plane process (an SSRF surface) and is being removed. |
+| ~~`http_api`~~ (removed) | — | — | **Removed (ADR 0047/0048, #512).** `HttpOperator` now compiles to `airflow_operator` and runs in a **pod**, like any other provider operator — declare `connectors: [http]`. The old inline path ran the request in the control-plane process (an SSRF surface) and is gone. |
 | `airflow_operator` | **any provider operator/sensor** (Snowflake, S3, Postgres, BigQuery, …) | agent in a pod | The generic executor (ADR 0040): the runtime imports the class, instantiates it with your args, and calls `execute()`. Declare the provider or compile fails. |
 
 Also supported:

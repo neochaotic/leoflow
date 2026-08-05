@@ -278,7 +278,7 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────
   # Native on-failure alerting gate (#424). A DAG with an `alerts:` block and a
-  # single http_api task that fails (500) is triggered; the scheduler must fire a
+  # single @task that raises is triggered; the scheduler must fire a
   # real webhook POST — resolved from an encrypted managed connection, rendered
   # from the message template — to a local receiver. Exercises the whole Go
   # control-plane chain (compile → dag.json → scheduler → dispatcher → notifier)

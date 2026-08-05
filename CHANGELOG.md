@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Split api role now reports pod dispatch correctly on `/api/v2/monitor/executor`**
+  (ADR 0049 pre-RC review). In split mode the executor runs in the scheduler
+  process, so the api role's runtime dispatch flag was always false and the
+  endpoint — whose job is "why is a task stuck queued" — told operators pod
+  dispatch was off when it wasn't. The api role now reports the configured
+  capability (`executor.type`) instead of the in-process bool.
+
+### Fixed
+
 - **Reaping a task now actually stops it** (#474). The three scheduler reapers
   (`agent_lost`, `dispatch_lost`, `orphaned`) only wrote metadatabase state, so a
   reaped task's pod kept running user code to completion — breaking at-most-once

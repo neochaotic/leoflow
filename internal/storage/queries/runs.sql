@@ -35,6 +35,7 @@ SELECT ti.id AS task_instance_id,
        ti.dag_run_id,
        d.dag_id AS dag_id_text,
        ti.task_id,
+       ti.try_number,
        ti.queued_at
 FROM task_instances ti
 JOIN dag_runs dr ON dr.id = ti.dag_run_id
@@ -526,12 +527,18 @@ SET state = 'failed',
 WHERE dag_run_id = $1
   AND state IN ('scheduled', 'queued', 'running');
 
--- name: RecordTaskHeartbeat :exec
+-- name: RecordTaskHeartbeat :execrows
 -- Stamps last_heartbeat_at on the active TI of an attempt. Bounded by the
 -- (dag_run_id, task_id, try_number) tuple to match the agent's identity. The
 -- state IN guard avoids stamping a heartbeat on a TI the scheduler already
 -- transitioned to terminal between the agent's last heartbeat and now — a
 -- terminal TI must stay terminal even if a late heartbeat arrives.
+--
+-- Returns the affected row count. Zero means the heartbeating agent's attempt
+-- no longer matches the live row — its try_number is behind, or a reaper
+-- already settled the row terminal — the same "moved on" predicate the state
+-- report is guarded by (#467). The agent RPC turns a zero here into a
+-- should_terminate signal so a reaped-but-alive pod stops itself (#474).
 UPDATE task_instances
 SET last_heartbeat_at = now()
 WHERE dag_run_id = $1
@@ -550,6 +557,7 @@ SELECT ti.id AS task_instance_id,
        ti.dag_run_id AS dag_run_id,
        d.dag_id AS dag_id_text,
        ti.task_id AS task_id,
+       ti.try_number AS try_number,
        ti.last_heartbeat_at AS last_heartbeat_at
 FROM task_instances ti
 JOIN dag_runs dr ON dr.id = ti.dag_run_id

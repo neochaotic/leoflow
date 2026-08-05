@@ -239,9 +239,13 @@ type Scheduler struct {
 	orphanThreshold       time.Duration
 	agentLostThreshold    time.Duration
 	dispatchLostThreshold time.Duration
-	lastTick              atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
-	leading               atomic.Bool  // true only while this instance holds leadership and ticks
-	steppingDown          atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
+	// podManager lets the reapers tear down a reaped task's pod and gate the
+	// dispatch-lost decision on pod liveness (#474, #461). Nil in Lite; the
+	// reapers guard the nil and fall back to DB-only behavior.
+	podManager   PodManager
+	lastTick     atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	leading      atomic.Bool  // true only while this instance holds leadership and ticks
+	steppingDown atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
@@ -277,6 +281,12 @@ func (s *Scheduler) SetAgentLostThreshold(d time.Duration) { s.agentLostThreshol
 // uses to declare a queued task's dispatch lost (optional; mainly for tests).
 // The default is defaultDispatchLostThreshold.
 func (s *Scheduler) SetDispatchLostThreshold(d time.Duration) { s.dispatchLostThreshold = d }
+
+// SetPodManager wires the pod-teardown / liveness capability the reapers use to
+// stop a reaped task's pod and to defer the dispatch-lost decision when a
+// queued TI's pod is actually live (#474, #461). Left unset in Lite/subprocess,
+// where the reapers stay DB-only. Called from main once the K8s client exists.
+func (s *Scheduler) SetPodManager(pm PodManager) { s.podManager = pm }
 
 // defaultStepTimeout bounds how long one scheduling tick may run before it is
 // canceled so the loop can recover, rather than hang forever on a stuck query.
@@ -484,11 +494,13 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 		return
 	}
 	runReaper := newOrphanReaper(s.store, s.logger, s.orphanThreshold, s.recorder)
+	runReaper.pods = s.podManager
 	if err := runReaper.run(ctx); err != nil {
 		logSchedulerError(s.logger, "orphan reaper", err, s.steppingDown.Load())
 		s.record("orphan_list_error")
 	}
 	tiReaper := newAgentLostReaper(s.store, s.logger, s.agentLostThreshold, s.recorder)
+	tiReaper.pods = s.podManager
 	if err := tiReaper.run(ctx); err != nil {
 		logSchedulerError(s.logger, "agent-lost reaper", err, s.steppingDown.Load())
 		s.record("agent_lost_list_error")
@@ -500,6 +512,7 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	// chain takes two ticks; running here in the same tick gives a one-tick
 	// chain once the threshold elapses.
 	dispatchReaper := newDispatchLostReaper(s.store, s.logger, s.dispatchLostThreshold, s.recorder)
+	dispatchReaper.pods = s.podManager
 	if err := dispatchReaper.run(ctx); err != nil {
 		logSchedulerError(s.logger, "dispatch-lost reaper", err, s.steppingDown.Load())
 		s.record("dispatch_lost_list_error")

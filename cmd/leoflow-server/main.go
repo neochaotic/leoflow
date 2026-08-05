@@ -943,6 +943,10 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 	disp, closer := wrapBuffered(dispatcher, store, logger, metrics, cfg.Scheduler.Dispatch) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	sched.SetDispatcher(disp)
+	// Let the reapers tear down a reaped task's pod and gate the dispatch-lost
+	// decision on real pod liveness (#474, #461). Only wired on the pod path;
+	// Lite/subprocess leaves it nil and the reapers stay DB-only.
+	sched.SetPodManager(podExec)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)
 	logger.Info("pod dispatch enabled", "namespace", cfg.Executor.TaskNamespace, "agent_control_plane_addr", controlAddr)

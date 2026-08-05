@@ -37,6 +37,11 @@ type LogsSection struct {
 // ExecutorSection configures how tasks are executed.
 type ExecutorSection struct {
 	HTTP HTTPExecutorSection `mapstructure:"http"`
+	// TaskNamespace is the Kubernetes namespace the server creates task pods and
+	// per-run staging PVCs in. It MUST match the namespace the Helm chart grants
+	// the executor Role in (chart `taskNamespace` → LEOFLOW_EXECUTOR_TASK_NAMESPACE);
+	// a mismatch 403s every dispatch (#480). Defaults to "leoflow".
+	TaskNamespace string `mapstructure:"task_namespace"`
 	// Type selects the pod-path executor: "kubernetes" (default, pod-per-task) or
 	// "subprocess" (dev only, runs the agent on the host without isolation, used
 	// by `leoflow dev`).
@@ -297,6 +302,7 @@ var serverDefaults = map[string]any{
 	"scheduler.dispatch.buffer_size":                   0,
 	"scheduler.dispatch.workers":                       0,
 	"executor.http.user_agent":                         "leoflow/0.1",
+	"executor.task_namespace":                          "leoflow",
 	"executor.type":                                    "kubernetes",
 	"executor.agent_path":                              "leoflow-agent",
 	"executor.subprocess_workdir":                      "",

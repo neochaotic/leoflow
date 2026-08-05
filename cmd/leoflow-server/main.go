@@ -144,7 +144,7 @@ func run() error {
 	}
 	executorInfo := api.ExecutorInfo{
 		PodDispatchEnabled:    podDispatch,
-		TaskNamespace:         podNamespace,
+		TaskNamespace:         cfg.Executor.TaskNamespace,
 		AgentControlPlaneAddr: agentAddr,
 	}
 
@@ -288,9 +288,6 @@ func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.
 	}
 	return nil
 }
-
-// podNamespace is the Kubernetes namespace task pods are created in.
-const podNamespace = "leoflow"
 
 // agentTokenTTL is how long a dispatched task's agent identity token stays valid.
 const agentTokenTTL = 24 * time.Hour
@@ -659,8 +656,8 @@ func runGatedTicker(ctx context.Context, name string, ticks <-chan time.Time, le
 	}
 }
 
-func startReconciler(ctx context.Context, cs kubernetes.Interface, reporter executor.FailureReporter, leading func() bool, logger *slog.Logger) {
-	rec := executor.NewReconciler(cs, podNamespace, reporter)
+func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace string, reporter executor.FailureReporter, leading func() bool, logger *slog.Logger) {
+	rec := executor.NewReconciler(cs, namespace, reporter)
 	startGatedTicker(ctx, "pod-reconcile", reconcileInterval, leading, logger, func() {
 		if err := rec.Reconcile(ctx); err != nil {
 			logger.Error("pod reconcile", "error", err)
@@ -680,8 +677,8 @@ const (
 // startStagingGC periodically reclaims per-run staging PVCs from the
 // metadatabase-tracked lifecycle: succeeded runs immediately, failed runs after
 // the TTL, orphaned volumes (run gone) on sight (ADR 0022).
-func startStagingGC(ctx context.Context, cs kubernetes.Interface, store executor.StagingStore, leading func() bool, logger *slog.Logger) {
-	exec := executor.NewKubernetesExecutor(cs, podNamespace)
+func startStagingGC(ctx context.Context, cs kubernetes.Interface, namespace string, store executor.StagingStore, leading func() bool, logger *slog.Logger) {
+	exec := executor.NewKubernetesExecutor(cs, namespace)
 	exec.SetStagingStore(store)
 	startGatedTicker(ctx, "staging-gc", stagingGCInterval, leading, logger, func() {
 		if err := exec.GCStagingClaims(ctx, stagingTTL); err != nil {
@@ -938,7 +935,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 		return false, nil
 	}
 	controlAddr := resolveAgentControlAddr(cfg)
-	podExec := executor.NewKubernetesExecutor(cs, podNamespace)
+	podExec := executor.NewKubernetesExecutor(cs, cfg.Executor.TaskNamespace)
 	podExec.SetStagingStore(store) // record per-run staging volumes in the metadatabase (ADR 0022)
 	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
 	dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
@@ -946,9 +943,9 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 	disp, closer := wrapBuffered(dispatcher, store, logger, metrics, cfg.Scheduler.Dispatch) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	sched.SetDispatcher(disp)
-	startReconciler(ctx, cs, execStore, sched.IsLeading, logger)
-	startStagingGC(ctx, cs, store, sched.IsLeading, logger)
-	logger.Info("pod dispatch enabled", "namespace", podNamespace, "agent_control_plane_addr", controlAddr)
+	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger)
+	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)
+	logger.Info("pod dispatch enabled", "namespace", cfg.Executor.TaskNamespace, "agent_control_plane_addr", controlAddr)
 	return true, closer
 }
 

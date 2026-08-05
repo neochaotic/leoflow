@@ -6,6 +6,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`taskNamespace` now actually moves the control plane** (#480). The chart
+  granted the executor Role in `.Values.taskNamespace` while the server created
+  task pods in a hardcoded `leoflow` namespace, so any override installed cleanly
+  and then 403'd every dispatch. The namespace is now configuration
+  (`executor.task_namespace`, wired from the chart's `taskNamespace` via
+  `LEOFLOW_EXECUTOR_TASK_NAMESPACE`), so the server acts on exactly the namespace
+  it is granted — the knob means what it says. A helm test asserts the server env
+  and the RBAC namespace derive from the same value.
+
 ### Security
 
 - **Bash task templating now shell-quotes interpolated values** (issue #489). A

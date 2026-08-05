@@ -248,8 +248,8 @@ flowchart LR
     class pg,redis store;
 ```
 
-Short-lived `http_api` tasks skip the pod and run inline as goroutines in the
-control plane (capped); everything else runs pod-per-task. Read
+Every task runs pod-per-task; an `HttpOperator` is a provider operator that runs
+in its own pod like any other (ADR 0040). Read
 [the ADRs](docs/adr/) for the reasoning behind every decision.
 
 ## Status
@@ -269,7 +269,7 @@ Versioning follows [ADR 0037](docs/adr/0037-release-version-scheme.md):
 
 - **CLI + parser** — `leoflow init / validate / compile / push / runs trigger / runs status / auth create-token`; the Python DAG parser; `compile --build / --push` builds and pushes the DAG image (out-of-process).
 - **Control plane** — Airflow-compatible `/api/v2` API, JWT auth + RBAC + multi-tenant, the scheduler state machine with cron scheduling, Postgres advisory-lock leader election, **task retries**, embedded Scalar API docs, and Prometheus + OpenTelemetry observability.
-- **Execution** — real pod-per-task execution via the `leoflow-agent` over gRPC (Kubernetes, ADR 0015), plus inline `http_api` goroutines for short calls; orphaned-pod reconciliation and completed-pod garbage collection.
+- **Execution** — real pod-per-task execution via the `leoflow-agent` over gRPC (Kubernetes, ADR 0015); orphaned-pod reconciliation and completed-pod garbage collection.
 - **Data flow** — XCom on Redis (256 KB limit, TTL, optional schema validation) passed between tasks; log shipping to disk with a read API and live tailing over Redis pub/sub.
 
 **Not yet implemented:** load tests (Phase 6) and S3/GCS log sinks. Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).

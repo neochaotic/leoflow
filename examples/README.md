@@ -63,7 +63,7 @@ a `README.md` walking through their specific Connection wiring.
 | [gcp_gcs_load](gcp_gcs_load/) | Write + read a GCS object via a managed `google_cloud_platform` Connection (key or keyless/ADC). |
 | [http_jsonplaceholder](http_jsonplaceholder/) | Fetch posts from a public JSON API (jsonplaceholder) and summarize. |
 | [http_load](http_load/) | POST a payload to an external HTTP endpoint via a managed Connection, assert the echo round-trips. |
-| [http_operator](http_operator/) | `HttpOperator` hitting a public API inline (the `http_api` task type). |
+| [http_operator](http_operator/) | `HttpOperator` hitting a public API — runs in a pod as an `airflow_operator` (ADR 0040). |
 | [lifecycle](lifecycle/) | Three-task pipeline (extract → transform → load) passing data via XCom — the canonical pod-per-task smoke. |
 | [ml_hparam_search](ml_hparam_search/) | Parallel hyperparameter search with map-reduce aggregation (toy ML). |
 | [montecarlo_pi](montecarlo_pi/) | Estimate pi with parallel Monte-Carlo workers, then combine. |

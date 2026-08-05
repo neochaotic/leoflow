@@ -124,7 +124,7 @@ What it does:
    agent-TLS) and `helm upgrade`s the release at the managed endpoints, then
    `kubectl rollout restart`s the Deployment.
 
-Validated end-to-end on GKE: python / bash / http_api + map-reduce + cron
+Validated end-to-end on GKE: python / bash + map-reduce + cron
 scheduler all `success` against Cloud SQL + Memorystore, and the scheduler showed
 no advisory-lock step-down on managed Postgres.
 

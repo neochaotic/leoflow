@@ -114,11 +114,11 @@ the very first line.
 
 | Tier | Import | Needs a provider in `leoflow.yaml.dependencies`? | Runtime path |
 |---|---|---|---|
-| **A. Native (already shipped)** | `from airflow.sdk import DAG, task` | **No** | Parser maps to `python` / `bash` / `http_api` task types; Leoflow runtime executes directly. |
+| **A. Native (already shipped)** | `from airflow.sdk import DAG, task` | **No** | Parser maps to `python` / `bash` task types; Leoflow runtime executes directly. |
 | A. | `from airflow.providers.standard.operators.python import PythonOperator` | **No** | Same as above. |
 | A. | `from airflow.providers.standard.operators.bash import BashOperator` | **No** | Same. |
 | A. | `from airflow.providers.standard.operators.empty import EmptyOperator` | **No** | Same. |
-| A. | `from airflow.providers.http.operators.http import HttpOperator` | **No** | Task type `http_api` — Leoflow agent executes the HTTP call. |
+| B. | `from airflow.providers.http.operators.http import HttpOperator` | **Yes — `apache-airflow-providers-http`** | Captured as `airflow_operator`; runs `.execute()` in a task pod (ADR 0040). The native inline `http_api` type was removed (ADR 0047). |
 | **B. Compat (ADR 0036)** | `from airflow.providers.postgres.hooks.postgres import PostgresHook` | **Yes — `apache-airflow-providers-postgres` + `psycopg2-binary`** | Through the runtime compat shim. |
 | B. | `from airflow.providers.google.cloud.hooks.gcs import GCSHook` | **Yes — `apache-airflow-providers-google`** | Shim + GCP resolver (ADR 0035). |
 | B. | `from airflow.providers.http.hooks.http import HttpHook` | **Yes — `apache-airflow-providers-http`** | Shim. (Distinct from `HttpOperator` in tier A.) |

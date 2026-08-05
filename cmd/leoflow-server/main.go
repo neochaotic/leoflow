@@ -143,7 +143,7 @@ func run() error {
 		agentAddr = cfg.Server.GRPCAddr
 	}
 	executorInfo := api.ExecutorInfo{
-		PodDispatchEnabled:    podDispatch,
+		PodDispatchEnabled:    executorDispatchEnabled(cfg, servesScheduler, podDispatch),
 		TaskNamespace:         cfg.Executor.TaskNamespace,
 		AgentControlPlaneAddr: agentAddr,
 	}
@@ -400,6 +400,20 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		ExamplesFS:      leoflow.ExampleDAGs(),
 	})
 	return &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+}
+
+// executorDispatchEnabled decides what /api/v2/monitor/executor reports for
+// pod_dispatch_enabled. The scheduler owns the executor, so on the scheduler/all
+// role the accurate runtime signal (whether a K8s client actually wired up) is
+// right. In the split api role (ADR 0049) the scheduler runs in another process,
+// so the runtime bool is always false here — reporting that would tell an
+// operator dispatch is off when it isn't (F1). Fall back to the configured
+// capability (executor.type), the config-derived ExecutorInfo the ADR calls for.
+func executorDispatchEnabled(cfg *config.ServerConfig, servesScheduler, runtimePodDispatch bool) bool {
+	if servesScheduler {
+		return runtimePodDispatch
+	}
+	return cfg.Executor.Type == "kubernetes"
 }
 
 // serveHTTP starts the process's HTTP listeners — the api role's API+UI (when

@@ -156,7 +156,6 @@
           "enum": [
             "python",
             "bash",
-            "http_api",
             "airflow_operator"
           ]
         },
@@ -207,64 +206,14 @@
         "execution_mode": {
           "type": "string",
           "enum": [
-            "inline",
             "pod"
           ],
-          "default": "inline",
-          "description": "For type=http_api only. 'inline' runs the call as a goroutine in the Control Plane (low overhead, capped at LEOFLOW_INLINE_HTTP_MAX_DURATION seconds, default 300s). 'pod' runs the call inside a worker pod via the agent (no duration cap beyond execution_timeout_seconds, full isolation, survives Control Plane restarts). Ignored for type=python and type=bash, which always use pod."
+          "default": "pod",
+          "description": "How a task runs. Every task (python, bash, airflow_operator) runs inside a worker pod via the agent; 'pod' is the only supported value and the default. Retained for forward compatibility."
         },
         "entrypoint": {
           "type": "string",
           "description": "For type=python: 'module.path:callable'. For type=bash: shell command."
-        },
-        "http_request": {
-          "type": "object",
-          "description": "Required when type=http_api. The Control Plane executes this directly.",
-          "required": [
-            "method",
-            "url"
-          ],
-          "properties": {
-            "method": {
-              "type": "string",
-              "enum": [
-                "GET",
-                "POST",
-                "PUT",
-                "PATCH",
-                "DELETE"
-              ]
-            },
-            "url": {
-              "type": "string",
-              "format": "uri"
-            },
-            "headers": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "body": {},
-            "timeout_seconds": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 60
-            },
-            "success_status_codes": {
-              "type": "array",
-              "items": {
-                "type": "integer"
-              },
-              "default": [
-                200,
-                201,
-                202,
-                204
-              ]
-            }
-          },
-          "additionalProperties": false
         },
         "env": {
           "type": "object",
@@ -372,12 +321,7 @@
           "then": {
             "required": [
               "entrypoint"
-            ],
-            "properties": {
-              "execution_mode": {
-                "const": "pod"
-              }
-            }
+            ]
           }
         },
         {
@@ -391,25 +335,6 @@
           "then": {
             "required": [
               "entrypoint"
-            ],
-            "properties": {
-              "execution_mode": {
-                "const": "pod"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "type": {
-                "const": "http_api"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "http_request"
             ]
           }
         }

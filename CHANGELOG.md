@@ -26,18 +26,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scheduler-only pod a probe target (ADR 0049) and is additive for the standard
   `/metrics` scrape; adjust any scrape configured against `:9090/` (non-`/metrics`).
 
-### Deprecated
+### Removed
 
-- **The native inline `http_api` task type is deprecated and will be removed next
-  release** (ADR 0047, issue #512). It runs an author-supplied HTTP request
-  *inline in the control-plane process*, which carries the control plane's network
-  position — the SSRF surface (audit finding H5). The parser no longer emits it
-  (an `HttpOperator` compiles to a captured provider operator that runs in a task
-  pod, ADR 0040), so it can now only arrive via a hand-written `dag.json`.
-  Registering a spec that still uses it succeeds but returns a deprecation warning
-  that `leoflow push` prints; next release the registration rejects it and the
-  inline executor is removed (the guard becomes structural, ADR 0048). Migrate to
-  an `HttpOperator`, which runs in a pod.
+- **The native inline `http_api` task type is removed** (ADR 0047/0048, issue
+  #512). It ran an author-supplied HTTP request *inline in the control-plane
+  process*, carrying the control plane's network position — a server-side request
+  forgery surface (audit finding H5). Registering a spec with `type: http_api` is
+  now **rejected** at validation (the parser already stopped emitting it — an
+  `HttpOperator` compiles to a pod-run `airflow_operator`, ADR 0040 — so it could
+  only arrive via a hand-written `dag.json`), and the inline executor and its
+  scheduler wiring are deleted, so the guard is structural (no in-process path to
+  route to, ADR 0048), not an input check. **Breaking** only for a hand-authored
+  `dag.json` that declared `http_api`; migrate to an `HttpOperator` (runs in a
+  task pod; declare `connectors: [http]`). The one-release deprecation window was
+  collapsed into this release because it is the first Pro-facing cut and shipping
+  the SSRF was not acceptable; the parser-emitted path was already gone, so no
+  compiled DAG is affected.
 
 ### Added
 

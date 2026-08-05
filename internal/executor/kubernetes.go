@@ -37,10 +37,6 @@ func NewKubernetesExecutor(clientset kubernetes.Interface, namespace string) *Ku
 
 // Execute creates the task pod. The agent inside the pod reports state over gRPC.
 func (e *KubernetesExecutor) Execute(ctx context.Context, req Request) error {
-	if req.Operator == "http_api" {
-		return fmt.Errorf("execution_mode: pod for http_api is not yet implemented; "+
-			"use execution_mode: inline (default) for short-lived calls, or wait for v0.2 (task %s)", req.TaskID)
-	}
 	// Provision the run's shared staging PVC on first use (idempotent), before the
 	// pod that mounts it (ADR 0022).
 	if req.StagingClaim != "" {

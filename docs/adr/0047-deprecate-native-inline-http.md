@@ -50,14 +50,16 @@ generic pod executor (ADR 0040 Phase A), like any other provider operator.**
    `s.inline`/`runInline` wiring) are deprecated: kept one release behind a
    warning, then removed.
 
-   *Cadence (maintainer decision, 2026-08-04).* One-release deprecation, not an
-   immediate break. Because the parser no longer emits `http_api` (step 1), it can
-   only arrive via a hand-written `dag.json`, so the warning lives at
-   **registration**, not compile: `DAGSpec.DeprecationWarnings()` feeds the
-   register response and `leoflow push` prints it (the CLI is the only place the
-   author sees it). The **removal** — reject `http_api` at registration (400) and
-   delete the inline executor + scheduler wiring so the guard is structural (ADR
-   0048) — is tracked in **issue #512** for the next release.
+   *Cadence (maintainer decisions, 2026-08-04).* Initially a one-release
+   deprecation (warn at registration, then remove). It was then **collapsed into a
+   single release**: the next cut is the first Pro-facing RC, so there was no
+   prior release to carry the warning, and shipping the SSRF to production was not
+   acceptable (security over the deprecation courtesy). Because the parser never
+   emitted `http_api` (step 1), no compiled DAG is affected — only a hand-written
+   `dag.json` declaring it, which is exactly the exploit vector. **Removed**
+   (issue #512): `DAGSpec.Validate()` rejects `type: http_api` at registration and
+   the inline executor + scheduler wiring are deleted, so the guard is structural
+   (no in-process path to route to, ADR 0048), not an input check.
 
 3. **Remove the app-level SSRF guard.** The inline dial-control (#504) goes with
    the inline executor. It is unnecessary once HTTP runs in a pod.

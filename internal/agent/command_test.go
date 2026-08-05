@@ -77,9 +77,11 @@ func TestBuildCommandBashTemplatedRoutesThroughRuntime(t *testing.T) {
 	}
 }
 
-func TestBuildCommandHTTPAndUnknown(t *testing.T) {
+func TestBuildCommandRejectsUnsupported(t *testing.T) {
+	// http_api was removed (ADR 0047/0048, #512); like any unknown operator the
+	// agent has no command for it and rejects it.
 	if _, err := BuildCommand("http_api", "x", ""); err == nil {
-		t.Error("http_api should not be runnable by the agent")
+		t.Error("removed http_api operator should be rejected")
 	}
 	if _, err := BuildCommand("ruby", "x", ""); err == nil {
 		t.Error("unknown operator should be rejected")

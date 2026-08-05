@@ -22,15 +22,9 @@ type versionResponse struct {
 	Version  string `json:"version"`
 	SpecHash string `json:"spec_hash"`
 	Created  bool   `json:"created"`
-	// Warnings carries non-fatal deprecation notices (e.g. the http_api task
-	// type, ADR 0047) so `leoflow push` can show the author. Omitted when empty.
-	Warnings []string `json:"warnings,omitempty"`
 }
 
-func registerVersionHandler(repo DagVersionRepository, inlineMaxSeconds int) gin.HandlerFunc {
-	if inlineMaxSeconds <= 0 {
-		inlineMaxSeconds = domain.DefaultInlineMaxDurationSeconds
-	}
+func registerVersionHandler(repo DagVersionRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var spec domain.DAGSpec
 		if err := c.ShouldBindJSON(&spec); err != nil {
@@ -42,10 +36,6 @@ func registerVersionHandler(repo DagVersionRepository, inlineMaxSeconds int) gin
 			return
 		}
 		if err := spec.Validate(); err != nil {
-			AbortProblem(c, http.StatusBadRequest, "invalid dag spec", err.Error())
-			return
-		}
-		if err := spec.ValidateInlineExecution(inlineMaxSeconds); err != nil {
 			AbortProblem(c, http.StatusBadRequest, "invalid dag spec", err.Error())
 			return
 		}
@@ -63,6 +53,6 @@ func registerVersionHandler(repo DagVersionRepository, inlineMaxSeconds int) gin
 		if created {
 			status = http.StatusCreated
 		}
-		c.JSON(status, versionResponse{DagID: spec.DagID, Version: spec.DagVersion, SpecHash: hash, Created: created, Warnings: spec.DeprecationWarnings()})
+		c.JSON(status, versionResponse{DagID: spec.DagID, Version: spec.DagVersion, SpecHash: hash, Created: created})
 	}
 }

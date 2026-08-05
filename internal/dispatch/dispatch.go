@@ -131,7 +131,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 		Operator:         string(task.Type),
 		Entrypoint:       task.Entrypoint,
 		Env:              task.Env,
-		HTTPRequest:      task.HTTPRequest,
 		ControlPlaneAddr: d.controlAddr,
 		AgentToken:       token,
 		// Cluster-operator policy, not a per-task choice — see PlatformDefaults.

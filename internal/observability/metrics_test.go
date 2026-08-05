@@ -78,7 +78,7 @@ func TestRecordTaskDurationObserves(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m := NewMetrics(reg)
 	m.RecordTaskTransition("running", "success", "etl")
-	m.RecordTaskDuration("etl", "hook", "http_api", 1.5)
+	m.RecordTaskDuration("etl", "hook", "bash", 1.5)
 
 	families, err := reg.Gather()
 	if err != nil {

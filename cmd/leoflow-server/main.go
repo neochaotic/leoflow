@@ -146,7 +146,6 @@ func run() error {
 		PodDispatchEnabled:    podDispatch,
 		TaskNamespace:         podNamespace,
 		AgentControlPlaneAddr: agentAddr,
-		InlineConcurrency:     cfg.Executor.HTTP.InlineConcurrencyLimit,
 	}
 
 	// Dependency health probes (Postgres, and Redis when configured). Built once
@@ -306,14 +305,6 @@ func loginRateLimit(cfg *config.ServerConfig) int {
 	return 5
 }
 
-// inlineStateSink adapts the scheduler store to the inline runner's StateSink,
-// recording inline http_api task transitions.
-type inlineStateSink struct{ store *storage.SchedulerStore }
-
-func (s inlineStateSink) Transition(ctx context.Context, runID, taskID string, state domain.TaskState) error {
-	return s.store.ApplyTransition(ctx, runID, taskID, state)
-}
-
 // startSchedulerSide starts the scheduler-role components (ADR 0049): the agent
 // gRPC endpoint, the XCom/log janitors, and — when cfg.Scheduler.Enabled — the
 // scheduler loop + dispatch pool. It returns the scheduler's health handle (nil
@@ -336,7 +327,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 
 	drain := func() {}
 	if cfg.Scheduler.Enabled {
-		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, xcomSvc, logSink, logger, metrics)
+		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, logger, metrics)
 		if serr != nil {
 			grpcSrv.GracefulStop()
 			return nil, false, nil, serr
@@ -387,30 +378,29 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		UIAutoRefreshIntervalSeconds: cfg.UI.AutoRefreshIntervalSeconds,
 		DevNoAuth:                    cfg.Auth.DevNoAuth,
 
-		InlineHTTPMaxDurationSeconds: cfg.Executor.HTTP.InlineMaxDurationSeconds,
-		Dags:                         repo,
-		DagRuns:                      repo,
-		Tasks:                        repo,
-		Versions:                     repo,
-		Xcoms:                        xcomReader,
-		Logs:                         storage.NewLogReader(pg, logSink, logTailer),
-		Specs:                        repo,
-		LatestRuns:                   repo,
-		TaskSummary:                  repo,
-		DagVersions:                  repo,
-		DashboardStats:               repo,
-		AuditLog:                     repo,
-		Variables:                    repo,
-		Connections:                  repo,
-		Favorites:                    repo,
-		ImportErrors:                 repo,
-		Audit:                        repo,
-		ExecutorInfo:                 executorInfo,
-		SchedulerHealth:              schedulerHealth,
-		UI:                           uiSrv,
-		Workspace:                    editorFS,
-		MonacoDir:                    cfg.UI.MonacoDir,
-		ExamplesFS:                   leoflow.ExampleDAGs(),
+		Dags:            repo,
+		DagRuns:         repo,
+		Tasks:           repo,
+		Versions:        repo,
+		Xcoms:           xcomReader,
+		Logs:            storage.NewLogReader(pg, logSink, logTailer),
+		Specs:           repo,
+		LatestRuns:      repo,
+		TaskSummary:     repo,
+		DagVersions:     repo,
+		DashboardStats:  repo,
+		AuditLog:        repo,
+		Variables:       repo,
+		Connections:     repo,
+		Favorites:       repo,
+		ImportErrors:    repo,
+		Audit:           repo,
+		ExecutorInfo:    executorInfo,
+		SchedulerHealth: schedulerHealth,
+		UI:              uiSrv,
+		Workspace:       editorFS,
+		MonacoDir:       cfg.UI.MonacoDir,
+		ExamplesFS:      leoflow.ExampleDAGs(),
 	})
 	return &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 }
@@ -472,7 +462,7 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 
 // buildPodExecutor constructs a Kubernetes executor from the in-cluster config
 // or the local kubeconfig. It returns an error when neither is available, in
-// which case pod dispatch is disabled and only inline http_api tasks run.
+// which case pod dispatch is disabled and tasks have no executor to run them.
 func buildK8sClient() (kubernetes.Interface, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -700,7 +690,7 @@ func startStagingGC(ctx context.Context, cs kubernetes.Interface, store executor
 	})
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc executor.XComPusher, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, io.Closer, error) {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, io.Closer, error) {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
 		return nil, false, nil, fmt.Errorf("leader pool: %w", err)
@@ -709,15 +699,6 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 	sched := scheduler.NewScheduler(store, logger,
 		time.Duration(cfg.Scheduler.LoopIntervalMS)*time.Millisecond)
 	sched.SetRecorder(metrics)
-	sched.SetInlineRunner(executor.NewInlineRunner(executor.InlineConfig{
-		Sink:        inlineStateSink{store},
-		Metrics:     metrics,
-		XCom:        xcomSvc,
-		Logs:        logSink,
-		Concurrency: cfg.Executor.HTTP.InlineConcurrencyLimit,
-		MaxSeconds:  cfg.Executor.HTTP.InlineMaxDurationSeconds,
-		UserAgent:   cfg.Executor.HTTP.UserAgent,
-	}))
 	// Native on-failure alerting (#424): the scheduler fires Slack/webhook rules
 	// declared in leoflow.yaml when a run finalizes failed, resolving each rule's
 	// managed connection to its endpoint URL. Best-effort, off the tick path.
@@ -948,11 +929,12 @@ func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Schedule
 }
 
 // setupK8sDispatch wires the production pod-per-task executor; it is a no-op
-// (only inline http_api tasks run) when no Kubernetes client is available.
+// (tasks have no executor and are failed as undispatchable) when no Kubernetes
+// client is available.
 func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
 	cs, perr := buildK8sClient()
 	if perr != nil {
-		logger.Warn("pod dispatch disabled; only inline http_api tasks will run", "error", perr)
+		logger.Warn("pod dispatch disabled; tasks have no executor and will fail as undispatchable", "error", perr)
 		return false, nil
 	}
 	controlAddr := resolveAgentControlAddr(cfg)

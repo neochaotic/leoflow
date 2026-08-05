@@ -126,14 +126,10 @@ type UISection struct {
 	MonacoDir string `mapstructure:"monaco_dir"`
 }
 
-// HTTPExecutorSection configures the inline http_api execution path (ADR 0002).
+// HTTPExecutorSection configures HTTP-related executor knobs.
 type HTTPExecutorSection struct {
-	// InlineMaxDurationSeconds caps how long an inline http_api task may run; a
-	// task declaring a longer execution_timeout_seconds must use execution_mode: pod.
-	InlineMaxDurationSeconds int `mapstructure:"inline_max_duration_seconds"`
-	// InlineConcurrencyLimit bounds the number of in-flight inline goroutines.
-	InlineConcurrencyLimit int `mapstructure:"inline_concurrency_limit"`
-	// UserAgent is the User-Agent header sent on inline http_api requests.
+	// UserAgent is the default User-Agent header for HTTP requests a task image
+	// may make on the platform's behalf.
 	UserAgent string `mapstructure:"user_agent"`
 }
 
@@ -300,8 +296,6 @@ var serverDefaults = map[string]any{
 	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).
 	"scheduler.dispatch.buffer_size":                   0,
 	"scheduler.dispatch.workers":                       0,
-	"executor.http.inline_max_duration_seconds":        300,
-	"executor.http.inline_concurrency_limit":           256,
 	"executor.http.user_agent":                         "leoflow/0.1",
 	"executor.type":                                    "kubernetes",
 	"executor.agent_path":                              "leoflow-agent",

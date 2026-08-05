@@ -78,7 +78,6 @@ func TestOperatorName(t *testing.T) {
 	cases := map[domain.TaskType]string{
 		domain.TaskTypePython:     "PythonOperator",
 		domain.TaskTypeBash:       "BashOperator",
-		domain.TaskTypeHTTPAPI:    "HttpOperator",
 		domain.TaskType("custom"): "custom", // unknown -> passthrough
 	}
 	for in, want := range cases {

@@ -262,7 +262,7 @@ browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
       container's nonroot user could not create `/var/log/leoflow`. Fixed by
       pointing `LEOFLOW_LOGS_DIR` at a writable path in the demo compose. Logs now
       persist and render (e.g. `inline http_api GET … -> success`).
-    - Note: **http_api** ran inline (ADR 0015; now deprecated, ADR 0047); python/bash tasks need a
+    - Note: **http_api** ran inline (ADR 0015; removed, ADR 0047/0048); python/bash tasks need a
       Kubernetes worker pod, which the compose demo does not provide.
   - **Write flows.** trigger / clear / pause are implemented on the public API
     (`POST /api/v2/dags/{id}/dagRuns`, `POST /api/v2/dags/{id}/clearTaskInstances`,

@@ -54,19 +54,6 @@ func newPushCommand() *cobra.Command {
 			if status >= http.StatusMultipleChoices {
 				return fmt.Errorf("server returned %d: %s", status, body)
 			}
-			// Surface any non-fatal deprecation warnings the server returned (e.g.
-			// the http_api task type, ADR 0047) — the CLI is where the author sees
-			// them. Best-effort: a body that does not parse just prints no warnings.
-			var resp struct {
-				Warnings []string `json:"warnings"`
-			}
-			if json.Unmarshal([]byte(body), &resp) == nil {
-				for _, w := range resp.Warnings {
-					if _, werr := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w); werr != nil {
-						return werr
-					}
-				}
-			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Registered %q with %s (HTTP %d)\n", spec.DagID, serverURL, status)
 			return err
 		},

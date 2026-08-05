@@ -22,10 +22,10 @@ func validDAGSpec() *DAGSpec {
 				TriggerRule: TriggerRuleAllSuccess,
 			},
 			{
-				TaskID:      "notify",
-				Type:        TaskTypeHTTPAPI,
-				DependsOn:   []string{"extract"},
-				HTTPRequest: &HTTPRequest{Method: "POST", URL: "https://example.com/hook"},
+				TaskID:     "notify",
+				Type:       TaskTypeBash,
+				DependsOn:  []string{"extract"},
+				Entrypoint: "echo done",
 			},
 		},
 	}
@@ -64,7 +64,7 @@ func TestDAGSpecValidateRejectsInvalidSpecs(t *testing.T) {
 		"unknown task type":    func(d *DAGSpec) { d.Tasks[0].Type = "ruby" },
 		"bad trigger rule":     func(d *DAGSpec) { d.Tasks[0].TriggerRule = "sometimes" },
 		"python without entry": func(d *DAGSpec) { d.Tasks[0].Entrypoint = "" },
-		"http without request": func(d *DAGSpec) { d.Tasks[1].HTTPRequest = nil },
+		"bash without command": func(d *DAGSpec) { d.Tasks[1].Entrypoint = "" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -77,25 +77,13 @@ func TestDAGSpecValidateRejectsInvalidSpecs(t *testing.T) {
 	}
 }
 
-func TestExecutionModeAcceptedForHTTPAPI(t *testing.T) {
-	for _, mode := range []ExecutionMode{ExecutionModeInline, ExecutionModePod} {
-		spec := validDAGSpec()
-		spec.Tasks[1].ExecutionMode = mode
-		if err := spec.Validate(); err != nil {
-			t.Errorf("http_api with execution_mode %q should be valid: %v", mode, err)
-		}
-	}
-}
-
-func TestExecutionModeRejectedForNonHTTPTasks(t *testing.T) {
+// pod is now the only supported execution_mode (the inline http_api path was
+// removed, ADR 0047/0048, #512). Any other value is rejected for every task type.
+func TestExecutionModeRejectsNonPodModes(t *testing.T) {
 	cases := map[string]func(*DAGSpec){
-		"python inline": func(d *DAGSpec) { d.Tasks[0].ExecutionMode = ExecutionModeInline },
-		"bash inline": func(d *DAGSpec) {
-			d.Tasks[0].Type = TaskTypeBash
-			d.Tasks[0].Entrypoint = "echo hi"
-			d.Tasks[0].ExecutionMode = ExecutionModeInline
-		},
-		"unknown mode": func(d *DAGSpec) { d.Tasks[1].ExecutionMode = "turbo" },
+		"python inline": func(d *DAGSpec) { d.Tasks[0].ExecutionMode = ExecutionMode("inline") },
+		"bash inline":   func(d *DAGSpec) { d.Tasks[1].ExecutionMode = ExecutionMode("inline") },
+		"unknown mode":  func(d *DAGSpec) { d.Tasks[1].ExecutionMode = "turbo" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -117,46 +105,13 @@ func TestPythonMayDeclarePodMode(t *testing.T) {
 }
 
 func TestEffectiveExecutionModeDefaults(t *testing.T) {
-	http := TaskSpec{Type: TaskTypeHTTPAPI}
-	if http.EffectiveExecutionMode() != ExecutionModeInline {
-		t.Errorf("http_api default = %q, want inline", http.EffectiveExecutionMode())
-	}
-	pod := TaskSpec{Type: TaskTypeHTTPAPI, ExecutionMode: ExecutionModePod}
-	if pod.EffectiveExecutionMode() != ExecutionModePod {
-		t.Errorf("explicit mode = %q, want pod", pod.EffectiveExecutionMode())
-	}
 	py := TaskSpec{Type: TaskTypePython}
 	if py.EffectiveExecutionMode() != ExecutionModePod {
 		t.Errorf("python default = %q, want pod", py.EffectiveExecutionMode())
 	}
-}
-
-func TestValidateInlineExecutionRejectsLongInlineHTTP(t *testing.T) {
-	spec := validDAGSpec()
-	spec.Tasks[1].ExecutionTimeoutSeconds = ptr(600) // http_api, inline by default
-	if err := spec.ValidateInlineExecution(300); err == nil {
-		t.Error("inline http_api with timeout above the cap must be rejected")
-	}
-}
-
-func TestValidateInlineExecutionAllows(t *testing.T) {
-	cases := map[string]func(*DAGSpec){
-		"inline under cap": func(d *DAGSpec) { d.Tasks[1].ExecutionTimeoutSeconds = ptr(200) },
-		"pod over cap": func(d *DAGSpec) {
-			d.Tasks[1].ExecutionMode = ExecutionModePod
-			d.Tasks[1].ExecutionTimeoutSeconds = ptr(3600)
-		},
-		"python over cap (pod)": func(d *DAGSpec) { d.Tasks[0].ExecutionTimeoutSeconds = ptr(3600) },
-		"no explicit timeout":   func(d *DAGSpec) {},
-	}
-	for name, mutate := range cases {
-		t.Run(name, func(t *testing.T) {
-			spec := validDAGSpec()
-			mutate(spec)
-			if err := spec.ValidateInlineExecution(300); err != nil {
-				t.Errorf("ValidateInlineExecution() = %v, want nil for %q", err, name)
-			}
-		})
+	explicit := TaskSpec{Type: TaskTypeBash, ExecutionMode: ExecutionModePod}
+	if explicit.EffectiveExecutionMode() != ExecutionModePod {
+		t.Errorf("explicit mode = %q, want pod", explicit.EffectiveExecutionMode())
 	}
 }
 

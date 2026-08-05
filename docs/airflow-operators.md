@@ -69,7 +69,7 @@ flowchart TB
 | `airflow_operator` | `python -m leoflow_runtime --operator <dotted.class>` | a captured provider operator/sensor (ADR 0040) |
 | `bash` (plain) | `bash -c <cmd>` | a shell command, no Python needed |
 | `bash` (templated) | `python -m leoflow_runtime --bash <cmd>` | shell command after Jinja rendering |
-| ~~`http_api`~~ | *(deprecated — ADR 0047; HttpOperator now runs in a pod as `airflow_operator`)* | — |
+| ~~`http_api`~~ | *(removed — ADR 0047/0048; HttpOperator now runs in a pod as `airflow_operator`)* | — |
 
 Only classes the shim actually captured carry the `__leoflow_operator_class__`
 marker, so the compiler routes them to `airflow_operator`; everything else stays
@@ -193,14 +193,14 @@ UI renders the buttons.
 The new capabilities were standardized so native task types get them too, without
 changing existing behaviour:
 
-| Capability | `@task` / python | `bash` | `airflow_operator` | `http_api` |
-|---|:---:|:---:|:---:|:---:|
-| Connections / Variables (`AIRFLOW_CONN/VAR_*`) | ✅ | ✅ (env) | ✅ | control-plane |
-| Run context (`ds`, `ts`, `data_interval`, `run_id`) | ✅ | ✅ via `{{ }}` + env | ✅ | control-plane |
-| `params` (#148) | ✅ | ✅ via `{{ }}` | ✅ | control-plane |
-| XCom chaining (`ti.xcom_pull`) | ✅ | n/a (shell) | ✅ | control-plane |
-| Multi-key `ti.xcom_push` | ✅ | n/a | ✅ | n/a |
-| Operator extra-links | n/a | n/a | ✅ | n/a |
+| Capability | `@task` / python | `bash` | `airflow_operator` |
+|---|:---:|:---:|:---:|
+| Connections / Variables (`AIRFLOW_CONN/VAR_*`) | ✅ | ✅ (env) | ✅ |
+| Run context (`ds`, `ts`, `data_interval`, `run_id`) | ✅ | ✅ via `{{ }}` + env | ✅ |
+| `params` (#148) | ✅ | ✅ via `{{ }}` | ✅ |
+| XCom chaining (`ti.xcom_pull`) | ✅ | n/a (shell) | ✅ |
+| Multi-key `ti.xcom_push` | ✅ | n/a | ✅ |
+| Operator extra-links | n/a | n/a | ✅ |
 
 `bash` gets the context through Jinja rendering of the command (`{{ ds }}`,
 `{{ var.value.X }}`, `{{ params.region }}`) when the command contains `{{` — a

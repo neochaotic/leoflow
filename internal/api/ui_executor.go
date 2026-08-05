@@ -16,13 +16,12 @@ type ExecutorInfo struct {
 	PodDispatchEnabled    bool
 	TaskNamespace         string
 	AgentControlPlaneAddr string
-	InlineConcurrency     int
 }
 
 // monitorExecutorHandler implements GET /api/v2/monitor/executor.
 func monitorExecutorHandler(info ExecutorInfo) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		modes := []string{"inline_http_api"}
+		modes := []string{}
 		if info.PodDispatchEnabled {
 			modes = append(modes, "kubernetes_pod")
 		}
@@ -30,11 +29,7 @@ func monitorExecutorHandler(info ExecutorInfo) gin.HandlerFunc {
 			"pod_dispatch_enabled":     info.PodDispatchEnabled,
 			"task_namespace":           info.TaskNamespace,
 			"agent_control_plane_addr": info.AgentControlPlaneAddr,
-			"inline_http_api": gin.H{
-				"enabled":           true,
-				"concurrency_limit": info.InlineConcurrency,
-			},
-			"execution_modes": modes,
+			"execution_modes":          modes,
 		})
 	}
 }

@@ -46,8 +46,8 @@ Each reaper requires a **positive observable signal** before failing
 anything:
 
 - **TI heartbeat reaper** — only fires on TIs that *did* heartbeat at least
-  once and then went silent. A TI that never heartbeated (e.g. an inline
-  http_api task with no agent) is left alone.
+  once and then went silent. A TI that never heartbeated (e.g. a pod that never
+  started, so no agent ever reported) is left alone.
 - **Dispatch-lost reaper** — requires a non-zero `queued_at` older than the
   threshold. A TI without that stamp is too poorly observed to reap.
 - **Orphan-run reaper** — requires `state = 'running'` AND no active TI on

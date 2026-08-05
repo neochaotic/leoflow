@@ -121,9 +121,11 @@ from airflow.sdk import DAG, task
 
 @task
 def work() -> str:
-    # Long enough to kill the scheduler / the pod while this is Running.
+    # Long enough to (a) kill the scheduler mid-run and (b) let the agent emit at
+    # least one heartbeat (15s interval) before scenario B kills the pod, so the
+    # agent-lost backstop is armed. Comfortably outlives both scenarios' setup.
     print("chaos: work START", flush=True)
-    time.sleep(40)
+    time.sleep(90)
     print("chaos: work DONE", flush=True)
     return "done"
 
@@ -237,6 +239,17 @@ scenario_task_pod_kill() {
   local pod
   pod="$(kubectl get pods -n leoflow --no-headers 2>/dev/null | awk '/chaosdag-work-.*Running/{print $1; exit}')"
   [ -n "$pod" ] || { bad "B: could not find the running work pod"; return; }
+
+  # Arm the agent-lost backstop before the kill. That reaper only fires once a TI
+  # has heartbeated at least once (the zero-heartbeat "do no harm" guard, ADR
+  # 0031); the agent heartbeats every 15s (cmd/leoflow-agent HeartbeatInterval).
+  # Killing the pod inside that first interval hits a separate, un-backstopped
+  # window (the reconciler is blind to a *deleted* pod, and agent-lost skips a
+  # null heartbeat) tracked in #527 — NOT what this scenario asserts. Wait one
+  # interval + margin so we exercise the documented mid-run-kill → agent-lost path.
+  log "B: waiting one heartbeat interval (15s) so the agent-lost backstop is armed (#527)"
+  sleep 20
+
   log "B: force-deleting $pod mid-execution"
   kubectl delete pod -n leoflow "$pod" --grace-period=0 --force >/dev/null 2>&1 || true
 

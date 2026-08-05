@@ -6,6 +6,7 @@ import importlib
 import inspect
 import json
 import os
+import shlex
 import sys
 from datetime import datetime
 
@@ -208,7 +209,18 @@ def _render_bash(command: str, context: dict) -> str:
         # renders a shell command, not HTML — HTML-escaping would corrupt it. Secrets
         # should be referenced as $AIRFLOW_VAR_*/$AIRFLOW_CONN_* env vars rather than
         # rendered into the command string (see the env-secrets delivery path).
-        return SandboxedEnvironment().from_string(command).render(**context)
+        #
+        # finalize shell-quotes every interpolated VALUE (issue #489). The template
+        # text is the DAG author's (write:dag) trusted structure; the values it
+        # interpolates — `params` is the run's `conf`, which anyone with execute:dag
+        # supplies — are untrusted data. Quoting each rendered value with shlex.quote
+        # keeps a metacharacter payload ("x; rm -rf /", "$(...)") a single inert
+        # argument instead of shell syntax. Safe values (dates, plain words) contain
+        # no metacharacters, so shlex.quote returns them unchanged — the common case
+        # is byte-identical. This is the boundary the sandbox does NOT cover: it
+        # governs what the template may evaluate, not what the result means to bash.
+        env = SandboxedEnvironment(finalize=lambda value: shlex.quote(str(value)))
+        return env.from_string(command).render(**context)
     except Exception:  # noqa: BLE001 — a broken/blocked template must not fail the task
         return command
 

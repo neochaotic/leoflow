@@ -102,6 +102,25 @@ executor**, native-first by type. Nothing is silently dropped or mistranslated.
 | ~~`http_api`~~ (removed) | — | — | **Removed (ADR 0047/0048, #512).** `HttpOperator` now compiles to `airflow_operator` and runs in a **pod**, like any other provider operator — declare `connectors: [http]`. The old inline path ran the request in the control-plane process (an SSRF surface) and is gone. |
 | `airflow_operator` | **any provider operator/sensor** (Snowflake, S3, Postgres, BigQuery, …) | agent in a pod | The generic executor (ADR 0040): the runtime imports the class, instantiates it with your args, and calls `execute()`. Declare the provider or compile fails. |
 
+!!! warning "Bash templating: values are shell-quoted, the template text is not"
+    A `bash_command` is Jinja-rendered with the run context (`{{ ds }}`,
+    `{{ params.x }}`, `{{ var.value.x }}`). The **command text you write** is the
+    shell structure and is used verbatim; every **interpolated value** is
+    automatically shell-quoted (`shlex.quote`) before it reaches `bash -c`. This is
+    a security boundary: `params` is the run's `conf`, which anyone who can
+    *trigger* the DAG supplies (`execute:dag`, a lower bar than authoring it), so an
+    un-quoted value would let a trigger inject arbitrary shell (issue #489).
+
+    Practical consequence — **write interpolations unquoted**, and do not wrap them
+    in your own quotes:
+
+    - ✅ `process --name {{ params.name }}` — the value is quoted for you.
+    - ❌ `process --name "{{ params.name }}"` — your quotes fight the auto-quoting.
+    - A value can no longer expand into multiple shell words/flags; if you need
+      that, pass the pieces as separate `params` and interpolate each. For secrets,
+      reference `$AIRFLOW_VAR_*` / `$AIRFLOW_CONN_*` env vars instead of rendering
+      them into the command.
+
 Also supported:
 
 - **Trigger rules**: `all_success`, `all_failed`, `all_done`, `one_success`, `one_failed`.

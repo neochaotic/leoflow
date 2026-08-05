@@ -206,7 +206,11 @@ changing existing behaviour:
 `{{ var.value.X }}`, `{{ params.region }}`) when the command contains `{{` — a
 plain command stays a direct `bash -c` so bash-only images need no Python. Jinja2
 is optional at runtime: if it is absent the command falls back to its raw form and
-the `$LEOFLOW_DS` / `$AIRFLOW_VAR_*` env vars still reach the shell.
+the `$LEOFLOW_DS` / `$AIRFLOW_VAR_*` env vars still reach the shell. Every
+interpolated **value** is shell-quoted (`shlex.quote`) before exec, so a `params`
+value from an untrusted `conf` cannot inject shell — write interpolations unquoted
+(`--name {{ params.x }}`, not `--name "{{ params.x }}"`). See
+[DAG authoring](dag-authoring.md) (issue #489).
 
 ## Not yet supported (loud, not silent)
 

@@ -6,6 +6,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Bash task templating now shell-quotes interpolated values** (issue #489). A
+  `bash_command` Jinja-renders the run context, and `params` is the run's `conf` —
+  supplied by anyone with `execute:dag`, a lower bar than authoring the DAG. A
+  value with shell metacharacters (`x; rm -rf /`, `$(...)`) was interpolated into
+  the command string unquoted, so a trigger could run arbitrary commands in the
+  task pod (privilege escalation from "may run this pipeline" to "may run any
+  command"). Every interpolated value is now `shlex.quote`d before `bash -c`; the
+  trusted template text is unchanged and safe values render byte-identically.
+  Behavior change: a value can no longer expand into multiple shell words — write
+  interpolations unquoted (`--name {{ params.x }}`).
+
 ### Added
 
 - **Optional api/scheduler split for Pro (`split.enabled`, off by default; ADR

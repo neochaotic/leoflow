@@ -519,7 +519,7 @@ def test_render_bash_quotes_conf_value_blocks_shell_injection(tmp_path):
     sentinel = tmp_path / "pwned"
     payload = f"$(touch {sentinel})"
     rendered = runner._render_bash("true {{ params.name }}", {"params": {"name": payload}})
-    subprocess.run(["bash", "-c", rendered], check=False)
+    subprocess.run(["bash", "-c", rendered], check=False)  # noqa: S603,S607 — deliberately exec bash to prove the payload is inert
     assert not sentinel.exists(), (
         f"shell injection executed via conf: rendered={rendered!r} created {sentinel}")
 
@@ -532,6 +532,6 @@ def test_render_bash_quotes_metachars_as_single_token(tmp_path):
     sentinel = tmp_path / "pwned2"
     payload = f"x; touch {sentinel}"
     rendered = runner._render_bash("echo {{ params.name }}", {"params": {"name": payload}})
-    subprocess.run(["bash", "-c", rendered], check=False)
+    subprocess.run(["bash", "-c", rendered], check=False)  # noqa: S603,S607 — deliberately exec bash to prove the payload is inert
     assert not sentinel.exists(), (
         f"';' in conf started a new command: rendered={rendered!r} created {sentinel}")

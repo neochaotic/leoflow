@@ -506,3 +506,32 @@ def test_maybe_fire_skips_when_retries_remain(monkeypatch):
     monkeypatch.setenv("LEOFLOW_MAX_TRIES", "3")
     runner._maybe_fire_on_failure_callback({}, [lambda ctx: calls.append(ctx)])
     assert calls == []
+
+
+def test_render_bash_quotes_conf_value_blocks_shell_injection(tmp_path):
+    # `params` comes from the DAG-run conf, which anyone with execute:dag supplies
+    # (a lower bar than write:dag). A value carrying shell metacharacters must be
+    # neutralized: only the trusted template text is shell syntax; interpolated
+    # values are quoted. Realistic payload — a command substitution that would
+    # create a file — run through the real bash the task uses (issue #489).
+    import subprocess
+
+    sentinel = tmp_path / "pwned"
+    payload = f"$(touch {sentinel})"
+    rendered = runner._render_bash("true {{ params.name }}", {"params": {"name": payload}})
+    subprocess.run(["bash", "-c", rendered], check=False)  # noqa: S603,S607 — deliberately exec bash to prove the payload is inert
+    assert not sentinel.exists(), (
+        f"shell injection executed via conf: rendered={rendered!r} created {sentinel}")
+
+
+def test_render_bash_quotes_metachars_as_single_token(tmp_path):
+    # A ';'-based payload must stay a single argument to the trusted command, not
+    # become a second command. Proven by executing: the injected `touch` must not run.
+    import subprocess
+
+    sentinel = tmp_path / "pwned2"
+    payload = f"x; touch {sentinel}"
+    rendered = runner._render_bash("echo {{ params.name }}", {"params": {"name": payload}})
+    subprocess.run(["bash", "-c", rendered], check=False)  # noqa: S603,S607 — deliberately exec bash to prove the payload is inert
+    assert not sentinel.exists(), (
+        f"';' in conf started a new command: rendered={rendered!r} created {sentinel}")

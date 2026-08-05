@@ -86,6 +86,11 @@ spec:
               value: ":{{ .ctx.Values.ports.grpc }}"
             - name: LEOFLOW_EXECUTOR_AGENT_CONTROL_PLANE_ADDR
               value: {{ include "leoflow.agentControlPlaneAddr" .ctx | quote }}
+            # The namespace the control plane creates task pods + staging PVCs in.
+            # MUST equal the namespace the executor Role/RoleBinding are granted in
+            # (rbac.yaml, also .Values.taskNamespace) or every dispatch 403s (#480).
+            - name: LEOFLOW_EXECUTOR_TASK_NAMESPACE
+              value: {{ .ctx.Values.taskNamespace | quote }}
             - name: LEOFLOW_LOGS_DIR
               value: {{ .ctx.Values.config.logsDir | quote }}
             - name: LEOFLOW_SCHEDULER_ENABLED

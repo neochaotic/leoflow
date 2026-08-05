@@ -20,6 +20,9 @@
 # LEOFLOW_E2E_HOST_ADDR. Ports are overridable for hosts whose defaults are busy.
 set -euo pipefail
 
+# shellcheck source=test/e2e/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLUSTER="${LEOFLOW_E2E_CLUSTER:-leoflow-dbt-e2e}"
 HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
@@ -147,7 +150,7 @@ for want in 'raw' 'stg' 'mart'; do
 done
 jq -e '.tasks[] | select(.task_id=="mart") | .depends_on | index("stg")' "$PROJ/dag.json" >/dev/null \
   || fail "mart must depend on stg (dbt edge not carried)"
-k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER" >/dev/null
+k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 
 log "Pushing the DAG and triggering a run"
 TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"

@@ -6,6 +6,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **k3d e2e image import is now verified + retried** (test/e2e reliability).
+  `k3d image import` prints "Successfully imported" even when the in-node
+  containerd import fails ("tarball: no such file or directory"), so a flaky
+  import left the cluster without the image and every task pod ErrImagePulled —
+  a confusing downstream failure. A shared `k3d_import` helper treats the import
+  as successful only when k3d exits 0 AND emits no error line, retrying up to 3×
+  and failing loud otherwise. Applied across the operator, split, and dbt e2es.
+
 ### Fixed
 
 - **Split api role now reports pod dispatch correctly on `/api/v2/monitor/executor`**

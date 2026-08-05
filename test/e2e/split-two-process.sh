@@ -25,6 +25,9 @@
 # Usage: test/e2e/split-two-process.sh [cluster-name]
 set -euo pipefail
 
+# shellcheck source=test/e2e/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
 CLUSTER="${1:-leoflow-split-e2e}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKDIR="$(mktemp -d)"
@@ -183,7 +186,7 @@ log "isolation OK: api serves HTTP+metrics-health; scheduler serves metrics-heal
 log "Compiling, building, and importing the DAG image"
 "$ROOT/bin/leoflow" compile "$WORKDIR/$DAG_ID" --image "$DAG_IMAGE" \
   --build --dockerfile Dockerfile -o "$WORKDIR/$DAG_ID/dag.json"
-k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER"
+k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 
 log "Pushing + triggering the DAG against the API process (never the scheduler)"
 TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"

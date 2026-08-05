@@ -15,6 +15,9 @@
 # Usage: test/e2e/e2e.sh [cluster-name]
 set -euo pipefail
 
+# shellcheck source=test/e2e/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
 CLUSTER="${1:-leoflow-e2e}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKDIR="$(mktemp -d)"
@@ -217,7 +220,7 @@ jq -e '.tasks[] | select(.task_id=="probe" and .type=="airflow_operator")' \
 log "Asserting probe chains from endpoint_name (ti.xcom_pull, ADR 0040)"
 jq -e '.tasks[] | select(.task_id=="probe") | .depends_on | index("endpoint_name")' \
   "$WORKDIR/$DAG_ID/dag.json" >/dev/null || fail "probe does not depend on endpoint_name (chaining wire missing)"
-k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER"
+k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 
 log "Pushing the DAG"
 TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"
@@ -445,7 +448,7 @@ CB_IMAGE="leoflow-e2e-cbdag:local"
   --build --dockerfile Dockerfile -o "$WORKDIR/$CBID/dag.json"
 jq -e '.tasks[] | select(.task_id=="boom" and .on_failure_callback==true)' \
   "$WORKDIR/$CBID/dag.json" >/dev/null || fail "boom did not compile with on_failure_callback=true"
-k3d image import "$CB_IMAGE" --cluster "$CLUSTER"
+k3d_import "$CLUSTER" "$CB_IMAGE"
 "$ROOT/bin/leoflow" push "$WORKDIR/$CBID/dag.json" --server "$API" --token "$TOKEN"
 CB_RUN="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{}' "$API/api/v2/dags/cbdag/dagRuns" | jq -r '.dag_run_id')"

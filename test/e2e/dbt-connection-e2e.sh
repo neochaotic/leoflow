@@ -15,6 +15,9 @@
 # On Linux/CI set LEOFLOW_E2E_HOST_ADDR=host.k3d.internal.
 set -euo pipefail
 
+# shellcheck source=test/e2e/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLUSTER="${LEOFLOW_E2E_CLUSTER:-leoflow-dbt-conn-e2e}"
 HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
@@ -126,7 +129,7 @@ log "Compiling (commands must be wrapped with the --dbt-profile step) + building
 "$ROOT/bin/leoflow" compile "$PROJ" --image "$DAG_IMAGE" --build --dockerfile Dockerfile -o "$PROJ/dag.json"
 jq -e '.tasks[] | select(.entrypoint | startswith("python -m leoflow_runtime --dbt-profile warehouse_pg shop &&"))' \
   "$PROJ/dag.json" >/dev/null || fail "task commands are not wrapped with the managed-profile step"
-k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER" >/dev/null
+k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 
 log "Pushing the DAG and creating the managed Postgres connection"
 TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"

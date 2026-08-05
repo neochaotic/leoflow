@@ -15,6 +15,9 @@
 # LEOFLOW_E2E_PARSER_CMD.
 set -euo pipefail
 
+# shellcheck source=test/e2e/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLUSTER="${LEOFLOW_E2E_CLUSTER:-leoflow-dbt-mix-e2e}"
 HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
@@ -140,7 +143,7 @@ jq -e '.tasks[] | select(.task_id=="transform__raw") | .depends_on | index("pre"
   || fail "group root transform__raw is not wired to the upstream operator 'pre'"
 jq -e '.tasks[] | select(.task_id=="post") | .depends_on | index("transform__mart")' "$PROJ/dag.json" >/dev/null \
   || fail "downstream operator 'post' is not wired to the group leaf"
-k3d image import "$BASE_IMAGE" "$DAG_IMAGE" --cluster "$CLUSTER" >/dev/null
+k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 
 log "Pushing + triggering"
 TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"

@@ -620,11 +620,14 @@ func TestRunnerFanInAbsentUpstreamGetsNull(t *testing.T) {
 	}
 }
 
-func TestRunnerRejectsHTTPOperator(t *testing.T) {
+func TestRunnerRejectsUnsupportedOperator(t *testing.T) {
+	// http_api was removed (ADR 0047/0048, #512). A leftover spec declaring it is
+	// rejected by the agent as an unsupported operator (defense in depth; the
+	// control plane refuses it at registration).
 	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "http_api"}}
 	r := newRunner(client, &fakeCmd{}, &recordingSink{})
 	if err := r.Run(context.Background()); err == nil {
-		t.Error("agent must refuse to run http_api tasks")
+		t.Error("agent must refuse to run a removed/unsupported operator")
 	}
 }
 

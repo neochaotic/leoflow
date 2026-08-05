@@ -283,8 +283,6 @@ def _map_task(task, source: str, dag=None) -> dict[str, Any]:
             entry["call_args"] = call_args
     elif task_type == "bash":
         entry["entrypoint"] = _bash_command(task)
-    elif task_type == "http_api":
-        entry["http_request"] = _http_request(task)
     elif task_type == "airflow_operator":
         entry["operator_class"] = type(task).__leoflow_operator_class__
         xcom_input, operator_args = _split_operator_args(task)
@@ -365,8 +363,7 @@ def _check_callbacks(task, task_type: str, entry: dict) -> None:
     if task_type in _CALLBACK_CAPABLE_TYPES:
         entry[_ON_FAILURE_CALLBACK] = True
         return
-    # bash execs bash in place (no Python left); http_api runs inline in the Go
-    # control plane (no Python at all). Neither can run a Python callback.
+    # bash execs bash in place (no Python left), so it cannot run a Python callback.
     raise ValueError(
         f"on_failure_callback on task {task.task_id!r} (type {task_type}) cannot run: "
         "only a Python-executed task runs it in-process (a provider operator or a "
@@ -607,20 +604,6 @@ def _is_json_literal(value: Any) -> bool:
 
 def _bash_command(task) -> str:
     return getattr(task, "bash_command", "") or ""
-
-
-def _http_request(task) -> dict[str, Any]:
-    request: dict[str, Any] = {
-        "method": (getattr(task, "method", "GET") or "GET").upper(),
-        "url": getattr(task, "endpoint", "") or "",
-    }
-    headers = getattr(task, "headers", None)
-    if headers:
-        request["headers"] = dict(headers)
-    body = getattr(task, "data", None)
-    if body:
-        request["body"] = body
-    return request
 
 
 def _schedule(dag) -> str | None:

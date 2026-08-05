@@ -465,7 +465,7 @@ type TaskSpec struct {
 	RunId                   string                    `protobuf:"bytes,4,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	TaskId                  string                    `protobuf:"bytes,5,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	TryNumber               int32                     `protobuf:"varint,6,opt,name=try_number,json=tryNumber,proto3" json:"try_number,omitempty"`
-	Operator                string                    `protobuf:"bytes,7,opt,name=operator,proto3" json:"operator,omitempty"` // 'python', 'bash', 'http_api'
+	Operator                string                    `protobuf:"bytes,7,opt,name=operator,proto3" json:"operator,omitempty"` // 'python', 'bash', 'airflow_operator'
 	Entrypoint              string                    `protobuf:"bytes,8,opt,name=entrypoint,proto3" json:"entrypoint,omitempty"`
 	Environment             map[string]string         `protobuf:"bytes,9,rep,name=environment,proto3" json:"environment,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	XcomInputMapping        map[string]*XComUpstreams `protobuf:"bytes,10,rep,name=xcom_input_mapping,json=xcomInputMapping,proto3" json:"xcom_input_mapping,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // param_name -> ordered list of upstream task_ids (1 = single, N = fan-in)

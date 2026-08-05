@@ -79,9 +79,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fetching task spec: %w", err)
 	}
-	if spec.GetOperator() == "http_api" {
-		return errors.New("agent received an http_api task, which is executed by the control plane")
-	}
 	argv, err := BuildCommand(spec.GetOperator(), spec.GetEntrypoint(), spec.GetOperatorClass())
 	if err != nil {
 		return err

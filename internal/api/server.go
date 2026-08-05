@@ -46,10 +46,6 @@ type Dependencies struct {
 	// be set in production. See DevBypassAuth.
 	DevNoAuth bool
 
-	// InlineHTTPMaxDurationSeconds caps inline http_api task timeouts at push
-	// time. Zero falls back to domain.DefaultInlineMaxDurationSeconds.
-	InlineHTTPMaxDurationSeconds int
-
 	// Resource repositories. Routes for nil repositories are not registered.
 	Dags           DagRepository
 	DagRuns        DagRunRepository

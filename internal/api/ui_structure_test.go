@@ -42,7 +42,7 @@ func diamondSpec() domain.DAGSpec {
 		DagID: "etl",
 		Tasks: []domain.TaskSpec{
 			{TaskID: "load", Type: "python", DependsOn: []string{"transform_a", "transform_b"}},
-			{TaskID: "transform_b", Type: "http_api", DependsOn: []string{"extract"}},
+			{TaskID: "transform_b", Type: "bash", DependsOn: []string{"extract"}},
 			{TaskID: "transform_a", Type: "python", DependsOn: []string{"extract"}},
 			{TaskID: "extract", Type: "python"},
 		},

@@ -29,9 +29,8 @@ func NewReturnValuePath() (path string, cleanup func() error, err error) {
 }
 
 // BuildCommand returns the argv to execute the user's task for the given
-// operator. http_api tasks are executed by the control plane, not the agent.
-// operatorClass is the dotted Airflow operator/sensor class, used only for
-// airflow_operator tasks (ADR 0040); it is ignored for the other operators.
+// operator. operatorClass is the dotted Airflow operator/sensor class, used only
+// for airflow_operator tasks (ADR 0040); it is ignored for the other operators.
 func BuildCommand(operator, entrypoint, operatorClass string) ([]string, error) {
 	switch operator {
 	case "python":
@@ -69,8 +68,6 @@ func BuildCommand(operator, entrypoint, operatorClass string) ([]string, error) 
 			return nil, errors.New("airflow_operator task requires an operator class")
 		}
 		return []string{pythonInterpreter(), "-u", "-m", "leoflow_runtime", "--operator", operatorClass}, nil
-	case "http_api":
-		return nil, errors.New("http_api is executed by the control plane, not the agent")
 	default:
 		return nil, fmt.Errorf("unsupported operator %q", operator)
 	}

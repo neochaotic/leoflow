@@ -188,14 +188,6 @@ type Dispatcher interface {
 	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error
 }
 
-// InlineRunner executes an inline http_api task out of band in the control
-// plane. Start reports whether the task was launched (false without error means
-// it should be retried on the next tick); the runner owns the task's state once
-// started, so the scheduler does not record a queued transition for it.
-type InlineRunner interface {
-	Start(ctx context.Context, runID, dagID, tenantID string, tryNumber int, task domain.TaskSpec) (started bool, err error)
-}
-
 // maxCatchupSlotsPerTick caps how many missed cron slots are backfilled for
 // one DAG on a single scheduler tick (#129). After a leader has been down
 // across hundreds of slots, the catchup helper would produce that many runs;
@@ -238,7 +230,6 @@ type Scheduler struct {
 	stepTimeout time.Duration
 	recorder    Recorder
 	dispatcher  Dispatcher
-	inline      InlineRunner
 	alerter     Alerter
 	// alertSem bounds concurrent on-failure alert dispatches (#424): a mass
 	// failure must not spawn an unbounded burst of alert goroutines/POSTs. A
@@ -361,10 +352,6 @@ func (s *Scheduler) SetRecorder(r Recorder) { s.recorder = r }
 // SetDispatcher attaches the executor dispatcher (optional; without it the
 // scheduler advances state only and launches nothing).
 func (s *Scheduler) SetDispatcher(d Dispatcher) { s.dispatcher = d }
-
-// SetInlineRunner attaches the inline http_api runner (optional; without it
-// inline http_api tasks fall back to the standard queued dispatch path).
-func (s *Scheduler) SetInlineRunner(r InlineRunner) { s.inline = r }
 
 // SetAlerter attaches the on-failure alerter (optional; #424). Without it, or
 // for a DAG with no alert rules, the scheduler finalizes failures silently.
@@ -824,16 +811,13 @@ func (s *Scheduler) redispatchReschedule(ctx context.Context, run RunState, task
 	return nil
 }
 
-// launchQueued routes a queued task to the inline runner (inline http_api) or
-// the dispatcher (pod path), recording the appropriate transition. A transient
-// failure leaves the task scheduled so the next tick retries.
+// launchQueued routes a queued task to the dispatcher (pod path), recording the
+// appropriate transition. A transient failure leaves the task scheduled so the
+// next tick retries.
 func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTransition) error {
 	task, ok := findTask(run.Tasks, t.TaskID)
 	if !ok {
 		return fmt.Errorf("task %s not found in run %s", t.TaskID, run.RunID)
-	}
-	if s.inline != nil && task.Type == domain.TaskTypeHTTPAPI && task.EffectiveExecutionMode() == domain.ExecutionModeInline {
-		return s.runInline(ctx, run, task)
 	}
 	if s.dispatcher != nil {
 		if err := s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task); err != nil {
@@ -845,9 +829,9 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 }
 
 // failUndispatchable fails a task that has no executor to run it (pod dispatch
-// disabled and it is not an inline http_api task). The condition is
-// deterministic for the process lifetime, so failing fast — with the reason on
-// the task note for the UI — beats leaving the run "running" forever (#46, #50).
+// disabled). The condition is deterministic for the process lifetime, so failing
+// fast — with the reason on the task note for the UI — beats leaving the run
+// "running" forever (#46, #50).
 // handleDispatchFailure records a synchronous dispatch failure: it backs the task
 // off for a growing interval, or fails it as dispatch_failed once the attempt
 // budget is spent (ADR 0031 Amendment A). It returns nil in both cases — the
@@ -887,26 +871,11 @@ func (s *Scheduler) failUndispatchable(ctx context.Context, run RunState, taskID
 		s.recorder.RecordUndispatchable("no_executor")
 	}
 	note := fmt.Sprintf("Failed: no executor available for a %q task. "+
-		"Pod dispatch is disabled (no Kubernetes config); only inline http_api tasks run without it.", taskType)
+		"Pod dispatch is disabled (no Kubernetes config).", taskType)
 	if nerr := s.store.SetTaskNote(ctx, run.RunID, taskID, note); nerr != nil {
 		s.logger.Warn("setting task note", "run", run.RunID, "task", taskID, "error", nerr)
 	}
 	return s.recordTransition(ctx, run, taskID, domain.TaskStateFailed)
-}
-
-// runInline starts an inline http_api task. The runner owns the task's state
-// once started, so no queued transition is recorded; a start error marks the
-// task failed, and an at-capacity result leaves it scheduled for retry.
-func (s *Scheduler) runInline(ctx context.Context, run RunState, task domain.TaskSpec) error {
-	started, err := s.inline.Start(ctx, run.RunID, run.DagID, run.TenantID, run.Tries[task.TaskID], task)
-	if err != nil {
-		s.logger.Error("starting inline task", "run", run.RunID, "task", task.TaskID, "error", err)
-		return s.recordTransition(ctx, run, task.TaskID, domain.TaskStateFailed)
-	}
-	if !started {
-		s.logger.Debug("inline runner at capacity; will retry", "run", run.RunID, "task", task.TaskID)
-	}
-	return nil
 }
 
 // recordTransition persists a task transition and records its metrics.

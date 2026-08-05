@@ -8,10 +8,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// DefaultInlineMaxDurationSeconds is the fallback cap on inline http_api task
-// duration when the server does not configure one. See ADR 0002.
-const DefaultInlineMaxDurationSeconds = 300
-
 // TaskType enumerates the kinds of work a task can perform.
 type TaskType string
 
@@ -21,8 +17,6 @@ const (
 	TaskTypePython TaskType = "python"
 	// TaskTypeBash runs a shell command supplied as the entrypoint.
 	TaskTypeBash TaskType = "bash"
-	// TaskTypeHTTPAPI performs an outbound HTTP request from the control plane.
-	TaskTypeHTTPAPI TaskType = "http_api"
 	// TaskTypeAirflowOperator runs a captured Airflow provider operator/sensor in
 	// the task pod via the generic executor (ADR 0040): the runtime instantiates
 	// OperatorClass with OperatorArgs and calls execute(). The provider is
@@ -34,15 +28,12 @@ const (
 	TaskTypeDbtGroup TaskType = "dbt_group"
 )
 
-// ExecutionMode selects how a task runs. It is only meaningful for http_api
-// tasks; python and bash tasks always run in a pod.
+// ExecutionMode selects how a task runs. Every task runs inside a worker pod;
+// the field is retained for forward compatibility and defaults to pod.
 type ExecutionMode string
 
-// Supported execution modes. See docs/api/dag-schema.json and ADR 0002.
+// Supported execution modes. See docs/api/dag-schema.json.
 const (
-	// ExecutionModeInline runs an http_api task as a goroutine in the control
-	// plane, capped at the server's inline duration limit.
-	ExecutionModeInline ExecutionMode = "inline"
 	// ExecutionModePod runs a task inside a worker pod via the agent.
 	ExecutionModePod ExecutionMode = "pod"
 )
@@ -122,7 +113,6 @@ type TaskSpec struct {
 	ExecutionTimeoutSeconds *int                `json:"execution_timeout_seconds,omitempty"`
 	ExecutionMode           ExecutionMode       `json:"execution_mode,omitempty"`
 	Entrypoint              string              `json:"entrypoint,omitempty"`
-	HTTPRequest             *HTTPRequest        `json:"http_request,omitempty"`
 	Env                     map[string]string   `json:"env,omitempty"`
 	Secrets                 []Secret            `json:"secrets,omitempty"`
 	Resources               *Resources          `json:"resources,omitempty"`
@@ -152,17 +142,6 @@ type TaskSpec struct {
 	OnFailureCallback bool `json:"on_failure_callback,omitempty"`
 }
 
-// HTTPRequest is the request executed directly by the control plane for
-// http_api tasks.
-type HTTPRequest struct {
-	Method             string            `json:"method"`
-	URL                string            `json:"url"`
-	Headers            map[string]string `json:"headers,omitempty"`
-	Body               any               `json:"body,omitempty"`
-	TimeoutSeconds     int               `json:"timeout_seconds,omitempty"`
-	SuccessStatusCodes []int             `json:"success_status_codes,omitempty"`
-}
-
 // Secret references a credential injected into the worker at run time.
 type Secret struct {
 	Name      string `json:"name"`
@@ -190,58 +169,30 @@ type Execution struct {
 	ImagePullPolicy string            `json:"image_pull_policy,omitempty" yaml:"image_pull_policy,omitempty"`
 }
 
-// EffectiveExecutionMode returns the task's execution mode, applying the
-// defaults: http_api tasks default to inline, every other type runs in a pod.
+// EffectiveExecutionMode returns the task's execution mode, defaulting to pod
+// when unset. Every task runs in a worker pod.
 func (t TaskSpec) EffectiveExecutionMode() ExecutionMode {
 	if t.ExecutionMode != "" {
 		return t.ExecutionMode
 	}
-	if t.Type == TaskTypeHTTPAPI {
-		return ExecutionModeInline
-	}
 	return ExecutionModePod
-}
-
-// ValidateInlineExecution rejects inline http_api tasks whose
-// execution_timeout_seconds exceeds the server's inline duration cap. Such a
-// task must declare execution_mode: pod. maxInlineSeconds is the server limit.
-func (d *DAGSpec) ValidateInlineExecution(maxInlineSeconds int) error {
-	for _, t := range d.Tasks {
-		if t.Type != TaskTypeHTTPAPI || t.EffectiveExecutionMode() != ExecutionModeInline {
-			continue
-		}
-		if t.ExecutionTimeoutSeconds != nil && *t.ExecutionTimeoutSeconds > maxInlineSeconds {
-			return fmt.Errorf(
-				"task %q declares execution_timeout_seconds=%d but inline http_api tasks are capped at %d seconds on this server; set execution_mode: pod to use a worker pod, which has no such cap",
-				t.TaskID, *t.ExecutionTimeoutSeconds, maxInlineSeconds)
-		}
-	}
-	return nil
-}
-
-// DeprecationWarnings returns non-fatal warnings for a spec that registers
-// successfully but uses a deprecated shape. Today the only one is the native
-// inline http_api task type (ADR 0047): the parser no longer emits it, so it can
-// only arrive via a hand-written dag.json — and it runs the request inline in the
-// control plane (the SSRF surface, H5). It is deprecated for one release, then
-// rejected and its inline executor removed (issue #512). The registration handler
-// surfaces these through the API response so `leoflow push` shows the author.
-func (d *DAGSpec) DeprecationWarnings() []string {
-	var warns []string
-	for _, t := range d.Tasks {
-		if t.Type == TaskTypeHTTPAPI {
-			warns = append(warns, fmt.Sprintf(
-				"task %q uses the deprecated task type %q, which runs the request inline in the control plane; "+
-					"it will be removed next release (issue #512). Use an HttpOperator, which runs in a task pod (ADR 0047).",
-				t.TaskID, TaskTypeHTTPAPI))
-		}
-	}
-	return warns
 }
 
 // Validate checks the DAGSpec against the canonical dag.json schema and
 // returns a joined error describing every schema violation, or nil when valid.
 func (d *DAGSpec) Validate() error {
+	// The native inline http_api task type is removed (ADR 0047/0048, #512): it
+	// executed an author-supplied request in the control-plane process (an SSRF
+	// surface). Reject it with a clear, actionable message — a literal string
+	// match (the type constant no longer exists) so a hand-written dag.json is
+	// refused at registration. HttpOperator runs in a task pod instead.
+	for _, t := range d.Tasks {
+		if t.Type == "http_api" {
+			return fmt.Errorf("task %q uses the removed task type \"http_api\" (ADR 0047): "+
+				"the native inline HTTP executor ran in the control plane and was an SSRF surface. "+
+				"Use an HttpOperator, which runs in a task pod (declare connectors: [http])", t.TaskID)
+		}
+	}
 	s, err := schemas()
 	if err != nil {
 		return err

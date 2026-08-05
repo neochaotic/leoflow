@@ -91,7 +91,7 @@ message TaskSpec {
     string run_id = 4;
     string task_id = 5;
     int32 try_number = 6;
-    string operator = 7;                          // 'python', 'bash', 'http_api'
+    string operator = 7;                          // 'python', 'bash', 'airflow_operator'
     string entrypoint = 8;
     map<string, string> environment = 9;
     map<string, XComUpstreams> xcom_input_mapping = 10;  // param_name -> ordered list of upstream task_ids (1 = single, N = fan-in)

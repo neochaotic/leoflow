@@ -23,8 +23,8 @@ func TestMonitorExecutorReportsDispatch(t *testing.T) {
 		wantModes int
 		wantPod   bool
 	}{
-		{"pod dispatch on", ExecutorInfo{PodDispatchEnabled: true, TaskNamespace: "leoflow", InlineConcurrency: 256}, 2, true},
-		{"pod dispatch off", ExecutorInfo{PodDispatchEnabled: false, InlineConcurrency: 256}, 1, false},
+		{"pod dispatch on", ExecutorInfo{PodDispatchEnabled: true, TaskNamespace: "leoflow"}, 1, true},
+		{"pod dispatch off", ExecutorInfo{PodDispatchEnabled: false}, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -37,10 +37,6 @@ func TestMonitorExecutorReportsDispatch(t *testing.T) {
 			var got struct {
 				PodDispatchEnabled bool     `json:"pod_dispatch_enabled"`
 				ExecutionModes     []string `json:"execution_modes"`
-				Inline             struct {
-					Enabled          bool `json:"enabled"`
-					ConcurrencyLimit int  `json:"concurrency_limit"`
-				} `json:"inline_http_api"`
 			}
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
@@ -50,9 +46,6 @@ func TestMonitorExecutorReportsDispatch(t *testing.T) {
 			}
 			if len(got.ExecutionModes) != tc.wantModes {
 				t.Errorf("execution_modes = %v, want %d modes", got.ExecutionModes, tc.wantModes)
-			}
-			if !got.Inline.Enabled || got.Inline.ConcurrencyLimit != 256 {
-				t.Errorf("inline = %+v", got.Inline)
 			}
 		})
 	}

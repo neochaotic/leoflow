@@ -16,6 +16,28 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as successful only when k3d exits 0 AND emits no error line, retrying up to 3×
   and failing loud otherwise. Applied across the operator, split, and dbt e2es.
 
+- **Runtime chaos / fault-injection e2e harness** (`make chaos-runtime`, #231
+  Phase 2). A destructive k3d harness that injects real faults on the two newest,
+  riskiest surfaces and asserts the invariants hold: killing the scheduler
+  mid-run in the api/scheduler split — the api's `/monitor/health` flips the
+  scheduler unhealthy, the in-flight run resumes on restart, and each task ran
+  exactly once (at-most-once, no duplicate dispatch) — and force-deleting a
+  running task's pod, after which the agent-lost reaper moves the task off
+  `running` with no orphaned pod left behind. Not gated in CI (slow); run on a
+  Linux box.
+
+- **The k3d e2e harness and `rc-smoke` battery now run on Linux/Lima, not only
+  Docker Desktop.** Running the RC battery on a Linux host surfaced four
+  environmental gaps that also affect a real Lima gate: task pods reach the host
+  control plane via `host.k3d.internal` on Linux (Docker Desktop's
+  `host.docker.internal` is not injected there); the DAG image is pinned to the
+  host arch (the loader defaults `build.platforms` to `linux/amd64`, which fails
+  `FROM` an arm64 base with `InvalidBaseImagePlatform` → `ErrImagePull`); the base
+  image is built with `--provenance=false` (a buildx manifest list breaks a later
+  `FROM` with "no match for platform"); and `rc-smoke`'s ui-smoke step now brings
+  up the Lite control plane it needs and drives it over IPv4. Test-only; macOS
+  behaviour is unchanged (the Linux branches are guarded by `uname`).
+
 ### Fixed
 
 - **Split api role now reports pod dispatch correctly on `/api/v2/monitor/executor`**

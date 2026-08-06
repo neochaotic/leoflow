@@ -49,7 +49,44 @@ helm_docs_fresh()  {
 ui_smoke() {
   # A real ui-smoke failure must surface as FAIL; only a MISSING node is skipped.
   if ! command -v node >/dev/null; then echo "node missing; skipping ui-smoke"; return 0; fi
-  node test/e2e/ui-smoke.js
+  # The headless SPA smoke needs a running Lite control plane. Bring one up on the
+  # migrated dev DB (setup -> bootstrap hash -> server), run the smoke against it
+  # over IPv4 (localhost resolves to ::1 first; the server binds IPv4, so force
+  # 127.0.0.1 to avoid a spurious connection refusal), then tear it down.
+  local port=18080 base="http://127.0.0.1:18080"
+  local db="postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable"
+  local home_dir; home_dir="$(mktemp -d)"
+  local pid="" rc=0 pw hash setup_out code=""
+  # a no-op python3.11 so `setup` skips the CPython download (the parser is unused here)
+  mkdir -p "$home_dir/bin"; printf '#!/bin/sh\n' > "$home_dir/bin/python3.11"; chmod +x "$home_dir/bin/python3.11"
+  LEOFLOW_DATABASE_URL="$db" PATH="$home_dir/bin:$PATH" ./bin/leoflow db reset --yes >/dev/null 2>&1
+  setup_out="$(HOME="$home_dir" PATH="$home_dir/bin:$PATH" ./bin/leoflow setup --workspace "$home_dir/ws" </dev/null 2>&1)"
+  pw="$(printf '%s\n' "$setup_out" | sed -n 's/^[[:space:]]*password:[[:space:]]*//p' | head -1)"
+  hash="$(sed -n 's/^admin_password_hash:[[:space:]]*"\(.*\)"/\1/p' "$home_dir/.leoflow/config.yaml" 2>/dev/null)"
+  if [ -z "$pw" ] || [ -z "$hash" ]; then echo "ui-smoke: setup did not yield admin creds"; rm -rf "$home_dir"; return 1; fi
+  printf 'print("hello")\n' > "$home_dir/ws/dag.py"
+  LEOFLOW_SERVER_HTTP_ADDR="127.0.0.1:${port}" LEOFLOW_SERVER_GRPC_ADDR="127.0.0.1:19091" \
+  LEOFLOW_SERVER_METRICS_ADDR="127.0.0.1:19090" LEOFLOW_DATABASE_URL="$db" \
+  LEOFLOW_REDIS_URL="redis://localhost:6379/0" LEOFLOW_AUTH_JWT_SECRET="e2e-insecure-jwt-secret-please-change" \
+  LEOFLOW_SECRET_KEY="e2e-insecure-secret-key-32bytes!" LEOFLOW_BOOTSTRAP_PASSWORD_HASH="$hash" \
+  LEOFLOW_BOOTSTRAP_EMAIL="admin@leoflow.local" LEOFLOW_UI_EDITION="lite" \
+  LEOFLOW_UI_WORKSPACE="$home_dir/ws" LEOFLOW_LOGS_DIR="$home_dir/logs" \
+    ./bin/leoflow-server >"$home_dir/server.log" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 60); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' "${base}/readyz" || true)"
+    [ "$code" = "200" ] && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  if [ "$code" = "200" ]; then
+    LEOFLOW_URL="$base" LEOFLOW_USER="admin@leoflow.local" LEOFLOW_PASS="$pw" node test/e2e/ui-smoke.js || rc=$?
+  else
+    echo "ui-smoke: lite control plane not ready (last /readyz=$code)"; tail -20 "$home_dir/server.log"; rc=1
+  fi
+  kill "$pid" 2>/dev/null || true
+  chmod -R u+w "$home_dir" 2>/dev/null || true; rm -rf "$home_dir"
+  return "$rc"
 }
 
 # --- preflight ---------------------------------------------------------------

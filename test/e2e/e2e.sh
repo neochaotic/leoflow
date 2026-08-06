@@ -34,7 +34,7 @@ GRPC_PORT="9091"
 # Address task pods dial to reach the host control plane's gRPC. On Docker
 # Desktop (macOS/Windows) host.docker.internal resolves to the host; k3d does
 # not inject host.k3d.internal into CoreDNS there. Override for Linux/CI.
-HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
+HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-$([ "$(uname -s)" = Linux ] && echo host.k3d.internal || echo host.docker.internal)}"
 SERVER_PID=""
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -67,6 +67,15 @@ log "Scaffolding a minimal DAG project ($DAG_ID)"
 # Dockerfile below installs it into the image.
 sed -i.bak 's/^dependencies: \[\]/dependencies: [apache-airflow-providers-http]/' \
   "$WORKDIR/$DAG_ID/leoflow.yaml" && rm -f "$WORKDIR/$DAG_ID/leoflow.yaml.bak"
+# The config loader defaults build.platforms to linux/amd64 (the prod default);
+# on an arm64 dev/Lima host the DAG image must build for the host arch, else its
+# base-image FROM mismatches (InvalidBaseImagePlatform) and the pods ErrImagePull.
+case "$(uname -m)" in arm64|aarch64) HOST_PLATFORM="linux/arm64" ;; *) HOST_PLATFORM="linux/amd64" ;; esac
+cat >> "$WORKDIR/$DAG_ID/leoflow.yaml" <<YAML
+build:
+  platforms:
+    - ${HOST_PLATFORM}
+YAML
 # A real Airflow-SDK DAG (the parser requires an actual DAG object, not a bare
 # function). Two tasks in sequence prove pod-per-task AND cross-pod ordering:
 # each runs in its own pod whose agent reports state over gRPC.
@@ -184,7 +193,7 @@ ENV PYTHONPATH=/home/leoflow
 DOCKER
 
 log "Building base and DAG images"
-docker build -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT"
+docker build --provenance=false -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT"
 
 log "Creating k3d cluster '$CLUSTER'"
 k3d cluster create "$CLUSTER" --wait
@@ -419,6 +428,9 @@ mkdir -p "$WORKDIR/$CBID"
 cat > "$WORKDIR/$CBID/leoflow.yaml" <<YAML
 schema_version: "1.0"
 dag_id: cbdag
+build:
+  platforms:
+    - ${HOST_PLATFORM}
 YAML
 cat > "$WORKDIR/$CBID/dag.py" <<'PY'
 from airflow.sdk import DAG, task

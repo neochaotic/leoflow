@@ -20,7 +20,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLUSTER="${LEOFLOW_E2E_CLUSTER:-leoflow-dbt-conn-e2e}"
-HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
+HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-$([ "$(uname -s)" = Linux ] && echo host.k3d.internal || echo host.docker.internal)}"
 HTTP_PORT="${LEOFLOW_E2E_HTTP_PORT:-8080}"
 GRPC_PORT="${LEOFLOW_E2E_GRPC_PORT:-9091}"
 METRICS_PORT="${LEOFLOW_E2E_METRICS_PORT:-9090}"
@@ -84,9 +84,15 @@ echo "select id, sum(v) as total from {{ ref('stg') }} group by id" >"$PROJ/mode
 log "Generating the manifest (dbt parse is offline; the bad host is fine for parse)"
 ( cd "$PROJ" && DBT_PROFILES_DIR="$PROJ" dbt parse >/dev/null 2>&1 ) || fail "dbt parse failed"
 
+# Pin the DAG image to the host arch (see e2e.sh): the loader defaults to
+# linux/amd64, which fails FROM an arm64 base on a Lima/dev host → ErrImagePull.
+case "$(uname -m)" in arm64|aarch64) HOST_PLATFORM="linux/arm64" ;; *) HOST_PLATFORM="linux/amd64" ;; esac
 cat >"$PROJ/leoflow.yaml" <<YAML
 schema_version: "1.0"
 dag_id: ${DAG_ID}
+build:
+  platforms:
+    - ${HOST_PLATFORM}
 dbt:
   project: .
   manifest: target/manifest.json
@@ -105,7 +111,7 @@ WORKDIR /home/leoflow
 DOCKER
 
 log "Building the leoflow base image"
-docker build -q -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT" >/dev/null
+docker build --provenance=false -q -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT" >/dev/null
 
 log "Creating k3d cluster '$CLUSTER' + the leoflow namespace"
 k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true

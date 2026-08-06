@@ -38,7 +38,7 @@ API_METRICS_PORT="9090"
 SCHED_METRICS_PORT="9092"
 GRPC_PORT="9091"
 API="http://localhost:${API_HTTP_PORT}"
-HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
+HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-$([ "$(uname -s)" = Linux ] && echo host.k3d.internal || echo host.docker.internal)}"
 # The dev Postgres container to restart in scenario C (future); its name differs
 # between `make dev-up` (compose) and a standalone run. Overridable.
 API_PID=""; SCHED_PID=""; TOKEN=""; FAILED=0

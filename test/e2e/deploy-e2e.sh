@@ -36,7 +36,7 @@ REG_HOST="${REG_FULLNAME}:${REG_PORT}" # same ref on host (loopback) and in-clus
 HTTP_PORT="${LEOFLOW_E2E_HTTP_PORT:-18080}"
 API="http://localhost:${HTTP_PORT}"
 GRPC_PORT="9091"
-HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-host.docker.internal}"
+HOST_ADDR="${LEOFLOW_E2E_HOST_ADDR:-$([ "$(uname -s)" = Linux ] && echo host.k3d.internal || echo host.docker.internal)}"
 CFG="${WORKDIR}/leoflow-config.yaml"   # login persists token+server here
 SERVER_PID=""
 
@@ -77,7 +77,7 @@ for tool in k3d kubectl docker jq curl; do
 done
 
 log "Building the task base image ($BASE_IMAGE)"
-docker build -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT"
+docker build --provenance=false -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT"
 
 log "Creating k3d registry ($REG_HOST) + cluster '$CLUSTER' (cluster pulls from the registry)"
 k3d registry create "$REG_NAME" --port "$REG_PORT" >/dev/null

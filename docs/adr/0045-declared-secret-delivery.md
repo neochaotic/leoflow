@@ -1,6 +1,12 @@
 # ADR 0045: Secrets reach a task because it declared them
 
-**Status:** Accepted
+**Status:** Accepted — not yet implemented. The decision (deliver a task only
+the secrets it declares) stands; **no code ships it yet.** The runtime still
+hands every task its whole tenant vault — `GetVariables`/`GetConnections` pass
+only the tenant id (`internal/agentrpc/secrets.go`), exactly the behaviour the
+Context section describes. An external audit of v0.2.0 re-confirmed the C1
+exfiltration this ADR exists to close is live. Do not read "Accepted" as "a task
+only receives what it declares" — that guarantee does not exist until #59 lands.
 **Date:** 2026-07-30
 **Accepted:** 2026-07-31
 **Relates:** ADR 0019 (encryption at rest), ADR 0021 (exposing variables/connections to pods), ADR 0004 (thin agent), ADR 0035 (Leoflow is not a key manager)

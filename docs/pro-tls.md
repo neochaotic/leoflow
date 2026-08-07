@@ -59,7 +59,19 @@ spec:
   dnsNames:
     - leoflow.leoflow.svc                 # the control-plane Service DNS
     - leoflow.leoflow.svc.cluster.local
+    # When split.enabled=true (ADR 0049) the scheduler runs as its own
+    # Service and task pods dial IT, not the api Service. The agent verifies
+    # the server hostname, so the cert MUST also carry the scheduler DNS or
+    # every task's connection fails verification and hangs. Drop these two
+    # SANs only if you run the fused `all` role (split.enabled=false).
+    - leoflow-scheduler.leoflow.svc
+    - leoflow-scheduler.leoflow.svc.cluster.local
 ```
+
+> The Service names above assume a release named `leoflow` in namespace
+> `leoflow`; both derive from the chart fullname. If you install under a
+> different release/namespace, substitute `<fullname>` and `<fullname>-scheduler`
+> (run `helm template` and read the `Service` names) into every SAN.
 
 ## 4. The CA trust bundle for task pods
 

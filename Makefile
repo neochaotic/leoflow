@@ -174,6 +174,10 @@ e2e-dbt-conn: ## Run the k3d dbt managed-connection e2e (ADR 0043; needs k3d, ku
 e2e-dbt-mixing: ## Run the k3d dbt+operators mixing e2e (ADR 0043; needs k3d, kubectl, docker, jq, dbt, python3; run make dev-up + make build first)
 	bash test/e2e/dbt-mixing-e2e.sh
 
+.PHONY: e2e-netpol-rwx
+e2e-netpol-rwx: ## Pro split real-cluster verify (#526): kind + Calico enforces NetworkPolicy + NFS RWX shared logs (needs kind, helm, kubectl, docker, openssl). Destructive; ~15 min.
+	bash test/e2e/pro-netpol-rwx.sh
+
 .PHONY: test
 test: ## Run Go and Python tests with coverage
 	go test -race -coverprofile=coverage.out -covermode=atomic ./...

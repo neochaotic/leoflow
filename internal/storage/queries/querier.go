@@ -116,6 +116,15 @@ type Querier interface {
 	// tick's reap work even after a multi-hour outage; the rest are picked up
 	// on the next tick (the reaper is a backstop, not a sprint).
 	ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error)
+	// Lists every TI currently in `running` alongside the timestamp it entered
+	// running, for the pod-lost reaper (#527). A running TI whose backing pod
+	// vanished before its first heartbeat is invisible to the agent-lost reaper
+	// (its null-heartbeat zero-guard) and to the reconciler (which only sees pods
+	// that still exist), so it would sit `running` until the 5-minute orphan reaper.
+	// The reaper applies the grace period + a pod-liveness check per candidate in
+	// Go, so the SQL stays simple. The LIMIT bounds a single tick's reap work even
+	// after a large outage; the rest are picked up next tick.
+	ListRunningTasks(ctx context.Context) ([]ListRunningTasksRow, error)
 	// Returns each cron-scheduled DAG with the bits the scheduler needs to decide
 	// both "is there a slot due?" (schedule + last_logical), "how many slots
 	// should I backfill on this tick?" (catchup + start_date, see #129), and
@@ -176,6 +185,11 @@ type Querier interface {
 	// since transitioned (real dispatch landed, or already failed) is a no-op,
 	// never overwriting a more meaningful state.
 	MarkTaskDispatchLost(ctx context.Context, id pgtype.UUID) error
+	// Fails a running TI whose pod has vanished (deleted/evicted/node lost). The
+	// WHERE state='running' guard makes it idempotent and prevents overwriting a
+	// late terminal report that landed between our list and our write (a live
+	// report wins over the reaper). Idempotent on a second call.
+	MarkTaskPodLost(ctx context.Context, id pgtype.UUID) (int64, error)
 	// A synchronous dispatch attempt failed (ADR 0031 Amendment A). Increment the
 	// consecutive-failure counter and back off the next attempt to $3, so the planner
 	// (which gates scheduled->queued on next_dispatch_at) does not re-attempt every

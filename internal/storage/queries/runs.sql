@@ -592,6 +592,39 @@ SET state = 'failed',
     error_message = 'agent_lost: no heartbeat within the threshold — see #128'
 WHERE id = $1 AND state = 'running';
 
+-- name: ListRunningTasks :many
+-- Lists every TI currently in `running` alongside the timestamp it entered
+-- running, for the pod-lost reaper (#527). A running TI whose backing pod
+-- vanished before its first heartbeat is invisible to the agent-lost reaper
+-- (its null-heartbeat zero-guard) and to the reconciler (which only sees pods
+-- that still exist), so it would sit `running` until the 5-minute orphan reaper.
+-- The reaper applies the grace period + a pod-liveness check per candidate in
+-- Go, so the SQL stays simple. The LIMIT bounds a single tick's reap work even
+-- after a large outage; the rest are picked up next tick.
+SELECT ti.id AS task_instance_id,
+       ti.dag_run_id AS dag_run_id,
+       d.dag_id AS dag_id_text,
+       ti.task_id AS task_id,
+       ti.try_number AS try_number,
+       ti.started_at AS started_at
+FROM task_instances ti
+JOIN dag_runs dr ON dr.id = ti.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+WHERE ti.state = 'running'
+ORDER BY ti.started_at NULLS LAST
+LIMIT 100;
+
+-- name: MarkTaskPodLost :execrows
+-- Fails a running TI whose pod has vanished (deleted/evicted/node lost). The
+-- WHERE state='running' guard makes it idempotent and prevents overwriting a
+-- late terminal report that landed between our list and our write (a live
+-- report wins over the reaper). Idempotent on a second call.
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'pod_lost: the task pod vanished with no live pod past the grace period — see #527'
+WHERE id = $1 AND state = 'running';
+
 -- name: MarkRunOrphanedRun :execrows
 -- Fails an orphaned dag run. The `state = 'running'` guard makes the reap a
 -- safety net, never a takeover: a competing finalizer (the normal scheduler

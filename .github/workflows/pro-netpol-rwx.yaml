@@ -1,0 +1,43 @@
+name: Pro netpol + RWX (real-cluster verify)
+
+# #526 Layer-1: the two Pro-split claims that k3d/kindnet CANNOT test — real
+# NetworkPolicy ENFORCEMENT and a ReadWriteMany shared-logs PVC — validated on a
+# kind cluster with a real CNI (Calico) and an NFS RWX StorageClass. Heavy
+# (~15 min), so it runs only when the chart or this test/job changes, plus on
+# demand. It is NOT part of the fast per-PR suite.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "helm/**"
+      - "test/e2e/pro-netpol-rwx.sh"
+      - ".github/workflows/pro-netpol-rwx.yaml"
+      - "deploy/Dockerfile.server"
+      - "deploy/Dockerfile.migrate"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  netpol-rwx:
+    name: kind + Calico (netpol enforced) + NFS RWX
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install kind + kubectl
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          sudo install -m0755 /tmp/kind /usr/local/bin/kind
+          curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          sudo install -m0755 /tmp/kubectl /usr/local/bin/kubectl
+          kind version && kubectl version --client
+
+      - uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        with:
+          version: v4.2.0
+
+      - name: Pro split netpol-enforcement + RWX shared-logs verify
+        run: bash test/e2e/pro-netpol-rwx.sh

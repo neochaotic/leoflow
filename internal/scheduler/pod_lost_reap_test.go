@@ -13,18 +13,22 @@ type fakePodLostStore struct {
 	listErr    error
 	marked     []string
 	markErr    error
+	markNoop   bool // when true, MarkTaskPodLost reports 0 rows updated (a late terminal report won the race)
 }
 
 func (f *fakePodLostStore) ListRunningTasks(context.Context) ([]PodLostCandidate, error) {
 	return f.candidates, f.listErr
 }
 
-func (f *fakePodLostStore) MarkTaskPodLost(_ context.Context, id string) error {
+func (f *fakePodLostStore) MarkTaskPodLost(_ context.Context, id string) (bool, error) {
 	if f.markErr != nil {
-		return f.markErr
+		return false, f.markErr
+	}
+	if f.markNoop {
+		return false, nil
 	}
 	f.marked = append(f.marked, id)
-	return nil
+	return true, nil
 }
 
 func TestIsPodLostCandidate(t *testing.T) {
@@ -127,6 +131,22 @@ func TestPodLostReaper(t *testing.T) {
 		}
 		if len(store.marked) != 0 {
 			t.Fatalf("Lite must not reap on 'no pod' (there are no pods), got %v", store.marked)
+		}
+	})
+
+	t.Run("a no-op mark (late terminal report won) skips the teardown", func(t *testing.T) {
+		store := &fakePodLostStore{
+			candidates: []PodLostCandidate{
+				{TaskInstanceID: "raced", DagRunID: "run-a", TaskID: "work", TryNumber: 1, RunningSince: past},
+			},
+			markNoop: true,
+		}
+		pods := &fakePodManager{active: map[string]bool{}} // no live pod → would reap, but the mark no-ops
+		if err := newReaper(store, pods).run(context.Background()); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if len(pods.deletedTasks) != 0 {
+			t.Fatalf("a no-op mark (0 rows) must not tear down a pod, got %v", pods.deletedTasks)
 		}
 	})
 

@@ -46,8 +46,10 @@ type PodLostReapStore interface {
 	ListRunningTasks(ctx context.Context) ([]PodLostCandidate, error)
 	// MarkTaskPodLost transitions one TI to `failed` with
 	// error_message='pod_lost'. The WHERE state='running' guard makes this
-	// idempotent: a second call on a now-non-running TI is a no-op.
-	MarkTaskPodLost(ctx context.Context, taskInstanceID string) error
+	// idempotent. It returns whether a row was actually updated: false means a
+	// late terminal report transitioned the TI between the list and this write,
+	// so the caller must NOT treat it as reaped (no false log, no pod delete).
+	MarkTaskPodLost(ctx context.Context, taskInstanceID string) (bool, error)
 }
 
 // podLostReaper fails `running` TIs whose pod has vanished — the gap between the
@@ -114,10 +116,18 @@ func (r *podLostReaper) run(ctx context.Context) error {
 		if active {
 			continue
 		}
-		if ferr := r.store.MarkTaskPodLost(ctx, c.TaskInstanceID); ferr != nil {
+		applied, ferr := r.store.MarkTaskPodLost(ctx, c.TaskInstanceID)
+		if ferr != nil {
 			r.logger.Error("marking task pod-lost",
 				"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
 			r.record("pod_lost_error")
+			continue
+		}
+		if !applied {
+			// A late terminal report transitioned the TI between our list and our
+			// write (WHERE state='running' matched 0 rows) — it settled on its own,
+			// so do not log a false reap or run the teardown.
+			r.record("pod_lost_noop")
 			continue
 		}
 		r.logger.Warn("running task has no live pod past grace; failing as pod_lost",

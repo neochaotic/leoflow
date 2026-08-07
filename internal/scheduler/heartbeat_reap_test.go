@@ -44,18 +44,22 @@ type fakeHeartbeatStore struct {
 	listErr    error
 	failed     []string
 	failErr    error
+	markNoop   bool // when true, MarkTaskAgentLost reports 0 rows updated (a late terminal report won the race)
 }
 
 func (f *fakeHeartbeatStore) ListAgentLostCandidates(context.Context) ([]AgentLostCandidate, error) {
 	return f.candidates, f.listErr
 }
 
-func (f *fakeHeartbeatStore) MarkTaskAgentLost(_ context.Context, tiID string) error {
+func (f *fakeHeartbeatStore) MarkTaskAgentLost(_ context.Context, tiID string) (bool, error) {
 	if f.failErr != nil {
-		return f.failErr
+		return false, f.failErr
+	}
+	if f.markNoop {
+		return false, nil
 	}
 	f.failed = append(f.failed, tiID)
-	return nil
+	return true, nil
 }
 
 // TestReapAgentLost_MarksStaleTIs covers the success path: only candidates
@@ -79,6 +83,36 @@ func TestReapAgentLost_MarksStaleTIs(t *testing.T) {
 	}
 	if got := rec.count("agent_lost"); got != 1 {
 		t.Errorf("agent_lost decisions = %d, want 1", got)
+	}
+}
+
+// TestReapAgentLost_NoopWhenAlreadyTransitioned: if MarkTaskAgentLost updates 0
+// rows (a late terminal report transitioned the TI between the list and the
+// write, WHERE state='running'), the reaper must NOT log a false reap or delete
+// the pod for the now-settled TI (audit finding: the rowcount was discarded).
+func TestReapAgentLost_NoopWhenAlreadyTransitioned(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeHeartbeatStore{
+		candidates: []AgentLostCandidate{
+			{TaskInstanceID: "raced", DagRunID: "r", TaskID: "t", TryNumber: 1, LastHeartbeat: now.Add(-5 * time.Minute)},
+		},
+		markNoop: true,
+	}
+	rec := &capturingRecorder{}
+	pods := &fakePodManager{active: map[string]bool{}}
+	r := newAgentLostReaper(store, reapTestLogger(), 90*time.Second, rec)
+	r.pods = pods
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := rec.count("agent_lost"); got != 0 {
+		t.Errorf("a no-op mark must not record a reap; agent_lost = %d, want 0", got)
+	}
+	if got := rec.count("agent_lost_noop"); got != 1 {
+		t.Errorf("agent_lost_noop = %d, want 1", got)
+	}
+	if len(pods.deletedTasks) != 0 {
+		t.Errorf("no pod should be deleted for a settled TI, got %v", pods.deletedTasks)
 	}
 }
 
@@ -124,11 +158,11 @@ func (p *panicHeartbeatStore) ListAgentLostCandidates(context.Context) ([]AgentL
 	}
 	return []AgentLostCandidate{{TaskInstanceID: "doomed", LastHeartbeat: time.Now().Add(-1 * time.Hour)}}, nil
 }
-func (p *panicHeartbeatStore) MarkTaskAgentLost(context.Context, string) error {
+func (p *panicHeartbeatStore) MarkTaskAgentLost(context.Context, string) (bool, error) {
 	if p.panicOnFail {
 		panic("boom: MarkTaskAgentLost")
 	}
-	return nil
+	return true, nil
 }
 
 func TestReapAgentLost_PanicInListDoesNotCrash(t *testing.T) {

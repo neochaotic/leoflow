@@ -174,9 +174,9 @@ func (f *fakeStore) ReapRun(_ context.Context, runID string) error {
 func (f *fakeStore) ListAgentLostCandidates(context.Context) ([]AgentLostCandidate, error) {
 	return f.agentLostCands, nil
 }
-func (f *fakeStore) MarkTaskAgentLost(_ context.Context, tiID string) error {
+func (f *fakeStore) MarkTaskAgentLost(_ context.Context, tiID string) (bool, error) {
 	f.agentLostMarked = append(f.agentLostMarked, tiID)
-	return nil
+	return true, nil
 }
 func (f *fakeStore) ListStaleQueuedCandidates(context.Context) ([]StaleQueuedCandidate, error) {
 	return f.staleQueuedCands, nil
@@ -186,7 +186,7 @@ func (f *fakeStore) MarkTaskDispatchLost(_ context.Context, tiID string) error {
 	return nil
 }
 func (f *fakeStore) ListRunningTasks(context.Context) ([]PodLostCandidate, error) { return nil, nil }
-func (f *fakeStore) MarkTaskPodLost(context.Context, string) error                { return nil }
+func (f *fakeStore) MarkTaskPodLost(context.Context, string) (bool, error)        { return true, nil }
 
 func newScheduler(store Store) *Scheduler {
 	s := NewScheduler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)

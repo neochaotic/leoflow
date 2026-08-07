@@ -50,8 +50,10 @@ type HeartbeatReapStore interface {
 	ListAgentLostCandidates(ctx context.Context) ([]AgentLostCandidate, error)
 	// MarkTaskAgentLost transitions one TI to `failed` with
 	// error_message='agent_lost'. The WHERE state='running' guard makes this
-	// idempotent: a second call on a now-failed TI is a no-op.
-	MarkTaskAgentLost(ctx context.Context, taskInstanceID string) error
+	// idempotent. It returns whether a row was actually updated: false means a
+	// late terminal report transitioned the TI between the list and this write,
+	// so the caller must NOT treat it as reaped (no false log, no pod delete).
+	MarkTaskAgentLost(ctx context.Context, taskInstanceID string) (bool, error)
 }
 
 // agentLostReaper is the scheduler-internal worker that fails TIs whose agent
@@ -92,10 +94,18 @@ func (r *agentLostReaper) run(ctx context.Context) error {
 		if !IsAgentLost(c, r.threshold, now) {
 			continue
 		}
-		if ferr := r.store.MarkTaskAgentLost(ctx, c.TaskInstanceID); ferr != nil {
+		applied, ferr := r.store.MarkTaskAgentLost(ctx, c.TaskInstanceID)
+		if ferr != nil {
 			r.logger.Error("marking task agent-lost",
 				"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
 			r.record("agent_lost_error")
+			continue
+		}
+		if !applied {
+			// A late terminal report transitioned the TI between our list and our
+			// write (WHERE state='running' matched 0 rows). It is no longer ours
+			// to reap — do not log a false reap or delete a pod for a settled TI.
+			r.record("agent_lost_noop")
 			continue
 		}
 		r.logger.Warn("task agent silent past threshold; failing as agent_lost",

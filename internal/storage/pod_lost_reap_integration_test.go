@@ -83,8 +83,12 @@ func TestMarkTaskPodLostIntegration(t *testing.T) {
 		t.Fatalf("expected a running candidate")
 	}
 
-	if err := sched.MarkTaskPodLost(ctx, c.TaskInstanceID); err != nil {
+	applied, err := sched.MarkTaskPodLost(ctx, c.TaskInstanceID)
+	if err != nil {
 		t.Fatalf("MarkTaskPodLost: %v", err)
+	}
+	if !applied {
+		t.Errorf("first MarkTaskPodLost on a running TI must report applied=true")
 	}
 	tis, _ := repo.TaskInstancesForRuns(ctx, "default", dagID, []string{"r1"})
 	if len(tis) != 1 || tis[0].State != domain.TaskStateFailed {
@@ -95,9 +99,14 @@ func TestMarkTaskPodLostIntegration(t *testing.T) {
 	if findPodLostCandidate(cands, runUUID, "t") != nil {
 		t.Errorf("a failed TI must no longer appear in ListRunningTasks")
 	}
-	// Idempotent: the WHERE state='running' guard no-ops the second call.
-	if err := sched.MarkTaskPodLost(ctx, c.TaskInstanceID); err != nil {
-		t.Errorf("second MarkTaskPodLost must be a no-op; got %v", err)
+	// Idempotent: the WHERE state='running' guard now matches 0 rows on the
+	// second call — observable via applied=false.
+	applied, err = sched.MarkTaskPodLost(ctx, c.TaskInstanceID)
+	if err != nil {
+		t.Errorf("second MarkTaskPodLost errored: %v", err)
+	}
+	if applied {
+		t.Errorf("second MarkTaskPodLost on a failed TI must report applied=false (0 rows)")
 	}
 }
 

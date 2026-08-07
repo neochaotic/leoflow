@@ -474,15 +474,16 @@ func (s *SchedulerStore) MarkTaskDispatchFailed(ctx context.Context, runID, task
 // reason. The WHERE state='running' guard makes this idempotent and prevents
 // a late terminal report being overwritten — if the row already moved, we
 // touch zero rows and return nil.
-func (s *SchedulerStore) MarkTaskAgentLost(ctx context.Context, taskInstanceID string) error {
+func (s *SchedulerStore) MarkTaskAgentLost(ctx context.Context, taskInstanceID string) (bool, error) {
 	tid, err := parseUUID(taskInstanceID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if _, err := s.q.MarkTaskAgentLost(ctx, tid); err != nil {
-		return fmt.Errorf("marking task agent-lost: %w", err)
+	n, err := s.q.MarkTaskAgentLost(ctx, tid)
+	if err != nil {
+		return false, fmt.Errorf("marking task agent-lost: %w", err)
 	}
-	return nil
+	return n == 1, nil
 }
 
 // ListStaleQueuedCandidates returns every `queued` TI with its queued_at, for
@@ -554,15 +555,16 @@ func (s *SchedulerStore) ListRunningTasks(ctx context.Context) ([]scheduler.PodL
 // MarkTaskPodLost transitions one TI to `failed` with the pod_lost reason. The
 // WHERE state='running' guard makes it idempotent: a TI that has since moved on
 // (a late terminal report landed) is left alone.
-func (s *SchedulerStore) MarkTaskPodLost(ctx context.Context, taskInstanceID string) error {
+func (s *SchedulerStore) MarkTaskPodLost(ctx context.Context, taskInstanceID string) (bool, error) {
 	tid, err := parseUUID(taskInstanceID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if _, err := s.q.MarkTaskPodLost(ctx, tid); err != nil {
-		return fmt.Errorf("marking task pod-lost: %w", err)
+	n, err := s.q.MarkTaskPodLost(ctx, tid)
+	if err != nil {
+		return false, fmt.Errorf("marking task pod-lost: %w", err)
 	}
-	return nil
+	return n == 1, nil
 }
 
 // ListActiveStagingVolumes returns active staging volumes joined with their DAG

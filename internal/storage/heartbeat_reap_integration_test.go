@@ -126,9 +126,13 @@ func TestMarkTaskAgentLostIntegration(t *testing.T) {
 		t.Fatalf("expected candidate after heartbeat")
 	}
 
-	// Reap.
-	if err := sched.MarkTaskAgentLost(ctx, c.TaskInstanceID); err != nil {
+	// Reap — the first mark applies (a running row transitions).
+	applied, err := sched.MarkTaskAgentLost(ctx, c.TaskInstanceID)
+	if err != nil {
 		t.Fatalf("MarkTaskAgentLost: %v", err)
+	}
+	if !applied {
+		t.Errorf("first MarkTaskAgentLost on a running TI must report applied=true")
 	}
 
 	// The TI is now failed and out of the candidate set.
@@ -137,9 +141,14 @@ func TestMarkTaskAgentLostIntegration(t *testing.T) {
 		t.Errorf("after MarkTaskAgentLost, TI state = %+v, want failed", tis)
 	}
 
-	// Second call is a no-op (WHERE state='running' updates zero rows).
-	if err := sched.MarkTaskAgentLost(ctx, c.TaskInstanceID); err != nil {
-		t.Errorf("second MarkTaskAgentLost must be a no-op; got %v", err)
+	// Second call is a no-op (WHERE state='running' now matches 0 rows) — and
+	// that is observable: applied must be false.
+	applied, err = sched.MarkTaskAgentLost(ctx, c.TaskInstanceID)
+	if err != nil {
+		t.Errorf("second MarkTaskAgentLost errored: %v", err)
+	}
+	if applied {
+		t.Errorf("second MarkTaskAgentLost on a failed TI must report applied=false (0 rows)")
 	}
 }
 

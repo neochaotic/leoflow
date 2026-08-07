@@ -128,6 +128,19 @@ fast enough to run on every PR (target <60s), reality-anchored (no mocks at
 the boundary it gates), and named to match what it gates (the bug it would
 have caught — not how the test happens to be implemented).
 
+### 4. The CHANGELOG records stable versions; the stable section owns the changes.
+
+`CHANGELOG.md` (Keep a Changelog) documents shipped **stable** releases. When
+cutting an `-rc.N`, promote `[Unreleased]` → `[X.Y.Z-rc.N]` with the full change
+list (so validators have notes). When **promoting** an rc to stable, do NOT leave
+a thin `[X.Y.Z]` pointer above the rc section — instead **rename the
+`[X.Y.Z-rc.N]` section to `[X.Y.Z]`** (re-dated), consolidating any fixes that
+landed between rcs, so the stable version is a single, self-contained record. The
+release is what people install, so the release section — not the rc — carries the
+changes. RCs stay discoverable via their git tag and the goreleaser-generated
+GitHub pre-release notes (`changelog: use: github`), which is where per-rc
+granularity belongs; `CHANGELOG.md` need not retain rc sections.
+
 ## Consequences
 
 ### Positive

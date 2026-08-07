@@ -6,6 +6,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-07
+
+> Promotes `v0.2.0-rc.1` unchanged. The candidate was validated end-to-end on a
+> Linux VM (the full RC battery — gates + all k3d e2es — plus the runtime chaos
+> harness) and by a hands-on UI journey against the published artifact: install
+> via `install.sh`, create a DAG, trigger it from the UI, and read the rendered
+> task logs. See the `0.2.0-rc.1` section below for the full change list.
+
 ## [0.2.0-rc.1] - 2026-08-06
 
 > First release candidate of the **0.2.0** line. The control plane can now run as
@@ -673,7 +681,8 @@ Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.2.0-rc.1...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/neochaotic/leoflow/compare/v0.2.0-rc.1...v0.2.0
 [0.2.0-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.2...v0.2.0-rc.1
 [0.1.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.2...v0.1.2
 [0.1.2-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.1...v0.1.2-rc.2

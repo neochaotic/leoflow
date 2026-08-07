@@ -6,6 +6,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0-rc.1] - 2026-08-06
+
+> First release candidate of the **0.2.0** line. The control plane can now run as
+> **separate api and scheduler processes** (ADR 0049, `split.enabled`, off by
+> default), the inline **`http_api` task type is removed** — closing an SSRF
+> surface (**breaking** only for a hand-authored `http_api` DAG) — and **task
+> reaping is now at-most-once**: a reaped task's pod is actually torn down instead
+> of running user code to completion. Plus a pod-aware dispatch-lost reaper, a
+> configurable task namespace, shell-quoted bash templating, and an e2e/chaos
+> harness that runs on Linux/Lima, not only Docker Desktop.
+
 ### Changed
 
 - **k3d e2e image import is now verified + retried** (test/e2e reliability).
@@ -662,7 +673,8 @@ Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.2.0-rc.1...HEAD
+[0.2.0-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.2...v0.2.0-rc.1
 [0.1.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.2...v0.1.2
 [0.1.2-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.1...v0.1.2-rc.2
 [0.1.2-rc.1]: https://github.com/neochaotic/leoflow/compare/v0.1.1...v0.1.2-rc.1

@@ -525,6 +525,46 @@ func (s *SchedulerStore) MarkTaskDispatchLost(ctx context.Context, taskInstanceI
 	return nil
 }
 
+// ListRunningTasks returns every `running` TI with the timestamp it entered
+// running, for the pod-lost reaper (#527). The reaper applies the grace period
+// and the pod-liveness check per row, so the SQL stays simple.
+func (s *SchedulerStore) ListRunningTasks(ctx context.Context) ([]scheduler.PodLostCandidate, error) {
+	rows, err := s.q.ListRunningTasks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing running tasks: %w", err)
+	}
+	out := make([]scheduler.PodLostCandidate, 0, len(rows))
+	for _, r := range rows {
+		var since time.Time
+		if r.StartedAt.Valid {
+			since = r.StartedAt.Time.UTC()
+		}
+		out = append(out, scheduler.PodLostCandidate{
+			TaskInstanceID: uuidToString(r.TaskInstanceID),
+			DagRunID:       uuidToString(r.DagRunID),
+			DagID:          r.DagIDText,
+			TaskID:         r.TaskID,
+			TryNumber:      int(r.TryNumber),
+			RunningSince:   since,
+		})
+	}
+	return out, nil
+}
+
+// MarkTaskPodLost transitions one TI to `failed` with the pod_lost reason. The
+// WHERE state='running' guard makes it idempotent: a TI that has since moved on
+// (a late terminal report landed) is left alone.
+func (s *SchedulerStore) MarkTaskPodLost(ctx context.Context, taskInstanceID string) error {
+	tid, err := parseUUID(taskInstanceID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.q.MarkTaskPodLost(ctx, tid); err != nil {
+		return fmt.Errorf("marking task pod-lost: %w", err)
+	}
+	return nil
+}
+
 // ListActiveStagingVolumes returns active staging volumes joined with their DAG
 // run's state (empty when the run row is gone), for the GC (ADR 0022).
 func (s *SchedulerStore) ListActiveStagingVolumes(ctx context.Context) ([]domain.StagingVolumeState, error) {

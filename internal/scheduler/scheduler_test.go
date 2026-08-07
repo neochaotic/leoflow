@@ -185,6 +185,8 @@ func (f *fakeStore) MarkTaskDispatchLost(_ context.Context, tiID string) error {
 	f.dispatchLostMarked = append(f.dispatchLostMarked, tiID)
 	return nil
 }
+func (f *fakeStore) ListRunningTasks(context.Context) ([]PodLostCandidate, error) { return nil, nil }
+func (f *fakeStore) MarkTaskPodLost(context.Context, string) error                { return nil }
 
 func newScheduler(store Store) *Scheduler {
 	s := NewScheduler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)

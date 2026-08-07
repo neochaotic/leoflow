@@ -755,6 +755,65 @@ func (q *Queries) ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandida
 	return items, nil
 }
 
+const listRunningTasks = `-- name: ListRunningTasks :many
+SELECT ti.id AS task_instance_id,
+       ti.dag_run_id AS dag_run_id,
+       d.dag_id AS dag_id_text,
+       ti.task_id AS task_id,
+       ti.try_number AS try_number,
+       ti.started_at AS started_at
+FROM task_instances ti
+JOIN dag_runs dr ON dr.id = ti.dag_run_id
+JOIN dags d ON d.id = dr.dag_id
+WHERE ti.state = 'running'
+ORDER BY ti.started_at NULLS LAST
+LIMIT 100
+`
+
+type ListRunningTasksRow struct {
+	TaskInstanceID pgtype.UUID        `json:"task_instance_id"`
+	DagRunID       pgtype.UUID        `json:"dag_run_id"`
+	DagIDText      string             `json:"dag_id_text"`
+	TaskID         string             `json:"task_id"`
+	TryNumber      int32              `json:"try_number"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+}
+
+// Lists every TI currently in `running` alongside the timestamp it entered
+// running, for the pod-lost reaper (#527). A running TI whose backing pod
+// vanished before its first heartbeat is invisible to the agent-lost reaper
+// (its null-heartbeat zero-guard) and to the reconciler (which only sees pods
+// that still exist), so it would sit `running` until the 5-minute orphan reaper.
+// The reaper applies the grace period + a pod-liveness check per candidate in
+// Go, so the SQL stays simple. The LIMIT bounds a single tick's reap work even
+// after a large outage; the rest are picked up next tick.
+func (q *Queries) ListRunningTasks(ctx context.Context) ([]ListRunningTasksRow, error) {
+	rows, err := q.db.Query(ctx, listRunningTasks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRunningTasksRow{}
+	for rows.Next() {
+		var i ListRunningTasksRow
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.DagRunID,
+			&i.DagIDText,
+			&i.TaskID,
+			&i.TryNumber,
+			&i.StartedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listScheduledDags = `-- name: ListScheduledDags :many
 SELECT d.dag_id, d.schedule, d.catchup, d.start_date, d.max_active_runs,
   (SELECT max(dr.logical_date) FROM dag_runs dr WHERE dr.dag_id = d.id) AS last_logical
@@ -1154,6 +1213,26 @@ WHERE id = $1 AND state = 'queued'
 func (q *Queries) MarkTaskDispatchLost(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, markTaskDispatchLost, id)
 	return err
+}
+
+const markTaskPodLost = `-- name: MarkTaskPodLost :execrows
+UPDATE task_instances
+SET state = 'failed',
+    ended_at = now(),
+    error_message = 'pod_lost: the task pod vanished with no live pod past the grace period — see #527'
+WHERE id = $1 AND state = 'running'
+`
+
+// Fails a running TI whose pod has vanished (deleted/evicted/node lost). The
+// WHERE state='running' guard makes it idempotent and prevents overwriting a
+// late terminal report that landed between our list and our write (a live
+// report wins over the reaper). Idempotent on a second call.
+func (q *Queries) MarkTaskPodLost(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markTaskPodLost, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const recordDispatchFailure = `-- name: RecordDispatchFailure :exec

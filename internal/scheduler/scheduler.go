@@ -159,6 +159,11 @@ type Store interface {
 	// would otherwise keep stuck queued TIs out of the candidate set forever
 	// (the orphan reaper's "no active TI" safety guard).
 	DispatchLostReapStore
+	// PodLostReapStore methods drive the pod-lost reaper (#527): they list
+	// `running` task instances and fail as `pod_lost` any whose backing pod has
+	// vanished past a grace period, closing the window where a pod killed before
+	// its first heartbeat sat `running` until the 5-minute orphan reaper.
+	PodLostReapStore
 }
 
 // Recorder records scheduler metrics. observability.Metrics implements it.
@@ -222,6 +227,15 @@ const defaultAgentLostThreshold = 90 * time.Second
 // mid-tick scheduler crash is reaped before the operator notices (#202).
 const defaultDispatchLostThreshold = 3 * time.Minute
 
+// defaultPodLostGrace is how long a TI may be `running` before the pod-lost
+// reaper checks whether its pod still exists (#527). It only matters as a floor
+// against a transient "pod not listed yet" blip right after the running
+// transition — the actual reap needs TaskPodActive to report NO live pod, so a
+// slow-starting (Pending) pod is deferred regardless. 60 s catches a pod that
+// vanished in its first seconds ~5x faster than the 5-minute orphan reaper,
+// while staying well clear of any real pod lifecycle timing. Kubernetes-only.
+const defaultPodLostGrace = 60 * time.Second
+
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
 	store       Store
@@ -239,6 +253,7 @@ type Scheduler struct {
 	orphanThreshold       time.Duration
 	agentLostThreshold    time.Duration
 	dispatchLostThreshold time.Duration
+	podLostGrace          time.Duration
 	// podManager lets the reapers tear down a reaped task's pod and gate the
 	// dispatch-lost decision on pod liveness (#474, #461). Nil in Lite; the
 	// reapers guard the nil and fall back to DB-only behavior.
@@ -262,6 +277,7 @@ func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Sch
 		orphanThreshold:       defaultOrphanThreshold,
 		agentLostThreshold:    defaultAgentLostThreshold,
 		dispatchLostThreshold: defaultDispatchLostThreshold,
+		podLostGrace:          defaultPodLostGrace,
 		warnedSchedules:       map[string]string{},
 		alertSem:              make(chan struct{}, defaultAlertConcurrency),
 	}
@@ -281,6 +297,11 @@ func (s *Scheduler) SetAgentLostThreshold(d time.Duration) { s.agentLostThreshol
 // uses to declare a queued task's dispatch lost (optional; mainly for tests).
 // The default is defaultDispatchLostThreshold.
 func (s *Scheduler) SetDispatchLostThreshold(d time.Duration) { s.dispatchLostThreshold = d }
+
+// SetPodLostGrace overrides how long a TI may be `running` before the pod-lost
+// reaper checks pod liveness (optional; mainly for tests). The default is
+// defaultPodLostGrace.
+func (s *Scheduler) SetPodLostGrace(d time.Duration) { s.podLostGrace = d }
 
 // SetPodManager wires the pod-teardown / liveness capability the reapers use to
 // stop a reaped task's pod and to defer the dispatch-lost decision when a
@@ -516,6 +537,16 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	if err := dispatchReaper.run(ctx); err != nil {
 		logSchedulerError(s.logger, "dispatch-lost reaper", err, s.steppingDown.Load())
 		s.record("dispatch_lost_list_error")
+	}
+
+	// Pod-lost reaper (#527): fails a running TI whose pod vanished before any
+	// other reaper could catch it. Kubernetes-only — nil podManager (Lite) makes
+	// it a no-op, so a live subprocess task is never reaped.
+	podLostReaper := newPodLostReaper(s.store, s.logger, s.podLostGrace, s.recorder)
+	podLostReaper.pods = s.podManager
+	if err := podLostReaper.run(ctx); err != nil {
+		logSchedulerError(s.logger, "pod-lost reaper", err, s.steppingDown.Load())
+		s.record("pod_lost_list_error")
 	}
 }
 

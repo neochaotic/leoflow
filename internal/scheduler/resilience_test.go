@@ -114,6 +114,10 @@ func (f *flakyStore) ListStaleQueuedCandidates(context.Context) ([]StaleQueuedCa
 	return nil, nil
 }
 func (f *flakyStore) MarkTaskDispatchLost(context.Context, string) error { return nil }
+func (f *flakyStore) ListRunningTasks(context.Context) ([]PodLostCandidate, error) {
+	return nil, nil
+}
+func (f *flakyStore) MarkTaskPodLost(context.Context, string) error { return nil }
 
 func (f *flakyStore) snapshotMaterialized() []string {
 	f.mu.Lock()

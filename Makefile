@@ -25,6 +25,7 @@ BIN_DIR       := bin
 CLI_BINARY    := $(BIN_DIR)/leoflow
 SERVER_BINARY := $(BIN_DIR)/leoflow-server
 AGENT_BINARY  := $(BIN_DIR)/leoflow-agent
+MCP_BINARY    := $(BIN_DIR)/leoflow-mcp
 
 # ─── Build metadata (embedded via internal/version) ───
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -67,6 +68,7 @@ build: ## Build all binaries into ./bin
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLI_BINARY) ./cmd/leoflow
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SERVER_BINARY) ./cmd/leoflow-server
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(AGENT_BINARY) ./cmd/leoflow-agent
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(MCP_BINARY) ./cmd/leoflow-mcp
 
 .PHONY: chaos-dogfood
 chaos-dogfood: ## Pre-Lima gate (#231) — Phase 1: run all suites on the host + emit a green/red report

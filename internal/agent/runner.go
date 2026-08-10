@@ -68,6 +68,18 @@ type Runner struct {
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
+	// afterFunc returns a channel that fires after the given delay; it exists so
+	// tests can make the report-retry backoff instant. Nil uses time.After.
+	afterFunc func(time.Duration) <-chan time.Time
+}
+
+// after waits for d, using the injected afterFunc when set (tests) and time.After
+// otherwise.
+func (r *Runner) after(d time.Duration) <-chan time.Time {
+	if r.afterFunc != nil {
+		return r.afterFunc(d)
+	}
+	return time.After(d)
 }
 
 // Run executes the task lifecycle and returns an error if the task failed.
@@ -571,16 +583,60 @@ func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode i
 }
 
 // reportRequest sends a ReportState request and translates the response's
-// should_terminate signal into an error.
+// should_terminate signal into an error. A transient RPC failure (the api pod
+// momentarily Unavailable, a deadline) is retried with exponential backoff so a
+// task's terminal result is not lost to a network blip — which would otherwise
+// leave the TI to be failed as agent_lost by a reaper even though it succeeded.
+// The server's ReportState is idempotent (a report that already applied comes
+// back as a stale ack, not a double-apply), so retrying is safe. A logical
+// rejection is returned immediately, and a canceled context (parent shutdown,
+// SIGTERM) aborts the backoff at once.
 func (r *Runner) reportRequest(ctx context.Context, req *agentv1.ReportStateRequest) error {
-	resp, err := r.Client.ReportState(ctx, req)
-	if err != nil {
-		return fmt.Errorf("reporting state %v: %w", req.GetState(), err)
+	for attempt := 1; ; attempt++ {
+		resp, err := r.Client.ReportState(ctx, req)
+		if err == nil {
+			// should_terminate means the row already moved on — a reaper settled it,
+			// a later attempt superseded it, or (on a retry here) our own earlier
+			// attempt applied but its ack was lost. We cannot tell "superseded" from
+			// "we already won" locally, so we conservatively surface it as an error
+			// and stop. The DB is authoritative and already terminal either way; when
+			// it was our own win, the state is correct and the reconciler no-ops on
+			// the now-terminal TI, so the only cost is a non-zero agent exit.
+			if resp.GetShouldTerminate() {
+				return errors.New("control plane requested task termination")
+			}
+			return nil
+		}
+		if !retryableReportErr(err) {
+			return fmt.Errorf("reporting state %v: %w", req.GetState(), err)
+		}
+		delay, ok := Backoff(attempt)
+		if !ok {
+			return fmt.Errorf("reporting state %v after %d attempts: %w", req.GetState(), attempt, err)
+		}
+		slog.Warn("report failed; retrying after backoff",
+			"state", req.GetState(), "attempt", attempt, "delay", delay, "error", err)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("reporting state %v: %w", req.GetState(), ctx.Err())
+		case <-r.after(delay):
+		}
 	}
-	if resp.GetShouldTerminate() {
-		return errors.New("control plane requested task termination")
+}
+
+// retryableReportErr reports whether a ReportState error is a transient
+// infrastructure failure worth retrying. The set is the canonical
+// safe-to-retry gRPC codes: everything else (InvalidArgument, PermissionDenied,
+// a logical rejection) is returned to the caller unretried. A stale report is
+// never seen here — the server acknowledges it (with should_terminate) rather
+// than returning an error.
+func retryableReportErr(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Aborted:
+		return true
+	default:
+		return false
 	}
-	return nil
 }
 
 // reschedule reads the next-poke time a reschedule-mode sensor wrote to

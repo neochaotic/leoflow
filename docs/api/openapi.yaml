@@ -98,6 +98,40 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/DAG" }
 
+  /api/v2/dags/{dag_id}/dagVersions:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: List a DAG's registered versions
+      operationId: listDagVersions
+      tags: [DAGs]
+      responses:
+        "200":
+          description: A page of DAG versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DagVersionCollection"
+
+  /api/v2/dags/{dag_id}/dagVersions/{version_number}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - name: version_number
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      summary: Get a specific registered DAG version
+      operationId: getDagVersion
+      tags: [DAGs]
+      responses:
+        "200":
+          description: DAG version detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DagVersion" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v2/dags/{dag_id}/dagRuns:
     parameters:
       - $ref: "#/components/parameters/DagID"
@@ -371,6 +405,26 @@ components:
         dags:
           type: array
           items: { $ref: "#/components/schemas/DAG" }
+        total_entries: { type: integer }
+
+    DagVersion:
+      type: object
+      properties:
+        id: { type: string }
+        version_number: { type: integer }
+        dag_id: { type: string }
+        dag_display_name: { type: string }
+        bundle_name: { type: string }
+        bundle_version: { type: string, nullable: true }
+        bundle_url: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    DagVersionCollection:
+      type: object
+      properties:
+        dag_versions:
+          type: array
+          items: { $ref: "#/components/schemas/DagVersion" }
         total_entries: { type: integer }
 
     DAGUpdate:

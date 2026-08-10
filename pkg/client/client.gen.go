@@ -204,6 +204,24 @@ type DAGUpdate struct {
 	IsPaused *bool `json:"is_paused,omitempty"`
 }
 
+// DagVersion defines model for DagVersion.
+type DagVersion struct {
+	BundleName     *string    `json:"bundle_name,omitempty"`
+	BundleUrl      *string    `json:"bundle_url,omitempty"`
+	BundleVersion  *string    `json:"bundle_version,omitempty"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
+	DagDisplayName *string    `json:"dag_display_name,omitempty"`
+	DagId          *string    `json:"dag_id,omitempty"`
+	Id             *string    `json:"id,omitempty"`
+	VersionNumber  *int       `json:"version_number,omitempty"`
+}
+
+// DagVersionCollection defines model for DagVersionCollection.
+type DagVersionCollection struct {
+	DagVersions  *[]DagVersion `json:"dag_versions,omitempty"`
+	TotalEntries *int          `json:"total_entries,omitempty"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	Detail   *string `json:"detail,omitempty"`
@@ -469,6 +487,16 @@ type ClientInterface interface {
 	// Corresponds with GET /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/logs/{try_number} (the `GetTaskLogs` operationId).
 	GetTaskLogs(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListDagVersions List a DAG's registered versions
+	//
+	// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions (the `ListDagVersions` operationId).
+	ListDagVersions(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetDagVersion Get a specific registered DAG version
+	//
+	// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
+	GetDagVersion(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetXcomEntry Read XCom value (read-only proxy for the Redis backend)
 	//
 	// Corresponds with GET /api/v2/xcoms/{dag_id}/{dag_run_id}/{task_id}/{key} (the `GetXcomEntry` operationId).
@@ -696,6 +724,36 @@ func (c *Client) GetTaskInstance(ctx context.Context, dagId DagID, dagRunId DagR
 // Corresponds with GET /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/logs/{try_number} (the `GetTaskLogs` operationId).
 func (c *Client) GetTaskLogs(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetTaskLogsRequest(c.Server, dagId, dagRunId, taskId, tryNumber)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListDagVersions List a DAG's registered versions
+//
+// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions (the `ListDagVersions` operationId).
+func (c *Client) ListDagVersions(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListDagVersionsRequest(c.Server, dagId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetDagVersion Get a specific registered DAG version
+//
+// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
+func (c *Client) GetDagVersion(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetDagVersionRequest(c.Server, dagId, versionNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -1332,6 +1390,81 @@ func NewGetTaskLogsRequest(server string, dagId DagID, dagRunId DagRunID, taskId
 	return req, nil
 }
 
+// NewListDagVersionsRequest constructs an http.Request for the ListDagVersions method
+func NewListDagVersionsRequest(server string, dagId DagID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "dag_id", dagId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/dags/%s/dagVersions", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetDagVersionRequest constructs an http.Request for the GetDagVersion method
+func NewGetDagVersionRequest(server string, dagId DagID, versionNumber int) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "dag_id", dagId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "version_number", versionNumber, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/dags/%s/dagVersions/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetXcomEntryRequest constructs an http.Request for the GetXcomEntry method
 func NewGetXcomEntryRequest(server string, dagId DagID, dagRunId DagRunID, taskId TaskID, key string) (*http.Request, error) {
 	var err error
@@ -1615,6 +1748,20 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/logs/{try_number} (the `GetTaskLogs` operationId).
 	GetTaskLogsWithResponse(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int, reqEditors ...RequestEditorFn) (*GetTaskLogsResponse, error)
+
+	// ListDagVersionsWithResponse List a DAG's registered versions
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions (the `ListDagVersions` operationId).
+	ListDagVersionsWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*ListDagVersionsResponse, error)
+
+	// GetDagVersionWithResponse Get a specific registered DAG version
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
+	GetDagVersionWithResponse(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*GetDagVersionResponse, error)
 
 	// GetXcomEntryWithResponse Read XCom value (read-only proxy for the Redis backend)
 	//
@@ -2069,6 +2216,95 @@ func (r GetTaskLogsResponse) ContentType() string {
 	return ""
 }
 
+type ListDagVersionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *DagVersionCollection
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListDagVersionsResponse) GetJSON200() *DagVersionCollection {
+	return r.JSON200
+}
+
+// GetBody returns the raw response body bytes
+func (r ListDagVersionsResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListDagVersionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListDagVersionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListDagVersionsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetDagVersionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *DagVersion
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *NotFound
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetDagVersionResponse) GetJSON200() *DagVersion {
+	return r.JSON200
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r GetDagVersionResponse) GetJSON404() *NotFound {
+	return r.JSON404
+}
+
+// GetBody returns the raw response body bytes
+func (r GetDagVersionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetDagVersionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetDagVersionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetDagVersionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetXcomEntryResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2402,6 +2638,32 @@ func (c *ClientWithResponses) GetTaskLogsWithResponse(ctx context.Context, dagId
 	return ParseGetTaskLogsResponse(rsp)
 }
 
+// ListDagVersionsWithResponse List a DAG's registered versions
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions (the `ListDagVersions` operationId).
+func (c *ClientWithResponses) ListDagVersionsWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*ListDagVersionsResponse, error) {
+	rsp, err := c.ListDagVersions(ctx, dagId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListDagVersionsResponse(rsp)
+}
+
+// GetDagVersionWithResponse Get a specific registered DAG version
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
+func (c *ClientWithResponses) GetDagVersionWithResponse(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*GetDagVersionResponse, error) {
+	rsp, err := c.GetDagVersion(ctx, dagId, versionNumber, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetDagVersionResponse(rsp)
+}
+
 // GetXcomEntryWithResponse Read XCom value (read-only proxy for the Redis backend)
 //
 // Returns a wrapper object for the known response body format(s).
@@ -2726,6 +2988,65 @@ func ParseGetTaskLogsResponse(rsp *http.Response) (*GetTaskLogsResponse, error) 
 	response := &GetTaskLogsResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseListDagVersionsResponse parses an HTTP response from a ListDagVersionsWithResponse call
+func ParseListDagVersionsResponse(rsp *http.Response) (*ListDagVersionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListDagVersionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DagVersionCollection
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetDagVersionResponse parses an HTTP response from a GetDagVersionWithResponse call
+func ParseGetDagVersionResponse(rsp *http.Response) (*GetDagVersionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetDagVersionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DagVersion
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
 	}
 
 	return response, nil

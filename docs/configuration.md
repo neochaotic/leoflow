@@ -57,6 +57,7 @@ roadmap item.
 | `LEOFLOW_SERVER_HTTP_ADDR` | `0.0.0.0:8080` | both | HTTP/UI listener. |
 | `LEOFLOW_SERVER_GRPC_ADDR` | `0.0.0.0:9091` | both | Agent gRPC listener. |
 | `LEOFLOW_SERVER_METRICS_ADDR` | `0.0.0.0:9090` | both | Prometheus metrics. |
+| `LEOFLOW_SERVER_TRUSTED_PROXIES` | *(empty — trust none)* | both | Proxy IPs/CIDRs whose `X-Forwarded-For` is honored for the client IP (`server.trusted_proxies`, a list). See note below. |
 | `LEOFLOW_DATABASE_URL` | `postgres://…/leoflow` | both | Postgres DSN. |
 | `LEOFLOW_REDIS_URL` | `redis://…/0` | **Pro only** | Redis (XCom + locks). Lite stores both in Postgres ([ADR 0026](adr/0026-lite-datastore-no-redis.md)). |
 | `LEOFLOW_AUTH_JWT_SECRET` | — *(required for jwt)* | both | Signs API/agent tokens. |
@@ -71,3 +72,20 @@ roadmap item.
 | `LEOFLOW_OBSERVABILITY_*` | — | both | OTel endpoint, log level/format. |
 
 `leoflow lite` sets the dev-appropriate values automatically (isolated DB, port 8088, admin login on, no Redis).
+
+### Trusted proxies and the client IP
+
+By default Leoflow trusts **no** proxy: `X-Forwarded-For` is ignored and the
+client IP (used by the login rate-limiter and the audit log) is the direct peer.
+This is the safe default — it stops a spoofed `X-Forwarded-For` from forging the
+client IP — and is correct for Lite (exposed directly) and for any deployment
+reached without a reverse proxy.
+
+When the API runs **behind a reverse proxy or ingress**, set
+`server.trusted_proxies` (env `LEOFLOW_SERVER_TRUSTED_PROXIES`) to the proxy's
+IP or CIDR — e.g. your ingress controller's pod CIDR. Only then is the left-most
+`X-Forwarded-For` entry honored, so rate-limiting and audit see the real client
+instead of the proxy. **Do not** set this to a broad private range (e.g. all of
+`10.0.0.0/8`) in a cluster where task pods run: a task pod inside that range
+could then spoof the client IP. Scope it to the ingress. An invalid value fails
+secure (trust none) with a logged error.

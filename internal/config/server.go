@@ -149,6 +149,12 @@ type ServerSection struct {
 	MetricsAddr string      `mapstructure:"metrics_addr"`
 	GRPCAddr    string      `mapstructure:"grpc_addr"`
 	CORS        CORSSection `mapstructure:"cors"`
+	// TrustedProxies lists the proxy IPs/CIDRs whose X-Forwarded-For is honored
+	// when resolving the client IP. Empty (the default) trusts no proxy, so a
+	// spoofed XFF cannot forge the client IP (audit H1); set it to the ingress
+	// CIDR when the API runs behind a reverse proxy so rate-limiting and audit
+	// see the real client.
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
 	// GRPCTLSCert/GRPCTLSKey enable TLS on the agent gRPC listener (issue #58).
 	// When both are set the channel is encrypted; empty means plaintext (dev).
 	GRPCTLSCert string `mapstructure:"grpc_tls_cert"`

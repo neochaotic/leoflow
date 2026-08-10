@@ -114,8 +114,11 @@ type Store interface {
 	MaterializeTasks(ctx context.Context, runID string, tasks []domain.TaskSpec) error
 	ApplyTransition(ctx context.Context, runID, taskID string, to domain.TaskState) error
 	// ResetForRetry returns a task to 'none' and increments its try number so a
-	// retry re-evaluates and re-runs it.
-	ResetForRetry(ctx context.Context, runID, taskID string) error
+	// retry re-evaluates and re-runs it. It is guarded to the up_for_retry source
+	// state; the bool reports whether the reset actually fired (false = the TI was
+	// no longer up_for_retry, nothing reset) so the caller does not record a
+	// phantom retry on a lost race.
+	ResetForRetry(ctx context.Context, runID, taskID string) (bool, error)
 	// RedispatchReschedule returns a task parked in up_for_reschedule to 'none' for
 	// re-dispatch, PRESERVING try_number (reschedule is not a retry; #380).
 	RedispatchReschedule(ctx context.Context, runID, taskID string) error
@@ -832,8 +835,18 @@ func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTra
 // resetForRetry returns a task to 'none' with an incremented try number so the
 // next tick re-evaluates and re-runs it.
 func (s *Scheduler) resetForRetry(ctx context.Context, run RunState, taskID string) error {
-	if err := s.store.ResetForRetry(ctx, run.RunID, taskID); err != nil {
+	applied, err := s.store.ResetForRetry(ctx, run.RunID, taskID)
+	if err != nil {
 		return fmt.Errorf("resetting %s for retry: %w", taskID, err)
+	}
+	// The guarded reset no-ops when the TI is no longer up_for_retry — a stale
+	// decision that raced a concurrent writer (e.g. a re-dispatch). Do not record
+	// a retry we did not perform; surface the lost race instead.
+	if !applied {
+		if s.recorder != nil {
+			s.recorder.RecordSchedulerDecision("retry_noop")
+		}
+		return nil
 	}
 	if s.recorder != nil {
 		s.recorder.RecordSchedulerDecision("retry")

@@ -1527,6 +1527,56 @@ func (q *Queries) ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTa
 	return result.RowsAffected(), nil
 }
 
+const resetTaskInstanceForRetry = `-- name: ResetTaskInstanceForRetry :execrows
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1 AND src.task_id = $2 AND src.state = 'up_for_retry'
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
+    reschedule_at = NULL,
+    first_reschedule_at = NULL,
+    try_number = ti.try_number + 1
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2 AND ti.state = 'up_for_retry'
+`
+
+type ResetTaskInstanceForRetryParams struct {
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskID   string      `json:"task_id"`
+}
+
+// The scheduler retry rail's reset: identical to ResetTaskInstanceToNone but
+// GUARDED to state='up_for_retry' on both the history snapshot and the update.
+// The planner emits up_for_retry → none, but by apply time the TI may have been
+// re-dispatched (a stale/concurrent decision); without this guard the reset
+// would yank a now-running TI back to none and bump try_number, orphaning its
+// live pod. Mirrors the source-state guard on RedispatchRescheduledTaskInstance.
+// The admin clear-task path deliberately uses the unguarded primitive above.
+func (q *Queries) ResetTaskInstanceForRetry(ctx context.Context, arg ResetTaskInstanceForRetryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resetTaskInstanceForRetry, arg.DagRunID, arg.TaskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const resetTaskInstanceToNone = `-- name: ResetTaskInstanceToNone :exec
 WITH archived AS (
     INSERT INTO task_instance_history (
@@ -1569,6 +1619,11 @@ type ResetTaskInstanceToNoneParams struct {
 // MUST be NULLed so the next TransitionTaskState(queued) stamps a fresh now()
 // — without that, the dispatch-lost reaper sees the stale pre-clear timestamp
 // and re-marks the TI dispatch_lost on every tick (Lima Bug 1).
+// This is the UNCONDITIONAL clear primitive: the admin "clear task" action
+// (ClearTaskInstances, onlyFailed=false) resets a TI to none from ANY state, so
+// it carries no source-state guard. The scheduler's retry rail uses the guarded
+// ResetTaskInstanceForRetry instead — do not add a guard here or clear-task
+// silently no-ops on non-up_for_retry tasks.
 func (q *Queries) ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error {
 	_, err := q.db.Exec(ctx, resetTaskInstanceToNone, arg.DagRunID, arg.TaskID)
 	return err

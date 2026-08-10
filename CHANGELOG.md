@@ -6,6 +6,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **The API now trusts no proxy by default** (`server.trusted_proxies`,
+  `LEOFLOW_SERVER_TRUSTED_PROXIES`). Previously `X-Forwarded-For` was honored
+  from any source, so the client IP behind the login rate-limiter and the audit
+  log could be spoofed. The client IP is now the direct peer unless you list the
+  reverse proxy's IP/CIDR. **Behavior change** for deployments behind an ingress:
+  set `server.trusted_proxies` to the ingress CIDR to keep per-client
+  rate-limiting and audit accurate. See
+  [Configuration → Trusted proxies](docs/configuration.md).
+
 ## [0.2.0] - 2026-08-07
 
 > The **0.2.0** line. The control plane can now run as **separate api and

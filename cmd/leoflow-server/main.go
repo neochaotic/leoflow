@@ -370,6 +370,7 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		Tracer:                       tel.Tracer,
 		HealthChecks:                 checks,
 		CORSOrigins:                  cfg.Server.CORS.AllowedOrigins,
+		TrustedProxies:               cfg.Server.TrustedProxies,
 		TokenTTLSecs:                 cfg.Auth.JWT.TokenTTLSeconds,
 		InstanceName:                 cfg.UI.InstanceName,
 		UIAutoRefreshIntervalSeconds: cfg.UI.AutoRefreshIntervalSeconds,

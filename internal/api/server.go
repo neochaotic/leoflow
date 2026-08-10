@@ -32,7 +32,13 @@ type Dependencies struct {
 	Tracer        trace.Tracer
 	HealthChecks  map[string]HealthChecker
 	CORSOrigins   []string
-	TokenTTLSecs  int
+	// TrustedProxies is the set of proxy IPs/CIDRs whose X-Forwarded-For header
+	// gin will honor when resolving c.ClientIP(). Empty/nil trusts NO proxy, so
+	// ClientIP is the direct peer and a spoofed XFF cannot forge the client IP
+	// (audit H1). A Pro deployment behind an ingress sets this to the ingress
+	// CIDR so per-client rate-limiting and audit see the real client.
+	TrustedProxies []string
+	TokenTTLSecs   int
 	// InstanceName is shown in the UI navbar (Airflow's instance_name). Empty
 	// falls back to "Leoflow"; `leoflow dev` sets it to mark the DEV environment.
 	InstanceName string
@@ -93,6 +99,16 @@ type Dependencies struct {
 func NewServer(deps Dependencies) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// Trust only the explicitly-configured proxies for X-Forwarded-For; the empty
+	// default trusts none, so c.ClientIP() is the direct peer and a spoofed XFF
+	// cannot forge it (audit H1). An invalid CIDR fails SECURE — trust none — not
+	// open.
+	if err := r.SetTrustedProxies(deps.TrustedProxies); err != nil {
+		deps.Logger.Error("invalid trusted_proxies; trusting no proxy", "error", err)
+		if resetErr := r.SetTrustedProxies(nil); resetErr != nil {
+			deps.Logger.Error("resetting trusted proxies to none failed", "error", resetErr)
+		}
+	}
 	// Disable auto-redirect on trailing slash (#291): the 301 it writes
 	// bypasses NoStoreOnVolatileRoutes, so the browser can cache the bare
 	// 301 and short-circuit the next request. Bare paths register explicit

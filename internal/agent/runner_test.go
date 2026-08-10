@@ -18,15 +18,20 @@ import (
 
 // fakeClient is a test double for the generated AgentServiceClient.
 type fakeClient struct {
-	spec               *agentv1.TaskSpec
-	xcom               map[string]*agentv1.FetchXComResponse
-	states             []agentv1.TaskState
-	reports            []*agentv1.ReportStateRequest
-	pushed             []*agentv1.PushXComRequest
-	registered         bool
-	terminateAt        agentv1.TaskState // state for which ReportState returns should_terminate
-	getSpecErr         error
-	pushErr            error
+	spec        *agentv1.TaskSpec
+	xcom        map[string]*agentv1.FetchXComResponse
+	states      []agentv1.TaskState
+	reports     []*agentv1.ReportStateRequest
+	pushed      []*agentv1.PushXComRequest
+	registered  bool
+	terminateAt agentv1.TaskState // state for which ReportState returns should_terminate
+	getSpecErr  error
+	pushErr     error
+	// reportFailCode + reportFailTimes make the first reportFailTimes ReportState
+	// calls fail with that gRPC code, then succeed — to exercise the report retry.
+	reportFailCode     codes.Code
+	reportFailTimes    int
+	reportAttempts     int
 	heartbeatTerminate bool
 	vars               map[string]string
 	conns              map[string]string
@@ -72,6 +77,10 @@ func (f *fakeClient) StreamLogs(context.Context, ...grpc.CallOption) (grpc.BidiS
 }
 
 func (f *fakeClient) ReportState(_ context.Context, in *agentv1.ReportStateRequest, _ ...grpc.CallOption) (*agentv1.ReportStateResponse, error) {
+	f.reportAttempts++
+	if f.reportAttempts <= f.reportFailTimes {
+		return nil, status.Error(f.reportFailCode, "injected report failure")
+	}
 	f.states = append(f.states, in.GetState())
 	f.reports = append(f.reports, in)
 	return &agentv1.ReportStateResponse{Acknowledged: true, ShouldTerminate: in.GetState() == f.terminateAt}, nil

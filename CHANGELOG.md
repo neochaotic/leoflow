@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Experimental MCP server skeleton (`leoflow-mcp`)** — the first slice of the
+  Model Context Protocol server (ADR 0050): a read-only, stdio server built on
+  the official `modelcontextprotocol/go-sdk`, exposing a `list_dags` tool that
+  reaches the control plane only through `pkg/client` (the caller's token is
+  passed through; the server holds no privilege of its own). Optional and never
+  part of `leoflow-server`. This is a skeleton — more read tools (`diagnose_run`,
+  `search_logs`) and the Pro HTTP transport follow.
 - **A generated, typed Go client for the `/api/v2` surface (`pkg/client`)** — the
   single control-plane client the CLI, the coming MCP server, and smoke tests
   share instead of hand-rolling HTTP (ADR 0050). Generated from the OpenAPI spec

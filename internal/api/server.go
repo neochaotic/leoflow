@@ -7,7 +7,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/neochaotic/leoflow/internal/auth"
@@ -128,9 +127,10 @@ func NewServer(deps Dependencies) *gin.Engine {
 
 	r.GET("/healthz", livenessHandler)
 	r.GET("/readyz", readinessHandler(deps.HealthChecks))
-	if deps.Registry != nil {
-		r.GET("/metrics", gin.WrapH(promhttp.HandlerFor(deps.Registry, promhttp.HandlerOpts{})))
-	}
+	// /metrics is intentionally NOT served here (audit H2): scraping lives on the
+	// dedicated observability listener (ObservabilityHandler on the metrics port),
+	// which every role runs, so metrics can be firewalled separately from the
+	// public API/UI surface. deps.Registry is retained for that listener's wiring.
 	registerDocs(r)
 
 	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs))

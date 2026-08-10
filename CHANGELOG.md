@@ -16,6 +16,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   set `server.trusted_proxies` to the ingress CIDR to keep per-client
   rate-limiting and audit accurate. See
   [Configuration → Trusted proxies](docs/configuration.md).
+- **`/metrics` is no longer served on the public API/UI listener; `/readyz`
+  no longer leaks dependency errors** (audit H2). Prometheus `/metrics` was
+  exposed unauthenticated on the API port in addition to the dedicated metrics
+  listener; it is now served **only** on the observability listener (the metrics
+  port, which every role runs), so it can be firewalled separately from the API.
+  And a failing `/readyz` returned the raw dependency error (which can carry a
+  DSN, credentials, or internal hostnames) to an unauthenticated caller; it now
+  names only the unready dependency and logs the full error server-side. Scrapers
+  must target the metrics port (`LEOFLOW_SERVER_METRICS_ADDR`, default `:9090`),
+  not the API port.
 
 ## [0.2.0] - 2026-08-07
 

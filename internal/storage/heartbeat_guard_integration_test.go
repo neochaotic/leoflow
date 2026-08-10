@@ -65,13 +65,20 @@ func TestRecordHeartbeatStaleTryNumberSignalsStale(t *testing.T) {
 	dagID := fmt.Sprintf("hb_stale_try_%d", time.Now().UnixNano())
 	runUUID := seedRunningTask(t, repo, sched, ctx, dagID, "load")
 
-	// Attempt 1 fails and is retried: try_number becomes 2, row back to none →
-	// queued → running for attempt 2.
+	// Attempt 1 fails and is retried along the real rail failed → up_for_retry →
+	// none: try_number becomes 2, row back to none → queued → running for
+	// attempt 2. ResetForRetry is guarded to up_for_retry, so the intermediate
+	// transition is required (a direct failed → reset would no-op).
 	if err := sched.ApplyTransition(ctx, runUUID, "load", domain.TaskStateFailed); err != nil {
 		t.Fatalf("ApplyTransition to failed: %v", err)
 	}
-	if err := sched.ResetForRetry(ctx, runUUID, "load"); err != nil {
+	if err := sched.ApplyTransition(ctx, runUUID, "load", domain.TaskStateUpForRetry); err != nil {
+		t.Fatalf("ApplyTransition to up_for_retry: %v", err)
+	}
+	if applied, err := sched.ResetForRetry(ctx, runUUID, "load"); err != nil {
 		t.Fatalf("ResetForRetry: %v", err)
+	} else if !applied {
+		t.Fatalf("ResetForRetry on up_for_retry must apply")
 	}
 	for _, st := range []domain.TaskState{domain.TaskStateQueued, domain.TaskStateRunning} {
 		if err := sched.ApplyTransition(ctx, runUUID, "load", st); err != nil {

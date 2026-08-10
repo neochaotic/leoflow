@@ -80,9 +80,9 @@ func (f *fakeStore) ApplyTransition(_ context.Context, runID, taskID string, to 
 	f.transitions = append(f.transitions, transition{runID, taskID, to})
 	return nil
 }
-func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) error {
+func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) (bool, error) {
 	f.retried = append(f.retried, transition{runID, taskID, domain.TaskStateNone})
-	return nil
+	return true, nil
 }
 func (f *fakeStore) RecordDispatchFailure(_ context.Context, runID, taskID string, _ time.Time) error {
 	f.dispatchFailures = append(f.dispatchFailures, transition{runID, taskID, ""})

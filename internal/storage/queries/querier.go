@@ -271,6 +271,14 @@ type Querier interface {
 	// Archives the current attempt into task_instance_history then resets the
 	// live row. See ResetTaskInstanceToNone for the per-attempt rationale.
 	ResetFailedTaskInstance(ctx context.Context, arg ResetFailedTaskInstanceParams) (int64, error)
+	// The scheduler retry rail's reset: identical to ResetTaskInstanceToNone but
+	// GUARDED to state='up_for_retry' on both the history snapshot and the update.
+	// The planner emits up_for_retry → none, but by apply time the TI may have been
+	// re-dispatched (a stale/concurrent decision); without this guard the reset
+	// would yank a now-running TI back to none and bump try_number, orphaning its
+	// live pod. Mirrors the source-state guard on RedispatchRescheduledTaskInstance.
+	// The admin clear-task path deliberately uses the unguarded primitive above.
+	ResetTaskInstanceForRetry(ctx context.Context, arg ResetTaskInstanceForRetryParams) (int64, error)
 	// Resets a TI for retry: snapshot the current per-attempt state into
 	// task_instance_history (so the UI's /tries endpoint can render one tab per
 	// attempt, Lima bug #241), then state back to `none`, all per-attempt
@@ -278,6 +286,11 @@ type Querier interface {
 	// MUST be NULLed so the next TransitionTaskState(queued) stamps a fresh now()
 	// — without that, the dispatch-lost reaper sees the stale pre-clear timestamp
 	// and re-marks the TI dispatch_lost on every tick (Lima Bug 1).
+	// This is the UNCONDITIONAL clear primitive: the admin "clear task" action
+	// (ClearTaskInstances, onlyFailed=false) resets a TI to none from ANY state, so
+	// it carries no source-state guard. The scheduler's retry rail uses the guarded
+	// ResetTaskInstanceForRetry instead — do not add a guard here or clear-task
+	// silently no-ops on non-up_for_retry tasks.
 	ResetTaskInstanceToNone(ctx context.Context, arg ResetTaskInstanceToNoneParams) error
 	ResolveRunRef(ctx context.Context, arg ResolveRunRefParams) (ResolveRunRefRow, error)
 	SetCurrentDagVersion(ctx context.Context, arg SetCurrentDagVersionParams) error

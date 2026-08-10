@@ -96,13 +96,21 @@ func TestReportStateIgnoresStaleTryNumberIntegration(t *testing.T) {
 	dagID := fmt.Sprintf("guard_stale_try_%d", time.Now().UnixNano())
 	runUUID := seedRunningTask(t, repo, sched, ctx, dagID, "load")
 
-	// Attempt 1 fails and the scheduler retries: try_number becomes 2, and the
-	// row goes back to none for re-dispatch.
+	// Attempt 1 fails and the scheduler retries. The real retry rail is
+	// failed → up_for_retry → none: the planner parks a retriable failure in
+	// up_for_retry, then ResetForRetry (guarded to up_for_retry) releases it to
+	// none with try_number bumped to 2. Going straight from failed would not
+	// match production and the guarded reset would (correctly) no-op.
 	if err := sched.ApplyTransition(ctx, runUUID, "load", domain.TaskStateFailed); err != nil {
 		t.Fatalf("ApplyTransition to failed: %v", err)
 	}
-	if err := sched.ResetForRetry(ctx, runUUID, "load"); err != nil {
+	if err := sched.ApplyTransition(ctx, runUUID, "load", domain.TaskStateUpForRetry); err != nil {
+		t.Fatalf("ApplyTransition to up_for_retry: %v", err)
+	}
+	if applied, err := sched.ResetForRetry(ctx, runUUID, "load"); err != nil {
 		t.Fatalf("ResetForRetry: %v", err)
+	} else if !applied {
+		t.Fatalf("ResetForRetry on up_for_retry must apply")
 	}
 	if err := sched.ApplyTransition(ctx, runUUID, "load", domain.TaskStateQueued); err != nil {
 		t.Fatalf("ApplyTransition to queued: %v", err)

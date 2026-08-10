@@ -173,16 +173,25 @@ func (s *SchedulerStore) SetTaskNote(ctx context.Context, runID, taskID, note st
 }
 
 // ResetForRetry returns a task instance to 'none', clears its timestamps, and
-// increments its try number so the scheduler re-evaluates and re-runs it.
-func (s *SchedulerStore) ResetForRetry(ctx context.Context, runID, taskID string) error {
+// increments its try number so the scheduler re-evaluates and re-runs it. It
+// uses the up_for_retry-guarded query so a stale retry decision cannot reset a
+// TI that has since been re-dispatched (audit follow-up; see the query doc). The
+// bool reports whether the guarded update actually fired (exactly one row): a
+// false means the TI was no longer up_for_retry and nothing was reset, so the
+// caller must not record a retry it did not perform.
+func (s *SchedulerStore) ResetForRetry(ctx context.Context, runID, taskID string) (bool, error) {
 	rid, err := parseUUID(runID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return s.q.ResetTaskInstanceToNone(ctx, queries.ResetTaskInstanceToNoneParams{
+	n, err := s.q.ResetTaskInstanceForRetry(ctx, queries.ResetTaskInstanceForRetryParams{
 		DagRunID: rid,
 		TaskID:   taskID,
 	})
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // RecordDispatchFailure increments a scheduled task's dispatch-failure counter

@@ -82,8 +82,8 @@ func (f *flakyStore) ApplyTransition(_ context.Context, runID, taskID string, to
 	return nil
 }
 
-func (f *flakyStore) ResetForRetry(context.Context, string, string) error        { return nil }
-func (f *flakyStore) RedispatchReschedule(context.Context, string, string) error { return nil }
+func (f *flakyStore) ResetForRetry(context.Context, string, string) (bool, error) { return true, nil }
+func (f *flakyStore) RedispatchReschedule(context.Context, string, string) error  { return nil }
 func (f *flakyStore) RecordDispatchFailure(context.Context, string, string, time.Time) error {
 	return nil
 }

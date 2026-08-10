@@ -440,3 +440,16 @@ tests:
           content:
             name: LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM
             value: "true"
+
+  - it: "audit H2 — control-plane pod sets seccompProfile RuntimeDefault (restricted PSA)"
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+    asserts:
+      # restricted Pod Security Admission requires a RuntimeDefault (or Localhost)
+      # seccomp profile at the pod or container level. The chart claimed this
+      # posture in a comment but never rendered it.
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault

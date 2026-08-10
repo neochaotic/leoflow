@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **Control-plane and migration-Job pods now set `seccompProfile: RuntimeDefault`**
+  (audit follow-up). The chart hardened these pods with `runAsNonRoot`, dropped
+  capabilities, and `allowPrivilegeEscalation: false`, and a comment claimed a
+  RuntimeDefault seccomp profile — but it was never rendered, so a cluster
+  enforcing the `restricted` Pod Security Standard would reject the pods. The
+  profile is now set at the pod level (inherited by every container) on the api,
+  scheduler, monolith, and migration-Job pods. Task pods already carried it.
 - **The API now trusts no proxy by default** (`server.trusted_proxies`,
   `LEOFLOW_SERVER_TRUSTED_PROXIES`). Previously `X-Forwarded-For` was honored
   from any source, so the client IP behind the login rate-limiter and the audit

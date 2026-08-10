@@ -71,3 +71,11 @@ tests:
       - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "0"   # Secret is at "-5"; Job at "0" → Secret runs first ✓
+
+  - it: "audit H2 — migration Job pod sets seccompProfile RuntimeDefault (restricted PSA)"
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault

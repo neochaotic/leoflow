@@ -260,6 +260,7 @@ differ from what's committed.
 | migrations.podSecurityContext.runAsGroup | int | `65532` |  |
 | migrations.podSecurityContext.runAsNonRoot | bool | `true` |  |
 | migrations.podSecurityContext.runAsUser | int | `65532` |  |
+| migrations.podSecurityContext.seccompProfile.type | string | `"RuntimeDefault"` |  |
 | migrations.securityContext.allowPrivilegeEscalation | bool | `false` |  |
 | migrations.securityContext.capabilities.drop[0] | string | `"ALL"` |  |
 | migrations.securityContext.readOnlyRootFilesystem | bool | `true` |  |
@@ -282,6 +283,7 @@ differ from what's committed.
 | podSecurityContext.runAsGroup | int | `65532` |  |
 | podSecurityContext.runAsNonRoot | bool | `true` |  |
 | podSecurityContext.runAsUser | int | `65532` |  |
+| podSecurityContext.seccompProfile.type | string | `"RuntimeDefault"` |  |
 | ports | object | `{"grpc":9091,"http":8080,"metrics":9090}` | Ports the leoflow-server listens on. http: API + UI, metrics: Prometheus /metrics, grpc: agent ↔ control plane channel (task pods dial back here). |
 | rbac.create | bool | `true` | Create the Role + RoleBinding the pod-per-task executor needs in `taskNamespace`: create/get/list/watch/delete on pods, get on pods/log, and create/delete on persistentvolumeclaims for the per-run staging volume (ADR 0022). The grant is checked against the executor's actual API calls by `scripts/rbac-covers-executor.sh` in CI, so this list cannot silently fall behind the code again. Set `false` only if you bring your own Role — and then that check does not protect you. |
 | redis.caConfigMap | string | `""` | Name of a ConfigMap with a `ca.crt` key containing the PEM CA bundle the client trusts when negotiating TLS to a `rediss://` URL (#312). Required when the managed-Redis server cert is signed by a provider / per-instance CA that is not in the system roots — Memorystore SERVER_AUTHENTICATION, ElastiCache in-transit encryption, Azure Cache for Redis. Mounted read-only at `/etc/leoflow/redis-ca` and exposed to the server via `LEOFLOW_REDIS_CA_FILE`. Leave empty when Redis uses a public CA or no TLS. |

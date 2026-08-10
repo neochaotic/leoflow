@@ -203,6 +203,9 @@ migrations:
     runAsUser: 65532
     runAsGroup: 65532
     fsGroup: 65532
+    # restricted PSA requires a RuntimeDefault seccomp profile; set pod-level.
+    seccompProfile:
+      type: RuntimeDefault
   securityContext:
     allowPrivilegeEscalation: false
     # migrate is a static Go binary writing only to the DB (advisory lock for
@@ -362,6 +365,10 @@ podSecurityContext:
   runAsUser: 65532
   runAsGroup: 65532
   fsGroup: 65532
+  # restricted Pod Security Admission requires a RuntimeDefault (or Localhost)
+  # seccomp profile. Set at the pod level so every container inherits it.
+  seccompProfile:
+    type: RuntimeDefault
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: false

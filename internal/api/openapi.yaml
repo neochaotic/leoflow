@@ -20,6 +20,7 @@ paths:
   /auth/token:
     post:
       summary: Issue a JWT for username/password credentials
+      operationId: issueToken
       tags: [Auth]
       security: []
       requestBody:
@@ -41,6 +42,7 @@ paths:
   /api/v2/dags:
     get:
       summary: List DAGs
+      operationId: listDags
       tags: [DAGs]
       parameters:
         - $ref: "#/components/parameters/Limit"
@@ -69,6 +71,7 @@ paths:
       - $ref: "#/components/parameters/DagID"
     get:
       summary: Get a DAG
+      operationId: getDag
       tags: [DAGs]
       responses:
         "200":
@@ -80,6 +83,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     patch:
       summary: Update DAG (typically pause/unpause)
+      operationId: updateDag
       tags: [DAGs]
       requestBody:
         required: true
@@ -99,6 +103,7 @@ paths:
       - $ref: "#/components/parameters/DagID"
     get:
       summary: List DAG runs
+      operationId: listDagRuns
       tags: [DAG Runs]
       parameters:
         - $ref: "#/components/parameters/Limit"
@@ -119,6 +124,7 @@ paths:
                 $ref: "#/components/schemas/DAGRunCollection"
     post:
       summary: Trigger a DAG run
+      operationId: triggerDagRun
       tags: [DAG Runs]
       requestBody:
         required: true
@@ -139,6 +145,7 @@ paths:
       - $ref: "#/components/parameters/DagRunID"
     get:
       summary: Get a DAG run
+      operationId: getDagRun
       tags: [DAG Runs]
       responses:
         "200":
@@ -154,6 +161,7 @@ paths:
       - $ref: "#/components/parameters/DagRunID"
     get:
       summary: List task instances of a DAG run
+      operationId: listTaskInstances
       tags: [Task Instances]
       responses:
         "200":
@@ -170,6 +178,7 @@ paths:
       - $ref: "#/components/parameters/TaskID"
     get:
       summary: Get a task instance
+      operationId: getTaskInstance
       tags: [Task Instances]
       responses:
         "200":
@@ -189,6 +198,7 @@ paths:
         schema: { type: integer, minimum: 1 }
     get:
       summary: Get task logs
+      operationId: getTaskLogs
       tags: [Task Instances]
       responses:
         "200":
@@ -202,6 +212,7 @@ paths:
       - $ref: "#/components/parameters/DagID"
     post:
       summary: Clear task instances (queue them for re-run)
+      operationId: clearTaskInstances
       tags: [Task Instances]
       requestBody:
         required: true
@@ -228,6 +239,7 @@ paths:
         schema: { type: string }
     get:
       summary: Read XCom value (read-only proxy for the Redis backend)
+      operationId: getXcomEntry
       tags: [XCom]
       responses:
         "200":
@@ -240,6 +252,7 @@ paths:
   /healthz:
     get:
       summary: Liveness probe
+      operationId: getHealthz
       tags: [Health]
       security: []
       responses:
@@ -250,6 +263,7 @@ paths:
   /readyz:
     get:
       summary: Readiness probe
+      operationId: getReadyz
       tags: [Health]
       security: []
       responses:

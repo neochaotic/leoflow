@@ -11,6 +11,7 @@ import (
 
 func TestRequestTokenReturnsAccessToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{"access_token":"jwt-xyz","token_type":"bearer"}`)
 	}))
@@ -38,6 +39,7 @@ func TestRequestTokenRejectsBadStatus(t *testing.T) {
 
 func TestCreateTokenCommand(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"access_token":"jwt-abc"}`)
 	}))
 	defer srv.Close()

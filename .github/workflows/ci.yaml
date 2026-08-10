@@ -69,6 +69,29 @@ jobs:
           fi
 
   # ─────────────────────────────────────────────────────────────────────
+  # pkg/client is generated from docs/api/openapi.yaml (ADR 0050 D8). A spec
+  # change without re-running `make pkg-client` would ship a stale client.
+  # Regenerate in CI and fail if the working tree differs.
+  # ─────────────────────────────────────────────────────────────────────
+  pkg-client-drift:
+    name: pkg/client is in sync with the OpenAPI spec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Regenerate pkg/client
+        run: make pkg-client
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code -- pkg/client/client.gen.go; then
+            echo "::error::pkg/client/client.gen.go is out of sync with docs/api/openapi.yaml. Run 'make pkg-client' and commit." >&2
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────
   # Lint the GitHub Actions workflows themselves (actionlint). A malformed
   # workflow can silently fail to trigger or break a release; catching schema and
   # expression errors here keeps the CI/release workflows valid before they merge.

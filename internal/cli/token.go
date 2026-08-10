@@ -1,19 +1,15 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/neochaotic/leoflow/internal/config"
+	apiclient "github.com/neochaotic/leoflow/pkg/client"
 )
 
 func newAuthCommand() *cobra.Command {
@@ -54,38 +50,26 @@ func newCreateTokenCommand() *cobra.Command {
 	return cmd
 }
 
-// requestToken posts credentials to /auth/token and returns the access token.
+// requestToken posts credentials to /auth/token and returns the access token,
+// via the shared typed /api/v2 client (ADR 0050 D8). No token is presented to
+// obtain a token, so New is called with an empty bearer.
 func requestToken(ctx context.Context, serverURL, username, password string) (string, error) {
-	payload, err := json.Marshal(map[string]string{"username": username, "password": password})
+	c, err := apiclient.New(serverURL, "")
 	if err != nil {
-		return "", fmt.Errorf("encoding credentials: %w", err)
+		return "", err
 	}
-	url := strings.TrimRight(serverURL, "/") + "/auth/token"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	resp, err := c.IssueTokenWithResponse(ctx, apiclient.TokenRequest{
+		Username: username,
+		Password: password,
+	})
 	if err != nil {
-		return "", fmt.Errorf("building request: %w", err)
+		return "", fmt.Errorf("posting to %s/auth/token: %w", serverURL, err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return "", fmt.Errorf("posting to %s: %w", url, err)
+	if resp.StatusCode() != http.StatusOK {
+		return "", fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body))
 	}
-	raw, readErr := io.ReadAll(resp.Body)
-	closeErr := resp.Body.Close()
-	if readErr != nil {
-		return "", fmt.Errorf("reading response: %w", readErr)
+	if resp.JSON200 == nil || resp.JSON200.AccessToken == nil {
+		return "", fmt.Errorf("server returned no access_token")
 	}
-	if closeErr != nil {
-		return "", fmt.Errorf("closing response: %w", closeErr)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("server returned %d: %s", resp.StatusCode, string(raw))
-	}
-	var body struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return "", fmt.Errorf("decoding response: %w", err)
-	}
-	return body.AccessToken, nil
+	return *resp.JSON200.AccessToken, nil
 }

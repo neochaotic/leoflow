@@ -44,8 +44,12 @@ func TestObservabilityHandler(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("/readyz degraded = %d, want 503", rec.Code)
 		}
-		if !strings.Contains(rec.Body.String(), "postgres") || !strings.Contains(rec.Body.String(), "connection refused") {
-			t.Errorf("/readyz body should name the failed dep + error, got %q", rec.Body.String())
+		// Names the failed dep, but must not leak the raw error (audit H2).
+		if !strings.Contains(rec.Body.String(), "postgres") {
+			t.Errorf("/readyz body should name the failed dep, got %q", rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "connection refused") {
+			t.Errorf("/readyz leaked the raw dependency error, got %q", rec.Body.String())
 		}
 	})
 

@@ -258,16 +258,6 @@ paths:
         "503":
           description: Not ready
 
-  /metrics:
-    get:
-      summary: Prometheus metrics
-      tags: [Observability]
-      security: []
-      responses:
-        "200":
-          description: Prometheus exposition format
-          content: { text/plain: { schema: { type: string } } }
-
 components:
   securitySchemes:
     bearerAuth:

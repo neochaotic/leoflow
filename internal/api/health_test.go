@@ -42,10 +42,10 @@ func TestReadinessHandlerSurfacesDependencyHealth(t *testing.T) {
 		}
 	})
 
-	t.Run("one check fails → 503 with the dep name + error", func(t *testing.T) {
+	t.Run("one check fails → 503 with the dep name but NOT the raw error", func(t *testing.T) {
 		r := gin.New()
 		r.GET("/readyz", readinessHandler(map[string]HealthChecker{
-			"postgres": &fakeHealthCheck{err: errors.New("connection refused")},
+			"postgres": &fakeHealthCheck{err: errors.New("connection refused to secret.host")},
 		}))
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", http.NoBody))
@@ -56,8 +56,10 @@ func TestReadinessHandlerSurfacesDependencyHealth(t *testing.T) {
 		if !strings.Contains(body, "postgres") {
 			t.Errorf("body missing the failed dep name 'postgres': %q", body)
 		}
-		if !strings.Contains(body, "connection refused") {
-			t.Errorf("body missing the underlying error message: %q", body)
+		// The raw dependency error must NOT leak into an unauthenticated response
+		// (audit H2). It is logged server-side instead.
+		if strings.Contains(body, "connection refused") || strings.Contains(body, "secret.host") {
+			t.Errorf("body leaked the raw dependency error: %q", body)
 		}
 	})
 

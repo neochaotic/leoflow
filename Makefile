@@ -14,6 +14,7 @@ SQLC_VERSION          ?= latest
 GOCYCLO_VERSION       ?= latest
 INEFFASSIGN_VERSION   ?= latest
 MISSPELL_VERSION      ?= latest
+OAPI_CODEGEN_VERSION  ?= v2.8.0
 
 # ─── Pinned Airflow UI (see ADR 0017 / docs/ui-compatibility.md) ───
 AIRFLOW_UI_VERSION ?= 3.2.1
@@ -283,6 +284,16 @@ sqlc: ## Regenerate sqlc code
 .PHONY: proto
 proto: ## Regenerate protobuf/gRPC code from proto/ via buf
 	buf generate
+
+.PHONY: pkg-client
+pkg-client: ## Regenerate the typed /api/v2 client in pkg/client from the OpenAPI spec
+	go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION) \
+		-config pkg/client/oapi-codegen.yaml docs/api/openapi.yaml
+
+.PHONY: pkg-client-check
+pkg-client-check: pkg-client ## Anti-drift: regenerate pkg/client in place and fail if it changed
+	@git diff --exit-code -- pkg/client/client.gen.go || \
+		{ echo "pkg/client/client.gen.go is out of date — run 'make pkg-client' and commit"; exit 1; }
 
 .PHONY: gen-connectors
 gen-connectors: ## Regenerate internal/connectors/catalog.json from the pinned providers (ADR 0039)

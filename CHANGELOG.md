@@ -6,6 +6,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A generated, typed Go client for the `/api/v2` surface (`pkg/client`)** — the
+  single control-plane client the CLI, the coming MCP server, and smoke tests
+  share instead of hand-rolling HTTP (ADR 0050). Generated from the OpenAPI spec
+  with `oapi-codegen` (`make pkg-client`); CI fails on drift. The public OpenAPI
+  spec now carries an `operationId` on every operation, so any consumer's code
+  generator produces stable, idiomatic method names (`ListDagRuns`, `GetTaskLogs`,
+  …). `leoflow auth create-token` / `login` now go through this client.
+
 ### Security
 
 - **Control-plane and migration-Job pods now set `seccompProfile: RuntimeDefault`**

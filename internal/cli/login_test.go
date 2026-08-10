@@ -17,6 +17,7 @@ func TestLoginPersistsTokenAndServer(t *testing.T) {
 		if r.URL.Path != "/auth/token" {
 			t.Errorf("login posted to %q, want /auth/token", r.URL.Path)
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"access_token":"jwt-login"}`)
 	}))
 	defer srv.Close()
@@ -45,6 +46,7 @@ func TestLoginPersistsTokenAndServer(t *testing.T) {
 
 func TestLoginUsesConfigServerWhenFlagOmitted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"access_token":"jwt-from-config"}`)
 	}))
 	defer srv.Close()

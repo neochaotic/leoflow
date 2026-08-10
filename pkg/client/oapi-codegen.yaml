@@ -1,0 +1,7 @@
+# oapi-codegen config for the typed /api/v2 client (ADR 0050 D8).
+# Regenerate with `make pkg-client`; drift is caught by `make pkg-client-check`.
+package: client
+output: pkg/client/client.gen.go
+generate:
+  models: true
+  client: true

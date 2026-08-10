@@ -52,4 +52,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0047: Deprecate the native inline http_api; run HTTP through the generic pod executor](adr/0047-deprecate-native-inline-http.md)
 - [ADR 0048: The control plane executes no user-influenced code or network requests](adr/0048-no-user-code-in-control-plane.md)
 - [ADR 0049: Split the API/UI and scheduler into separate roles of one binary](adr/0049-split-api-and-scheduler-roles.md)
+- [ADR 0050: Model Context Protocol (MCP) server](adr/0050-mcp-server.md)
 <!-- END ADR INDEX -->

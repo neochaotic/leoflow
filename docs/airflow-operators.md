@@ -212,6 +212,18 @@ value from an untrusted `conf` cannot inject shell — write interpolations unqu
 (`--name {{ params.x }}`, not `--name "{{ params.x }}"`). See
 [DAG authoring](dag-authoring.md) (issue #489).
 
+> **Security — the auto-quoting is the native `bash` path only.** A captured
+> provider operator (`airflow_operator`) renders its `template_fields` with
+> Airflow's own Jinja, exactly as upstream Airflow does — leoflow does **not**
+> (and cannot, without breaking non-shell operators and Airflow parity) inject
+> `shlex.quote` into that render. So if you use a provider operator that executes
+> a shell (e.g. a `BashOperator`) and template an **untrusted** value into a
+> shell field — `params`/`conf` supplied by anyone with `execute:dag` — the same
+> rules as upstream Airflow apply: quote it yourself, or, preferably, pass the
+> value through the environment (`$AIRFLOW_VAR_*`, `$AIRFLOW_CONN_*`, an env kwarg)
+> instead of rendering it into the command string. Trusted, author-written
+> template structure is fine; untrusted interpolated values are the hazard.
+
 ## Not yet supported (loud, not silent)
 
 Capabilities that need scheduler/control-plane work are rejected loudly rather

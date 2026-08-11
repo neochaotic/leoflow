@@ -283,6 +283,57 @@ paths:
               schema: { $ref: "#/components/schemas/XComEntry" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v2/dagSources/{dag_id}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: Get a DAG's source (the dag.py text)
+      operationId: getDagSource
+      tags: [DAGs]
+      responses:
+        "200":
+          description: DAG source
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DagSource" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v2/monitor/health:
+    get:
+      summary: Control-plane health (Airflow HealthInfoResponse shape)
+      operationId: getMonitorHealth
+      tags: [Monitor]
+      responses:
+        "200":
+          description: Component health
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthInfo" }
+
+  /api/v2/monitor/executor:
+    get:
+      summary: Executor capability and configuration
+      operationId: getMonitorExecutor
+      tags: [Monitor]
+      responses:
+        "200":
+          description: Executor info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExecutorInfo" }
+
+  /api/v2/version:
+    get:
+      summary: Control-plane version (Airflow VersionInfo shape)
+      operationId: getVersion
+      tags: [Monitor]
+      responses:
+        "200":
+          description: Version info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionInfo" }
+
   /healthz:
     get:
       summary: Liveness probe
@@ -426,6 +477,44 @@ components:
           type: array
           items: { $ref: "#/components/schemas/DagVersion" }
         total_entries: { type: integer }
+
+    DagSource:
+      type: object
+      properties:
+        content: { type: string, description: "The dag.py source text (compiled-spec JSON fallback for pre-source-capture versions)." }
+        dag_id: { type: string }
+        version_number: { type: integer }
+        dag_display_name: { type: string }
+
+    ComponentHealth:
+      type: object
+      properties:
+        status: { type: string }
+        latest_scheduler_heartbeat: { type: string, nullable: true }
+        latest_triggerer_heartbeat: { type: string, nullable: true }
+        latest_dag_processor_heartbeat: { type: string, nullable: true }
+
+    HealthInfo:
+      type: object
+      properties:
+        metadatabase: { $ref: "#/components/schemas/ComponentHealth" }
+        scheduler: { $ref: "#/components/schemas/ComponentHealth" }
+        triggerer: { $ref: "#/components/schemas/ComponentHealth" }
+        dag_processor: { $ref: "#/components/schemas/ComponentHealth" }
+
+    ExecutorInfo:
+      type: object
+      properties:
+        pod_dispatch_enabled: { type: boolean }
+        task_namespace: { type: string }
+        agent_control_plane_addr: { type: string }
+        execution_modes: { type: array, items: { type: string } }
+
+    VersionInfo:
+      type: object
+      properties:
+        version: { type: string }
+        git_version: { type: string }
 
     DAGUpdate:
       type: object

@@ -137,6 +137,14 @@ type ClearTaskInstancesRequest struct {
 	TaskIds      *[]string `json:"task_ids,omitempty"`
 }
 
+// ComponentHealth defines model for ComponentHealth.
+type ComponentHealth struct {
+	LatestDagProcessorHeartbeat *string `json:"latest_dag_processor_heartbeat,omitempty"`
+	LatestSchedulerHeartbeat    *string `json:"latest_scheduler_heartbeat,omitempty"`
+	LatestTriggererHeartbeat    *string `json:"latest_triggerer_heartbeat,omitempty"`
+	Status                      *string `json:"status,omitempty"`
+}
+
 // DAG defines model for DAG.
 type DAG struct {
 	Catchup                  *bool                   `json:"catchup,omitempty"`
@@ -204,6 +212,15 @@ type DAGUpdate struct {
 	IsPaused *bool `json:"is_paused,omitempty"`
 }
 
+// DagSource defines model for DagSource.
+type DagSource struct {
+	// Content The dag.py source text (compiled-spec JSON fallback for pre-source-capture versions).
+	Content        *string `json:"content,omitempty"`
+	DagDisplayName *string `json:"dag_display_name,omitempty"`
+	DagId          *string `json:"dag_id,omitempty"`
+	VersionNumber  *int    `json:"version_number,omitempty"`
+}
+
 // DagVersion defines model for DagVersion.
 type DagVersion struct {
 	BundleName     *string    `json:"bundle_name,omitempty"`
@@ -229,6 +246,22 @@ type Error struct {
 	Status   *int    `json:"status,omitempty"`
 	Title    *string `json:"title,omitempty"`
 	Type     *string `json:"type,omitempty"`
+}
+
+// ExecutorInfo defines model for ExecutorInfo.
+type ExecutorInfo struct {
+	AgentControlPlaneAddr *string   `json:"agent_control_plane_addr,omitempty"`
+	ExecutionModes        *[]string `json:"execution_modes,omitempty"`
+	PodDispatchEnabled    *bool     `json:"pod_dispatch_enabled,omitempty"`
+	TaskNamespace         *string   `json:"task_namespace,omitempty"`
+}
+
+// HealthInfo defines model for HealthInfo.
+type HealthInfo struct {
+	DagProcessor *ComponentHealth `json:"dag_processor,omitempty"`
+	Metadatabase *ComponentHealth `json:"metadatabase,omitempty"`
+	Scheduler    *ComponentHealth `json:"scheduler,omitempty"`
+	Triggerer    *ComponentHealth `json:"triggerer,omitempty"`
 }
 
 // TaskInstance defines model for TaskInstance.
@@ -272,6 +305,12 @@ type TokenResponse struct {
 
 	// TokenType Example: bearer
 	TokenType *string `json:"token_type,omitempty"`
+}
+
+// VersionInfo defines model for VersionInfo.
+type VersionInfo struct {
+	GitVersion *string `json:"git_version,omitempty"`
+	Version    *string `json:"version,omitempty"`
 }
 
 // XComEntry defines model for XComEntry.
@@ -410,6 +449,11 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 // The interface specification for the client above.
 type ClientInterface interface {
 
+	// GetDagSource Get a DAG's source (the dag.py text)
+	//
+	// Corresponds with GET /api/v2/dagSources/{dag_id} (the `GetDagSource` operationId).
+	GetDagSource(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListDags List DAGs
 	//
 	// Corresponds with GET /api/v2/dags (the `ListDags` operationId).
@@ -497,6 +541,21 @@ type ClientInterface interface {
 	// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
 	GetDagVersion(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetMonitorExecutor Executor capability and configuration
+	//
+	// Corresponds with GET /api/v2/monitor/executor (the `GetMonitorExecutor` operationId).
+	GetMonitorExecutor(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetMonitorHealth Control-plane health (Airflow HealthInfoResponse shape)
+	//
+	// Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
+	GetMonitorHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetVersion Control-plane version (Airflow VersionInfo shape)
+	//
+	// Corresponds with GET /api/v2/version (the `GetVersion` operationId).
+	GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetXcomEntry Read XCom value (read-only proxy for the Redis backend)
 	//
 	// Corresponds with GET /api/v2/xcoms/{dag_id}/{dag_run_id}/{task_id}/{key} (the `GetXcomEntry` operationId).
@@ -525,6 +584,21 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /readyz (the `GetReadyz` operationId).
 	GetReadyz(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+// GetDagSource Get a DAG's source (the dag.py text)
+//
+// Corresponds with GET /api/v2/dagSources/{dag_id} (the `GetDagSource` operationId).
+func (c *Client) GetDagSource(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetDagSourceRequest(c.Server, dagId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 // ListDags List DAGs
@@ -764,6 +838,51 @@ func (c *Client) GetDagVersion(ctx context.Context, dagId DagID, versionNumber i
 	return c.Client.Do(req)
 }
 
+// GetMonitorExecutor Executor capability and configuration
+//
+// Corresponds with GET /api/v2/monitor/executor (the `GetMonitorExecutor` operationId).
+func (c *Client) GetMonitorExecutor(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMonitorExecutorRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetMonitorHealth Control-plane health (Airflow HealthInfoResponse shape)
+//
+// Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
+func (c *Client) GetMonitorHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMonitorHealthRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetVersion Control-plane version (Airflow VersionInfo shape)
+//
+// Corresponds with GET /api/v2/version (the `GetVersion` operationId).
+func (c *Client) GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetVersionRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // GetXcomEntry Read XCom value (read-only proxy for the Redis backend)
 //
 // Corresponds with GET /api/v2/xcoms/{dag_id}/{dag_run_id}/{task_id}/{key} (the `GetXcomEntry` operationId).
@@ -841,6 +960,40 @@ func (c *Client) GetReadyz(ctx context.Context, reqEditors ...RequestEditorFn) (
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewGetDagSourceRequest constructs an http.Request for the GetDagSource method
+func NewGetDagSourceRequest(server string, dagId DagID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "dag_id", dagId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/dagSources/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewListDagsRequest constructs an http.Request for the ListDags method
@@ -1465,6 +1618,87 @@ func NewGetDagVersionRequest(server string, dagId DagID, versionNumber int) (*ht
 	return req, nil
 }
 
+// NewGetMonitorExecutorRequest constructs an http.Request for the GetMonitorExecutor method
+func NewGetMonitorExecutorRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/monitor/executor")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetMonitorHealthRequest constructs an http.Request for the GetMonitorHealth method
+func NewGetMonitorHealthRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/monitor/health")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetVersionRequest constructs an http.Request for the GetVersion method
+func NewGetVersionRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/version")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetXcomEntryRequest constructs an http.Request for the GetXcomEntry method
 func NewGetXcomEntryRequest(server string, dagId DagID, dagRunId DagRunID, taskId TaskID, key string) (*http.Request, error) {
 	var err error
@@ -1658,6 +1892,13 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 
+	// GetDagSourceWithResponse Get a DAG's source (the dag.py text)
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/dagSources/{dag_id} (the `GetDagSource` operationId).
+	GetDagSourceWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*GetDagSourceResponse, error)
+
 	// ListDagsWithResponse List DAGs
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -1763,6 +2004,27 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
 	GetDagVersionWithResponse(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*GetDagVersionResponse, error)
 
+	// GetMonitorExecutorWithResponse Executor capability and configuration
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/monitor/executor (the `GetMonitorExecutor` operationId).
+	GetMonitorExecutorWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMonitorExecutorResponse, error)
+
+	// GetMonitorHealthWithResponse Control-plane health (Airflow HealthInfoResponse shape)
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
+	GetMonitorHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMonitorHealthResponse, error)
+
+	// GetVersionWithResponse Control-plane version (Airflow VersionInfo shape)
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/version (the `GetVersion` operationId).
+	GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error)
+
 	// GetXcomEntryWithResponse Read XCom value (read-only proxy for the Redis backend)
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -1797,6 +2059,54 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /readyz (the `GetReadyz` operationId).
 	GetReadyzWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetReadyzResponse, error)
+}
+
+type GetDagSourceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *DagSource
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *NotFound
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetDagSourceResponse) GetJSON200() *DagSource {
+	return r.JSON200
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r GetDagSourceResponse) GetJSON404() *NotFound {
+	return r.JSON404
+}
+
+// GetBody returns the raw response body bytes
+func (r GetDagSourceResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetDagSourceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetDagSourceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetDagSourceResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type ListDagsResponse struct {
@@ -2305,6 +2615,129 @@ func (r GetDagVersionResponse) ContentType() string {
 	return ""
 }
 
+type GetMonitorExecutorResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ExecutorInfo
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetMonitorExecutorResponse) GetJSON200() *ExecutorInfo {
+	return r.JSON200
+}
+
+// GetBody returns the raw response body bytes
+func (r GetMonitorExecutorResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMonitorExecutorResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMonitorExecutorResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMonitorExecutorResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetMonitorHealthResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *HealthInfo
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetMonitorHealthResponse) GetJSON200() *HealthInfo {
+	return r.JSON200
+}
+
+// GetBody returns the raw response body bytes
+func (r GetMonitorHealthResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMonitorHealthResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMonitorHealthResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMonitorHealthResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetVersionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *VersionInfo
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetVersionResponse) GetJSON200() *VersionInfo {
+	return r.JSON200
+}
+
+// GetBody returns the raw response body bytes
+func (r GetVersionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetVersionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetVersionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetVersionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetXcomEntryResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2467,6 +2900,19 @@ func (r GetReadyzResponse) ContentType() string {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
 	return ""
+}
+
+// GetDagSourceWithResponse Get a DAG's source (the dag.py text)
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/dagSources/{dag_id} (the `GetDagSource` operationId).
+func (c *ClientWithResponses) GetDagSourceWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*GetDagSourceResponse, error) {
+	rsp, err := c.GetDagSource(ctx, dagId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetDagSourceResponse(rsp)
 }
 
 // ListDagsWithResponse List DAGs
@@ -2664,6 +3110,45 @@ func (c *ClientWithResponses) GetDagVersionWithResponse(ctx context.Context, dag
 	return ParseGetDagVersionResponse(rsp)
 }
 
+// GetMonitorExecutorWithResponse Executor capability and configuration
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/monitor/executor (the `GetMonitorExecutor` operationId).
+func (c *ClientWithResponses) GetMonitorExecutorWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMonitorExecutorResponse, error) {
+	rsp, err := c.GetMonitorExecutor(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMonitorExecutorResponse(rsp)
+}
+
+// GetMonitorHealthWithResponse Control-plane health (Airflow HealthInfoResponse shape)
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
+func (c *ClientWithResponses) GetMonitorHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMonitorHealthResponse, error) {
+	rsp, err := c.GetMonitorHealth(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMonitorHealthResponse(rsp)
+}
+
+// GetVersionWithResponse Control-plane version (Airflow VersionInfo shape)
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/version (the `GetVersion` operationId).
+func (c *ClientWithResponses) GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error) {
+	rsp, err := c.GetVersion(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetVersionResponse(rsp)
+}
+
 // GetXcomEntryWithResponse Read XCom value (read-only proxy for the Redis backend)
 //
 // Returns a wrapper object for the known response body format(s).
@@ -2727,6 +3212,39 @@ func (c *ClientWithResponses) GetReadyzWithResponse(ctx context.Context, reqEdit
 		return nil, err
 	}
 	return ParseGetReadyzResponse(rsp)
+}
+
+// ParseGetDagSourceResponse parses an HTTP response from a GetDagSourceWithResponse call
+func ParseGetDagSourceResponse(rsp *http.Response) (*GetDagSourceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetDagSourceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DagSource
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseListDagsResponse parses an HTTP response from a ListDagsWithResponse call
@@ -3046,6 +3564,84 @@ func ParseGetDagVersionResponse(rsp *http.Response) (*GetDagVersionResponse, err
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetMonitorExecutorResponse parses an HTTP response from a GetMonitorExecutorWithResponse call
+func ParseGetMonitorExecutorResponse(rsp *http.Response) (*GetMonitorExecutorResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMonitorExecutorResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ExecutorInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetMonitorHealthResponse parses an HTTP response from a GetMonitorHealthWithResponse call
+func ParseGetMonitorHealthResponse(rsp *http.Response) (*GetMonitorHealthResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMonitorHealthResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest HealthInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetVersionResponse parses an HTTP response from a GetVersionWithResponse call
+func ParseGetVersionResponse(rsp *http.Response) (*GetVersionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetVersionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest VersionInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	}
 

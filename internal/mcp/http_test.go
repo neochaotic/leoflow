@@ -49,7 +49,7 @@ func TestHTTPTransportPassesTokenThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	srv := NewServer(base, cp.URL, "test")
+	srv := NewServer(base, cp.URL, "test", true) // http transport: per-request bearer
 
 	// The MCP server, served over Streamable HTTP exactly as cmd/leoflow-mcp does.
 	mcpHandler := mcpsdk.NewStreamableHTTPHandler(

@@ -14,14 +14,14 @@ import (
 	apiclient "github.com/neochaotic/leoflow/pkg/client"
 )
 
-// resourceLogTail bounds a log resource read (R16); a task log an agent fetches
+// resourceLogTail bounds a log resource read; a task log an agent fetches
 // wholesale still must not blow the context window.
 const resourceLogTail = 200
 
-// registerResources wires the read-only addressable resources (ADR 0050 D7/R12).
+// registerResources wires the read-only addressable resources (ADR 0050 D7).
 // The agent chooses the URI; the control plane authorizes each read via the
 // pass-through token, so a resource can only surface what the caller already may
-// see. Templates carry their parameters IN the URI (R05).
+// see. Templates carry their parameters IN the URI.
 func (h *handlers) registerResources(s *mcpsdk.Server) {
 	s.AddResource(&mcpsdk.Resource{
 		Name: "dags", URI: "dag://list", MIMEType: "application/json",
@@ -54,7 +54,7 @@ func (h *handlers) registerResources(s *mcpsdk.Server) {
 }
 
 // maxSourceBytes caps a dag.py source resource read so a large DAG file can't
-// blow the agent's context window (R40).
+// blow the agent's context window.
 const maxSourceBytes = 64 * 1024
 
 func (h *handlers) readDagSource(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
@@ -62,7 +62,10 @@ func (h *handlers) readDagSource(ctx context.Context, req *mcpsdk.ReadResourceRe
 	if err != nil {
 		return nil, err
 	}
-	api := apiFor(h, req)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := api.GetDagSourceWithResponse(ctx, p[0])
 	if err != nil {
 		return nil, fmt.Errorf("fetching dag source: %w", err)
@@ -80,7 +83,7 @@ func (h *handlers) readDagSource(ctx context.Context, req *mcpsdk.ReadResourceRe
 }
 
 // maxSpecBytes guards a dag.json resource read; the compiled artifact is small
-// in practice, but a runaway must not blow the context window (R40). JSON can't
+// in practice, but a runaway must not blow the context window. JSON can't
 // be safely truncated, so an oversize spec yields a structured note instead.
 const maxSpecBytes = 128 * 1024
 
@@ -89,7 +92,10 @@ func (h *handlers) readDagSpec(ctx context.Context, req *mcpsdk.ReadResourceRequ
 	if err != nil {
 		return nil, err
 	}
-	api := apiFor(h, req)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := api.GetDagSpecWithResponse(ctx, p[0])
 	if err != nil {
 		return nil, fmt.Errorf("fetching dag spec: %w", err)
@@ -102,18 +108,50 @@ func (h *handlers) readDagSpec(ctx context.Context, req *mcpsdk.ReadResourceRequ
 			"error": "compiled spec too large for a resource read", "bytes": len(resp.Body), "dag_id": p[0],
 		})
 	}
-	// Return the compiled dag.json verbatim (already a clean structured artifact).
-	return &mcpsdk.ReadResourceResult{Contents: []*mcpsdk.ResourceContents{{
-		URI: req.Params.URI, MIMEType: "application/json", Text: string(resp.Body),
-	}}}, nil
+	// The spec is structured, but its string values (task descriptions, owners,
+	// tags) are author-controlled free text; an ANSI/control byte stored as the JSON escape \u001b
+	// would decode to a live escape in the agent's context (D10). Decode, strip
+	// control bytes from every string value, and re-encode — and treat a
+	// non-JSON 200 as an error rather than forwarding it as application/json.
+	var spec any
+	if err := json.Unmarshal(resp.Body, &spec); err != nil {
+		return nil, fmt.Errorf("control plane returned a non-JSON spec for %s: %w", p[0], err)
+	}
+	return jsonResource(req.Params.URI, sanitizeJSONValue(spec))
+}
+
+// sanitizeJSONValue recursively strips control/ANSI bytes from every string in a
+// decoded JSON tree (map values, slice elements, nested strings), leaving
+// structure and non-string scalars untouched. Map keys are field names from the
+// compiler, not author free text, so they are left as-is.
+func sanitizeJSONValue(v any) any {
+	switch t := v.(type) {
+	case string:
+		return stripControl(t)
+	case []any:
+		for i := range t {
+			t[i] = sanitizeJSONValue(t[i])
+		}
+		return t
+	case map[string]any:
+		for k, val := range t {
+			t[k] = sanitizeJSONValue(val)
+		}
+		return t
+	default:
+		return v
+	}
 }
 
 // readHealth composes the three monitor endpoints into one snapshot, best-effort
 // per section: a section that fails is omitted rather than failing the whole
-// read (structured degradation, R39), and an all-empty result is an error so the
+// read (structured degradation), and an all-empty result is an error so the
 // agent knows the control plane is unreachable rather than "healthy".
 func (h *handlers) readHealth(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
-	api := apiFor(h, req)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, err
+	}
 	snap := map[string]any{}
 	if r, err := api.GetMonitorHealthWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
 		snap["health"] = r.JSON200
@@ -131,7 +169,11 @@ func (h *handlers) readHealth(ctx context.Context, req *mcpsdk.ReadResourceReque
 }
 
 func (h *handlers) readDagList(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
-	out, err := h.fetchDagList(ctx, apiFor(h, req), listDagsInput{})
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, err
+	}
+	out, err := h.fetchDagList(ctx, api, listDagsInput{})
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +185,10 @@ func (h *handlers) readRunDetail(ctx context.Context, req *mcpsdk.ReadResourceRe
 	if err != nil {
 		return nil, err
 	}
-	api := apiFor(h, req)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := api.GetDagRunWithResponse(ctx, p[0], p[1])
 	if err != nil {
 		return nil, fmt.Errorf("fetching run: %w", err)
@@ -179,7 +224,10 @@ func (h *handlers) readTaskInstances(ctx context.Context, req *mcpsdk.ReadResour
 	if err != nil {
 		return nil, err
 	}
-	api := apiFor(h, req)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := api.ListTaskInstancesWithResponse(ctx, p[0], p[1])
 	if err != nil {
 		return nil, fmt.Errorf("listing task instances: %w", err)
@@ -212,7 +260,10 @@ func (h *handlers) readTaskLog(ctx context.Context, req *mcpsdk.ReadResourceRequ
 	if err != nil || try < 1 {
 		return nil, fmt.Errorf("uri %q: try_number must be a positive integer", req.Params.URI)
 	}
-	api := apiFor(h, req)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := api.GetTaskLogsWithResponse(ctx, p[0], p[1], p[2], try)
 	if err != nil {
 		return nil, fmt.Errorf("fetching task log: %w", err)
@@ -227,7 +278,7 @@ func (h *handlers) readTaskLog(ctx context.Context, req *mcpsdk.ReadResourceRequ
 
 // uriParams strips scheme+prefix from a resource URI and returns exactly n
 // non-empty, URL-decoded path segments. A path segment supplied by the agent is
-// data, never a raw selector (R05): it is decoded here and passed to the typed
+// data, never a raw selector: it is decoded here and passed to the typed
 // client, which URL-encodes it back into the request path — so a "../" or a stray
 // slash cannot escape the intended endpoint.
 func uriParams(uri, prefix string, n int) ([]string, error) {

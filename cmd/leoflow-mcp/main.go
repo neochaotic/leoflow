@@ -41,30 +41,35 @@ func run() int {
 		"listen address for the http transport")
 	flag.Parse()
 
-	// On stdio the process carries one token (LEOFLOW_TOKEN). On http each request
-	// carries its own bearer (pass-through, ADR 0050 D9), so the base client is
-	// only a fallback; serverURL lets the server mint a per-request client.
-	apiClient, err := apiclient.New(server, os.Getenv("LEOFLOW_TOKEN"))
+	if transport != "stdio" && transport != "http" {
+		slog.Error("unknown transport (want stdio | http)", "transport", transport)
+		return 2
+	}
+	httpMode := transport == "http"
+
+	// stdio: the process token IS the caller's identity. http: identity is the
+	// per-request bearer (ADR 0050 D9), so the base client holds NO ambient token
+	// — a bearer-less request is refused, never served with a process credential.
+	token := os.Getenv("LEOFLOW_TOKEN")
+	if httpMode {
+		token = ""
+	}
+	apiClient, err := apiclient.New(server, token)
 	if err != nil {
 		slog.Error("building control-plane client", "error", err)
 		return 1
 	}
-	srv := mcp.NewServer(apiClient, server, version)
+	srv := mcp.NewServer(apiClient, server, version, httpMode)
 
-	switch transport {
-	case "stdio":
-		slog.Info("leoflow-mcp starting", "server", server, "transport", "stdio", "version", version)
-		if err := srv.Run(context.Background(), &mcpsdk.StdioTransport{}); err != nil {
-			slog.Error("mcp server exited", "error", err)
-			return 1
-		}
-		return 0
-	case "http":
+	if httpMode {
 		return runHTTP(srv, listen, server)
-	default:
-		slog.Error("unknown transport (want stdio | http)", "transport", transport)
-		return 2
 	}
+	slog.Info("leoflow-mcp starting", "server", server, "transport", "stdio", "version", version)
+	if err := srv.Run(context.Background(), &mcpsdk.StdioTransport{}); err != nil {
+		slog.Error("mcp server exited", "error", err)
+		return 1
+	}
+	return 0
 }
 
 // runHTTP serves the MCP over Streamable HTTP at POST /mcp. Stateless: no session

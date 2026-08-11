@@ -92,6 +92,24 @@ jobs:
           fi
 
   # ─────────────────────────────────────────────────────────────────────
+  # The MCP server (ADR 0050) is exercised end-to-end against the REAL binary:
+  # the test builds leoflow-mcp and drives it over the actual MCP protocol
+  # (stdio) — catching wiring/transport bugs the in-process handler tests miss.
+  # Hermetic (the control plane is an httptest server), so it runs in CI.
+  # ─────────────────────────────────────────────────────────────────────
+  mcp-e2e:
+    name: MCP server e2e (real binary over stdio)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: MCP binary e2e
+        run: go test -tags e2e -run TestMCPBinaryEndToEnd ./internal/mcp/
+
+  # ─────────────────────────────────────────────────────────────────────
   # Lint the GitHub Actions workflows themselves (actionlint). A malformed
   # workflow can silently fail to trigger or break a release; catching schema and
   # expression errors here keeps the CI/release workflows valid before they merge.

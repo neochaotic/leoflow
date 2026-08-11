@@ -47,6 +47,7 @@ func NewServer(api *apiclient.ClientWithResponses, version string) *mcpsdk.Serve
 		Name:        "search_logs",
 		Description: "Search one task attempt's log for a case-insensitive substring, returning the matching lines (with line numbers) instead of the whole log.",
 	}, h.searchLogs)
+	h.registerResources(s)
 	return s
 }
 
@@ -69,6 +70,13 @@ type listDagsOutput struct {
 // forwarding the verbose upstream payload (ADR 0050 R18), and surfaces a
 // non-200 as an error so the agent never mistakes a failed call for "no DAGs".
 func (h *handlers) listDags(ctx context.Context, _ *mcpsdk.CallToolRequest, in listDagsInput) (*mcpsdk.CallToolResult, listDagsOutput, error) {
+	out, err := h.fetchDagList(ctx, in)
+	return nil, out, err
+}
+
+// fetchDagList is the shared read used by both the list_dags tool and the
+// dag://list resource: it calls /api/v2/dags and shapes a compact list.
+func (h *handlers) fetchDagList(ctx context.Context, in listDagsInput) (listDagsOutput, error) {
 	limit := in.Limit
 	if limit <= 0 {
 		limit = defaultDagLim
@@ -84,10 +92,10 @@ func (h *handlers) listDags(ctx context.Context, _ *mcpsdk.CallToolRequest, in l
 
 	resp, err := h.api.ListDagsWithResponse(ctx, params)
 	if err != nil {
-		return nil, listDagsOutput{}, fmt.Errorf("listing dags: %w", err)
+		return listDagsOutput{}, fmt.Errorf("listing dags: %w", err)
 	}
 	if resp.StatusCode() != http.StatusOK || resp.JSON200 == nil {
-		return nil, listDagsOutput{}, fmt.Errorf("control plane returned %d listing dags", resp.StatusCode())
+		return listDagsOutput{}, fmt.Errorf("control plane returned %d listing dags", resp.StatusCode())
 	}
 
 	out := listDagsOutput{}
@@ -103,7 +111,7 @@ func (h *handlers) listDags(ctx context.Context, _ *mcpsdk.CallToolRequest, in l
 			})
 		}
 	}
-	return nil, out, nil
+	return out, nil
 }
 
 // deref returns the pointed-to value or the zero value when nil — the generated

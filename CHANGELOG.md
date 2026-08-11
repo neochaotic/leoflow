@@ -14,7 +14,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   each failed task's truncated, sanitized log tail) — reaching the control plane
   only through `pkg/client` (the caller's token is
   passed through; the server holds no privilege of its own). Optional and never
-  part of `leoflow-server`. More read resources and the Pro HTTP transport follow.
+  part of `leoflow-server`. It also serves addressable read resources —
+  `dag://list`, `run://detail/{dag_id}/{run_id}`, `task://instances/{dag_id}/{run_id}`,
+  and `log://task/{dag_id}/{run_id}/{task_id}/{try_number}` (truncated + sanitized).
+  The Pro HTTP transport and authoring follow.
 - **A generated, typed Go client for the `/api/v2` surface (`pkg/client`)** — the
   single control-plane client the CLI, the coming MCP server, and smoke tests
   share instead of hand-rolling HTTP (ADR 0050). Generated from the OpenAPI spec

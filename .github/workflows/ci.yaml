@@ -98,7 +98,7 @@ jobs:
   # Hermetic (the control plane is an httptest server), so it runs in CI.
   # ─────────────────────────────────────────────────────────────────────
   mcp-e2e:
-    name: MCP server e2e (real binary over stdio)
+    name: MCP server e2e (real binary over stdio + http)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -107,7 +107,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: MCP binary e2e
-        run: go test -tags e2e -run TestMCPBinaryEndToEnd ./internal/mcp/
+        run: go test -tags e2e ./internal/mcp/
 
   # ─────────────────────────────────────────────────────────────────────
   # Lint the GitHub Actions workflows themselves (actionlint). A malformed

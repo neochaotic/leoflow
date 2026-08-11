@@ -13,11 +13,13 @@ package mcp_test
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +58,47 @@ func buildMCPBinary(t *testing.T) string {
 		t.Fatalf("building leoflow-mcp: %v\n%s", err, out)
 	}
 	return bin
+}
+
+// freePort asks the OS for an unused TCP port and hands it back. There is an
+// inherent bind race, but the window is tiny and this is standard for spawning a
+// child that needs a known address.
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+	return l.Addr().String()
+}
+
+// waitHealthy polls the binary's /healthz until it answers or the deadline hits.
+func waitHealthy(t *testing.T, ctx context.Context, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/healthz", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("leoflow-mcp http transport never became healthy")
+}
+
+type e2eAuthRT struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (a e2eAuthRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	r.Header.Set("Authorization", "Bearer "+a.token)
+	return a.base.RoundTrip(r)
 }
 
 func textOf(contents []mcpsdk.Content) string {
@@ -127,5 +170,67 @@ func TestMCPBinaryEndToEnd(t *testing.T) {
 	}
 	if len(rr.Contents) == 0 || !strings.Contains(rr.Contents[0].Text, `"state":"failed"`) {
 		t.Errorf("run://detail content missing state; got %+v", rr.Contents)
+	}
+}
+
+// TestMCPBinaryHTTPTransport is the Pro-transport gate (ADR 0050 Phase 3): the
+// real binary is launched with --transport http, a real MCP client connects over
+// Streamable HTTP carrying its own bearer, and the token reaches the control
+// plane on the resulting tool call — the whole per-request pass-through (D9)
+// through the actual binary, not the in-process handler.
+func TestMCPBinaryHTTPTransport(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		gotAuth string
+	)
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/dags" {
+			mu.Lock()
+			gotAuth = r.Header.Get("Authorization")
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"dags":[{"dag_id":"etl","is_paused":false}],"total_entries":1}`))
+	}))
+	defer cp.Close()
+	bin := buildMCPBinary(t)
+	addr := freePort(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "--transport", "http", "--listen", addr, "--server", cp.URL)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting http binary: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+	waitHealthy(t, ctx, addr)
+
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "e2e-http-client", Version: "0"}, nil)
+	transport := &mcpsdk.StreamableClientTransport{
+		Endpoint:   "http://" + addr + "/mcp",
+		HTTPClient: &http.Client{Transport: e2eAuthRT{token: "usertok", base: http.DefaultTransport}},
+	}
+	sess, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("connecting over http: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	res, err := sess.CallTool(ctx, &mcpsdk.CallToolParams{Name: "list_dags"})
+	if err != nil {
+		t.Fatalf("CallTool list_dags over http: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("list_dags returned an error result: %s", textOf(res.Content))
+	}
+	mu.Lock()
+	seen := gotAuth
+	mu.Unlock()
+	if seen != "Bearer usertok" {
+		t.Errorf("caller token did not reach the control plane via the http binary; saw %q", seen)
 	}
 }

@@ -25,6 +25,26 @@ connectors:
 The PAT round-trip (reserved characters) + host + `http_path` Extra are pinned by
 `TestDatabricksConnectionURIShapeIntegration`.
 
+## dbt auth: PAT or OAuth M2M (service principal)
+
+When a dbt task uses this connection, Leoflow generates its `profiles.yml` from the
+connection at runtime (nothing baked in the image). Two auth modes are supported:
+
+| Mode | What to set in Extra | dbt profile emitted |
+|---|---|---|
+| **PAT** (default) | `http_path`, and the token in Password (or `token` in Extra) | `token: <pat>` |
+| **OAuth M2M** (service principal) | `http_path`, `client_id`, `client_secret` (and optionally `auth_type: oauth`) | `auth_type: oauth` + `client_id` + `client_secret` |
+
+```json
+// Extra for OAuth M2M — Databricks' recommended auth for automation/CI
+{"http_path": "/sql/1.0/warehouses/abc", "client_id": "…", "client_secret": "…", "auth_type": "oauth"}
+```
+
+OAuth M2M is selected whenever `client_id`/`client_secret` are present (or
+`auth_type: oauth` is explicit) and takes precedence over a PAT; the two are
+mutually exclusive, so exactly one lands in the profile. `client_secret` is part
+of Extra, which is encrypted at rest exactly like the PAT.
+
 ## Example DAG (copy-paste)
 
 Docs-only recipe (needs a real Databricks workspace). The hook is imported
@@ -75,7 +95,9 @@ connectors:
 
 - **Scope the PAT** to the workspace and rotate it regularly; it is encrypted at
   rest and never echoed back.
-- Prefer a **service principal** token over a personal one for production jobs.
+- Prefer a **service principal** over a personal identity for production jobs — for
+  dbt, that means OAuth M2M (`client_id`/`client_secret`) rather than a PAT (see
+  *dbt auth* above).
 - **Never `print()` the URI** — it carries the PAT.
 
 ## Related

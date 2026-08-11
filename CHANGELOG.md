@@ -8,6 +8,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Databricks dbt profiles support OAuth M2M (service principal).** A managed
+  Databricks connection whose extra carries `client_id`/`client_secret` (or an
+  explicit `auth_type: oauth`) now generates a `profiles.yml` using service-principal
+  OAuth M2M — Databricks' recommended auth for automation — instead of a Personal
+  Access Token. PATs keep working; OAuth wins when present (the two are mutually
+  exclusive). Same encrypted-at-rest, generated-in-pod delivery as before.
+
+### Documentation
+
+- **dbt: fused-group retry trade-off** — documented that retrying a `level`/`folder`
+  (fused) group re-runs the whole group, with guidance to use `granularity: node`
+  where per-model retry efficiency matters.
+- **dbt: baked manifest & Slim CI** — documented where the compiled `manifest.json`
+  lives and how it enables `state:modified+` Slim CI, plus an honest note on the two
+  capabilities still needed for a turnkey recipe.
+
 - **Experimental MCP server skeleton (`leoflow-mcp`)** — the first slice of the
   Model Context Protocol server (ADR 0050): a read-only, stdio server built on
   the official `modelcontextprotocol/go-sdk`, exposing `list_dags`, `diagnose_run`, and `search_logs` (one call: run state + failed tasks +

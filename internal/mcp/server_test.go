@@ -134,7 +134,7 @@ func TestNewServerRegistersListDags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	srv := NewServer(api, "test")
+	srv := NewServer(api, "", "test")
 
 	serverT, clientT := mcpsdk.NewInMemoryTransports()
 	_, err = srv.Connect(ctx, serverT, nil)
@@ -173,6 +173,62 @@ func testHandlers(t *testing.T, fn http.HandlerFunc) *handlers {
 		t.Fatalf("client: %v", err)
 	}
 	return &handlers{api: c}
+}
+
+// TestPerRequestTokenPassThrough: on a request carrying an Authorization header
+// (the HTTP transport), the handler builds a client with THAT token and the
+// control plane sees it — the pass-through the Pro transport relies on (D9).
+func TestPerRequestTokenPassThrough(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"dags":[],"total_entries":0}`)
+	}))
+	defer srv.Close()
+
+	base, err := apiclient.New(srv.URL, "") // base has NO token
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handlers{api: base, serverURL: srv.URL}
+	req := &mcpsdk.CallToolRequest{Extra: &mcpsdk.RequestExtra{
+		Header: http.Header{"Authorization": []string{"Bearer usertok"}},
+	}}
+	if _, _, err := h.listDags(context.Background(), req, listDagsInput{}); err != nil {
+		t.Fatalf("listDags: %v", err)
+	}
+	if gotAuth != "Bearer usertok" {
+		t.Errorf("per-request token not passed through; control plane saw %q", gotAuth)
+	}
+}
+
+// TestNoServerURLIgnoresHeader: with no serverURL (stdio mode), a stray
+// Authorization header is ignored and the base (process-token) client is used —
+// so stdio can't be tricked into re-tokening per request.
+func TestNoServerURLIgnoresHeader(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"dags":[],"total_entries":0}`)
+	}))
+	defer srv.Close()
+
+	base, err := apiclient.New(srv.URL, "basetok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handlers{api: base} // serverURL empty
+	req := &mcpsdk.CallToolRequest{Extra: &mcpsdk.RequestExtra{
+		Header: http.Header{"Authorization": []string{"Bearer usertok"}},
+	}}
+	if _, _, err := h.listDags(context.Background(), req, listDagsInput{}); err != nil {
+		t.Fatalf("listDags: %v", err)
+	}
+	if gotAuth != "Bearer basetok" {
+		t.Errorf("without serverURL the base token must be used; control plane saw %q", gotAuth)
+	}
 }
 
 // TestListDagsShapesOutput: the tool calls /api/v2/dags and returns a compact

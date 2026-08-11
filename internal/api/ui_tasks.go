@@ -242,4 +242,20 @@ func registerUITasks(r gin.IRouter, specs DagSpecReader) {
 	r.GET("/api/v2/dags/:dag_id/tasks", RequirePermission("read", "task"), tasksHandler(specs))
 	r.GET("/api/v2/dags/:dag_id/tasks/:task_id", RequirePermission("read", "task"), taskDetailHandler(specs))
 	r.GET("/api/v2/dagSources/:dag_id", RequirePermission("read", "dag"), dagSourceHandler(specs))
+	r.GET("/api/v2/dags/:dag_id/spec", RequirePermission("read", "dag"), dagSpecHandler(specs))
+}
+
+// dagSpecHandler implements GET /api/v2/dags/{dag_id}/spec: the compiled dag.json
+// artifact (the immutable spec the scheduler runs), for tools and agents that
+// need the structured graph rather than the dag.py source that dagSourceHandler
+// serves. The DAGSpec marshals with its own json tags.
+func dagSpecHandler(specs DagSpecReader) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		spec, err := specs.GetCurrentSpec(c.Request.Context(), tenantOf(c), c.Param("dag_id"))
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, spec)
+	}
 }

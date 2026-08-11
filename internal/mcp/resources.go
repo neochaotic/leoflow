@@ -43,6 +43,10 @@ func (h *handlers) registerResources(s *mcpsdk.Server) {
 		Name: "dag-source", URITemplate: "dag://source/{dag_id}", MIMEType: "text/plain",
 		Description: "A DAG's source (the dag.py text), sanitized and size-capped.",
 	}, h.readDagSource)
+	s.AddResourceTemplate(&mcpsdk.ResourceTemplate{
+		Name: "dag-spec", URITemplate: "dag://spec/{dag_id}", MIMEType: "application/json",
+		Description: "A DAG's compiled spec (the dag.json artifact: the structured task graph).",
+	}, h.readDagSpec)
 	s.AddResource(&mcpsdk.Resource{
 		Name: "control-plane-health", URI: "health://control-plane", MIMEType: "application/json",
 		Description: "Control-plane health: component status, executor capability, and version (best-effort per section).",
@@ -71,6 +75,34 @@ func (h *handlers) readDagSource(ctx context.Context, req *mcpsdk.ReadResourceRe
 	}
 	return &mcpsdk.ReadResourceResult{Contents: []*mcpsdk.ResourceContents{{
 		URI: req.Params.URI, MIMEType: "text/plain", Text: src,
+	}}}, nil
+}
+
+// maxSpecBytes guards a dag.json resource read; the compiled artifact is small
+// in practice, but a runaway must not blow the context window (R40). JSON can't
+// be safely truncated, so an oversize spec yields a structured note instead.
+const maxSpecBytes = 128 * 1024
+
+func (h *handlers) readDagSpec(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+	p, err := uriParams(req.Params.URI, "dag://spec/", 1)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := h.api.GetDagSpecWithResponse(ctx, p[0])
+	if err != nil {
+		return nil, fmt.Errorf("fetching dag spec: %w", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("control plane returned %d fetching dag spec for %s", resp.StatusCode(), p[0])
+	}
+	if len(resp.Body) > maxSpecBytes {
+		return jsonResource(req.Params.URI, map[string]any{
+			"error": "compiled spec too large for a resource read", "bytes": len(resp.Body), "dag_id": p[0],
+		})
+	}
+	// Return the compiled dag.json verbatim (already a clean structured artifact).
+	return &mcpsdk.ReadResourceResult{Contents: []*mcpsdk.ResourceContents{{
+		URI: req.Params.URI, MIMEType: "application/json", Text: string(resp.Body),
 	}}}, nil
 }
 

@@ -541,6 +541,11 @@ type ClientInterface interface {
 	// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
 	GetDagVersion(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetDagSpec Get a DAG's compiled spec (the dag.json artifact)
+	//
+	// Corresponds with GET /api/v2/dags/{dag_id}/spec (the `GetDagSpec` operationId).
+	GetDagSpec(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetMonitorExecutor Executor capability and configuration
 	//
 	// Corresponds with GET /api/v2/monitor/executor (the `GetMonitorExecutor` operationId).
@@ -828,6 +833,21 @@ func (c *Client) ListDagVersions(ctx context.Context, dagId DagID, reqEditors ..
 // Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
 func (c *Client) GetDagVersion(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetDagVersionRequest(c.Server, dagId, versionNumber)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetDagSpec Get a DAG's compiled spec (the dag.json artifact)
+//
+// Corresponds with GET /api/v2/dags/{dag_id}/spec (the `GetDagSpec` operationId).
+func (c *Client) GetDagSpec(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetDagSpecRequest(c.Server, dagId)
 	if err != nil {
 		return nil, err
 	}
@@ -1618,6 +1638,40 @@ func NewGetDagVersionRequest(server string, dagId DagID, versionNumber int) (*ht
 	return req, nil
 }
 
+// NewGetDagSpecRequest constructs an http.Request for the GetDagSpec method
+func NewGetDagSpecRequest(server string, dagId DagID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "dag_id", dagId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/dags/%s/spec", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetMonitorExecutorRequest constructs an http.Request for the GetMonitorExecutor method
 func NewGetMonitorExecutorRequest(server string) (*http.Request, error) {
 	var err error
@@ -2003,6 +2057,13 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/dags/{dag_id}/dagVersions/{version_number} (the `GetDagVersion` operationId).
 	GetDagVersionWithResponse(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*GetDagVersionResponse, error)
+
+	// GetDagSpecWithResponse Get a DAG's compiled spec (the dag.json artifact)
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/dags/{dag_id}/spec (the `GetDagSpec` operationId).
+	GetDagSpecWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*GetDagSpecResponse, error)
 
 	// GetMonitorExecutorWithResponse Executor capability and configuration
 	//
@@ -2615,6 +2676,54 @@ func (r GetDagVersionResponse) ContentType() string {
 	return ""
 }
 
+type GetDagSpecResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *map[string]interface{}
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *NotFound
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetDagSpecResponse) GetJSON200() *map[string]interface{} {
+	return r.JSON200
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r GetDagSpecResponse) GetJSON404() *NotFound {
+	return r.JSON404
+}
+
+// GetBody returns the raw response body bytes
+func (r GetDagSpecResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetDagSpecResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetDagSpecResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetDagSpecResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetMonitorExecutorResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3110,6 +3219,19 @@ func (c *ClientWithResponses) GetDagVersionWithResponse(ctx context.Context, dag
 	return ParseGetDagVersionResponse(rsp)
 }
 
+// GetDagSpecWithResponse Get a DAG's compiled spec (the dag.json artifact)
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/dags/{dag_id}/spec (the `GetDagSpec` operationId).
+func (c *ClientWithResponses) GetDagSpecWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*GetDagSpecResponse, error) {
+	rsp, err := c.GetDagSpec(ctx, dagId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetDagSpecResponse(rsp)
+}
+
 // GetMonitorExecutorWithResponse Executor capability and configuration
 //
 // Returns a wrapper object for the known response body format(s).
@@ -3553,6 +3675,39 @@ func ParseGetDagVersionResponse(rsp *http.Response) (*GetDagVersionResponse, err
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest DagVersion
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetDagSpecResponse parses an HTTP response from a GetDagSpecWithResponse call
+func ParseGetDagSpecResponse(rsp *http.Response) (*GetDagSpecResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetDagSpecResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest map[string]interface{}
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

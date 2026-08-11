@@ -114,6 +114,27 @@ func TestReadDagSourceResource(t *testing.T) {
 	}
 }
 
+func TestReadDagSpecResource(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/dags/etl/spec" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"dag_id":"etl","tasks":[{"task_id":"load","type":"python"}]}`)
+	})
+	res, err := h.readDagSpec(context.Background(), readReq("dag://spec/etl"))
+	if err != nil {
+		t.Fatalf("readDagSpec: %v", err)
+	}
+	if res.Contents[0].MIMEType != "application/json" {
+		t.Errorf("mime = %q, want application/json", res.Contents[0].MIMEType)
+	}
+	// Returned verbatim (the compiled artifact), so the graph is intact.
+	if !strings.Contains(res.Contents[0].Text, `"task_id":"load"`) {
+		t.Errorf("spec content missing the task graph: %s", res.Contents[0].Text)
+	}
+}
+
 func TestReadHealthResource(t *testing.T) {
 	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

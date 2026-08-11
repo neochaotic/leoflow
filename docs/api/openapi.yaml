@@ -298,6 +298,24 @@ paths:
               schema: { $ref: "#/components/schemas/DagSource" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v2/dags/{dag_id}/spec:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: Get a DAG's compiled spec (the dag.json artifact)
+      operationId: getDagSpec
+      tags: [DAGs]
+      responses:
+        "200":
+          description: The compiled dag.json (the structured graph the scheduler runs)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                description: The compiled dag.json artifact (DAGSpec shape).
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/v2/monitor/health:
     get:
       summary: Control-plane health (Airflow HealthInfoResponse shape)

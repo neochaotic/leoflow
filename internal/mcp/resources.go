@@ -62,7 +62,8 @@ func (h *handlers) readDagSource(ctx context.Context, req *mcpsdk.ReadResourceRe
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.api.GetDagSourceWithResponse(ctx, p[0])
+	api := apiFor(h, req)
+	resp, err := api.GetDagSourceWithResponse(ctx, p[0])
 	if err != nil {
 		return nil, fmt.Errorf("fetching dag source: %w", err)
 	}
@@ -88,7 +89,8 @@ func (h *handlers) readDagSpec(ctx context.Context, req *mcpsdk.ReadResourceRequ
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.api.GetDagSpecWithResponse(ctx, p[0])
+	api := apiFor(h, req)
+	resp, err := api.GetDagSpecWithResponse(ctx, p[0])
 	if err != nil {
 		return nil, fmt.Errorf("fetching dag spec: %w", err)
 	}
@@ -111,14 +113,15 @@ func (h *handlers) readDagSpec(ctx context.Context, req *mcpsdk.ReadResourceRequ
 // read (structured degradation, R39), and an all-empty result is an error so the
 // agent knows the control plane is unreachable rather than "healthy".
 func (h *handlers) readHealth(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+	api := apiFor(h, req)
 	snap := map[string]any{}
-	if r, err := h.api.GetMonitorHealthWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
+	if r, err := api.GetMonitorHealthWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
 		snap["health"] = r.JSON200
 	}
-	if r, err := h.api.GetMonitorExecutorWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
+	if r, err := api.GetMonitorExecutorWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
 		snap["executor"] = r.JSON200
 	}
-	if r, err := h.api.GetVersionWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
+	if r, err := api.GetVersionWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
 		snap["version"] = r.JSON200
 	}
 	if len(snap) == 0 {
@@ -128,7 +131,7 @@ func (h *handlers) readHealth(ctx context.Context, req *mcpsdk.ReadResourceReque
 }
 
 func (h *handlers) readDagList(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
-	out, err := h.fetchDagList(ctx, listDagsInput{})
+	out, err := h.fetchDagList(ctx, apiFor(h, req), listDagsInput{})
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +143,8 @@ func (h *handlers) readRunDetail(ctx context.Context, req *mcpsdk.ReadResourceRe
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.api.GetDagRunWithResponse(ctx, p[0], p[1])
+	api := apiFor(h, req)
+	resp, err := api.GetDagRunWithResponse(ctx, p[0], p[1])
 	if err != nil {
 		return nil, fmt.Errorf("fetching run: %w", err)
 	}
@@ -175,7 +179,8 @@ func (h *handlers) readTaskInstances(ctx context.Context, req *mcpsdk.ReadResour
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.api.ListTaskInstancesWithResponse(ctx, p[0], p[1])
+	api := apiFor(h, req)
+	resp, err := api.ListTaskInstancesWithResponse(ctx, p[0], p[1])
 	if err != nil {
 		return nil, fmt.Errorf("listing task instances: %w", err)
 	}
@@ -207,7 +212,8 @@ func (h *handlers) readTaskLog(ctx context.Context, req *mcpsdk.ReadResourceRequ
 	if err != nil || try < 1 {
 		return nil, fmt.Errorf("uri %q: try_number must be a positive integer", req.Params.URI)
 	}
-	resp, err := h.api.GetTaskLogsWithResponse(ctx, p[0], p[1], p[2], try)
+	api := apiFor(h, req)
+	resp, err := api.GetTaskLogsWithResponse(ctx, p[0], p[1], p[2], try)
 	if err != nil {
 		return nil, fmt.Errorf("fetching task log: %w", err)
 	}

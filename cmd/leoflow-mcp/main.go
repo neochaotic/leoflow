@@ -41,7 +41,7 @@ func run() int {
 		return 1
 	}
 
-	srv := mcp.NewServer(apiClient, version)
+	srv := mcp.NewServer(apiClient, server, version)
 	slog.Info("leoflow-mcp starting", "server", server, "transport", "stdio", "version", version)
 	if err := srv.Run(context.Background(), &mcpsdk.StdioTransport{}); err != nil {
 		slog.Error("mcp server exited", "error", err)

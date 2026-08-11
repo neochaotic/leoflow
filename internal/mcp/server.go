@@ -22,19 +22,48 @@ const (
 	maxDagLim     = 200
 )
 
-// handlers holds the dependencies the tool handlers share — currently just the
-// typed /api/v2 client.
+// handlers holds what the tool/resource handlers share. api is the base client
+// (the stdio process token, or a test client); serverURL lets a handler build a
+// PER-REQUEST client from the caller's Authorization header on the HTTP
+// transport, where one process serves many callers (ADR 0050 D9 pass-through).
 type handlers struct {
-	api *apiclient.ClientWithResponses
+	api       *apiclient.ClientWithResponses
+	serverURL string
 }
 
-// NewServer builds a read-only Leoflow MCP server over the given control-plane
-// client. It registers the read tools and returns the server; the caller runs it
+// clientFor returns the /api/v2 client for one request: on the HTTP transport a
+// per-request bearer arrives in the header, so build a client carrying THAT
+// token (pass-through — the MCP never mints one); on stdio there is no such
+// header, so fall back to the base client (built from the process token).
+func (h *handlers) clientFor(extra *mcpsdk.RequestExtra) *apiclient.ClientWithResponses {
+	if h.serverURL != "" && extra != nil && extra.Header != nil {
+		if authz := extra.Header.Get("Authorization"); authz != "" {
+			token := strings.TrimSpace(strings.TrimPrefix(authz, "Bearer "))
+			if c, err := apiclient.New(h.serverURL, token); err == nil {
+				return c
+			}
+		}
+	}
+	return h.api
+}
+
+// apiFor resolves the client for a tool/resource request, tolerating a nil
+// request (unit tests call handlers directly with nil).
+func apiFor[P mcpsdk.Params](h *handlers, req *mcpsdk.ServerRequest[P]) *apiclient.ClientWithResponses {
+	if req == nil {
+		return h.api
+	}
+	return h.clientFor(req.Extra)
+}
+
+// NewServer builds a read-only Leoflow MCP server. api is the base control-plane
+// client; serverURL is the control-plane URL used to build per-request clients on
+// the HTTP transport. It registers the read tools + resources; the caller runs it
 // over a transport (stdio for Lite dev, Streamable HTTP for Pro). Tools that
-// mutate state are deliberately absent from this skeleton (ADR 0050 D7).
-func NewServer(api *apiclient.ClientWithResponses, version string) *mcpsdk.Server {
+// mutate state are deliberately absent (ADR 0050 D7).
+func NewServer(api *apiclient.ClientWithResponses, serverURL, version string) *mcpsdk.Server {
 	s := mcpsdk.NewServer(&mcpsdk.Implementation{Name: serverName, Version: version}, nil)
-	h := &handlers{api: api}
+	h := &handlers{api: api, serverURL: serverURL}
 	mcpsdk.AddTool(s, &mcpsdk.Tool{
 		Name:        "list_dags",
 		Description: "List DAGs registered in the Leoflow control plane, with their paused state.",
@@ -69,14 +98,14 @@ type listDagsOutput struct {
 // listDags returns a compact list of DAGs. It shapes the response rather than
 // forwarding the verbose upstream payload (ADR 0050 R18), and surfaces a
 // non-200 as an error so the agent never mistakes a failed call for "no DAGs".
-func (h *handlers) listDags(ctx context.Context, _ *mcpsdk.CallToolRequest, in listDagsInput) (*mcpsdk.CallToolResult, listDagsOutput, error) {
-	out, err := h.fetchDagList(ctx, in)
+func (h *handlers) listDags(ctx context.Context, req *mcpsdk.CallToolRequest, in listDagsInput) (*mcpsdk.CallToolResult, listDagsOutput, error) {
+	out, err := h.fetchDagList(ctx, apiFor(h, req), in)
 	return nil, out, err
 }
 
 // fetchDagList is the shared read used by both the list_dags tool and the
 // dag://list resource: it calls /api/v2/dags and shapes a compact list.
-func (h *handlers) fetchDagList(ctx context.Context, in listDagsInput) (listDagsOutput, error) {
+func (h *handlers) fetchDagList(ctx context.Context, api *apiclient.ClientWithResponses, in listDagsInput) (listDagsOutput, error) {
 	limit := in.Limit
 	if limit <= 0 {
 		limit = defaultDagLim
@@ -90,7 +119,7 @@ func (h *handlers) fetchDagList(ctx context.Context, in listDagsInput) (listDags
 		params.Tags = &[]string{in.Tag}
 	}
 
-	resp, err := h.api.ListDagsWithResponse(ctx, params)
+	resp, err := api.ListDagsWithResponse(ctx, params)
 	if err != nil {
 		return listDagsOutput{}, fmt.Errorf("listing dags: %w", err)
 	}
@@ -158,7 +187,7 @@ type diagnoseRunOutput struct {
 // deliberately client-side composition for the MVP; a server-side aggregate
 // endpoint is the later optimization for chattiness. Log tails are truncated and
 // sanitized because log content is untrusted (D10).
-func (h *handlers) diagnoseRun(ctx context.Context, _ *mcpsdk.CallToolRequest, in diagnoseRunInput) (*mcpsdk.CallToolResult, diagnoseRunOutput, error) {
+func (h *handlers) diagnoseRun(ctx context.Context, req *mcpsdk.CallToolRequest, in diagnoseRunInput) (*mcpsdk.CallToolResult, diagnoseRunOutput, error) {
 	if in.DagID == "" || in.RunID == "" {
 		return nil, diagnoseRunOutput{}, fmt.Errorf("dag_id and run_id are required")
 	}
@@ -169,7 +198,8 @@ func (h *handlers) diagnoseRun(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if tail > maxLogTail {
 		tail = maxLogTail
 	}
-	runResp, err := h.api.GetDagRunWithResponse(ctx, in.DagID, in.RunID)
+	api := apiFor(h, req)
+	runResp, err := api.GetDagRunWithResponse(ctx, in.DagID, in.RunID)
 	if err != nil {
 		return nil, diagnoseRunOutput{}, fmt.Errorf("fetching run: %w", err)
 	}
@@ -177,7 +207,7 @@ func (h *handlers) diagnoseRun(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return nil, diagnoseRunOutput{}, fmt.Errorf("control plane returned %d for run %s/%s", runResp.StatusCode(), in.DagID, in.RunID)
 	}
 
-	tiResp, err := h.api.ListTaskInstancesWithResponse(ctx, in.DagID, in.RunID)
+	tiResp, err := api.ListTaskInstancesWithResponse(ctx, in.DagID, in.RunID)
 	if err != nil {
 		return nil, diagnoseRunOutput{}, fmt.Errorf("listing task instances: %w", err)
 	}
@@ -194,7 +224,7 @@ func (h *handlers) diagnoseRun(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		tis = *tiResp.JSON200.TaskInstances
 	}
 	out.TotalTasks = len(tis)
-	out.FailedTasks = h.collectFailedTasks(ctx, in.DagID, in.RunID, tis, tail)
+	out.FailedTasks = h.collectFailedTasks(ctx, api, in.DagID, in.RunID, tis, tail)
 	out.Summary = fmt.Sprintf("%d of %d task(s) failed", len(out.FailedTasks), out.TotalTasks)
 	return nil, out, nil
 }
@@ -202,7 +232,7 @@ func (h *handlers) diagnoseRun(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 // collectFailedTasks returns the failed/upstream-failed task instances, each with
 // a truncated+sanitized log tail (only for tasks that actually ran — an
 // upstream_failed task never executed, so it has no log of its own).
-func (h *handlers) collectFailedTasks(ctx context.Context, dagID, runID string, tis []apiclient.TaskInstance, tail int) []failedTask {
+func (h *handlers) collectFailedTasks(ctx context.Context, api *apiclient.ClientWithResponses, dagID, runID string, tis []apiclient.TaskInstance, tail int) []failedTask {
 	var failed []failedTask
 	for _, ti := range tis {
 		if ti.State == nil {
@@ -220,7 +250,7 @@ func (h *handlers) collectFailedTasks(ctx context.Context, dagID, runID string, 
 			DurationSeconds: deref(ti.Duration),
 		}
 		if *ti.State == apiclient.TaskInstanceStateFailed && ft.TaskID != "" && ft.TryNumber >= 1 {
-			logResp, lerr := h.api.GetTaskLogsWithResponse(ctx, dagID, runID, ft.TaskID, ft.TryNumber)
+			logResp, lerr := api.GetTaskLogsWithResponse(ctx, dagID, runID, ft.TaskID, ft.TryNumber)
 			if lerr == nil && logResp.StatusCode() == http.StatusOK {
 				ft.LogTail = sanitizeLogTail(string(logResp.Body), tail)
 			}
@@ -266,7 +296,7 @@ type searchLogsOutput struct {
 // (ADR 0050 R16). The match is a plain substring, not a regex, to avoid handing
 // the model a ReDoS lever. Matched lines are sanitized (untrusted content, D10)
 // and the returned set is capped, but the true total is always reported.
-func (h *handlers) searchLogs(ctx context.Context, _ *mcpsdk.CallToolRequest, in searchLogsInput) (*mcpsdk.CallToolResult, searchLogsOutput, error) {
+func (h *handlers) searchLogs(ctx context.Context, req *mcpsdk.CallToolRequest, in searchLogsInput) (*mcpsdk.CallToolResult, searchLogsOutput, error) {
 	if in.DagID == "" || in.RunID == "" || in.TaskID == "" || in.Query == "" {
 		return nil, searchLogsOutput{}, fmt.Errorf("dag_id, run_id, task_id, and query are required")
 	}
@@ -282,7 +312,8 @@ func (h *handlers) searchLogs(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		maxN = maxLogMatches
 	}
 
-	resp, err := h.api.GetTaskLogsWithResponse(ctx, in.DagID, in.RunID, in.TaskID, try)
+	api := apiFor(h, req)
+	resp, err := api.GetTaskLogsWithResponse(ctx, in.DagID, in.RunID, in.TaskID, try)
 	if err != nil {
 		return nil, searchLogsOutput{}, fmt.Errorf("fetching task log: %w", err)
 	}

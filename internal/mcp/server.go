@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -38,6 +39,10 @@ func NewServer(api *apiclient.ClientWithResponses, version string) *mcpsdk.Serve
 		Name:        "list_dags",
 		Description: "List DAGs registered in the Leoflow control plane, with their paused state.",
 	}, h.listDags)
+	mcpsdk.AddTool(s, &mcpsdk.Tool{
+		Name:        "diagnose_run",
+		Description: "Diagnose a DAG run: its state, which task instances failed, and a truncated tail of each failed task's log — one call instead of list-runs/get-run/list-tasks/get-logs.",
+	}, h.diagnoseRun)
 	return s
 }
 
@@ -105,4 +110,147 @@ func deref[T any](p *T) T {
 		return zero
 	}
 	return *p
+}
+
+const (
+	defaultLogTail = 40
+	maxLogTail     = 200
+)
+
+type diagnoseRunInput struct {
+	DagID        string `json:"dag_id" jsonschema:"the DAG id"`
+	RunID        string `json:"run_id" jsonschema:"the DAG run id to diagnose"`
+	LogTailLines int    `json:"log_tail_lines,omitempty" jsonschema:"log lines to include per failed task (default 40, max 200)"`
+}
+
+type failedTask struct {
+	TaskID          string  `json:"task_id"`
+	State           string  `json:"state"`
+	TryNumber       int     `json:"try_number"`
+	DurationSeconds float32 `json:"duration_seconds,omitempty"`
+	LogTail         string  `json:"log_tail,omitempty"`
+}
+
+type diagnoseRunOutput struct {
+	DagID       string       `json:"dag_id"`
+	RunID       string       `json:"run_id"`
+	RunState    string       `json:"run_state"`
+	TotalTasks  int          `json:"total_tasks"`
+	FailedTasks []failedTask `json:"failed_tasks"`
+	Summary     string       `json:"summary"`
+}
+
+// diagnoseRun composes the run, its task instances, and each failed task's log
+// tail into a single diagnosis (ADR 0050 R19), so an agent gets one answer
+// instead of chaining four calls it would likely mis-sequence. It is
+// deliberately client-side composition for the MVP; a server-side aggregate
+// endpoint is the later optimization for chattiness. Log tails are truncated and
+// sanitized because log content is untrusted (D10).
+func (h *handlers) diagnoseRun(ctx context.Context, _ *mcpsdk.CallToolRequest, in diagnoseRunInput) (*mcpsdk.CallToolResult, diagnoseRunOutput, error) {
+	if in.DagID == "" || in.RunID == "" {
+		return nil, diagnoseRunOutput{}, fmt.Errorf("dag_id and run_id are required")
+	}
+	tail := in.LogTailLines
+	if tail <= 0 {
+		tail = defaultLogTail
+	}
+	if tail > maxLogTail {
+		tail = maxLogTail
+	}
+	runResp, err := h.api.GetDagRunWithResponse(ctx, in.DagID, in.RunID)
+	if err != nil {
+		return nil, diagnoseRunOutput{}, fmt.Errorf("fetching run: %w", err)
+	}
+	if runResp.StatusCode() != http.StatusOK || runResp.JSON200 == nil {
+		return nil, diagnoseRunOutput{}, fmt.Errorf("control plane returned %d for run %s/%s", runResp.StatusCode(), in.DagID, in.RunID)
+	}
+
+	tiResp, err := h.api.ListTaskInstancesWithResponse(ctx, in.DagID, in.RunID)
+	if err != nil {
+		return nil, diagnoseRunOutput{}, fmt.Errorf("listing task instances: %w", err)
+	}
+	if tiResp.StatusCode() != http.StatusOK || tiResp.JSON200 == nil {
+		return nil, diagnoseRunOutput{}, fmt.Errorf("control plane returned %d listing task instances", tiResp.StatusCode())
+	}
+
+	out := diagnoseRunOutput{DagID: in.DagID, RunID: in.RunID}
+	if runResp.JSON200.State != nil {
+		out.RunState = string(*runResp.JSON200.State)
+	}
+	var tis []apiclient.TaskInstance
+	if tiResp.JSON200.TaskInstances != nil {
+		tis = *tiResp.JSON200.TaskInstances
+	}
+	out.TotalTasks = len(tis)
+	out.FailedTasks = h.collectFailedTasks(ctx, in.DagID, in.RunID, tis, tail)
+	out.Summary = fmt.Sprintf("%d of %d task(s) failed", len(out.FailedTasks), out.TotalTasks)
+	return nil, out, nil
+}
+
+// collectFailedTasks returns the failed/upstream-failed task instances, each with
+// a truncated+sanitized log tail (only for tasks that actually ran — an
+// upstream_failed task never executed, so it has no log of its own).
+func (h *handlers) collectFailedTasks(ctx context.Context, dagID, runID string, tis []apiclient.TaskInstance, tail int) []failedTask {
+	var failed []failedTask
+	for _, ti := range tis {
+		if ti.State == nil {
+			continue
+		}
+		switch *ti.State {
+		case apiclient.TaskInstanceStateFailed, apiclient.TaskInstanceStateUpstreamFailed:
+		default:
+			continue
+		}
+		ft := failedTask{
+			TaskID:          deref(ti.TaskId),
+			State:           string(*ti.State),
+			TryNumber:       deref(ti.TryNumber),
+			DurationSeconds: deref(ti.Duration),
+		}
+		if *ti.State == apiclient.TaskInstanceStateFailed && ft.TaskID != "" && ft.TryNumber >= 1 {
+			logResp, lerr := h.api.GetTaskLogsWithResponse(ctx, dagID, runID, ft.TaskID, ft.TryNumber)
+			if lerr == nil && logResp.StatusCode() == http.StatusOK {
+				ft.LogTail = sanitizeLogTail(string(logResp.Body), tail)
+			}
+		}
+		failed = append(failed, ft)
+	}
+	return failed
+}
+
+// sanitizeLogTail returns at most the last n lines of raw log output, stripped of
+// control and ANSI bytes (keeping \n and \t). Log content is untrusted (D10): an
+// ANSI/control payload in a task's stderr must not reach the agent's context
+// intact, and an unbounded tail would blow the context window (R16).
+func sanitizeLogTail(raw string, n int) string {
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	// Drop a trailing empty line from a final newline so "n lines" is intuitive.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	var b strings.Builder
+	for i, ln := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(stripControl(ln))
+	}
+	return b.String()
+}
+
+// stripControl removes ASCII control bytes (< 0x20) except tab; this also breaks
+// ANSI escape sequences by removing their leading ESC (0x1b).
+func stripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }

@@ -2,14 +2,71 @@ package mcp
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apiclient "github.com/neochaotic/leoflow/pkg/client"
 )
+
+// TestDiagnoseRun composes run + task-instances + logs into one diagnosis: it
+// reports the run state, isolates the failed task, and returns a truncated,
+// sanitized tail of that task's log (ADR 0050 R19). It must not treat a
+// successful task as failed, and must surface the failing task's log.
+func TestDiagnoseRun(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v2/dags/etl/dagRuns/r1":
+			_, _ = io.WriteString(w, `{"dag_id":"etl","dag_run_id":"r1","state":"failed"}`)
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances":
+			_, _ = io.WriteString(w, `{"task_instances":[`+
+				`{"task_id":"extract","state":"success","try_number":1},`+
+				`{"task_id":"load","state":"failed","try_number":2,"duration":3.5}],"total_entries":2}`)
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/load/logs/2":
+			_, _ = io.WriteString(w, "setup\nrunning query\nTraceback (most recent call last)\nValueError: boom\x1b[0m\n")
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	_, out, err := h.diagnoseRun(context.Background(), nil, diagnoseRunInput{DagID: "etl", RunID: "r1"})
+	if err != nil {
+		t.Fatalf("diagnoseRun: %v", err)
+	}
+	if out.RunState != "failed" {
+		t.Errorf("run_state = %q, want failed", out.RunState)
+	}
+	if out.TotalTasks != 2 {
+		t.Errorf("total_tasks = %d, want 2", out.TotalTasks)
+	}
+	if len(out.FailedTasks) != 1 || out.FailedTasks[0].TaskID != "load" {
+		t.Fatalf("failed_tasks = %+v, want exactly [load]", out.FailedTasks)
+	}
+	ft := out.FailedTasks[0]
+	if ft.TryNumber != 2 {
+		t.Errorf("try_number = %d, want 2", ft.TryNumber)
+	}
+	if !strings.Contains(ft.LogTail, "ValueError: boom") {
+		t.Errorf("log_tail missing the failure line: %q", ft.LogTail)
+	}
+	if strings.Contains(ft.LogTail, "\x1b") {
+		t.Errorf("log_tail must be sanitized of control/ANSI bytes: %q", ft.LogTail)
+	}
+}
+
+// TestDiagnoseRunMissingArgs: dag_id and run_id are required.
+func TestDiagnoseRunMissingArgs(t *testing.T) {
+	h := &handlers{}
+	if _, _, err := h.diagnoseRun(context.Background(), nil, diagnoseRunInput{DagID: "etl"}); err == nil {
+		t.Error("expected an error when run_id is missing")
+	}
+}
 
 // TestNewServerRegistersListDags connects a client to the server over an
 // in-memory transport and asserts list_dags is discoverable via tools/list —

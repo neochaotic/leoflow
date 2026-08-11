@@ -43,6 +43,10 @@ func NewServer(api *apiclient.ClientWithResponses, version string) *mcpsdk.Serve
 		Name:        "diagnose_run",
 		Description: "Diagnose a DAG run: its state, which task instances failed, and a truncated tail of each failed task's log — one call instead of list-runs/get-run/list-tasks/get-logs.",
 	}, h.diagnoseRun)
+	mcpsdk.AddTool(s, &mcpsdk.Tool{
+		Name:        "search_logs",
+		Description: "Search one task attempt's log for a case-insensitive substring, returning the matching lines (with line numbers) instead of the whole log.",
+	}, h.searchLogs)
 	return s
 }
 
@@ -216,6 +220,82 @@ func (h *handlers) collectFailedTasks(ctx context.Context, dagID, runID string, 
 		failed = append(failed, ft)
 	}
 	return failed
+}
+
+const (
+	defaultLogMatches = 20
+	maxLogMatches     = 100
+)
+
+type searchLogsInput struct {
+	DagID      string `json:"dag_id" jsonschema:"the DAG id"`
+	RunID      string `json:"run_id" jsonschema:"the DAG run id"`
+	TaskID     string `json:"task_id" jsonschema:"the task id whose log to search"`
+	TryNumber  int    `json:"try_number,omitempty" jsonschema:"attempt to search (default 1)"`
+	Query      string `json:"query" jsonschema:"case-insensitive substring to match"`
+	MaxMatches int    `json:"max_matches,omitempty" jsonschema:"maximum matching lines to return (default 20, max 100)"`
+}
+
+type logMatch struct {
+	LineNumber int    `json:"line_number"`
+	Line       string `json:"line"`
+}
+
+type searchLogsOutput struct {
+	DagID        string     `json:"dag_id"`
+	RunID        string     `json:"run_id"`
+	TaskID       string     `json:"task_id"`
+	TryNumber    int        `json:"try_number"`
+	Query        string     `json:"query"`
+	Matches      []logMatch `json:"matches"`
+	TotalMatches int        `json:"total_matches"`
+	Truncated    bool       `json:"truncated"`
+}
+
+// searchLogs fetches one task attempt's log and returns the lines matching a
+// case-insensitive substring, with 1-based line numbers — so an agent can find
+// the relevant lines of a long log without pulling the whole thing into context
+// (ADR 0050 R16). The match is a plain substring, not a regex, to avoid handing
+// the model a ReDoS lever. Matched lines are sanitized (untrusted content, D10)
+// and the returned set is capped, but the true total is always reported.
+func (h *handlers) searchLogs(ctx context.Context, _ *mcpsdk.CallToolRequest, in searchLogsInput) (*mcpsdk.CallToolResult, searchLogsOutput, error) {
+	if in.DagID == "" || in.RunID == "" || in.TaskID == "" || in.Query == "" {
+		return nil, searchLogsOutput{}, fmt.Errorf("dag_id, run_id, task_id, and query are required")
+	}
+	try := in.TryNumber
+	if try < 1 {
+		try = 1
+	}
+	maxN := in.MaxMatches
+	if maxN <= 0 {
+		maxN = defaultLogMatches
+	}
+	if maxN > maxLogMatches {
+		maxN = maxLogMatches
+	}
+
+	resp, err := h.api.GetTaskLogsWithResponse(ctx, in.DagID, in.RunID, in.TaskID, try)
+	if err != nil {
+		return nil, searchLogsOutput{}, fmt.Errorf("fetching task log: %w", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, searchLogsOutput{}, fmt.Errorf("control plane returned %d fetching task log", resp.StatusCode())
+	}
+
+	out := searchLogsOutput{DagID: in.DagID, RunID: in.RunID, TaskID: in.TaskID, TryNumber: try, Query: in.Query}
+	needle := strings.ToLower(in.Query)
+	lines := strings.Split(strings.ReplaceAll(string(resp.Body), "\r\n", "\n"), "\n")
+	for i, ln := range lines {
+		if !strings.Contains(strings.ToLower(ln), needle) {
+			continue
+		}
+		out.TotalMatches++
+		if len(out.Matches) < maxN {
+			out.Matches = append(out.Matches, logMatch{LineNumber: i + 1, Line: stripControl(ln)})
+		}
+	}
+	out.Truncated = out.TotalMatches > len(out.Matches)
+	return nil, out, nil
 }
 
 // sanitizeLogTail returns at most the last n lines of raw log output, stripped of

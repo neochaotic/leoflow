@@ -60,6 +60,62 @@ func TestDiagnoseRun(t *testing.T) {
 	}
 }
 
+// TestSearchLogs finds case-insensitive substring matches in one task's log,
+// reports 1-based line numbers, sanitizes control/ANSI bytes, and returns the
+// total found even when the returned set is capped.
+func TestSearchLogs(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/dags/etl/dagRuns/r1/taskInstances/load/logs/2" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, "starting\nERROR: connection refused\nretrying\nerror: timeout\x1b[0m\ndone\n")
+	})
+
+	_, out, err := h.searchLogs(context.Background(), nil, searchLogsInput{
+		DagID: "etl", RunID: "r1", TaskID: "load", TryNumber: 2, Query: "error",
+	})
+	if err != nil {
+		t.Fatalf("searchLogs: %v", err)
+	}
+	if out.TotalMatches != 2 || len(out.Matches) != 2 {
+		t.Fatalf("matches = %+v (total %d), want 2", out.Matches, out.TotalMatches)
+	}
+	if out.Matches[0].LineNumber != 2 || out.Matches[1].LineNumber != 4 {
+		t.Errorf("line numbers = %d,%d, want 2,4", out.Matches[0].LineNumber, out.Matches[1].LineNumber)
+	}
+	if strings.Contains(out.Matches[1].Line, "\x1b") {
+		t.Errorf("match line must be sanitized: %q", out.Matches[1].Line)
+	}
+	if out.Truncated {
+		t.Error("should not be truncated with the default cap")
+	}
+}
+
+// TestSearchLogsTruncates caps the returned matches but still reports the true
+// total, so the agent knows there is more.
+func TestSearchLogsTruncates(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "error a\nerror b\nerror c\n")
+	})
+	_, out, err := h.searchLogs(context.Background(), nil, searchLogsInput{
+		DagID: "d", RunID: "r", TaskID: "t", Query: "error", MaxMatches: 1,
+	})
+	if err != nil {
+		t.Fatalf("searchLogs: %v", err)
+	}
+	if len(out.Matches) != 1 || out.TotalMatches != 3 || !out.Truncated {
+		t.Errorf("want 1 returned / 3 total / truncated, got %d / %d / %v", len(out.Matches), out.TotalMatches, out.Truncated)
+	}
+}
+
+// TestSearchLogsMissingArgs: the locators and the query are required.
+func TestSearchLogsMissingArgs(t *testing.T) {
+	h := &handlers{}
+	if _, _, err := h.searchLogs(context.Background(), nil, searchLogsInput{DagID: "d", RunID: "r", TaskID: "t"}); err == nil {
+		t.Error("expected an error when query is missing")
+	}
+}
+
 // TestDiagnoseRunMissingArgs: dag_id and run_id are required.
 func TestDiagnoseRunMissingArgs(t *testing.T) {
 	h := &handlers{}

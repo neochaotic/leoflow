@@ -242,6 +242,29 @@ naive setups, break *every* task. Leoflow stops that at the **build parse-gate**
 So a syntax error fails **loudly and early**, never at 5am. Baking the manifest +
 `partial_parse` reinforces this: runtime pods reuse the build-time parse.
 
+### The baked manifest, and Slim CI (`state:modified+`)
+
+The manifest that Leoflow compiles from is `dbt parse`'s `target/manifest.json`. On
+**Pro** it is produced at image-build time and copied into the DAG image (alongside
+`partial_parse.msgpack`), immutable with that artifact; on **Lite** `leoflow compile`
+parses on save. Leoflow reads it **at compile time** to render tasks — dbt itself
+reuses the baked copy at runtime.
+
+That baked manifest is exactly the ingredient dbt's **Slim CI**
+(`dbt build --select state:modified+ --defer --state <prod-artifacts>`) needs — build
+only changed models and their downstreams, deferring unchanged refs to production
+relations. Leoflow does **not** yet offer this as a turnkey recipe, because two pieces
+are missing:
+
+1. **No supported way to fetch the deployed manifest** to diff against — it currently
+   lives only baked inside the immutable DAG image, with no export CLI/API.
+2. **The compiler never emits `--state`/`--defer`/`state:modified+`** selectors — it
+   selects by node/level/folder only.
+
+If you drive dbt yourself in CI (outside Leoflow's compilation) you can already run
+Slim CI by supplying your own prior `manifest.json` as `--state`. A first-class
+recipe wired to Leoflow's artifacts is tracked as a future enhancement.
+
 **Run-time errors** (a model that compiles but fails against the warehouse) are
 isolated by granularity:
 
@@ -249,6 +272,28 @@ isolated by granularity:
   only its downstream subtree is blocked.
 - **fused:** dbt still materializes the group's good models, but the group task
   fails as a unit (coarser blast radius).
+
+### Retrying a fused group re-runs the whole group
+
+A fused group is one `dbt build --select <members>` task. If it fails mid-way, dbt
+keeps the models it already built — but **retrying the task re-runs the entire
+group from scratch**, including the models that already succeeded. dbt is not
+resumed from its failure point here (that would need `dbt retry`, which reads the
+previous run's `target/run_results.json` — an artifact Leoflow does not yet persist
+across pod attempts). On warehouses billed per compute-second, retrying a
+mostly-green group re-bills the green models.
+
+This is the flip side of the fused trade-off. If retry efficiency matters more than
+pod count for a given DAG, use **`granularity: node`**: each model is its own task,
+so a retry re-runs only the failed model (and its blocked downstream), exactly like
+Airflow's per-task retry. Choose per DAG:
+
+- **Expensive warehouse + flaky sources → `node`** — pay in pods, save on recompute.
+- **Cheap/idempotent models at scale → `level`/`folder`** — pay a little recompute
+  on the rare retry, save on pod startups.
+
+Resumable fused retries (persisting `run_results.json` so `dbt retry` can skip the
+already-built models) are tracked as a future enhancement.
 
 ---
 

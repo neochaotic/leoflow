@@ -132,6 +132,53 @@ def test_databricks_uri_maps_to_dbt_profile():
     }
 
 
+def test_databricks_oauth_m2m_maps_to_service_principal_profile():
+    # Service-principal OAuth M2M (client_id/client_secret) is Databricks' guidance
+    # for automation. When present it wins over a PAT and emits auth_type=oauth
+    # INSTEAD of token (the two are mutually exclusive in dbt-databricks).
+    uri = _conn_uri(
+        "databricks", host="dbc.databricks.com", schema="analytics",
+        extra={
+            "http_path": "/sql/1.0/warehouses/abc", "catalog": "main",
+            "auth_type": "oauth", "client_id": "svc-123", "client_secret": "sekret",
+        },
+    )
+    assert dbt_profile_from_uri(uri) == {
+        "type": "databricks", "host": "dbc.databricks.com", "http_path": "/sql/1.0/warehouses/abc",
+        "auth_type": "oauth", "client_id": "svc-123", "client_secret": "sekret",
+        "catalog": "main", "schema": "analytics", "threads": 4,
+    }
+
+
+def test_databricks_oauth_selected_by_credentials_without_explicit_auth_type():
+    # client_id/client_secret present (no explicit auth_type) selects OAuth too, and
+    # a stray PAT is ignored in favor of the service principal.
+    uri = _conn_uri(
+        "databricks", password="dapi-ignored", host="h",
+        extra={"http_path": "/sql/x", "client_id": "svc", "client_secret": "sek"},
+    )
+    out = dbt_profile_from_uri(uri)
+    assert out["auth_type"] == "oauth"
+    assert out["client_id"] == "svc" and out["client_secret"] == "sek"
+    assert "token" not in out
+
+
+def test_databricks_oauth_needs_both_client_id_and_secret():
+    uri = _conn_uri("databricks", host="h",
+                    extra={"http_path": "/sql/x", "client_id": "svc"})  # secret missing
+    with pytest.raises(ValueError):
+        dbt_profile_from_uri(uri)
+
+
+def test_databricks_pat_still_works():
+    # Backward compatibility: a plain PAT connection keeps emitting token, no OAuth keys.
+    uri = _conn_uri("databricks", password="dapitoken", host="h",
+                    extra={"http_path": "/sql/x"})
+    out = dbt_profile_from_uri(uri)
+    assert out["token"] == "dapitoken"
+    assert "auth_type" not in out and "client_id" not in out
+
+
 def test_airflow_prefixed_extra_keys_are_accepted():
     # Older Airflow exports extra as extra__<conn_type>__<key>; accept both forms.
     uri = _conn_uri("databricks", password="t", host="h",

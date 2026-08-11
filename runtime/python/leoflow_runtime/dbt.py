@@ -77,11 +77,26 @@ def _databricks(parts, ct, _login, password, path, extra):
     http_path = _eget(extra, ct, "http_path")
     if not http_path:
         raise ValueError("databricks connection needs `http_path` in its extra")
-    return {
+    profile = {
         "type": "databricks", "host": parts.hostname or "", "http_path": http_path,
-        "token": password or _eget(extra, ct, "token"), "catalog": _eget(extra, ct, "catalog"),
+        "catalog": _eget(extra, ct, "catalog"),
         "schema": path or _eget(extra, ct, "schema"), "threads": _threads(extra),
     }
+    # Auth: service-principal OAuth M2M (client_id/client_secret) is Databricks'
+    # guidance for automation and is preferred when present; otherwise fall back to
+    # a Personal Access Token. dbt-databricks treats auth_type=oauth and token as
+    # mutually exclusive, so emit exactly one.
+    client_id = _eget(extra, ct, "client_id")
+    client_secret = _eget(extra, ct, "client_secret")
+    if _eget(extra, ct, "auth_type") == "oauth" or client_id or client_secret:
+        if not (client_id and client_secret):
+            raise ValueError(
+                "databricks OAuth M2M needs both `client_id` and `client_secret` in its extra"
+            )
+        profile.update(auth_type="oauth", client_id=client_id, client_secret=client_secret)
+    else:
+        profile["token"] = password or _eget(extra, ct, "token")
+    return profile
 
 
 def _duckdb(_parts, ct, _login, _password, path, extra):

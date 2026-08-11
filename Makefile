@@ -313,3 +313,7 @@ gen-connectors-check: ## Anti-drift: regenerate to a temp file and diff against 
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR) coverage.out
+
+.PHONY: test-mcp-e2e
+test-mcp-e2e: ## Build leoflow-mcp and drive it over the real MCP protocol (stdio) against a seeded control plane
+	go test -tags e2e -run TestMCPBinaryEndToEnd ./internal/mcp/

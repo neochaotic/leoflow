@@ -39,6 +39,60 @@ func (h *handlers) registerResources(s *mcpsdk.Server) {
 		Name: "task-log", URITemplate: "log://task/{dag_id}/{run_id}/{task_id}/{try_number}", MIMEType: "text/plain",
 		Description: "A task attempt's log, truncated to the last lines and sanitized.",
 	}, h.readTaskLog)
+	s.AddResourceTemplate(&mcpsdk.ResourceTemplate{
+		Name: "dag-source", URITemplate: "dag://source/{dag_id}", MIMEType: "text/plain",
+		Description: "A DAG's source (the dag.py text), sanitized and size-capped.",
+	}, h.readDagSource)
+	s.AddResource(&mcpsdk.Resource{
+		Name: "control-plane-health", URI: "health://control-plane", MIMEType: "application/json",
+		Description: "Control-plane health: component status, executor capability, and version (best-effort per section).",
+	}, h.readHealth)
+}
+
+// maxSourceBytes caps a dag.py source resource read so a large DAG file can't
+// blow the agent's context window (R40).
+const maxSourceBytes = 64 * 1024
+
+func (h *handlers) readDagSource(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+	p, err := uriParams(req.Params.URI, "dag://source/", 1)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := h.api.GetDagSourceWithResponse(ctx, p[0])
+	if err != nil {
+		return nil, fmt.Errorf("fetching dag source: %w", err)
+	}
+	if resp.StatusCode() != http.StatusOK || resp.JSON200 == nil {
+		return nil, fmt.Errorf("control plane returned %d fetching dag source for %s", resp.StatusCode(), p[0])
+	}
+	src := stripControl(deref(resp.JSON200.Content))
+	if len(src) > maxSourceBytes {
+		src = src[:maxSourceBytes] + "\n... [truncated]"
+	}
+	return &mcpsdk.ReadResourceResult{Contents: []*mcpsdk.ResourceContents{{
+		URI: req.Params.URI, MIMEType: "text/plain", Text: src,
+	}}}, nil
+}
+
+// readHealth composes the three monitor endpoints into one snapshot, best-effort
+// per section: a section that fails is omitted rather than failing the whole
+// read (structured degradation, R39), and an all-empty result is an error so the
+// agent knows the control plane is unreachable rather than "healthy".
+func (h *handlers) readHealth(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+	snap := map[string]any{}
+	if r, err := h.api.GetMonitorHealthWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
+		snap["health"] = r.JSON200
+	}
+	if r, err := h.api.GetMonitorExecutorWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
+		snap["executor"] = r.JSON200
+	}
+	if r, err := h.api.GetVersionWithResponse(ctx); err == nil && r.StatusCode() == http.StatusOK && r.JSON200 != nil {
+		snap["version"] = r.JSON200
+	}
+	if len(snap) == 0 {
+		return nil, fmt.Errorf("control plane unreachable (no monitor section responded)")
+	}
+	return jsonResource(req.Params.URI, snap)
 }
 
 func (h *handlers) readDagList(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {

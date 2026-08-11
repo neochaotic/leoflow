@@ -329,11 +329,13 @@ func sanitizeLogTail(raw string, n int) string {
 	return b.String()
 }
 
-// stripControl removes ASCII control bytes (< 0x20) except tab; this also breaks
-// ANSI escape sequences by removing their leading ESC (0x1b).
+// stripControl removes ASCII control bytes (< 0x20) except tab and newline; this
+// also breaks ANSI escape sequences by removing their leading ESC (0x1b). Newline
+// is kept so multi-line text (a task log, a dag.py source) survives; log-tail
+// callers split on newlines first, so a single line never contains one anyway.
 func stripControl(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r == '\t' {
+		if r == '\t' || r == '\n' {
 			return r
 		}
 		if r < 0x20 || r == 0x7f {

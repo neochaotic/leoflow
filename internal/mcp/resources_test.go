@@ -73,6 +73,7 @@ func TestReadTaskLogResource(t *testing.T) {
 		if r.URL.Path != "/api/v2/dags/etl/dagRuns/r1/taskInstances/load/logs/2" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
+		// text/plain body with a real ESC byte (Go \x1b escape) — sanitizer strips it.
 		_, _ = io.WriteString(w, "boot\nrunning\x1b[0m\ndone\n")
 	})
 	res, err := h.readTaskLog(context.Background(), readReq("log://task/etl/r1/load/2"))
@@ -84,6 +85,78 @@ func TestReadTaskLogResource(t *testing.T) {
 	}
 	if strings.Contains(res.Contents[0].Text, "\x1b") {
 		t.Errorf("log resource must be sanitized: %q", res.Contents[0].Text)
+	}
+}
+
+func TestReadDagSourceResource(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/dagSources/etl" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// \r is a JSON-valid control-char escape (CR, 0x0d); the sanitizer must
+		// strip it while keeping the \n line breaks of the multi-line source.
+		_, _ = io.WriteString(w, `{"content":"def hi():\n    print('hi')\r\n","dag_id":"etl","version_number":1}`)
+	})
+	res, err := h.readDagSource(context.Background(), readReq("dag://source/etl"))
+	if err != nil {
+		t.Fatalf("readDagSource: %v", err)
+	}
+	txt := res.Contents[0].Text
+	if !strings.Contains(txt, "def hi()") || !strings.Contains(txt, "print") {
+		t.Errorf("source content wrong: %q", txt)
+	}
+	if !strings.Contains(txt, "\n") {
+		t.Errorf("multi-line source must keep newlines: %q", txt)
+	}
+	if strings.Contains(txt, "\r") {
+		t.Errorf("source must be sanitized of control bytes: %q", txt)
+	}
+}
+
+func TestReadHealthResource(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v2/monitor/health":
+			_, _ = io.WriteString(w, `{"scheduler":{"status":"healthy"},"metadatabase":{"status":"healthy"}}`)
+		case "/api/v2/monitor/executor":
+			_, _ = io.WriteString(w, `{"pod_dispatch_enabled":true,"task_namespace":"leoflow","execution_modes":["kubernetes_pod"]}`)
+		case "/api/v2/version":
+			_, _ = io.WriteString(w, `{"version":"v0.2.0","git_version":"abc123"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	res, err := h.readHealth(context.Background(), readReq("health://control-plane"))
+	if err != nil {
+		t.Fatalf("readHealth: %v", err)
+	}
+	txt := res.Contents[0].Text
+	for _, want := range []string{`"health"`, `"executor"`, `"version"`, "kubernetes_pod", "v0.2.0"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("health snapshot missing %q; got %s", want, txt)
+		}
+	}
+}
+
+// TestReadHealthDegrades: if some monitor sections fail, the snapshot still
+// returns what responded (structured degradation), not a hard error.
+func TestReadHealthDegrades(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/version" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"version":"v0.2.0"}`)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError) // health + executor down
+	})
+	res, err := h.readHealth(context.Background(), readReq("health://control-plane"))
+	if err != nil {
+		t.Fatalf("readHealth should degrade, not error: %v", err)
+	}
+	if !strings.Contains(res.Contents[0].Text, "v0.2.0") || strings.Contains(res.Contents[0].Text, `"health"`) {
+		t.Errorf("degraded snapshot should carry version only; got %s", res.Contents[0].Text)
 	}
 }
 

@@ -108,6 +108,60 @@ func TestSearchLogsTruncates(t *testing.T) {
 	}
 }
 
+// TestDiagnoseRunCapsGiantLine: a single newline-free megabyte line must not
+// slip into the agent context whole — line-count truncation doesn't catch it, so
+// each line is length-capped (D10 "cap line length").
+func TestDiagnoseRunCapsGiantLine(t *testing.T) {
+	giant := strings.Repeat("A", 5_000_000)
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v2/dags/etl/dagRuns/r1":
+			_, _ = io.WriteString(w, `{"dag_id":"etl","dag_run_id":"r1","state":"failed"}`)
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances":
+			_, _ = io.WriteString(w, `{"task_instances":[{"task_id":"load","state":"failed","try_number":1}],"total_entries":1}`)
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/load/logs/1":
+			_, _ = io.WriteString(w, giant) // one line, no newline
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	_, out, err := h.diagnoseRun(context.Background(), nil, diagnoseRunInput{DagID: "etl", RunID: "r1"})
+	if err != nil {
+		t.Fatalf("diagnoseRun: %v", err)
+	}
+	if len(out.FailedTasks) != 1 {
+		t.Fatalf("want 1 failed task, got %d", len(out.FailedTasks))
+	}
+	if n := len([]rune(out.FailedTasks[0].LogTail)); n > maxLineRunes+64 {
+		t.Errorf("log_tail not length-capped: %d runes (cap %d)", n, maxLineRunes)
+	}
+	if !strings.Contains(out.FailedTasks[0].LogTail, "line truncated") {
+		t.Error("a truncated line should carry the truncation marker")
+	}
+}
+
+// TestSearchLogsCapsGiantLine: a matching line that is enormous is length-capped
+// in the returned match, not surfaced whole.
+func TestSearchLogsCapsGiantLine(t *testing.T) {
+	giant := "error " + strings.Repeat("B", 5_000_000)
+	h := testHandlers(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, giant)
+	})
+	_, out, err := h.searchLogs(context.Background(), nil, searchLogsInput{
+		DagID: "d", RunID: "r", TaskID: "t", Query: "error",
+	})
+	if err != nil {
+		t.Fatalf("searchLogs: %v", err)
+	}
+	if len(out.Matches) != 1 {
+		t.Fatalf("want 1 match, got %d", len(out.Matches))
+	}
+	if n := len([]rune(out.Matches[0].Line)); n > maxLineRunes+64 {
+		t.Errorf("match line not length-capped: %d runes (cap %d)", n, maxLineRunes)
+	}
+}
+
 // TestSearchLogsMissingArgs: the locators and the query are required.
 func TestSearchLogsMissingArgs(t *testing.T) {
 	h := &handlers{}
@@ -134,7 +188,7 @@ func TestNewServerRegistersListDags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	srv := NewServer(api, "", "test")
+	srv := NewServer(api, "", "test", false)
 
 	serverT, clientT := mcpsdk.NewInMemoryTransports()
 	_, err = srv.Connect(ctx, serverT, nil)
@@ -163,6 +217,64 @@ func TestNewServerRegistersListDags(t *testing.T) {
 	}
 }
 
+// TestNewServerAdvertisesResources connects a client and asserts every resource
+// is discoverable via resources/list (static) and resources/templates/list
+// (templated). This is the same "registered-but-invisible" guard the tools test
+// applies — a resource clients can't enumerate is a resource they won't use.
+func TestNewServerAdvertisesResources(t *testing.T) {
+	ctx := context.Background()
+	api, err := apiclient.New("http://control-plane.invalid", "")
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	srv := NewServer(api, "", "test", false)
+
+	serverT, clientT := mcpsdk.NewInMemoryTransports()
+	if _, err = srv.Connect(ctx, serverT, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "0"}, nil)
+	sess, err := client.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	seen := map[string]bool{}
+	resList, err := sess.ListResources(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	for _, r := range resList.Resources {
+		seen[r.URI] = true
+	}
+	for _, want := range []string{"dag://list", "health://control-plane"} {
+		if !seen[want] {
+			t.Errorf("static resource %q not advertised via resources/list", want)
+		}
+	}
+
+	tmpl := map[string]bool{}
+	tmplList, err := sess.ListResourceTemplates(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListResourceTemplates: %v", err)
+	}
+	for _, r := range tmplList.ResourceTemplates {
+		tmpl[r.URITemplate] = true
+	}
+	for _, want := range []string{
+		"run://detail/{dag_id}/{run_id}",
+		"task://instances/{dag_id}/{run_id}",
+		"log://task/{dag_id}/{run_id}/{task_id}/{try_number}",
+		"dag://source/{dag_id}",
+		"dag://spec/{dag_id}",
+	} {
+		if !tmpl[want] {
+			t.Errorf("resource template %q not advertised via resources/templates/list", want)
+		}
+	}
+}
+
 // testHandlers spins up a fake control plane and returns handlers wired to it.
 func testHandlers(t *testing.T, fn http.HandlerFunc) *handlers {
 	t.Helper()
@@ -175,9 +287,10 @@ func testHandlers(t *testing.T, fn http.HandlerFunc) *handlers {
 	return &handlers{api: c}
 }
 
-// TestPerRequestTokenPassThrough: on a request carrying an Authorization header
-// (the HTTP transport), the handler builds a client with THAT token and the
-// control plane sees it — the pass-through the Pro transport relies on (D9).
+// TestPerRequestTokenPassThrough: in http mode (requireBearer), a request
+// carrying an Authorization header makes the handler build a client with THAT
+// token, and the control plane sees it — the pass-through the Pro transport
+// relies on (D9).
 func TestPerRequestTokenPassThrough(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +304,7 @@ func TestPerRequestTokenPassThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &handlers{api: base, serverURL: srv.URL}
+	h := &handlers{api: base, serverURL: srv.URL, requireBearer: true}
 	req := &mcpsdk.CallToolRequest{Extra: &mcpsdk.RequestExtra{
 		Header: http.Header{"Authorization": []string{"Bearer usertok"}},
 	}}
@@ -203,10 +316,44 @@ func TestPerRequestTokenPassThrough(t *testing.T) {
 	}
 }
 
-// TestNoServerURLIgnoresHeader: with no serverURL (stdio mode), a stray
-// Authorization header is ignored and the base (process-token) client is used —
-// so stdio can't be tricked into re-tokening per request.
-func TestNoServerURLIgnoresHeader(t *testing.T) {
+// TestHTTPModeRefusesMissingBearer: in http mode a bearer-less request is
+// refused, NOT served with the base client — otherwise an anonymous caller could
+// ride an ambient process token (the D9 defect the review caught). The control
+// plane must never be touched.
+func TestHTTPModeRefusesMissingBearer(t *testing.T) {
+	var touched bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		touched = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"dags":[],"total_entries":0}`)
+	}))
+	defer srv.Close()
+
+	base, err := apiclient.New(srv.URL, "ambient-should-not-be-used")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handlers{api: base, serverURL: srv.URL, requireBearer: true}
+
+	// No Extra at all, and an explicitly empty header — both must be refused.
+	for _, req := range []*mcpsdk.CallToolRequest{
+		{},
+		{Extra: &mcpsdk.RequestExtra{Header: http.Header{}}},
+		{Extra: &mcpsdk.RequestExtra{Header: http.Header{"Authorization": []string{"Bearer "}}}},
+	} {
+		if _, _, err := h.listDags(context.Background(), req, listDagsInput{}); err == nil {
+			t.Errorf("bearer-less http request should be refused, req=%+v", req)
+		}
+	}
+	if touched {
+		t.Error("a refused request must never reach the control plane")
+	}
+}
+
+// TestStdioIgnoresHeader: in stdio mode (requireBearer=false) the base
+// (process-token) client is always used and any inbound Authorization header is
+// ignored — so stdio can't be coaxed into per-request re-tokening.
+func TestStdioIgnoresHeader(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -219,7 +366,7 @@ func TestNoServerURLIgnoresHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &handlers{api: base} // serverURL empty
+	h := &handlers{api: base, serverURL: srv.URL} // requireBearer=false (stdio)
 	req := &mcpsdk.CallToolRequest{Extra: &mcpsdk.RequestExtra{
 		Header: http.Header{"Authorization": []string{"Bearer usertok"}},
 	}}
@@ -227,7 +374,7 @@ func TestNoServerURLIgnoresHeader(t *testing.T) {
 		t.Fatalf("listDags: %v", err)
 	}
 	if gotAuth != "Bearer basetok" {
-		t.Errorf("without serverURL the base token must be used; control plane saw %q", gotAuth)
+		t.Errorf("stdio must use the base token and ignore the header; control plane saw %q", gotAuth)
 	}
 }
 

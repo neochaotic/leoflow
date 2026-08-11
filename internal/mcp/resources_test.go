@@ -135,6 +135,43 @@ func TestReadDagSpecResource(t *testing.T) {
 	}
 }
 
+// TestReadDagSpecSanitizesValues: the compiled spec is author-controlled free
+// text (task descriptions, owners). A control/ANSI byte stored in a string value
+// (as the JSON escape \u001b) must be stripped before the agent's JSON
+// can turn it back into a live escape (D10) — the spec is not exempt just
+// because it is structured.
+func TestReadDagSpecSanitizesValues(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// A task description carrying an ANSI escape as the JSON escape \u001b —
+		// valid JSON on the wire; the decoder turns it into a real ESC byte.
+		_, _ = io.WriteString(w, `{"dag_id":"etl","tasks":[{"task_id":"load","description":"evil\u001b[31mred"}]}`)
+	})
+	res, err := h.readDagSpec(context.Background(), readReq("dag://spec/etl"))
+	if err != nil {
+		t.Fatalf("readDagSpec: %v", err)
+	}
+	txt := res.Contents[0].Text
+	if strings.Contains(txt, "\x1b") {
+		t.Errorf("spec must be sanitized of control bytes; got %q", txt)
+	}
+	if !strings.Contains(txt, `"task_id":"load"`) || !strings.Contains(txt, "red") {
+		t.Errorf("sanitizing must keep the graph and surrounding text: %s", txt)
+	}
+}
+
+// TestReadDagSpecNonJSON: a 200 whose body is not JSON is reported as an error,
+// not forwarded verbatim as application/json.
+func TestReadDagSpecNonJSON(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `<html>not json</html>`)
+	})
+	if _, err := h.readDagSpec(context.Background(), readReq("dag://spec/etl")); err == nil {
+		t.Error("a non-JSON spec body should surface as an error")
+	}
+}
+
 func TestReadHealthResource(t *testing.T) {
 	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

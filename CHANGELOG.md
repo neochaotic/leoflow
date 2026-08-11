@@ -19,7 +19,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `log://task/{dag_id}/{run_id}/{task_id}/{try_number}` (truncated + sanitized),
   `dag://source/{dag_id}` (the dag.py text), `dag://spec/{dag_id}` (the compiled
   dag.json artifact, via a new GET /api/v2/dags/{dag_id}/spec endpoint), and
-  `health://control-plane` (component health + executor + version). The Pro HTTP transport and authoring follow.
+  `health://control-plane` (component health + executor + version). Beyond stdio
+  it also speaks **Streamable HTTP** (`--transport http`, `POST /mcp`, stateless)
+  as an optional Pro service, where each request carries its own bearer and the
+  server mints a per-request control-plane client from it — the token
+  pass-through the Pro deployment relies on, with no ambient privilege. Authoring
+  follows.
 - **A generated, typed Go client for the `/api/v2` surface (`pkg/client`)** — the
   single control-plane client the CLI, the coming MCP server, and smoke tests
   share instead of hand-rolling HTTP (ADR 0050). Generated from the OpenAPI spec

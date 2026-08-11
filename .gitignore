@@ -21,6 +21,8 @@ COPILOT.md
 # Compiled binaries
 bin/
 dist/
+/leoflow-mcp
+/leoflow
 *.exe
 *.exe~
 *.dll

@@ -22,48 +22,61 @@ const (
 	maxDagLim     = 200
 )
 
-// handlers holds what the tool/resource handlers share. api is the base client
-// (the stdio process token, or a test client); serverURL lets a handler build a
-// PER-REQUEST client from the caller's Authorization header on the HTTP
-// transport, where one process serves many callers (ADR 0050 D9 pass-through).
+// handlers holds what the tool/resource handlers share. api is the base client;
+// serverURL is the control-plane URL used to build per-request clients.
+//
+// requireBearer is the identity policy, and it keys off the TRANSPORT, not off
+// whether serverURL happens to be set:
+//   - HTTP transport (requireBearer=true): one process serves many callers, so
+//     every request MUST carry its own bearer; the server builds a client from
+//     THAT token and holds no ambient identity (ADR 0050 D9). A bearer-less
+//     request is refused, never served with the base client — otherwise an
+//     anonymous caller could ride a process-level token.
+//   - stdio transport (requireBearer=false): single local caller whose identity
+//     is the process token in the base client; any inbound header is ignored, so
+//     stdio can't be coaxed into per-request re-tokening.
 type handlers struct {
-	api       *apiclient.ClientWithResponses
-	serverURL string
+	api           *apiclient.ClientWithResponses
+	serverURL     string
+	requireBearer bool
 }
 
-// clientFor returns the /api/v2 client for one request: on the HTTP transport a
-// per-request bearer arrives in the header, so build a client carrying THAT
-// token (pass-through — the MCP never mints one); on stdio there is no such
-// header, so fall back to the base client (built from the process token).
-func (h *handlers) clientFor(extra *mcpsdk.RequestExtra) *apiclient.ClientWithResponses {
-	if h.serverURL != "" && extra != nil && extra.Header != nil {
-		if authz := extra.Header.Get("Authorization"); authz != "" {
-			token := strings.TrimSpace(strings.TrimPrefix(authz, "Bearer "))
-			if c, err := apiclient.New(h.serverURL, token); err == nil {
-				return c
-			}
-		}
+// clientFor returns the /api/v2 client for one request per the identity policy
+// above. On the HTTP transport it demands a bearer and never falls back to the
+// base client; on stdio it always uses the base client and ignores any header.
+func (h *handlers) clientFor(extra *mcpsdk.RequestExtra) (*apiclient.ClientWithResponses, error) {
+	if !h.requireBearer {
+		return h.api, nil
 	}
-	return h.api
+	if extra == nil || extra.Header == nil {
+		return nil, fmt.Errorf("missing Authorization header (the http transport requires a per-request bearer)")
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(extra.Header.Get("Authorization"), "Bearer "))
+	if token == "" {
+		return nil, fmt.Errorf("missing bearer token (the http transport requires a per-request bearer)")
+	}
+	return apiclient.New(h.serverURL, token)
 }
 
 // apiFor resolves the client for a tool/resource request, tolerating a nil
 // request (unit tests call handlers directly with nil).
-func apiFor[P mcpsdk.Params](h *handlers, req *mcpsdk.ServerRequest[P]) *apiclient.ClientWithResponses {
+func apiFor[P mcpsdk.Params](h *handlers, req *mcpsdk.ServerRequest[P]) (*apiclient.ClientWithResponses, error) {
 	if req == nil {
-		return h.api
+		return h.api, nil
 	}
 	return h.clientFor(req.Extra)
 }
 
 // NewServer builds a read-only Leoflow MCP server. api is the base control-plane
-// client; serverURL is the control-plane URL used to build per-request clients on
-// the HTTP transport. It registers the read tools + resources; the caller runs it
-// over a transport (stdio for Lite dev, Streamable HTTP for Pro). Tools that
-// mutate state are deliberately absent (ADR 0050 D7).
-func NewServer(api *apiclient.ClientWithResponses, serverURL, version string) *mcpsdk.Server {
+// client; serverURL is the control-plane URL used to build per-request clients.
+// requireBearer selects the identity policy (true for the HTTP transport, where
+// each request carries its own token; false for stdio) — see handlers. It
+// registers the read tools + resources; the caller runs it over a transport
+// (stdio for Lite dev, Streamable HTTP for Pro). Tools that mutate state are
+// deliberately absent (ADR 0050 D7).
+func NewServer(api *apiclient.ClientWithResponses, serverURL, version string, requireBearer bool) *mcpsdk.Server {
 	s := mcpsdk.NewServer(&mcpsdk.Implementation{Name: serverName, Version: version}, nil)
-	h := &handlers{api: api, serverURL: serverURL}
+	h := &handlers{api: api, serverURL: serverURL, requireBearer: requireBearer}
 	mcpsdk.AddTool(s, &mcpsdk.Tool{
 		Name:        "list_dags",
 		Description: "List DAGs registered in the Leoflow control plane, with their paused state.",
@@ -96,10 +109,14 @@ type listDagsOutput struct {
 }
 
 // listDags returns a compact list of DAGs. It shapes the response rather than
-// forwarding the verbose upstream payload (ADR 0050 R18), and surfaces a
+// forwarding the verbose upstream payload (ADR 0050 D7), and surfaces a
 // non-200 as an error so the agent never mistakes a failed call for "no DAGs".
 func (h *handlers) listDags(ctx context.Context, req *mcpsdk.CallToolRequest, in listDagsInput) (*mcpsdk.CallToolResult, listDagsOutput, error) {
-	out, err := h.fetchDagList(ctx, apiFor(h, req), in)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, listDagsOutput{}, err
+	}
+	out, err := h.fetchDagList(ctx, api, in)
 	return nil, out, err
 }
 
@@ -156,7 +173,22 @@ func deref[T any](p *T) T {
 const (
 	defaultLogTail = 40
 	maxLogTail     = 200
+	// maxLineRunes caps a SINGLE line's length. Tail/match limits are by line
+	// count, so one newline-free megabyte line (a serialized frame, a no-newline
+	// progress bar) would otherwise slip the whole thing into the agent's context
+	// (D10 "cap line length"). Applied after control-stripping, on a rune boundary.
+	maxLineRunes = 2000
 )
+
+// capLine truncates one line to maxLineRunes on a rune boundary, appending a
+// marker so the agent knows the line was cut rather than actually short.
+func capLine(s string) string {
+	r := []rune(s)
+	if len(r) <= maxLineRunes {
+		return s
+	}
+	return string(r[:maxLineRunes]) + " …[line truncated]"
+}
 
 type diagnoseRunInput struct {
 	DagID        string `json:"dag_id" jsonschema:"the DAG id"`
@@ -182,7 +214,7 @@ type diagnoseRunOutput struct {
 }
 
 // diagnoseRun composes the run, its task instances, and each failed task's log
-// tail into a single diagnosis (ADR 0050 R19), so an agent gets one answer
+// tail into a single diagnosis (ADR 0050 D7), so an agent gets one answer
 // instead of chaining four calls it would likely mis-sequence. It is
 // deliberately client-side composition for the MVP; a server-side aggregate
 // endpoint is the later optimization for chattiness. Log tails are truncated and
@@ -198,7 +230,10 @@ func (h *handlers) diagnoseRun(ctx context.Context, req *mcpsdk.CallToolRequest,
 	if tail > maxLogTail {
 		tail = maxLogTail
 	}
-	api := apiFor(h, req)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, diagnoseRunOutput{}, err
+	}
 	runResp, err := api.GetDagRunWithResponse(ctx, in.DagID, in.RunID)
 	if err != nil {
 		return nil, diagnoseRunOutput{}, fmt.Errorf("fetching run: %w", err)
@@ -293,7 +328,7 @@ type searchLogsOutput struct {
 // searchLogs fetches one task attempt's log and returns the lines matching a
 // case-insensitive substring, with 1-based line numbers — so an agent can find
 // the relevant lines of a long log without pulling the whole thing into context
-// (ADR 0050 R16). The match is a plain substring, not a regex, to avoid handing
+// (ADR 0050 D7). The match is a plain substring, not a regex, to avoid handing
 // the model a ReDoS lever. Matched lines are sanitized (untrusted content, D10)
 // and the returned set is capped, but the true total is always reported.
 func (h *handlers) searchLogs(ctx context.Context, req *mcpsdk.CallToolRequest, in searchLogsInput) (*mcpsdk.CallToolResult, searchLogsOutput, error) {
@@ -312,7 +347,10 @@ func (h *handlers) searchLogs(ctx context.Context, req *mcpsdk.CallToolRequest, 
 		maxN = maxLogMatches
 	}
 
-	api := apiFor(h, req)
+	api, err := apiFor(h, req)
+	if err != nil {
+		return nil, searchLogsOutput{}, err
+	}
 	resp, err := api.GetTaskLogsWithResponse(ctx, in.DagID, in.RunID, in.TaskID, try)
 	if err != nil {
 		return nil, searchLogsOutput{}, fmt.Errorf("fetching task log: %w", err)
@@ -330,7 +368,7 @@ func (h *handlers) searchLogs(ctx context.Context, req *mcpsdk.CallToolRequest, 
 		}
 		out.TotalMatches++
 		if len(out.Matches) < maxN {
-			out.Matches = append(out.Matches, logMatch{LineNumber: i + 1, Line: stripControl(ln)})
+			out.Matches = append(out.Matches, logMatch{LineNumber: i + 1, Line: capLine(stripControl(ln))})
 		}
 	}
 	out.Truncated = out.TotalMatches > len(out.Matches)
@@ -340,7 +378,7 @@ func (h *handlers) searchLogs(ctx context.Context, req *mcpsdk.CallToolRequest, 
 // sanitizeLogTail returns at most the last n lines of raw log output, stripped of
 // control and ANSI bytes (keeping \n and \t). Log content is untrusted (D10): an
 // ANSI/control payload in a task's stderr must not reach the agent's context
-// intact, and an unbounded tail would blow the context window (R16).
+// intact, and an unbounded tail would blow the context window (D10).
 func sanitizeLogTail(raw string, n int) string {
 	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
 	// Drop a trailing empty line from a final newline so "n lines" is intuitive.
@@ -355,7 +393,7 @@ func sanitizeLogTail(raw string, n int) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(stripControl(ln))
+		b.WriteString(capLine(stripControl(ln)))
 	}
 	return b.String()
 }

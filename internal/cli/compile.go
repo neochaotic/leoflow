@@ -143,6 +143,11 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	if perr != nil {
 		return perr
 	}
+	// A non-build compile is a Lite/host build (subprocess executor), same as the
+	// dbt_group path. On Lite: --project-dir must be absolute (the task runs from a
+	// temp workdir), and with no managed connection each task gets the zero-config
+	// duckdb profile step — unless the project ships its own profiles.yml (#575).
+	local := !o.build
 	spec, err := dbt.Compile(manifest, dbt.Meta{
 		DagID:       cfg.DagID,
 		DagVersion:  o.dagVersion,
@@ -155,7 +160,8 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Connection:  conn,
 		Profile:     profile,
 		Schema:      cfg.Dbt.Schema,
-		ProjectDir:  cfg.Dbt.Project,
+		ProjectDir:  dbtProjectDir(dir, cfg.Dbt.Project, local),
+		Local:       local && !dbtProjectHasProfiles(filepath.Join(dir, cfg.Dbt.Project)),
 	})
 	if err != nil {
 		return fmt.Errorf("dbt compile: %w", err)

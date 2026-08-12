@@ -61,6 +61,41 @@ func TestCompileNoScheduleIsNil(t *testing.T) {
 	}
 }
 
+// TestCompileLocalEmitsDuckdbPrefix locks the Lite wiring: Meta.Local threads into
+// the render options, so a top-level dbt project built for Lite (no managed
+// connection) gets the zero-config duckdb profile step — the same behavior the
+// dbt_group path already has. Without it, a Lite build emits a bare `dbt run` with
+// no profiles.yml and silently assumes the user supplied one (#575).
+func TestCompileLocalEmitsDuckdbPrefix(t *testing.T) {
+	spec, err := Compile(loadManifest(t, "manifest_chain.json"), Meta{
+		DagID: "shop", Image: "img", Profile: "transform", Local: true,
+	})
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+	for _, task := range spec.Tasks {
+		if !strings.Contains(task.Entrypoint, "--dbt-default-duckdb transform") {
+			t.Errorf("Lite task must inject the duckdb profile step; got %q", task.Entrypoint)
+		}
+	}
+}
+
+// TestCompileNonLocalNoDuckdbPrefix: the Pro/image path (Local=false) must NOT
+// inject the duckdb step — the baked profiles.yml is used instead.
+func TestCompileNonLocalNoDuckdbPrefix(t *testing.T) {
+	spec, err := Compile(loadManifest(t, "manifest_chain.json"), Meta{
+		DagID: "shop", Image: "img", Profile: "transform", Local: false,
+	})
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+	for _, task := range spec.Tasks {
+		if strings.Contains(task.Entrypoint, "--dbt-default-duckdb") {
+			t.Errorf("Pro task must not inject the duckdb step; got %q", task.Entrypoint)
+		}
+	}
+}
+
 // dag_id is required — a dbt DAG with no id is a loud error, not a silent default.
 func TestCompileRequiresDagID(t *testing.T) {
 	if _, err := Compile(loadManifest(t, "manifest_chain.json"), Meta{Image: "img"}); err == nil {

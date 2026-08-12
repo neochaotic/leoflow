@@ -6,6 +6,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fresh binary-only install: `leoflow compile` and `leoflow lite` now work
+  without a repo or `PYTHONPATH`.** The primary "download the release and run
+  it" path was broken: the binary extracts the Python parser to
+  `~/.leoflow/pysrc/parser`, but spawned it as a bare `python3 -m leoflow_parser`
+  without putting that directory on `PYTHONPATH`, so compile failed with
+  `No module named leoflow_parser`. And the Lite boot referenced the extracted
+  `pysrc/runtime/python` (to build the per-DAG venv) *before* anything extracted
+  it, aborting with `does not exist`. The parser invocation now always wires the
+  extracted sources onto `PYTHONPATH`, and the Lite boot self-heals the
+  extraction before provisioning the venv. Every existing e2e job preset
+  `PYTHONPATH=parser` (repo-relative), which masked both — a new
+  binary-only-install CI gate exercises the genuine path (built binary, clean
+  HOME, no repo, no `PYTHONPATH`).
+
 ## [0.3.0-rc.1] - 2026-08-12
 
 > First RC of the **0.3.0** line. Adds the experimental **`leoflow-mcp`** Model

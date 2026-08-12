@@ -29,6 +29,54 @@ func pysrcRoot() (string, error) {
 	return filepath.Join(home, ".leoflow", "pysrc"), nil
 }
 
+// parserPysrcDir returns the extracted parser-sources directory
+// (~/.leoflow/pysrc/parser) that ensurePysrc writes and the bundled
+// `python3 -m leoflow_parser` imports from. It is empty when the home
+// directory cannot be resolved — the caller then leaves PYTHONPATH untouched
+// and falls back to the ambient environment.
+func parserPysrcDir() string {
+	root, err := pysrcRoot()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root, "parser")
+}
+
+// withParserPythonPath returns env with the extracted parser-sources directory
+// guaranteed on PYTHONPATH, preserving any entries already there (a caller's
+// own PYTHONPATH, or CI's repo-root `parser`). On a binary-only install the
+// default parser command is a bare `python3 -m leoflow_parser` and nothing
+// else puts leoflow_parser on the import path, so the parser fails with
+// ModuleNotFoundError (#587); this closes that gap without depending on the
+// parser_cmd string carrying the path. The bundled parser is pure Python with
+// vendored deps (ADR 0024), so this directory is all it needs to import.
+// Idempotent: the directory is never added twice.
+func withParserPythonPath(env []string) []string {
+	dir := parserPysrcDir()
+	if dir == "" {
+		return env
+	}
+	const key = "PYTHONPATH="
+	for i, e := range env {
+		if !strings.HasPrefix(e, key) {
+			continue
+		}
+		existing := e[len(key):]
+		for _, p := range filepath.SplitList(existing) {
+			if p == dir {
+				return env // already present; nothing to do
+			}
+		}
+		if existing == "" {
+			env[i] = key + dir
+		} else {
+			env[i] = key + dir + string(os.PathListSeparator) + existing
+		}
+		return env
+	}
+	return append(env, key+dir)
+}
+
 // pythonSourcesChecksum hashes this binary's embedded parser+runtime sources, so a
 // drifted on-disk extraction (the binary-upgrade case, #239) can be detected
 // without re-extracting on every invocation.

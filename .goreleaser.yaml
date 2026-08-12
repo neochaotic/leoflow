@@ -44,12 +44,26 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags: *ldflags
+  - id: leoflow-mcp
+    main: ./cmd/leoflow-mcp
+    binary: leoflow-mcp
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    # leoflow-mcp carries its version in `package main` (var version), so it needs
+    # the unqualified `main.version` ldflag — the shared *ldflags anchor targets
+    # internal/version.* and would leave main.version at its "dev" default.
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
 
 archives:
   - id: leoflow
-    # One archive per platform containing all three binaries; install.sh extracts
+    # One archive per platform containing all four binaries; install.sh extracts
     # them into ~/.leoflow/bin.
-    ids: [leoflow, leoflow-server, leoflow-agent]
+    ids: [leoflow, leoflow-server, leoflow-agent, leoflow-mcp]
     formats: [tar.gz]
     name_template: "leoflow_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:

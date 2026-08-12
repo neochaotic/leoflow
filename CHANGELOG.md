@@ -6,6 +6,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `leoflow-mcp` binary is now built and shipped in the release archives.**
+  GoReleaser built `leoflow`/`leoflow-server`/`leoflow-agent` but not
+  `leoflow-mcp`, so v0.3.0-rc.1 shipped the MCP server as source with no
+  distributable binary. It now builds for the same platform matrix, carries its
+  version via the `main.version` ldflag, and is included in the per-platform
+  archive. (#586)
+
 ## [0.3.0-rc.1] - 2026-08-12
 
 > First RC of the **0.3.0** line. Adds the experimental **`leoflow-mcp`** Model

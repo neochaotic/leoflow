@@ -186,6 +186,32 @@ def test_airflow_prefixed_extra_keys_are_accepted():
     assert dbt_profile_from_uri(uri)["http_path"] == "/sql/x"
 
 
+def test_snowflake_missing_account_is_loud():
+    # A misconfigured cloud connection must fail loudly, not produce a broken profile.
+    uri = _conn_uri("snowflake", login="u", password="p", extra={"warehouse": "WH"})
+    with pytest.raises(ValueError):
+        dbt_profile_from_uri(uri)
+
+
+def test_bigquery_missing_keyfile_is_loud():
+    uri = _conn_uri("google_cloud_platform", schema="ds", extra={"project": "p"})
+    with pytest.raises(ValueError):
+        dbt_profile_from_uri(uri)
+
+
+def test_databricks_missing_http_path_is_loud():
+    uri = _conn_uri("databricks", password="t", host="h", extra={"catalog": "main"})
+    with pytest.raises(ValueError):
+        dbt_profile_from_uri(uri)
+
+
+def test_malformed_extra_degrades_to_missing_field_error():
+    # A non-JSON __extra__ is ignored (not a crash); the normal missing-required-field
+    # error then surfaces, rather than a confusing JSON parse traceback.
+    with pytest.raises(ValueError):
+        dbt_profile_from_uri("databricks://t@h?__extra__=not-json")  # http_path missing
+
+
 def test_write_dbt_profile_from_env(tmp_path, monkeypatch):
     monkeypatch.setenv("AIRFLOW_CONN_WAREHOUSE_PG", "postgres://u:p@h:5432/wh?schema=analytics")
     path = write_dbt_profile("warehouse_pg", "analytics", str(tmp_path))

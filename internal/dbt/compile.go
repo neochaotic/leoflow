@@ -26,6 +26,10 @@ type Meta struct {
 	Schema string
 	// ProjectDir scopes the dbt commands with --project-dir for a subdir project.
 	ProjectDir string
+	// Local marks a Lite/host build: with no Connection, each task is prefixed with
+	// the step that writes a default duckdb profiles.yml (the zero-config local
+	// warehouse). Ignored on the Pro/image path. See Options.Local.
+	Local bool
 }
 
 // Compile renders a dbt manifest.json into tasks and assembles a complete
@@ -41,6 +45,7 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		Profile:     meta.Profile,
 		Schema:      meta.Schema,
 		ProjectDir:  meta.ProjectDir,
+		Local:       meta.Local,
 	})
 	if err != nil {
 		return domain.DAGSpec{}, err

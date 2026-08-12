@@ -69,7 +69,20 @@ func planRetryTransitions(run RunState, effective map[string]domain.TaskState, d
 	for _, t := range run.Tasks {
 		switch run.States[t.TaskID] {
 		case domain.TaskStateFailed:
-			if retriable(run, t.TaskID) {
+			switch {
+			case run.InfraFailed[t.TaskID]:
+				// Infra fault (agent/pod/dispatch lost): re-place the task WITHOUT
+				// consuming its retry budget — an infrastructure failure is not the
+				// user's task failing (ADR 0051 Phase 1). Bounded by a separate
+				// infra-attempt limit so a poison placement can't loop forever;
+				// exhausted → terminal (no fallback to the app-retry budget). The
+				// store bumps infra_attempts (not try_number) when applying failed→none.
+				if run.InfraAttempts[t.TaskID] < infraMaxAttempts {
+					out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
+					effective[t.TaskID] = domain.TaskStateNone
+				}
+				decided[t.TaskID] = true
+			case retriable(run, t.TaskID):
 				out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateUpForRetry})
 				effective[t.TaskID] = domain.TaskStateUpForRetry
 				decided[t.TaskID] = true

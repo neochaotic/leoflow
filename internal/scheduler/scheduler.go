@@ -79,6 +79,16 @@ type RunState struct {
 	// a task failure — and drives the dispatch_failed give-up at
 	// dispatchMaxAttempts. Absent entries mean zero.
 	DispatchAttempts map[string]int
+	// InfraFailed marks a `failed` task whose failure was infra-caused (agent/pod/
+	// dispatch lost), from the durable last_failure_kind signal. Such a task
+	// re-places without consuming the task's retry budget (ADR 0051 Phase 1) — an
+	// infrastructure fault is not the user's task failing.
+	InfraFailed map[string]bool
+	// InfraAttempts counts asynchronous infra re-placements per task — the
+	// try_number-free analog of DispatchAttempts for agent/pod/dispatch-lost faults.
+	// It bounds the re-place at infraMaxAttempts so a poison placement cannot loop
+	// forever. Absent entries mean zero.
+	InfraAttempts map[string]int
 	// Now is the wall-clock value the planner compares against EndedAt. Zero
 	// means "skip the cooldown gate" so legacy callers + tests that don't set
 	// retry_delay get the previous (immediate-retry) behavior.

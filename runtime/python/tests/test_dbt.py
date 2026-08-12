@@ -8,6 +8,12 @@ import pytest
 
 from leoflow_runtime.dbt import dbt_profile_from_uri, write_dbt_profile
 
+# Stand-in for a private key. The mapper passes the value through verbatim (it does
+# not parse it), so a real PEM body is unnecessary here — and a real PEM armor block
+# would trip secret scanners (gitleaks) on a test fixture. The real PEM format users
+# provide is documented in the connection docs.
+FAKE_PRIVATE_KEY = "test-private-key-material-xxxx-not-a-real-key"
+
 
 def _conn_uri(scheme, login="", password="", host="", port=None, schema="", extra=None):
     """Build an Airflow connection URI the way Leoflow delivers it (conn_type with
@@ -113,7 +119,7 @@ def test_snowflake_key_pair_auth_maps_to_private_key():
     # Key-pair (service principal) is Snowflake's guidance for automation. When a
     # private key is present it wins over a password and emits `private_key`
     # (inline PEM), dropping `password`/`token`. `user` is still required.
-    pem = "-----BEGIN PRIVATE KEY-----\nMIIBVgIBADANBgkq\n-----END PRIVATE KEY-----\n"
+    pem = FAKE_PRIVATE_KEY
     # private_key_content is the Airflow snowflake provider's Extra field.
     uri = _conn_uri(
         "snowflake", login="svc_user", schema="analytics",
@@ -131,7 +137,7 @@ def test_snowflake_key_pair_auth_maps_to_private_key():
 def test_snowflake_key_pair_dbt_native_alias():
     # The dbt-native name `private_key` is accepted as an alias of the provider's
     # private_key_content (for a connection whose Extra was written by hand).
-    pem = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"
+    pem = FAKE_PRIVATE_KEY
     uri = _conn_uri("snowflake", login="u", extra={"account": "a", "private_key": pem})
     assert dbt_profile_from_uri(uri)["private_key"] == pem
 
@@ -154,7 +160,7 @@ def test_snowflake_key_pair_path_dbt_native_alias():
 
 def test_snowflake_key_pair_via_airflow_prefixed_extra():
     # Legacy Airflow export form extra__<conn_type>__<key> must also deliver the key.
-    pem = "-----BEGIN PRIVATE KEY-----\nZZZ\n-----END PRIVATE KEY-----\n"
+    pem = FAKE_PRIVATE_KEY
     uri = _conn_uri("snowflake", login="u",
                     extra={"account": "a", "extra__snowflake__private_key_content": pem})
     assert dbt_profile_from_uri(uri)["private_key"] == pem
@@ -170,7 +176,7 @@ def test_bigquery_keyless_via_airflow_prefixed_extra():
 
 def test_snowflake_rejects_both_private_key_forms():
     # The adapter errors if both inline and path keys are set; reject early.
-    pem = "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n"
+    pem = FAKE_PRIVATE_KEY
     uri = _conn_uri("snowflake", extra={
         "account": "a", "private_key_content": pem, "private_key_file": "/k.p8"})
     with pytest.raises(ValueError):

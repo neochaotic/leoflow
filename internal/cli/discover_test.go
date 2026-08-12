@@ -59,6 +59,21 @@ func TestDiscoverProjects_TableDriven(t *testing.T) {
 			want: want{projects: []string{"yamlless"}, dagIDs: []string{"yamlless"}},
 		},
 		{
+			name: "dbt-only project (leoflow.yaml with dbt:, no dag.py) is discovered",
+			files: map[string]string{
+				"shopdbt/leoflow.yaml":    "dag_id: shopdbt\ndbt:\n  project: .\n",
+				"shopdbt/dbt_project.yml": "name: shop\n",
+			},
+			want: want{projects: []string{"shopdbt"}, dagIDs: []string{"shopdbt"}},
+		},
+		{
+			name: "leoflow.yaml without dag.py and without a dbt: block is NOT a project",
+			files: map[string]string{
+				"notaproj/leoflow.yaml": "dag_id: notaproj\n",
+			},
+			want: want{projects: nil},
+		},
+		{
 			name: "root project (backward compat) is discovered",
 			files: map[string]string{
 				"leoflow.yaml": "dag_id: root_dag\n",

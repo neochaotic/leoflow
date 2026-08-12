@@ -130,14 +130,20 @@ func pathDepth(p string) int {
 	return strings.Count(filepath.Clean(p), string(os.PathSeparator))
 }
 
-// projectAt builds a Project for path iff path contains a dag.py. The
-// returned Project's Config is fully defaulted; when no leoflow.yaml exists
-// the DagID falls back to filepath.Base(path).
+// projectAt builds a Project for path when the directory is a DAG project. A
+// project is marked by either a dag.py (a Python DAG; leoflow.yaml optional) OR
+// a leoflow.yaml carrying a dbt: block with no dag.py (a pure dbt project, whose
+// DAG is generated from the dbt manifest — the zero-config Lite path documented
+// in docs/dbt.md). The returned Project's Config is fully defaulted; when no
+// leoflow.yaml exists the DagID falls back to filepath.Base(path).
 func projectAt(path string) (Project, bool) {
-	if _, err := os.Stat(filepath.Join(path, dagSourceFile)); err != nil {
-		return Project{}, false
-	}
 	yamlPath := filepath.Join(path, "leoflow.yaml")
+	if _, err := os.Stat(filepath.Join(path, dagSourceFile)); err != nil {
+		// No dag.py: the only other kind of project is a pure dbt project — a
+		// leoflow.yaml with a dbt: block. Anything else (no yaml, or a yaml with
+		// neither dag.py nor dbt:) is not a project.
+		return dbtOnlyProjectAt(path, yamlPath)
+	}
 	if _, err := os.Stat(yamlPath); err == nil {
 		cfg, lerr := loadProjectConfig(path)
 		if lerr != nil {
@@ -175,6 +181,33 @@ func projectAt(path string) (Project, bool) {
 		DagID:      filepath.Base(path),
 		ConfigPath: "",
 		HasYAML:    false,
+		Config:     cfg,
+	}, true
+}
+
+// dbtOnlyProjectAt recognizes a pure dbt project: a leoflow.yaml carrying a dbt:
+// block, with no dag.py. Its DAG is generated from the dbt manifest at compile
+// time, so it has no Python source. A directory with no leoflow.yaml, or a
+// leoflow.yaml without a dbt: block (or one that fails to parse — we can't tell
+// it's dbt without parsing), is not a project.
+func dbtOnlyProjectAt(path, yamlPath string) (Project, bool) {
+	if _, err := os.Stat(yamlPath); err != nil {
+		return Project{}, false
+	}
+	cfg, lerr := loadProjectConfig(path)
+	if lerr != nil || cfg.Dbt == nil {
+		return Project{}, false
+	}
+	id := cfg.DagID
+	if id == "" {
+		id = filepath.Base(path)
+		cfg.DagID = id
+	}
+	return Project{
+		Path:       path,
+		DagID:      id,
+		ConfigPath: yamlPath,
+		HasYAML:    true,
 		Config:     cfg,
 	}, true
 }

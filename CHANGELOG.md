@@ -6,6 +6,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-rc.1] - 2026-08-12
+
+> First RC of the **0.3.0** line. Adds the experimental **`leoflow-mcp`** Model
+> Context Protocol server (read tools + resources over stdio and Streamable HTTP,
+> ADR 0050) and a typed **`pkg/client`** for `/api/v2`; brings **dbt** cloud-adapter
+> auth up to modern service-account standards (Databricks OAuth M2M, Snowflake
+> key-pair, BigQuery keyless), a dbt-aware `diagnose_run`, and adapter contract
+> tests; plus security hardening (seccomp, trusted-proxy default, `/metrics`
+> isolation). Docker-free gates green locally; full CI battery green on the tagged
+> commit (`f3ded10`).
+
 ### Added
 
 - **`diagnose_run` (MCP) is now dbt-aware and shows downstream impact.** For each

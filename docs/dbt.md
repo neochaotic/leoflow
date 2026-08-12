@@ -310,6 +310,33 @@ Power User, dbt Cloud IDE); Leoflow only adds orchestration and packing.
 
 ---
 
+## 7. Adapter assurance — what's verified how
+
+Leoflow generates each warehouse's `profiles.yml`. How thoroughly that generation
+is tested varies by adapter:
+
+| Adapter | Profile shape | Live query in CI |
+|---|---|---|
+| **postgres** | contract + live | ✅ real dbt on k3d (`e2e-dbt`) |
+| **duckdb** | contract + live | ✅ real dbt on Lite (`e2e-lite-dbt`) |
+| **snowflake** | ✅ contract-tested | ⚠️ hand-verified only |
+| **bigquery** | ✅ contract-tested | ⚠️ hand-verified only |
+| **databricks** | ✅ contract-tested | ⚠️ hand-verified only |
+
+**Contract-tested** means CI feeds Leoflow's emitted profile through the *real* dbt
+adapter's own credential parsing (`dbt-adapter-contracts` job): correct field
+names, alias resolution, required fields, and each auth mode (Snowflake key-pair,
+BigQuery keyless, Databricks OAuth M2M) are validated against the actual adapter —
+without connecting to a warehouse. What it does **not** prove is that a real query
+succeeds against your account.
+
+**Live-query verification for the cloud adapters is maintainer-owned** — it needs
+real warehouse accounts + CI secrets. The template is `test/e2e/dbt-connection-e2e.sh`
+(today it runs against a local Postgres warehouse); pointing it at a real Snowflake/
+BigQuery/Databricks account, gated on org secrets, is the remaining step.
+
+---
+
 ## Reference
 
 `leoflow.yaml` `dbt:` (whole-DAG) and each `dbt_groups:` entry (embedded) accept:

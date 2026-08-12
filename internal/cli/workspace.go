@@ -85,7 +85,13 @@ func (w *WorkspaceSpec) WatchedPaths() []string {
 		if p.HasYAML {
 			paths = append(paths, p.ConfigPath)
 		}
-		paths = append(paths, filepath.Join(p.Path, p.Config.DagSource))
+		if p.Config.Dbt != nil {
+			// A pure dbt project has no dag.py; watch its dbt project file so a
+			// model/config edit still triggers a reload.
+			paths = append(paths, filepath.Join(p.Path, p.Config.Dbt.Project, "dbt_project.yml"))
+		} else {
+			paths = append(paths, filepath.Join(p.Path, p.Config.DagSource))
+		}
 	}
 	return paths
 }

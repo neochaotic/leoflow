@@ -37,6 +37,24 @@ The account/warehouse/role fields are delivered to the task inside the
 `extra_dejson`. The round-trip (password with reserved characters + the Extra
 blob) is pinned by `TestSnowflakeConnectionURIShapeIntegration`.
 
+## dbt auth: password or key-pair (service account)
+
+When a dbt task uses this connection, Leoflow generates its `profiles.yml` from the
+connection at runtime. Two auth modes are supported:
+
+| Mode | What to set in Extra | dbt profile emitted |
+|---|---|---|
+| **Password** (default) | the password in Password | `password: <pw>` |
+| **Key-pair** (service account) | `private_key_content` (inline PEM) **or** `private_key_file` (path), plus optional `private_key_passphrase` | `private_key` / `private_key_path` (+ `private_key_passphrase`) |
+
+Key-pair is selected whenever a private key is present and takes precedence over the
+password (the two are mutually exclusive, so exactly one lands in the profile;
+`private_key_content` and `private_key_file` cannot both be set). Inline keys are
+emitted as-is — provide the full PEM (with the `-----BEGIN … -----` armor). The key
+is part of Extra, encrypted at rest exactly like the password. Prefer key-pair for
+automation — Snowflake is deprecating single-factor password auth for programmatic
+access.
+
 ## Example DAG (copy-paste)
 
 This recipe lives only here in the docs (it needs a real Snowflake account, so it

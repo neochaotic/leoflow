@@ -53,21 +53,63 @@ def _snowflake(_parts, ct, login, password, path, extra):
     account = _eget(extra, ct, "account")
     if not account:
         raise ValueError("snowflake connection needs `account` in its extra")
-    return {
-        "type": "snowflake", "account": account, "user": login, "password": password,
+    profile = {
+        "type": "snowflake", "account": account, "user": login,
         "role": _eget(extra, ct, "role"), "database": _eget(extra, ct, "database"),
         "warehouse": _eget(extra, ct, "warehouse"),
         "schema": path or _eget(extra, ct, "schema", "PUBLIC"), "threads": _threads(extra),
     }
+    # Auth: key-pair (service account) is Snowflake's guidance for automation and
+    # is preferred when a private key is present; otherwise fall back to a password.
+    # The Airflow snowflake provider carries the key in Extra as private_key_content
+    # (inline PEM) / private_key_file (path) — accept those, plus the dbt-native
+    # aliases. These (and private_key_passphrase) ride the connection's free-form
+    # extra pass-through, so they need no catalog field. The two forms are mutually
+    # exclusive in the adapter, and password/token are dropped for key-pair.
+    private_key = _eget(extra, ct, "private_key_content") or _eget(extra, ct, "private_key")
+    private_key_path = _eget(extra, ct, "private_key_file") or _eget(extra, ct, "private_key_path")
+    if private_key and private_key_path:
+        raise ValueError(
+            "snowflake connection: set only one of `private_key` or `private_key_path`"
+        )
+    if private_key or private_key_path:
+        if private_key:
+            profile["private_key"] = private_key
+        else:
+            profile["private_key_path"] = private_key_path
+        passphrase = _eget(extra, ct, "private_key_passphrase")
+        if passphrase:
+            profile["private_key_passphrase"] = passphrase
+    else:
+        profile["password"] = password
+    return profile
 
 
 def _bigquery(_parts, ct, _login, _password, path, extra):
+    project = _eget(extra, ct, "project")
+    dataset = path or _eget(extra, ct, "dataset")
+    # Keyless: method=oauth uses Application Default Credentials — the pod's
+    # identity via GKE Workload Identity on Pro — so no key file is shipped.
+    # `method` is a leoflow dbt-mapping selector carried in the free-form extra
+    # (not a catalog field). dataset is required by the adapter; project is
+    # optional (defers to the ADC environment project when absent).
+    if _eget(extra, ct, "method") == "oauth":
+        out = {
+            "type": "bigquery", "method": "oauth",
+            "dataset": dataset, "threads": _threads(extra),
+        }
+        if project:
+            out["project"] = project
+        return out
     keyfile = _eget(extra, ct, "keyfile_dict")
     if not keyfile:
-        raise ValueError("bigquery connection needs `keyfile_dict` in its extra")
+        raise ValueError(
+            "bigquery connection needs `keyfile_dict` in its extra "
+            "(or set `method: oauth` for keyless / Workload Identity)"
+        )
     return {
         "type": "bigquery", "method": "service-account-json",
-        "project": _eget(extra, ct, "project"), "dataset": path or _eget(extra, ct, "dataset"),
+        "project": project, "dataset": dataset,
         "keyfile_json": json.loads(keyfile) if isinstance(keyfile, str) else keyfile,
         "threads": _threads(extra),
     }

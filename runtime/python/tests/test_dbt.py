@@ -8,6 +8,12 @@ import pytest
 
 from leoflow_runtime.dbt import dbt_profile_from_uri, write_dbt_profile
 
+# Stand-in for a private key. The mapper passes the value through verbatim (it does
+# not parse it), so a real PEM body is unnecessary here — and a real PEM armor block
+# would trip secret scanners (gitleaks) on a test fixture. The real PEM format users
+# provide is documented in the connection docs.
+FAKE_PRIVATE_KEY = "test-private-key-material-xxxx-not-a-real-key"
+
 
 def _conn_uri(scheme, login="", password="", host="", port=None, schema="", extra=None):
     """Build an Airflow connection URI the way Leoflow delivers it (conn_type with
@@ -107,6 +113,100 @@ def test_snowflake_uri_maps_to_dbt_profile():
         "role": "TRANSFORMER", "database": "DB", "warehouse": "WH",
         "schema": "analytics", "threads": 4,
     }
+
+
+def test_snowflake_key_pair_auth_maps_to_private_key():
+    # Key-pair (service principal) is Snowflake's guidance for automation. When a
+    # private key is present it wins over a password and emits `private_key`
+    # (inline PEM), dropping `password`/`token`. `user` is still required.
+    pem = FAKE_PRIVATE_KEY
+    # private_key_content is the Airflow snowflake provider's Extra field.
+    uri = _conn_uri(
+        "snowflake", login="svc_user", schema="analytics",
+        extra={"account": "ab12345", "warehouse": "WH", "database": "DB",
+               "private_key_content": pem, "private_key_passphrase": "sekret"},
+    )
+    out = dbt_profile_from_uri(uri)
+    assert out["type"] == "snowflake"
+    assert out["user"] == "svc_user"
+    assert out["private_key"] == pem
+    assert out["private_key_passphrase"] == "sekret"
+    assert "password" not in out and "token" not in out
+
+
+def test_snowflake_key_pair_dbt_native_alias():
+    # The dbt-native name `private_key` is accepted as an alias of the provider's
+    # private_key_content (for a connection whose Extra was written by hand).
+    pem = FAKE_PRIVATE_KEY
+    uri = _conn_uri("snowflake", login="u", extra={"account": "a", "private_key": pem})
+    assert dbt_profile_from_uri(uri)["private_key"] == pem
+
+
+def test_snowflake_key_pair_path_variant():
+    # private_key_file is the Airflow provider's path field.
+    uri = _conn_uri("snowflake", login="svc",
+                    extra={"account": "a", "private_key_file": "/keys/rsa_key.p8"})
+    out = dbt_profile_from_uri(uri)
+    assert out["private_key_path"] == "/keys/rsa_key.p8"
+    assert "private_key" not in out and "password" not in out
+    assert "private_key_passphrase" not in out  # omitted when unset
+
+
+def test_snowflake_key_pair_path_dbt_native_alias():
+    # private_key_path is the dbt-native alias of the provider's private_key_file.
+    uri = _conn_uri("snowflake", login="u", extra={"account": "a", "private_key_path": "/k.p8"})
+    assert dbt_profile_from_uri(uri)["private_key_path"] == "/k.p8"
+
+
+def test_snowflake_key_pair_via_airflow_prefixed_extra():
+    # Legacy Airflow export form extra__<conn_type>__<key> must also deliver the key.
+    pem = FAKE_PRIVATE_KEY
+    uri = _conn_uri("snowflake", login="u",
+                    extra={"account": "a", "extra__snowflake__private_key_content": pem})
+    assert dbt_profile_from_uri(uri)["private_key"] == pem
+
+
+def test_bigquery_keyless_via_airflow_prefixed_extra():
+    # The keyless selector must also arrive via the prefixed extra form.
+    uri = _conn_uri("google_cloud_platform", schema="ds",
+                    extra={"extra__google_cloud_platform__method": "oauth"})
+    out = dbt_profile_from_uri(uri)
+    assert out["method"] == "oauth" and "keyfile_json" not in out
+
+
+def test_snowflake_rejects_both_private_key_forms():
+    # The adapter errors if both inline and path keys are set; reject early.
+    pem = FAKE_PRIVATE_KEY
+    uri = _conn_uri("snowflake", extra={
+        "account": "a", "private_key_content": pem, "private_key_file": "/k.p8"})
+    with pytest.raises(ValueError):
+        dbt_profile_from_uri(uri)
+
+
+def test_snowflake_password_still_works():
+    # Backward compatibility: no private key → password auth, no key-pair keys.
+    uri = _conn_uri("snowflake", login="u", password="p", extra={"account": "a"})
+    out = dbt_profile_from_uri(uri)
+    assert out["password"] == "p"
+    assert "private_key" not in out and "private_key_path" not in out
+
+
+def test_bigquery_keyless_oauth_maps_to_adc():
+    # Keyless: method=oauth uses Application Default Credentials (GKE Workload
+    # Identity on Pro) — no key file shipped. dataset required, project optional.
+    uri = _conn_uri("google_cloud_platform", schema="my_dataset",
+                    extra={"method": "oauth", "project": "my-proj"})
+    out = dbt_profile_from_uri(uri)
+    assert out == {"type": "bigquery", "method": "oauth",
+                   "project": "my-proj", "dataset": "my_dataset", "threads": 4}
+    assert "keyfile_json" not in out
+
+
+def test_bigquery_keyless_project_optional():
+    uri = _conn_uri("google_cloud_platform", schema="ds", extra={"method": "oauth"})
+    out = dbt_profile_from_uri(uri)
+    assert out["method"] == "oauth" and out["dataset"] == "ds"
+    assert "project" not in out  # deferred to the ADC environment project
 
 
 def test_bigquery_uri_maps_to_dbt_profile():

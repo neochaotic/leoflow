@@ -14,6 +14,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   OAuth M2M — Databricks' recommended auth for automation — instead of a Personal
   Access Token. PATs keep working; OAuth wins when present (the two are mutually
   exclusive). Same encrypted-at-rest, generated-in-pod delivery as before.
+- **Snowflake dbt profiles support key-pair auth (service account).** A managed
+  Snowflake connection whose extra carries `private_key_content` (inline PEM) or
+  `private_key_file` (path) — with an optional `private_key_passphrase` — now
+  generates a `profiles.yml` using key-pair auth instead of a password. Passwords
+  keep working; key-pair wins when a key is present (password/token dropped).
+  Prefer it for automation — Snowflake is deprecating single-factor password auth.
+- **BigQuery dbt profiles support keyless auth (Workload Identity).** Setting
+  `method: oauth` in a `google_cloud_platform` connection's extra now generates a
+  BigQuery `profiles.yml` that authenticates via Application Default Credentials
+  (GKE Workload Identity on Pro) — no service-account key file is shipped.
+  `keyfile_dict` (inline key) still works for the service-account-json method.
 
 ### Documentation
 

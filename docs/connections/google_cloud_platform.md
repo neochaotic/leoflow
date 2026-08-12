@@ -71,6 +71,18 @@ Workload Identity — to *read* the secret). Grant the task's GSA
 The SA JSON in the connection's Extra (encrypted at rest). Convenient for
 dev/low-criticality; **not** recommended (see Security below).
 
+### dbt (BigQuery) profile mapping
+When a **dbt** task uses this connection, Leoflow generates the BigQuery
+`profiles.yml` from it:
+
+| Extra | dbt profile |
+|---|---|
+| `method: oauth` | `method: oauth` — **keyless**, via Application Default Credentials (Workload Identity on Pro). No key shipped. `dataset` required; `project` optional (defers to the ADC project). |
+| `keyfile_dict` (inline SA JSON) | `method: service-account-json` + `keyfile_json` |
+
+Set **`method: oauth`** in Extra to get the keyless profile; otherwise the mapper
+expects `keyfile_dict`. Prefer keyless — it ships no downloadable key.
+
 ## Lite vs Pro
 
 | | Lite (subprocess) | Lite (k3d) | Pro (GKE) |

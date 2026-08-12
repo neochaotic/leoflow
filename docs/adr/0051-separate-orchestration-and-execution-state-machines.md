@@ -41,7 +41,7 @@ Today the second machine leaks through the first. Four pieces of evidence:
    nowhere else for them to live.
 
 3. **Infrastructure faults consume the task's retry budget — the money finding.**
-   All three pod reapers write a plain `failed`, which lands on the same
+   All three execution-fault reapers write a plain `failed`, which lands on the same
    `retriable()` rail as an application exception
    (`internal/scheduler/plan.go:104-107` — `run.Tries[taskID] < run.MaxTries[taskID]`).
    So an eviction, an OOM-kill, or a node loss burns one of the user's declared
@@ -63,7 +63,7 @@ Today the second machine leaks through the first. Four pieces of evidence:
      (`plan.go:85-95`).
 
    Two of the four ways a task can be re-placed already refuse to bill the user's
-   retry budget. The three pod reapers are the outlier. The seam this ADR draws
+   retry budget. The three execution-fault reapers are the outlier. The seam this ADR draws
    is the one that already exists in two places, made uniform.
 
 4. **#543: the agent's exit code conflates "task outcome" with "report
@@ -95,7 +95,7 @@ the seam a first-class contract.
 - **Execution state machine** — a new/expanded execution layer, seeded by
   today's `internal/executor`. Owns the **substrate**: it places work, owns the
   pod lifecycle, the `PodManager`, the reconciler (`reconcile.go`), and the three
-  pod reapers (`heartbeat_reap.go`, `pod_lost_reap.go`, `stale_queued_reap.go`).
+  execution-fault reapers (`heartbeat_reap.go`, `pod_lost_reap.go`, `stale_queued_reap.go`).
   It performs **infra-retry** — bounded, backed off, and it **does not burn the
   task-retry budget** (exactly as `DispatchAttempts` already does). It delivers
   **exactly one outcome** per work item.
@@ -125,7 +125,7 @@ layer is the only reader of those coordinates. This is the invariant that keeps
 the two machines decoupled — the substrate carries the DAG's coordinates as
 metadata without ever understanding the DAG.
 
-`Unexecutable` is the type that fixes finding #3: the three pod reapers stop
+`Unexecutable` is the type that fixes finding #3: the three execution-fault reapers stop
 writing plain `failed` and instead surface `Unexecutable`, which the
 orchestration layer routes to a bounded, no-budget re-place counter — the
 generalization of `DispatchAttempts` from "dispatch call failed" to "the substrate
@@ -178,9 +178,10 @@ DAG's coordinates as opaque metadata across an execution boundary is the standar
 shape, not an invention.
 
 **The at-most-once guards are preserved verbatim.** Crash-consistency across the
-seam is non-negotiable. The existing guards — `WHERE state = 'running'` on reaper
-writes, `ON CONFLICT DO NOTHING` on the durable-outcome path, and `ErrStaleReport`
-on out-of-order agent reports — stay exactly as they are (ADR 0031's
+seam is non-negotiable. The existing guards — a source-state CAS on reaper writes
+(`WHERE state = 'running'` for the pod/agent reapers, `WHERE state = 'queued'` for
+the dispatch-lost reaper), `ON CONFLICT DO NOTHING` on the durable-outcome path,
+and `ErrStaleReport` on out-of-order agent reports — stay exactly as they are (ADR 0031's
 leader-overlap correctness section). The seam changes *who* writes the outcome and
 *what type* it is, not the concurrency discipline that makes the write safe.
 
@@ -261,7 +262,7 @@ Each phase ships **independently**, **failing-test-first** (ADR 0011), and is
   `last_failure_kind` column. Purely additive; nothing routes on it yet. No
   behavior change.
 - **Phase 1 — fix the retry conflation** (highest value, lowest blast). Route
-  `Unexecutable` faults from the three pod reapers to a bounded, no-budget
+  `Unexecutable` faults from the three execution-fault reapers to a bounded, no-budget
   re-place counter — the generalization of `DispatchAttempts`. This is the bug
   fix users feel: infra faults stop eating `retries`.
 - **Phase 2 — durable outcome + #543.** Separate the task outcome from its report

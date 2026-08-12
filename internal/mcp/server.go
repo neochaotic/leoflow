@@ -7,8 +7,10 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -202,6 +204,12 @@ type failedTask struct {
 	TryNumber       int     `json:"try_number"`
 	DurationSeconds float32 `json:"duration_seconds,omitempty"`
 	LogTail         string  `json:"log_tail,omitempty"`
+	// DownstreamBlocked are the tasks this failure transitively blocks (the DAG's
+	// depends_on graph). Models are the dbt models this task runs, parsed from its
+	// --select (empty for a non-dbt task). Both are best-effort from the compiled
+	// spec — a fetch/parse failure just leaves them empty.
+	DownstreamBlocked []string `json:"downstream_blocked,omitempty"`
+	Models            []string `json:"models,omitempty"`
 }
 
 type diagnoseRunOutput struct {
@@ -260,8 +268,104 @@ func (h *handlers) diagnoseRun(ctx context.Context, req *mcpsdk.CallToolRequest,
 	}
 	out.TotalTasks = len(tis)
 	out.FailedTasks = h.collectFailedTasks(ctx, api, in.DagID, in.RunID, tis, tail)
-	out.Summary = fmt.Sprintf("%d of %d task(s) failed", len(out.FailedTasks), out.TotalTasks)
+	enrichFromSpec(ctx, api, in.DagID, out.FailedTasks)
+	out.Summary = summarizeFailures(out.FailedTasks, out.TotalTasks)
 	return nil, out, nil
+}
+
+// summarizeFailures distinguishes root failures (state=failed) from the tasks they
+// blocked (state=upstream_failed), so the agent sees cause vs consequence at a
+// glance.
+func summarizeFailures(failed []failedTask, total int) string {
+	roots, blocked := 0, 0
+	for _, ft := range failed {
+		if ft.State == string(apiclient.TaskInstanceStateUpstreamFailed) {
+			blocked++
+		} else {
+			roots++
+		}
+	}
+	return fmt.Sprintf("%d task(s) failed, %d blocked downstream, of %d total", roots, blocked, total)
+}
+
+type specTask struct {
+	TaskID     string   `json:"task_id"`
+	DependsOn  []string `json:"depends_on"`
+	Entrypoint string   `json:"entrypoint"`
+}
+
+// enrichFromSpec adds, for each failed task, the tasks it transitively blocks
+// (downstream in the DAG's depends_on graph) and the dbt models it runs (from its
+// --select). Best-effort: a spec that can't be fetched or parsed leaves these
+// fields empty; the core diagnosis stands. One extra /api/v2 read per diagnosis.
+func enrichFromSpec(ctx context.Context, api *apiclient.ClientWithResponses, dagID string, failed []failedTask) {
+	if len(failed) == 0 {
+		return
+	}
+	resp, err := api.GetDagSpecWithResponse(ctx, dagID)
+	if err != nil || resp.StatusCode() != http.StatusOK {
+		return
+	}
+	var spec struct {
+		Tasks []specTask `json:"tasks"`
+	}
+	if json.Unmarshal(resp.Body, &spec) != nil {
+		return
+	}
+	children := make(map[string][]string, len(spec.Tasks)) // parent -> direct children
+	entrypoint := make(map[string]string, len(spec.Tasks))
+	for _, t := range spec.Tasks {
+		entrypoint[t.TaskID] = t.Entrypoint
+		for _, p := range t.DependsOn {
+			children[p] = append(children[p], t.TaskID)
+		}
+	}
+	for i := range failed {
+		failed[i].DownstreamBlocked = downstreamClosure(children, failed[i].TaskID)
+		failed[i].Models = dbtSelectModels(entrypoint[failed[i].TaskID])
+	}
+}
+
+// downstreamClosure returns every task transitively reachable from root via the
+// parent→children edges, sorted for a stable result.
+func downstreamClosure(children map[string][]string, root string) []string {
+	seen := map[string]bool{}
+	queue := append([]string{}, children[root]...)
+	var out []string
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+		queue = append(queue, children[n]...)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// dbtSelectModels extracts the dbt models a task runs from its entrypoint's
+// `--select <models...>`: a single model for node granularity, several for a fused
+// group. Empty for a non-dbt task (no --select). Selection stops at the next flag
+// or a shell `&&`.
+func dbtSelectModels(entrypoint string) []string {
+	fields := strings.Fields(entrypoint)
+	var models []string
+	for i := 0; i < len(fields); i++ {
+		if fields[i] != "--select" && fields[i] != "-s" {
+			continue
+		}
+		for _, f := range fields[i+1:] {
+			if f == "&&" || strings.HasPrefix(f, "-") {
+				break
+			}
+			models = append(models, f)
+		}
+		break
+	}
+	return models
 }
 
 // collectFailedTasks returns the failed/upstream-failed task instances, each with

@@ -43,6 +43,12 @@ func seededControlPlane(t *testing.T) *httptest.Server {
 				`{"task_id":"load","state":"failed","try_number":2,"duration":3.5}],"total_entries":2}`))
 		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/load/logs/2":
 			_, _ = w.Write([]byte("connecting\nValueError: boom in load\ndone\n"))
+		case "/api/v2/dags/etl/spec":
+			// A dbt graph so diagnose_run can surface load's models + downstream.
+			_, _ = w.Write([]byte(`{"tasks":[` +
+				`{"task_id":"extract","entrypoint":"dbt seed --select extract"},` +
+				`{"task_id":"load","depends_on":["extract"],"entrypoint":"dbt build --select load_a load_b --project-dir /p"},` +
+				`{"task_id":"report","depends_on":["load"],"entrypoint":"dbt run --select report"}]}`))
 		default:
 			t.Errorf("control plane got unexpected path %q", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -157,7 +163,11 @@ func TestMCPBinaryEndToEnd(t *testing.T) {
 		t.Fatalf("diagnose_run returned an error result: %s", textOf(res.Content))
 	}
 	got := textOf(res.Content)
-	for _, want := range []string{`"run_state":"failed"`, `"task_id":"load"`, "ValueError: boom in load"} {
+	for _, want := range []string{
+		`"run_state":"failed"`, `"task_id":"load"`, "ValueError: boom in load",
+		"load_a", "load_b", // dbt models parsed from the fused --select
+		"report",           // downstream task blocked by load's failure
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("diagnose_run output missing %q; got: %s", want, got)
 		}

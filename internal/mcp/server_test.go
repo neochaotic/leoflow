@@ -29,6 +29,8 @@ func TestDiagnoseRun(t *testing.T) {
 				`{"task_id":"load","state":"failed","try_number":2,"duration":3.5}],"total_entries":2}`)
 		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/load/logs/2":
 			_, _ = io.WriteString(w, "setup\nrunning query\nTraceback (most recent call last)\nValueError: boom\x1b[0m\n")
+		case "/api/v2/dags/etl/spec": // diagnose_run enriches downstream/models best-effort
+			_, _ = io.WriteString(w, `{"tasks":[{"task_id":"extract"},{"task_id":"load","depends_on":["extract"]}]}`)
 		default:
 			t.Errorf("unexpected path %q", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -57,6 +59,53 @@ func TestDiagnoseRun(t *testing.T) {
 	}
 	if strings.Contains(ft.LogTail, "\x1b") {
 		t.Errorf("log_tail must be sanitized of control/ANSI bytes: %q", ft.LogTail)
+	}
+}
+
+// TestDiagnoseRunDbtAware: for a failed task, diagnose_run additionally surfaces
+// the downstream tasks it blocks (from the spec's depends_on graph) and, for a dbt
+// task, the models it runs (parsed from its --select). Best-effort from the spec.
+func TestDiagnoseRunDbtAware(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v2/dags/etl/dagRuns/r1":
+			_, _ = io.WriteString(w, `{"dag_id":"etl","dag_run_id":"r1","state":"failed"}`)
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances":
+			_, _ = io.WriteString(w, `{"task_instances":[`+
+				`{"task_id":"raw","state":"success","try_number":1},`+
+				`{"task_id":"stg","state":"failed","try_number":1},`+
+				`{"task_id":"mart","state":"upstream_failed","try_number":0}],"total_entries":3}`)
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/stg/logs/1":
+			_, _ = io.WriteString(w, "boom\n")
+		case "/api/v2/dags/etl/spec":
+			_, _ = io.WriteString(w, `{"tasks":[`+
+				`{"task_id":"raw","entrypoint":"dbt seed --select raw"},`+
+				`{"task_id":"stg","depends_on":["raw"],"entrypoint":"dbt build --select stg_a stg_b --project-dir /x"},`+
+				`{"task_id":"mart","depends_on":["stg"],"entrypoint":"dbt run --select mart"}]}`)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	})
+
+	_, out, err := h.diagnoseRun(context.Background(), nil, diagnoseRunInput{DagID: "etl", RunID: "r1"})
+	if err != nil {
+		t.Fatalf("diagnoseRun: %v", err)
+	}
+	var stg *failedTask
+	for i := range out.FailedTasks {
+		if out.FailedTasks[i].TaskID == "stg" {
+			stg = &out.FailedTasks[i]
+		}
+	}
+	if stg == nil {
+		t.Fatalf("stg not in failed tasks: %+v", out.FailedTasks)
+	}
+	if len(stg.DownstreamBlocked) != 1 || stg.DownstreamBlocked[0] != "mart" {
+		t.Errorf("stg downstream_blocked = %v, want [mart]", stg.DownstreamBlocked)
+	}
+	if len(stg.Models) != 2 || stg.Models[0] != "stg_a" || stg.Models[1] != "stg_b" {
+		t.Errorf("stg models = %v, want [stg_a stg_b]", stg.Models)
 	}
 }
 

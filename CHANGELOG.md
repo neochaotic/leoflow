@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`diagnose_run` (MCP) is now dbt-aware and shows downstream impact.** For each
+  failed task it additionally surfaces the tasks it transitively **blocks**
+  (`downstream_blocked`, from the DAG's `depends_on` graph) and, for a dbt task,
+  the **models** it runs (`models`, parsed from the task's `--select` — a single
+  model at `node` granularity, several for a fused group). The summary now
+  distinguishes root failures from the tasks they blocked. Best-effort from the
+  compiled spec — a run with no failures pays nothing extra, and a spec that can't
+  be read just omits the fields. No control-plane change (built on the existing
+  `dag://spec`).
 - **Databricks dbt profiles support OAuth M2M (service principal).** A managed
   Databricks connection whose extra carries `client_id`/`client_secret` (or an
   explicit `auth_type: oauth`) now generates a `profiles.yml` using service-principal

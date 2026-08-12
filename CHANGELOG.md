@@ -26,6 +26,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (GKE Workload Identity on Pro) — no service-account key file is shipped.
   `keyfile_dict` (inline key) still works for the service-account-json method.
 
+### Testing
+
+- **dbt adapter contract tests (Snowflake / BigQuery / Databricks).** CI now feeds
+  the `profiles.yml` Leoflow emits for each cloud warehouse through that warehouse's
+  *real* dbt adapter credential parsing — validating field names, alias resolution,
+  required fields, and each auth mode (key-pair / keyless / OAuth M2M) without a live
+  query or credentials (`dbt-adapter-contracts` matrix). This is the credential-free
+  half of cloud-adapter assurance; a live-query gate remains maintainer-owned (needs
+  warehouse secrets). See the new "Adapter assurance" section in docs/dbt.md.
+
 ### Documentation
 
 - **dbt: fused-group retry trade-off** — documented that retrying a `level`/`folder`

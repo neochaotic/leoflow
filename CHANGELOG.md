@@ -6,6 +6,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-rc.2] - 2026-08-13
+
+> Second RC of the **0.3.0** line — a fix-and-polish pass over `rc.1`. Repairs two
+> distribution bugs the `rc.1` soak surfaced (the **`leoflow-mcp`** binary is now
+> built and shipped in the release archives; a fresh **binary-only install** —
+> `leoflow compile` and `leoflow lite` — works without a repo or `PYTHONPATH`), and
+> closes the discoverability gap on the new dbt cloud auth: the **connection form
+> now surfaces** the Snowflake key-pair, BigQuery keyless, and Databricks OAuth M2M
+> fields, with matching docs. No functional change to the MCP server or the
+> control plane since `rc.1`. Docker-free gates green locally; full CI battery
+> gated the cut.
+
 ### Added
 
 - **The connection form now surfaces dbt cloud-auth fields with inline help.**

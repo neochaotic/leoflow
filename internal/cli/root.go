@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/neochaotic/leoflow/internal/version"
 )
 
 // NewRootCommand builds the root leoflow command with its global flags and
@@ -16,7 +18,13 @@ func NewRootCommand() *cobra.Command {
 		Short:         "Leoflow is a GitOps-first, container-native workflow orchestrator.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Setting Version makes cobra accept the `--version` flag, matching the
+		// companion binaries (#598). The template prints exactly what the
+		// `version` subcommand does (info.String()), so the flag and the
+		// subcommand are interchangeable.
+		Version: version.Get().String(),
 	}
+	root.SetVersionTemplate("{{.Version}}\n")
 	root.PersistentFlags().String("config", "", "config file path (default ~/.leoflow/config.yaml)")
 	root.PersistentFlags().String("log-level", "", "log level: debug, info, warn, error")
 	root.PersistentFlags().String("server-url", "", "control plane API base URL")

@@ -6,6 +6,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`leoflow --version` (flag) now works, matching the `version` subcommand and
+  the companion binaries.** Previously the root CLI accepted only `leoflow
+  version`; `leoflow --version` errored with `unknown flag`. The flag now prints
+  the same build info and exits 0. (#598)
+
 ## [0.3.0-rc.3] - 2026-08-13
 
 > Third RC of the **0.3.0** line — operability polish surfaced by the `rc.2`

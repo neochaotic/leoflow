@@ -140,6 +140,113 @@ func TestSearchLogs(t *testing.T) {
 	}
 }
 
+// TestSearchLogsRunWide: with task_id OMITTED, search_logs enumerates the run's
+// task instances and searches every task's log, tagging each match with the
+// task_id it came from (and a 1-based line number). Matches are sanitized.
+func TestSearchLogsRunWide(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances":
+			_, _ = io.WriteString(w, `{"task_instances":[`+
+				`{"task_id":"extract","state":"success","try_number":1},`+
+				`{"task_id":"load","state":"failed","try_number":2}],"total_entries":2}`)
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/extract/logs/1":
+			_, _ = io.WriteString(w, "connecting\nerror in extract\ndone\n")
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/load/logs/2":
+			_, _ = io.WriteString(w, "load starting\nERROR: boom\x1b[0m\ndone\n")
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	})
+
+	_, out, err := h.searchLogs(context.Background(), nil, searchLogsInput{
+		DagID: "etl", RunID: "r1", Query: "error", // no TaskID -> run-wide
+	})
+	if err != nil {
+		t.Fatalf("searchLogs run-wide: %v", err)
+	}
+	if out.TotalMatches != 2 || len(out.Matches) != 2 {
+		t.Fatalf("matches = %+v (total %d), want 2 across the run", out.Matches, out.TotalMatches)
+	}
+	// Matches are tagged with the task they came from, in task-instance order.
+	if out.Matches[0].TaskID != "extract" || out.Matches[0].LineNumber != 2 {
+		t.Errorf("match[0] = %+v, want extract@line2", out.Matches[0])
+	}
+	if out.Matches[1].TaskID != "load" || out.Matches[1].LineNumber != 2 {
+		t.Errorf("match[1] = %+v, want load@line2", out.Matches[1])
+	}
+	if out.Matches[1].TryNumber != 2 {
+		t.Errorf("match[1] try_number = %d, want 2 (the searched attempt)", out.Matches[1].TryNumber)
+	}
+	if strings.Contains(out.Matches[1].Line, "\x1b") {
+		t.Errorf("run-wide match line must be sanitized: %q", out.Matches[1].Line)
+	}
+	if out.Truncated {
+		t.Error("should not be truncated with the default cap")
+	}
+}
+
+// TestSearchLogsRunWideCaps: the cap on returned matches is applied across the
+// WHOLE run, and the true total (over all tasks) is still reported so the agent
+// knows there is more.
+func TestSearchLogsRunWideCaps(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v2/dags/d/dagRuns/r/taskInstances":
+			_, _ = io.WriteString(w, `{"task_instances":[`+
+				`{"task_id":"a","state":"failed","try_number":1},`+
+				`{"task_id":"b","state":"failed","try_number":1}],"total_entries":2}`)
+		case "/api/v2/dags/d/dagRuns/r/taskInstances/a/logs/1":
+			_, _ = io.WriteString(w, "error a1\nerror a2\n")
+		case "/api/v2/dags/d/dagRuns/r/taskInstances/b/logs/1":
+			_, _ = io.WriteString(w, "error b1\nerror b2\n")
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	})
+	_, out, err := h.searchLogs(context.Background(), nil, searchLogsInput{
+		DagID: "d", RunID: "r", Query: "error", MaxMatches: 2,
+	})
+	if err != nil {
+		t.Fatalf("searchLogs run-wide: %v", err)
+	}
+	if len(out.Matches) != 2 || out.TotalMatches != 4 || !out.Truncated {
+		t.Errorf("want 2 returned / 4 total / truncated, got %d / %d / %v", len(out.Matches), out.TotalMatches, out.Truncated)
+	}
+}
+
+// TestSearchLogsRunWideToleratesMissingLog: in run-wide mode a task whose log
+// can't be fetched (never ran, or the endpoint errors) is skipped rather than
+// failing the whole search — the matches from the other tasks still come back.
+func TestSearchLogsRunWideToleratesMissingLog(t *testing.T) {
+	h := testHandlers(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v2/dags/d/dagRuns/r/taskInstances":
+			_, _ = io.WriteString(w, `{"task_instances":[`+
+				`{"task_id":"a","state":"failed","try_number":1},`+
+				`{"task_id":"b","state":"upstream_failed","try_number":0}],"total_entries":2}`)
+		case "/api/v2/dags/d/dagRuns/r/taskInstances/a/logs/1":
+			_, _ = io.WriteString(w, "error a1\n")
+		default:
+			// b has try_number 0 (never ran); its log must never be requested.
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	_, out, err := h.searchLogs(context.Background(), nil, searchLogsInput{
+		DagID: "d", RunID: "r", Query: "error",
+	})
+	if err != nil {
+		t.Fatalf("searchLogs run-wide: %v", err)
+	}
+	if out.TotalMatches != 1 || len(out.Matches) != 1 || out.Matches[0].TaskID != "a" {
+		t.Errorf("want 1 match tagged a, got %+v (total %d)", out.Matches, out.TotalMatches)
+	}
+}
+
 // TestSearchLogsTruncates caps the returned matches but still reports the true
 // total, so the agent knows there is more.
 func TestSearchLogsTruncates(t *testing.T) {
@@ -211,11 +318,18 @@ func TestSearchLogsCapsGiantLine(t *testing.T) {
 	}
 }
 
-// TestSearchLogsMissingArgs: the locators and the query are required.
+// TestSearchLogsMissingArgs: the run locators and the query are required, but
+// task_id is now optional (omitting it means a run-wide search, not an error).
 func TestSearchLogsMissingArgs(t *testing.T) {
 	h := &handlers{}
 	if _, _, err := h.searchLogs(context.Background(), nil, searchLogsInput{DagID: "d", RunID: "r", TaskID: "t"}); err == nil {
 		t.Error("expected an error when query is missing")
+	}
+	if _, _, err := h.searchLogs(context.Background(), nil, searchLogsInput{RunID: "r", Query: "q"}); err == nil {
+		t.Error("expected an error when dag_id is missing")
+	}
+	if _, _, err := h.searchLogs(context.Background(), nil, searchLogsInput{DagID: "d", Query: "q"}); err == nil {
+		t.Error("expected an error when run_id is missing")
 	}
 }
 

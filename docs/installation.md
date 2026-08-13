@@ -141,6 +141,17 @@ leoflow doctor
   next: run `leoflow setup` to bootstrap the managed runtime.
 ```
 
+### Confirming the installed version
+
+Each binary reports its own build, so you can confirm what landed on `PATH`:
+
+```console
+$ leoflow --version          # root CLI (leoflow version also prints commit + build date)
+$ leoflow-server --version   # control plane
+$ leoflow-agent --version    # in-pod agent
+$ leoflow-mcp --version      # MCP server (see the MCP guide)
+```
+
 ### Installer options
 
 | Variable | Effect |

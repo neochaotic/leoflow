@@ -239,7 +239,7 @@ the connection form surfaces these fields with inline help:
 The recommended mode wins when its fields are present; otherwise the legacy mode
 is used. Per-warehouse setup — required fields (`account`/`warehouse`, `http_path`,
 …), example payloads, and precedence — lives in the connection reference:
-[Snowflake](connections/snowflake.md), [BigQuery](connections/google_cloud_platform.md),
+[Snowflake](connections/snowflake.md), [BigQuery](connections/gcpbigquery.md),
 [Databricks](connections/databricks.md).
 
 ---

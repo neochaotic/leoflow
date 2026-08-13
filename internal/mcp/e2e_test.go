@@ -41,6 +41,10 @@ func seededControlPlane(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"task_instances":[` +
 				`{"task_id":"extract","state":"success","try_number":1},` +
 				`{"task_id":"load","state":"failed","try_number":2,"duration":3.5}],"total_entries":2}`))
+		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/extract/logs/1":
+			// A clean log for the successful task; a run-wide search must scan it
+			// too, but it carries no "boom".
+			_, _ = w.Write([]byte("extract connecting\nextract done\n"))
 		case "/api/v2/dags/etl/dagRuns/r1/taskInstances/load/logs/2":
 			_, _ = w.Write([]byte("connecting\nValueError: boom in load\ndone\n"))
 		case "/api/v2/dags/etl/spec":
@@ -166,10 +170,30 @@ func TestMCPBinaryEndToEnd(t *testing.T) {
 	for _, want := range []string{
 		`"run_state":"failed"`, `"task_id":"load"`, "ValueError: boom in load",
 		"load_a", "load_b", // dbt models parsed from the fused --select
-		"report",           // downstream task blocked by load's failure
+		"report", // downstream task blocked by load's failure
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("diagnose_run output missing %q; got: %s", want, got)
+		}
+	}
+
+	// search_logs run-wide — omit task_id so the binary enumerates the run's
+	// task instances and searches every task's log, tagging each match with its
+	// task_id. Only "load" carries the boom, so the match must be tagged load.
+	sr, err := sess.CallTool(ctx, &mcpsdk.CallToolParams{
+		Name:      "search_logs",
+		Arguments: map[string]any{"dag_id": "etl", "run_id": "r1", "query": "boom"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool search_logs (run-wide): %v", err)
+	}
+	if sr.IsError {
+		t.Fatalf("search_logs run-wide returned an error result: %s", textOf(sr.Content))
+	}
+	sgot := textOf(sr.Content)
+	for _, want := range []string{`"task_id":"load"`, "ValueError: boom in load"} {
+		if !strings.Contains(sgot, want) {
+			t.Errorf("run-wide search_logs output missing %q; got: %s", want, sgot)
 		}
 	}
 

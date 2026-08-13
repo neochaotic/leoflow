@@ -11,7 +11,7 @@ hide:
 
 <p class="home-hero__lead">
 The workflow orchestrator that ate Apache Airflow's lunch.<br>
-<strong>Same UI. Same vocabulary. A Go control plane instead of Python's. Zero of the pain.</strong><br>
+<strong>Compatible with the Apache Airflow UI &amp; REST API — a Go control plane instead of Python's. Zero of the pain.</strong><br>
 <em>Native map-reduce for ML/AI — fan-out + reduce as a Python list comprehension.</em>
 </p>
 
@@ -129,12 +129,21 @@ for the guarantees, limits, and the `dag.json` shape.
 ## The dev loop
 
 ```bash
-leoflow lite provision            # check + provision host deps (dev-only)
-leoflow init dags/my_dag     # scaffold a project
-leoflow lite dags/my_dag      # hot-reload at http://localhost:8088 (Lite edition)
+leoflow doctor                    # check the host: OS, Python, Docker, and what's achievable
+leoflow init dags/my_dag          # scaffold a project
+leoflow lite dags/my_dag          # hot-reload at http://localhost:8088 (Lite edition)
 ```
+
+(The one-command [install](installation.md) already runs `leoflow setup`, which
+provisions the managed Python and your workspace — `leoflow doctor` just confirms
+the host is ready.)
 
 **Lite** is the recommended way to run Leoflow today (single host, on a trusted
 network); **Pro** (the Kubernetes edition) is Helm-installable and in active
 validation — see the
 [roadmap](roadmap-to-release.md) and [Editions](editions.md) for the split.
+
+---
+
+<small>Apache Airflow® is a registered trademark of the Apache Software Foundation.
+Leoflow is an independent project, not affiliated with or endorsed by the ASF.</small>

@@ -24,6 +24,7 @@ type fakeStore struct {
 	materialize        []string
 	transitions        []transition
 	retried            []transition
+	resetInfra         []transition
 	redispatched       []transition
 	runStates          map[string]domain.DagRunState
 	scheduled          []ScheduledDAG
@@ -82,6 +83,10 @@ func (f *fakeStore) ApplyTransition(_ context.Context, runID, taskID string, to 
 }
 func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) (bool, error) {
 	f.retried = append(f.retried, transition{runID, taskID, domain.TaskStateNone})
+	return true, nil
+}
+func (f *fakeStore) ResetForInfraReplace(_ context.Context, runID, taskID string) (bool, error) {
+	f.resetInfra = append(f.resetInfra, transition{runID, taskID, domain.TaskStateNone})
 	return true, nil
 }
 func (f *fakeStore) RecordDispatchFailure(_ context.Context, runID, taskID string, _ time.Time) error {

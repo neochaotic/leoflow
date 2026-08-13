@@ -61,6 +61,8 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		rescheduleAt := make(map[string]*time.Time, len(tis))
 		dispatchAttempts := make(map[string]int, len(tis))
 		nextDispatchAt := make(map[string]*time.Time, len(tis))
+		infraFailed := make(map[string]bool, len(tis))
+		infraAttempts := make(map[string]int, len(tis))
 		for _, ti := range tis {
 			states[ti.TaskID] = domain.TaskState(ti.State)
 			tries[ti.TaskID] = int(ti.TryNumber)
@@ -83,6 +85,18 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			if ti.NextDispatchAt.Valid {
 				ts := ti.NextDispatchAt.Time
 				nextDispatchAt[ti.TaskID] = &ts
+			}
+			// An infra-caused terminal failure (agent/pod/dispatch lost) is re-placed
+			// off the retry budget (ADR 0051 Phase 1): the planner keys on a failed TI
+			// stamped last_failure_kind='infra', bounded by infra_attempts. The
+			// state guard mirrors the load-time invariant — only a still-failed TI is
+			// a candidate; a stale kind on any other state is inert.
+			if ti.LastFailureKind != nil && *ti.LastFailureKind == "infra" &&
+				domain.TaskState(ti.State) == domain.TaskStateFailed {
+				infraFailed[ti.TaskID] = true
+			}
+			if ti.InfraAttempts > 0 {
+				infraAttempts[ti.TaskID] = int(ti.InfraAttempts)
 			}
 		}
 		// Build per-task retry_delay_seconds from the DAG spec so the planner
@@ -110,6 +124,8 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			RescheduleAt:      rescheduleAt,
 			NextDispatchAt:    nextDispatchAt,
 			DispatchAttempts:  dispatchAttempts,
+			InfraFailed:       infraFailed,
+			InfraAttempts:     infraAttempts,
 			Now:               time.Now(),
 			Alerts:            spec.Alerts,
 		})
@@ -185,6 +201,30 @@ func (s *SchedulerStore) ResetForRetry(ctx context.Context, runID, taskID string
 		return false, err
 	}
 	n, err := s.q.ResetTaskInstanceForRetry(ctx, queries.ResetTaskInstanceForRetryParams{
+		DagRunID: rid,
+		TaskID:   taskID,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// ResetForInfraReplace returns a task instance failed by a reaper as infra
+// (last_failure_kind='infra') to 'none' so the scheduler re-runs it, bumping
+// infra_attempts instead of try_number — an infrastructure fault must not
+// consume the user's retry budget (ADR 0051 Phase 1). It uses the
+// failed+infra-guarded query so a late terminal report or a non-infra failure at
+// state='failed' cannot be re-placed off-budget. The bool reports whether the
+// guarded update fired (exactly one row): a false means the TI was no longer a
+// failed-infra candidate, so the caller must not record a re-placement it did
+// not perform.
+func (s *SchedulerStore) ResetForInfraReplace(ctx context.Context, runID, taskID string) (bool, error) {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return false, err
+	}
+	n, err := s.q.ResetTaskInstanceInfraReplace(ctx, queries.ResetTaskInstanceInfraReplaceParams{
 		DagRunID: rid,
 		TaskID:   taskID,
 	})

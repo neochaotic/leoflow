@@ -5,14 +5,21 @@ package storage_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
+
+type okDispatcher struct{}
+
+func (okDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) error { return nil }
 
 // openInfra connects to the migrated test DB (or skips) and returns a repository,
 // scheduler store, and the raw pool for direct-read assertions.
@@ -166,5 +173,60 @@ func TestInfraReplaceIsAtMostOnce(t *testing.T) {
 	}
 	if infraAttempts != 1 {
 		t.Errorf("infra_attempts must be bumped exactly once under concurrency, got %d", infraAttempts)
+	}
+}
+
+// TestChaosInfraReplaceReRunsWithoutFinalizing is the reap→re-place→re-run loop
+// end-to-end (ADR 0051 Phase 1): a running task reaped as infra is re-placed and
+// re-dispatched by the scheduler — the task recovers and the run stays ACTIVE,
+// instead of the run finalizing as failed. Contrast the dispatch-lost chaos path,
+// where a run with no recovery finalizes.
+func TestChaosInfraReplaceReRunsWithoutFinalizing(t *testing.T) {
+	repo, sched, pg, ctx := openInfra(t)
+	dagID := fmt.Sprintf("infra_chaos_%d", time.Now().UnixNano())
+	_, runUUID := seedInfraFailed(t, repo, sched, pg, ctx, dagID)
+
+	var tryBefore int
+	if err := pg.Pool.QueryRow(ctx, "SELECT try_number FROM task_instances WHERE dag_run_id=$1::uuid AND task_id='t'", runUUID).Scan(&tryBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	scr := scheduler.NewScheduler(sched, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+	scr.SetDispatcher(okDispatcher{})
+	scr.SetLeading(true)
+	// A few ticks: re-place (failed→none), then none→scheduled→queued→dispatch.
+	for i := 0; i < 5; i++ {
+		if err := scr.Step(ctx); err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+	}
+
+	runs, err := sched.ActiveRuns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, r := range runs {
+		if r.DagID != dagID {
+			continue
+		}
+		found = true
+		if r.States["t"] == domain.TaskStateFailed {
+			t.Errorf("infra-reaped task should be re-placed and re-running, not left failed; state=%s", r.States["t"])
+		}
+		if r.InfraAttempts["t"] < 1 {
+			t.Errorf("infra_attempts should be >=1 after the re-place, got %d", r.InfraAttempts["t"])
+		}
+	}
+	if !found {
+		t.Error("run must stay ACTIVE after an infra re-place (not finalize) — but it is not in ActiveRuns")
+	}
+
+	var tryAfter int
+	if err := pg.Pool.QueryRow(ctx, "SELECT try_number FROM task_instances WHERE dag_run_id=$1::uuid AND task_id='t'", runUUID).Scan(&tryAfter); err != nil {
+		t.Fatal(err)
+	}
+	if tryAfter != tryBefore {
+		t.Errorf("infra recovery must not consume the retry budget: try_number before=%d after=%d", tryBefore, tryAfter)
 	}
 }

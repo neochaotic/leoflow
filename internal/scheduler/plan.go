@@ -77,7 +77,7 @@ func planRetryTransitions(run RunState, effective map[string]domain.TaskState, d
 				// infra-attempt limit so a poison placement can't loop forever;
 				// exhausted → terminal (no fallback to the app-retry budget). The
 				// store bumps infra_attempts (not try_number) when applying failed→none.
-				if run.InfraAttempts[t.TaskID] < infraMaxAttempts {
+				if infraReplaceable(run, t.TaskID) {
 					out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
 					effective[t.TaskID] = domain.TaskStateNone
 				}
@@ -205,15 +205,24 @@ func triggerRuleOf(t domain.TaskSpec) domain.TriggerRule {
 	return t.TriggerRule
 }
 
+// infraReplaceable reports whether a failed task is an infra fault (agent/pod/
+// dispatch lost) still within its re-place budget — one the scheduler will
+// return to 'none' rather than leave terminal (ADR 0051 Phase 1). Such a task is
+// NOT terminal for run finalization, mirroring how a retriable failed task keeps
+// the run active until the retry resolves.
+func infraReplaceable(run RunState, taskID string) bool {
+	return run.InfraFailed[taskID] && run.InfraAttempts[taskID] < infraMaxAttempts
+}
+
 // FinalizeRun reports the terminal dag-run state once every task is terminal.
-// A failed task that still has retry budget counts as non-terminal, so the run
-// keeps running until the retry resolves. The boolean is false while any task is
-// still non-terminal.
+// A failed task that still has retry budget (or an infra re-place budget) counts
+// as non-terminal, so the run keeps running until it resolves. The boolean is
+// false while any task is still non-terminal.
 func FinalizeRun(run RunState) (domain.DagRunState, bool) {
 	anyFailed := false
 	for _, t := range run.Tasks {
 		st := run.States[t.TaskID]
-		if st == domain.TaskStateFailed && retriable(run, t.TaskID) {
+		if st == domain.TaskStateFailed && (retriable(run, t.TaskID) || infraReplaceable(run, t.TaskID)) {
 			return "", false
 		}
 		if !st.IsTerminal() {

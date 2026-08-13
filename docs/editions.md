@@ -23,7 +23,7 @@ DAG once and it runs on either.
 
 | | **Lite** | **Pro** |
 |---|---|---|
-| Status | **Supported** — single host | **Supported** — Helm on Kubernetes |
+| Status | **Supported** — single host | **In validation** — Helm on Kubernetes (tested against GKE; pin a tag) |
 | Install | one command (`curl … \| sh`) on one machine | [Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md) on your cluster |
 | Command | `leoflow lite` | the deployed control plane |
 | Auth | a single local **admin** login (password shown once at setup) | enterprise: SSO/OIDC, full RBAC, multi-tenant |

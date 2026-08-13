@@ -6,6 +6,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- **Front-door docs fixed for the v0.3.0 line.** The README's flagship example
+  imported `from leoflow import DAG, task` (which does not parse — the shim only
+  exports `dbt_group`); it now uses `from airflow.sdk import DAG, task`. Broken
+  README links to `docs/api-reference.md` and `docs/helm-chart.md` now point to
+  the published API reference and `helm/leoflow/README.md`. Install commands no
+  longer pin the removed `v0.0.1*`/pre-alpha tags. Pro's readiness is now stated
+  consistently across the README, index, quickstart, editions, and operating-modes
+  pages ("Helm-installable and in active validation"), and the Status section
+  reflects v0.3.0 (dbt, `leoflow-mcp`, `pkg/client`). (#601, #602, #603)
+
 ## [0.3.0-rc.4] - 2026-08-13
 
 > Fourth RC of the **0.3.0** line — a one-line CLI consistency fix over `rc.3`:

@@ -2,8 +2,8 @@
 
 Leoflow has three runtime modes. The two user-facing ones are **Lite** (the full control plane on one host — laptop, VM, or internal server) and **Pro** (Helm-installed Kubernetes); **Demo** is a
 contributor-facing reference environment used to validate UI compatibility
-against the production-shaped control plane. **Lite ships today** (pre-alpha,
-trusted networks only); Pro is in active validation — the Helm chart is
+against the production-shaped control plane. **Lite is the recommended way to
+run Leoflow today** (trusted networks only); Pro is in active validation — the Helm chart is
 installable + chart-test gated and is being tested against GKE today, but not
 blessed for official use until the v0.1.0-alpha cut.
 

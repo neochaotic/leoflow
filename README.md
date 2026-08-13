@@ -33,7 +33,7 @@
 | [**Map-reduce for ML**](docs/cookbook/map-reduce.md) | fan-out + reduce as a Python list comprehension |
 | [CI/CD & deploy examples](docs/deploy.md) | GitHub Actions · GitLab · Cloud Build/Run · generic |
 | [Helm chart](helm/leoflow/README.md) | Pro install: values reference, hardening, PoC recipe |
-| [HTTP API (Scalar)](docs/api-reference.md) · [Go packages](docs/go-api.md) | API references |
+| [HTTP API (Scalar)](https://neochaotic.github.io/leoflow/api-reference.html) · [Go packages](docs/go-api.md) | API references |
 | [Concepts & glossary](docs/concepts.md) · [Architecture](docs/architecture.md) | the model & the *why* |
 
 ---
@@ -71,8 +71,8 @@ coexist out of the box.
 helm repo add leoflow https://neochaotic.github.io/leoflow   # (charts published per release)
 kubectl create namespace leoflow
 helm install lf leoflow/leoflow -n leoflow \
-  --set image.tag=v0.0.1 \
-  --set migrations.image.tag=v0.0.1 \
+  --set image.tag=v0.3.0 \
+  --set migrations.image.tag=v0.3.0 \
   --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
   --set redis.url='rediss://HOST:6380/0' \
   --set auth.jwtSecret="$(openssl rand -base64 64)" \
@@ -86,7 +86,7 @@ Postgres 13+ and Redis 6+ are required (the chart fails the install otherwise �
 embedded datastores are Lite-only). Managed datastores work out of the box
 (Cloud SQL / RDS / Memorystore / ElastiCache / Azure Cache), with optional
 `caConfigMap` knobs for verified TLS. See the
-**[chart docs](docs/helm-chart.md)**.
+**[chart docs](helm/leoflow/README.md)**.
 
 Full guide for both tracks → **[Installation](docs/installation.md)**.
 
@@ -145,7 +145,7 @@ dependencies:
 
 ```python
 # dag.py
-from leoflow import DAG, task
+from airflow.sdk import DAG, task
 
 @task
 def fetch():
@@ -255,28 +255,30 @@ in its own pod like any other (ADR 0040). Read
 ## Status
 
 🧪 **Experimental — pre-1.0.** The HTTP API (`/api/v2`), CLI, and Helm chart
-values may change between minor versions until **v1.0.0** locks them. Production
-Pro deployments are supported by the Helm chart today, with the usual caveats
-that come with a pre-1.0 codebase: pin to a specific tag, read the
+values may change between minor versions until **v1.0.0** locks them. **Lite**
+(single host) is the recommended way to run Leoflow today. **Pro** (Kubernetes)
+is Helm-installable and in **active validation** — tested against GKE, not yet
+certified for production; pin to a specific tag, read the
 [upgrades guide](docs/upgrades.md) before bumping, and exercise
 [backup/restore](docs/backup-restore.md) before you need to.
 
 Versioning follows [ADR 0037](docs/adr/0037-release-version-scheme.md):
-`v0.0.1` ends the pre-alpha series; every release after is
-`vX.Y.Z-rc.N → vX.Y.Z`.
+`vX.Y.Z-rc.N → vX.Y.Z`, no separate alpha/beta.
 
-**Implemented today (Phases 1–4):**
+**Implemented today:**
 
 - **CLI + parser** — `leoflow init / validate / compile / push / runs trigger / runs status / auth create-token`; the Python DAG parser; `compile --build / --push` builds and pushes the DAG image (out-of-process).
 - **Control plane** — Airflow-compatible `/api/v2` API, JWT auth + RBAC + multi-tenant, the scheduler state machine with cron scheduling, Postgres advisory-lock leader election, **task retries**, embedded Scalar API docs, and Prometheus + OpenTelemetry observability.
 - **Execution** — real pod-per-task execution via the `leoflow-agent` over gRPC (Kubernetes, ADR 0015); orphaned-pod reconciliation and completed-pod garbage collection.
 - **Data flow** — XCom on Redis (256 KB limit, TTL, optional schema validation) passed between tasks; log shipping to disk with a read API and live tailing over Redis pub/sub.
+- **dbt** — a dbt project runs as a DAG (pod-per-model or fused groups); managed warehouse connections generate `profiles.yml` in-pod, with modern service-account auth (Snowflake key-pair, BigQuery keyless / Workload Identity, Databricks OAuth M2M).
+- **MCP + typed client** — an experimental [`leoflow-mcp`](docs/adr/0050-mcp-server.md) Model Context Protocol server (read tools + resources over stdio / Streamable HTTP) and a generated, typed Go client for `/api/v2` (`pkg/client`).
 
-**Not yet implemented:** load tests (Phase 6) and S3/GCS log sinks. Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).
+**Not yet implemented:** load tests and S3/GCS log sinks. Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).
 
-## Features in the MVP
+## Features
 
-**Shipping in v0.1.0:**
+- Python, Bash, and HTTP API operators
 
 - Python, Bash, and HTTP API operators
 - DAG-as-Image model with automatic image build via `leoflow.yaml`
@@ -370,7 +372,7 @@ We borrow from Argo Workflows (container-native), from Prefect (modern developer
 
 - [Architecture overview](docs/architecture.md)
 - [Architecture Decision Records](docs/adr/) — every major decision, with its reasoning
-- [HTTP API reference (Scalar)](docs/api-reference.md) — also rendered interactively at `/docs` in the running server
+- [HTTP API reference (Scalar)](https://neochaotic.github.io/leoflow/api-reference.html) — also rendered interactively at `/docs` in the running server
 - [DAG authoring](docs/dag-authoring.md) — writing your first DAG, the Lite → deploy lifecycle
 - [Quickstart](docs/quickstart.md) and [Installation](docs/installation.md) — getting Leoflow running locally
 - [Map-reduce for ML](docs/cookbook/map-reduce.md) · [Variables & Connections](docs/variables-connections.md) · [Troubleshooting](docs/troubleshooting.md)

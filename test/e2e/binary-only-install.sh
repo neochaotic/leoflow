@@ -69,4 +69,16 @@ for b in leoflow-server leoflow-agent leoflow-mcp; do
 done
 pass "leoflow-server/agent/mcp all answer --version and exit 0"
 
+# --help must print usage and exit 0 WITHOUT trying to boot (#593). Guard against
+# the regression where --help fell through to a config load / connect that errored.
+echo "==> asserting --help prints usage and exits 0 (no boot attempt)"
+for b in leoflow-server leoflow-agent leoflow-mcp; do
+  out="$("$BINDIR/$b" --help 2>&1)" || fail "$b --help exited non-zero: $out"
+  printf '%s' "$out" | grep -qiE 'usage|flags|leoflow-' \
+    || fail "$b --help did not print usage (got: $out)"
+  printf '%s' "$out" | grep -qiE 'required|connecting to control plane|jwt.secret' \
+    && fail "$b --help attempted to boot instead of printing help (got: $out)"
+done
+pass "leoflow-server/agent/mcp all print --help usage and exit 0"
+
 echo "ALL PASS"

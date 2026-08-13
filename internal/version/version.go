@@ -54,3 +54,18 @@ func WantsVersion(args []string) bool {
 	}
 	return false
 }
+
+// WantsHelp reports whether args ask for usage help. Like WantsVersion, it lets
+// the config-less companion daemons (leoflow-server / -agent) answer `--help`
+// with a usage message and exit 0, instead of falling through to a boot attempt
+// that errors on missing config. Accepts the conventional `-h`, `-help`, and
+// `--help`; exact match, no substring.
+func WantsHelp(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "-h", "-help", "--help":
+			return true
+		}
+	}
+	return false
+}

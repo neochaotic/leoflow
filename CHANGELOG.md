@@ -6,6 +6,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-rc.3] - 2026-08-13
+
+> Third RC of the **0.3.0** line — operability polish surfaced by the `rc.2`
+> soak. The companion binaries (`leoflow-server`/`-agent`/`-mcp`) now answer
+> `--version` and `--help` without a runnable config, and the embedded UI's
+> documentation links resolve (the Airflow VersionInfo endpoint reports the
+> pinned Airflow UI version, not leoflow's build version). No control-plane,
+> MCP, or dbt functional change since `rc.2`. Docker-free gates green locally;
+> full CI battery gated the cut.
+
 ### Fixed
 
 - **`leoflow-server`, `leoflow-agent`, and `leoflow-mcp` now answer `--version`

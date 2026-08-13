@@ -126,3 +126,45 @@ func TestInfraReplacePreservesRetryBudget(t *testing.T) {
 		t.Errorf("infra re-place must clear last_failure_kind, got %q", k)
 	}
 }
+
+// TestInfraReplaceIsAtMostOnce: two concurrent re-place attempts on the same
+// failed+infra TI (a scheduler tick racing a stale duplicate) must result in
+// EXACTLY ONE applied — the guarded UPDATE + row lock makes the loser match zero
+// rows, so infra_attempts is bumped once, never double-counted.
+func TestInfraReplaceIsAtMostOnce(t *testing.T) {
+	repo, sched, pg, ctx := openInfra(t)
+	dagID := fmt.Sprintf("infra_cas_%d", time.Now().UnixNano())
+	_, runUUID := seedInfraFailed(t, repo, sched, pg, ctx, dagID)
+
+	type res struct {
+		applied bool
+		err     error
+	}
+	out := make(chan res, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			applied, err := sched.ResetForInfraReplace(ctx, runUUID, "t")
+			out <- res{applied, err}
+		}()
+	}
+	wins := 0
+	for i := 0; i < 2; i++ {
+		r := <-out
+		if r.err != nil {
+			t.Fatalf("ResetForInfraReplace error: %v", r.err)
+		}
+		if r.applied {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Errorf("exactly one concurrent re-place must apply (at-most-once), got %d", wins)
+	}
+	var infraAttempts int
+	if err := pg.Pool.QueryRow(ctx, "SELECT infra_attempts FROM task_instances WHERE dag_run_id=$1::uuid AND task_id='t'", runUUID).Scan(&infraAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if infraAttempts != 1 {
+		t.Errorf("infra_attempts must be bumped exactly once under concurrency, got %d", infraAttempts)
+	}
+}

@@ -43,7 +43,7 @@ jobs:
             --repository.url https://github.com/neochaotic/leoflow --repository.default-branch main \
             ./internal/domain ./internal/scheduler ./internal/executor ./internal/dispatch \
             ./internal/agent ./internal/agentrpc ./internal/storage ./internal/auth \
-            ./internal/config ./internal/cli ./internal/api
+            ./internal/config ./internal/cli ./internal/api ./pkg/client
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with: { python-version: "3.12" }
       # Imaging libs for the Material social-cards plugin.

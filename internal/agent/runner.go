@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/neochaotic/leoflow/internal/taskoutcome"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -65,6 +67,11 @@ type Runner struct {
 	// ReschedulePath is the file a reschedule-mode sensor writes its next-poke time
 	// to before exiting with rescheduleExitCode; empty disables reschedule (#380).
 	ReschedulePath string
+	// TerminationLogPath is where the agent writes its durable outcome record just
+	// before delivering the report, so a pod killed mid-report still leaves the
+	// task's true result behind for the reconciler to recover (ADR 0052). Empty
+	// disables it — Lite (subprocess, in-process report) needs no such record.
+	TerminationLogPath string
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
@@ -574,12 +581,46 @@ func (r *Runner) heartbeat(ctx context.Context, cancel context.CancelFunc) {
 }
 
 func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode int32, msg string) error {
+	r.recordOutcome(state, exitCode)
 	return r.reportRequest(ctx, &agentv1.ReportStateRequest{
 		State:        state,
 		ExitCode:     exitCode,
 		ErrorMessage: msg,
 		OccurredAt:   timestamppb.Now(),
 	})
+}
+
+// recordOutcome writes the durable outcome record for a terminal report state,
+// before the report is delivered (ADR 0052). Keying off the reported state — not
+// the individual fail()/failWithReason() call sites — guarantees every failure
+// sink is covered. Non-terminal states are a no-op.
+func (r *Runner) recordOutcome(state agentv1.TaskState, exitCode int32) {
+	switch state {
+	case agentv1.TaskState_TASK_STATE_SUCCESS:
+		r.writeOutcome(taskoutcome.Succeeded())
+	case agentv1.TaskState_TASK_STATE_FAILED:
+		r.writeOutcome(taskoutcome.FailedWith(exitCode))
+	default:
+		// Non-terminal states (RUNNING, and the reschedule handled separately in
+		// reportReschedule) carry no durable outcome.
+	}
+}
+
+// writeOutcome persists the task's true outcome to the termination-log path. It is
+// best-effort: the report remains the primary delivery channel, so an encode or
+// write failure is logged, never fatal. A no-op when the path is unset (Lite).
+func (r *Runner) writeOutcome(rec taskoutcome.Record) {
+	if r.TerminationLogPath == "" {
+		return
+	}
+	enc, err := rec.Encode()
+	if err != nil {
+		slog.Warn("encoding task outcome record", "error", err)
+		return
+	}
+	if err := os.WriteFile(r.TerminationLogPath, []byte(enc), 0o644); err != nil {
+		slog.Warn("writing task outcome record", "path", r.TerminationLogPath, "error", err)
+	}
 }
 
 // reportRequest sends a ReportState request and translates the response's
@@ -665,6 +706,7 @@ func (r *Runner) readReschedule() (time.Time, bool) {
 // reportReschedule reports up_for_reschedule with the next-poke time so the
 // scheduler re-dispatches the task later, consuming no retry budget (#380).
 func (r *Runner) reportReschedule(ctx context.Context, when time.Time) error {
+	r.writeOutcome(taskoutcome.RescheduledAt(when))
 	return r.reportRequest(ctx, &agentv1.ReportStateRequest{
 		State:        agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE,
 		OccurredAt:   timestamppb.Now(),

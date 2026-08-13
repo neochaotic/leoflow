@@ -29,9 +29,13 @@ type fakeClient struct {
 	pushErr     error
 	// reportFailCode + reportFailTimes make the first reportFailTimes ReportState
 	// calls fail with that gRPC code, then succeed — to exercise the report retry.
-	reportFailCode     codes.Code
-	reportFailTimes    int
-	reportAttempts     int
+	reportFailCode  codes.Code
+	reportFailTimes int
+	reportAttempts  int
+	// failReportState, when set, makes ReportState fail for that state only (e.g.
+	// fail the terminal SUCCESS report but let the earlier RUNNING report land) —
+	// used to prove the outcome record is durable even when its report is lost.
+	failReportState    agentv1.TaskState
 	heartbeatTerminate bool
 	vars               map[string]string
 	conns              map[string]string
@@ -80,6 +84,9 @@ func (f *fakeClient) ReportState(_ context.Context, in *agentv1.ReportStateReque
 	f.reportAttempts++
 	if f.reportAttempts <= f.reportFailTimes {
 		return nil, status.Error(f.reportFailCode, "injected report failure")
+	}
+	if f.failReportState != agentv1.TaskState_TASK_STATE_UNSPECIFIED && in.GetState() == f.failReportState {
+		return nil, status.Error(codes.Internal, "injected terminal report failure")
 	}
 	f.states = append(f.states, in.GetState())
 	f.reports = append(f.reports, in)

@@ -376,17 +376,24 @@ func (q *Queries) FailDispatchExhausted(ctx context.Context, arg FailDispatchExh
 
 const failTaskInstanceIfActive = `-- name: FailTaskInstanceIfActive :exec
 UPDATE task_instances
-SET state = 'failed', ended_at = now(), error_message = $2
-WHERE id = $1 AND state IN ('scheduled', 'queued', 'running')
+SET state = 'failed', ended_at = now(), error_message = $1
+WHERE id = $2 AND try_number = $3
+  AND state IN ('scheduled', 'queued', 'running')
 `
 
 type FailTaskInstanceIfActiveParams struct {
-	ID           pgtype.UUID `json:"id"`
 	ErrorMessage *string     `json:"error_message"`
+	ID           pgtype.UUID `json:"id"`
+	TryNumber    int32       `json:"try_number"`
 }
 
+// Settle a task instance failed from the pod reconciler, guarded by BOTH id and
+// try_number (ADR 0052): try_number bumps IN PLACE on retry (same row id), so a
+// stale reconciler acting on a previous attempt's lingering pod must not match the
+// new running attempt and clobber it. The active-state guard prevents clobbering a
+// terminal row.
 func (q *Queries) FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInstanceIfActiveParams) error {
-	_, err := q.db.Exec(ctx, failTaskInstanceIfActive, arg.ID, arg.ErrorMessage)
+	_, err := q.db.Exec(ctx, failTaskInstanceIfActive, arg.ErrorMessage, arg.ID, arg.TryNumber)
 	return err
 }
 
@@ -1415,6 +1422,30 @@ func (q *Queries) RescheduleTaskInstance(ctx context.Context, arg RescheduleTask
 	return err
 }
 
+const rescheduleTaskInstanceByIDIfActive = `-- name: RescheduleTaskInstanceByIDIfActive :exec
+UPDATE task_instances
+SET state = 'up_for_reschedule'::task_state,
+    reschedule_at = $1,
+    first_reschedule_at = COALESCE(first_reschedule_at, now())
+WHERE id = $2 AND try_number = $3
+  AND state IN ('running', 'queued', 'scheduled')
+`
+
+type RescheduleTaskInstanceByIDIfActiveParams struct {
+	RescheduleAt pgtype.Timestamptz `json:"reschedule_at"`
+	ID           pgtype.UUID        `json:"id"`
+	TryNumber    int32              `json:"try_number"`
+}
+
+// Settle a lost reschedule from the durable outcome record (ADR 0052): park the TI
+// in up_for_reschedule with the record's next-poke time, guarded by id AND
+// try_number (never clobber a different attempt or a terminal row), consuming no
+// retry budget. Mirrors RescheduleTaskInstance but keyed by id, for the reconciler.
+func (q *Queries) RescheduleTaskInstanceByIDIfActive(ctx context.Context, arg RescheduleTaskInstanceByIDIfActiveParams) error {
+	_, err := q.db.Exec(ctx, rescheduleTaskInstanceByIDIfActive, arg.RescheduleAt, arg.ID, arg.TryNumber)
+	return err
+}
+
 const resetAllFailedTaskInstances = `-- name: ResetAllFailedTaskInstances :execrows
 WITH archived AS (
     INSERT INTO task_instance_history (
@@ -1690,6 +1721,28 @@ type StampDagRunStateParams struct {
 // terminal state. Other timestamps are preserved (the scheduler may re-run).
 func (q *Queries) StampDagRunState(ctx context.Context, arg StampDagRunStateParams) error {
 	_, err := q.db.Exec(ctx, stampDagRunState, arg.State, arg.ID)
+	return err
+}
+
+const succeedTaskInstanceIfActive = `-- name: SucceedTaskInstanceIfActive :exec
+UPDATE task_instances
+SET state = 'success', ended_at = now(), error_message = NULL
+WHERE id = $1 AND try_number = $2
+  AND state IN ('scheduled', 'queued', 'running')
+`
+
+type SucceedTaskInstanceIfActiveParams struct {
+	ID        pgtype.UUID `json:"id"`
+	TryNumber int32       `json:"try_number"`
+}
+
+// Settle a task instance succeeded from its durable outcome record (ADR 0052),
+// recovering a success whose report was lost. Guarded by id AND try_number so a
+// stale reconciler never marks a LIVE retry succeeded — which would fire downstream
+// tasks on incomplete work, strictly worse than the bug being fixed. The
+// active-state guard prevents clobbering a terminal row.
+func (q *Queries) SucceedTaskInstanceIfActive(ctx context.Context, arg SucceedTaskInstanceIfActiveParams) error {
+	_, err := q.db.Exec(ctx, succeedTaskInstanceIfActive, arg.ID, arg.TryNumber)
 	return err
 }
 

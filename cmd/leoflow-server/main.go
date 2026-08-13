@@ -697,7 +697,7 @@ func runGatedTicker(ctx context.Context, name string, ticks <-chan time.Time, le
 	}
 }
 
-func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace string, reporter executor.FailureReporter, leading func() bool, logger *slog.Logger) {
+func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace string, reporter executor.OutcomeReporter, leading func() bool, logger *slog.Logger) {
 	rec := executor.NewReconciler(cs, namespace, reporter)
 	startGatedTicker(ctx, "pod-reconcile", reconcileInterval, leading, logger, func() {
 		if err := rec.Reconcile(ctx); err != nil {

@@ -197,10 +197,11 @@ func (s *ExecutionStore) RecordHeartbeat(ctx context.Context, id auth.AgentIdent
 	return nil
 }
 
-// FailTask marks a task instance failed by its ID, but only while it is still
-// active (scheduled/queued/running), so it never clobbers a terminal state. It
-// implements executor.FailureReporter for the pod reconciler.
-func (s *ExecutionStore) FailTask(ctx context.Context, taskInstanceID, reason string) error {
+// FailTask marks a task instance failed by its ID, guarded by the attempt
+// (try_number) and the active states so it never clobbers a different attempt or a
+// terminal row. It implements part of executor.OutcomeReporter for the pod
+// reconciler (ADR 0052).
+func (s *ExecutionStore) FailTask(ctx context.Context, taskInstanceID string, tryNumber int, reason string) error {
 	tid, err := parseUUID(taskInstanceID)
 	if err != nil {
 		return err
@@ -208,7 +209,37 @@ func (s *ExecutionStore) FailTask(ctx context.Context, taskInstanceID, reason st
 	msg := reason
 	return s.q.FailTaskInstanceIfActive(ctx, queries.FailTaskInstanceIfActiveParams{
 		ID:           tid,
+		TryNumber:    toInt32(tryNumber),
 		ErrorMessage: &msg,
+	})
+}
+
+// SucceedTask marks a task instance succeeded by its ID — recovering a success
+// whose report was lost (ADR 0052) — guarded by the attempt and the active states.
+// A settle on an already-terminal or superseded row is a no-op.
+func (s *ExecutionStore) SucceedTask(ctx context.Context, taskInstanceID string, tryNumber int) error {
+	tid, err := parseUUID(taskInstanceID)
+	if err != nil {
+		return err
+	}
+	return s.q.SucceedTaskInstanceIfActive(ctx, queries.SucceedTaskInstanceIfActiveParams{
+		ID:        tid,
+		TryNumber: toInt32(tryNumber),
+	})
+}
+
+// RescheduleTask parks a task instance in up_for_reschedule with the recovered
+// next-poke time, guarded by the attempt and the active states, consuming no retry
+// budget (ADR 0052). Used by the reconciler when a reschedule report was lost.
+func (s *ExecutionStore) RescheduleTask(ctx context.Context, taskInstanceID string, tryNumber int, at time.Time) error {
+	tid, err := parseUUID(taskInstanceID)
+	if err != nil {
+		return err
+	}
+	return s.q.RescheduleTaskInstanceByIDIfActive(ctx, queries.RescheduleTaskInstanceByIDIfActiveParams{
+		ID:           tid,
+		TryNumber:    toInt32(tryNumber),
+		RescheduleAt: pgtype.Timestamptz{Time: at, Valid: true},
 	})
 }
 

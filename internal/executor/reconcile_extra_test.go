@@ -32,8 +32,8 @@ func TestPodFailureReasonSurfacesCause(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, reason := classifyPod(c.pod); reason != c.want {
-				t.Errorf("reason = %q, want %q", reason, c.want)
+			if got := classifyPod(c.pod).reason; got != c.want {
+				t.Errorf("reason = %q, want %q", got, c.want)
 			}
 		})
 	}
@@ -49,14 +49,22 @@ func TestReconcileSkipsPodWithoutTaskInstance(t *testing.T) {
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(reporter.failed) != 0 {
-		t.Errorf("a pod without a task-instance annotation must not be reported, got %v", reporter.failed)
+	if len(reporter.settled) != 0 {
+		t.Errorf("a pod without a task-instance annotation must not be reported, got %v", reporter.settled)
 	}
 }
 
 type errReporter struct{}
 
-func (errReporter) FailTask(context.Context, string, string) error {
+func (errReporter) FailTask(context.Context, string, int, string) error {
+	return errors.New("metadatabase unavailable")
+}
+
+func (errReporter) SucceedTask(context.Context, string, int) error {
+	return errors.New("metadatabase unavailable")
+}
+
+func (errReporter) RescheduleTask(context.Context, string, int, time.Time) error {
 	return errors.New("metadatabase unavailable")
 }
 

@@ -89,7 +89,7 @@ func NewServer(api *apiclient.ClientWithResponses, serverURL, version string, re
 	}, h.diagnoseRun)
 	mcpsdk.AddTool(s, &mcpsdk.Tool{
 		Name:        "search_logs",
-		Description: "Search one task attempt's log for a case-insensitive substring, returning the matching lines (with line numbers) instead of the whole log.",
+		Description: "Search a DAG run's logs for a case-insensitive substring, returning the matching lines (with line numbers) instead of the whole log. Give task_id to search that one task's attempt (fast path); OMIT task_id to search every task instance's log across the whole run — each match is then tagged with the task_id it came from. Returned matches are capped (truncated=true when there are more), but the true total is always reported.",
 	}, h.searchLogs)
 	h.registerResources(s)
 	return s
@@ -407,13 +407,18 @@ const (
 type searchLogsInput struct {
 	DagID      string `json:"dag_id" jsonschema:"the DAG id"`
 	RunID      string `json:"run_id" jsonschema:"the DAG run id"`
-	TaskID     string `json:"task_id" jsonschema:"the task id whose log to search"`
-	TryNumber  int    `json:"try_number,omitempty" jsonschema:"attempt to search (default 1)"`
+	TaskID     string `json:"task_id,omitempty" jsonschema:"the task id whose log to search; omit to search every task instance's log across the whole run"`
+	TryNumber  int    `json:"try_number,omitempty" jsonschema:"attempt to search when task_id is given (default 1); ignored for a run-wide search, which searches each task instance's own attempt"`
 	Query      string `json:"query" jsonschema:"case-insensitive substring to match"`
-	MaxMatches int    `json:"max_matches,omitempty" jsonschema:"maximum matching lines to return (default 20, max 100)"`
+	MaxMatches int    `json:"max_matches,omitempty" jsonschema:"maximum matching lines to return, across all tasks (default 20, max 100)"`
 }
 
 type logMatch struct {
+	// TaskID and TryNumber are populated for a run-wide search (task_id omitted),
+	// so each match carries the task instance it came from; they are empty for a
+	// task-scoped search, where the output's top-level task_id/try_number apply.
+	TaskID     string `json:"task_id,omitempty"`
+	TryNumber  int    `json:"try_number,omitempty"`
 	LineNumber int    `json:"line_number"`
 	Line       string `json:"line"`
 }
@@ -429,19 +434,17 @@ type searchLogsOutput struct {
 	Truncated    bool       `json:"truncated"`
 }
 
-// searchLogs fetches one task attempt's log and returns the lines matching a
-// case-insensitive substring, with 1-based line numbers — so an agent can find
-// the relevant lines of a long log without pulling the whole thing into context
-// (ADR 0050 D7). The match is a plain substring, not a regex, to avoid handing
-// the model a ReDoS lever. Matched lines are sanitized (untrusted content, D10)
-// and the returned set is capped, but the true total is always reported.
+// searchLogs returns the lines of a run's logs matching a case-insensitive
+// substring, with 1-based line numbers — so an agent can find the relevant lines
+// of a long log without pulling the whole thing into context (ADR 0050 D7). With
+// task_id it searches that one attempt (fast path); without task_id it searches
+// every task instance's log across the run, tagging each match with its task_id.
+// The match is a plain substring, not a regex, to avoid handing the model a
+// ReDoS lever. Matched lines are sanitized (untrusted content, D10) and the
+// returned set is capped across all tasks, but the true total is always reported.
 func (h *handlers) searchLogs(ctx context.Context, req *mcpsdk.CallToolRequest, in searchLogsInput) (*mcpsdk.CallToolResult, searchLogsOutput, error) {
-	if in.DagID == "" || in.RunID == "" || in.TaskID == "" || in.Query == "" {
-		return nil, searchLogsOutput{}, fmt.Errorf("dag_id, run_id, task_id, and query are required")
-	}
-	try := in.TryNumber
-	if try < 1 {
-		try = 1
+	if in.DagID == "" || in.RunID == "" || in.Query == "" {
+		return nil, searchLogsOutput{}, fmt.Errorf("dag_id, run_id, and query are required")
 	}
 	maxN := in.MaxMatches
 	if maxN <= 0 {
@@ -455,28 +458,96 @@ func (h *handlers) searchLogs(ctx context.Context, req *mcpsdk.CallToolRequest, 
 	if err != nil {
 		return nil, searchLogsOutput{}, err
 	}
-	resp, err := api.GetTaskLogsWithResponse(ctx, in.DagID, in.RunID, in.TaskID, try)
-	if err != nil {
-		return nil, searchLogsOutput{}, fmt.Errorf("fetching task log: %w", err)
-	}
-	if resp.StatusCode() != http.StatusOK {
-		return nil, searchLogsOutput{}, fmt.Errorf("control plane returned %d fetching task log", resp.StatusCode())
+
+	out := searchLogsOutput{DagID: in.DagID, RunID: in.RunID, Query: in.Query}
+	needle := strings.ToLower(in.Query)
+
+	if in.TaskID != "" {
+		try := in.TryNumber
+		if try < 1 {
+			try = 1
+		}
+		out.TaskID = in.TaskID
+		out.TryNumber = try
+		resp, err := api.GetTaskLogsWithResponse(ctx, in.DagID, in.RunID, in.TaskID, try)
+		if err != nil {
+			return nil, searchLogsOutput{}, fmt.Errorf("fetching task log: %w", err)
+		}
+		if resp.StatusCode() != http.StatusOK {
+			return nil, searchLogsOutput{}, fmt.Errorf("control plane returned %d fetching task log", resp.StatusCode())
+		}
+		// Task-scoped: the top-level task_id/try_number carry provenance, so the
+		// per-match tags stay empty to keep the fast-path output unchanged.
+		scanLog(&out, string(resp.Body), needle, "", 0, maxN)
+		out.Truncated = out.TotalMatches > len(out.Matches)
+		return nil, out, nil
 	}
 
-	out := searchLogsOutput{DagID: in.DagID, RunID: in.RunID, TaskID: in.TaskID, TryNumber: try, Query: in.Query}
-	needle := strings.ToLower(in.Query)
-	lines := strings.Split(strings.ReplaceAll(string(resp.Body), "\r\n", "\n"), "\n")
+	// Run-wide: enumerate the run's task instances (same list diagnose_run uses)
+	// and search each one's own attempt, tagging matches with their task_id.
+	if err := h.searchRunLogs(ctx, api, &out, needle, maxN); err != nil {
+		return nil, searchLogsOutput{}, err
+	}
+	out.Truncated = out.TotalMatches > len(out.Matches)
+	return nil, out, nil
+}
+
+// searchRunLogs lists a run's task instances and scans each one's log for the
+// needle, tagging every match with its task_id and attempt. A task whose log
+// can't be fetched (never ran, or a per-task read error) is skipped rather than
+// failing the whole search — the matches from the other tasks still come back;
+// only the initial task-instance listing is fatal. The returned-match cap is
+// shared across all tasks, but every task is still scanned so TotalMatches
+// reports the true run-wide total.
+func (h *handlers) searchRunLogs(ctx context.Context, api *apiclient.ClientWithResponses, out *searchLogsOutput, needle string, maxN int) error {
+	tiResp, err := api.ListTaskInstancesWithResponse(ctx, out.DagID, out.RunID)
+	if err != nil {
+		return fmt.Errorf("listing task instances: %w", err)
+	}
+	if tiResp.StatusCode() != http.StatusOK || tiResp.JSON200 == nil {
+		return fmt.Errorf("control plane returned %d listing task instances", tiResp.StatusCode())
+	}
+	var tis []apiclient.TaskInstance
+	if tiResp.JSON200.TaskInstances != nil {
+		tis = *tiResp.JSON200.TaskInstances
+	}
+	for _, ti := range tis {
+		taskID := deref(ti.TaskId)
+		try := deref(ti.TryNumber)
+		if taskID == "" || try < 1 { // a task that never ran has no log to search
+			continue
+		}
+		logResp, lerr := api.GetTaskLogsWithResponse(ctx, out.DagID, out.RunID, taskID, try)
+		if lerr != nil || logResp.StatusCode() != http.StatusOK {
+			continue
+		}
+		scanLog(out, string(logResp.Body), needle, taskID, try, maxN)
+	}
+	return nil
+}
+
+// scanLog appends every needle match in body to out.Matches (up to maxN total,
+// counting matches already collected from other tasks) and always increments
+// out.TotalMatches, so the cap bounds what is returned while the true total is
+// still counted. taskID/tryNumber tag each match for a run-wide search and are
+// empty/zero for a task-scoped one. Matched lines are control/ANSI-stripped and
+// length-capped (untrusted content, D10).
+func scanLog(out *searchLogsOutput, body, needle, taskID string, tryNumber, maxN int) {
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
 	for i, ln := range lines {
 		if !strings.Contains(strings.ToLower(ln), needle) {
 			continue
 		}
 		out.TotalMatches++
 		if len(out.Matches) < maxN {
-			out.Matches = append(out.Matches, logMatch{LineNumber: i + 1, Line: capLine(stripControl(ln))})
+			out.Matches = append(out.Matches, logMatch{
+				TaskID:     taskID,
+				TryNumber:  tryNumber,
+				LineNumber: i + 1,
+				Line:       capLine(stripControl(ln)),
+			})
 		}
 	}
-	out.Truncated = out.TotalMatches > len(out.Matches)
-	return nil, out, nil
 }
 
 // sanitizeLogTail returns at most the last n lines of raw log output, stripped of

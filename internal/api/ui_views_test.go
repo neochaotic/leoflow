@@ -10,6 +10,8 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/ui"
+	"github.com/neochaotic/leoflow/internal/version"
 )
 
 func viewsServer(runs []domain.DagRun, user *auth.User) *gin.Engine {
@@ -39,6 +41,27 @@ func TestVersionEndpoint(t *testing.T) {
 	}
 	if _, ok := v["git_version"]; !ok {
 		t.Errorf("missing git_version field: %v", v)
+	}
+}
+
+// TestVersionEndpointReportsAirflowCompatVersion pins #594: /api/v2/version is
+// the Airflow VersionInfo endpoint the embedded SPA reads to build its docs
+// links (https://airflow.apache.org/docs/apache-airflow/<version>/…). It must
+// report the pinned Airflow UI version, NOT leoflow's build version — otherwise
+// the SPA points users at a nonexistent Airflow docs release (a 404). leoflow's
+// own version stays on the CLI, health, and MCP surfaces.
+func TestVersionEndpointReportsAirflowCompatVersion(t *testing.T) {
+	rec := authGet(viewsServer(nil, nil), http.MethodGet, "/api/v2/version", "")
+	var v map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	want := ui.Version() // the pinned Airflow tag (e.g. "3.2.1")
+	if got := v["version"]; got != want {
+		t.Errorf("version = %v, want the Airflow-compat version %q (so SPA docs links resolve)", got, want)
+	}
+	if v["version"] == version.Get().Version {
+		t.Errorf("version must not be leoflow's build version %q — it drives Airflow docs URLs", version.Get().Version)
 	}
 }
 

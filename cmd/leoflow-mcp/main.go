@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,15 +20,27 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/neochaotic/leoflow/internal/mcp"
+	versioninfo "github.com/neochaotic/leoflow/internal/version"
 	apiclient "github.com/neochaotic/leoflow/pkg/client"
 )
 
-// version is overridden at build time via -ldflags "-X main.version=...".
+// version is overridden at build time via -ldflags "-X main.version=...". This
+// binary carries its version in package main (not internal/version), so
+// -X main.version is the only injection that lands (see .goreleaser.yaml).
 var version = "dev"
 
 func main() { os.Exit(run()) }
 
 func run() int {
+	// Answer `--version` before parsing flags — flag.Parse would reject an
+	// unknown --version — and before any stdout goes to the MCP channel, so an
+	// operator can ask the binary its version (#593). Print main.version: this
+	// binary's own ldflag target.
+	if versioninfo.WantsVersion(os.Args[1:]) {
+		fmt.Println("leoflow-mcp", version)
+		return 0
+	}
+
 	// Logs go to stderr: on stdio, stdout is the MCP protocol channel and must
 	// carry nothing else.
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))

@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/ui"
 	"github.com/neochaotic/leoflow/internal/version"
 )
 
@@ -109,11 +110,17 @@ func synthRunID(runID string) uint32 {
 	return h.Sum32()
 }
 
-// versionHandler implements GET /api/v2/version (Airflow VersionInfo).
+// versionHandler implements GET /api/v2/version (Airflow VersionInfo). The
+// embedded SPA reads `version` to build its documentation links
+// (https://airflow.apache.org/docs/apache-airflow/<version>/…), so this MUST be
+// the pinned Airflow UI version, not leoflow's build version — otherwise the UI
+// points users at a nonexistent Airflow docs release (#594). leoflow's own
+// version is surfaced on the CLI (`leoflow version`), the health endpoints, and
+// the MCP `health://control-plane` resource. git_version keeps leoflow's commit
+// as a build reference for the control plane actually serving this compat UI.
 func versionHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		info := version.Get()
-		c.JSON(http.StatusOK, gin.H{"version": info.Version, "git_version": info.GitCommit})
+		c.JSON(http.StatusOK, gin.H{"version": ui.Version(), "git_version": version.Get().GitCommit})
 	}
 }
 

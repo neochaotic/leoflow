@@ -17,13 +17,33 @@ import (
 	"github.com/neochaotic/leoflow/internal/version"
 )
 
+// usage is printed for `--help`. leoflow-agent takes no positional args; it is
+// configured via environment and normally launched by the control plane.
+const usage = `leoflow-agent — runs as PID 1 inside a task pod: connects to the control plane
+over gRPC, runs the task, streams logs, and reports the result.
+
+Configured via environment (LEOFLOW_CONTROL_PLANE_ADDR, LEOFLOW_AGENT_TOKEN, …);
+there are no positional arguments. Normally launched by the control plane, not
+by hand.
+
+Flags:
+  --version   print version and exit
+  --help, -h  print this help and exit
+`
+
 func main() { os.Exit(run()) }
 
 func run() int {
-	// Answer `--version` before connecting, so an operator can ask a deployed
-	// agent its version without a reachable control plane (#593).
-	if version.WantsVersion(os.Args[1:]) {
+	// Answer `--version`/`--help` before connecting, so an operator can query a
+	// deployed agent without a reachable control plane (#593). Without this,
+	// `--help` falls through to a Dial that errors on a missing address.
+	args := os.Args[1:]
+	switch {
+	case version.WantsVersion(args):
 		fmt.Println(version.Get().String())
+		return 0
+	case version.WantsHelp(args):
+		fmt.Print(usage)
 		return 0
 	}
 

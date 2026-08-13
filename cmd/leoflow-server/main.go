@@ -44,11 +44,30 @@ import (
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
 
+// usage is printed for `--help`. leoflow-server takes no positional args; it is
+// configured entirely via environment and an optional LEOFLOW_CONFIG file.
+const usage = `leoflow-server — the Leoflow control plane (HTTP API, auth, metrics, scheduler).
+
+Configured via environment variables and an optional config file (LEOFLOW_CONFIG);
+there are no positional arguments. See docs/configuration.md.
+
+Flags:
+  --version   print version and exit
+  --help, -h  print this help and exit
+`
+
 func main() {
-	// Answer `--version` before loading any config, so an operator can ask a
-	// deployed binary its version without a runnable environment (#593).
-	if version.WantsVersion(os.Args[1:]) {
+	// Answer `--version`/`--help` before loading any config, so an operator can
+	// query a deployed binary without a runnable environment (#593). Without
+	// this, `--help` falls through to a boot attempt that errors on missing
+	// config.
+	args := os.Args[1:]
+	switch {
+	case version.WantsVersion(args):
 		fmt.Println(version.Get().String())
+		return
+	case version.WantsHelp(args):
+		fmt.Print(usage)
 		return
 	}
 	if err := run(); err != nil {

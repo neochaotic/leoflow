@@ -18,8 +18,9 @@ eviction) shows Kubernetes phase `Failed` **even when the user task itself
 succeeded**.
 
 The reconciler is the backstop for a pod that never delivered, but it can only
-read **pod phase** (`internal/executor/reconcile.go:103-116`): a `Failed` pod is
-settled as a task failure via `reportFailure`. It has no way to recover a success
+read **pod phase** (`classifyPod`, `internal/executor/reconcile.go:39-55`, invoked
+in the loop at `:103-116`): a `Failed` pod is settled as a task failure via
+`reportFailure`. It has no way to recover a success
 from phase alone, because the only durable signal — the pod — says `Failed`.
 
 ### This is a classic distributed-systems problem, and there are two schools
@@ -116,21 +117,48 @@ try (and safely fail) to decode — avoided outright.
 ### Write ordering: the success record follows the pushes
 
 The record is written **path-specifically at the point the outcome becomes true**,
-not on a single "user process exited" event:
+not on a single "user process exited" event. To avoid missing a terminal sink, the
+write is keyed off the `state` the agent is about to report inside the terminal
+path — not bolted onto individual call sites:
 
 - The `success` record is written **only after every pre-report push (return
   value, extra links, custom XComs) has been accepted** — immediately before
   `report(SUCCESS)`. A kill *during* the pushes therefore leaves **no** success
-  record → fallback → failure → idempotent re-drive. This closes the gap where a
-  recovered "success" could have missing downstream XCom/return-value.
-- The `failed` record is written immediately before each `fail(...)`.
+  record → fallback → failure → idempotent re-drive.
+- The `failed` record must cover **every** failure sink: the `fail(...)` calls
+  (`runner.go:409-418`) **and** the execution-timeout path `failWithReason(...)`
+  (`runner.go:396, 426-431`), which reports `FAILED` without going through
+  `fail()`. Keying the write off the reported state (rather than enumerating call
+  sites) is what guarantees the timeout sink is not missed.
 - The `reschedule` record is written immediately before `reportReschedule(...)`,
   carrying the parsed next-poke time.
+
+**This ordering is forward-looking, not a present-day fix.** Return-value,
+extra-links, and custom-XCom persistence is **not implemented today** — those
+pushes short-circuit on `codes.Unimplemented` and store nothing
+(`runner.go:463-468`; XCom lands in a later phase). So "success only after the
+pushes" currently guards a gap that **cannot occur yet** (the pushes always
+"succeed" by being skipped). The constraint hardens the write site now so that
+when persistence lands, a recovered success cannot have missing downstream data;
+it buys nothing until then. Called out so the win is not mistaken for a
+present-day correctness improvement.
 
 ### The reconciler reads it as source of truth (attempt-guarded)
 
 `classifyPod` (`internal/executor/reconcile.go:39`) is extended: when a terminated
 container carries a decodable outcome record, it is trusted over the pod phase.
+
+**This is a reconciler-seam expansion, not merely a read.** Today `classifyPod`
+returns a 3-valued phase enum (`podPending | podFailed | podSucceeded`,
+`reconcile.go:14-25`) and `Reconcile` only ever *settles* a `podFailed` pod, via a
+single `FailureReporter.FailTask` (`reconcile.go:67-69, 113-117`) — a `Succeeded`
+pod is merely GC'd on age, with no success- or reschedule-settle path at all.
+Consuming the record therefore requires: (a) a richer `classifyPod` return that
+carries the outcome, `exit_code`, and `reschedule_at`; (b) new settle methods
+beyond `FailTask` for the success and reschedule paths; (c) **two new
+`try_number`-guarded queries** — a succeed and a reschedule settle — alongside the
+existing `FailTaskInstanceIfActive`; and (d) new branches in the `Reconcile` loop.
+This is scoped in Step 2 below.
 
 - Record says `success` on a `Failed` pod → settle the task **succeeded** (the
   report was lost, the work was not).
@@ -157,10 +185,12 @@ This ADR therefore specifies a **new try_number-guarded settle for the reconcile
 (both the success and failure paths): `WHERE id=$1 AND try_number=$2 AND state IN
 (...)`, threading the `leoflow.io/try-number` pod label (already set in `BuildPod`)
 into the settle. Whichever of the reconciler and a late agent report writes first
-wins; the other is a no-op. `on_failure_callback` (#424) fires consistently for a
-reconciler-driven failure, exactly as for an agent-driven one. (The claim in the
-earlier draft that we could "reuse the existing guard" was wrong — that guard is
-not on the reconciler path.)
+wins; the other is a no-op. `on_failure_callback` (#424) should fire via the
+standard `failed`-state handling for a reconciler-driven failure, exactly as for
+an agent-driven one — Step 2 must assert this, since the settle is a bare `UPDATE`
+and the callback dispatch keys off the transition, not the query. (The claim in
+the earlier draft that we could "reuse the existing guard" was wrong — that guard
+is not on the reconciler path.)
 
 ## Key properties
 
@@ -196,9 +226,12 @@ not on the reconciler path.)
   but lost its report — is closed for the common kill classes; the residue is
   safe re-drive. This is the concrete answer to Airflow's zombie-task false
   negative.
-- Small, contained change: a write in the agent's terminal path and a read in
-  `classifyPod`; a policy pin in `BuildPod`; a try_number-guarded settle. No new
-  coordination substrate, no control-plane schema change.
+- Contained but not trivial. On the execution side: a write in the agent's
+  terminal path and a policy pin in `BuildPod`. On the orchestration side: a richer
+  `classifyPod` return, new success/reschedule settle methods, two new
+  `try_number`-guarded queries, and new `Reconcile` branches. No new coordination
+  substrate and no control-plane schema change — but this **expands the reconciler
+  seam**, it is not "just a read".
 - The termination message becomes a **contract** between agent and reconciler,
   versioned by `v` so the format can evolve.
 - The reconciler grows one dependency on a Kubernetes-surfaced field; the fallback
@@ -271,11 +304,15 @@ not on the reconciler path.)
 
 1. **This ADR** — the durable-outcome mechanism, the seam contract, and the
    School-B-floor / School-A-optimization framing.
-2. **Core (no cluster).** `BuildPod` pins the termination-message policy (tested);
-   agent writes the record path-specifically after the pushes; `classifyPod` +
-   the reconciler read it and settle with a try_number-guarded query;
-   reschedule-exclusion with `reschedule_at`; idempotent double-settle. Unit-tested
-   with a fake clientset and synthetic pod statuses.
+2. **Core (no cluster).** Execution side: `BuildPod` pins the termination-message
+   policy (tested); the agent writes the record keyed off the reported state,
+   covering `fail(...)` **and** the `failWithReason(...)` timeout sink, the success
+   record after the pushes. Orchestration side: a richer `classifyPod` return; new
+   success/reschedule settle methods; two new `try_number`-guarded queries (succeed
+   + reschedule) beside `FailTaskInstanceIfActive`; new `Reconcile` branches;
+   reschedule-exclusion with `reschedule_at`; idempotent double-settle; and an
+   assertion that `on_failure_callback` fires on the reconciler-driven `failed`
+   transition. Unit-tested with a fake clientset and synthetic pod statuses.
 3. **E2E / chaos (k3d).** Inject a pod kill mid-report on the operator/split E2E
    and the runtime chaos harness (#524); assert the correct terminal state, and
    assert the agent can write the termination file under the hardened security

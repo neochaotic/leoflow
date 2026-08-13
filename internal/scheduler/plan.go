@@ -222,8 +222,18 @@ func FinalizeRun(run RunState) (domain.DagRunState, bool) {
 	anyFailed := false
 	for _, t := range run.Tasks {
 		st := run.States[t.TaskID]
-		if st == domain.TaskStateFailed && (retriable(run, t.TaskID) || infraReplaceable(run, t.TaskID)) {
-			return "", false
+		if st == domain.TaskStateFailed {
+			// Infra faults route EXCLUSIVELY through the infra budget, matching
+			// planRetryTransitions. They preserve try_number, so `retriable` would
+			// wrongly keep the run alive after the infra budget is spent — the
+			// planner never app-retries an InfraFailed task, so the run would hang.
+			if run.InfraFailed[t.TaskID] {
+				if infraReplaceable(run, t.TaskID) {
+					return "", false
+				}
+			} else if retriable(run, t.TaskID) {
+				return "", false
+			}
 		}
 		if !st.IsTerminal() {
 			return "", false

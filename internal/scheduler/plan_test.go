@@ -288,6 +288,41 @@ func TestFinalizeRunWaitsForRetriableFailure(t *testing.T) {
 	}
 }
 
+// TestFinalizeRunWaitsForInfraReplace: a failed+infra task within its infra
+// budget is being re-placed, so the run must stay active (ADR 0051 Phase 1).
+func TestFinalizeRunWaitsForInfraReplace(t *testing.T) {
+	run := RunState{
+		Tasks:         linear(),
+		States:        map[string]domain.TaskState{"a": domain.TaskStateFailed, "b": domain.TaskStateSuccess},
+		Tries:         map[string]int{"a": 1},
+		MaxTries:      map[string]int{"a": 3},
+		InfraFailed:   map[string]bool{"a": true},
+		InfraAttempts: map[string]int{"a": 0},
+	}
+	if _, done := FinalizeRun(run); done {
+		t.Error("must not finalize while an infra-failed task is still re-placeable")
+	}
+}
+
+// TestFinalizeRunFinalizesExhaustedInfra: an infra fault preserves try_number, so
+// an infra-EXHAUSTED task can still look "retriable" — but the planner routes an
+// InfraFailed task EXCLUSIVELY and never app-retries it. FinalizeRun must mirror
+// that and finalize the run as failed, never hang forever (ADR 0051 Phase 1).
+func TestFinalizeRunFinalizesExhaustedInfra(t *testing.T) {
+	run := RunState{
+		Tasks:         linear(),
+		States:        map[string]domain.TaskState{"a": domain.TaskStateFailed, "b": domain.TaskStateSuccess},
+		Tries:         map[string]int{"a": 1}, // try_number untouched by infra faults
+		MaxTries:      map[string]int{"a": 3}, // app-retry budget still "available"
+		InfraFailed:   map[string]bool{"a": true},
+		InfraAttempts: map[string]int{"a": infraMaxAttempts}, // infra budget spent
+	}
+	state, done := FinalizeRun(run)
+	if !done || state != domain.DagRunStateFailed {
+		t.Errorf("exhausted-infra task must finalize the run as failed (no hang), got (%q,%v)", state, done)
+	}
+}
+
 // A scheduled task whose next_dispatch_at is in the future is NOT promoted to
 // queued this tick — its previous dispatch failed and the backoff has not
 // elapsed (ADR 0031 Amendment A). Mirrors the up_for_reschedule gate.

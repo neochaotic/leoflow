@@ -61,6 +61,32 @@ func TestBuildPod(t *testing.T) {
 	}
 }
 
+// TestBuildPodPinsTerminationMessagePolicy locks the ADR 0052 prerequisite: the
+// task container must explicitly pin TerminationMessagePolicy=File and the path,
+// so the agent's durable outcome record is surfaced on pod status. Relying on the
+// Kubernetes default is fragile — an admission webhook or PodSecurity policy could
+// mutate it and silently revert outcome recovery to phase-based failure.
+func TestBuildPodPinsTerminationMessagePolicy(t *testing.T) {
+	c := BuildPod(sampleReq()).Spec.Containers[0]
+	if c.TerminationMessagePolicy != corev1.TerminationMessageReadFile {
+		t.Errorf("TerminationMessagePolicy = %q, want File (ADR 0052)", c.TerminationMessagePolicy)
+	}
+	if c.TerminationMessagePath != "/dev/termination-log" {
+		t.Errorf("TerminationMessagePath = %q, want /dev/termination-log", c.TerminationMessagePath)
+	}
+	// The agent must be told to write its record to the same path the container
+	// surfaces, so the reader and writer agree.
+	var envPath string
+	for _, e := range c.Env {
+		if e.Name == "LEOFLOW_TERMINATION_LOG_PATH" {
+			envPath = e.Value
+		}
+	}
+	if envPath != c.TerminationMessagePath {
+		t.Errorf("LEOFLOW_TERMINATION_LOG_PATH = %q, want it to match TerminationMessagePath %q", envPath, c.TerminationMessagePath)
+	}
+}
+
 func TestBuildPodMountsStagingVolume(t *testing.T) {
 	// Without a staging claim, no extra volume is added.
 	if vols := BuildPod(sampleReq()).Spec.Volumes; len(vols) != 0 {

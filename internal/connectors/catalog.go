@@ -18,6 +18,9 @@ import (
 //go:embed catalog.json
 var catalogJSON []byte
 
+//go:embed catalog.overlay.json
+var catalogOverlayJSON []byte
+
 // Connector is one curated connector type, mirroring a catalog.json entry. The
 // field metadata (StandardFields/ExtraFields) is the precise shape the Airflow
 // 3.2 SPA renders via its FlexibleForm component, so the admin form can serve it
@@ -59,15 +62,67 @@ var aliasOverlay = map[string][]string{
 	"google_cloud_platform": {"gcp", "google"},
 }
 
+// connectorOverlay is a leoflow-owned augmentation for one conn_type.
+type connectorOverlay struct {
+	StandardFields map[string]any `json:"standard_fields"`
+	ExtraFields    map[string]any `json:"extra_fields"`
+}
+
+// fieldOverlay augments generated catalog entries with leoflow-owned form
+// fields — the dbt-auth fields Airflow's provider introspection does not emit
+// (BigQuery's leoflow-invented `method` selector, Snowflake's key passphrase,
+// the whole Databricks form). It is loaded from catalog.overlay.json, which —
+// unlike the generated catalog.json — is hand-curated and safe to edit. Keyed
+// by conn_type; only StandardFields and ExtraFields are merged.
+var fieldOverlay map[string]connectorOverlay
+
 var catalog []Connector
 
 func init() {
 	if err := json.Unmarshal(catalogJSON, &catalog); err != nil {
 		panic("connectors: parsing embedded catalog.json: " + err.Error())
 	}
+	// The overlay file carries a leading "_comment" key documenting itself; it
+	// names no connector. Decode raw, drop it, then type each entry so the
+	// self-documenting comment does not have to satisfy connectorOverlay.
+	rawOverlay := map[string]json.RawMessage{}
+	if err := json.Unmarshal(catalogOverlayJSON, &rawOverlay); err != nil {
+		panic("connectors: parsing embedded catalog.overlay.json: " + err.Error())
+	}
+	delete(rawOverlay, "_comment")
+	fieldOverlay = make(map[string]connectorOverlay, len(rawOverlay))
+	for ct, raw := range rawOverlay {
+		var ov connectorOverlay
+		if err := json.Unmarshal(raw, &ov); err != nil {
+			panic("connectors: parsing overlay for " + ct + ": " + err.Error())
+		}
+		fieldOverlay[ct] = ov
+	}
 	for i := range catalog {
 		catalog[i].Aliases = aliasOverlay[catalog[i].ConnectionType]
+		if ov, ok := fieldOverlay[catalog[i].ConnectionType]; ok {
+			catalog[i].StandardFields = mergeFields(catalog[i].StandardFields, ov.StandardFields)
+			catalog[i].ExtraFields = mergeFields(catalog[i].ExtraFields, ov.ExtraFields)
+		}
 	}
+}
+
+// mergeFields returns base with every key from overlay added or replaced. The
+// overlay augments the generated fields (never wholesale-replaces the map), so
+// the provider's own fields survive; a nil base (Airflow emitted none, e.g.
+// databricks) is allocated. base is not mutated.
+func mergeFields(base, overlay map[string]any) map[string]any {
+	if len(overlay) == 0 {
+		return base
+	}
+	out := make(map[string]any, len(base)+len(overlay))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range overlay {
+		out[k] = v
+	}
+	return out
 }
 
 // Catalog returns every connector entry, including core types with no pip package

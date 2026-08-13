@@ -6,6 +6,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The connection form now surfaces dbt cloud-auth fields with inline help.**
+  The three modern service-account auth modes shipped in 0.3.0-rc.1 were only
+  reachable by hand-typing keys into the raw `extra` JSON box, because the form
+  catalog is generated from Airflow's provider introspection, which does not
+  describe them. A hand-curated leoflow overlay
+  (`internal/connectors/catalog.overlay.json`, merged over the generated catalog
+  at load) adds them as labeled fields: Snowflake `private_key_passphrase`,
+  BigQuery's keyless `method` selector, and the full Databricks form
+  (`http_path`, `client_id`/`client_secret`, `auth_type`, plus a labeled
+  workspace URL and access-token field — Airflow shipped it empty). The generated
+  `catalog.json` is untouched; the overlay survives regeneration.
+
+### Documentation
+
+- **dbt: the warehouse-connection section now documents modern cloud auth.**
+  `docs/dbt.md` §4 described only the legacy password/key-file modes; it now has
+  a per-warehouse table (Snowflake key-pair, BigQuery keyless, Databricks OAuth
+  M2M) and links to the connection reference pages that carry the full setup.
+
 ### Fixed
 
 - **Fresh binary-only install: `leoflow compile` and `leoflow lite` now work

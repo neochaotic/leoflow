@@ -1,0 +1,61 @@
+{
+  "_comment": "Leoflow-owned overlay merged over the GENERATED catalog.json at load (see catalog.go). These are dbt-auth fields that Airflow's provider introspection does not emit — either leoflow-invented selectors (BigQuery `method`) or fields Airflow's form omits (Snowflake key passphrase, the whole Databricks form). Each field mirrors the FlexibleForm shape the SPA renders; `description` becomes the field's help text. Hand-curated on purpose: unlike catalog.json, this file is safe to edit. Keep field names in sync with runtime/python/leoflow_runtime/dbt.py.",
+  "snowflake": {
+    "extra_fields": {
+      "private_key_passphrase": {
+        "description": "Passphrase for an encrypted key-pair private key. Leave blank for an unencrypted key or password auth.",
+        "schema": {"title": "Private key passphrase", "type": ["string", "null"]},
+        "source": null,
+        "value": null
+      }
+    }
+  },
+  "google_cloud_platform": {
+    "extra_fields": {
+      "method": {
+        "description": "dbt auth method. Set to `oauth` for keyless auth via Application Default Credentials / GKE Workload Identity (no key file shipped). Leave blank to authenticate with keyfile_dict.",
+        "schema": {"title": "dbt auth method (oauth = keyless)", "type": ["string", "null"]},
+        "source": null,
+        "value": null
+      }
+    }
+  },
+  "databricks": {
+    "standard_fields": {
+      "host": {"hidden": false, "title": "Workspace URL", "placeholder": "https://dbc-xxxxxxxx.cloud.databricks.com"},
+      "password": {"hidden": false, "title": "Access token (PAT)", "placeholder": "dapi… — leave blank when using OAuth M2M"}
+    },
+    "extra_fields": {
+      "http_path": {
+        "description": "SQL warehouse or cluster HTTP path, e.g. /sql/1.0/warehouses/abc123.",
+        "schema": {"title": "HTTP path", "type": ["string", "null"]},
+        "source": null,
+        "value": null
+      },
+      "catalog": {
+        "description": "Unity Catalog catalog to run dbt against (optional).",
+        "schema": {"title": "Catalog", "type": ["string", "null"]},
+        "source": null,
+        "value": null
+      },
+      "auth_type": {
+        "description": "Set to `oauth` for service-principal OAuth M2M (Databricks' recommended automation auth). Leave blank to authenticate with the access token above.",
+        "schema": {"title": "Auth type (oauth = service principal)", "type": ["string", "null"]},
+        "source": null,
+        "value": null
+      },
+      "client_id": {
+        "description": "Service-principal client ID (OAuth M2M). Required with client_secret when auth_type is oauth.",
+        "schema": {"title": "Client ID (OAuth M2M)", "type": ["string", "null"]},
+        "source": null,
+        "value": null
+      },
+      "client_secret": {
+        "description": "Service-principal client secret (OAuth M2M).",
+        "schema": {"title": "Client secret (OAuth M2M)", "type": ["string", "null"]},
+        "source": null,
+        "value": null
+      }
+    }
+  }
+}

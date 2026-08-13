@@ -223,9 +223,24 @@ image). Simple for Lite; you own the credential delivery.
 zero-server local dev) are supported — Leoflow maps the managed connection to each
 adapter's profile. Declare the adapter package
 (`dbt-snowflake`, `dbt-bigquery`, `dbt-databricks`, …) as a dependency so it lands
-in the image. BigQuery uses the connection's `keyfile_dict`; Snowflake its
-`account`/`warehouse`; Databricks its `http_path` — all from the connection's
-`extra`, so nothing secret is baked in.
+in the image.
+
+Each cloud adapter supports modern, service-account auth — Leoflow's recommended
+mode for automation — alongside the legacy password/key-file mode. Everything is
+driven by the connection's `extra`, so nothing secret is baked into the image, and
+the connection form surfaces these fields with inline help:
+
+| Warehouse | Recommended auth | Set in the connection | Legacy fallback |
+|---|---|---|---|
+| **Snowflake** | key-pair | `private_key_content` (inline PEM) or `private_key_file` (path), optional `private_key_passphrase` | `password` |
+| **BigQuery** | keyless (Workload Identity / ADC) | `method: oauth` | `keyfile_dict` |
+| **Databricks** | OAuth M2M (service principal) | `client_id` + `client_secret` (or `auth_type: oauth`) | access token (PAT) |
+
+The recommended mode wins when its fields are present; otherwise the legacy mode
+is used. Per-warehouse setup — required fields (`account`/`warehouse`, `http_path`,
+…), example payloads, and precedence — lives in the connection reference:
+[Snowflake](connections/snowflake.md), [BigQuery](connections/google_cloud_platform.md),
+[Databricks](connections/databricks.md).
 
 ---
 

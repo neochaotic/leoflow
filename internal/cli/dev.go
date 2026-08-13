@@ -699,6 +699,12 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSp
 	if err != nil {
 		return nil, nil, err
 	}
+	// Self-heal the extracted Python sources before anything references them.
+	// On a binary-only install (no repo) resolveRuntimeSrc points the per-DAG
+	// venv at ~/.leoflow/pysrc/runtime/python; if the boot provisions that venv
+	// before the sources are extracted, pip aborts with "does not exist" (#587).
+	// Checksum-gated, so a warm install pays nothing.
+	ensurePysrc(cmd)
 	runtimeSrc := resolveRuntimeSrc(o.runtimeSrc, home)
 	// Per-DAG venvs: every project gets its own ~/.leoflow/dev/venvs/<dag_id>/.
 	// Editing one project's `dependencies:` only re-runs pip for THAT project,

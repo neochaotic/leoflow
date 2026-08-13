@@ -541,6 +541,11 @@ func runParser(cmd *cobra.Command, command string, a parserArgs) error {
 		"--dag-version", a.dagVersion)
 	//nolint:gosec // G204: the parser command is operator-configured by design (ADR 0005).
 	pc := exec.CommandContext(cmdContext(cmd), fields[0], argv...)
+	// Build the child environment. Guarantee the extracted parser sources are
+	// importable: on a binary-only install the default command is a bare
+	// `python3 -m leoflow_parser` and nothing else wires ~/.leoflow/pysrc/parser
+	// onto PYTHONPATH, so the parser fails with ModuleNotFoundError (#587).
+	env := withParserPythonPath(os.Environ())
 	// Hand the resolved project config to the parser as JSON via an env var.
 	// The parser uses this instead of re-parsing leoflow.yaml in-process, so
 	// Go owns the schema and the parser ships zero third-party deps.
@@ -549,8 +554,9 @@ func runParser(cmd *cobra.Command, command string, a parserArgs) error {
 		if merr != nil {
 			return fmt.Errorf("marshaling project config for parser: %w", merr)
 		}
-		pc.Env = append(os.Environ(), parserConfigEnv+"="+string(raw))
+		env = append(env, parserConfigEnv+"="+string(raw))
 	}
+	pc.Env = env
 	pc.Stdout = cmd.OutOrStdout()
 	// Stream the parser's stderr to the terminal and capture it, so a parse
 	// failure carries the real traceback (e.g. the SyntaxError + file:line) in

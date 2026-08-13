@@ -6,6 +6,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-rc.4] - 2026-08-13
+
+> Fourth RC of the **0.3.0** line — a one-line CLI consistency fix over `rc.3`:
+> `leoflow --version` (flag) now works, matching the `version` subcommand and the
+> companion binaries. No control-plane, MCP, dbt, or UI change since `rc.3`.
+
 ### Fixed
 
 - **`leoflow --version` (flag) now works, matching the `version` subcommand and

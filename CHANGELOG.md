@@ -6,6 +6,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-13
+
+> Promotes the **0.3.0** release line (`v0.3.0-rc.1` → `v0.3.0-rc.4`) to stable.
+> The candidate was validated end-to-end on the published artifact: checksum +
+> cosign signature verification, a binary-only install (managed Postgres, no repo
+> or `PYTHONPATH`), the full UI journey (trigger, failure-path traceback,
+> connection CRUD with encryption verified at the database), the `leoflow-mcp`
+> server over stdio, and a dbt-duckdb run. See the `0.3.0-rc.1` … `0.3.0-rc.4`
+> sections below for the full change list. The only change since `rc.4` is the
+> front-door documentation fix below.
+
 ### Documentation
 
 - **Front-door docs fixed for the v0.3.0 line.** The README's flagship example
@@ -893,7 +904,8 @@ Per-rc detail is in the `0.1.0-rc.1` … `0.1.0-rc.4` sections below.
 - Browser end-to-end verification (rendering, write-flow paths, screenshots) is
   the remaining Phase 5 acceptance step; see `docs/ui-compatibility.md`.
 
-[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/neochaotic/leoflow/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/neochaotic/leoflow/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/neochaotic/leoflow/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.2...v0.1.2
 [0.1.2-rc.2]: https://github.com/neochaotic/leoflow/compare/v0.1.2-rc.1...v0.1.2-rc.2

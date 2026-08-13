@@ -145,7 +145,7 @@ leoflow doctor
 
 | Variable | Effect |
 |---|---|
-| `LEOFLOW_VERSION=v0.0.1-prealpha.1` | install a specific release (default: newest, including pre-releases) |
+| `LEOFLOW_VERSION=v0.3.0` | install a specific release (default: newest, including pre-releases). See [Releases](https://github.com/neochaotic/leoflow/releases) for the current tag. |
 | `LEOFLOW_NO_SETUP=1` | install binaries only; run `leoflow setup` yourself later |
 | `LEOFLOW_INSTALL_DIR=~/.leoflow/bin` | where to put the binaries |
 
@@ -219,18 +219,18 @@ respectively) for verified TLS.
 ### Install with Helm
 
 The chart is published per release (and built from `helm/leoflow` in the
-repo). For pre-alpha cadence, the simplest path is to install directly from
-the cloned repo at a checked-out tag:
+repo). One simple path is to install directly from the cloned repo at a
+checked-out tag (replace `v0.3.0` with the [latest release](https://github.com/neochaotic/leoflow/releases)):
 
 ```bash
-git clone --depth 1 --branch v0.0.1-prealpha.27 https://github.com/neochaotic/leoflow
+git clone --depth 1 --branch v0.3.0 https://github.com/neochaotic/leoflow
 cd leoflow
 
 kubectl create namespace leoflow
 
 helm install lf ./helm/leoflow -n leoflow \
-  --set image.tag=v0.0.1-prealpha.27 \
-  --set migrations.image.tag=v0.0.1-prealpha.27 \
+  --set image.tag=v0.3.0 \
+  --set migrations.image.tag=v0.3.0 \
   --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
   --set redis.url='rediss://HOST:6380/0' \
   --set auth.jwtSecret="$(openssl rand -base64 64)" \
@@ -289,7 +289,7 @@ plus `leoflow` and `leoflow-agent` binaries) are published by
 
 ```bash
 # Verify the server image at a release tag.
-cosign verify ghcr.io/neochaotic/leoflow-server:v0.0.1-prealpha.27 \
+cosign verify ghcr.io/neochaotic/leoflow-server:v0.3.0 \
   --certificate-identity-regexp 'https://github.com/neochaotic/leoflow' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

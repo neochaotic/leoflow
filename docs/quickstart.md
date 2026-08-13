@@ -94,4 +94,4 @@ leoflow uninstall                    # remove the install (--purge for workspace
 - [DAG authoring](dag-authoring.md) — the dialect, `leoflow.yaml`, overrides.
 - [The `leoflow lite` workflow](dev-workflow.md) — the edit→reload loop, executors.
 - [CI/CD & deploy examples](deploy.md) — ship it.
-- [Editions](editions.md) — Lite (now) vs Pro (coming).
+- [Editions](editions.md) — Lite (now) vs Pro (in validation).

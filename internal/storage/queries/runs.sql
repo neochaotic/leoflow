@@ -373,7 +373,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    reschedule_at = NULL
+    reschedule_at = NULL,
+    last_failure_kind = NULL
 WHERE dag_run_id = $1 AND task_id = $2 AND state = 'up_for_reschedule';
 
 -- name: TaskInstanceFirstRescheduleAt :one
@@ -528,6 +529,7 @@ SET state = 'none',
     scheduled_at = NULL,
     dispatch_attempts = 0,
     next_dispatch_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry');
@@ -559,6 +561,7 @@ SET state = 'none',
     scheduled_at = NULL,
     dispatch_attempts = 0,
     next_dispatch_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry');

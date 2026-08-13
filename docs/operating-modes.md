@@ -3,9 +3,9 @@
 Leoflow has three runtime modes. The two user-facing ones are **Lite** (the full control plane on one host — laptop, VM, or internal server) and **Pro** (Helm-installed Kubernetes); **Demo** is a
 contributor-facing reference environment used to validate UI compatibility
 against the production-shaped control plane. **Lite is the recommended way to
-run Leoflow today** (trusted networks only); Pro is in active validation — the Helm chart is
-installable + chart-test gated and is being tested against GKE today, but not
-blessed for official use until the v0.1.0-alpha cut.
+run Leoflow today** (trusted networks only); Pro is Helm-installable and in active
+validation — the chart is chart-test gated and tested against GKE today, but not
+yet certified for production.
 
 > See also [Editions](editions.md) for the Lite/Pro distribution split.
 > This page is the **runtime details** view — exact ports, database names,
@@ -33,9 +33,10 @@ ports) so there is no split brain. Edit `dags/<project>/dag.py` or
 ![Leoflow Lite — home dashboard](assets/screenshots/dev-graph.png)
 
 
-- `leoflow lite provision` — check + provision host deps (Docker/k3d/kubectl/python3),
-  the base image, and the `leoflow_dev` database.
-- `leoflow lite dags/hello` — run a project (cluster-mode: real pods).
+- `leoflow doctor` — check the host (OS, Docker/k3d/kubectl/python3) and report the
+  achievable executor tier; `leoflow setup` bootstraps the managed runtime, base
+  image, and workspace (run for you by the installer).
+- `leoflow lite dags/hello` — run a project (k8s executor: real k3d pods).
 - `leoflow lite --executor=subprocess dags/hello` — fast host loop (no image build).
 - `leoflow db migrate|reset` — manage the Lite database (Airflow-style).
 
@@ -52,9 +53,9 @@ left alone.
 Real cluster install via the **[Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md)** (chart-test
 gated, multi-arch images published per release, signed with cosign).
 Hardening templates ship as opt-in toggles: HPA + PDB + NetworkPolicy +
-ServiceMonitor. Still **in validation** before the
-v0.1.0-alpha cut clears it for official use — but the chart is installable and
-tested against GKE today, and runs on any K8s cluster with external Postgres + Redis.
+ServiceMonitor. **Helm-installable and in active validation** — the chart is
+installable and tested against GKE today, and runs on any K8s cluster with external
+Postgres + Redis, but is not yet certified for production.
 
 Pending Pro work (tracked separately): TLS on the agent channel
 (#58), keyless cloud auth via workload identity (#56), least-privilege

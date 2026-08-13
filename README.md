@@ -5,6 +5,10 @@
 <h1 align="center">Leoflow</h1>
 
 <p align="center">
+  <strong>A fast, container-native workflow orchestrator — compatible with the Apache Airflow UI &amp; REST API.</strong>
+</p>
+
+<p align="center">
   <em>The workflow orchestrator that ate Apache Airflow's lunch.<br>
   Same UI. Same vocabulary. Ten times the speed. Zero of the pain.<br>
   <strong>Native map-reduce for ML/AI</strong> — fan-out + reduce as a Python list comprehension, no XCom plumbing, no broker, no special operator.</em>
@@ -28,13 +32,25 @@
 
 | | |
 |---|---|
+| [Quickstart](docs/quickstart.md) · [Installation](docs/installation.md) | get Leoflow running locally |
 | [Operating modes](docs/operating-modes.md) · [Editions](docs/editions.md) | Lite · Pro · Demo — the runtime split and the packaging split |
-| [DAG authoring](docs/dag-authoring.md) | write a DAG; the Lite → deploy lifecycle |
+| [DAG authoring](docs/dag-authoring.md) · [Variables & Connections](docs/variables-connections.md) | write a DAG; the Lite → deploy lifecycle |
 | [**Map-reduce for ML**](docs/cookbook/map-reduce.md) | fan-out + reduce as a Python list comprehension |
 | [CI/CD & deploy examples](docs/deploy.md) | GitHub Actions · GitLab · Cloud Build/Run · generic |
 | [Helm chart](helm/leoflow/README.md) | Pro install: values reference, hardening, PoC recipe |
-| [HTTP API (Scalar)](https://neochaotic.github.io/leoflow/api-reference.html) · [Go packages](docs/go-api.md) | API references |
-| [Concepts & glossary](docs/concepts.md) · [Architecture](docs/architecture.md) | the model & the *why* |
+| [HTTP API (Scalar)](https://neochaotic.github.io/leoflow/api-reference.html) · [Go packages](docs/go-api.md) · [MCP server](docs/mcp.md) | API references & the LLM-agent surface |
+| [Concepts & glossary](docs/concepts.md) · [Architecture](docs/architecture.md) · [ADRs](docs/adr/) | the model, the *why*, and every major decision |
+| [Troubleshooting](docs/troubleshooting.md) · [Security policy](SECURITY.md) | when things break; how to report a vulnerability |
+
+---
+
+<p align="center">
+  <a href="https://neochaotic.github.io/leoflow/">
+    <img src="docs/assets/screenshots/dev-grid-tasks.png" alt="Leoflow running the Apache Airflow 3.2 UI — a DAG's grid view, task list, and run-duration overview" width="860">
+  </a>
+</p>
+
+<p align="center"><em>The unmodified Apache Airflow 3.2 UI, served by a Go control plane.</em></p>
 
 ---
 
@@ -368,16 +384,6 @@ We have no patience for marketing fiction. Here is where Leoflow sits in the lan
 
 We borrow from Argo Workflows (container-native), from Prefect (modern developer experience), and from Airflow (the UI and vocabulary). We do not pretend we invented any of those. We just put them together in a way nobody had.
 
-## Documentation
-
-- [Architecture overview](docs/architecture.md)
-- [Architecture Decision Records](docs/adr/) — every major decision, with its reasoning
-- [HTTP API reference (Scalar)](https://neochaotic.github.io/leoflow/api-reference.html) — also rendered interactively at `/docs` in the running server
-- [DAG authoring](docs/dag-authoring.md) — writing your first DAG, the Lite → deploy lifecycle
-- [Quickstart](docs/quickstart.md) and [Installation](docs/installation.md) — getting Leoflow running locally
-- [Map-reduce for ML](docs/cookbook/map-reduce.md) · [Variables & Connections](docs/variables-connections.md) · [Troubleshooting](docs/troubleshooting.md)
-- [Security policy](SECURITY.md) — how to report vulnerabilities
-
 ## Engineering Discipline
 
 Leoflow holds itself to a higher bar than most open source projects, because workflow orchestrators must be boring and reliable to be useful:
@@ -428,3 +434,7 @@ We also studied the source of Argo Workflows, Prefect, and Dagster carefully. Ea
 > **Star the repo if you have ever waited five seconds for an Airflow task to start.**
 > **Watch the repo if you want a heads-up on every release.**
 > **Open an issue if you have a chronic Airflow pain we have not addressed yet — pre-1.0 is the time to shape the API.**
+
+---
+
+<sub>Apache Airflow® is a registered trademark of the Apache Software Foundation. Leoflow is an independent project, not affiliated with or endorsed by the ASF.</sub>

@@ -25,9 +25,10 @@ and runs the **setup wizard**, which asks a few questions — press Enter to acc
 each `[default]`:
 
 - **Where your DAGs live** (workspace) — default `~/leoflow`
-- **How tasks run**: `local` (each task as a process on this machine — simple, no
-  Docker, recommended) or `cluster` (real pod-per-task on a local mini-Kubernetes
-  — mirrors Pro, needs Docker)
+- **How tasks run** — `subprocess` (each task as a process on this machine — simple,
+  no Docker, recommended) or `k8s` (real pod-per-task on a local mini-Kubernetes —
+  mirrors Pro, needs Docker). The wizard also accepts the friendly aliases `local`
+  (= `subprocess`) and `cluster` (= `k8s`).
 - **Admin email** — default `admin@leoflow.local`
 
 It then fetches a managed Python + the editor, creates your workspace, and prints
@@ -73,7 +74,25 @@ save — press Ctrl-C to stop.
     (`http://192.168.x.y:8088`). It is honored only with a login configured, and
     Lite is for trusted networks only — never the public internet.
 
-## 3 · Edit your DAG
+## 3 · Trigger your first run
+
+`leoflow lite` scaffolds a starter DAG on first boot, so there is something to run
+right away.
+
+1. Open **http://127.0.0.1:8088** and log in — the scaffolded DAG is listed on the
+   **Dags** page.
+
+    ![The Dags list with the scaffolded DAG](assets/screenshots/dev-dags.png)
+
+2. Click the DAG to open it, then press **▶ Trigger** (top-right) to start a run.
+3. Watch the **grid** fill in — each task goes yellow (running), then green
+   (success). A fully green column is a successful run.
+
+    ![A green grid after a successful run, with the run-duration overview](assets/screenshots/dev-grid-tasks.png)
+
+That is the whole loop: author, trigger, watch it go green.
+
+## 4 · Edit your DAG
 
 Click the **`< >` IDE** button (bottom-right of the UI) to open the built-in web
 editor — file tree + Python/YAML highlighting. Edit `dag.py`, save, and the DAG

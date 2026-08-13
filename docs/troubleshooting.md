@@ -12,6 +12,18 @@ tail -f /tmp/leoflow-lite.log           # the live boot log when you ran `leoflo
 journalctl -u leoflow-server -f         # Pro / systemd hosts
 ```
 
+!!! tip "Every binary reports its version"
+    When filing a bug, include the exact build. The root CLI takes both
+    `leoflow version` (with commit + build date) and `leoflow --version`, and each
+    companion binary answers `--version`:
+
+    ```bash
+    leoflow --version
+    leoflow-server --version
+    leoflow-agent --version
+    leoflow-mcp --version
+    ```
+
 ## Install & setup
 
 | Symptom | Cause / fix |

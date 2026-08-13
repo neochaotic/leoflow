@@ -17,7 +17,7 @@
 > See also [Operating modes](operating-modes.md) for the Lite/Pro/Demo
 > runtime view (this page is the per-edition distribution + posture view).
 
-Leoflow is planned in two editions that share the same engine, the same
+Leoflow ships in two editions that share the same engine, the same
 Airflow-3.2.x UI, and the same DAG format (`dag.py` + `leoflow.yaml`). You author a
 DAG once and it runs on either.
 
@@ -93,11 +93,12 @@ See the [Installation](installation.md) guide and the
 Pro is the enterprise control plane: enterprise authentication (SSO/OIDC),
 full role-based access control, multi-tenant isolation, the Kubernetes executor
 at scale, first-class observability, and the GitOps deploy flow (DAGs as immutable
-images + `dag.json`, shipped from CI). The Helm chart is installable and in
-validation (tested against GKE; not yet cleared for official use); this site
-documents Lite today, and the production surfaces (the `/api/v2/`
-Airflow-compatible API, the executor, observability) are built with that target
-in mind.
+images + `dag.json`, shipped from CI). The Helm chart is **Helm-installable and in
+active validation** — tested against GKE, not yet certified for production. Pin a
+specific tag and read the release notes before upgrading (pre-1.0, breaking changes
+ship between minor versions with a migration note, ADR 0037). The production
+surfaces (the `/api/v2/` Airflow-compatible API, the executor, observability) are
+built with that target in mind.
 
 ## Which one? (recommendation)
 
@@ -115,7 +116,7 @@ in mind.
 Rule of thumb: if it fits on one host and the network is trusted, Lite is enough;
 when you need a cluster, multiple users, or scale, that's Pro.
 
-Because both editions share the DAG format, the engine, and the UI, DAGs authored
-on Lite will carry straight over to Pro when it ships — but there is
-**nothing to migrate today** (nobody is in production on Lite). The migration path
-will be documented when Pro is available.
+Because both editions share the DAG format, the engine, and the UI, a DAG authored
+on Lite carries straight over to Pro **unchanged** — same `dag.py` + `leoflow.yaml`,
+same immutable `dag.json`. Going from a single host to a cluster is a deployment
+change, not a DAG rewrite.

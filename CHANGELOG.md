@@ -6,6 +6,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`leoflow-server`, `leoflow-agent`, and `leoflow-mcp` now answer `--version`.**
+  Previously only the main `leoflow` CLI could report its version; the companion
+  binaries responded to `--version`/`version` by trying to boot and erroring on
+  missing config or an unreachable control plane. They now print their build
+  version and exit 0 before any config load or network connect, so an operator
+  can identify a deployed binary. (#593)
+- **The UI's "Learn more" documentation links no longer 404.** `GET
+  /api/v2/version` (the Airflow VersionInfo endpoint the embedded SPA reads to
+  build `https://airflow.apache.org/docs/apache-airflow/<version>/…` links)
+  reported leoflow's build version, so the SPA pointed at a nonexistent Airflow
+  docs release. It now reports the pinned Airflow UI version. leoflow's own
+  version remains on the CLI, health endpoints, and the MCP
+  `health://control-plane` resource. (#594)
+
 ## [0.3.0-rc.2] - 2026-08-13
 
 > Second RC of the **0.3.0** line — a fix-and-polish pass over `rc.1`. Repairs two

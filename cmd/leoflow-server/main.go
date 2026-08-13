@@ -38,12 +38,19 @@ import (
 	"github.com/neochaotic/leoflow/internal/secrets"
 	"github.com/neochaotic/leoflow/internal/storage"
 	"github.com/neochaotic/leoflow/internal/ui"
+	"github.com/neochaotic/leoflow/internal/version"
 	"github.com/neochaotic/leoflow/internal/workspace"
 	"github.com/neochaotic/leoflow/internal/xcom"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
 
 func main() {
+	// Answer `--version` before loading any config, so an operator can ask a
+	// deployed binary its version without a runnable environment (#593).
+	if version.WantsVersion(os.Args[1:]) {
+		fmt.Println(version.Get().String())
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "leoflow-server:", err)
 		os.Exit(1)

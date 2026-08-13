@@ -38,3 +38,19 @@ func (i Info) String() string {
 	return fmt.Sprintf("leoflow %s (commit %s, built %s, %s)",
 		i.Version, i.GitCommit, i.BuildDate, i.GoVersion)
 }
+
+// WantsVersion reports whether args ask for the version (and nothing else runs).
+// It accepts `version`, `-version`, and `--version` so the long-running
+// companion binaries (leoflow-server / -agent / -mcp) can answer "what version
+// are you?" without a full runnable config — checked before any config load or
+// network connect. Kept deliberately narrow (no `-v`, which conventionally means
+// verbose) and exact (no substring match).
+func WantsVersion(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "version", "-version", "--version":
+			return true
+		}
+	}
+	return false
+}

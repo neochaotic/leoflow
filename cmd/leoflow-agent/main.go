@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,14 +14,19 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/agent"
+	"github.com/neochaotic/leoflow/internal/version"
 )
-
-// version is overridden at build time via -ldflags.
-var version = "dev"
 
 func main() { os.Exit(run()) }
 
 func run() int {
+	// Answer `--version` before connecting, so an operator can ask a deployed
+	// agent its version without a reachable control plane (#593).
+	if version.WantsVersion(os.Args[1:]) {
+		fmt.Println(version.Get().String())
+		return 0
+	}
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
 	addr := os.Getenv("LEOFLOW_CONTROL_PLANE_ADDR")
@@ -65,7 +71,7 @@ func run() int {
 		Cmd:        agent.NewExecRunner(),
 		Sink:       sink,
 		Hostname:   hostname,
-		Version:    version,
+		Version:    version.Get().Version,
 		Env:        os.Environ(),
 		ReturnPath: returnPath,
 		// Operator extra-links share the return value's per-task temp dir (#375).

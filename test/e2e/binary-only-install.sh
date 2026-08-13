@@ -50,4 +50,23 @@ echo "==> asserting the binary self-extracted parser + runtime sources"
   || fail "runtime sources not extracted — the Lite venv build would abort with 'does not exist'"
 pass "binary extracted both parser and runtime sources for a binary-only install"
 
+# The companion binaries must answer --version WITHOUT a runnable config (#593):
+# an operator has to be able to ask a deployed binary its version. server/agent
+# carry it in internal/version; leoflow-mcp in package main.
+echo "==> building companion binaries and asserting they report a version"
+( cd "$REPO" && go build \
+    -ldflags "-X github.com/neochaotic/leoflow/internal/version.version=e2e-ver -X main.version=e2e-ver" \
+    -o "$BINDIR/leoflow-server" ./cmd/leoflow-server )
+( cd "$REPO" && go build \
+    -ldflags "-X github.com/neochaotic/leoflow/internal/version.version=e2e-ver" \
+    -o "$BINDIR/leoflow-agent" ./cmd/leoflow-agent )
+( cd "$REPO" && go build -ldflags "-X main.version=e2e-ver" \
+    -o "$BINDIR/leoflow-mcp" ./cmd/leoflow-mcp )
+for b in leoflow-server leoflow-agent leoflow-mcp; do
+  out="$("$BINDIR/$b" --version 2>&1)" || fail "$b --version exited non-zero: $out"
+  printf '%s' "$out" | grep -q 'e2e-ver' \
+    || fail "$b --version did not report the injected version (got: $out)"
+done
+pass "leoflow-server/agent/mcp all answer --version and exit 0"
+
 echo "ALL PASS"

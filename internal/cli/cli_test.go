@@ -36,6 +36,26 @@ func TestVersionCommandPrintsInfo(t *testing.T) {
 	}
 }
 
+// TestVersionFlagMatchesSubcommand pins #598: `leoflow --version` (flag) must
+// work and print exactly what `leoflow version` (subcommand) prints — the
+// companion binaries accept the --version flag, so the root CLI must too.
+func TestVersionFlagMatchesSubcommand(t *testing.T) {
+	flagOut, _, err := run(t, "--version")
+	if err != nil {
+		t.Fatalf("`leoflow --version` should be accepted, got error: %v", err)
+	}
+	subOut, _, err := run(t, "version")
+	if err != nil {
+		t.Fatalf("version subcommand: %v", err)
+	}
+	if strings.TrimSpace(flagOut) != strings.TrimSpace(subOut) {
+		t.Errorf("--version = %q, want identical to `version` subcommand = %q", flagOut, subOut)
+	}
+	if !strings.Contains(flagOut, "leoflow") {
+		t.Errorf("--version output missing 'leoflow': %q", flagOut)
+	}
+}
+
 func TestVersionCommandJSON(t *testing.T) {
 	out, _, err := run(t, "version", "--json")
 	if err != nil {

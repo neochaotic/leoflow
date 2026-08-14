@@ -385,9 +385,38 @@ SELECT first_reschedule_at FROM task_instances
 WHERE dag_run_id = $1 AND task_id = $2;
 
 -- name: FailTaskInstanceIfActive :exec
+-- Settle a task instance failed from the pod reconciler, guarded by BOTH id and
+-- try_number (ADR 0052): try_number bumps IN PLACE on retry (same row id), so a
+-- stale reconciler acting on a previous attempt's lingering pod must not match the
+-- new running attempt and clobber it. The active-state guard prevents clobbering a
+-- terminal row.
 UPDATE task_instances
-SET state = 'failed', ended_at = now(), error_message = $2
-WHERE id = $1 AND state IN ('scheduled', 'queued', 'running');
+SET state = 'failed', ended_at = now(), error_message = sqlc.arg(error_message)
+WHERE id = sqlc.arg(id) AND try_number = sqlc.arg(try_number)
+  AND state IN ('scheduled', 'queued', 'running');
+
+-- name: SucceedTaskInstanceIfActive :exec
+-- Settle a task instance succeeded from its durable outcome record (ADR 0052),
+-- recovering a success whose report was lost. Guarded by id AND try_number so a
+-- stale reconciler never marks a LIVE retry succeeded — which would fire downstream
+-- tasks on incomplete work, strictly worse than the bug being fixed. The
+-- active-state guard prevents clobbering a terminal row.
+UPDATE task_instances
+SET state = 'success', ended_at = now(), error_message = NULL
+WHERE id = sqlc.arg(id) AND try_number = sqlc.arg(try_number)
+  AND state IN ('scheduled', 'queued', 'running');
+
+-- name: RescheduleTaskInstanceByIDIfActive :exec
+-- Settle a lost reschedule from the durable outcome record (ADR 0052): park the TI
+-- in up_for_reschedule with the record's next-poke time, guarded by id AND
+-- try_number (never clobber a different attempt or a terminal row), consuming no
+-- retry budget. Mirrors RescheduleTaskInstance but keyed by id, for the reconciler.
+UPDATE task_instances
+SET state = 'up_for_reschedule'::task_state,
+    reschedule_at = sqlc.arg(reschedule_at),
+    first_reschedule_at = COALESCE(first_reschedule_at, now())
+WHERE id = sqlc.arg(id) AND try_number = sqlc.arg(try_number)
+  AND state IN ('running', 'queued', 'scheduled');
 
 -- name: ReportTaskResult :execrows
 -- $3 is cast to task_state in every usage: without the cast Postgres deduces an

@@ -54,4 +54,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0049: Split the API/UI and scheduler into separate roles of one binary](adr/0049-split-api-and-scheduler-roles.md)
 - [ADR 0050: Model Context Protocol (MCP) server](adr/0050-mcp-server.md)
 - [ADR 0051: Separate the orchestration and execution state machines](adr/0051-separate-orchestration-and-execution-state-machines.md)
+- [ADR 0052: Durable task outcome — decouple the task result from report delivery](adr/0052-durable-task-outcome.md)
 <!-- END ADR INDEX -->

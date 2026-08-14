@@ -51,6 +51,12 @@ func (e *KubernetesExecutor) Execute(ctx context.Context, req Request) error {
 	return nil
 }
 
+// terminationMessagePath is where the task container surfaces its termination
+// message. The agent writes its durable outcome record here and the reconciler
+// reads it from pod status (ADR 0052); it is the Kubernetes default path, pinned
+// explicitly so the contract does not rely on an implicit default.
+const terminationMessagePath = "/dev/termination-log"
+
 // BuildPod constructs the pod spec for a task instance. It is pure (modulo the
 // random name suffix) and unit-tested independently of any cluster.
 func BuildPod(req Request) *corev1.Pod {
@@ -85,6 +91,14 @@ func BuildPod(req Request) *corev1.Pod {
 				Env:             podEnv(req),
 				Resources:       buildResources(req.Resources),
 				SecurityContext: buildSecurityContext(req.PodSecurity),
+				// Pin the termination-message contract explicitly rather than relying
+				// on the Kubernetes default: the agent writes its durable outcome
+				// record here before delivering the report, and the reconciler reads
+				// it from pod status to recover a success whose report was lost (ADR
+				// 0052). FallbackToLogsOnError is deliberately NOT set — it would
+				// populate the message from the log tail, which is not a record.
+				TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+				TerminationMessagePath:   terminationMessagePath,
 			}},
 		},
 	}
@@ -182,6 +196,10 @@ func podEnv(req Request) []corev1.EnvVar {
 		corev1.EnvVar{Name: "LEOFLOW_CONTROL_PLANE_ADDR", Value: req.ControlPlaneAddr},
 		corev1.EnvVar{Name: "LEOFLOW_AGENT_TOKEN", Value: req.AgentToken},
 		corev1.EnvVar{Name: "LEOFLOW_TASK_INSTANCE_ID", Value: req.TaskInstanceID},
+		// Tell the pod agent where to write its durable outcome record; it matches
+		// the container's TerminationMessagePath. Only the pod path sets this, so
+		// Lite (subprocess, no pod) leaves the agent's record writing disabled.
+		corev1.EnvVar{Name: "LEOFLOW_TERMINATION_LOG_PATH", Value: terminationMessagePath},
 	)
 	if req.StagingClaim != "" {
 		env = append(env, corev1.EnvVar{Name: "LEOFLOW_STAGING_DIR", Value: stagingMountPath})

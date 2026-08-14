@@ -62,6 +62,11 @@ type Querier interface {
 	// reason as RecordDispatchFailure. This is distinct from dispatch_lost (a TI that
 	// reached 'queued' then vanished) and from a task's own 'failed' (the code ran).
 	FailDispatchExhausted(ctx context.Context, arg FailDispatchExhaustedParams) error
+	// Settle a task instance failed from the pod reconciler, guarded by BOTH id and
+	// try_number (ADR 0052): try_number bumps IN PLACE on retry (same row id), so a
+	// stale reconciler acting on a previous attempt's lingering pod must not match the
+	// new running attempt and clobber it. The active-state guard prevents clobbering a
+	// terminal row.
 	FailTaskInstanceIfActive(ctx context.Context, arg FailTaskInstanceIfActiveParams) error
 	GetConnection(ctx context.Context, arg GetConnectionParams) (GetConnectionRow, error)
 	GetCurrentDagSpec(ctx context.Context, arg GetCurrentDagSpecParams) ([]byte, error)
@@ -255,6 +260,11 @@ type Querier interface {
 	// the active states so a late report never clobbers a terminal row. ended_at is
 	// left untouched (the task is not finished); started_at is preserved.
 	RescheduleTaskInstance(ctx context.Context, arg RescheduleTaskInstanceParams) error
+	// Settle a lost reschedule from the durable outcome record (ADR 0052): park the TI
+	// in up_for_reschedule with the record's next-poke time, guarded by id AND
+	// try_number (never clobber a different attempt or a terminal row), consuming no
+	// retry budget. Mirrors RescheduleTaskInstance but keyed by id, for the reconciler.
+	RescheduleTaskInstanceByIDIfActive(ctx context.Context, arg RescheduleTaskInstanceByIDIfActiveParams) error
 	// Archives every failed attempt in the run into task_instance_history then
 	// resets. See ResetTaskInstanceToNone for the per-attempt rationale.
 	ResetAllFailedTaskInstances(ctx context.Context, dagRunID pgtype.UUID) (int64, error)
@@ -311,6 +321,12 @@ type Querier interface {
 	// show its duration: started_at on first entry into 'running', ended_at on a
 	// terminal state. Other timestamps are preserved (the scheduler may re-run).
 	StampDagRunState(ctx context.Context, arg StampDagRunStateParams) error
+	// Settle a task instance succeeded from its durable outcome record (ADR 0052),
+	// recovering a success whose report was lost. Guarded by id AND try_number so a
+	// stale reconciler never marks a LIVE retry succeeded — which would fire downstream
+	// tasks on incomplete work, strictly worse than the bug being fixed. The
+	// active-state guard prevents clobbering a terminal row.
+	SucceedTaskInstanceIfActive(ctx context.Context, arg SucceedTaskInstanceIfActiveParams) error
 	// The time a reschedule-mode sensor first entered reschedule (NULL until it does).
 	// Delivered to each re-dispatched pod so get_first_reschedule_date returns the real
 	// value and the sensor honors its cumulative timeout across pokes (#380).

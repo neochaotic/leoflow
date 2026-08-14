@@ -99,8 +99,11 @@ func run() int {
 		// Custom-keyed XCom pushes, same per-task temp dir (multi-key XCom).
 		PushesPath: filepath.Join(filepath.Dir(returnPath), "xcom_pushes.json"),
 		// A reschedule-mode sensor's next-poke time, same per-task temp dir (#380).
-		ReschedulePath:    filepath.Join(filepath.Dir(returnPath), "reschedule.txt"),
-		HeartbeatInterval: 15 * time.Second,
+		ReschedulePath: filepath.Join(filepath.Dir(returnPath), "reschedule.txt"),
+		// The durable outcome record's destination (the container termination
+		// message), set by the executor's podEnv; empty outside a pod (ADR 0052).
+		TerminationLogPath: os.Getenv("LEOFLOW_TERMINATION_LOG_PATH"),
+		HeartbeatInterval:  15 * time.Second,
 	}
 	if rerr := runner.Run(ctx); rerr != nil {
 		slog.Error("task failed", "error", rerr)

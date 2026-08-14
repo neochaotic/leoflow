@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -136,6 +137,48 @@ func TestRunnerWritesOutcomeBeforeReport(t *testing.T) {
 	// Even though the report never landed, the outcome is durable.
 	if rec := readOutcome(t, path); rec.Outcome != taskoutcome.Success {
 		t.Errorf("outcome = %q, want success recorded before the (failed) report", rec.Outcome)
+	}
+}
+
+// TestRunnerSuccessPathPushFailureWritesFailedRecord locks the write ordering the
+// design leans on: a task whose user code exited 0 but whose pre-report XCom push
+// fails routes to fail(), which must leave a FAILED record — never a stale SUCCESS.
+// A recovered success must only ever be written after the pushes were accepted.
+func TestRunnerSuccessPathPushFailureWritesFailedRecord(t *testing.T) {
+	dir := t.TempDir()
+	returnPath := filepath.Join(dir, "return.json")
+	if err := os.WriteFile(returnPath, []byte(`{"x":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "termination-log")
+	client := &fakeClient{
+		spec:    &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:ok"},
+		pushErr: errors.New("xcom backend down"), // a non-Unimplemented push failure
+	}
+	r := newRunner(client, &fakeCmd{exitCode: 0}, &recordingSink{})
+	r.ReturnPath = returnPath
+	r.TerminationLogPath = path
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a failed pre-report push must fail the task")
+	}
+	if rec := readOutcome(t, path); rec.Outcome != taskoutcome.Failed {
+		t.Errorf("a push failure on the success path must write a FAILED record, not a stale success, got %q", rec.Outcome)
+	}
+}
+
+// TestRunnerRunningStateWritesNoRecord: a non-terminal RUNNING report must never
+// write an outcome record — only the terminal states carry a durable outcome.
+func TestRunnerRunningStateWritesNoRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "termination-log")
+	r := newRunner(&fakeClient{}, &fakeCmd{}, &recordingSink{})
+	r.TerminationLogPath = path
+
+	if err := r.report(context.Background(), agentv1.TaskState_TASK_STATE_RUNNING, 0, ""); err != nil {
+		t.Fatalf("report RUNNING: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("a RUNNING report must not write an outcome record")
 	}
 }
 

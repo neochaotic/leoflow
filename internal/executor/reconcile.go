@@ -159,6 +159,13 @@ const podGCGracePeriod = 10 * time.Minute
 // the pod's durable outcome record where present, else its phase — so retries and
 // run finalization proceed instead of stranding the task. It also garbage-collects
 // finished pods once they age out.
+//
+// Outcome recovery is best-effort (ADR 0052 is a School-A optimization on the
+// School-B re-drive floor): the settle guards on the active states, so if a reaper
+// settles the still-running TI failed first (heartbeat timeout, ~90s) before this
+// loop recovers the success record (~30s), the recovered success is dropped and the
+// task degrades to the safe retry path. The 30s vs 90s cadence makes the reconciler
+// win the common case; the loss is a correctness-safe re-run, not a wrong result.
 type Reconciler struct {
 	clientset kubernetes.Interface
 	namespace string
@@ -189,12 +196,23 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 			continue
 		}
 		// A terminal pod must have its outcome durably recorded before it is
-		// collected: the pod is the only signal that lets the next tick retry the
-		// record, so deleting it after a failed settle strands the task instance
-		// until the heartbeat reaper catches it. If the settle does not succeed,
-		// leave the pod and try again next tick.
+		// collected: while a settle can still be retried, the pod is the only signal,
+		// so deleting it after a failed settle would strand the task instance until
+		// the heartbeat reaper catches it. On a genuine DB error, leave the pod and
+		// try again next tick.
 		if v.settle != settleNothing {
 			if err := r.settlePod(ctx, pod, v); err != nil {
+				continue
+			}
+			// A reschedule pod's record must NOT linger to be re-applied. Reschedule
+			// redispatch reuses the same try_number (it consumes no attempt, #380), so
+			// the attempt guard cannot tell a stale poke pod from the re-dispatched
+			// live one — a lingering poke pod would re-park the live attempt with an
+			// already-elapsed reschedule_at and flap the sensor. It exited cleanly
+			// (nothing to inspect), so collect it now instead of after the grace
+			// period, well before the next redispatch. (ADR 0052)
+			if v.settle == settleReschedule {
+				r.collect(ctx, pod)
 				continue
 			}
 		}
@@ -217,12 +235,15 @@ func (r *Reconciler) settlePod(ctx context.Context, pod *corev1.Pod, v verdict) 
 	}
 	tryNumber, ok := tryNumberOf(pod)
 	if !ok {
-		// Without the attempt we cannot guard the settle, and settling unguarded
-		// could clobber a different attempt. Leave the pod for a later tick / the
-		// heartbeat reaper rather than risk a wrong write.
-		err := fmt.Errorf("pod %s has no parseable leoflow.io/try-number label", pod.Name)
-		slog.Error("cannot settle task pod without a try-number", "pod", pod.Name, "task_instance", tiID)
-		return err
+		// Anomalous pod — BuildPod always sets the label, so this is a hand-created
+		// or old-version pod. Without the attempt we cannot guard the settle, and
+		// settling unguarded could clobber a different attempt. Skip the settle and
+		// let the pod age out normally (the heartbeat reaper is the task instance's
+		// backstop); returning an error here would leak the pod forever, since the
+		// label will never appear on a later tick.
+		slog.Error("cannot settle task pod without a try-number; leaving the TI to the reaper",
+			"pod", pod.Name, "task_instance", tiID)
+		return nil
 	}
 	if err := r.recordOutcome(ctx, tiID, tryNumber, v); err != nil {
 		slog.Error("recording task pod outcome", "pod", pod.Name, "task_instance", tiID,

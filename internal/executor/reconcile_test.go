@@ -204,12 +204,12 @@ func TestReconcileUndecodableRecordFallsBackToPhase(t *testing.T) {
 
 // TestReconcileSkipsSettleWithoutTryNumber: a pod missing the try-number label
 // cannot be attempt-guarded, so the reconciler must NOT settle it (risking a
-// clobber of a different attempt) and must NOT collect it — it leaves it for a
-// later tick / the heartbeat reaper.
+// clobber of a different attempt) — but it must still age out normally rather than
+// leak forever (the label will never appear); the heartbeat reaper settles the TI.
 func TestReconcileSkipsSettleWithoutTryNumber(t *testing.T) {
 	pod := withRecord(managedPod("p-nolabel", "ti-nolabel", corev1.PodFailed), taskoutcome.Succeeded())
 	delete(pod.Labels, "leoflow.io/try-number")
-	pod.CreationTimestamp = metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) // old enough to GC
+	pod.CreationTimestamp = metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) // aged past the grace period
 	cs := fake.NewClientset(pod)
 	reporter := &fakeReporter{}
 	r := NewReconciler(cs, "leoflow", reporter)
@@ -221,8 +221,33 @@ func TestReconcileSkipsSettleWithoutTryNumber(t *testing.T) {
 	if len(reporter.settled) != 0 {
 		t.Errorf("a pod without a try-number must not be settled, got %v", reporter.settled)
 	}
-	if _, err := cs.CoreV1().Pods("leoflow").Get(context.Background(), "p-nolabel", metav1.GetOptions{}); err != nil {
-		t.Errorf("an unsettled pod must not be garbage-collected: %v", err)
+	if _, err := cs.CoreV1().Pods("leoflow").Get(context.Background(), "p-nolabel", metav1.GetOptions{}); err == nil {
+		t.Error("an aged label-less pod must still be garbage-collected (no forever-leak)")
+	}
+}
+
+// TestReconcileCollectsReschedulePodImmediately pins the ADR 0052 B1 fix: a
+// reschedule pod is collected as soon as its outcome is settled — NOT kept for the
+// grace period — because reschedule redispatch reuses the same try_number, so a
+// lingering poke pod would re-park the re-dispatched live attempt and flap the
+// sensor. Here the pod is young (well within the grace period) yet must be gone.
+func TestReconcileCollectsReschedulePodImmediately(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	pod := withRecord(managedPod("p-poke", "ti-poke", corev1.PodFailed), taskoutcome.RescheduledAt(now.Add(time.Minute)))
+	pod.CreationTimestamp = metav1.NewTime(now.Add(-time.Second)) // brand new
+	cs := fake.NewClientset(pod)
+	reporter := &fakeReporter{}
+	r := NewReconciler(cs, "leoflow", reporter)
+	r.now = func() time.Time { return now }
+
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := reporter.settled["ti-poke"]; got.kind != settleReschedule {
+		t.Errorf("reschedule pod must be settled up_for_reschedule, got %+v", got)
+	}
+	if _, err := cs.CoreV1().Pods("leoflow").Get(context.Background(), "p-poke", metav1.GetOptions{}); err == nil {
+		t.Error("a settled reschedule pod must be collected immediately, not left to linger and re-park the next attempt")
 	}
 }
 

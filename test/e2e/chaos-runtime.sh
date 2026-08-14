@@ -13,6 +13,10 @@
 #   B) task-pod kill (#474/#518) — delete a running task's pod; assert the reaper
 #      moves the TI off `running` to a terminal state (not stuck forever) and
 #      leaves no orphaned pod for that attempt.
+#   C) durable outcome recovery (ADR 0052) — a task succeeds but the agent is told
+#      to exit mid-report AFTER writing the durable outcome record; assert the
+#      reconciler recovers the SUCCESS from the record (the pod is Failed and no
+#      report ever landed), settling the run success instead of failing/retrying.
 #
 # NOT a `go test`; destructive; not gated in CI (slow). It mirrors the proven
 # host-process split harness (split-two-process.sh) and reuses the k3d_import
@@ -32,6 +36,8 @@ PY_VERSION="3.11"
 BASE_IMAGE="leoflow-base:py${PY_VERSION}"
 DAG_IMAGE="leoflow-chaos-dag:dev"
 DAG_ID="chaosdag"
+RECOVER_DAG_IMAGE="leoflow-recover-dag:dev"
+RECOVER_DAG_ID="recoverdag"
 
 API_HTTP_PORT="${LEOFLOW_E2E_API_HTTP_PORT:-8080}"
 API_METRICS_PORT="9090"
@@ -275,8 +281,106 @@ scenario_task_pod_kill() {
   fi
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Scenario C — durable outcome recovery (ADR 0052)
+# ─────────────────────────────────────────────────────────────────────────────
+setup_recoverdag() {
+  log "C-setup: scaffolding recoverdag (succeeds, but the agent dies mid-report)"
+  "$ROOT/bin/leoflow" init "$WORKDIR/$RECOVER_DAG_ID" >/dev/null
+  cat >> "$WORKDIR/$RECOVER_DAG_ID/leoflow.yaml" <<YAML
+build:
+  platforms:
+    - ${HOST_PLATFORM}
+tasks:
+  quick:
+    # The agent runs the task to success and writes the durable outcome record to
+    # the termination message, then exits 137 WITHOUT delivering the report —
+    # simulating a pod killed mid-report (OOM/eviction). Test-only seam (ADR 0052).
+    env:
+      LEOFLOW_CHAOS_DIE_BEFORE_REPORT: TASK_STATE_SUCCESS
+YAML
+  cat > "$WORKDIR/$RECOVER_DAG_ID/dag.py" <<'PY'
+"""recoverdag — the task succeeds; the agent is told to die mid-report, so the
+reconciler must recover the success from the durable outcome record (ADR 0052)."""
+from __future__ import annotations
+from airflow.sdk import DAG, task
+
+
+@task
+def quick() -> str:
+    print("recover: task body ran to success", flush=True)
+    return "ok"
+
+
+with DAG("recoverdag", schedule=None, catchup=False, tags=["chaos"]):
+    quick()
+PY
+  cat > "$WORKDIR/$RECOVER_DAG_ID/Dockerfile" <<DOCKER
+FROM ${BASE_IMAGE}
+COPY dag.py /home/leoflow/dag.py
+ENV PYTHONPATH=/home/leoflow
+DOCKER
+  "$ROOT/bin/leoflow" compile "$WORKDIR/$RECOVER_DAG_ID" --image "$RECOVER_DAG_IMAGE" --build --dockerfile Dockerfile -o "$WORKDIR/$RECOVER_DAG_ID/dag.json" >/dev/null
+  k3d_import "$CLUSTER" "$RECOVER_DAG_IMAGE" || fatal "C: k3d import of recoverdag failed"
+  "$ROOT/bin/leoflow" push "$WORKDIR/$RECOVER_DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null
+}
+
+recover_run_state() {  # $1=run
+  curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$RECOVER_DAG_ID/dagRuns/$1" 2>/dev/null | jq -r '.state // "unknown"'
+}
+
+scenario_durable_outcome_recovery() {
+  log "SCENARIO C — pod killed mid-report after writing the outcome record; reconciler recovers the SUCCESS (ADR 0052)"
+  setup_recoverdag
+
+  local run
+  run="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{}' "$API/api/v2/dags/$RECOVER_DAG_ID/dagRuns" | jq -r '.dag_run_id')"
+  [ -n "$run" ] && [ "$run" != "null" ] || { bad "C: no run id"; return; }
+
+  # The task pod must end NON-successfully at the k8s level (agent exit 137) — the
+  # whole point is that pod phase says failure while the record says success.
+  local deadline; deadline=$(( $(date +%s) + 90 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -qE 'recoverdag-quick-.*(Error|Failed)' && break
+    sleep 3
+  done
+
+  # The reconciler (30s sweep) must settle the TI SUCCEEDED from the durable record,
+  # winning the race against the agent-lost reaper (90s, and disarmed here: a sub-15s
+  # task never heartbeats, so the zero-heartbeat guard skips it). Assert the run
+  # reaches success and does NOT fail.
+  deadline=$(( $(date +%s) + 150 )); local state=""
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    state="$(recover_run_state "$run")"
+    [ "$state" = success ] && break
+    [ "$state" = failed ] && { bad "C: run FAILED — the reconciler did not recover the success from the durable record"; return; }
+    sleep 5
+  done
+  if [ "$state" = success ]; then
+    ok "C: run recovered to SUCCESS from the durable outcome record, despite the Failed pod and the lost report"
+  else
+    bad "C: run did not reach success within the recovery window (state=$state)"
+    return
+  fi
+
+  # Recovery is a SETTLE, not a retry: the durable record settles the current
+  # attempt succeeded (try_number unchanged), so there is exactly one attempt.
+  local tries
+  tries="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$RECOVER_DAG_ID/dagRuns/$run/taskInstances" 2>/dev/null \
+    | jq -r '[.task_instances[].try_number] | max')"
+  if [ "$tries" = "1" ]; then
+    ok "C: recovery settled the current attempt (try_number=1) — no wasteful retry of already-done work"
+  else
+    bad "C: expected a single attempt (recovery is a settle, not a retry), got max try_number=$tries"
+  fi
+}
+
 scenario_scheduler_crash
 scenario_task_pod_kill
+scenario_durable_outcome_recovery
 
 printf '\n\033[1m===== chaos-runtime summary =====\033[0m\n'
 if [ "$FAILED" -ne 0 ]; then

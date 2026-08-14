@@ -75,6 +75,12 @@ type Runner struct {
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
+	// BeforeReport, if set, is invoked with the terminal state AFTER the durable
+	// outcome record is written and BEFORE the report is delivered. It is a
+	// fault-injection seam for the durable-outcome E2E (ADR 0052) — the agent
+	// binary wires it, from an env var, to exit the process, simulating a pod
+	// killed mid-report with the record already on disk. Nil in production.
+	BeforeReport func(agentv1.TaskState)
 	// afterFunc returns a channel that fires after the given delay; it exists so
 	// tests can make the report-retry backoff instant. Nil uses time.After.
 	afterFunc func(time.Duration) <-chan time.Time
@@ -582,6 +588,9 @@ func (r *Runner) heartbeat(ctx context.Context, cancel context.CancelFunc) {
 
 func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode int32, msg string) error {
 	r.recordOutcome(state, exitCode)
+	if r.BeforeReport != nil {
+		r.BeforeReport(state)
+	}
 	return r.reportRequest(ctx, &agentv1.ReportStateRequest{
 		State:        state,
 		ExitCode:     exitCode,

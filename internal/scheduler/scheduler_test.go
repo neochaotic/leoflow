@@ -24,6 +24,7 @@ type fakeStore struct {
 	materialize        []string
 	transitions        []transition
 	retried            []transition
+	resetInfra         []transition
 	redispatched       []transition
 	runStates          map[string]domain.DagRunState
 	scheduled          []ScheduledDAG
@@ -82,6 +83,10 @@ func (f *fakeStore) ApplyTransition(_ context.Context, runID, taskID string, to 
 }
 func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) (bool, error) {
 	f.retried = append(f.retried, transition{runID, taskID, domain.TaskStateNone})
+	return true, nil
+}
+func (f *fakeStore) ResetForInfraReplace(_ context.Context, runID, taskID string) (bool, error) {
+	f.resetInfra = append(f.resetInfra, transition{runID, taskID, domain.TaskStateNone})
 	return true, nil
 }
 func (f *fakeStore) RecordDispatchFailure(_ context.Context, runID, taskID string, _ time.Time) error {
@@ -250,6 +255,58 @@ func TestStepRedispatchesRescheduledTask(t *testing.T) {
 	// it consumes no attempt (#380).
 	if len(store.retried) != 0 {
 		t.Errorf("reschedule must not consume retry budget; retried=%v", store.retried)
+	}
+}
+
+// TestStepReplacesInfraFailedTaskOffRetryBudget: a task a reaper failed as infra
+// (state=failed, InfraFailed) is re-placed via ResetForInfraReplace (preserves
+// try_number, bumps infra_attempts) — NOT via the retry rail (ADR 0051 Phase 1).
+func TestStepReplacesInfraFailedTaskOffRetryBudget(t *testing.T) {
+	store := newFakeStore(RunState{
+		RunID: "r1", DagID: "etl", State: domain.DagRunStateRunning, Tasks: linearTasks(),
+		States:        map[string]domain.TaskState{"a": domain.TaskStateFailed, "b": domain.TaskStateNone},
+		Tries:         map[string]int{"a": 1, "b": 1},
+		MaxTries:      map[string]int{"a": 3, "b": 3},
+		InfraFailed:   map[string]bool{"a": true},
+		InfraAttempts: map[string]int{"a": 0},
+	})
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.resetInfra) != 1 || store.resetInfra[0].taskID != "a" {
+		t.Errorf("infra-failed a should be re-placed off-budget, got resetInfra=%v", store.resetInfra)
+	}
+	// The infra rail must NOT touch the retry budget (ResetForRetry bumps try_number).
+	if len(store.retried) != 0 {
+		t.Errorf("infra fault must not consume retry budget; retried=%v", store.retried)
+	}
+}
+
+// TestStepInfraBudgetExhaustedIsTerminal: once infra_attempts hits the bound the
+// task stays failed — no further off-budget re-placement, and the run finalizes.
+func TestStepInfraBudgetExhaustedIsTerminal(t *testing.T) {
+	store := newFakeStore(RunState{
+		RunID: "r1", DagID: "etl", State: domain.DagRunStateRunning, Tasks: linearTasks(),
+		States:        map[string]domain.TaskState{"a": domain.TaskStateFailed, "b": domain.TaskStateNone},
+		Tries:         map[string]int{"a": 1, "b": 1},
+		MaxTries:      map[string]int{"a": 3, "b": 3},
+		InfraFailed:   map[string]bool{"a": true},
+		InfraAttempts: map[string]int{"a": infraMaxAttempts},
+	})
+	if err := newScheduler(store).Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.resetInfra) != 0 {
+		t.Errorf("exhausted infra budget must not re-place; resetInfra=%v", store.resetInfra)
+	}
+	// Crucially, an exhausted infra budget must NOT fall back to the app-retry
+	// rail — the task stays terminally failed, it does not silently gain retries.
+	if len(store.retried) != 0 {
+		t.Errorf("exhausted infra budget must not fall back to retry; retried=%v", store.retried)
+	}
+	// a stays failed (no transition emitted for it this tick).
+	if hasTransition(store.transitions, "a", domain.TaskStateNone) {
+		t.Errorf("exhausted infra task must not be moved to none; transitions=%v", store.transitions)
 	}
 }
 

@@ -276,7 +276,7 @@ func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateSched
 const createTaskInstance = `-- name: CreateTaskInstance :one
 INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
 VALUES ($1, $2, $3, $4, $5, $6, 1)
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts
 `
 
 type CreateTaskInstanceParams struct {
@@ -329,6 +329,8 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 		&i.FirstRescheduleAt,
 		&i.DispatchAttempts,
 		&i.NextDispatchAt,
+		&i.LastFailureKind,
+		&i.InfraAttempts,
 	)
 	return i, err
 }
@@ -1034,7 +1036,7 @@ func (q *Queries) ListTaskInstanceAttempts(ctx context.Context, arg ListTaskInst
 }
 
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
-SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at FROM task_instances
+SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts FROM task_instances
 WHERE dag_run_id = $1
 ORDER BY task_id
 `
@@ -1076,6 +1078,8 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 			&i.FirstRescheduleAt,
 			&i.DispatchAttempts,
 			&i.NextDispatchAt,
+			&i.LastFailureKind,
+			&i.InfraAttempts,
 		); err != nil {
 			return nil, err
 		}
@@ -1156,6 +1160,7 @@ const markTaskAgentLost = `-- name: MarkTaskAgentLost :execrows
 UPDATE task_instances
 SET state = 'failed',
     ended_at = now(),
+    last_failure_kind = 'infra',
     error_message = 'agent_lost: no heartbeat within the threshold — see #128'
 WHERE id = $1 AND state = 'running'
 `
@@ -1202,6 +1207,7 @@ const markTaskDispatchLost = `-- name: MarkTaskDispatchLost :exec
 UPDATE task_instances
 SET state = 'failed',
     ended_at = now(),
+    last_failure_kind = 'infra',
     error_message = 'dispatch_lost: scheduler crashed before dispatch landed; will be retried by the run reaper'
 WHERE id = $1 AND state = 'queued'
 `
@@ -1219,6 +1225,7 @@ const markTaskPodLost = `-- name: MarkTaskPodLost :execrows
 UPDATE task_instances
 SET state = 'failed',
     ended_at = now(),
+    last_failure_kind = 'infra',
     error_message = 'pod_lost: the task pod vanished with no live pod past the grace period — see #527'
 WHERE id = $1 AND state = 'running'
 `
@@ -1300,7 +1307,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    reschedule_at = NULL
+    reschedule_at = NULL,
+    last_failure_kind = NULL
 WHERE dag_run_id = $1 AND task_id = $2 AND state = 'up_for_reschedule'
 `
 
@@ -1440,6 +1448,7 @@ SET state = 'none',
     scheduled_at = NULL,
     dispatch_attempts = 0,
     next_dispatch_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry')
@@ -1507,6 +1516,7 @@ SET state = 'none',
     scheduled_at = NULL,
     dispatch_attempts = 0,
     next_dispatch_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry')
@@ -1553,6 +1563,7 @@ SET state = 'none',
     next_dispatch_at = NULL,
     reschedule_at = NULL,
     first_reschedule_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2 AND ti.state = 'up_for_retry'
 `
@@ -1571,6 +1582,62 @@ type ResetTaskInstanceForRetryParams struct {
 // The admin clear-task path deliberately uses the unguarded primitive above.
 func (q *Queries) ResetTaskInstanceForRetry(ctx context.Context, arg ResetTaskInstanceForRetryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, resetTaskInstanceForRetry, arg.DagRunID, arg.TaskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const resetTaskInstanceInfraReplace = `-- name: ResetTaskInstanceInfraReplace :execrows
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1 AND src.task_id = $2
+      AND src.state = 'failed' AND src.last_failure_kind = 'infra'
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
+    reschedule_at = NULL,
+    first_reschedule_at = NULL,
+    last_failure_kind = NULL,
+    infra_attempts = ti.infra_attempts + 1
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
+  AND ti.state = 'failed' AND ti.last_failure_kind = 'infra'
+`
+
+type ResetTaskInstanceInfraReplaceParams struct {
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskID   string      `json:"task_id"`
+}
+
+// The scheduler infra-fault rail's reset (ADR 0051 Phase 1): re-place a task that
+// a reaper failed as infra (agent/pod/dispatch lost, last_failure_kind='infra')
+// back to 'none' WITHOUT consuming the retry budget — try_number is left
+// untouched and infra_attempts is bumped instead, mirroring how dispatch_attempts
+// counts synchronous-dispatch faults. GUARDED to state='failed' AND
+// last_failure_kind='infra' on both the history snapshot and the update: by apply
+// time a late terminal report may have moved the TI, and only a genuine infra
+// failure may re-place off-budget (an app failure at state='failed' must fall to
+// the normal retry rail). last_failure_kind is cleared so the next attempt's
+// outcome is classified fresh.
+func (q *Queries) ResetTaskInstanceInfraReplace(ctx context.Context, arg ResetTaskInstanceInfraReplaceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resetTaskInstanceInfraReplace, arg.DagRunID, arg.TaskID)
 	if err != nil {
 		return 0, err
 	}
@@ -1603,6 +1670,7 @@ SET state = 'none',
     next_dispatch_at = NULL,
     reschedule_at = NULL,
     first_reschedule_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2
 `
@@ -1815,7 +1883,7 @@ const updateTaskInstanceState = `-- name: UpdateTaskInstanceState :one
 UPDATE task_instances
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts
 `
 
 type UpdateTaskInstanceStateParams struct {
@@ -1861,6 +1929,8 @@ func (q *Queries) UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskIns
 		&i.FirstRescheduleAt,
 		&i.DispatchAttempts,
 		&i.NextDispatchAt,
+		&i.LastFailureKind,
+		&i.InfraAttempts,
 	)
 	return i, err
 }

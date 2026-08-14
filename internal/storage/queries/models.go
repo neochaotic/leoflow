@@ -337,6 +337,8 @@ type TaskInstance struct {
 	FirstRescheduleAt pgtype.Timestamptz `json:"first_reschedule_at"`
 	DispatchAttempts  int32              `json:"dispatch_attempts"`
 	NextDispatchAt    pgtype.Timestamptz `json:"next_dispatch_at"`
+	LastFailureKind   *string            `json:"last_failure_kind"`
+	InfraAttempts     int32              `json:"infra_attempts"`
 }
 
 type TaskInstanceHistory struct {

@@ -339,13 +339,27 @@ scenario_durable_outcome_recovery() {
     -d '{}' "$API/api/v2/dags/$RECOVER_DAG_ID/dagRuns" | jq -r '.dag_run_id')"
   [ -n "$run" ] && [ "$run" != "null" ] || { bad "C: no run id"; return; }
 
-  # The task pod must end NON-successfully at the k8s level (agent exit 137) — the
-  # whole point is that pod phase says failure while the record says success.
-  local deadline; deadline=$(( $(date +%s) + 90 ))
+  # The task pod MUST end non-successfully at the k8s level (agent exit 137) — the
+  # whole point is that pod phase says failure while the record says success. This
+  # is fail-closed: if the pod ends `Completed` (exit 0) the fault-injection seam
+  # did NOT fire (e.g. a stale agent image without the seam), so the recovery path
+  # was never exercised — a false green — and the scenario must fail loudly rather
+  # than let the run reach success via the ordinary report path.
+  local deadline status=""; deadline=$(( $(date +%s) + 120 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -qE 'recoverdag-quick-.*(Error|Failed)' && break
+    status="$(kubectl get pods -n leoflow --no-headers 2>/dev/null | awk '/recoverdag-quick-/{print $3; exit}')"
+    case "$status" in
+      Error|Failed) break ;;
+      Completed|Succeeded)
+        bad "C: recoverdag pod ended '$status' (exit 0) — the fault-injection seam did NOT fire, so recovery was never exercised (stale agent image?). Refusing to pass on the ordinary report path."
+        return ;;
+    esac
     sleep 3
   done
+  case "$status" in
+    Error|Failed) ok "C: fault injected — the pod ended '$status' (agent exited mid-report, record already written)" ;;
+    *) bad "C: recoverdag pod never reached a terminal failed state (status='$status') — cannot confirm the fault fired"; return ;;
+  esac
 
   # The reconciler (30s sweep) must settle the TI SUCCEEDED from the durable record,
   # winning the race against the agent-lost reaper (90s, and disarmed here: a sub-15s

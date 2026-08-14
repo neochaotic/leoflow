@@ -289,6 +289,17 @@ type Querier interface {
 	// live pod. Mirrors the source-state guard on RedispatchRescheduledTaskInstance.
 	// The admin clear-task path deliberately uses the unguarded primitive above.
 	ResetTaskInstanceForRetry(ctx context.Context, arg ResetTaskInstanceForRetryParams) (int64, error)
+	// The scheduler infra-fault rail's reset (ADR 0051 Phase 1): re-place a task that
+	// a reaper failed as infra (agent/pod/dispatch lost, last_failure_kind='infra')
+	// back to 'none' WITHOUT consuming the retry budget — try_number is left
+	// untouched and infra_attempts is bumped instead, mirroring how dispatch_attempts
+	// counts synchronous-dispatch faults. GUARDED to state='failed' AND
+	// last_failure_kind='infra' on both the history snapshot and the update: by apply
+	// time a late terminal report may have moved the TI, and only a genuine infra
+	// failure may re-place off-budget (an app failure at state='failed' must fall to
+	// the normal retry rail). last_failure_kind is cleared so the next attempt's
+	// outcome is classified fresh.
+	ResetTaskInstanceInfraReplace(ctx context.Context, arg ResetTaskInstanceInfraReplaceParams) (int64, error)
 	// Resets a TI for retry: snapshot the current per-attempt state into
 	// task_instance_history (so the UI's /tries endpoint can render one tab per
 	// attempt, Lima bug #241), then state back to `none`, all per-attempt

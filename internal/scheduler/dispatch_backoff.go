@@ -18,6 +18,11 @@ const (
 	// a few minutes of retrying — long enough to ride out a transient blip, short
 	// enough that a permanent failure surfaces rather than looping silently.
 	dispatchMaxAttempts = 6
+	// infraMaxAttempts bounds the try_number-free re-placement of a task that fails
+	// for an infrastructure reason (agent/pod/dispatch lost) — the async analog of
+	// dispatchMaxAttempts (ADR 0051 Phase 1). Past this, a task that keeps hitting
+	// infra faults fails terminally instead of re-placing forever.
+	infraMaxAttempts = 6
 )
 
 // dispatchBackoff returns the delay before the next dispatch attempt after

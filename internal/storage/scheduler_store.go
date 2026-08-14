@@ -34,6 +34,75 @@ func NewSchedulerStore(pg *Postgres) *SchedulerStore {
 }
 
 // ActiveRuns returns every queued/running run with its topology and task states.
+// taskMaps holds the per-task state a run's task-instance rows contribute to a
+// scheduler.RunState. Extracted from ActiveRuns to keep it under the complexity
+// bound; the planner reads these maps.
+type taskMaps struct {
+	states           map[string]domain.TaskState
+	tries            map[string]int
+	maxTries         map[string]int
+	endedAt          map[string]*time.Time
+	rescheduleAt     map[string]*time.Time
+	dispatchAttempts map[string]int
+	nextDispatchAt   map[string]*time.Time
+	infraFailed      map[string]bool
+	infraAttempts    map[string]int
+}
+
+// taskInstanceMaps projects a run's task-instance rows into the per-task maps the
+// planner consumes.
+func taskInstanceMaps(tis []queries.TaskInstance) taskMaps {
+	n := len(tis)
+	m := taskMaps{
+		states:           make(map[string]domain.TaskState, n),
+		tries:            make(map[string]int, n),
+		maxTries:         make(map[string]int, n),
+		endedAt:          make(map[string]*time.Time, n),
+		rescheduleAt:     make(map[string]*time.Time, n),
+		dispatchAttempts: make(map[string]int, n),
+		nextDispatchAt:   make(map[string]*time.Time, n),
+		infraFailed:      make(map[string]bool, n),
+		infraAttempts:    make(map[string]int, n),
+	}
+	for _, ti := range tis {
+		m.states[ti.TaskID] = domain.TaskState(ti.State)
+		m.tries[ti.TaskID] = int(ti.TryNumber)
+		m.maxTries[ti.TaskID] = int(ti.MaxTries)
+		if ti.EndedAt.Valid {
+			t := ti.EndedAt.Time
+			m.endedAt[ti.TaskID] = &t
+		}
+		// reschedule_at gates the up_for_reschedule → none re-dispatch (#380).
+		if ti.RescheduleAt.Valid {
+			t := ti.RescheduleAt.Time
+			m.rescheduleAt[ti.TaskID] = &t
+		}
+		// dispatch_attempts / next_dispatch_at gate scheduled → queued re-dispatch
+		// after a synchronous dispatch failure (ADR 0031 Amendment A).
+		if ti.DispatchAttempts > 0 {
+			m.dispatchAttempts[ti.TaskID] = int(ti.DispatchAttempts)
+		}
+		if ti.NextDispatchAt.Valid {
+			t := ti.NextDispatchAt.Time
+			m.nextDispatchAt[ti.TaskID] = &t
+		}
+		// An infra-caused terminal failure (agent/pod/dispatch lost) re-places off
+		// the retry budget (ADR 0051 Phase 1). Guard on state=failed so a stale kind
+		// on any other state is inert — the load-time half of the invariant the
+		// reset queries enforce by clearing last_failure_kind.
+		if ti.LastFailureKind != nil && *ti.LastFailureKind == "infra" &&
+			domain.TaskState(ti.State) == domain.TaskStateFailed {
+			m.infraFailed[ti.TaskID] = true
+		}
+		if ti.InfraAttempts > 0 {
+			m.infraAttempts[ti.TaskID] = int(ti.InfraAttempts)
+		}
+	}
+	return m
+}
+
+// ActiveRuns loads every active dag run and projects it into the scheduler's
+// RunState (topology + per-task state), the read side of a scheduler tick.
 func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, error) {
 	runs, err := s.q.ListActiveDagRuns(ctx)
 	if err != nil {
@@ -54,37 +123,7 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		if err != nil {
 			return nil, fmt.Errorf("listing task instances: %w", err)
 		}
-		states := make(map[string]domain.TaskState, len(tis))
-		tries := make(map[string]int, len(tis))
-		maxTries := make(map[string]int, len(tis))
-		endedAt := make(map[string]*time.Time, len(tis))
-		rescheduleAt := make(map[string]*time.Time, len(tis))
-		dispatchAttempts := make(map[string]int, len(tis))
-		nextDispatchAt := make(map[string]*time.Time, len(tis))
-		for _, ti := range tis {
-			states[ti.TaskID] = domain.TaskState(ti.State)
-			tries[ti.TaskID] = int(ti.TryNumber)
-			maxTries[ti.TaskID] = int(ti.MaxTries)
-			if ti.EndedAt.Valid {
-				ts := ti.EndedAt.Time
-				endedAt[ti.TaskID] = &ts
-			}
-			// reschedule_at gates the up_for_reschedule → none re-dispatch (#380),
-			// the reschedule counterpart of ended_at + retry_delay for retries.
-			if ti.RescheduleAt.Valid {
-				ts := ti.RescheduleAt.Time
-				rescheduleAt[ti.TaskID] = &ts
-			}
-			// dispatch_attempts / next_dispatch_at gate scheduled → queued re-dispatch
-			// after a synchronous dispatch failure (ADR 0031 Amendment A).
-			if ti.DispatchAttempts > 0 {
-				dispatchAttempts[ti.TaskID] = int(ti.DispatchAttempts)
-			}
-			if ti.NextDispatchAt.Valid {
-				ts := ti.NextDispatchAt.Time
-				nextDispatchAt[ti.TaskID] = &ts
-			}
-		}
+		ts := taskInstanceMaps(tis)
 		// Build per-task retry_delay_seconds from the DAG spec so the planner
 		// can gate `up_for_retry → none` on the user-declared cooldown (#201).
 		// TaskSpec.RetryDelaySeconds is *int (omitempty); nil = no cooldown.
@@ -102,14 +141,16 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			TenantID:          uuidToString(run.TenantID),
 			State:             domain.DagRunState(run.State),
 			Tasks:             spec.Tasks,
-			States:            states,
-			Tries:             tries,
-			MaxTries:          maxTries,
-			EndedAt:           endedAt,
+			States:            ts.states,
+			Tries:             ts.tries,
+			MaxTries:          ts.maxTries,
+			EndedAt:           ts.endedAt,
 			RetryDelaySeconds: retryDelay,
-			RescheduleAt:      rescheduleAt,
-			NextDispatchAt:    nextDispatchAt,
-			DispatchAttempts:  dispatchAttempts,
+			RescheduleAt:      ts.rescheduleAt,
+			NextDispatchAt:    ts.nextDispatchAt,
+			DispatchAttempts:  ts.dispatchAttempts,
+			InfraFailed:       ts.infraFailed,
+			InfraAttempts:     ts.infraAttempts,
 			Now:               time.Now(),
 			Alerts:            spec.Alerts,
 		})
@@ -185,6 +226,30 @@ func (s *SchedulerStore) ResetForRetry(ctx context.Context, runID, taskID string
 		return false, err
 	}
 	n, err := s.q.ResetTaskInstanceForRetry(ctx, queries.ResetTaskInstanceForRetryParams{
+		DagRunID: rid,
+		TaskID:   taskID,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// ResetForInfraReplace returns a task instance failed by a reaper as infra
+// (last_failure_kind='infra') to 'none' so the scheduler re-runs it, bumping
+// infra_attempts instead of try_number — an infrastructure fault must not
+// consume the user's retry budget (ADR 0051 Phase 1). It uses the
+// failed+infra-guarded query so a late terminal report or a non-infra failure at
+// state='failed' cannot be re-placed off-budget. The bool reports whether the
+// guarded update fired (exactly one row): a false means the TI was no longer a
+// failed-infra candidate, so the caller must not record a re-placement it did
+// not perform.
+func (s *SchedulerStore) ResetForInfraReplace(ctx context.Context, runID, taskID string) (bool, error) {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return false, err
+	}
+	n, err := s.q.ResetTaskInstanceInfraReplace(ctx, queries.ResetTaskInstanceInfraReplaceParams{
 		DagRunID: rid,
 		TaskID:   taskID,
 	})

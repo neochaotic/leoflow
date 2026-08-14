@@ -52,6 +52,7 @@ LIMIT 100;
 UPDATE task_instances
 SET state = 'failed',
     ended_at = now(),
+    last_failure_kind = 'infra',
     error_message = 'dispatch_lost: scheduler crashed before dispatch landed; will be retried by the run reaper'
 WHERE id = $1 AND state = 'queued';
 
@@ -276,6 +277,7 @@ SET state = 'none',
     next_dispatch_at = NULL,
     reschedule_at = NULL,
     first_reschedule_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2;
 
@@ -312,8 +314,51 @@ SET state = 'none',
     next_dispatch_at = NULL,
     reschedule_at = NULL,
     first_reschedule_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2 AND ti.state = 'up_for_retry';
+
+-- name: ResetTaskInstanceInfraReplace :execrows
+-- The scheduler infra-fault rail's reset (ADR 0051 Phase 1): re-place a task that
+-- a reaper failed as infra (agent/pod/dispatch lost, last_failure_kind='infra')
+-- back to 'none' WITHOUT consuming the retry budget — try_number is left
+-- untouched and infra_attempts is bumped instead, mirroring how dispatch_attempts
+-- counts synchronous-dispatch faults. GUARDED to state='failed' AND
+-- last_failure_kind='infra' on both the history snapshot and the update: by apply
+-- time a late terminal report may have moved the TI, and only a genuine infra
+-- failure may re-place off-budget (an app failure at state='failed' must fall to
+-- the normal retry rail). last_failure_kind is cleared so the next attempt's
+-- outcome is classified fresh.
+WITH archived AS (
+    INSERT INTO task_instance_history (
+        task_instance_id, try_number, state,
+        queued_at, scheduled_at, started_at, ended_at, duration_seconds,
+        exit_code, error_message, hostname, pod_name, node_name, note
+    )
+    SELECT
+        src.id, src.try_number, src.state,
+        src.queued_at, src.scheduled_at, src.started_at, src.ended_at, src.duration_seconds,
+        src.exit_code, src.error_message, src.hostname, src.pod_name, src.node_name, src.note
+    FROM task_instances src
+    WHERE src.dag_run_id = $1 AND src.task_id = $2
+      AND src.state = 'failed' AND src.last_failure_kind = 'infra'
+    ON CONFLICT (task_instance_id, try_number) DO NOTHING
+    RETURNING task_instance_id
+)
+UPDATE task_instances ti
+SET state = 'none',
+    started_at = NULL,
+    ended_at = NULL,
+    queued_at = NULL,
+    scheduled_at = NULL,
+    dispatch_attempts = 0,
+    next_dispatch_at = NULL,
+    reschedule_at = NULL,
+    first_reschedule_at = NULL,
+    last_failure_kind = NULL,
+    infra_attempts = ti.infra_attempts + 1
+WHERE ti.dag_run_id = $1 AND ti.task_id = $2
+  AND ti.state = 'failed' AND ti.last_failure_kind = 'infra';
 
 -- name: RedispatchRescheduledTaskInstance :exec
 -- Re-dispatch a task parked in up_for_reschedule once its reschedule_at has passed:
@@ -328,7 +373,8 @@ SET state = 'none',
     ended_at = NULL,
     queued_at = NULL,
     scheduled_at = NULL,
-    reschedule_at = NULL
+    reschedule_at = NULL,
+    last_failure_kind = NULL
 WHERE dag_run_id = $1 AND task_id = $2 AND state = 'up_for_reschedule';
 
 -- name: TaskInstanceFirstRescheduleAt :one
@@ -512,6 +558,7 @@ SET state = 'none',
     scheduled_at = NULL,
     dispatch_attempts = 0,
     next_dispatch_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1 AND ti.task_id = $2
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry');
@@ -543,6 +590,7 @@ SET state = 'none',
     scheduled_at = NULL,
     dispatch_attempts = 0,
     next_dispatch_at = NULL,
+    last_failure_kind = NULL,
     try_number = ti.try_number + 1
 WHERE ti.dag_run_id = $1
   AND ti.state IN ('failed', 'upstream_failed', 'up_for_retry');
@@ -659,6 +707,7 @@ WHERE dag_run_id = $1
 UPDATE task_instances
 SET state = 'failed',
     ended_at = now(),
+    last_failure_kind = 'infra',
     error_message = 'agent_lost: no heartbeat within the threshold — see #128'
 WHERE id = $1 AND state = 'running';
 
@@ -692,6 +741,7 @@ LIMIT 100;
 UPDATE task_instances
 SET state = 'failed',
     ended_at = now(),
+    last_failure_kind = 'infra',
     error_message = 'pod_lost: the task pod vanished with no live pod past the grace period — see #527'
 WHERE id = $1 AND state = 'running';
 

@@ -79,6 +79,16 @@ type RunState struct {
 	// a task failure — and drives the dispatch_failed give-up at
 	// dispatchMaxAttempts. Absent entries mean zero.
 	DispatchAttempts map[string]int
+	// InfraFailed marks a `failed` task whose failure was infra-caused (agent/pod/
+	// dispatch lost), from the durable last_failure_kind signal. Such a task
+	// re-places without consuming the task's retry budget (ADR 0051 Phase 1) — an
+	// infrastructure fault is not the user's task failing.
+	InfraFailed map[string]bool
+	// InfraAttempts counts asynchronous infra re-placements per task — the
+	// try_number-free analog of DispatchAttempts for agent/pod/dispatch-lost faults.
+	// It bounds the re-place at infraMaxAttempts so a poison placement cannot loop
+	// forever. Absent entries mean zero.
+	InfraAttempts map[string]int
 	// Now is the wall-clock value the planner compares against EndedAt. Zero
 	// means "skip the cooldown gate" so legacy callers + tests that don't set
 	// retry_delay get the previous (immediate-retry) behavior.
@@ -119,6 +129,13 @@ type Store interface {
 	// no longer up_for_retry, nothing reset) so the caller does not record a
 	// phantom retry on a lost race.
 	ResetForRetry(ctx context.Context, runID, taskID string) (bool, error)
+	// ResetForInfraReplace returns a task a reaper failed as infra to 'none' for a
+	// re-run, PRESERVING try_number and bumping infra_attempts instead — an infra
+	// fault must not consume the retry budget (ADR 0051 Phase 1). Guarded to the
+	// failed+infra source; the bool reports whether the reset fired (false = no
+	// longer a failed-infra candidate) so the caller does not record a phantom
+	// re-placement on a lost race.
+	ResetForInfraReplace(ctx context.Context, runID, taskID string) (bool, error)
 	// RedispatchReschedule returns a task parked in up_for_reschedule to 'none' for
 	// re-dispatch, PRESERVING try_number (reschedule is not a retry; #380).
 	RedispatchReschedule(ctx context.Context, runID, taskID string) error
@@ -821,10 +838,14 @@ func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTra
 	case domain.TaskStateQueued:
 		return s.launchQueued(ctx, run, t)
 	case domain.TaskStateNone:
-		// A → none transition is either a retry release (bump try_number) or a
-		// reschedule re-dispatch (preserve try_number) — keyed on the from-state.
+		// A → none transition is a retry release (bump try_number), a reschedule
+		// re-dispatch (preserve try_number), or an infra re-placement (preserve
+		// try_number, bump infra_attempts) — keyed on the from-state.
 		if run.States[t.TaskID] == domain.TaskStateUpForReschedule {
 			return s.redispatchReschedule(ctx, run, t.TaskID)
+		}
+		if run.States[t.TaskID] == domain.TaskStateFailed && run.InfraFailed[t.TaskID] {
+			return s.resetForInfraReplace(ctx, run, t.TaskID)
 		}
 		return s.resetForRetry(ctx, run, t.TaskID)
 	default:
@@ -850,6 +871,31 @@ func (s *Scheduler) resetForRetry(ctx context.Context, run RunState, taskID stri
 	}
 	if s.recorder != nil {
 		s.recorder.RecordSchedulerDecision("retry")
+		s.recorder.RecordTaskTransition(string(run.States[taskID]), string(domain.TaskStateNone), run.DagID)
+	}
+	return nil
+}
+
+// resetForInfraReplace returns a task a reaper failed as infra to 'none' for a
+// re-run, preserving try_number and bumping infra_attempts — an infrastructure
+// fault (agent/pod/dispatch lost) is not a task failure and must not consume the
+// user's retry budget (ADR 0051 Phase 1).
+func (s *Scheduler) resetForInfraReplace(ctx context.Context, run RunState, taskID string) error {
+	applied, err := s.store.ResetForInfraReplace(ctx, run.RunID, taskID)
+	if err != nil {
+		return fmt.Errorf("re-placing infra-failed %s: %w", taskID, err)
+	}
+	// The guarded reset no-ops when the TI is no longer a failed-infra candidate
+	// (a late terminal report, or an app failure raced the reap). Do not record a
+	// re-placement we did not perform; surface the lost race instead.
+	if !applied {
+		if s.recorder != nil {
+			s.recorder.RecordSchedulerDecision("infra_replace_noop")
+		}
+		return nil
+	}
+	if s.recorder != nil {
+		s.recorder.RecordSchedulerDecision("infra_replace")
 		s.recorder.RecordTaskTransition(string(run.States[taskID]), string(domain.TaskStateNone), run.DagID)
 	}
 	return nil

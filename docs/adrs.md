@@ -55,4 +55,7 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0050: Model Context Protocol (MCP) server](adr/0050-mcp-server.md)
 - [ADR 0051: Separate the orchestration and execution state machines](adr/0051-separate-orchestration-and-execution-state-machines.md)
 - [ADR 0052: Durable task outcome — decouple the task result from report delivery](adr/0052-durable-task-outcome.md)
+- [ADR 0053: Admission + placement — one scheduler-side layer for task concurrency and pod assignment](adr/0053-admission-and-placement.md)
+- [ADR 0054: Coexistence in a shared, multi-team Kubernetes cluster](adr/0054-shared-cluster-coexistence.md)
+- [ADR 0055: Secret scoping and token liveness — scope by declaration, exchange the token, bind it to task liveness](adr/0055-secret-scoping-and-token-liveness.md)
 <!-- END ADR INDEX -->

@@ -1,9 +1,78 @@
 # ADR 0051: Separate the orchestration and execution state machines
 
-**Status:** Proposed
-**Date:** 2026-08-12
+**Status:** Accepted
+**Date:** 2026-08-12 (proposed); accepted 2026-08-17
+**Accepted because:** the N:1 execution direction (a task is atomic to one pod;
+a DAG spans 1..N pods; a pod is dedicated *or* a shared warm worker) makes the
+two machines genuinely different in cardinality — so pod phase can never be a
+proxy for a single task's outcome. See "Why now" below. This is the foundation
+that makes the warm-pool safe; it is a prerequisite for ADR 0053 (admission +
+placement) and for PR-N1 (the warm-worker / shared-pod executor).
 **Relates:** ADR 0031 (scheduler architecture — reconciliation loop, two-phase dispatch, two-layer reaping), ADR 0027 (editions: executors + delivery), ADR 0015 (Kubernetes-only container execution), ADR 0002 (pod-per-task), ADR 0004 (thin agent), ADR 0010 (observability), ADR 0049 (split API/scheduler roles)
 **Issues:** #543 (agent exit code conflates task outcome with report delivery), infra-vs-task retry conflation (this ADR)
+
+## Why now — the motivation, strengthened
+
+When this ADR was proposed, the case for the seam read as cleanup: name the
+second state machine the scheduler had quietly absorbed, stop infra faults from
+billing the user's `retries`, and untangle #543. All true, all still the
+immediate wins — but they undersell the decision. The decisive reason to draw
+this seam is **cardinality**, and it only becomes visible under the N:1
+execution direction the product is now committed to.
+
+**The N:1 direction.** A task is **atomic to one pod** — it always runs whole,
+on exactly one pod. But a **DAG spans 1..N pods**, and a pod is either
+**dedicated** (runs one task, exits at its end) **or a shared warm worker**
+(a long-lived process that runs many task-attempts and does *not* exit per task).
+So the moment pods are reused, orchestration and execution stop being two views
+of the same lifecycle and become two machines with **genuinely different
+cardinality**: one pod ⟷ many tasks.
+
+**Why that is dispositive.** Under a dedicated pod you can *almost* get away with
+reading the substrate — one pod, one task, one exit, so pod phase looks like the
+task's outcome (it is not — that conflation is exactly #543 — but the 1:1
+cardinality hides the error). Under a shared worker the illusion collapses
+completely: **a pod's phase describes the pod, never any single task that ran on
+it.** A warm worker that is `Running` has already finished tasks; one that dies
+carries an unbounded set of in-flight attempts down with it. There is no
+function from pod phase, and no function from pod identity, to *one task's*
+result. Pod-as-proxy was always wrong; N:1 makes it unrepresentable.
+
+**The invariant this forces.** Orchestration must consume a task's outcome
+**only through the execution seam** — the `ExecutionOutcome` up the seam, and its
+durable record (`ExecutionStore`) — and **must never read pod phase or pod
+identity to decide a task's result.** That is not a stylistic preference; it is
+the single rule that keeps the two machines correct once their cardinality
+diverges. Everything the Decision specifies (the opaque `Correlation` bag,
+`Unexecutable` off the task-retry rail, the at-most-once guards) is the machinery
+that makes this one invariant hold.
+
+**Foundation, not a peer.** This is why 0051 is accepted now rather than left to
+mature alongside the work it enables:
+
+- It is the **foundation that makes the warm-pool (N:1 impl #2) safe.** Losing a
+  warm pod is *one* infra event that must fan out to *all* in-flight
+  task-instances on it, each re-placed without consuming the user's retry budget
+  — the exact generalization of `Unexecutable` / `DispatchAttempts` this ADR
+  draws. Without the seam there is nowhere correct for that fan-out to live.
+- It is a **prerequisite for ADR 0053 (admission + placement).** Placement
+  ("reuse a warm pod of the same DAG, else spin one, else defer") is an execution
+  concern; admission (`max_active_tasks`, pools) is an orchestration concern. They
+  compose only across a named seam. 0053 assumes this split exists.
+- It is a **prerequisite for PR-N1 (the warm-worker executor).** The shared pod
+  is simply a *second outcome transport* — a long-lived worker reporting each
+  attempt in-band and durably — behind the same `WorkItem` / `ExecutionOutcome`
+  contract. That substitution is only invisible to orchestration because the
+  seam already hides the transport.
+
+**ADR 0052 already accepted this split one layer up.** 0052 (durable task
+outcome, this ADR's Phase 2) explicitly separates the outcome *contract* from its
+*transport*: dedicated pod → termination message (impl #1); shared warm worker →
+in-band per-attempt record (impl #2); "orchestration consumes the outcome through
+the execution seam (`ExecutionStore`), never pod phase or the transport
+directly." Accepting 0051 **formalizes the state-machine separation underneath
+that contract** — 0052 split contract-vs-transport on this exact basis, and 0051
+is the machine boundary that makes the split load-bearing rather than incidental.
 
 ## Context
 

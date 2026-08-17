@@ -151,7 +151,19 @@ ENV PYTHONPATH=/home/leoflow
 DOCKER
 
 log "Building base image + cluster"
-docker build --provenance=false -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT"
+docker build --provenance=false -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT" \
+  || fatal "base image build failed — refusing to continue against a possibly stale $BASE_IMAGE"
+
+# A build that fails (e.g. a transient registry timeout pulling layers) used to
+# leave any pre-existing $BASE_IMAGE tag in place, so the run silently proceeded on
+# a stale agent binary. When that agent predates the fault-injection seam, the
+# durable-outcome scenario runs the ordinary report path and passes for the wrong
+# reason. Assert the freshly-built agent carries the seam the scenario depends on,
+# so a stale image can never masquerade as a green run.
+docker run --rm --entrypoint sh "$BASE_IMAGE" \
+  -c 'grep -aq LEOFLOW_CHAOS_DIE_BEFORE_REPORT /usr/local/bin/leoflow-agent' \
+  || fatal "$BASE_IMAGE has a stale leoflow-agent (missing the LEOFLOW_CHAOS_DIE_BEFORE_REPORT seam); run 'docker rmi -f $BASE_IMAGE' and re-run to force a fresh build"
+
 k3d cluster create "$CLUSTER" --wait
 kubectl create namespace leoflow
 

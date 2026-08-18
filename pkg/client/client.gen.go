@@ -145,6 +145,18 @@ type ComponentHealth struct {
 	Status                      *string `json:"status,omitempty"`
 }
 
+// CreateUserRequest defines model for CreateUserRequest.
+type CreateUserRequest struct {
+	// Email Login email. Normalized to lowercase, so it is unique case-insensitively within the tenant.
+	Email string `json:"email"`
+
+	// Password Plaintext password (write-only; never returned). Must be at least 8 characters — the server rejects anything shorter with 400.
+	Password *string `json:"password,omitempty"`
+
+	// Role Name of an existing role to grant (e.g. "admin"). Omit to grant no role — the most restrictive default; the user then holds no permissions until an admin grants one.
+	Role *string `json:"role,omitempty"`
+}
+
 // DAG defines model for DAG.
 type DAG struct {
 	Catchup                  *bool                   `json:"catchup,omitempty"`
@@ -307,6 +319,15 @@ type TokenResponse struct {
 	TokenType *string `json:"token_type,omitempty"`
 }
 
+// User defines model for User.
+type User struct {
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	Email     string     `json:"email"`
+	Id        string     `json:"id"`
+	IsActive  *bool      `json:"is_active,omitempty"`
+	Role      *string    `json:"role,omitempty"`
+}
+
 // VersionInfo defines model for VersionInfo.
 type VersionInfo struct {
 	GitVersion *string `json:"git_version,omitempty"`
@@ -371,6 +392,9 @@ type ClearTaskInstancesJSONRequestBody = ClearTaskInstancesRequest
 
 // TriggerDagRunJSONRequestBody defines body for TriggerDagRun for application/json ContentType.
 type TriggerDagRunJSONRequestBody = DAGRunCreate
+
+// CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
+type CreateUserJSONRequestBody = CreateUserRequest
 
 // IssueTokenJSONRequestBody defines body for IssueToken for application/json ContentType.
 type IssueTokenJSONRequestBody = TokenRequest
@@ -555,6 +579,28 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
 	GetMonitorHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateUserWithBody Create a user
+	//
+	// Admin-only. Creates a control-plane account with the given email and
+	// password and grants at most one role. The password is write-only and is
+	// never returned. Requires the admin:tenant permission.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
+	CreateUserWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateUser Create a user
+	//
+	// Admin-only. Creates a control-plane account with the given email and
+	// password and grants at most one role. The password is write-only and is
+	// never returned. Requires the admin:tenant permission.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
+	CreateUser(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetVersion Control-plane version (Airflow VersionInfo shape)
 	//
@@ -878,6 +924,48 @@ func (c *Client) GetMonitorExecutor(ctx context.Context, reqEditors ...RequestEd
 // Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
 func (c *Client) GetMonitorHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetMonitorHealthRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateUserWithBody Create a user
+//
+// Admin-only. Creates a control-plane account with the given email and
+// password and grants at most one role. The password is write-only and is
+// never returned. Requires the admin:tenant permission.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
+func (c *Client) CreateUserWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateUserRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateUser Create a user
+//
+// Admin-only. Creates a control-plane account with the given email and
+// password and grants at most one role. The password is write-only and is
+// never returned. Requires the admin:tenant permission.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
+func (c *Client) CreateUser(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateUserRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1726,6 +1814,46 @@ func NewGetMonitorHealthRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewCreateUserRequest calls the generic CreateUser builder with application/json body
+func NewCreateUserRequest(server string, body CreateUserJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateUserRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateUserRequestWithBody constructs an http.Request for the CreateUser method, with any body, and a specified content type
+func NewCreateUserRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/users")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewGetVersionRequest constructs an http.Request for the GetVersion method
 func NewGetVersionRequest(server string) (*http.Request, error) {
 	var err error
@@ -2078,6 +2206,28 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
 	GetMonitorHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMonitorHealthResponse, error)
+
+	// CreateUserWithBodyWithResponse Create a user
+	//
+	// Admin-only. Creates a control-plane account with the given email and
+	// password and grants at most one role. The password is write-only and is
+	// never returned. Requires the admin:tenant permission.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
+	CreateUserWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateUserResponse, error)
+
+	// CreateUserWithResponse Create a user
+	//
+	// Admin-only. Creates a control-plane account with the given email and
+	// password and grants at most one role. The password is write-only and is
+	// never returned. Requires the admin:tenant permission.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
+	CreateUserWithResponse(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateUserResponse, error)
 
 	// GetVersionWithResponse Control-plane version (Airflow VersionInfo shape)
 	//
@@ -2806,6 +2956,68 @@ func (r GetMonitorHealthResponse) ContentType() string {
 	return ""
 }
 
+type CreateUserResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *User
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r CreateUserResponse) GetJSON201() *User {
+	return r.JSON201
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r CreateUserResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r CreateUserResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r CreateUserResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetBody returns the raw response body bytes
+func (r CreateUserResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateUserResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateUserResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateUserResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetVersionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3256,6 +3468,40 @@ func (c *ClientWithResponses) GetMonitorHealthWithResponse(ctx context.Context, 
 		return nil, err
 	}
 	return ParseGetMonitorHealthResponse(rsp)
+}
+
+// CreateUserWithBodyWithResponse Create a user
+//
+// Admin-only. Creates a control-plane account with the given email and
+// password and grants at most one role. The password is write-only and is
+// never returned. Requires the admin:tenant permission.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
+func (c *ClientWithResponses) CreateUserWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateUserResponse, error) {
+	rsp, err := c.CreateUserWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateUserResponse(rsp)
+}
+
+// CreateUserWithResponse Create a user
+//
+// Admin-only. Creates a control-plane account with the given email and
+// password and grants at most one role. The password is write-only and is
+// never returned. Requires the admin:tenant permission.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
+func (c *ClientWithResponses) CreateUserWithResponse(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateUserResponse, error) {
+	rsp, err := c.CreateUser(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateUserResponse(rsp)
 }
 
 // GetVersionWithResponse Control-plane version (Airflow VersionInfo shape)
@@ -3771,6 +4017,53 @@ func ParseGetMonitorHealthResponse(rsp *http.Response) (*GetMonitorHealthRespons
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateUserResponse parses an HTTP response from a CreateUserWithResponse call
+func ParseCreateUserResponse(rsp *http.Response) (*CreateUserResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateUserResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest User
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	}
 

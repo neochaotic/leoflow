@@ -4,6 +4,13 @@ SELECT id, name FROM tenants WHERE name = 'default';
 -- name: GetTenantByName :one
 SELECT id, name FROM tenants WHERE name = $1;
 
+-- name: InsertUser :one
+-- Mirrors the bootstrap CreateUser insert (tenant_id, email, password_hash) but
+-- returns the columns the admin create-user API echoes back to the caller.
+INSERT INTO users (tenant_id, email, password_hash)
+VALUES ($1, $2, $3)
+RETURNING id, email, is_active, created_at;
+
 -- name: GetUserByEmail :one
 SELECT u.id, u.tenant_id, u.email, u.password_hash, u.is_active
 FROM users u

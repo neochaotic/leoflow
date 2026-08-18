@@ -136,6 +136,39 @@ func (q *Queries) GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]strin
 	return items, nil
 }
 
+const insertUser = `-- name: InsertUser :one
+INSERT INTO users (tenant_id, email, password_hash)
+VALUES ($1, $2, $3)
+RETURNING id, email, is_active, created_at
+`
+
+type InsertUserParams struct {
+	TenantID     pgtype.UUID `json:"tenant_id"`
+	Email        string      `json:"email"`
+	PasswordHash *string     `json:"password_hash"`
+}
+
+type InsertUserRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Email     string             `json:"email"`
+	IsActive  bool               `json:"is_active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Mirrors the bootstrap CreateUser insert (tenant_id, email, password_hash) but
+// returns the columns the admin create-user API echoes back to the caller.
+func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (InsertUserRow, error) {
+	row := q.db.QueryRow(ctx, insertUser, arg.TenantID, arg.Email, arg.PasswordHash)
+	var i InsertUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.IsActive,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const updateUserPassword = `-- name: UpdateUserPassword :execrows
 UPDATE users
 SET password_hash = $3

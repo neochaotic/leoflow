@@ -85,6 +85,9 @@ type Querier interface {
 	GetXComByNames(ctx context.Context, arg GetXComByNamesParams) (GetXComByNamesRow, error)
 	GetXComEntry(ctx context.Context, arg GetXComEntryParams) (GetXComEntryRow, error)
 	InsertDagVersion(ctx context.Context, arg InsertDagVersionParams) (DagVersion, error)
+	// Mirrors the bootstrap CreateUser insert (tenant_id, email, password_hash) but
+	// returns the columns the admin create-user API echoes back to the caller.
+	InsertUser(ctx context.Context, arg InsertUserParams) (InsertUserRow, error)
 	LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsParams) ([]LatestRunsForDagsRow, error)
 	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
 	// run_id is the dag_run's UUID (StagingClaimName uses it), so join on dag_runs.id,

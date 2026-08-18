@@ -61,6 +61,38 @@ func TestBuildPod(t *testing.T) {
 	}
 }
 
+// TestBuildPodAppliesTolerations locks the fix for the dropped-tolerations contract
+// bug: a task's declared tolerations (domain.Execution.Tolerations, an untyped
+// []map[string]any) must land on pod.Spec.Tolerations. Without this a DAG that
+// declares a toleration is accepted at push and silently mis-scheduled — a tainted
+// dedicated node pool becomes unreachable.
+func TestBuildPodAppliesTolerations(t *testing.T) {
+	req := sampleReq()
+	req.Execution.Tolerations = []map[string]any{
+		{"key": "workload", "operator": "Equal", "value": "leoflow", "effect": "NoSchedule"},
+		{"key": "dedicated", "operator": "Exists", "effect": "NoExecute"},
+	}
+
+	tols := BuildPod(req).Spec.Tolerations
+	if len(tols) != 2 {
+		t.Fatalf("tolerations = %v, want 2", tols)
+	}
+	if want := (corev1.Toleration{Key: "workload", Operator: corev1.TolerationOpEqual, Value: "leoflow", Effect: corev1.TaintEffectNoSchedule}); tols[0] != want {
+		t.Errorf("tolerations[0] = %+v, want %+v", tols[0], want)
+	}
+	if want := (corev1.Toleration{Key: "dedicated", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute}); tols[1] != want {
+		t.Errorf("tolerations[1] = %+v, want %+v", tols[1], want)
+	}
+}
+
+// TestBuildPodNoTolerations confirms omission stays unset (nil) rather than an
+// empty non-nil slice, so a task that declares none is byte-identical to today.
+func TestBuildPodNoTolerations(t *testing.T) {
+	if tols := BuildPod(sampleReq()).Spec.Tolerations; tols != nil {
+		t.Errorf("tolerations = %v, want nil when none declared", tols)
+	}
+}
+
 // TestBuildPodPinsTerminationMessagePolicy locks the ADR 0052 prerequisite: the
 // task container must explicitly pin TerminationMessagePolicy=File and the path,
 // so the agent's durable outcome record is surfaced on pod status. Relying on the

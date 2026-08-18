@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -79,6 +80,7 @@ func BuildPod(req Request) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			NodeSelector:  req.Execution.NodeSelector,
+			Tolerations:   buildTolerations(req.Execution.Tolerations),
 			// The task pod authenticates to the control plane with its own
 			// per-task token over gRPC and never calls the Kubernetes API, so a
 			// mounted ServiceAccount token is a credential handed to untrusted
@@ -236,6 +238,34 @@ func ptr[T any](v T) *T { return &v }
 //
 // readOnlyRootFilesystem is opt-in for a different reason: `restricted` never
 // asks for it, and turning it on by default breaks any task that writes to /tmp.
+// buildTolerations converts a task's declared tolerations — an untyped
+// []map[string]any carried verbatim from the DAG spec — into typed pod
+// tolerations via a JSON round-trip (the map keys match corev1.Toleration's JSON
+// field names). A malformed entry is skipped rather than failing the whole pod
+// build, matching how BuildPod treats other optional placement hints. Returns nil
+// when none are declared, so the field stays unset for a DAG that declares none.
+func buildTolerations(raw []map[string]any) []corev1.Toleration {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]corev1.Toleration, 0, len(raw))
+	for _, m := range raw {
+		b, err := json.Marshal(m)
+		if err != nil {
+			continue
+		}
+		var t corev1.Toleration
+		if err := json.Unmarshal(b, &t); err != nil {
+			continue
+		}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func buildSecurityContext(ps PodSecurity) *corev1.SecurityContext {
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: ptr(false),

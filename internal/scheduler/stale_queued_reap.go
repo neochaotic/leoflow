@@ -67,6 +67,12 @@ type dispatchLostReaper struct {
 	// so the reaper must DEFER. Nil in Lite: with no pods, the reaper falls
 	// back to the pure time-threshold behavior.
 	pods PodManager
+	// cache is an optional informer-backed presence cache (PR-10) consulted ONLY
+	// to DEFER a reap: a cached Pending/Running pod skips the live LIST. A cache
+	// miss is never authoritative — the reaper falls through to the live
+	// TaskPodActive read, so cache lag can only delay a reap, never cause a
+	// false-positive one (#461, the queued path). Nil keeps the live path.
+	cache PodPresenceCache
 }
 
 func newDispatchLostReaper(store DispatchLostReapStore, logger *slog.Logger, threshold time.Duration, rec Recorder) *dispatchLostReaper {
@@ -101,6 +107,14 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 		//   * no/terminal pod       -> dispatch is genuinely lost; proceed.
 		// Nil pods (Lite) has no pod concept, so it falls through to the
 		// threshold behavior unchanged.
+		//
+		// Cache fast-path (PR-10), safe direction only: a cached Pending/Running
+		// pod defers without an apiserver read. A cache MISS is NOT trusted — fall
+		// through to the live read below, preserving the #461 fix.
+		if r.cache != nil && r.cache.CachedPodActive(c.DagRunID, c.TaskID) {
+			r.record("dispatch_lost_cache_active")
+			continue
+		}
 		if r.pods != nil {
 			active, perr := r.pods.TaskPodActive(ctx, c.DagRunID, c.TaskID)
 			if perr != nil {

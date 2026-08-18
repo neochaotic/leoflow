@@ -296,10 +296,16 @@ type Scheduler struct {
 	// podManager lets the reapers tear down a reaped task's pod and gate the
 	// dispatch-lost decision on pod liveness (#474, #461). Nil in Lite; the
 	// reapers guard the nil and fall back to DB-only behavior.
-	podManager   PodManager
-	lastTick     atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
-	leading      atomic.Bool  // true only while this instance holds leadership and ticks
-	steppingDown atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
+	podManager PodManager
+	// podPresenceCache is an optional informer-backed read cache (PR-10) the
+	// pod-lost and dispatch-lost reapers consult to DEFER a reap without an
+	// apiserver LIST. Trusted only in the safe (presence) direction; a miss falls
+	// through to podManager's live read (#461). Nil in Lite and before the
+	// informer is wired — every candidate then uses the live path.
+	podPresenceCache PodPresenceCache
+	lastTick         atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	leading          atomic.Bool  // true only while this instance holds leadership and ticks
+	steppingDown     atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
@@ -347,6 +353,15 @@ func (s *Scheduler) SetPodLostGrace(d time.Duration) { s.podLostGrace = d }
 // queued TI's pod is actually live (#474, #461). Left unset in Lite/subprocess,
 // where the reapers stay DB-only. Called from main once the K8s client exists.
 func (s *Scheduler) SetPodManager(pm PodManager) { s.podManager = pm }
+
+// SetPodPresenceCache wires the informer-backed presence cache the pod-lost and
+// dispatch-lost reapers use to defer a reap without a live apiserver LIST (PR-10).
+// It is consulted only in the safe direction: a cached Pending/Running pod defers;
+// a miss falls through to the live TaskPodActive read, so cache lag can never
+// cause a false-positive reap (#461). Left unset in Lite/subprocess and until the
+// informer is constructed, where the reapers stay on the live path. Called from
+// main on the Pro (scheduler/all) K8s path only.
+func (s *Scheduler) SetPodPresenceCache(c PodPresenceCache) { s.podPresenceCache = c }
 
 // defaultStepTimeout bounds how long one scheduling tick may run before it is
 // canceled so the loop can recover, rather than hang forever on a stuck query.
@@ -582,6 +597,7 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	// chain once the threshold elapses.
 	dispatchReaper := newDispatchLostReaper(s.store, s.logger, s.dispatchLostThreshold, s.recorder)
 	dispatchReaper.pods = s.podManager
+	dispatchReaper.cache = s.podPresenceCache
 	if err := dispatchReaper.run(ctx); err != nil {
 		logSchedulerError(s.logger, "dispatch-lost reaper", err, s.steppingDown.Load())
 		s.record("dispatch_lost_list_error")
@@ -592,6 +608,7 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	// it a no-op, so a live subprocess task is never reaped.
 	podLostReaper := newPodLostReaper(s.store, s.logger, s.podLostGrace, s.recorder)
 	podLostReaper.pods = s.podManager
+	podLostReaper.cache = s.podPresenceCache
 	if err := podLostReaper.run(ctx); err != nil {
 		logSchedulerError(s.logger, "pod-lost reaper", err, s.steppingDown.Load())
 		s.record("pod_lost_list_error")

@@ -71,6 +71,12 @@ type podLostReaper struct {
 	// pods is required for this reaper to do anything; nil (Lite) makes run a
 	// no-op. See the type doc.
 	pods PodManager
+	// cache is an optional informer-backed presence cache (PR-10) consulted ONLY
+	// to DEFER a reap: a cached Pending/Running pod skips the live LIST. A cache
+	// miss is never authoritative — the reaper falls through to the live
+	// TaskPodActive read below, so cache lag can only delay a reap, never cause a
+	// false-positive one (#461). Nil keeps every candidate on the live path.
+	cache PodPresenceCache
 }
 
 func newPodLostReaper(store PodLostReapStore, logger *slog.Logger, grace time.Duration, rec Recorder) *podLostReaper {
@@ -99,6 +105,13 @@ func (r *podLostReaper) run(ctx context.Context) error {
 	now := time.Now().UTC()
 	for _, c := range candidates {
 		if !IsPodLostCandidate(c, r.grace, now) {
+			continue
+		}
+		// Cache fast-path (PR-10), safe direction only: a cached Pending/Running
+		// pod defers the reap without an apiserver read. A cache MISS is NOT
+		// trusted — fall through to the live read below, preserving the #461 fix.
+		if r.cache != nil && r.cache.CachedPodActive(c.DagRunID, c.TaskID) {
+			r.record("pod_lost_cache_active")
 			continue
 		}
 		// Consult the pod before failing:

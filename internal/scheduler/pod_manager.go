@@ -31,3 +31,26 @@ type PodManager interface {
 	// the dispatch landed, the node is merely slow (#461).
 	TaskPodActive(ctx context.Context, runID, taskID string) (bool, error)
 }
+
+// PodPresenceCache is an optional read-through cache of pod presence — backed by
+// a shared informer (PR-10) — that the pod-lost and dispatch-lost reapers consult
+// ONLY to DEFER a reap, never to authorize one. Its trust is asymmetric (#461):
+//
+//   - CachedPodActive == true  => a pod is present and Pending/Running; the reaper
+//     may skip the live LIST and defer, because presence is monotonic-safe against
+//     cache lag (a pod the cache still shows as live cannot have been gone longer
+//     than the lag, and deferring one tick is harmless).
+//   - CachedPodActive == false => NOT authoritative. The reaper MUST fall through
+//     to the live TaskPodActive (quorum) read before any destructive action, so a
+//     lagged/cold cache can only ever delay a reap by a tick, never cause a
+//     false-positive one.
+//
+// It exists to remove the O(running-TIs)/sec apiserver LIST storm from the read
+// path while keeping the kill decision on the live read. Nil in Lite/subprocess
+// and before the informer warms: every candidate then uses the live path.
+type PodPresenceCache interface {
+	// CachedPodActive reports whether the cache holds a Pending/Running pod for
+	// (run, task). Only a true return is trusted (to defer); false is a "no
+	// speedup" signal that must not drive a reap.
+	CachedPodActive(runID, taskID string) bool
+}

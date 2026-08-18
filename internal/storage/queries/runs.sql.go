@@ -1249,6 +1249,32 @@ func (q *Queries) MarkTaskPodLost(ctx context.Context, id pgtype.UUID) (int64, e
 	return result.RowsAffected(), nil
 }
 
+const recordDispatchBackpressure = `-- name: RecordDispatchBackpressure :exec
+UPDATE task_instances
+SET next_dispatch_at = $3
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'scheduled'
+`
+
+type RecordDispatchBackpressureParams struct {
+	DagRunID       pgtype.UUID        `json:"dag_run_id"`
+	TaskID         string             `json:"task_id"`
+	NextDispatchAt pgtype.Timestamptz `json:"next_dispatch_at"`
+}
+
+// A pod CREATE was refused by cluster backpressure — a ResourceQuota 403 or an
+// API Priority & Fairness 429 (ADR 0053). Back off the next attempt to $3 WITHOUT
+// touching dispatch_attempts: backpressure is a temporary "no room," retriable
+// forever, and must never accumulate toward the dispatch_failed budget the way a
+// permanent failure does (RecordDispatchFailure). The planner gates
+// scheduled->queued on next_dispatch_at alone, so setting it holds and re-offers
+// the task without a counter bump. Guarded to 'scheduled' for the same reason as
+// RecordDispatchFailure; try_number is untouched — this is infra, not a task
+// failure.
+func (q *Queries) RecordDispatchBackpressure(ctx context.Context, arg RecordDispatchBackpressureParams) error {
+	_, err := q.db.Exec(ctx, recordDispatchBackpressure, arg.DagRunID, arg.TaskID, arg.NextDispatchAt)
+	return err
+}
+
 const recordDispatchFailure = `-- name: RecordDispatchFailure :exec
 UPDATE task_instances
 SET dispatch_attempts = dispatch_attempts + 1,

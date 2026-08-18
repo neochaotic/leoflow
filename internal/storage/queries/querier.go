@@ -195,6 +195,16 @@ type Querier interface {
 	// late terminal report that landed between our list and our write (a live
 	// report wins over the reaper). Idempotent on a second call.
 	MarkTaskPodLost(ctx context.Context, id pgtype.UUID) (int64, error)
+	// A pod CREATE was refused by cluster backpressure — a ResourceQuota 403 or an
+	// API Priority & Fairness 429 (ADR 0053). Back off the next attempt to $3 WITHOUT
+	// touching dispatch_attempts: backpressure is a temporary "no room," retriable
+	// forever, and must never accumulate toward the dispatch_failed budget the way a
+	// permanent failure does (RecordDispatchFailure). The planner gates
+	// scheduled->queued on next_dispatch_at alone, so setting it holds and re-offers
+	// the task without a counter bump. Guarded to 'scheduled' for the same reason as
+	// RecordDispatchFailure; try_number is untouched — this is infra, not a task
+	// failure.
+	RecordDispatchBackpressure(ctx context.Context, arg RecordDispatchBackpressureParams) error
 	// A synchronous dispatch attempt failed (ADR 0031 Amendment A). Increment the
 	// consecutive-failure counter and back off the next attempt to $3, so the planner
 	// (which gates scheduled->queued on next_dispatch_at) does not re-attempt every

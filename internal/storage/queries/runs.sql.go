@@ -335,6 +335,16 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 	return i, err
 }
 
+type CreateTaskInstancesParams struct {
+	TenantID  pgtype.UUID `json:"tenant_id"`
+	DagRunID  pgtype.UUID `json:"dag_run_id"`
+	TaskID    string      `json:"task_id"`
+	Operator  string      `json:"operator"`
+	MaxTries  int32       `json:"max_tries"`
+	State     TaskState   `json:"state"`
+	TryNumber int32       `json:"try_number"`
+}
+
 const deleteDagRun = `-- name: DeleteDagRun :execrows
 DELETE FROM dag_runs WHERE dag_id = $1 AND run_id = $2
 `
@@ -2035,5 +2045,34 @@ type UpdateTaskInstanceStateByRunTaskParams struct {
 // task_state (see ReportTaskResult for why the cast is required).
 func (q *Queries) UpdateTaskInstanceStateByRunTask(ctx context.Context, arg UpdateTaskInstanceStateByRunTaskParams) error {
 	_, err := q.db.Exec(ctx, updateTaskInstanceStateByRunTask, arg.State, arg.DagRunID, arg.TaskID)
+	return err
+}
+
+const updateTaskInstanceStatesByRunTasks = `-- name: UpdateTaskInstanceStatesByRunTasks :exec
+UPDATE task_instances
+SET state = $1::task_state,
+    scheduled_at = CASE WHEN $1::task_state = 'scheduled' AND scheduled_at IS NULL THEN now() ELSE scheduled_at END,
+    queued_at = CASE WHEN $1::task_state = 'queued' AND queued_at IS NULL THEN now() ELSE queued_at END,
+    started_at = CASE WHEN $1::task_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END
+WHERE dag_run_id = $2 AND task_id = ANY($3::text[])
+`
+
+type UpdateTaskInstanceStatesByRunTasksParams struct {
+	State    TaskState   `json:"state"`
+	DagRunID pgtype.UUID `json:"dag_run_id"`
+	TaskIds  []string    `json:"task_ids"`
+}
+
+// Batched form of UpdateTaskInstanceStateByRunTask: applies ONE target state to
+// every listed task of a run in a single statement. The per-row stamping is
+// identical (scheduled_at/queued_at/started_at set on first entry only), as is
+// the task_state cast, so a batch of R same-target transitions is byte-identical
+// to R single-row updates — only the statement count changes (R UPDATEs → 1 per
+// distinct target state). The scheduler groups a tick's plain state-set
+// transitions (scheduled/skipped/upstream_failed/up_for_retry) by target state
+// and flushes each group through this query. task_id = ANY keeps every row's CASE
+// self-referential, so an already-stamped row is never re-stamped.
+func (q *Queries) UpdateTaskInstanceStatesByRunTasks(ctx context.Context, arg UpdateTaskInstanceStatesByRunTasksParams) error {
+	_, err := q.db.Exec(ctx, updateTaskInstanceStatesByRunTasks, arg.State, arg.DagRunID, arg.TaskIds)
 	return err
 }

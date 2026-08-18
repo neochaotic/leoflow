@@ -33,6 +33,10 @@ const pgStartupBackoff = 100 * time.Millisecond
 type Postgres struct {
 	Pool    *pgxpool.Pool
 	Queries *queries.Queries
+	// specs memoizes parsed DAG specs by (immutable) dag_version_id, shared by
+	// the scheduler read path and the dispatch/agent path so a spec is fetched
+	// and decoded once per version, not once per active run per tick.
+	specs *specCache
 }
 
 // poolConfig builds a pgxpool.Config from the database section.
@@ -70,7 +74,7 @@ func NewPostgres(ctx context.Context, cfg config.DatabaseSection) (*Postgres, er
 		pool.Close()
 		return nil, err
 	}
-	return &Postgres{Pool: pool, Queries: queries.New(pool)}, nil
+	return &Postgres{Pool: pool, Queries: queries.New(pool), specs: newSpecCache()}, nil
 }
 
 // connectWithRetry calls pingFn until it returns nil, the budget elapses, or

@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -17,8 +16,9 @@ import (
 
 // SchedulerStore is the sqlc-backed implementation of scheduler.Store.
 type SchedulerStore struct {
-	q    *queries.Queries
-	pool poolBeginner
+	q     *queries.Queries
+	pool  poolBeginner
+	specs *specCache
 }
 
 // poolBeginner is the slice of pgxpool.Pool the store uses to start the orphan
@@ -30,7 +30,7 @@ type poolBeginner interface {
 
 // NewSchedulerStore builds a SchedulerStore over the given Postgres connection.
 func NewSchedulerStore(pg *Postgres) *SchedulerStore {
-	return &SchedulerStore{q: pg.Queries, pool: pg.Pool}
+	return &SchedulerStore{q: pg.Queries, pool: pg.Pool, specs: sharedSpecCache(pg)}
 }
 
 // ActiveRuns returns every queued/running run with its topology and task states.
@@ -110,14 +110,17 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 	}
 	out := make([]scheduler.RunState, 0, len(runs))
 	for _, run := range runs {
-		version, err := s.q.GetDagVersionByID(ctx, run.DagVersionID)
+		// The spec is immutable per dag_version_id (see specCache), so N active
+		// runs sharing a version decode it once, not N times. The cached spec is
+		// shared read-only: copy Tasks before applyDefaultRetries so filling a
+		// run's retry defaults never writes through the shared backing array.
+		_, cached, err := s.specs.get(ctx, s.q, run.DagVersionID)
 		if err != nil {
-			return nil, fmt.Errorf("loading dag version: %w", err)
+			return nil, err
 		}
-		var spec domain.DAGSpec
-		if uerr := json.Unmarshal(version.Spec, &spec); uerr != nil {
-			return nil, fmt.Errorf("decoding spec: %w", uerr)
-		}
+		spec := cached
+		spec.Tasks = make([]domain.TaskSpec, len(cached.Tasks))
+		copy(spec.Tasks, cached.Tasks)
 		applyDefaultRetries(&spec)
 		tis, err := s.q.ListTaskInstancesByRun(ctx, run.ID)
 		if err != nil {
@@ -159,36 +162,46 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 	return out, nil
 }
 
-// MaterializeTasks creates a none-state task instance for each task in the run.
+// MaterializeTasks creates a none-state task instance for each task in the run,
+// in one batched COPY rather than T INSERT round-trips. The rows are identical
+// to the per-task loop this replaced: try_number pinned to 1, state none, and
+// max_tries derived from the task's retries (default 1). An empty task set is a
+// no-op (a DAG with no tasks materializes nothing).
 func (s *SchedulerStore) MaterializeTasks(ctx context.Context, runID string, tasks []domain.TaskSpec) error {
 	rid, err := parseUUID(runID)
 	if err != nil {
 		return err
 	}
+	if len(tasks) == 0 {
+		return nil
+	}
 	run, err := s.q.GetDagRunByID(ctx, rid)
 	if err != nil {
 		return fmt.Errorf("loading run: %w", err)
 	}
-	for _, t := range tasks {
+	rows := make([]queries.CreateTaskInstancesParams, len(tasks))
+	for i, t := range tasks {
 		maxTries := int32(1)
 		if t.Retries != nil {
 			maxTries = toInt32(*t.Retries + 1)
 		}
-		if _, err := s.q.CreateTaskInstance(ctx, queries.CreateTaskInstanceParams{
-			TenantID: run.TenantID,
-			DagRunID: rid,
-			TaskID:   t.TaskID,
-			Operator: string(t.Type),
-			MaxTries: maxTries,
-			State:    queries.TaskStateNone,
-		}); err != nil {
-			return fmt.Errorf("creating task instance %q: %w", t.TaskID, err)
+		rows[i] = queries.CreateTaskInstancesParams{
+			TenantID:  run.TenantID,
+			DagRunID:  rid,
+			TaskID:    t.TaskID,
+			Operator:  string(t.Type),
+			MaxTries:  maxTries,
+			State:     queries.TaskStateNone,
+			TryNumber: 1,
 		}
+	}
+	if _, err := s.q.CreateTaskInstances(ctx, rows); err != nil {
+		return fmt.Errorf("creating task instances for run %q: %w", runID, err)
 	}
 	return nil
 }
 
-// ApplyTransition moves a task instance to a new state.
+// ApplyTransition moves a single task instance to a new state.
 func (s *SchedulerStore) ApplyTransition(ctx context.Context, runID, taskID string, to domain.TaskState) error {
 	rid, err := parseUUID(runID)
 	if err != nil {
@@ -197,6 +210,27 @@ func (s *SchedulerStore) ApplyTransition(ctx context.Context, runID, taskID stri
 	return s.q.UpdateTaskInstanceStateByRunTask(ctx, queries.UpdateTaskInstanceStateByRunTaskParams{
 		DagRunID: rid,
 		TaskID:   taskID,
+		State:    queries.TaskState(to),
+	})
+}
+
+// ApplyTransitions moves every listed task of a run to the SAME target state in
+// one UPDATE, the batched equivalent of calling ApplyTransition once per task.
+// The scheduler groups a tick's plain state-set transitions by target state and
+// flushes each group here, collapsing R updates into one per distinct state. The
+// per-row stamping is identical to the single-row query, so the result is
+// byte-identical — only the statement count drops. An empty list is a no-op.
+func (s *SchedulerStore) ApplyTransitions(ctx context.Context, runID string, taskIDs []string, to domain.TaskState) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.UpdateTaskInstanceStatesByRunTasks(ctx, queries.UpdateTaskInstanceStatesByRunTasksParams{
+		DagRunID: rid,
+		TaskIds:  taskIDs,
 		State:    queries.TaskState(to),
 	})
 }

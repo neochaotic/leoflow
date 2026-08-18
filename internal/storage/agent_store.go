@@ -18,12 +18,13 @@ import (
 // both agentrpc.Store (serving the in-pod agent) and dispatch.Resolver (feeding
 // the pod-path dispatcher) over the same dag_version spec.
 type ExecutionStore struct {
-	q *queries.Queries
+	q     *queries.Queries
+	specs *specCache
 }
 
 // NewExecutionStore builds an ExecutionStore over the given Postgres connection.
 func NewExecutionStore(pg *Postgres) *ExecutionStore {
-	return &ExecutionStore{q: pg.Queries}
+	return &ExecutionStore{q: pg.Queries, specs: sharedSpecCache(pg)}
 }
 
 // TaskSpec returns the agent-facing execution spec for a task instance.
@@ -293,13 +294,14 @@ func (s *ExecutionStore) resolve(ctx context.Context, runID, taskID string) (dom
 	if err != nil {
 		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, fmt.Errorf("loading run: %w", err)
 	}
-	ver, err := s.q.GetDagVersionByID(ctx, run.DagVersionID)
+	// The version row + decoded spec are memoized per (immutable) dag_version_id,
+	// so re-resolving the same run's tasks on the dispatch path reuses the parse
+	// the scheduler tick already did instead of a fresh fetch + unmarshal. The
+	// spec is shared read-only; this path only reads it (task lookup + Image/
+	// Staging/Source), never mutates it.
+	ver, spec, err := s.specs.get(ctx, s.q, run.DagVersionID)
 	if err != nil {
-		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, fmt.Errorf("loading dag version: %w", err)
-	}
-	var spec domain.DAGSpec
-	if jerr := json.Unmarshal(ver.Spec, &spec); jerr != nil {
-		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, fmt.Errorf("decoding spec: %w", jerr)
+		return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, err
 	}
 	for _, t := range spec.Tasks {
 		if t.TaskID == taskID {

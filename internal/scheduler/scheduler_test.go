@@ -82,6 +82,16 @@ func (f *fakeStore) ApplyTransition(_ context.Context, runID, taskID string, to 
 	f.transitions = append(f.transitions, transition{runID, taskID, to})
 	return nil
 }
+
+// ApplyTransitions mirrors the batched store: it records one transition per task,
+// exactly as the equivalent per-task ApplyTransition calls would, so assertions
+// on f.transitions are unchanged by the scheduler's batching.
+func (f *fakeStore) ApplyTransitions(_ context.Context, runID string, taskIDs []string, to domain.TaskState) error {
+	for _, taskID := range taskIDs {
+		f.transitions = append(f.transitions, transition{runID, taskID, to})
+	}
+	return nil
+}
 func (f *fakeStore) ResetForRetry(_ context.Context, runID, taskID string) (bool, error) {
 	f.retried = append(f.retried, transition{runID, taskID, domain.TaskStateNone})
 	return true, nil

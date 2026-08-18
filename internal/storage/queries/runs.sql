@@ -140,6 +140,16 @@ INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries,
 VALUES ($1, $2, $3, $4, $5, $6, 1)
 RETURNING *;
 
+-- name: CreateTaskInstances :copyfrom
+-- Batched form of CreateTaskInstance: materializes every task of one run in a
+-- single COPY instead of T INSERT round-trips. The caller supplies one param row
+-- per task with try_number pinned to 1 (matching CreateTaskInstance's literal);
+-- columns omitted from the list take their table defaults, exactly as the
+-- per-row INSERT relied on, so the rows are byte-identical to the loop — only the
+-- statement count changes (T INSERTs → 1 COPY).
+INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
 -- name: ListTaskInstancesByRun :many
 SELECT * FROM task_instances
 WHERE dag_run_id = $1
@@ -238,6 +248,23 @@ SET state = sqlc.arg(state)::task_state,
     queued_at = CASE WHEN sqlc.arg(state)::task_state = 'queued' AND queued_at IS NULL THEN now() ELSE queued_at END,
     started_at = CASE WHEN sqlc.arg(state)::task_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END
 WHERE dag_run_id = sqlc.arg(dag_run_id) AND task_id = sqlc.arg(task_id);
+
+-- name: UpdateTaskInstanceStatesByRunTasks :exec
+-- Batched form of UpdateTaskInstanceStateByRunTask: applies ONE target state to
+-- every listed task of a run in a single statement. The per-row stamping is
+-- identical (scheduled_at/queued_at/started_at set on first entry only), as is
+-- the task_state cast, so a batch of R same-target transitions is byte-identical
+-- to R single-row updates — only the statement count changes (R UPDATEs → 1 per
+-- distinct target state). The scheduler groups a tick's plain state-set
+-- transitions (scheduled/skipped/upstream_failed/up_for_retry) by target state
+-- and flushes each group through this query. task_id = ANY keeps every row's CASE
+-- self-referential, so an already-stamped row is never re-stamped.
+UPDATE task_instances
+SET state = sqlc.arg(state)::task_state,
+    scheduled_at = CASE WHEN sqlc.arg(state)::task_state = 'scheduled' AND scheduled_at IS NULL THEN now() ELSE scheduled_at END,
+    queued_at = CASE WHEN sqlc.arg(state)::task_state = 'queued' AND queued_at IS NULL THEN now() ELSE queued_at END,
+    started_at = CASE WHEN sqlc.arg(state)::task_state = 'running' AND started_at IS NULL THEN now() ELSE started_at END
+WHERE dag_run_id = sqlc.arg(dag_run_id) AND task_id = ANY(sqlc.arg(task_ids)::text[]);
 
 -- name: ResetTaskInstanceToNone :exec
 -- Resets a TI for retry: snapshot the current per-attempt state into

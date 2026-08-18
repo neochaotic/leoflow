@@ -240,6 +240,16 @@ the Kubernetes scheduler cannot make for it.
 - **O(1) amortized placement; O(D) bookkeeping.** Per-task cost is a slot
   pop/push against a per-DAG index; pool state is Θ(active DAGs), not Θ(tasks).
   This is the property that decouples infra cost from task volume (§2.3).
+- **Cost-efficient by default; warmth is opt-in.** The default is the cheapest
+  posture — `min-idle=0`, scale-to-zero — so an idle platform costs nothing: a DAG
+  that is not running holds no warm pods, no reserved capacity, no standing cost.
+  Warmth (`min-idle > 0` for a hot DAG, to hide cold start) is an **explicit,
+  per-DAG opt-in the operator consciously pays for** — never a default, and never
+  the Cloud-Composer-style always-on minimum node pool. Taken to its limit the
+  cheapest default is *no warm pool at all* (pure on-demand); the warm pool must
+  **earn its place on measured cold-start cost** (the PR-0 harness), not be
+  assumed. This is the design principle behind the `min-idle=0` default in Stage 2
+  — a resource that is not being used must not be wasted.
 - **Bare Pod today, per-DAG owner for warm pods.** Dedicated pods are bare `Pod`s
   GC'd by the informer with no `ownerReferences`; `Job` is rejected for the three
   collisions above; warm pods are cascade-GC'd via a per-DAG ConfigMap anchor at

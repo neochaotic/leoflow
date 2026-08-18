@@ -153,6 +153,7 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 			InfraAttempts:     ts.infraAttempts,
 			Now:               time.Now(),
 			Alerts:            spec.Alerts,
+			MaxActiveTasks:    spec.MaxActiveTasks,
 		})
 	}
 	return out, nil

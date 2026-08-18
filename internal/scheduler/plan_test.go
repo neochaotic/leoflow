@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -365,5 +366,104 @@ func TestPlanRunSchedulesImmediatelyWithoutBackoff(t *testing.T) {
 	}
 	if got := planMap(run)["a"]; got != domain.TaskStateQueued {
 		t.Errorf("a scheduled task with no backoff should be queued, got %s", got)
+	}
+}
+
+// independent returns n root tasks with no dependencies — a fan-out whose tasks
+// are all simultaneously ready, the shape the per-DAG max_active_tasks cap
+// bounds (ADR 0053 Stage 1).
+func independent(n int) []domain.TaskSpec {
+	tasks := make([]domain.TaskSpec, n)
+	for i := range tasks {
+		tasks[i] = domain.TaskSpec{TaskID: fmt.Sprintf("t%d", i), Type: domain.TaskTypePython}
+	}
+	return tasks
+}
+
+// scheduledStates marks every task `scheduled` — all ready to promote to queued.
+func scheduledStates(tasks []domain.TaskSpec) map[string]domain.TaskState {
+	states := make(map[string]domain.TaskState, len(tasks))
+	for _, t := range tasks {
+		states[t.TaskID] = domain.TaskStateScheduled
+	}
+	return states
+}
+
+// countQueued tallies the scheduled→queued promotions in a plan.
+func countQueued(transitions []PlannedTransition) int {
+	n := 0
+	for _, p := range transitions {
+		if p.To == domain.TaskStateQueued {
+			n++
+		}
+	}
+	return n
+}
+
+// TestPlanRunMaxActiveTasksGatesPromotion: a fan-out of T ready tasks under
+// max_active_tasks=k promotes exactly k to queued this tick; the rest stay
+// scheduled and are re-evaluated next tick (ADR 0053 Stage 1).
+func TestPlanRunMaxActiveTasksGatesPromotion(t *testing.T) {
+	tasks := independent(5)
+	run := RunState{Tasks: tasks, States: scheduledStates(tasks), MaxActiveTasks: 2}
+	if got := countQueued(PlanRun(run)); got != 2 {
+		t.Errorf("promoted %d tasks, want 2 (max_active_tasks cap)", got)
+	}
+}
+
+// TestPlanRunMaxActiveTasksCountsActiveSiblings: the cap is against the DAG-wide
+// count of already-active (queued+running) task instances (ActiveTaskCount), so
+// a DAG holding 2 active TIs under a cap of 3 admits only one more this tick.
+func TestPlanRunMaxActiveTasksCountsActiveSiblings(t *testing.T) {
+	tasks := independent(5)
+	run := RunState{Tasks: tasks, States: scheduledStates(tasks), MaxActiveTasks: 3, ActiveTaskCount: 2}
+	if got := countQueued(PlanRun(run)); got != 1 {
+		t.Errorf("promoted %d, want 1 (3 cap − 2 already active)", got)
+	}
+}
+
+// TestPlanRunMaxActiveTasksFullAdmitsNone: at the cap no scheduled task is
+// promoted; they stay parked until a sibling finishes and frees a slot.
+func TestPlanRunMaxActiveTasksFullAdmitsNone(t *testing.T) {
+	tasks := independent(4)
+	run := RunState{Tasks: tasks, States: scheduledStates(tasks), MaxActiveTasks: 2, ActiveTaskCount: 2}
+	if got := countQueued(PlanRun(run)); got != 0 {
+		t.Errorf("promoted %d, want 0 (DAG at max_active_tasks)", got)
+	}
+}
+
+// TestPlanRunMaxActiveTasksReleasesAsTasksFinish: once active TIs drain
+// (finished → terminal, no longer counted in ActiveTaskCount), headroom reopens
+// and the parked tasks promote on a later tick.
+func TestPlanRunMaxActiveTasksReleasesAsTasksFinish(t *testing.T) {
+	tasks := independent(4)
+	full := RunState{Tasks: tasks, States: scheduledStates(tasks), MaxActiveTasks: 2, ActiveTaskCount: 2}
+	if got := countQueued(PlanRun(full)); got != 0 {
+		t.Fatalf("full DAG promoted %d, want 0", got)
+	}
+	drained := RunState{Tasks: tasks, States: scheduledStates(tasks), MaxActiveTasks: 2, ActiveTaskCount: 0}
+	if got := countQueued(PlanRun(drained)); got != 2 {
+		t.Errorf("after tasks finished promoted %d, want 2", got)
+	}
+}
+
+// TestPlanRunMaxActiveTasksUnsetPromotesAll: an unset cap (0) is unlimited —
+// today's behavior — so every ready task promotes. This is the Lite-safety
+// invariant: a DAG that never sets max_active_tasks plans byte-identically.
+func TestPlanRunMaxActiveTasksUnsetPromotesAll(t *testing.T) {
+	tasks := independent(5)
+	run := RunState{Tasks: tasks, States: scheduledStates(tasks)} // MaxActiveTasks 0 = unlimited
+	if got := countQueued(PlanRun(run)); got != 5 {
+		t.Errorf("unset cap promoted %d, want all 5", got)
+	}
+}
+
+// TestPlanRunMaxActiveTasksNonPositiveUnlimited: a non-positive cap (defensive,
+// e.g. a hand-edited spec) also means unlimited — fail open, never lock a DAG out.
+func TestPlanRunMaxActiveTasksNonPositiveUnlimited(t *testing.T) {
+	tasks := independent(3)
+	run := RunState{Tasks: tasks, States: scheduledStates(tasks), MaxActiveTasks: -1}
+	if got := countQueued(PlanRun(run)); got != 3 {
+		t.Errorf("negative cap promoted %d, want all 3 (unlimited)", got)
 	}
 }

@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"math"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
@@ -36,6 +37,12 @@ func PlanRun(run RunState) []PlannedTransition {
 
 	out = append(out, planRetryTransitions(run, effective, decided)...)
 
+	// Admission gate (ADR 0053 Stage 1): headroom is how many scheduled tasks may
+	// still be promoted to queued for this DAG this tick under max_active_tasks;
+	// promoted tracks what we spend against it. An unset cap yields math.MaxInt,
+	// so the gate never trips and the loop behaves exactly as before.
+	headroom := admissionHeadroom(run)
+	promoted := 0
 	for _, t := range run.Tasks {
 		if decided[t.TaskID] {
 			continue
@@ -51,12 +58,38 @@ func PlanRun(run RunState) []PlannedTransition {
 			if !readyToDispatch(run, t.TaskID) {
 				continue
 			}
+			if promoted >= headroom {
+				// DAG is at max_active_tasks: leave the task scheduled so a
+				// finishing sibling frees a slot and a later tick promotes it —
+				// the same "park it, downstream waits" discipline the retry and
+				// reschedule rails use.
+				continue
+			}
 			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateQueued})
+			promoted++
 		default:
 			// queued/running/terminal/up_for_retry: nothing to plan here.
 		}
 	}
 	return out
+}
+
+// admissionHeadroom returns how many more of this DAG's scheduled tasks PlanRun
+// may promote to queued this tick under the per-DAG max_active_tasks cap (ADR
+// 0053 Stage 1). A non-positive cap means unlimited — the gate is a no-op, so an
+// unset DAG (and all of Lite, which never sets the field) plans byte-identically
+// to today; math.MaxInt is the "unbounded" sentinel the promotion loop compares
+// against. Otherwise it is the cap minus the DAG's already-active (queued+
+// running) task instances, floored at zero (never negative, so a DAG over its
+// cap simply admits nothing rather than wrapping).
+func admissionHeadroom(run RunState) int {
+	if run.MaxActiveTasks <= 0 {
+		return math.MaxInt
+	}
+	if headroom := run.MaxActiveTasks - run.ActiveTaskCount; headroom > 0 {
+		return headroom
+	}
+	return 0
 }
 
 // planRetryTransitions handles the retry/reschedule rail: a failed task with

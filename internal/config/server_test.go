@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -133,10 +134,58 @@ func TestServerConfigValidateRequiresJWTSecret(t *testing.T) {
 	}
 }
 
+// TestServerConfigValidateProviderAllowlist locks the auth.provider allowlist so
+// an unimplemented or misspelled provider fails closed at boot rather than
+// silently falling back to the JWT authenticator main.go always builds.
+func TestServerConfigValidateProviderAllowlist(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider string
+		secret   string
+		wantErr  bool
+	}{
+		{"unset defaults to jwt", "", "set", false},
+		{"jwt with secret", "jwt", "set", false},
+		{"jwt without secret", "jwt", "", true},
+		{"oidc known but unimplemented", "oidc", "set", true},
+		{"garbage unknown provider", "garbage", "set", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &ServerConfig{}
+			c.Auth.Provider = tc.provider
+			c.Auth.JWT.Secret = tc.secret
+			err := c.Validate()
+			if tc.wantErr && err == nil {
+				t.Errorf("provider %q secret %q: Validate() = nil, want error", tc.provider, tc.secret)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("provider %q secret %q: Validate() = %v, want nil", tc.provider, tc.secret, err)
+			}
+		})
+	}
+}
+
+// TestServerConfigValidateOIDCMessage locks the actionable hint for the known
+// but unimplemented oidc provider, so an operator is told to switch to jwt
+// rather than left guessing why boot failed.
+func TestServerConfigValidateOIDCMessage(t *testing.T) {
+	c := &ServerConfig{}
+	c.Auth.Provider = "oidc"
+	c.Auth.JWT.Secret = "set"
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil for oidc provider, want error")
+	}
+	if !strings.Contains(err.Error(), "not yet implemented") {
+		t.Errorf("oidc error = %q, want it to mention it is not yet implemented", err.Error())
+	}
+}
+
 func TestValidateRejectsDevNoAuthOnNonLoopback(t *testing.T) {
 	base := func() *ServerConfig {
 		c := &ServerConfig{}
-		c.Auth.Provider = "none" // skip the jwt-secret requirement
+		c.Auth.Provider = "jwt"
+		c.Auth.JWT.Secret = "set" // satisfy the jwt-secret requirement
 		c.Auth.DevNoAuth = true
 		return c
 	}

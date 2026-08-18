@@ -369,12 +369,27 @@ func LoadServer(configFile string, flags *pflag.FlagSet) (*ServerConfig, error) 
 	return &c, nil
 }
 
+// Auth providers (auth.provider allowlist). "jwt" is the only implemented
+// authenticator; "oidc" is a recognized-but-unimplemented value that is
+// rejected at boot rather than silently falling back to JWT.
+const (
+	// AuthProviderJWT is the only auth.provider main.go can build an
+	// Authenticator for today.
+	AuthProviderJWT = "jwt"
+	// AuthProviderOIDC is a declared future provider with no implementation;
+	// selecting it is a boot failure, not a silent JWT fallback.
+	AuthProviderOIDC = "oidc"
+)
+
 // Validate reports configuration errors that must abort startup.
 func (c *ServerConfig) Validate() error {
 	if err := c.validateRole(); err != nil {
 		return err
 	}
-	if c.Auth.Provider == "jwt" && c.Auth.JWT.Secret == "" {
+	if err := c.validateProvider(); err != nil {
+		return err
+	}
+	if c.Auth.Provider == AuthProviderJWT && c.Auth.JWT.Secret == "" {
 		return errors.New("auth.jwt.secret is required (set LEOFLOW_AUTH_JWT_SECRET)")
 	}
 	// auth.dev_no_auth disables authentication entirely; permit it only when the
@@ -398,6 +413,24 @@ func isLoopbackListenAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// validateProvider rejects an unknown or unimplemented auth.provider, failing
+// closed at boot instead of letting main.go build a JWTAuthenticator regardless
+// of what was configured. Empty is valid: serverDefaults sets auth.provider to
+// "jwt", so an unset provider in an existing config keeps defaulting to JWT and
+// is unaffected. "oidc" is recognized but has no implementation, so it is
+// rejected with an actionable hint rather than a silent JWT fallback.
+func (c *ServerConfig) validateProvider() error {
+	switch c.Auth.Provider {
+	case "", AuthProviderJWT:
+		return nil
+	case AuthProviderOIDC:
+		return errors.New("auth.provider: oidc is declared but not yet implemented; set provider: jwt")
+	default:
+		return fmt.Errorf("invalid auth.provider %q: must be %q (or empty = %q)",
+			c.Auth.Provider, AuthProviderJWT, AuthProviderJWT)
+	}
 }
 
 // validateRole rejects an unknown server.role (ADR 0049). Empty is valid (defaults

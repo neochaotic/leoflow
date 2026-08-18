@@ -20,25 +20,26 @@ type transition struct {
 }
 
 type fakeStore struct {
-	runs               []RunState
-	materialize        []string
-	transitions        []transition
-	retried            []transition
-	resetInfra         []transition
-	redispatched       []transition
-	runStates          map[string]domain.DagRunState
-	scheduled          []ScheduledDAG
-	createdRuns        []string
-	notes              map[string]string
-	reapCands          []ReapCandidate
-	reaped             []string
-	createErr          bool
-	agentLostCands     []AgentLostCandidate
-	agentLostMarked    []string
-	staleQueuedCands   []StaleQueuedCandidate
-	dispatchLostMarked []string
-	dispatchFailures   []transition
-	dispatchExhausted  []string
+	runs                 []RunState
+	materialize          []string
+	transitions          []transition
+	retried              []transition
+	resetInfra           []transition
+	redispatched         []transition
+	runStates            map[string]domain.DagRunState
+	scheduled            []ScheduledDAG
+	createdRuns          []string
+	notes                map[string]string
+	reapCands            []ReapCandidate
+	reaped               []string
+	createErr            bool
+	agentLostCands       []AgentLostCandidate
+	agentLostMarked      []string
+	staleQueuedCands     []StaleQueuedCandidate
+	dispatchLostMarked   []string
+	dispatchFailures     []transition
+	dispatchBackpressure []transition
+	dispatchExhausted    []string
 	// alertAttempts mirrors the real per-episode attempt claim: each call
 	// consumes one, and the claim is refused once the budget is spent or the
 	// episode is already delivered. Backoff is not simulated — the fake is for
@@ -91,6 +92,11 @@ func (f *fakeStore) ResetForInfraReplace(_ context.Context, runID, taskID string
 }
 func (f *fakeStore) RecordDispatchFailure(_ context.Context, runID, taskID string, _ time.Time) error {
 	f.dispatchFailures = append(f.dispatchFailures, transition{runID, taskID, ""})
+	return nil
+}
+
+func (f *fakeStore) RecordDispatchBackpressure(_ context.Context, runID, taskID string, _ time.Time) error {
+	f.dispatchBackpressure = append(f.dispatchBackpressure, transition{runID, taskID, ""})
 	return nil
 }
 

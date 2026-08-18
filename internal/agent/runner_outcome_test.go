@@ -167,6 +167,45 @@ func TestRunnerSuccessPathPushFailureWritesFailedRecord(t *testing.T) {
 	}
 }
 
+// TestRunnerBeforeReportHookFiresAfterRecordBeforeReport locks the fault-injection
+// seam the ADR 0052 E2E relies on: BeforeReport is invoked with the terminal state
+// after the durable record is on disk but before the report is delivered — so the
+// E2E can simulate a pod killed mid-report with the record already written.
+func TestRunnerBeforeReportHookFiresAfterRecordBeforeReport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "termination-log")
+	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:ok"}}
+	r := newRunner(client, &fakeCmd{exitCode: 0}, &recordingSink{})
+	r.TerminationLogPath = path
+
+	var gotState agentv1.TaskState
+	var recordOnDisk, reportSeenYet bool
+	r.BeforeReport = func(state agentv1.TaskState) {
+		gotState = state
+		if _, err := os.Stat(path); err == nil {
+			recordOnDisk = true
+		}
+		// Only the RUNNING report has been sent by now; the terminal SUCCESS report
+		// is what this hook precedes.
+		for _, rep := range client.reports {
+			if rep.GetState() == agentv1.TaskState_TASK_STATE_SUCCESS {
+				reportSeenYet = true
+			}
+		}
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if gotState != agentv1.TaskState_TASK_STATE_SUCCESS {
+		t.Errorf("hook state = %v, want SUCCESS", gotState)
+	}
+	if !recordOnDisk {
+		t.Error("the outcome record must be on disk before BeforeReport fires")
+	}
+	if reportSeenYet {
+		t.Error("the SUCCESS report must NOT have been delivered before BeforeReport fires")
+	}
+}
+
 // TestRunnerRunningStateWritesNoRecord: a non-terminal RUNNING report must never
 // write an outcome record — only the terminal states carry a durable outcome.
 func TestRunnerRunningStateWritesNoRecord(t *testing.T) {

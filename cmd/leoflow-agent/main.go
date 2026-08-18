@@ -15,6 +15,7 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/agent"
 	"github.com/neochaotic/leoflow/internal/version"
+	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
 
 // usage is printed for `--help`. leoflow-agent takes no positional args; it is
@@ -104,6 +105,19 @@ func run() int {
 		// message), set by the executor's podEnv; empty outside a pod (ADR 0052).
 		TerminationLogPath: os.Getenv("LEOFLOW_TERMINATION_LOG_PATH"),
 		HeartbeatInterval:  15 * time.Second,
+	}
+	// Fault-injection seam for the durable-outcome chaos E2E (ADR 0052): when a DAG
+	// sets LEOFLOW_CHAOS_DIE_BEFORE_REPORT to a task state, the agent writes the
+	// outcome record and then exits without delivering the report — simulating a pod
+	// killed mid-report (OOM/eviction) with the record already on disk. Never set in
+	// production; the reconciler must then recover the outcome from the record.
+	if want := os.Getenv("LEOFLOW_CHAOS_DIE_BEFORE_REPORT"); want != "" {
+		runner.BeforeReport = func(state agentv1.TaskState) {
+			if state.String() == want {
+				slog.Warn("chaos: exiting before report to simulate a pod killed mid-report", "state", state.String())
+				os.Exit(137)
+			}
+		}
 	}
 	if rerr := runner.Run(ctx); rerr != nil {
 		slog.Error("task failed", "error", rerr)

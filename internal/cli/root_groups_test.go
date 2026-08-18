@@ -24,6 +24,8 @@ func TestRootCommandsHaveGroups(t *testing.T) {
 		"dags": "inspection",
 		"runs": "inspection",
 		"auth": "inspection",
+		// Operations — operate a running control plane.
+		"admin": "operations",
 		// Lifecycle — install, configure, repair, version, retire the host.
 		"setup":     "lifecycle",
 		"doctor":    "lifecycle",
@@ -44,11 +46,11 @@ func TestRootCommandsHaveGroups(t *testing.T) {
 	}
 }
 
-// TestRootDefinesFourGroups pins the group set itself so a typo in a GroupID
+// TestRootDefinesGroups pins the group set itself so a typo in a GroupID
 // fails the GROUP definition, not the assignment.
-func TestRootDefinesFourGroups(t *testing.T) {
+func TestRootDefinesGroups(t *testing.T) {
 	root := NewRootCommand()
-	want := map[string]bool{"authoring": false, "runtime": false, "inspection": false, "lifecycle": false}
+	want := map[string]bool{"authoring": false, "runtime": false, "inspection": false, "operations": false, "lifecycle": false}
 	for _, g := range root.Groups() {
 		if _, ok := want[g.ID]; ok {
 			want[g.ID] = true

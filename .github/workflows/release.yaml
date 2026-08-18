@@ -19,6 +19,7 @@ jobs:
   release:
     name: Build, sign, publish
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write   # GoReleaser creates the GitHub release.
       packages: write   # Push the leoflow-server image to GHCR.
@@ -79,6 +80,7 @@ jobs:
     name: Build + push leoflow-migrate image
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -157,6 +159,7 @@ jobs:
     name: Build + push leoflow-runtime base (py${{ matrix.python }})
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -235,6 +238,7 @@ jobs:
     name: Install smoke (${{ matrix.image }})
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     container: ${{ matrix.image }}
     defaults:
       run:
@@ -243,8 +247,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { image: "debian:12", prep: "apt-get update -qq && apt-get install -y -qq curl ca-certificates tar" }
-          - { image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y -qq curl ca-certificates tar" }
+          - { image: "debian:12", prep: "apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq curl ca-certificates tar" }
+          - { image: "ubuntu:24.04", prep: "apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq curl ca-certificates tar" }
           - { image: "fedora:41", prep: "dnf install -y -q tar curl --allowerasing" }
           - { image: "quay.io/rockylinux/rockylinux:9", prep: "dnf install -y -q tar curl --allowerasing" }
           - { image: "opensuse/leap:15", prep: "zypper --no-gpg-checks -n in -y curl tar gzip" }
@@ -285,6 +289,7 @@ jobs:
     name: Lite cold-start (boot + /readyz, docker PG)
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Install Leoflow via the published install.sh
         env:
@@ -337,20 +342,21 @@ jobs:
     name: Upgrade smoke (previous → ${{ github.ref_name }})
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     container: ubuntu:24.04
     steps:
       - name: Install prerequisites
         run: |
-          apt-get update -qq
-          apt-get install -y -qq curl ca-certificates tar git
+          apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq
+          apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq curl ca-certificates tar git
           # gh CLI for release listing
           mkdir -p /etc/apt/keyrings
           chmod 755 /etc/apt/keyrings
           out=$(mktemp) && curl -sL https://cli.github.com/packages/githubcli-archive-keyring.gpg > "$out" && cat "$out" > /etc/apt/keyrings/githubcli-archive-keyring.gpg
           chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-          apt-get update -qq
-          apt-get install -y -qq gh
+          apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq
+          apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq gh
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run upgrade smoke
         env:
@@ -370,6 +376,7 @@ jobs:
     needs: [release, install-smoke, lite-cold-start-smoke, upgrade-smoke, migrate-image, runtime-image]
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write   # Edit the published release back to a draft on failure.
     steps:

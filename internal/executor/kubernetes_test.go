@@ -119,6 +119,198 @@ func TestBuildPodPinsTerminationMessagePolicy(t *testing.T) {
 	}
 }
 
+// TestBuildPodAppliesPriorityClassName locks the shared-cluster preemption knob
+// (ADR 0054): a declared PriorityClassName must land on the PodSpec so the
+// scheduler preempts Leoflow's ETL, not production, under contention.
+func TestBuildPodAppliesPriorityClassName(t *testing.T) {
+	req := sampleReq()
+	req.Execution.PriorityClassName = "leoflow-batch"
+	if got := BuildPod(req).Spec.PriorityClassName; got != "leoflow-batch" {
+		t.Errorf("PriorityClassName = %q, want leoflow-batch", got)
+	}
+	// Omission stays the empty zero value (byte-identical to today).
+	if got := BuildPod(sampleReq()).Spec.PriorityClassName; got != "" {
+		t.Errorf("PriorityClassName = %q, want empty when none declared", got)
+	}
+}
+
+// TestBuildPodAppliesTerminationGracePeriod asserts a declared grace period lands
+// on the PodSpec, and omission leaves it nil (cluster default).
+func TestBuildPodAppliesTerminationGracePeriod(t *testing.T) {
+	req := sampleReq()
+	req.Execution.TerminationGracePeriodSeconds = ptr(int64(45))
+	got := BuildPod(req).Spec.TerminationGracePeriodSeconds
+	if got == nil || *got != 45 {
+		t.Errorf("TerminationGracePeriodSeconds = %v, want 45", got)
+	}
+	if got := BuildPod(sampleReq()).Spec.TerminationGracePeriodSeconds; got != nil {
+		t.Errorf("TerminationGracePeriodSeconds = %v, want nil when none declared", got)
+	}
+}
+
+// TestBuildPodAppliesRuntimeClassName asserts a declared RuntimeClassName lands on
+// the PodSpec (e.g. a sandboxed or GPU runtime), and omission leaves it nil.
+func TestBuildPodAppliesRuntimeClassName(t *testing.T) {
+	req := sampleReq()
+	req.Execution.RuntimeClassName = ptr("gvisor")
+	got := BuildPod(req).Spec.RuntimeClassName
+	if got == nil || *got != "gvisor" {
+		t.Errorf("RuntimeClassName = %v, want gvisor", got)
+	}
+	if got := BuildPod(sampleReq()).Spec.RuntimeClassName; got != nil {
+		t.Errorf("RuntimeClassName = %v, want nil when none declared", got)
+	}
+}
+
+// TestBuildPodAppliesTopologySpreadConstraints locks the JSON round-trip of the
+// untyped spread constraints onto typed pod constraints. A malformed entry is
+// skipped, and omission stays nil.
+func TestBuildPodAppliesTopologySpreadConstraints(t *testing.T) {
+	req := sampleReq()
+	req.Execution.TopologySpreadConstraints = []map[string]any{
+		{
+			"maxSkew":           1,
+			"topologyKey":       "topology.kubernetes.io/zone",
+			"whenUnsatisfiable": "DoNotSchedule",
+			"labelSelector":     map[string]any{"matchLabels": map[string]any{"leoflow.io/dag-id": "etl"}},
+		},
+	}
+	tscs := BuildPod(req).Spec.TopologySpreadConstraints
+	if len(tscs) != 1 {
+		t.Fatalf("topologySpreadConstraints = %v, want 1", tscs)
+	}
+	if tscs[0].MaxSkew != 1 || tscs[0].TopologyKey != "topology.kubernetes.io/zone" ||
+		tscs[0].WhenUnsatisfiable != corev1.DoNotSchedule {
+		t.Errorf("topologySpreadConstraints[0] = %+v", tscs[0])
+	}
+	if tscs[0].LabelSelector == nil || tscs[0].LabelSelector.MatchLabels["leoflow.io/dag-id"] != "etl" {
+		t.Errorf("labelSelector not round-tripped: %+v", tscs[0].LabelSelector)
+	}
+	// Omission stays nil.
+	if tscs := BuildPod(sampleReq()).Spec.TopologySpreadConstraints; tscs != nil {
+		t.Errorf("topologySpreadConstraints = %v, want nil when none declared", tscs)
+	}
+}
+
+// TestBuildPodAppliesAffinity locks the JSON round-trip of the untyped affinity
+// object onto *corev1.Affinity, and asserts omission stays nil.
+func TestBuildPodAppliesAffinity(t *testing.T) {
+	req := sampleReq()
+	req.Execution.Affinity = map[string]any{
+		"nodeAffinity": map[string]any{
+			"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+				"nodeSelectorTerms": []any{
+					map[string]any{
+						"matchExpressions": []any{
+							map[string]any{"key": "accelerator", "operator": "In", "values": []any{"gpu"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	aff := BuildPod(req).Spec.Affinity
+	if aff == nil || aff.NodeAffinity == nil || aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		t.Fatalf("affinity not round-tripped: %+v", aff)
+	}
+	terms := aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || len(terms[0].MatchExpressions) != 1 || terms[0].MatchExpressions[0].Key != "accelerator" {
+		t.Errorf("nodeAffinity term = %+v", terms)
+	}
+	// Omission stays nil.
+	if aff := BuildPod(sampleReq()).Spec.Affinity; aff != nil {
+		t.Errorf("affinity = %v, want nil when none declared", aff)
+	}
+}
+
+// TestBuildPodAppliesResourceClaims locks Dynamic Resource Allocation passthrough
+// (DRA, GA in Kubernetes 1.34): pod-level ResourceClaims and the container's
+// resources.claims that reference them, both round-tripped from the untyped spec.
+func TestBuildPodAppliesResourceClaims(t *testing.T) {
+	req := sampleReq()
+	req.Execution.ResourceClaims = []map[string]any{
+		{"name": "gpu", "resourceClaimTemplateName": "single-gpu"},
+	}
+	req.Resources.Claims = []map[string]any{
+		{"name": "gpu", "request": "gpu-req"},
+	}
+	pod := BuildPod(req)
+	claims := pod.Spec.ResourceClaims
+	if len(claims) != 1 || claims[0].Name != "gpu" ||
+		claims[0].ResourceClaimTemplateName == nil || *claims[0].ResourceClaimTemplateName != "single-gpu" {
+		t.Fatalf("pod resourceClaims = %+v", claims)
+	}
+	cclaims := pod.Spec.Containers[0].Resources.Claims
+	if len(cclaims) != 1 || cclaims[0].Name != "gpu" || cclaims[0].Request != "gpu-req" {
+		t.Errorf("container resources.claims = %+v", cclaims)
+	}
+	// Omission stays nil on both.
+	base := BuildPod(sampleReq())
+	if base.Spec.ResourceClaims != nil {
+		t.Errorf("pod resourceClaims = %v, want nil when none declared", base.Spec.ResourceClaims)
+	}
+	if base.Spec.Containers[0].Resources.Claims != nil {
+		t.Errorf("container resources.claims = %v, want nil when none declared", base.Spec.Containers[0].Resources.Claims)
+	}
+}
+
+// TestBuildPodAppliesEphemeralStorage asserts ephemeral-storage requests/limits
+// reach the container ResourceList, so a runaway task cannot evict its neighbors
+// under disk pressure (ADR 0054). Omission leaves the key absent.
+func TestBuildPodAppliesEphemeralStorage(t *testing.T) {
+	req := sampleReq()
+	req.Resources = domain.Resources{
+		Requests: &domain.ResourceQuantity{CPU: "500m", Memory: "512Mi", EphemeralStorage: "1Gi"},
+		Limits:   &domain.ResourceQuantity{EphemeralStorage: "2Gi"},
+	}
+	c := BuildPod(req).Spec.Containers[0]
+	if got := c.Resources.Requests[corev1.ResourceEphemeralStorage]; got.String() != "1Gi" {
+		t.Errorf("requests ephemeral-storage = %q, want 1Gi", got.String())
+	}
+	if got := c.Resources.Limits[corev1.ResourceEphemeralStorage]; got.String() != "2Gi" {
+		t.Errorf("limits ephemeral-storage = %q, want 2Gi", got.String())
+	}
+	// Omission: sampleReq declares no ephemeral-storage, so the key is absent.
+	base := BuildPod(sampleReq()).Spec.Containers[0]
+	if _, ok := base.Resources.Requests[corev1.ResourceEphemeralStorage]; ok {
+		t.Error("ephemeral-storage present when none declared")
+	}
+}
+
+// TestBuildPodMergesLabelsAndAnnotations asserts operator-declared labels and
+// annotations are merged onto the task pod, but Leoflow's own leoflow.io/* labels
+// and the task-instance-id annotation win any key collision — a DAG must not be
+// able to shadow the identity the reconciler and terminate path select on.
+func TestBuildPodMergesLabelsAndAnnotations(t *testing.T) {
+	req := sampleReq()
+	req.Execution.Labels = map[string]string{
+		"team":              "data-eng",
+		"leoflow.io/dag-id": "hijacked", // collision: Leoflow must win
+	}
+	req.Execution.Annotations = map[string]string{
+		"cost-center":                 "1234",
+		"leoflow.io/task-instance-id": "hijacked", // collision: Leoflow must win
+	}
+	pod := BuildPod(req)
+	if pod.Labels["team"] != "data-eng" {
+		t.Errorf("declared label not merged: %v", pod.Labels)
+	}
+	if pod.Labels["leoflow.io/dag-id"] != "etl" {
+		t.Errorf("Leoflow label overridden by DAG: %q, want etl", pod.Labels["leoflow.io/dag-id"])
+	}
+	if pod.Annotations["cost-center"] != "1234" {
+		t.Errorf("declared annotation not merged: %v", pod.Annotations)
+	}
+	if pod.Annotations["leoflow.io/task-instance-id"] != "ti-1" {
+		t.Errorf("Leoflow annotation overridden by DAG: %q, want ti-1", pod.Annotations["leoflow.io/task-instance-id"])
+	}
+	// Omission leaves only Leoflow's own metadata (5 labels, 1 annotation).
+	base := BuildPod(sampleReq())
+	if len(base.Labels) != 5 || len(base.Annotations) != 1 {
+		t.Errorf("unexpected base metadata: labels=%v annotations=%v", base.Labels, base.Annotations)
+	}
+}
+
 func TestBuildPodMountsStagingVolume(t *testing.T) {
 	// Without a staging claim, no extra volume is added.
 	if vols := BuildPod(sampleReq()).Spec.Volumes; len(vols) != 0 {

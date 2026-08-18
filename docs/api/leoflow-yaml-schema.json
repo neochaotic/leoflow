@@ -207,7 +207,8 @@
                 "type": "object",
                 "properties": {
                   "cpu": { "type": "string" },
-                  "memory": { "type": "string" }
+                  "memory": { "type": "string" },
+                  "ephemeral_storage": { "type": "string", "description": "Node-local scratch limit, e.g. '2Gi' (ADR 0054)." }
                 },
                 "additionalProperties": false
               },
@@ -215,9 +216,15 @@
                 "type": "object",
                 "properties": {
                   "cpu": { "type": "string" },
-                  "memory": { "type": "string" }
+                  "memory": { "type": "string" },
+                  "ephemeral_storage": { "type": "string", "description": "Node-local scratch limit, e.g. '2Gi' (ADR 0054)." }
                 },
                 "additionalProperties": false
+              },
+              "claims": {
+                "type": "array",
+                "description": "Dynamic Resource Allocation: the pod-level resource_claims this container consumes (DRA, GA in Kubernetes 1.34).",
+                "items": { "type": "object" }
               }
             },
             "additionalProperties": false
@@ -231,7 +238,15 @@
               },
               "tolerations": { "type": "array" },
               "service_account": { "type": "string" },
-              "image_pull_policy": { "type": "string" }
+              "image_pull_policy": { "type": "string" },
+              "priority_class_name": { "type": "string", "description": "Ranks the task pod against neighbors on a shared cluster; the PriorityClass is platform-owned (ADR 0054)." },
+              "termination_grace_period_seconds": { "type": "integer", "minimum": 0, "description": "Seconds to shut down before SIGKILL; omit for the cluster default." },
+              "runtime_class_name": { "type": "string", "description": "Alternate container runtime registered as a RuntimeClass (e.g. sandboxed/GPU)." },
+              "topology_spread_constraints": { "type": "array", "description": "Spread task pods across failure domains; Kubernetes TopologySpreadConstraint entries." },
+              "affinity": { "type": "object", "description": "Node/pod affinity and anti-affinity; a Kubernetes Affinity object." },
+              "resource_claims": { "type": "array", "description": "Pod-level ResourceClaims for Dynamic Resource Allocation (DRA, GA in Kubernetes 1.34)." },
+              "labels": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Pod labels merged onto the task pod; Leoflow's leoflow.io/* labels win collisions." },
+              "annotations": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Pod annotations merged onto the task pod; Leoflow's task-instance-id annotation wins collisions." }
             },
             "additionalProperties": false
           }

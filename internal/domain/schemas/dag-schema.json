@@ -256,13 +256,20 @@
             },
             "limits": {
               "$ref": "#/$defs/resource_quantity"
+            },
+            "claims": {
+              "type": "array",
+              "description": "Dynamic Resource Allocation (DRA, GA in Kubernetes 1.34): the pod-level resource_claims this container consumes. Each entry names a claim (and optionally a request within it) declared in execution.resource_claims.",
+              "items": {
+                "type": "object"
+              }
             }
           },
           "additionalProperties": false
         },
         "execution": {
           "type": "object",
-          "description": "Executor-specific hints. Ignored if the chosen executor does not support them.",
+          "description": "Executor-specific placement and scheduling hints. Applied only by the Kubernetes executor; ignored by Lite (subprocess, no pods).",
           "properties": {
             "node_selector": {
               "type": "object",
@@ -287,6 +294,51 @@
                 "Never"
               ],
               "default": "IfNotPresent"
+            },
+            "priority_class_name": {
+              "type": "string",
+              "description": "Ranks this task pod against neighbors on a shared cluster; the named PriorityClass is platform-owned and cluster-scoped (ADR 0054)."
+            },
+            "termination_grace_period_seconds": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Seconds the pod is given to shut down before SIGKILL. Omit for the cluster default (30s)."
+            },
+            "runtime_class_name": {
+              "type": "string",
+              "description": "Selects an alternate container runtime (e.g. a sandboxed or GPU runtime) registered as a RuntimeClass."
+            },
+            "topology_spread_constraints": {
+              "type": "array",
+              "description": "Spread a DAG's task pods across failure domains (zones, nodes). Each entry is a Kubernetes TopologySpreadConstraint.",
+              "items": {
+                "type": "object"
+              }
+            },
+            "affinity": {
+              "type": "object",
+              "description": "Pins or repels a task pod relative to nodes and other pods (node/pod affinity and anti-affinity). A Kubernetes Affinity object."
+            },
+            "resource_claims": {
+              "type": "array",
+              "description": "Pod-level ResourceClaims for Dynamic Resource Allocation (DRA, GA in Kubernetes 1.34) — e.g. a GPU from a claim template. Each entry is a Kubernetes PodResourceClaim; a container consumes one via resources.claims.",
+              "items": {
+                "type": "object"
+              }
+            },
+            "labels": {
+              "type": "object",
+              "description": "Operator-declared pod labels merged onto the task pod. Leoflow's own leoflow.io/* labels win any key collision.",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "annotations": {
+              "type": "object",
+              "description": "Operator-declared pod annotations merged onto the task pod. Leoflow's own task-instance-id annotation wins any key collision.",
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           }
         },
@@ -350,6 +402,10 @@
         "memory": {
           "type": "string",
           "description": "Kubernetes-style: '512Mi', '2Gi'."
+        },
+        "ephemeral_storage": {
+          "type": "string",
+          "description": "Kubernetes-style node-local scratch limit, e.g. '2Gi'. Bounds writable-layer/emptyDir/log usage so a runaway task cannot evict neighbors under disk pressure (ADR 0054)."
         }
       },
       "additionalProperties": false

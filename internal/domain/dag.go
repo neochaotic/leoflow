@@ -153,20 +153,67 @@ type Secret struct {
 type Resources struct {
 	Requests *ResourceQuantity `json:"requests,omitempty" yaml:"requests,omitempty"`
 	Limits   *ResourceQuantity `json:"limits,omitempty" yaml:"limits,omitempty"`
+	// Claims lists the ResourceClaims (declared in Execution.ResourceClaims) this
+	// task's container consumes — the container half of Dynamic Resource Allocation
+	// (DRA, GA in Kubernetes 1.34). Untyped []map[string]any carried verbatim from
+	// the DAG spec; the executor round-trips it to []corev1.ResourceClaim. Each
+	// entry names a claim (and optionally a specific request within it) that makes
+	// an accelerator available inside the container.
+	Claims []map[string]any `json:"claims,omitempty" yaml:"claims,omitempty"`
 }
 
-// ResourceQuantity expresses CPU and memory in Kubernetes notation.
+// ResourceQuantity expresses CPU, memory, and ephemeral-storage in Kubernetes
+// notation.
 type ResourceQuantity struct {
 	CPU    string `json:"cpu,omitempty" yaml:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty" yaml:"memory,omitempty"`
+	// EphemeralStorage bounds the node-local scratch (writable layer, emptyDir,
+	// logs) a task may use. Setting it keeps a runaway task from filling a shared
+	// node's disk and evicting its neighbors under disk pressure (ADR 0054).
+	// Kubernetes quantity, e.g. "2Gi".
+	EphemeralStorage string `json:"ephemeral_storage,omitempty" yaml:"ephemeral_storage,omitempty"`
 }
 
-// Execution carries executor-specific placement hints for a task.
+// Execution carries executor-specific placement and scheduling hints for a task.
+// Every field beyond NodeSelector/Tolerations/ServiceAccount is applied only by
+// the Kubernetes executor; Lite (subprocess, no pods) ignores them.
 type Execution struct {
 	NodeSelector    map[string]string `json:"node_selector,omitempty" yaml:"node_selector,omitempty"`
 	Tolerations     []map[string]any  `json:"tolerations,omitempty" yaml:"tolerations,omitempty"`
 	ServiceAccount  string            `json:"service_account,omitempty" yaml:"service_account,omitempty"`
 	ImagePullPolicy string            `json:"image_pull_policy,omitempty" yaml:"image_pull_policy,omitempty"`
+
+	// PriorityClassName ranks this task pod against its neighbors on a shared
+	// cluster; the named PriorityClass is a platform-owned, cluster-scoped object,
+	// so under genuine contention the scheduler preempts Leoflow's ETL rather than
+	// production services (ADR 0054).
+	PriorityClassName string `json:"priority_class_name,omitempty" yaml:"priority_class_name,omitempty"`
+	// TerminationGracePeriodSeconds is how long the pod is given to shut down after
+	// a delete/preempt before SIGKILL. Nil leaves the cluster default (30s).
+	TerminationGracePeriodSeconds *int64 `json:"termination_grace_period_seconds,omitempty" yaml:"termination_grace_period_seconds,omitempty"`
+	// RuntimeClassName selects an alternate container runtime (e.g. a sandboxed or
+	// GPU runtime) registered as a RuntimeClass. Nil uses the cluster default.
+	RuntimeClassName *string `json:"runtime_class_name,omitempty" yaml:"runtime_class_name,omitempty"`
+	// TopologySpreadConstraints spread a DAG's task pods across failure domains
+	// (zones, nodes). Untyped []map[string]any carried verbatim from the DAG spec;
+	// the executor round-trips it to []corev1.TopologySpreadConstraint.
+	TopologySpreadConstraints []map[string]any `json:"topology_spread_constraints,omitempty" yaml:"topology_spread_constraints,omitempty"`
+	// Affinity pins or repels a task pod relative to nodes and other pods
+	// (node/pod affinity and anti-affinity). Untyped map[string]any carried verbatim
+	// from the DAG spec; the executor round-trips it to *corev1.Affinity.
+	Affinity map[string]any `json:"affinity,omitempty" yaml:"affinity,omitempty"`
+	// ResourceClaims declares the pod-level ResourceClaims (Dynamic Resource
+	// Allocation, GA in Kubernetes 1.34) an accelerator DAG needs — e.g. a GPU from
+	// a claim template. Untyped []map[string]any carried verbatim from the DAG spec;
+	// the executor round-trips it to []corev1.PodResourceClaim. A container consumes
+	// one by naming it in Resources.Claims.
+	ResourceClaims []map[string]any `json:"resource_claims,omitempty" yaml:"resource_claims,omitempty"`
+	// Labels and Annotations are operator-declared pod metadata merged onto the task
+	// pod. Leoflow's own leoflow.io/* labels and the task-instance-id annotation win
+	// any key collision (the reconciler and terminate path select on them), so a DAG
+	// cannot shadow them.
+	Labels      map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
 }
 
 // EffectiveExecutionMode returns the task's execution mode, defaulting to pod
@@ -236,6 +283,7 @@ func (d *DAGSpec) validateResourceQuantities() error {
 			for _, f := range []struct{ name, value string }{
 				{"cpu", q.val.CPU},
 				{"memory", q.val.Memory},
+				{"ephemeral-storage", q.val.EphemeralStorage},
 			} {
 				if f.value == "" {
 					continue

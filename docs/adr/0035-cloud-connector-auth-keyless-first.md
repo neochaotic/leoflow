@@ -70,7 +70,11 @@ cloud key.
 5. **No cloud SDK in the Go control plane.** Connection validation is
    **structural only** (check the key shape, or report keyless); the token
    exchange happens in the task. Keeps core connector-agnostic and avoids a Go
-   cloud-SDK supply-chain surface (consistent with ADR 0014).
+   cloud-SDK supply-chain surface (consistent with ADR 0014). *Scope: this rule
+   is about **connector credential resolution**. ADR 0056 carves a narrow
+   exception for the **task-log object sink** — operator infrastructure that may
+   use a cloud SDK in core with the pod's keyless identity, since it is not
+   connector auth and does not make core a key manager.*
 
 6. **v1 scope.** Handle `keyfile_dict`, `key_path` (mounted K8s Secret via the
    chart's `taskSecret`), `key_secret_name` (GCP Secret Manager, fetched in the

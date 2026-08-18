@@ -11,15 +11,18 @@ import (
 )
 
 // ErrObjectNotFound reports that an object-store sink holds no stored log for a
-// Ref. Backends translate their own not-found signal (S3 NoSuchKey, a missing
-// in-memory entry) into this sentinel so the read path maps it uniformly.
+// Ref. Backends translate their own not-found signal (S3 NoSuchKey, GCS
+// ErrObjectNotExist, a missing in-memory entry) into this sentinel so the read
+// path maps it uniformly.
 var ErrObjectNotFound = errors.New("log object not found")
 
 // ObjectStore is the minimal object-store API the ObjectSink needs: write a
 // whole object under a key, and read one back. It is deliberately tiny so the
-// sink is testable against an in-memory fake, and so any S3-compatible backend
-// (AWS S3, Google Cloud Storage via its S3 interop endpoint, MinIO) can satisfy
-// it. Implementations target a single, pre-configured bucket.
+// sink is testable against an in-memory fake, and so any backend can satisfy it
+// with its own native SDK — the S3 backend (AWS S3, MinIO, Ceph RGW via
+// aws-sdk-go-v2) and the GCS backend (Google Cloud Storage via its native SDK).
+// Each provider keeps its own keyless auth path this way. Implementations target
+// a single, pre-configured bucket.
 type ObjectStore interface {
 	Put(ctx context.Context, key string, r io.Reader) error
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
@@ -112,19 +115,20 @@ func (w *objectWriter) Close() error {
 // NewDurableSink selects the durable log sink from configuration. The default —
 // an empty or "disk" backend — returns a DiskSink rooted at dir, so Lite and
 // every deployment that does not opt in keep the exact on-disk behavior. The
-// "object" backend returns an ObjectSink over store (which the caller builds
-// from the configured bucket/endpoint/credentials) and requires a non-nil
-// store. An unknown backend is rejected rather than silently falling back.
+// "s3" and "gcs" backends return an ObjectSink over store (which the caller
+// builds with the matching native SDK from the configured bucket/credentials)
+// and require a non-nil store. An unknown backend is rejected rather than
+// silently falling back.
 func NewDurableSink(ctx context.Context, backend, dir string, store ObjectStore, prefix string) (Sink, error) {
 	switch backend {
 	case "", "disk":
 		return NewDiskSink(dir), nil
-	case "object":
+	case "s3", "gcs":
 		if store == nil {
-			return nil, errors.New("object log backend requires an object store")
+			return nil, fmt.Errorf("%s log backend requires an object store", backend)
 		}
 		return NewObjectSink(ctx, store, prefix), nil
 	default:
-		return nil, fmt.Errorf("unknown log backend %q (want \"disk\" or \"object\")", backend)
+		return nil, fmt.Errorf("unknown log backend %q (want \"disk\", \"s3\" or \"gcs\")", backend)
 	}
 }

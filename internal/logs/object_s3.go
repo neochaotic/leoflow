@@ -15,17 +15,19 @@ import (
 )
 
 // S3Config configures the S3-compatible object store backing an ObjectSink. It
-// targets AWS S3, Google Cloud Storage (via its S3 interop endpoint), and any
-// S3-compatible store (MinIO, Ceph RGW). Keyless is the default (ADR 0035):
+// targets AWS S3 and any S3-compatible store (MinIO, Ceph RGW). Google Cloud
+// Storage is NOT reached through here — it has its own native backend (GCSStore)
+// because the S3 interop endpoint requires HMAC keys and cannot use Workload
+// Identity, which would forfeit keyless auth. Keyless is the default (ADR 0035):
 // leave AccessKeyID/SecretAccessKey empty to use the ambient credential chain
-// (IRSA / instance profile / GKE Workload Identity + HMAC / env). Static keys
-// are a discouraged escape hatch for dev and stores without an identity broker.
+// (IRSA / instance profile / env). Static keys are a discouraged escape hatch
+// for dev and stores without an identity broker.
 type S3Config struct {
 	// Bucket is the target bucket. Required.
 	Bucket string
 	// Region is the store region. Required by AWS S3; ignored by some stores.
 	Region string
-	// Endpoint overrides the S3 endpoint (GCS interop, MinIO). Empty = AWS default.
+	// Endpoint overrides the S3 endpoint (MinIO, Ceph RGW). Empty = AWS default.
 	Endpoint string
 	// ForcePathStyle uses path-style addressing (needed by MinIO and some stores).
 	ForcePathStyle bool
@@ -42,7 +44,7 @@ type S3Store struct {
 
 // NewS3Store builds an S3Store from cfg. It loads the ambient AWS configuration
 // (region + keyless credential chain) and, when set, overrides the endpoint (for
-// GCS interop / MinIO), forces path-style addressing, and installs static
+// MinIO / Ceph RGW), forces path-style addressing, and installs static
 // credentials. No network call is made here; credential resolution and any
 // failure surface on the first Put/Get.
 func NewS3Store(ctx context.Context, cfg S3Config) (*S3Store, error) {

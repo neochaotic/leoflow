@@ -182,18 +182,22 @@ func TestNewDurableSinkDefaultsToDisk(t *testing.T) {
 }
 
 func TestNewDurableSinkObject(t *testing.T) {
-	sink, err := NewDurableSink(context.Background(), "object", "", newMemStore(), "p")
-	if err != nil {
-		t.Fatalf("NewDurableSink(object) error = %v", err)
-	}
-	if _, ok := sink.(*ObjectSink); !ok {
-		t.Errorf("NewDurableSink(object) = %T, want *ObjectSink", sink)
+	for _, backend := range []string{"s3", "gcs"} {
+		sink, err := NewDurableSink(context.Background(), backend, "", newMemStore(), "p")
+		if err != nil {
+			t.Fatalf("NewDurableSink(%q) error = %v", backend, err)
+		}
+		if _, ok := sink.(*ObjectSink); !ok {
+			t.Errorf("NewDurableSink(%q) = %T, want *ObjectSink", backend, sink)
+		}
 	}
 }
 
 func TestNewDurableSinkObjectRequiresStore(t *testing.T) {
-	if _, err := NewDurableSink(context.Background(), "object", "", nil, ""); err == nil {
-		t.Fatal("NewDurableSink(object, nil store) error = nil, want error")
+	for _, backend := range []string{"s3", "gcs"} {
+		if _, err := NewDurableSink(context.Background(), backend, "", nil, ""); err == nil {
+			t.Fatalf("NewDurableSink(%q, nil store) error = nil, want error", backend)
+		}
 	}
 }
 

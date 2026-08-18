@@ -242,17 +242,17 @@ differ from what's committed.
 | ingress.enabled | bool | `false` | Enable an Ingress resource exposing the control plane via HTTP/HTTPS. Requires an Ingress controller (nginx/traefik/etc.) in the cluster. |
 | ingress.hosts | list | `[{"host":"leoflow.local","paths":[{"path":"/","pathType":"Prefix"}]}]` | Host + path rules. Each host maps to one or more path entries routed to the leoflow-server's `http` port. |
 | ingress.tls | list | `[]` | TLS configuration. Each entry maps hosts to a TLS Secret (typically a cert-manager Certificate Secret). |
-| logs.object.bucket | string | `""` | Target bucket. Required when `object.enabled`. |
-| logs.object.enabled | bool | `false` | Ship task logs to an S3-compatible object store instead of the PVC (default OFF — the on-disk path is unchanged when this is false). |
-| logs.object.endpoint | string | `""` | S3 endpoint override for S3-compatible stores: GCS interop (`https://storage.googleapis.com`) or MinIO. Empty uses the AWS default. |
-| logs.object.existingSecret | string | `""` | Name of a Secret with keys `accessKeyId` and `secretAccessKey` for static credentials. Discouraged — prefer keyless (Workload Identity / IRSA). Empty (recommended) uses the ambient credential chain. |
-| logs.object.forcePathStyle | bool | `false` | Use path-style addressing (bucket in the path, not the host). Required by MinIO and some S3-compatible stores. |
-| logs.object.prefix | string | `""` | Optional key prefix under which attempt objects are laid out (`{prefix}/{tenant}/{dag}/{run}/{task}/{try}.log`). |
-| logs.object.region | string | `""` | Store region (e.g. `us-east-1`). Required by AWS S3; ignored by some S3-compatible stores. |
 | logs.persistence.accessMode | string | `"ReadWriteOnce"` | PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments; `ReadWriteMany` is required when `replicaCount > 1`. |
 | logs.persistence.enabled | bool | `true` | Persist control-plane logs in a PVC (default ON). Disable for ephemeral emptyDir (dev only — logs lost on pod restart). |
 | logs.persistence.size | string | `"50Gi"` | PVC size for control-plane logs. ~1 GB/day per ~1000 active task runs is a sane starting point. |
 | logs.persistence.storageClass | string | `""` | StorageClass for the PVC. Empty uses the cluster default. Specify an RWX class when `accessMode: ReadWriteMany`. |
+| logs.sink.bucket | string | `""` | Target bucket. Required when `provider` is `s3` or `gcs`. |
+| logs.sink.endpoint | string | `""` | [s3] Endpoint override for S3-compatible stores (MinIO, Ceph RGW). Empty uses the AWS default. NOT the way to reach GCS — use `provider: gcs`. |
+| logs.sink.existingSecret | string | `""` | [s3] Name of a Secret with keys `accessKeyId` and `secretAccessKey` for static credentials. Discouraged — prefer keyless (IRSA). Empty (recommended) uses the ambient credential chain. (For `gcs`, use keyless Workload Identity — the discouraged file escape hatch is a config-level `logs.sink.credentials_file`.) |
+| logs.sink.forcePathStyle | bool | `false` | [s3] Use path-style addressing (bucket in the path, not the host). Required by MinIO and some S3-compatible stores. |
+| logs.sink.prefix | string | `""` | Optional key prefix under which attempt objects are laid out (`{prefix}/{tenant}/{dag}/{run}/{task}/{try}.log`). |
+| logs.sink.provider | string | `"disk"` | Durable task-log backend: `disk` (default — the PVC above), `s3` (AWS S3, MinIO, Ceph RGW), or `gcs` (Google Cloud Storage). Object storage is opt-in; `disk` leaves the on-disk path unchanged. |
+| logs.sink.region | string | `""` | [s3] Store region (e.g. `us-east-1`). Required by AWS S3; ignored by some S3-compatible stores. |
 | metrics.serviceMonitor.additionalLabels | object | `{}` | Extra labels on the ServiceMonitor. Required when the Prometheus instance has a `serviceMonitorSelector` filter (e.g. `{release: kube-prometheus-stack}`). |
 | metrics.serviceMonitor.enabled | bool | `false` | Enable ServiceMonitor for Prometheus scraping. Requires kube-prometheus-stack CRDs. |
 | metrics.serviceMonitor.interval | string | `"30s"` | Prometheus scrape interval. |

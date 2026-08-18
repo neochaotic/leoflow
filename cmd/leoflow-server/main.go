@@ -546,30 +546,46 @@ const lowDiskWarnBytes = 1 << 30 // 1 GiB
 // prunes old log files, and warns on low disk for the datastore dir. The
 // buildLogSink selects the durable task-log sink from configuration. The default
 // (logs.backend "disk" or unset) is the on-disk sink — unchanged behavior for
-// Lite and every deployment that does not opt in. "object" ships each attempt to
-// an S3-compatible bucket (AWS S3, GCS via its S3 interop endpoint, or MinIO)
-// with keyless-first auth (ADR 0035); ctx bounds the store operations for the
-// sink's lifetime. The config layer has already validated that an object backend
-// carries a bucket (config.validateLogs), so a nil sink here is a real build
-// error, not a misconfiguration.
+// Lite and every deployment that does not opt in. "s3" ships each attempt to an
+// S3-compatible bucket (AWS S3, MinIO, Ceph RGW) via aws-sdk-go-v2; "gcs" ships
+// to Google Cloud Storage via its native SDK. Both default to keyless auth
+// (ADR 0035): IRSA/instance-profile for S3, GKE Workload Identity for GCS. ctx
+// bounds the store operations for the sink's lifetime. The config layer has
+// already validated that an object backend carries a bucket
+// (config.validateLogs), so a nil sink here is a real build error.
 func buildLogSink(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger) (logs.Sink, error) {
-	if cfg.Logs.Backend != "object" {
+	switch cfg.Logs.Backend {
+	case "", "disk":
 		return logs.NewDurableSink(ctx, cfg.Logs.Backend, cfg.Logs.Dir, nil, "")
+	case "s3":
+		store, err := logs.NewS3Store(ctx, logs.S3Config{
+			Bucket:          cfg.Logs.Sink.Bucket,
+			Region:          cfg.Logs.Sink.Region,
+			Endpoint:        cfg.Logs.Sink.Endpoint,
+			ForcePathStyle:  cfg.Logs.Sink.ForcePathStyle,
+			AccessKeyID:     cfg.Logs.Sink.AccessKeyID,
+			SecretAccessKey: cfg.Logs.Sink.SecretAccessKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("building s3 log store: %w", err)
+		}
+		logger.Info("task logs: s3 object-store backend enabled",
+			"bucket", cfg.Logs.Sink.Bucket, "endpoint", cfg.Logs.Sink.Endpoint, "prefix", cfg.Logs.Sink.Prefix)
+		return logs.NewDurableSink(ctx, "s3", "", store, cfg.Logs.Sink.Prefix)
+	case "gcs":
+		store, err := logs.NewGCSStore(ctx, logs.GCSConfig{
+			Bucket:          cfg.Logs.Sink.Bucket,
+			CredentialsFile: cfg.Logs.Sink.CredentialsFile,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("building gcs log store: %w", err)
+		}
+		logger.Info("task logs: gcs object-store backend enabled",
+			"bucket", cfg.Logs.Sink.Bucket, "prefix", cfg.Logs.Sink.Prefix)
+		return logs.NewDurableSink(ctx, "gcs", "", store, cfg.Logs.Sink.Prefix)
+	default:
+		return nil, fmt.Errorf("unknown logs.backend %q", cfg.Logs.Backend)
 	}
-	store, err := logs.NewS3Store(ctx, logs.S3Config{
-		Bucket:          cfg.Logs.Object.Bucket,
-		Region:          cfg.Logs.Object.Region,
-		Endpoint:        cfg.Logs.Object.Endpoint,
-		ForcePathStyle:  cfg.Logs.Object.ForcePathStyle,
-		AccessKeyID:     cfg.Logs.Object.AccessKeyID,
-		SecretAccessKey: cfg.Logs.Object.SecretAccessKey,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("building object log store: %w", err)
-	}
-	logger.Info("task logs: object-store backend enabled",
-		"bucket", cfg.Logs.Object.Bucket, "endpoint", cfg.Logs.Object.Endpoint, "prefix", cfg.Logs.Object.Prefix)
-	return logs.NewDurableSink(ctx, "object", "", store, cfg.Logs.Object.Prefix)
 }
 
 // operations are idempotent, so it is safe on every replica.

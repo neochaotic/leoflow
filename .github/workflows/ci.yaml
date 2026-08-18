@@ -528,14 +528,44 @@ jobs:
       PYTHONPATH: parser
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Full history so the gate below can diff origin/<base>...HEAD (the
+          # merge-base must be present). checkout + gate always run; the heavy
+          # steps are guarded, so this job always reports its (required) check.
+          fetch-depth: 0
+      # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
+      # keep reporting this required check. Computes the base..head diff and runs
+      # the heavy steps only when a non-docs/spec/load-test/markdown file changed.
+      - name: Gate heavy E2E on code changes
+        id: gate
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull_request event — running heavy k3d E2E."
+            exit 0
+          fi
+          git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "Changed files:"; echo "$FILES"
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|.*\.md$)'; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "docs/tooling-only change — skipping heavy k3d E2E."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Code change detected — running heavy k3d E2E."
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install k3d + kubectl + jq + migrate
+        if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.7.4/install.sh | TAG=v5.7.4 bash
@@ -544,10 +574,13 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq jq
           go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
       - name: Apply migrations
+        if: steps.gate.outputs.run == 'true'
         run: ~/go/bin/migrate -path migrations -database "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable" up
       - name: Build binaries
+        if: steps.gate.outputs.run == 'true'
         run: make build
       - name: Run the k3d operator e2e
+        if: steps.gate.outputs.run == 'true'
         run: bash test/e2e/e2e.sh
 
   # ─────────────────────────────────────────────────────────────────────
@@ -582,14 +615,44 @@ jobs:
       PYTHONPATH: parser
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Full history so the gate below can diff origin/<base>...HEAD (the
+          # merge-base must be present). checkout + gate always run; the heavy
+          # steps are guarded, so this job always reports its (required) check.
+          fetch-depth: 0
+      # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
+      # keep reporting this required check. Computes the base..head diff and runs
+      # the heavy steps only when a non-docs/spec/load-test/markdown file changed.
+      - name: Gate heavy E2E on code changes
+        id: gate
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull_request event — running heavy k3d E2E."
+            exit 0
+          fi
+          git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "Changed files:"; echo "$FILES"
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|.*\.md$)'; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "docs/tooling-only change — skipping heavy k3d E2E."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Code change detected — running heavy k3d E2E."
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install k3d + kubectl + jq + migrate
+        if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.7.4/install.sh | TAG=v5.7.4 bash
@@ -598,10 +661,13 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq jq
           go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
       - name: Apply migrations
+        if: steps.gate.outputs.run == 'true'
         run: ~/go/bin/migrate -path migrations -database "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable" up
       - name: Build binaries
+        if: steps.gate.outputs.run == 'true'
         run: make build
       - name: Run the k3d two-process split e2e (ADR 0049)
+        if: steps.gate.outputs.run == 'true'
         run: bash test/e2e/split-two-process.sh
 
   # e2e-dbt: dbt-native orchestration on a real k3d cluster. dbt-e2e.sh compiles a
@@ -633,14 +699,44 @@ jobs:
       PYTHONPATH: parser
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Full history so the gate below can diff origin/<base>...HEAD (the
+          # merge-base must be present). checkout + gate always run; the heavy
+          # steps are guarded, so this job always reports its (required) check.
+          fetch-depth: 0
+      # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
+      # keep reporting this required check. Computes the base..head diff and runs
+      # the heavy steps only when a non-docs/spec/load-test/markdown file changed.
+      - name: Gate heavy E2E on code changes
+        id: gate
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull_request event — running heavy k3d E2E."
+            exit 0
+          fi
+          git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "Changed files:"; echo "$FILES"
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|.*\.md$)'; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "docs/tooling-only change — skipping heavy k3d E2E."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Code change detected — running heavy k3d E2E."
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install k3d + kubectl + jq + migrate + dbt
+        if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.7.4/install.sh | TAG=v5.7.4 bash
@@ -650,14 +746,19 @@ jobs:
           go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
           pip install --quiet dbt-core dbt-postgres
       - name: Apply migrations
+        if: steps.gate.outputs.run == 'true'
         run: ~/go/bin/migrate -path migrations -database "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable" up
       - name: Build binaries
+        if: steps.gate.outputs.run == 'true'
         run: make build
       - name: Run the dbt e2e (postgres warehouse)
+        if: steps.gate.outputs.run == 'true'
         run: bash test/e2e/dbt-e2e.sh
       - name: Run the dbt mixing e2e (subdir + --project-dir, #401)
+        if: steps.gate.outputs.run == 'true'
         run: bash test/e2e/dbt-mixing-e2e.sh
       - name: Run the dbt managed-connection e2e (in-pod profile generation, #573)
+        if: steps.gate.outputs.run == 'true'
         run: bash test/e2e/dbt-connection-e2e.sh
 
   # dbt-adapter-contracts (#574): the profiles.yml Leoflow emits for each cloud
@@ -715,14 +816,44 @@ jobs:
       PYTHONPATH: parser
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Full history so the gate below can diff origin/<base>...HEAD (the
+          # merge-base must be present). checkout + gate always run; the heavy
+          # steps are guarded, so this job always reports its (required) check.
+          fetch-depth: 0
+      # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
+      # keep reporting this required check. Computes the base..head diff and runs
+      # the heavy steps only when a non-docs/spec/load-test/markdown file changed.
+      - name: Gate heavy E2E on code changes
+        id: gate
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull_request event — running heavy k3d E2E."
+            exit 0
+          fi
+          git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "Changed files:"; echo "$FILES"
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|.*\.md$)'; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "docs/tooling-only change — skipping heavy k3d E2E."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Code change detected — running heavy k3d E2E."
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install k3d + kubectl + jq + migrate
+        if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.7.4/install.sh | TAG=v5.7.4 bash
@@ -731,10 +862,13 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq jq
           go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
       - name: Apply migrations
+        if: steps.gate.outputs.run == 'true'
         run: ~/go/bin/migrate -path migrations -database "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable" up
       - name: Build binaries
+        if: steps.gate.outputs.run == 'true'
         run: make build
       - name: Run the k3d deploy e2e
+        if: steps.gate.outputs.run == 'true'
         run: bash test/e2e/deploy-e2e.sh
 
   # ─────────────────────────────────────────────────────────────────────

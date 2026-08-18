@@ -230,3 +230,81 @@ func TestLoadServerReadsUIAutoRefreshIntervalFromEnv(t *testing.T) {
 		t.Errorf("UI.AutoRefreshIntervalSeconds = %d, want 1 (env var must override default)", c.UI.AutoRefreshIntervalSeconds)
 	}
 }
+
+// TestLoadServerLogsBackendDefaultsToDisk locks the off-by-default guarantee:
+// with nothing configured the log backend is "disk", so the on-disk path (Lite
+// and every install that does not opt in) is unchanged.
+func TestLoadServerLogsBackendDefaultsToDisk(t *testing.T) {
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if c.Logs.Backend != "disk" {
+		t.Errorf("Logs.Backend = %q, want \"disk\" (object storage must be opt-in)", c.Logs.Backend)
+	}
+	if c.Logs.Object.Bucket != "" {
+		t.Errorf("Logs.Object.Bucket = %q, want empty by default", c.Logs.Object.Bucket)
+	}
+}
+
+// TestLoadServerReadsLogsObjectFromEnv checks the object-store surface binds from
+// LEOFLOW_LOGS_OBJECT_* env vars, the path the Helm chart uses.
+func TestLoadServerReadsLogsObjectFromEnv(t *testing.T) {
+	t.Setenv("LEOFLOW_LOGS_BACKEND", "object")
+	t.Setenv("LEOFLOW_LOGS_OBJECT_BUCKET", "my-bucket")
+	t.Setenv("LEOFLOW_LOGS_OBJECT_PREFIX", "acme")
+	t.Setenv("LEOFLOW_LOGS_OBJECT_ENDPOINT", "https://storage.googleapis.com")
+	t.Setenv("LEOFLOW_LOGS_OBJECT_FORCE_PATH_STYLE", "true")
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if c.Logs.Backend != "object" {
+		t.Errorf("Logs.Backend = %q, want \"object\"", c.Logs.Backend)
+	}
+	if c.Logs.Object.Bucket != "my-bucket" {
+		t.Errorf("Logs.Object.Bucket = %q, want \"my-bucket\"", c.Logs.Object.Bucket)
+	}
+	if c.Logs.Object.Prefix != "acme" {
+		t.Errorf("Logs.Object.Prefix = %q, want \"acme\"", c.Logs.Object.Prefix)
+	}
+	if c.Logs.Object.Endpoint != "https://storage.googleapis.com" {
+		t.Errorf("Logs.Object.Endpoint = %q, want the GCS interop endpoint", c.Logs.Object.Endpoint)
+	}
+	if !c.Logs.Object.ForcePathStyle {
+		t.Error("Logs.Object.ForcePathStyle = false, want true from env")
+	}
+}
+
+// TestValidateLogsBackend locks the log-backend validation: "object" requires a
+// bucket, an unknown backend fails closed, and disk/empty stay valid.
+func TestValidateLogsBackend(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backend string
+		bucket  string
+		wantErr bool
+	}{
+		{"empty defaults to disk", "", "", false},
+		{"disk", "disk", "", false},
+		{"object with bucket", "object", "b", false},
+		{"object without bucket", "object", "", true},
+		{"unknown backend", "gopher", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &ServerConfig{}
+			c.Auth.Provider = AuthProviderJWT
+			c.Auth.JWT.Secret = "set"
+			c.Server.HTTPAddr = "0.0.0.0:8080"
+			c.Logs.Backend = tc.backend
+			c.Logs.Object.Bucket = tc.bucket
+			err := c.Validate()
+			if tc.wantErr && err == nil {
+				t.Errorf("backend %q bucket %q: Validate() = nil, want error", tc.backend, tc.bucket)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("backend %q bucket %q: Validate() = %v, want nil", tc.backend, tc.bucket, err)
+			}
+		})
+	}
+}

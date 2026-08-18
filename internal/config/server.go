@@ -30,8 +30,44 @@ type ServerConfig struct {
 
 // LogsSection configures task log shipping.
 type LogsSection struct {
-	// Dir is the root directory for the disk log sink.
+	// Dir is the root directory for the disk log sink (the default backend).
 	Dir string `mapstructure:"dir"`
+	// Backend selects the durable task-log store: "disk" (default) writes files
+	// under Dir; "object" ships each attempt to an S3-compatible bucket. Object
+	// storage is opt-in — Lite and every deployment that does not set this keep
+	// the exact on-disk path unchanged.
+	Backend string `mapstructure:"backend"`
+	// Object configures the object-store backend; read only when Backend is
+	// "object".
+	Object ObjectLogSection `mapstructure:"object"`
+}
+
+// ObjectLogSection configures the S3-compatible object-store log backend. It
+// targets AWS S3, Google Cloud Storage (via its S3 interop endpoint), and any
+// S3-compatible store (MinIO, Ceph RGW). Auth is keyless-first (ADR 0035):
+// leave the key fields empty to use the ambient credential chain (IRSA /
+// instance profile / GKE Workload Identity + HMAC / env). Static keys are a
+// discouraged escape hatch for dev and stores without an identity broker.
+type ObjectLogSection struct {
+	// Bucket is the target bucket. Required when Backend is "object".
+	Bucket string `mapstructure:"bucket"`
+	// Prefix is an optional key prefix under which attempt objects are laid out.
+	Prefix string `mapstructure:"prefix"`
+	// Region is the store region (e.g. "us-east-1"). Required by AWS S3; ignored
+	// by some S3-compatible stores.
+	Region string `mapstructure:"region"`
+	// Endpoint overrides the S3 endpoint for S3-compatible stores: Google Cloud
+	// Storage interop ("https://storage.googleapis.com") or MinIO. Empty uses the
+	// AWS default endpoint.
+	Endpoint string `mapstructure:"endpoint"`
+	// ForcePathStyle uses path-style addressing (bucket in the path, not the
+	// host). Required by MinIO and some S3-compatible stores.
+	ForcePathStyle bool `mapstructure:"force_path_style"`
+	// AccessKeyID is a static access key. Empty (recommended) uses the keyless
+	// credential chain (ADR 0035).
+	AccessKeyID string `mapstructure:"access_key_id"`
+	// SecretAccessKey pairs with AccessKeyID. Discouraged; prefer keyless.
+	SecretAccessKey string `mapstructure:"secret_access_key"`
 }
 
 // ExecutorSection configures how tasks are executed.
@@ -320,15 +356,23 @@ var serverDefaults = map[string]any{
 	"executor.defaults.staging_access_mode":            "ReadWriteMany",
 	"executor.defaults.run_tasks_as_non_root":          true,
 	"executor.defaults.read_only_task_root_filesystem": false,
-	"logs.dir":                    "/var/log/leoflow",
-	"observability.otel.enabled":  true,
-	"observability.otel.endpoint": "localhost:4317",
-	"observability.log_level":     "info",
-	"observability.log_format":    "json",
-	"ui.instance_name":            "Leoflow",
-	"ui.edition":                  "",
-	"ui.workspace":                "",
-	"ui.monaco_dir":               "",
+	"logs.dir":                      "/var/log/leoflow",
+	"logs.backend":                  "disk",
+	"logs.object.bucket":            "",
+	"logs.object.prefix":            "",
+	"logs.object.region":            "",
+	"logs.object.endpoint":          "",
+	"logs.object.force_path_style":  false,
+	"logs.object.access_key_id":     "",
+	"logs.object.secret_access_key": "",
+	"observability.otel.enabled":    true,
+	"observability.otel.endpoint":   "localhost:4317",
+	"observability.log_level":       "info",
+	"observability.log_format":      "json",
+	"ui.instance_name":              "Leoflow",
+	"ui.edition":                    "",
+	"ui.workspace":                  "",
+	"ui.monaco_dir":                 "",
 	// Must appear here even though the zero value is meaningful (the handler
 	// falls back to api.DefaultUIAutoRefreshIntervalSeconds when ≤ 0): viper's
 	// AutomaticEnv only binds env vars for keys it has seen via SetDefault or
@@ -390,6 +434,9 @@ func (c *ServerConfig) Validate() error {
 	if err := c.validateProvider(); err != nil {
 		return err
 	}
+	if err := c.validateLogs(); err != nil {
+		return err
+	}
 	if c.Auth.Provider == AuthProviderJWT && c.Auth.JWT.Secret == "" {
 		return errors.New("auth.jwt.secret is required (set LEOFLOW_AUTH_JWT_SECRET)")
 	}
@@ -414,6 +461,24 @@ func isLoopbackListenAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// validateLogs rejects an unknown logs.backend and requires a bucket when the
+// object backend is selected, so a misconfigured object sink fails closed at
+// boot instead of losing every task log to a nonexistent bucket. Empty and
+// "disk" are always valid — the on-disk default is unaffected.
+func (c *ServerConfig) validateLogs() error {
+	switch c.Logs.Backend {
+	case "", "disk":
+		return nil
+	case "object":
+		if c.Logs.Object.Bucket == "" {
+			return errors.New(`logs.object.bucket is required when logs.backend is "object" (set LEOFLOW_LOGS_OBJECT_BUCKET)`)
+		}
+		return nil
+	default:
+		return fmt.Errorf(`unknown logs.backend %q (want "disk" or "object")`, c.Logs.Backend)
+	}
 }
 
 // validateProvider rejects an unknown or unimplemented auth.provider, failing

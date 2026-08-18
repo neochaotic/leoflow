@@ -93,6 +93,35 @@ spec:
               value: {{ .ctx.Values.taskNamespace | quote }}
             - name: LEOFLOW_LOGS_DIR
               value: {{ .ctx.Values.config.logsDir | quote }}
+            {{- if .ctx.Values.logs.object.enabled }}
+            # Object-store log backend (opt-in, ADR 0035 keyless-first). When on,
+            # task logs ship to an S3-compatible bucket instead of the PVC; set
+            # logs.persistence.enabled=false to drop the (RWX) log PVC entirely.
+            - name: LEOFLOW_LOGS_BACKEND
+              value: "object"
+            - name: LEOFLOW_LOGS_OBJECT_BUCKET
+              value: {{ .ctx.Values.logs.object.bucket | quote }}
+            - name: LEOFLOW_LOGS_OBJECT_PREFIX
+              value: {{ .ctx.Values.logs.object.prefix | quote }}
+            - name: LEOFLOW_LOGS_OBJECT_REGION
+              value: {{ .ctx.Values.logs.object.region | quote }}
+            - name: LEOFLOW_LOGS_OBJECT_ENDPOINT
+              value: {{ .ctx.Values.logs.object.endpoint | quote }}
+            - name: LEOFLOW_LOGS_OBJECT_FORCE_PATH_STYLE
+              value: {{ .ctx.Values.logs.object.forcePathStyle | quote }}
+            {{- if .ctx.Values.logs.object.existingSecret }}
+            - name: LEOFLOW_LOGS_OBJECT_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .ctx.Values.logs.object.existingSecret }}
+                  key: accessKeyId
+            - name: LEOFLOW_LOGS_OBJECT_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .ctx.Values.logs.object.existingSecret }}
+                  key: secretAccessKey
+            {{- end }}
+            {{- end }}
             - name: LEOFLOW_SCHEDULER_ENABLED
               value: {{ .ctx.Values.config.scheduler.enabled | quote }}
             - name: LEOFLOW_SCHEDULER_LOOP_INTERVAL_MS

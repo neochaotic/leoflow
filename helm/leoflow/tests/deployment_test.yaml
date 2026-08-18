@@ -457,3 +457,86 @@ tests:
       - equal:
           path: spec.template.spec.securityContext.seccompProfile.type
           value: RuntimeDefault
+
+  - it: omits the object-store log env by default (on-disk PVC path unchanged)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_BACKEND
+            value: "object"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_DIR
+            value: /var/log/leoflow
+
+  - it: wires the object-store log backend + keyless config when logs.object.enabled
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.object.enabled: true
+      logs.object.bucket: my-task-logs
+      logs.object.region: us-east-1
+      logs.object.endpoint: https://storage.googleapis.com
+      logs.object.forcePathStyle: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_BACKEND
+            value: "object"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_OBJECT_BUCKET
+            value: my-task-logs
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_OBJECT_ENDPOINT
+            value: https://storage.googleapis.com
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_OBJECT_FORCE_PATH_STYLE
+            value: "true"
+      # Keyless-first (ADR 0035): no static-credential env unless an existingSecret is set.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_OBJECT_ACCESS_KEY_ID
+
+  - it: sources static object-store credentials from a Secret when existingSecret is set
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.object.enabled: true
+      logs.object.bucket: my-task-logs
+      logs.object.existingSecret: my-object-creds
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_OBJECT_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: my-object-creds
+                key: accessKeyId
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_OBJECT_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-object-creds
+                key: secretAccessKey

@@ -242,6 +242,13 @@ differ from what's committed.
 | ingress.enabled | bool | `false` | Enable an Ingress resource exposing the control plane via HTTP/HTTPS. Requires an Ingress controller (nginx/traefik/etc.) in the cluster. |
 | ingress.hosts | list | `[{"host":"leoflow.local","paths":[{"path":"/","pathType":"Prefix"}]}]` | Host + path rules. Each host maps to one or more path entries routed to the leoflow-server's `http` port. |
 | ingress.tls | list | `[]` | TLS configuration. Each entry maps hosts to a TLS Secret (typically a cert-manager Certificate Secret). |
+| logs.object.bucket | string | `""` | Target bucket. Required when `object.enabled`. |
+| logs.object.enabled | bool | `false` | Ship task logs to an S3-compatible object store instead of the PVC (default OFF — the on-disk path is unchanged when this is false). |
+| logs.object.endpoint | string | `""` | S3 endpoint override for S3-compatible stores: GCS interop (`https://storage.googleapis.com`) or MinIO. Empty uses the AWS default. |
+| logs.object.existingSecret | string | `""` | Name of a Secret with keys `accessKeyId` and `secretAccessKey` for static credentials. Discouraged — prefer keyless (Workload Identity / IRSA). Empty (recommended) uses the ambient credential chain. |
+| logs.object.forcePathStyle | bool | `false` | Use path-style addressing (bucket in the path, not the host). Required by MinIO and some S3-compatible stores. |
+| logs.object.prefix | string | `""` | Optional key prefix under which attempt objects are laid out (`{prefix}/{tenant}/{dag}/{run}/{task}/{try}.log`). |
+| logs.object.region | string | `""` | Store region (e.g. `us-east-1`). Required by AWS S3; ignored by some S3-compatible stores. |
 | logs.persistence.accessMode | string | `"ReadWriteOnce"` | PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments; `ReadWriteMany` is required when `replicaCount > 1`. |
 | logs.persistence.enabled | bool | `true` | Persist control-plane logs in a PVC (default ON). Disable for ephemeral emptyDir (dev only — logs lost on pod restart). |
 | logs.persistence.size | string | `"50Gi"` | PVC size for control-plane logs. ~1 GB/day per ~1000 active task runs is a sane starting point. |

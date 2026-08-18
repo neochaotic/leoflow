@@ -128,22 +128,19 @@ func run() error {
 		return err
 	}
 
-	logSink := logs.NewDiskSink(cfg.Logs.Dir)
+	logSink, lerr := buildLogSink(ctx, cfg, tel.Logger)
+	if lerr != nil {
+		return lerr
+	}
 	// Secrets are served over the agent channel only when explicitly allowed
 	// insecure (dev) until gRPC TLS lands (issue #58); otherwise the handlers
 	// fail closed on a plaintext channel.
 	allowInsecureSecrets := os.Getenv("LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS") == "true"
-	// Pro alpha blocker (#58): a production-edition deployment MUST NOT ship
-	// secrets over a plaintext channel. The chart's deployment template stamps
-	// LEOFLOW_UI_EDITION=production; refuse to boot if the insecure escape
-	// hatch is set alongside it. Lite (edition=lite) and the unmarked default
-	// (edition="") still tolerate the flag for the dev inner loop.
-	if err := guardInsecureSecretsForEdition(cfg.UI.Edition, allowInsecureSecrets); err != nil {
-		return err
-	}
-	// A Pro deployment without agent-gRPC TLS boots but can't deliver secrets —
-	// refuse it loudly rather than fail every secrets RPC cryptically (#281).
-	if err := guardTLSForEdition(cfg.UI.Edition, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey); err != nil {
+	// Edition-gated boot guards (#58, #281): a Pro deployment must not ship
+	// secrets over a plaintext channel (the insecure escape hatch) and must have
+	// TLS on the agent gRPC channel. Lite (edition=lite) and the unmarked default
+	// (edition="") still tolerate the plaintext dev loop.
+	if err := guardEditionSecurity(cfg.UI.Edition, allowInsecureSecrets, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey); err != nil {
 		return err
 	}
 	// Role gating (ADR 0049). "all" (the default, and Lite's only mode) serves both
@@ -336,7 +333,7 @@ func loginRateLimit(cfg *config.ServerConfig) int {
 // false (the api role) it starts nothing and returns a nil handle + no-op stop, so
 // the caller defers unconditionally. The stop func fires drain-then-gRPC-stop,
 // matching the pre-0049 defer order (LIFO: drainDispatch before GracefulStop).
-func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc *xcom.Service, logSink *logs.DiskSink, logTailer logs.Tailer, allowInsecureSecrets bool, servesScheduler bool, logger *slog.Logger, metrics *observability.Metrics) (health api.Heartbeater, podDispatch bool, stop func(), err error) {
+func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc *xcom.Service, logSink logs.Sink, logTailer logs.Tailer, allowInsecureSecrets bool, servesScheduler bool, logger *slog.Logger, metrics *observability.Metrics) (health api.Heartbeater, podDispatch bool, stop func(), err error) {
 	if !servesScheduler {
 		return nil, false, func() {}, nil
 	}
@@ -373,7 +370,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 // role (ADR 0049). It is called only when the role serves the API, so the UI
 // shell, editor FS, rate limiter, and full route set are never constructed in a
 // scheduler-only process.
-func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, authn *auth.JWTAuthenticator, pg *storage.Postgres, repo *storage.Repository, xcomReader *storage.XComReader, logSink *logs.DiskSink, logTailer logs.Tailer, checks map[string]api.HealthChecker, executorInfo api.ExecutorInfo, schedulerHealth api.Heartbeater) *http.Server {
+func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, authn *auth.JWTAuthenticator, pg *storage.Postgres, repo *storage.Repository, xcomReader *storage.XComReader, logSink logs.Sink, logTailer logs.Tailer, checks map[string]api.HealthChecker, executorInfo api.ExecutorInfo, schedulerHealth api.Heartbeater) *http.Server {
 	if cfg.Auth.DevNoAuth {
 		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
 	}
@@ -547,8 +544,40 @@ const lowDiskWarnBytes = 1 << 30 // 1 GiB
 
 // startCleanup runs a periodic janitor that purges expired XCom index rows,
 // prunes old log files, and warns on low disk for the datastore dir. The
+// buildLogSink selects the durable task-log sink from configuration. The default
+// (logs.backend "disk" or unset) is the on-disk sink — unchanged behavior for
+// Lite and every deployment that does not opt in. "object" ships each attempt to
+// an S3-compatible bucket (AWS S3, GCS via its S3 interop endpoint, or MinIO)
+// with keyless-first auth (ADR 0035); ctx bounds the store operations for the
+// sink's lifetime. The config layer has already validated that an object backend
+// carries a bucket (config.validateLogs), so a nil sink here is a real build
+// error, not a misconfiguration.
+func buildLogSink(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger) (logs.Sink, error) {
+	if cfg.Logs.Backend != "object" {
+		return logs.NewDurableSink(ctx, cfg.Logs.Backend, cfg.Logs.Dir, nil, "")
+	}
+	store, err := logs.NewS3Store(ctx, logs.S3Config{
+		Bucket:          cfg.Logs.Object.Bucket,
+		Region:          cfg.Logs.Object.Region,
+		Endpoint:        cfg.Logs.Object.Endpoint,
+		ForcePathStyle:  cfg.Logs.Object.ForcePathStyle,
+		AccessKeyID:     cfg.Logs.Object.AccessKeyID,
+		SecretAccessKey: cfg.Logs.Object.SecretAccessKey,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building object log store: %w", err)
+	}
+	logger.Info("task logs: object-store backend enabled",
+		"bucket", cfg.Logs.Object.Bucket, "endpoint", cfg.Logs.Object.Endpoint, "prefix", cfg.Logs.Object.Prefix)
+	return logs.NewDurableSink(ctx, "object", "", store, cfg.Logs.Object.Prefix)
+}
+
 // operations are idempotent, so it is safe on every replica.
-func startCleanup(ctx context.Context, idx *storage.XComIndex, sink *logs.DiskSink, dataDir string, logger *slog.Logger) {
+func startCleanup(ctx context.Context, idx *storage.XComIndex, sink logs.Sink, dataDir string, logger *slog.Logger) {
+	// Only a self-managing sink prunes: the disk sink deletes old files, while the
+	// object-store sink leaves retention to bucket lifecycle policy and does not
+	// implement logs.Pruner, so the janitor skips it.
+	pruner, canPrune := sink.(logs.Pruner)
 	go func() {
 		t := time.NewTicker(cleanupInterval)
 		defer t.Stop()
@@ -561,8 +590,10 @@ func startCleanup(ctx context.Context, idx *storage.XComIndex, sink *logs.DiskSi
 					if err := idx.PurgeExpired(ctx); err != nil {
 						logger.Error("purging expired xcom index", "error", err)
 					}
-					if err := sink.Prune(time.Now(), logRetention); err != nil {
-						logger.Error("pruning old logs", "error", err)
+					if canPrune {
+						if err := pruner.Prune(time.Now(), logRetention); err != nil {
+							logger.Error("pruning old logs", "error", err)
+						}
 					}
 					if free, derr := dirFreeBytes(dataDir); derr == nil && lowDisk(free, lowDiskWarnBytes) {
 						logger.Warn("low disk space for the datastore", "dir", dataDir,

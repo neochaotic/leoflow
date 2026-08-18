@@ -124,6 +124,29 @@ logs:
     storageClass: ""
     # -- PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments; `ReadWriteMany` is required when `replicaCount > 1`.
     accessMode: ReadWriteOnce
+  # Object-store log backend (opt-in). When `object.enabled`, task logs ship to an
+  # S3-compatible bucket instead of the PVC — AWS S3, Google Cloud Storage (via its
+  # S3 interop endpoint), or MinIO. This removes the need for an RWX log PVC at
+  # `replicaCount > 1`: set `logs.persistence.enabled: false` and let the bucket own
+  # durability. Auth is keyless-first (ADR 0035): on GKE/EKS bind the pod's
+  # ServiceAccount to a cloud identity (Workload Identity / IRSA) and leave the key
+  # fields empty. Retention is owned by the bucket's lifecycle policy, not the
+  # in-cluster log janitor.
+  object:
+    # -- Ship task logs to an S3-compatible object store instead of the PVC (default OFF — the on-disk path is unchanged when this is false).
+    enabled: false
+    # -- Target bucket. Required when `object.enabled`.
+    bucket: ""
+    # -- Optional key prefix under which attempt objects are laid out (`{prefix}/{tenant}/{dag}/{run}/{task}/{try}.log`).
+    prefix: ""
+    # -- Store region (e.g. `us-east-1`). Required by AWS S3; ignored by some S3-compatible stores.
+    region: ""
+    # -- S3 endpoint override for S3-compatible stores: GCS interop (`https://storage.googleapis.com`) or MinIO. Empty uses the AWS default.
+    endpoint: ""
+    # -- Use path-style addressing (bucket in the path, not the host). Required by MinIO and some S3-compatible stores.
+    forcePathStyle: false
+    # -- Name of a Secret with keys `accessKeyId` and `secretAccessKey` for static credentials. Discouraged — prefer keyless (Workload Identity / IRSA). Empty (recommended) uses the ambient credential chain.
+    existingSecret: ""
 
 # Database (Postgres). Provide an external URL, or a pre-existing secret.
 database:

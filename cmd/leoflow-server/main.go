@@ -699,8 +699,35 @@ func runGatedTicker(ctx context.Context, name string, ticks <-chan time.Time, le
 	}
 }
 
-func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace string, reporter executor.OutcomeReporter, leading func() bool, logger *slog.Logger) {
+// buildPodInformer constructs and starts the shared pod informer for the
+// scheduler read-path (PR-10), returning nil when this process must NOT watch
+// pods: the api-only role (ADR 0049 — the sibling scheduler process owns the
+// read-path) or a non-Kubernetes executor (no pods to watch). A nil return leaves
+// the reapers and reconciler on their live read paths — today's behavior. The
+// informer is always-on for the process lifetime, warming the cache before
+// leadership; a not-yet-synced cache is safe because its readings only ever DEFER
+// a reap (#461), never authorize one.
+func buildPodInformer(ctx context.Context, cfg *config.ServerConfig, cs kubernetes.Interface, logger *slog.Logger) *executor.PodInformer {
+	if !cfg.Server.ServesScheduler() || cfg.Executor.Type != "kubernetes" {
+		return nil
+	}
+	pi := executor.NewPodInformer(cs, cfg.Executor.TaskNamespace)
+	pi.Start(ctx)
+	if pi.WaitForCacheSync(ctx) {
+		logger.Info("pod informer cache synced; reaper/reconciler read-path warm", "namespace", cfg.Executor.TaskNamespace)
+	} else {
+		logger.Warn("pod informer cache did not sync before shutdown; reapers use live reads until it warms")
+	}
+	return pi
+}
+
+func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace string, reporter executor.OutcomeReporter, leading func() bool, logger *slog.Logger, snapshotter executor.PodSnapshotter) {
 	rec := executor.NewReconciler(cs, namespace, reporter)
+	// Read task pods from the shared informer cache instead of a live LIST every
+	// tick when the informer is wired (PR-10); nil keeps the live LIST.
+	if snapshotter != nil {
+		rec.SetPodSnapshotter(snapshotter)
+	}
 	startGatedTicker(ctx, "pod-reconcile", reconcileInterval, leading, logger, func() {
 		if err := rec.Reconcile(ctx); err != nil {
 			logger.Error("pod reconcile", "error", err)
@@ -990,7 +1017,18 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// decision on real pod liveness (#474, #461). Only wired on the pod path;
 	// Lite/subprocess leaves it nil and the reapers stay DB-only.
 	sched.SetPodManager(podExec)
-	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger)
+	// Shared informer read-path (PR-10): one long-lived watch replaces the
+	// reapers' per-running-TI LIST storm and the reconciler's 30s LIST. Consulted
+	// only to DEFER a reap; the live TaskPodActive kill path is unchanged (#461).
+	// A typed-nil pointer would defeat the reconciler's nil check, so the
+	// snapshotter interface is only populated when the informer actually built.
+	podInformer := buildPodInformer(ctx, cfg, cs, logger)
+	var snapshotter executor.PodSnapshotter
+	if podInformer != nil {
+		sched.SetPodPresenceCache(podInformer)
+		snapshotter = podInformer
+	}
+	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)
 	logger.Info("pod dispatch enabled", "namespace", cfg.Executor.TaskNamespace, "agent_control_plane_addr", controlAddr)
 	return true, closer

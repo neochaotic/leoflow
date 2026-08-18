@@ -69,7 +69,7 @@ func createUser(ctx context.Context, serverURL, token, email, password, role str
 	if err != nil {
 		return apiclient.User{}, err
 	}
-	body := apiclient.CreateUserRequest{Email: email, Password: password}
+	body := apiclient.CreateUserRequest{Email: email, Password: &password}
 	if role != "" {
 		body.Role = &role
 	}

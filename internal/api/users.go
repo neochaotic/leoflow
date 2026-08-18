@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,12 +20,31 @@ import (
 // may tighten it later without breaking the endpoint's contract.
 const minPasswordLength = 8
 
+// emailPattern is a deliberately basic sanity check — one "@", a dotted domain,
+// and no whitespace. It rejects obvious garbage; it is not a full RFC 5322
+// validator (real deliverability is out of scope for account creation).
+var emailPattern = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+// normalizeEmail lowercases and trims the address so uniqueness (which is
+// exact-text at the database) treats "Alice@X.com" and "alice@x.com" as one
+// account rather than two.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
 // UserStore creates control-plane accounts for the admin create-user API. The
 // store hashes the plaintext password (reusing the bootstrap admin's bcrypt
 // scheme) and returns the created user without any secret. A duplicate email
 // must surface as domain.ErrConflict and an unknown role as domain.ErrValidation.
 type UserStore interface {
 	CreateUser(ctx context.Context, tenant, email, password, role string) (domain.User, error)
+}
+
+// UserAuditWriter records account-creation events for the Audit Log. It is a
+// separate, narrow interface (not the task-shaped AuditWriter) so account
+// management writes a "user" resource entry with the acting admin as owner.
+type UserAuditWriter interface {
+	RecordUserCreatedAudit(ctx context.Context, tenant, actorUserID, createdUserID, email, role string) error
 }
 
 // createUserBody is the POST /api/v2/users payload. Password is write-only.
@@ -51,15 +73,20 @@ func toUserDTO(u domain.User) userDTO {
 	}
 }
 
-func createUserHandler(store UserStore) gin.HandlerFunc {
+func createUserHandler(store UserStore, audit UserAuditWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body createUserBody
 		if err := c.ShouldBindJSON(&body); err != nil {
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
 			return
 		}
-		if body.Email == "" || body.Password == "" {
+		email := normalizeEmail(body.Email)
+		if email == "" || body.Password == "" {
 			AbortProblem(c, http.StatusBadRequest, "bad request", "email and password are required")
+			return
+		}
+		if !emailPattern.MatchString(email) {
+			AbortProblem(c, http.StatusBadRequest, "bad request", "email is not a valid address")
 			return
 		}
 		if len(body.Password) < minPasswordLength {
@@ -67,12 +94,29 @@ func createUserHandler(store UserStore) gin.HandlerFunc {
 				fmt.Sprintf("password must be at least %d characters", minPasswordLength))
 			return
 		}
-		user, err := store.CreateUser(c.Request.Context(), tenantOf(c), body.Email, body.Password, body.Role)
+		user, err := store.CreateUser(c.Request.Context(), tenantOf(c), email, body.Password, body.Role)
 		if err != nil {
 			handleUserWriteError(c, err)
 			return
 		}
+		recordUserCreatedAudit(c, audit, user)
 		c.JSON(http.StatusCreated, toUserDTO(user))
+	}
+}
+
+// recordUserCreatedAudit writes a best-effort audit entry for a successful
+// account creation; an audit failure must not fail the create the admin
+// requested, so it is logged rather than surfaced.
+func recordUserCreatedAudit(c *gin.Context, audit UserAuditWriter, u domain.User) {
+	if audit == nil {
+		return
+	}
+	actorID := ""
+	if actor, ok := UserFromContext(c); ok {
+		actorID = actor.ID
+	}
+	if err := audit.RecordUserCreatedAudit(c.Request.Context(), tenantOf(c), actorID, u.ID, u.Email, u.Role); err != nil {
+		slog.Warn("recording user-created audit", "user", u.ID, "error", err)
 	}
 }
 
@@ -91,9 +135,9 @@ func handleUserWriteError(c *gin.Context, err error) {
 // gated with the admin:tenant permission, matching how other privileged /api/v2
 // mutations are gated (RequirePermission), so only administrators may create
 // users. With no store it is left unregistered (unknown route -> 404).
-func registerUsers(r gin.IRouter, store UserStore) {
+func registerUsers(r gin.IRouter, store UserStore, audit UserAuditWriter) {
 	if store == nil {
 		return
 	}
-	r.POST("/api/v2/users", RequirePermission("admin", "tenant"), createUserHandler(store))
+	r.POST("/api/v2/users", RequirePermission("admin", "tenant"), createUserHandler(store, audit))
 }

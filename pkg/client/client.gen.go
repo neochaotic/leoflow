@@ -147,8 +147,11 @@ type ComponentHealth struct {
 
 // CreateUserRequest defines model for CreateUserRequest.
 type CreateUserRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	// Email Login email. Normalized to lowercase, so it is unique case-insensitively within the tenant.
+	Email string `json:"email"`
+
+	// Password Plaintext password (write-only; never returned). Must be at least 8 characters — the server rejects anything shorter with 400.
+	Password *string `json:"password,omitempty"`
 
 	// Role Name of an existing role to grant (e.g. "admin"). Omit to grant no role — the most restrictive default; the user then holds no permissions until an admin grants one.
 	Role *string `json:"role,omitempty"`

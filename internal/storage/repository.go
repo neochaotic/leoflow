@@ -21,16 +21,23 @@ import (
 
 const defaultMaxActiveRuns = 16
 
+// txBeginner opens a transaction. *pgxpool.Pool satisfies it; tests inject a
+// fake so the transactional paths can be exercised without a database.
+type txBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // Repository implements the API resource and auth user-store interfaces over
 // Postgres using the sqlc-generated query set.
 type Repository struct {
 	q      *queries.Queries
+	pool   txBeginner
 	cipher secrets.Cipher
 }
 
 // NewRepository builds a Repository backed by the given Postgres connection.
 func NewRepository(pg *Postgres) *Repository {
-	return &Repository{q: pg.Queries}
+	return &Repository{q: pg.Queries, pool: pg.Pool}
 }
 
 // SetCipher attaches the encryption cipher used for connection secrets (ADR
@@ -437,6 +444,35 @@ func (r *Repository) RecordTaskActionAudit(ctx context.Context, tenant, userID, 
 	return nil
 }
 
+// RecordUserCreatedAudit logs an account creation with the acting admin as the
+// owner and the new account's email and role in metadata, scoped to the "user"
+// resource so account-management actions are visible in the Audit Log.
+func (r *Repository) RecordUserCreatedAudit(ctx context.Context, tenant, actorUserID, createdUserID, email, role string) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	var uid pgtype.UUID
+	if u, perr := parseUUID(actorUserID); perr == nil {
+		uid = u
+	}
+	fields := map[string]any{"email": email}
+	if role != "" {
+		fields["role"] = role
+	}
+	meta, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("encoding audit metadata: %w", err)
+	}
+	if err := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
+		TenantID: tid, UserID: uid, Action: "user.create",
+		ResourceType: strPtr("user"), ResourceID: strPtr(createdUserID), Metadata: meta,
+	}); err != nil {
+		return fmt.Errorf("writing user-created audit: %w", err)
+	}
+	return nil
+}
+
 // SetTaskInstanceState sets a task instance's state directly, backing the UI's
 // "mark success"/"mark failed" actions. It does not run the task.
 func (r *Repository) SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error {
@@ -639,6 +675,12 @@ func (r *Repository) BootstrapAdmin(ctx context.Context, tenant, email, password
 // insert so an unknown role fails cleanly as domain.ErrValidation without
 // leaving an orphaned account; an empty role grants none — the most restrictive
 // default, leaving the user with no permissions until an admin grants a role.
+//
+// The insert and the role grant run in a single transaction, so a failure in the
+// grant rolls the user insert back. Without that atomicity a failed grant would
+// leave a role-less account that the (tenant_id, email) UNIQUE makes impossible
+// to recreate — every retry would 409 forever with no recovery path.
+//
 // This backs `leoflow auth create-user` (ADR 0008) and is purely additive: it
 // does not touch the bootstrap/reconcile path.
 func (r *Repository) CreateUser(ctx context.Context, tenant, email, password, role string) (domain.User, error) {
@@ -660,14 +702,25 @@ func (r *Repository) CreateUser(ctx context.Context, tenant, email, password, ro
 	if err != nil {
 		return domain.User{}, err
 	}
-	row, err := r.q.InsertUser(ctx, queries.InsertUserParams{TenantID: tid, Email: email, PasswordHash: strPtr(hash)})
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return domain.User{}, fmt.Errorf("beginning create-user tx: %w", err)
+	}
+	// Rollback after a successful commit is a no-op; on any early return it undoes
+	// the user insert so a failed role grant leaves nothing behind.
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort; the commit path returns the meaningful error
+	qtx := r.q.WithTx(tx)
+	row, err := qtx.InsertUser(ctx, queries.InsertUserParams{TenantID: tid, Email: email, PasswordHash: strPtr(hash)})
 	if err != nil {
 		return domain.User{}, mapConflict(err)
 	}
 	if role != "" {
-		if aerr := r.q.AssignUserRole(ctx, queries.AssignUserRoleParams{UserID: row.ID, RoleID: roleID}); aerr != nil {
+		if aerr := qtx.AssignUserRole(ctx, queries.AssignUserRoleParams{UserID: row.ID, RoleID: roleID}); aerr != nil {
 			return domain.User{}, fmt.Errorf("assigning role: %w", aerr)
 		}
+	}
+	if cerr := tx.Commit(ctx); cerr != nil {
+		return domain.User{}, fmt.Errorf("committing create-user tx: %w", cerr)
 	}
 	return domain.User{
 		ID:        uuidToString(row.ID),

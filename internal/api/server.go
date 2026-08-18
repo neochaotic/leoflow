@@ -66,6 +66,7 @@ type Dependencies struct {
 	AuditLog       AuditLogReader
 	Variables      VariableStore
 	Users          UserStore
+	UserAudit      UserAuditWriter
 	Connections    ConnectionStore
 	ConnectionTest ConnectionTester
 	Favorites      FavoriteStore
@@ -150,7 +151,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIDashboard(r, deps.DashboardStats)
 	registerUIAudit(r, deps.AuditLog)
 	registerUIVariables(r, deps.Variables)
-	registerUsers(r, deps.Users)
+	registerUsers(r, deps.Users, deps.UserAudit)
 	registerUIConnections(r, deps.Connections, deps.ConnectionTest)
 	registerUIFavorites(r, deps.Favorites)
 	registerImportErrors(r, deps.ImportErrors)

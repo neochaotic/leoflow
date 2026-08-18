@@ -37,6 +37,45 @@ func TestRequestTokenRejectsBadStatus(t *testing.T) {
 	}
 }
 
+func TestCreateUserSendsRoleAndReturnsUser(t *testing.T) {
+	var gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"id":"u-9","email":"alice@example.com","role":"admin","is_active":true}`)
+	}))
+	defer srv.Close()
+
+	user, err := createUser(context.Background(), srv.URL, "admin-jwt", "alice@example.com", "pw-12345678", "admin")
+	if err != nil {
+		t.Fatalf("createUser: %v", err)
+	}
+	if user.Id != "u-9" || user.Email != "alice@example.com" {
+		t.Errorf("unexpected user: %+v", user)
+	}
+	if gotAuth != "Bearer admin-jwt" {
+		t.Errorf("Authorization = %q, want the admin bearer", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"role":"admin"`) {
+		t.Errorf("request body missing role: %s", gotBody)
+	}
+}
+
+func TestCreateUserRejectsBadStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, `{"detail":"resource already exists"}`)
+	}))
+	defer srv.Close()
+
+	if _, err := createUser(context.Background(), srv.URL, "t", "dupe@example.com", "pw-12345678", ""); err == nil {
+		t.Error("expected error on 409")
+	}
+}
+
 func TestCreateTokenCommand(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -415,6 +415,7 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		DashboardStats:  repo,
 		AuditLog:        repo,
 		Variables:       repo,
+		Users:           repo,
 		Connections:     repo,
 		Favorites:       repo,
 		ImportErrors:    repo,

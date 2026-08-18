@@ -39,6 +39,40 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v2/users:
+    post:
+      summary: Create a user
+      description: |
+        Admin-only. Creates a control-plane account with the given email and
+        password and grants at most one role. The password is write-only and is
+        never returned. Requires the admin:tenant permission.
+      operationId: createUser
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Invalid input (missing fields or unknown role)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: A user with this email already exists in the tenant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /api/v2/dags:
     get:
       summary: List DAGs
@@ -442,6 +476,29 @@ components:
         access_token: { type: string }
         token_type: { type: string, example: "bearer" }
         expires_in: { type: integer, example: 3600 }
+
+    CreateUserRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string }
+        password: { type: string }
+        role:
+          type: string
+          description: >-
+            Name of an existing role to grant (e.g. "admin"). Omit to grant no
+            role — the most restrictive default; the user then holds no
+            permissions until an admin grants one.
+
+    User:
+      type: object
+      required: [id, email]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        role: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
 
     DAG:
       type: object

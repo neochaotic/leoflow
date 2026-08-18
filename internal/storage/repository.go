@@ -631,6 +631,53 @@ func (r *Repository) BootstrapAdmin(ctx context.Context, tenant, email, password
 	return r.BootstrapAdminHash(ctx, tenant, email, hash)
 }
 
+// CreateUser provisions a new account in the tenant and grants it at most one
+// role, returning the created user (never its password or hash). It reuses the
+// same bcrypt hashing as the bootstrap admin path (auth.HashPassword) and the
+// same email uniqueness guarantee, so a duplicate email surfaces as
+// domain.ErrConflict (the API maps it to 409). The role is resolved BEFORE the
+// insert so an unknown role fails cleanly as domain.ErrValidation without
+// leaving an orphaned account; an empty role grants none — the most restrictive
+// default, leaving the user with no permissions until an admin grants a role.
+// This backs `leoflow auth create-user` (ADR 0008) and is purely additive: it
+// does not touch the bootstrap/reconcile path.
+func (r *Repository) CreateUser(ctx context.Context, tenant, email, password, role string) (domain.User, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return domain.User{}, err
+	}
+	var roleID pgtype.UUID
+	if role != "" {
+		roleID, err = r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: role})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.User{}, fmt.Errorf("unknown role %q: %w", role, domain.ErrValidation)
+			}
+			return domain.User{}, fmt.Errorf("looking up role: %w", err)
+		}
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return domain.User{}, err
+	}
+	row, err := r.q.InsertUser(ctx, queries.InsertUserParams{TenantID: tid, Email: email, PasswordHash: strPtr(hash)})
+	if err != nil {
+		return domain.User{}, mapConflict(err)
+	}
+	if role != "" {
+		if aerr := r.q.AssignUserRole(ctx, queries.AssignUserRoleParams{UserID: row.ID, RoleID: roleID}); aerr != nil {
+			return domain.User{}, fmt.Errorf("assigning role: %w", aerr)
+		}
+	}
+	return domain.User{
+		ID:        uuidToString(row.ID),
+		Email:     row.Email,
+		Role:      role,
+		IsActive:  row.IsActive,
+		CreatedAt: timeVal(row.CreatedAt),
+	}, nil
+}
+
 // SetUserPassword sets a user's bcrypt hash by email, returning whether a user
 // was updated (false when no such user exists). Used by `leoflow lite
 // reset-password`.

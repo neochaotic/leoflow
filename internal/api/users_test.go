@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -22,6 +23,8 @@ type fakeUserStore struct {
 	err                            error
 	called                         bool
 	gotEmail, gotPassword, gotRole string
+	enforceUnique                  bool
+	seen                           map[string]bool
 }
 
 func (f *fakeUserStore) CreateUser(_ context.Context, _, email, password, role string) (domain.User, error) {
@@ -30,16 +33,43 @@ func (f *fakeUserStore) CreateUser(_ context.Context, _, email, password, role s
 	if f.err != nil {
 		return domain.User{}, f.err
 	}
+	if f.enforceUnique {
+		if f.seen == nil {
+			f.seen = map[string]bool{}
+		}
+		if f.seen[email] {
+			return domain.User{}, domain.ErrConflict
+		}
+		f.seen[email] = true
+	}
 	return f.created, nil
 }
 
+// fakeUserAudit records the audit entries the handler writes on success.
+type fakeUserAudit struct {
+	entries []userAuditEntry
+	err     error
+}
+
+type userAuditEntry struct{ tenant, actorID, createdID, email, role string }
+
+func (f *fakeUserAudit) RecordUserCreatedAudit(_ context.Context, tenant, actorUserID, createdUserID, email, role string) error {
+	f.entries = append(f.entries, userAuditEntry{tenant, actorUserID, createdUserID, email, role})
+	return f.err
+}
+
 func userServer(store UserStore, user *auth.User) *gin.Engine {
+	return userServerAudit(store, nil, user)
+}
+
+func userServerAudit(store UserStore, audit UserAuditWriter, user *auth.User) *gin.Engine {
 	return NewServer(Dependencies{
 		Logger:        discardLogger(),
 		Authenticator: &fakeAuthn{user: user},
 		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
 		CORSOrigins:   []string{"*"},
 		Users:         store,
+		UserAudit:     audit,
 	})
 }
 
@@ -130,6 +160,65 @@ func TestCreateUserValidatesRequiredFields(t *testing.T) {
 				t.Errorf("%s: store must not be reached on invalid input", name)
 			}
 		})
+	}
+}
+
+func TestCreateUserWritesAuditOnSuccess(t *testing.T) {
+	store := &fakeUserStore{created: domain.User{ID: "u-7", Email: "alice@example.com", Role: "admin", IsActive: true}}
+	audit := &fakeUserAudit{}
+	rec := authGet(userServerAudit(store, audit, adminUser()), http.MethodPost, "/api/v2/users",
+		`{"email":"alice@example.com","password":"pw-12345678","role":"admin"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want exactly 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.actorID != "admin-1" || e.createdID != "u-7" || e.email != "alice@example.com" || e.role != "admin" || e.tenant != "default" {
+		t.Errorf("unexpected audit entry: %+v", e)
+	}
+}
+
+func TestCreateUserAuditFailureDoesNotFailRequest(t *testing.T) {
+	store := &fakeUserStore{created: domain.User{ID: "u-8", Email: "z@example.com"}}
+	audit := &fakeUserAudit{err: errors.New("audit sink down")}
+	rec := authGet(userServerAudit(store, audit, adminUser()), http.MethodPost, "/api/v2/users",
+		`{"email":"z@example.com","password":"pw-12345678"}`)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("a best-effort audit failure must not fail the request, got %d", rec.Code)
+	}
+}
+
+func TestCreateUserNormalizesEmailForUniqueness(t *testing.T) {
+	// Uniqueness is exact-text at the DB, so the handler must lowercase-normalize
+	// before the store sees the email — otherwise "A@X.COM" and "a@x.com" would
+	// become two distinct accounts.
+	store := &fakeUserStore{enforceUnique: true, created: domain.User{ID: "u-1", Email: "a@x.com"}}
+	srv := userServer(store, adminUser())
+
+	if rec := authGet(srv, http.MethodPost, "/api/v2/users",
+		`{"email":"A@X.COM","password":"pw-12345678"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("first create = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if store.gotEmail != "a@x.com" {
+		t.Errorf("store saw %q, want normalized a@x.com", store.gotEmail)
+	}
+	if rec := authGet(srv, http.MethodPost, "/api/v2/users",
+		`{"email":"a@x.com","password":"pw-12345678"}`); rec.Code != http.StatusConflict {
+		t.Errorf("normalized duplicate = %d, want 409", rec.Code)
+	}
+}
+
+func TestCreateUserRejectsMalformedEmail(t *testing.T) {
+	store := &fakeUserStore{}
+	rec := authGet(userServer(store, adminUser()), http.MethodPost, "/api/v2/users",
+		`{"email":"not-an-email","password":"pw-12345678"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed email = %d, want 400", rec.Code)
+	}
+	if store.called {
+		t.Error("store must not be reached on a malformed email")
 	}
 }
 

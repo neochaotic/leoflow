@@ -6,6 +6,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Task pods now run as non-root by default (behavior change; breaking for root
+  task images).** The default for `taskPodSecurity.runAsNonRoot`
+  (`executor.defaults.run_tasks_as_non_root`) flips `false → true`, and the task
+  base image's UID is renumbered `1000 → 65532` (distroless `nonroot`, matching
+  the control-plane and migration pods) — this unblocks Pod Security Admission
+  `restricted`. On upgrade, any existing task image that runs as root will fail to
+  start with `CreateContainerConfigError` ("container has runAsNonRoot and image
+  will run as root"), because the pod sets `runAsNonRoot=true` without pinning
+  `runAsUser`. **Remediation for a fleet with root task images:** set
+  `taskPodSecurity.runAsNonRoot=false` (cluster-wide — pod security is
+  intentionally not a per-DAG setting), or rebuild those images to run as a
+  non-root user. The staging PVC stays writable for any non-root UID via the
+  pod's supplementary `fsGroup`.
+
 ## [0.3.0] - 2026-08-13
 
 > Promotes the **0.3.0** release line (`v0.3.0-rc.1` → `v0.3.0-rc.4`) to stable.

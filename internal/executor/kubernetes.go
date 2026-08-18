@@ -79,8 +79,12 @@ func BuildPod(req Request) *corev1.Pod {
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
-			NodeSelector:  req.Execution.NodeSelector,
-			Tolerations:   buildTolerations(req.Execution.Tolerations),
+			// Pod-level hardening: fsGroup for a non-root task so the kubelet makes
+			// mounted volumes group-writable by the non-root user. nil (and thus
+			// unset) when the task may run as root — see buildPodSecurityContext.
+			SecurityContext: buildPodSecurityContext(req.PodSecurity),
+			NodeSelector:    req.Execution.NodeSelector,
+			Tolerations:     buildTolerations(req.Execution.Tolerations),
 			// Placement and scheduling passthrough for a shared cluster (ADR 0054):
 			// pin/spread/prioritize task pods and run accelerator (DRA) DAGs. Each
 			// is applied verbatim from the declaration, mirroring tolerations; a
@@ -235,22 +239,6 @@ func podEnv(req Request) []corev1.EnvVar {
 // *bool, where nil means "cluster default" and is not the same as false.
 func ptr[T any](v T) *T { return &v }
 
-// buildSecurityContext hardens the task container toward Pod Security
-// Admission's `restricted` profile, which requires four things: no privilege
-// escalation, every capability dropped, a seccomp profile, and a non-root user.
-//
-// The first three are unconditional because they cost an ordinary task nothing:
-// a task process does not escalate privileges, needs no Linux capability, and
-// runs fine under the runtime's default seccomp filter. None of them depend on
-// the UID, so they apply whatever the image runs as.
-//
-// The fourth, runAsNonRoot, is opt-in — see PodSecurity for why the images this
-// repo ships cannot satisfy it yet. Until that flips, a `restricted` namespace
-// still rejects task pods; what this buys today is every protection that does
-// not require changing the images.
-//
-// readOnlyRootFilesystem is opt-in for a different reason: `restricted` never
-// asks for it, and turning it on by default breaks any task that writes to /tmp.
 // decodeStructured converts one untyped map — carried verbatim from the DAG spec
 // — into a typed Kubernetes object via a JSON round-trip (the map keys match the
 // target type's JSON field names). ok is false when the entry cannot be
@@ -321,6 +309,45 @@ func mergeMetadata(own, declared map[string]string) {
 	}
 }
 
+// nonRootFSGroup is the GID the task base image runs as (runtime/Dockerfile:
+// USER 65532:65532), the de-facto "nonroot" GID from Google's distroless images
+// and the same GID the Helm chart pins for the control-plane and migration pods.
+// A non-root task carries it as the pod's fsGroup so the kubelet chowns mounted
+// volumes to this group and adds it to the container's supplementary groups —
+// without it the per-run staging PVC (ADR 0022) lands root-owned and the
+// non-root user cannot write the intermediate data it is meant to share.
+const nonRootFSGroup int64 = 65532
+
+// buildPodSecurityContext returns the pod-level security context, or nil when no
+// pod-wide setting is needed. It carries fsGroup — a pod-level knob with no
+// container-level equivalent — only for a non-root task: a task that may run as
+// root writes its volumes as root already, so there is nothing to fix, and
+// leaving the context unset skips the kubelet's recursive volume chown and keeps
+// the spec byte-identical to before this feature.
+func buildPodSecurityContext(ps PodSecurity) *corev1.PodSecurityContext {
+	if !ps.RunAsNonRoot {
+		return nil
+	}
+	return &corev1.PodSecurityContext{FSGroup: ptr(nonRootFSGroup)}
+}
+
+// buildSecurityContext hardens the task container toward Pod Security Admission's
+// `restricted` profile, which requires four things: no privilege escalation,
+// every capability dropped, a seccomp profile, and a non-root user.
+//
+// The first three are unconditional because they cost an ordinary task nothing:
+// a task process does not escalate privileges, needs no Linux capability, and
+// runs fine under the runtime's default seccomp filter. None of them depend on
+// the UID, so they apply whatever the image runs as.
+//
+// The fourth, runAsNonRoot, follows req.PodSecurity: on by default now that the
+// shipped task images carry numeric non-root UIDs, and paired at the pod level
+// with an fsGroup (buildPodSecurityContext) so the non-root user can write its
+// mounted volumes. An operator can still turn it off for a fleet whose images
+// legitimately run as root.
+//
+// readOnlyRootFilesystem stays opt-in: `restricted` never asks for it, and
+// turning it on by default breaks any task that writes to /tmp or its home dir.
 func buildSecurityContext(ps PodSecurity) *corev1.SecurityContext {
 	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: ptr(false),

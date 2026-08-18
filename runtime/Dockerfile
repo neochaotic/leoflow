@@ -30,8 +30,16 @@ LABEL org.opencontainers.image.source="https://github.com/neochaotic/leoflow"
 LABEL org.opencontainers.image.description="Leoflow task base image (agent + Python runtime)"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
-# Run as a non-root user; user code runs under this account.
-RUN useradd --create-home --uid 1000 leoflow
+# Run as a NUMERIC non-root UID (not a login name). A PodSecurity `restricted`
+# namespace enforces runAsNonRoot by verifying the image's user is non-root, and
+# the kubelet can only verify a numeric UID — a NAME like `leoflow` is
+# unresolvable, so the container is rejected even though the user is not root.
+# 65532 is the de-facto "nonroot" UID from Google's distroless images, matching
+# the UID the Helm chart pins for the control-plane and migration pods. The home
+# dir is created and owned by this UID so runtime writes to it (e.g. __pycache__)
+# succeed; the staging PVC is made group-writable at the pod level via fsGroup.
+RUN groupadd --gid 65532 leoflow \
+ && useradd --create-home --home-dir /home/leoflow --uid 65532 --gid 65532 leoflow
 
 COPY --from=agent-build /out/leoflow-agent /usr/local/bin/leoflow-agent
 COPY runtime/python /opt/leoflow-runtime
@@ -44,7 +52,7 @@ RUN pip install --no-cache-dir /opt/leoflow-runtime
 ARG AIRFLOW_TASK_SDK_VERSION=1.2.1
 RUN pip install --no-cache-dir "apache-airflow-task-sdk==${AIRFLOW_TASK_SDK_VERSION}"
 
-USER leoflow
+USER 65532:65532
 WORKDIR /home/leoflow
 
 # The agent is PID 1; it fetches the task spec and runs the user code.

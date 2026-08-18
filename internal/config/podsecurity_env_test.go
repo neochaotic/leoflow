@@ -14,28 +14,35 @@ import (
 // env var is ignored, and the escape hatch does not exist. This pins both keys
 // against that.
 func TestPodSecurityDefaultsBindFromEnv(t *testing.T) {
-	t.Setenv("LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT", "true")
+	// Each key is flipped away from its own default so a value that binds proves
+	// the env var reached the field rather than merely matching the default:
+	// run_tasks_as_non_root defaults on, so drive it off; read_only defaults off,
+	// so drive it on.
+	t.Setenv("LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT", "false")
 	t.Setenv("LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM", "true")
 	c, err := config.LoadServer("", nil)
 	if err != nil {
 		t.Fatalf("LoadServer: %v", err)
 	}
-	if !c.Executor.Defaults.RunTasksAsNonRoot {
-		t.Error("LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT did not bind: the non-root opt-in would be unreachable")
+	if c.Executor.Defaults.RunTasksAsNonRoot {
+		t.Error("LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT did not bind: the non-root opt-out would be unreachable")
 	}
 	if !c.Executor.Defaults.ReadOnlyTaskRootFilesystem {
 		t.Error("LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM did not bind")
 	}
 }
 
-// The secure posture must be what an operator gets without configuring anything.
+// The secure posture must be what an operator gets without configuring anything:
+// runAsNonRoot on (the shipped images carry numeric non-root UIDs), and
+// readOnlyRootFilesystem off (restricted does not require it and it breaks
+// ordinary Python tasks).
 func TestPodSecurityDefaultsAreSecureWhenUnset(t *testing.T) {
 	c, err := config.LoadServer("", nil)
 	if err != nil {
 		t.Fatalf("LoadServer: %v", err)
 	}
-	if c.Executor.Defaults.RunTasksAsNonRoot {
-		t.Error("RunTasksAsNonRoot must default to false until the shipped images carry numeric non-root UIDs")
+	if !c.Executor.Defaults.RunTasksAsNonRoot {
+		t.Error("RunTasksAsNonRoot must default to true now that the shipped images carry numeric non-root UIDs")
 	}
 	if c.Executor.Defaults.ReadOnlyTaskRootFilesystem {
 		t.Error("ReadOnlyTaskRootFilesystem must default to false (restricted does not require it)")

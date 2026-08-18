@@ -403,38 +403,42 @@ tests:
   # Task-pod hardening is cluster-operator policy, so it must reach the control
   # plane the way the operator sets it: through the chart. A field that exists in
   # values.yaml but never renders is an escape hatch nobody can pull.
-  - it: stamps the task-pod hardening defaults (secure when unset)
+  - it: stamps the task-pod hardening defaults (runAsNonRoot on, readOnly off)
     template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
     asserts:
+      # runAsNonRoot is on by default now that the shipped task images carry
+      # numeric non-root UIDs (runtime/Dockerfile: USER 65532:65532).
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT
-            value: "false"
+            value: "true"
+      # readOnlyRootFilesystem stays off: restricted does not require it and it
+      # breaks ordinary Python tasks that write to /tmp or the pip cache.
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM
             value: "false"
 
-  - it: propagates the task-pod hardening opt-ins when the operator sets them
+  - it: propagates the task-pod hardening choices when the operator overrides them
     template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
-      taskPodSecurity.runAsNonRoot: true
+      taskPodSecurity.runAsNonRoot: false
       taskPodSecurity.readOnlyRootFilesystem: true
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT
-            value: "true"
+            value: "false"
       - contains:
           path: spec.template.spec.containers[0].env
           content:

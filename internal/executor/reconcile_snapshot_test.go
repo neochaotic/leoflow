@@ -49,13 +49,21 @@ func TestReconcile_FromSnapshot_AttemptGuarded(t *testing.T) {
 	}
 }
 
-// TestReconcile_SnapshotError_Surfaces: a snapshot error (e.g. cache not synced)
-// is returned so the reconciler retries next tick instead of acting on a cold or
-// partial view.
-func TestReconcile_SnapshotError_Surfaces(t *testing.T) {
-	r := NewReconciler(fake.NewClientset(), "leoflow", &fakeReporter{})
+// TestReconcile_SnapshotError_FallsBackToLiveList: a snapshot error (e.g. the
+// informer never synced — RBAC drift, a broken watch) must NOT stall the
+// reconciler. It degrades to the authoritative live LIST, so ADR-0052
+// lost-outcome recovery and finished-pod GC keep running during an informer
+// outage instead of being silently disabled every tick.
+func TestReconcile_SnapshotError_FallsBackToLiveList(t *testing.T) {
+	failed := managedPod("p-fail", "ti-fail", corev1.PodFailed) // live: the fallback LIST must find it
+	reporter := &fakeReporter{}
+	r := NewReconciler(fake.NewClientset(failed), "leoflow", reporter)
 	r.SetPodSnapshotter(&fakeSnapshotter{err: errCacheNotSynced})
-	if err := r.Reconcile(context.Background()); err == nil {
-		t.Error("a snapshot error must surface so the tick retries")
+
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("a snapshot error must fall back to the live LIST, not surface, got %v", err)
+	}
+	if got, ok := reporter.settled["ti-fail"]; !ok || got.kind != settleFailed {
+		t.Fatalf("on a snapshot error the reconciler must fall back to the live LIST and still settle the terminal pod, got %+v (ok=%v)", got, ok)
 	}
 }

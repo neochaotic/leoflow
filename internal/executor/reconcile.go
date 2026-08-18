@@ -249,10 +249,17 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 func (r *Reconciler) listTaskPods(ctx context.Context) ([]*corev1.Pod, error) {
 	if r.snapshot != nil {
 		pods, err := r.snapshot.SnapshotTaskPods()
-		if err != nil {
-			return nil, fmt.Errorf("snapshotting task pods: %w", err)
+		if err == nil {
+			return pods, nil
 		}
-		return pods, nil
+		// The snapshot is unavailable (e.g. the informer never synced — RBAC
+		// drift denying watch, or a broken watch). Degrade to the live LIST
+		// rather than propagate: a returned error would stall Reconcile every
+		// tick and silently disable ADR-0052 lost-outcome recovery and
+		// finished-pod GC. This mirrors the reapers' cold-cache fallback; at the
+		// ~30s reconcile cadence a live LIST during an informer outage is
+		// O(P)/30s, not the per-second storm this read-path removed.
+		slog.DebugContext(ctx, "task-pod snapshot unavailable; falling back to live LIST", "err", err)
 	}
 	list, err := r.clientset.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "leoflow.io/run-id",

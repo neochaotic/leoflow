@@ -364,6 +364,32 @@ func TestStepSchedulesRootTask(t *testing.T) {
 	}
 }
 
+// TestStepMaxActiveTasksCapsAcrossSiblingRuns: two runs of the SAME DAG, each
+// with ready tasks, draw on ONE per-DAG max_active_tasks budget. A single tick
+// must not promote more than the cap across both runs — the per-DAG (not
+// per-run) semantics of Airflow's max_active_tasks (ADR 0053 Stage 1). Without
+// the within-tick admission threading, each run would independently promote up
+// to the cap and the DAG would overshoot.
+func TestStepMaxActiveTasksCapsAcrossSiblingRuns(t *testing.T) {
+	mk := func(runID string) RunState {
+		tasks := independent(3)
+		return RunState{
+			RunID: runID, DagID: "etl", State: domain.DagRunStateRunning,
+			Tasks: tasks, States: scheduledStates(tasks), MaxActiveTasks: 2,
+		}
+	}
+	store := newFakeStore(mk("r1"), mk("r2"))
+	d := &fakeDispatcher{}
+	s := newScheduler(store)
+	s.SetDispatcher(d)
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.dispatched) != 2 {
+		t.Errorf("dispatched %d tasks across sibling runs, want 2 (per-DAG max_active_tasks)", len(d.dispatched))
+	}
+}
+
 func TestStepFinalizesCompletedRun(t *testing.T) {
 	store := newFakeStore(RunState{
 		RunID: "r1", State: domain.DagRunStateRunning, Tasks: linearTasks(),

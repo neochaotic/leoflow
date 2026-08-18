@@ -143,6 +143,12 @@ type Store interface {
 	// failure: it increments dispatch_attempts and sets next_dispatch_at so the
 	// planner does not re-attempt until the backoff elapses (ADR 0031 Amendment A).
 	RecordDispatchFailure(ctx context.Context, runID, taskID string, nextAt time.Time) error
+	// RecordDispatchBackpressure backs off a scheduled task after a retriable-
+	// forever cluster-backpressure dispatch failure (quota 403 / APF 429): it sets
+	// next_dispatch_at WITHOUT incrementing dispatch_attempts, so the task is
+	// re-offered once the backoff elapses but never accumulates toward the
+	// dispatch_failed cap (ADR 0053).
+	RecordDispatchBackpressure(ctx context.Context, runID, taskID string, nextAt time.Time) error
 	// FailDispatchExhausted fails a scheduled task as dispatch_failed once its
 	// dispatch-attempt budget is spent, so the run finalizes instead of looping.
 	FailDispatchExhausted(ctx context.Context, runID, taskID, reason string) error
@@ -941,7 +947,16 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 // failure is recorded in the DB, not propagated, so one task's dispatch trouble
 // does not abort the tick. A dispatch failure is infrastructure, not a task
 // failure, so it never consumes the task's try_number.
+//
+// Cluster backpressure (a ResourceQuota 403 or an APF 429) is split out first
+// (ADR 0053): it is retriable-forever, so it is backed off WITHOUT touching the
+// dispatch-attempt counter and can never reach the dispatch_failed give-up below.
+// Leoflow holds the task and re-offers it until the cluster has room, rather than
+// failing the user's task because the cluster asked it to slow down.
 func (s *Scheduler) handleDispatchFailure(ctx context.Context, run RunState, taskID string, cause error) error {
+	if classifyDispatchError(cause) == dispatchRetriableForever {
+		return s.backoffBackpressure(ctx, run, taskID, cause)
+	}
 	attempts := run.DispatchAttempts[taskID] + 1
 	if attempts >= dispatchMaxAttempts {
 		reason := fmt.Sprintf("dispatch_failed after %d attempts: %v", attempts, cause)
@@ -961,6 +976,34 @@ func (s *Scheduler) handleDispatchFailure(ctx context.Context, run RunState, tas
 		"run", run.RunID, "task", taskID, "attempt", attempts, "next_dispatch_at", nextAt, "error", cause)
 	if err := s.store.RecordDispatchFailure(ctx, run.RunID, taskID, nextAt); err != nil {
 		s.logger.Error("recording dispatch failure", "run", run.RunID, "task", taskID, "error", err)
+	}
+	return nil
+}
+
+// backoffBackpressure handles a retriable-forever dispatch failure caused by
+// cluster backpressure (ADR 0053). It sets next_dispatch_at so the planner holds
+// the task `scheduled` and re-offers it once the backoff elapses, but it does NOT
+// increment dispatch_attempts — backpressure is a temporary "no room," not a
+// poison placement, so it must never accumulate toward the dispatch_failed cap.
+//
+// The backoff reuses dispatchBackoff over the task's EXISTING (un-incremented)
+// attempt count: a task hitting only backpressure keeps a steady base-interval
+// re-offer cadence rather than a growing one — the right trade-off for a
+// condition expected to clear, since it recovers fast when the cluster frees room
+// without hammering the apiserver every tick, and without inflating a counter
+// that could later fail the task. Returns nil: like every dispatch outcome, the
+// result is recorded, never propagated, so one task's backpressure cannot abort
+// the tick.
+func (s *Scheduler) backoffBackpressure(ctx context.Context, run RunState, taskID string, cause error) error {
+	now := run.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	nextAt := now.Add(dispatchBackoff(run.DispatchAttempts[taskID] + 1))
+	s.logger.Warn("dispatch hit cluster backpressure; backing off and re-offering (not counted against dispatch budget)",
+		"run", run.RunID, "task", taskID, "next_dispatch_at", nextAt, "error", cause)
+	if err := s.store.RecordDispatchBackpressure(ctx, run.RunID, taskID, nextAt); err != nil {
+		s.logger.Error("recording dispatch backpressure", "run", run.RunID, "task", taskID, "error", err)
 	}
 	return nil
 }

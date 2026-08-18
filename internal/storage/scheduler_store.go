@@ -273,6 +273,22 @@ func (s *SchedulerStore) RecordDispatchFailure(ctx context.Context, runID, taskI
 	})
 }
 
+// RecordDispatchBackpressure backs off a scheduled task after a retriable-forever
+// cluster-backpressure dispatch failure (quota 403 / APF 429), setting nextAt
+// WITHOUT incrementing dispatch_attempts so it never accumulates toward the
+// dispatch_failed cap (ADR 0053).
+func (s *SchedulerStore) RecordDispatchBackpressure(ctx context.Context, runID, taskID string, nextAt time.Time) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	return s.q.RecordDispatchBackpressure(ctx, queries.RecordDispatchBackpressureParams{
+		DagRunID:       rid,
+		TaskID:         taskID,
+		NextDispatchAt: pgtype.Timestamptz{Time: nextAt, Valid: true},
+	})
+}
+
 // FailDispatchExhausted fails a scheduled task as dispatch_failed once its
 // dispatch-attempt budget is spent (ADR 0031 Amendment A).
 func (s *SchedulerStore) FailDispatchExhausted(ctx context.Context, runID, taskID, reason string) error {

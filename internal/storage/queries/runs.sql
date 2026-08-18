@@ -768,6 +768,20 @@ SET dispatch_attempts = dispatch_attempts + 1,
     next_dispatch_at = $3
 WHERE dag_run_id = $1 AND task_id = $2 AND state = 'scheduled';
 
+-- name: RecordDispatchBackpressure :exec
+-- A pod CREATE was refused by cluster backpressure — a ResourceQuota 403 or an
+-- API Priority & Fairness 429 (ADR 0053). Back off the next attempt to $3 WITHOUT
+-- touching dispatch_attempts: backpressure is a temporary "no room," retriable
+-- forever, and must never accumulate toward the dispatch_failed budget the way a
+-- permanent failure does (RecordDispatchFailure). The planner gates
+-- scheduled->queued on next_dispatch_at alone, so setting it holds and re-offers
+-- the task without a counter bump. Guarded to 'scheduled' for the same reason as
+-- RecordDispatchFailure; try_number is untouched — this is infra, not a task
+-- failure.
+UPDATE task_instances
+SET next_dispatch_at = $3
+WHERE dag_run_id = $1 AND task_id = $2 AND state = 'scheduled';
+
 -- name: FailDispatchExhausted :exec
 -- The dispatch-attempt budget is spent (ADR 0031 Amendment A): fail the task with
 -- a dispatch_failed reason so the run can finalize instead of looping forever.

@@ -184,7 +184,8 @@ func TestServerConfigValidateOIDCMessage(t *testing.T) {
 func TestValidateRejectsDevNoAuthOnNonLoopback(t *testing.T) {
 	base := func() *ServerConfig {
 		c := &ServerConfig{}
-		c.Auth.Provider = "none" // skip the jwt-secret requirement
+		c.Auth.Provider = "jwt"
+		c.Auth.JWT.Secret = "set" // satisfy the jwt-secret requirement
 		c.Auth.DevNoAuth = true
 		return c
 	}

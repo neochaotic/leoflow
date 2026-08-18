@@ -97,6 +97,19 @@ type RunState struct {
 	// from the dag.json alongside Tasks. nil means no alerting; the scheduler
 	// dispatches these rules once the run finalizes as failed.
 	Alerts *domain.AlertsConfig
+	// MaxActiveTasks is the DAG's per-DAG task-concurrency cap (Airflow's
+	// max_active_tasks, ADR 0053 Stage 1), loaded from the spec. Zero or negative
+	// means unlimited — the admission gate is a no-op, so a DAG that never sets it
+	// (and all of Lite) plans exactly as before.
+	MaxActiveTasks int
+	// ActiveTaskCount is the DAG-wide number of currently non-terminal (queued or
+	// running) task instances across every active run of this DAG, plus any this
+	// tick already admitted for the same DAG in earlier sibling runs. PlanRun
+	// subtracts it from MaxActiveTasks to derive this run's admission headroom, so
+	// the cap holds per-DAG across runs and one tick cannot breach it. The Step
+	// loop populates it; it defaults to zero, leaving the gate unlimited when
+	// MaxActiveTasks is unset.
+	ActiveTaskCount int
 }
 
 // ScheduledDAG is a cron-scheduled DAG and the logical date of its latest run.
@@ -521,9 +534,18 @@ func (s *Scheduler) Step(ctx context.Context) error {
 		return fmt.Errorf("listing active runs: %w", err)
 	}
 	activeByDAG := make(map[string]int, len(runs))
-	for _, run := range runs {
+	// Per-DAG task-admission budget (max_active_tasks, ADR 0053 Stage 1).
+	// activeTasksByDAG is the snapshot of currently non-terminal (queued+running)
+	// TIs per DAG; admittedTasksByDAG folds in what earlier sibling runs already
+	// promoted this tick so a single tick cannot breach the cap across runs —
+	// mirroring how createDueRuns folds justCreated into the max_active_runs cap.
+	activeTasksByDAG := activeTaskCounts(runs)
+	admittedTasksByDAG := make(map[string]int, len(runs))
+	for i := range runs {
+		run := runs[i]
 		activeByDAG[run.DagID]++
-		s.advanceSafely(ctx, run)
+		run.ActiveTaskCount = activeTasksByDAG[run.DagID] + admittedTasksByDAG[run.DagID]
+		admittedTasksByDAG[run.DagID] += s.advanceSafely(ctx, run)
 	}
 	createErr := s.createDueRuns(ctx, activeByDAG)
 	s.reapOrphansIfLeader(ctx)
@@ -576,23 +598,46 @@ func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	}
 }
 
+// activeTaskCounts tallies, per DAG, the task instances that already occupy a
+// max_active_tasks slot — those in a non-terminal active state (queued or
+// running) across every active run of the DAG. It is the snapshot the admission
+// gate subtracts from max_active_tasks to size per-run headroom (ADR 0053 Stage
+// 1). Reuses the runs Step already loaded, so it adds no per-tick query.
+func activeTaskCounts(runs []RunState) map[string]int {
+	counts := make(map[string]int, len(runs))
+	for i := range runs {
+		for _, st := range runs[i].States {
+			if st == domain.TaskStateQueued || st == domain.TaskStateRunning {
+				counts[runs[i].DagID]++
+			}
+		}
+	}
+	return counts
+}
+
 // advanceSafely advances one run, isolating it: a panic or error in a single run
 // is recovered, logged, and metered, but never aborts the tick. This keeps one
 // poison run (a malformed spec, a panicking dispatcher, a transient per-run DB
 // error) from stalling every other run or crashing the process — the scheduler
-// may fall behind on that run, but it stays alive and keeps the rest moving.
-func (s *Scheduler) advanceSafely(ctx context.Context, run RunState) {
+// may fall behind on that run, but it stays alive and keeps the rest moving. It
+// returns how many tasks it admitted to queued (zero on a panic or error), which
+// the caller folds into the per-DAG max_active_tasks budget for sibling runs.
+func (s *Scheduler) advanceSafely(ctx context.Context, run RunState) (admitted int) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Error("scheduler run panic recovered",
 				"run", run.RunID, "dag", run.DagID, "panic", r, "stack", string(debug.Stack()))
 			s.record("panic")
+			admitted = 0
 		}
 	}()
-	if err := s.advance(ctx, run); err != nil {
+	admitted, err := s.advance(ctx, run)
+	if err != nil {
 		s.logger.Error("advancing run", "run", run.RunID, "dag", run.DagID, "error", err)
 		s.record("run_error")
+		return 0
 	}
+	return admitted
 }
 
 // createDueRuns creates a new run for each scheduled DAG whose next cron slot
@@ -706,29 +751,37 @@ func (s *Scheduler) createScheduledRun(ctx context.Context, dagID string, logica
 	s.record("create_run")
 }
 
-func (s *Scheduler) advance(ctx context.Context, run RunState) error {
+// advance plans and applies one run's transitions, returning how many tasks it
+// promoted to queued this tick — the number that spent against the DAG's
+// max_active_tasks budget (ADR 0053 Stage 1), which the caller folds into
+// sibling runs of the same DAG so the per-DAG cap holds across runs.
+func (s *Scheduler) advance(ctx context.Context, run RunState) (int, error) {
 	// Materialize task instances on first sight of a queued run, then start it.
 	if run.State == domain.DagRunStateQueued && len(run.States) == 0 {
 		if err := s.store.MaterializeTasks(ctx, run.RunID, run.Tasks); err != nil {
-			return fmt.Errorf("materializing tasks: %w", err)
+			return 0, fmt.Errorf("materializing tasks: %w", err)
 		}
 		if err := s.store.SetRunState(ctx, run.RunID, domain.DagRunStateRunning); err != nil {
-			return fmt.Errorf("starting run: %w", err)
+			return 0, fmt.Errorf("starting run: %w", err)
 		}
-		return nil
+		return 0, nil
 	}
+	admitted := 0
 	for _, t := range PlanRun(run) {
+		if t.To == domain.TaskStateQueued {
+			admitted++
+		}
 		if err := s.applyPlanned(ctx, run, t); err != nil {
-			return err
+			return admitted, err
 		}
 	}
 	if state, done := FinalizeRun(run); done {
 		if err := s.store.SetRunState(ctx, run.RunID, state); err != nil {
-			return fmt.Errorf("finalizing run: %w", err)
+			return admitted, fmt.Errorf("finalizing run: %w", err)
 		}
 		s.maybeAlertFailure(ctx, state, run)
 	}
-	return nil
+	return admitted, nil
 }
 
 // alertMaxAttempts bounds how many times one failure episode may be sent before

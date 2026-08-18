@@ -58,20 +58,27 @@ const (
 // DAGSpec is the canonical serialized representation of a DAG consumed by the
 // control plane. It mirrors docs/api/dag-schema.json.
 type DAGSpec struct {
-	SchemaVersion string       `json:"schema_version"`
-	DagID         string       `json:"dag_id"`
-	DagVersion    string       `json:"dag_version"`
-	Image         string       `json:"image"`
-	Description   string       `json:"description,omitempty"`
-	Owner         string       `json:"owner,omitempty"`
-	Tags          []string     `json:"tags,omitempty"`
-	Schedule      *string      `json:"schedule,omitempty"`
-	ScheduleTZ    string       `json:"schedule_timezone,omitempty"`
-	StartDate     string       `json:"start_date,omitempty"`
-	EndDate       *string      `json:"end_date,omitempty"`
-	MaxActiveRuns int          `json:"max_active_runs,omitempty"`
-	Catchup       bool         `json:"catchup,omitempty"`
-	DefaultArgs   *DefaultArgs `json:"default_args,omitempty"`
+	SchemaVersion string   `json:"schema_version"`
+	DagID         string   `json:"dag_id"`
+	DagVersion    string   `json:"dag_version"`
+	Image         string   `json:"image"`
+	Description   string   `json:"description,omitempty"`
+	Owner         string   `json:"owner,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Schedule      *string  `json:"schedule,omitempty"`
+	ScheduleTZ    string   `json:"schedule_timezone,omitempty"`
+	StartDate     string   `json:"start_date,omitempty"`
+	EndDate       *string  `json:"end_date,omitempty"`
+	MaxActiveRuns int      `json:"max_active_runs,omitempty"`
+	// MaxActiveTasks caps how many of this DAG's task instances may be
+	// concurrently non-terminal (queued or running) across all of its active
+	// runs — Airflow's per-DAG max_active_tasks (ADR 0053 Stage 1). Zero (the
+	// default) means unlimited: a DAG that never sets it, and all of Lite, plans
+	// exactly as before. The scheduler enforces it in PlanRun's scheduled→queued
+	// admission gate.
+	MaxActiveTasks int          `json:"max_active_tasks,omitempty"`
+	Catchup        bool         `json:"catchup,omitempty"`
+	DefaultArgs    *DefaultArgs `json:"default_args,omitempty"`
 	// Staging, when enabled, requests an ephemeral RWX volume shared by the run's
 	// tasks at /staging (ADR 0022). nil/disabled means no staging volume.
 	Staging *StagingConfig `json:"staging,omitempty"`

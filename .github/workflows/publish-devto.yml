@@ -32,6 +32,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write # the publish step commits the returned article id back to the repo
     # Skip entirely if the token secret is not configured, so forks/CI stay green.

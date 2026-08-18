@@ -39,6 +39,7 @@ jobs:
   prune:
     name: Prune stale pre-alpha releases
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write   # Delete pre-alpha releases and their tags.
     steps:

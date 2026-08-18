@@ -55,6 +55,10 @@ func (f *flakyStore) ScheduledDAGs(context.Context) ([]ScheduledDAG, error) {
 	return f.scheduled, nil
 }
 
+func (f *flakyStore) PoolBudgets(context.Context) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
 func (f *flakyStore) CreateScheduledRun(_ context.Context, dagID string, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

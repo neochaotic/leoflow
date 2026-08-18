@@ -35,6 +35,7 @@ func (r iteratorForCreateTaskInstances) Values() ([]interface{}, error) {
 		r.rows[0].Operator,
 		r.rows[0].MaxTries,
 		r.rows[0].State,
+		r.rows[0].Pool,
 		r.rows[0].TryNumber,
 	}, nil
 }
@@ -45,10 +46,10 @@ func (r iteratorForCreateTaskInstances) Err() error {
 
 // Batched form of CreateTaskInstance: materializes every task of one run in a
 // single COPY instead of T INSERT round-trips. The caller supplies one param row
-// per task with try_number pinned to 1 (matching CreateTaskInstance's literal);
-// columns omitted from the list take their table defaults, exactly as the
-// per-row INSERT relied on, so the rows are byte-identical to the loop — only the
-// statement count changes (T INSERTs → 1 COPY).
+// per task with try_number pinned to 1 (matching CreateTaskInstance's literal)
+// and pool carried through so cross-DAG pool occupancy is attributed correctly;
+// columns omitted from the list take their table defaults, so the rows are
+// byte-identical to the loop — only the statement count changes (T INSERTs → 1 COPY).
 func (q *Queries) CreateTaskInstances(ctx context.Context, arg []CreateTaskInstancesParams) (int64, error) {
-	return q.db.CopyFrom(ctx, []string{"task_instances"}, []string{"tenant_id", "dag_run_id", "task_id", "operator", "max_tries", "state", "try_number"}, &iteratorForCreateTaskInstances{rows: arg})
+	return q.db.CopyFrom(ctx, []string{"task_instances"}, []string{"tenant_id", "dag_run_id", "task_id", "operator", "max_tries", "state", "pool", "try_number"}, &iteratorForCreateTaskInstances{rows: arg})
 }

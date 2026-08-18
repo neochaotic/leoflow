@@ -54,6 +54,11 @@ type fakeStore struct {
 	// can be asserted: a follower must NOT read run state (single-writer
 	// invariant, ADR 0031 / issue #208).
 	activeRunsCalls int
+	// poolBudgets is the per-pool slot cap the pool gate reads (keyed by PoolKey);
+	// poolBudgetsCalls counts PoolBudgets invocations so a Lite/pools-disabled tick
+	// can be asserted to never query pool budgets (ADR 0053 Stage 3).
+	poolBudgets      map[string]int
+	poolBudgetsCalls int
 }
 
 func newFakeStore(runs ...RunState) *fakeStore {
@@ -66,6 +71,10 @@ func (f *fakeStore) ActiveRuns(context.Context) ([]RunState, error) {
 }
 func (f *fakeStore) ScheduledDAGs(context.Context) ([]ScheduledDAG, error) {
 	return f.scheduled, nil
+}
+func (f *fakeStore) PoolBudgets(context.Context) (map[string]int, error) {
+	f.poolBudgetsCalls++
+	return f.poolBudgets, nil
 }
 func (f *fakeStore) CreateScheduledRun(_ context.Context, dagID string, _ time.Time) error {
 	if f.createErr {
@@ -397,6 +406,57 @@ func TestStepMaxActiveTasksCapsAcrossSiblingRuns(t *testing.T) {
 	}
 	if len(d.dispatched) != 2 {
 		t.Errorf("dispatched %d tasks across sibling runs, want 2 (per-DAG max_active_tasks)", len(d.dispatched))
+	}
+}
+
+// TestStepPoolCapsAcrossDAGs: two DIFFERENT DAGs whose tasks all draw on one
+// shared 2-slot pool. A single Pro tick must dispatch at most 2 across both DAGs
+// — the cross-DAG semantics of named pools (ADR 0053 Stage 3). The per-DAG
+// max_active_tasks gate cannot express this; the pool gate does.
+func TestStepPoolCapsAcrossDAGs(t *testing.T) {
+	mk := func(runID, dagID string) RunState {
+		tasks := pooledTasks(3, "shared")
+		return RunState{
+			RunID: runID, DagID: dagID, TenantID: testTenant, State: domain.DagRunStateRunning,
+			Tasks: tasks, States: scheduledStates(tasks),
+		}
+	}
+	store := newFakeStore(mk("r1", "alpha"), mk("r2", "beta"))
+	store.poolBudgets = map[string]int{PoolKey(testTenant, "shared"): 2}
+	d := &fakeDispatcher{}
+	s := newScheduler(store)
+	s.SetDispatcher(d)
+	s.EnablePools() // Pro path
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.dispatched) != 2 {
+		t.Errorf("dispatched %d across DAGs, want 2 (cross-DAG pool cap)", len(d.dispatched))
+	}
+}
+
+// TestStepPoolsDisabledDispatchesAllAndSkipsQuery is the Lite-safety lock at the
+// tick level: with pools disabled (Lite / non-Pro), the tick must NOT query pool
+// budgets and must dispatch every ready task — byte-identical to the pre-pool
+// behavior even if pool budgets exist in the store.
+func TestStepPoolsDisabledDispatchesAllAndSkipsQuery(t *testing.T) {
+	tasks := pooledTasks(3, "shared")
+	store := newFakeStore(RunState{
+		RunID: "r1", DagID: "alpha", TenantID: testTenant, State: domain.DagRunStateRunning,
+		Tasks: tasks, States: scheduledStates(tasks),
+	})
+	store.poolBudgets = map[string]int{PoolKey(testTenant, "shared"): 2}
+	d := &fakeDispatcher{}
+	s := newScheduler(store) // EnablePools NOT called → Lite
+	s.SetDispatcher(d)
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.dispatched) != 3 {
+		t.Errorf("dispatched %d, want all 3 (pools disabled is a no-op)", len(d.dispatched))
+	}
+	if store.poolBudgetsCalls != 0 {
+		t.Errorf("PoolBudgets called %d times, want 0 (Lite must not query pool budgets)", store.poolBudgetsCalls)
 	}
 }
 

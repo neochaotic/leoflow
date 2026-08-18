@@ -194,6 +194,10 @@
           ],
           "default": "all_success"
         },
+        "pool": {
+          "type": "string",
+          "description": "The named task pool this task draws a concurrency slot from (Airflow's pool). Empty means the implicit default_pool. Enforced Pro-only (ADR 0053); ignored on Lite."
+        },
         "retries": {
           "type": "integer",
           "minimum": 0,

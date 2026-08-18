@@ -38,6 +38,7 @@ type Querier interface {
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountDagsByLatestRunState(ctx context.Context, tenantID pgtype.UUID) ([]CountDagsByLatestRunStateRow, error)
 	CountDagsFiltered(ctx context.Context, arg CountDagsFilteredParams) (int64, error)
+	CountPools(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountTaskInstanceStatesInWindow(ctx context.Context, arg CountTaskInstanceStatesInWindowParams) ([]CountTaskInstanceStatesInWindowRow, error)
 	CountUsers(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountVariables(ctx context.Context, tenantID pgtype.UUID) (int64, error)
@@ -50,10 +51,10 @@ type Querier interface {
 	CreateTaskInstance(ctx context.Context, arg CreateTaskInstanceParams) (TaskInstance, error)
 	// Batched form of CreateTaskInstance: materializes every task of one run in a
 	// single COPY instead of T INSERT round-trips. The caller supplies one param row
-	// per task with try_number pinned to 1 (matching CreateTaskInstance's literal);
-	// columns omitted from the list take their table defaults, exactly as the
-	// per-row INSERT relied on, so the rows are byte-identical to the loop — only the
-	// statement count changes (T INSERTs → 1 COPY).
+	// per task with try_number pinned to 1 (matching CreateTaskInstance's literal)
+	// and pool carried through so cross-DAG pool occupancy is attributed correctly;
+	// columns omitted from the list take their table defaults, so the rows are
+	// byte-identical to the loop — only the statement count changes (T INSERTs → 1 COPY).
 	CreateTaskInstances(ctx context.Context, arg []CreateTaskInstancesParams) (int64, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (pgtype.UUID, error)
 	DeleteConnection(ctx context.Context, arg DeleteConnectionParams) (int64, error)
@@ -62,6 +63,9 @@ type Querier interface {
 	DeleteDagRun(ctx context.Context, arg DeleteDagRunParams) (int64, error)
 	DeleteExpiredXComIndex(ctx context.Context) error
 	DeleteImportError(ctx context.Context, arg DeleteImportErrorParams) error
+	// The implicit default pool is never deletable (Airflow parity): the guard is in
+	// the query so a direct call cannot orphan the fallback pool the gate resolves to.
+	DeletePool(ctx context.Context, arg DeletePoolParams) (int64, error)
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	// The dispatch-attempt budget is spent (ADR 0031 Amendment A): fail the task with
 	// a dispatch_failed reason so the run can finalize instead of looping forever.
@@ -83,6 +87,7 @@ type Querier interface {
 	GetDagVersionByHash(ctx context.Context, arg GetDagVersionByHashParams) (DagVersion, error)
 	GetDagVersionByID(ctx context.Context, id pgtype.UUID) (DagVersion, error)
 	GetDefaultTenant(ctx context.Context) (GetDefaultTenantRow, error)
+	GetPool(ctx context.Context, arg GetPoolParams) (GetPoolRow, error)
 	GetRoleByName(ctx context.Context, arg GetRoleByNameParams) (pgtype.UUID, error)
 	GetTenantByName(ctx context.Context, name string) (GetTenantByNameRow, error)
 	GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) (GetUserByEmailRow, error)
@@ -131,6 +136,7 @@ type Querier interface {
 	// tick's reap work even after a multi-hour outage; the rest are picked up
 	// on the next tick (the reaper is a backstop, not a sprint).
 	ListOrphanCandidates(ctx context.Context) ([]ListOrphanCandidatesRow, error)
+	ListPools(ctx context.Context, arg ListPoolsParams) ([]ListPoolsRow, error)
 	// Lists every TI currently in `running` alongside the timestamp it entered
 	// running, for the pod-lost reaper (#527). A running TI whose backing pod
 	// vanished before its first heartbeat is invisible to the agent-lost reaper
@@ -205,6 +211,15 @@ type Querier interface {
 	// late terminal report that landed between our list and our write (a live
 	// report wins over the reaper). Idempotent on a second call.
 	MarkTaskPodLost(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Every named pool's slot cap across all tenants, for the scheduler's per-tick
+	// cross-DAG admission budget (ADR 0053 Stage 3). Keyed by (tenant_id, name) so a
+	// pool name is scoped to its tenant. Pro-only: Lite never calls this.
+	PoolBudgets(ctx context.Context) ([]PoolBudgetsRow, error)
+	// Per-pool occupancy for a tenant: how many of the tenant's task instances sit in
+	// each non-terminal state, grouped by the instance's pool (a NULL pool is the
+	// implicit default_pool). Feeds the Airflow PoolResponse occupancy fields; the
+	// gate itself counts queued+running as the occupied slots.
+	PoolSlotUsage(ctx context.Context, tenantID pgtype.UUID) ([]PoolSlotUsageRow, error)
 	// A pod CREATE was refused by cluster backpressure — a ResourceQuota 403 or an
 	// API Priority & Fairness 429 (ADR 0053). Back off the next attempt to $3 WITHOUT
 	// touching dispatch_attempts: backpressure is a temporary "no room," retriable
@@ -373,6 +388,7 @@ type Querier interface {
 	UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
 	UpsertImportError(ctx context.Context, arg UpsertImportErrorParams) error
+	UpsertPool(ctx context.Context, arg UpsertPoolParams) error
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) error
 }
 

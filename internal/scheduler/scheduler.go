@@ -110,6 +110,22 @@ type RunState struct {
 	// loop populates it; it defaults to zero, leaving the gate unlimited when
 	// MaxActiveTasks is unset.
 	ActiveTaskCount int
+	// PoolsEnabled turns on the named-pool slot gate (ADR 0053 Stage 3, Pro only).
+	// The Step loop sets it from the scheduler's edition flag. Lite and any
+	// non-Pro deployment leave it false, so the pool gate is a no-op and planning
+	// is byte-identical to the max_active_tasks-only path.
+	PoolsEnabled bool
+	// PoolBudgets is the per-pool slot cap keyed by PoolKey(TenantID, pool). A pool
+	// with a non-positive or absent budget is unlimited (fail open, never
+	// deadlock). The Step loop sets it from the once-per-tick PoolBudgets snapshot;
+	// nil in Lite. Shared read-only across sibling runs.
+	PoolBudgets map[string]int
+	// PoolActive is the cross-DAG count of currently non-terminal (queued+running)
+	// task instances per pool, keyed like PoolBudgets, plus any this tick already
+	// admitted into the same pool by earlier runs. PlanRun adds its own within-call
+	// promotions on top. The Step loop sets it and folds each run's admissions back
+	// in so a single tick cannot breach a pool across runs; nil in Lite.
+	PoolActive map[string]int
 }
 
 // ScheduledDAG is a cron-scheduled DAG and the logical date of its latest run.
@@ -134,6 +150,11 @@ type ScheduledDAG struct {
 // implementation is sqlc-backed; tests use a fake.
 type Store interface {
 	ActiveRuns(ctx context.Context) ([]RunState, error)
+	// PoolBudgets returns every named pool's slot cap keyed by PoolKey(tenant,
+	// pool) — the cross-DAG admission budget the pool gate enforces (ADR 0053
+	// Stage 3). Called once per tick, and ONLY on the Pro path (poolsEnabled);
+	// Lite never invokes it.
+	PoolBudgets(ctx context.Context) (map[string]int, error)
 	MaterializeTasks(ctx context.Context, runID string, tasks []domain.TaskSpec) error
 	ApplyTransition(ctx context.Context, runID, taskID string, to domain.TaskState) error
 	// ApplyTransitions moves every listed task of a run to the SAME target state
@@ -318,6 +339,13 @@ type Scheduler struct {
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
 	warnedSchedules map[string]string
+	// poolsEnabled turns on the cross-DAG named-pool admission gate (ADR 0053
+	// Stage 3). Pro-only: main calls EnablePools() only when the edition is "pro".
+	// While false (Lite / non-Pro), Step never loads pool budgets and never
+	// threads pool occupancy, so PlanRun's pool gate is a no-op and Lite plans
+	// byte-identically. Set once at construction (before ticking), read on the
+	// single-threaded tick, so it needs no lock.
+	poolsEnabled bool
 }
 
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
@@ -446,6 +474,13 @@ func (s *Scheduler) SetRecorder(r Recorder) { s.recorder = r }
 // scheduler advances state only and launches nothing).
 func (s *Scheduler) SetDispatcher(d Dispatcher) { s.dispatcher = d }
 
+// EnablePools turns on the cross-DAG named-pool admission gate (ADR 0053 Stage
+// 3). It is Pro-only: main calls it exactly when the edition is "pro". Left
+// unset in Lite/non-Pro, where the pool gate stays a no-op and the tick never
+// queries pool budgets, so Lite plans byte-identically. Call once before the
+// scheduler starts ticking.
+func (s *Scheduler) EnablePools() { s.poolsEnabled = true }
+
 // SetAlerter attaches the on-failure alerter (optional; #424). Without it, or
 // for a DAG with no alert rules, the scheduler finalizes failures silently.
 func (s *Scheduler) SetAlerter(a Alerter) { s.alerter = a }
@@ -564,11 +599,27 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	// mirroring how createDueRuns folds justCreated into the max_active_runs cap.
 	activeTasksByDAG := activeTaskCounts(runs)
 	admittedTasksByDAG := make(map[string]int, len(runs))
+	// Cross-DAG named-pool budget (ADR 0053 Stage 3, Pro only). Loaded once per
+	// tick; poolOccupied starts at the current cross-DAG occupancy and each run's
+	// admissions fold back in — the same within-tick threading as the per-DAG cap,
+	// generalized to a per-pool map. Left nil on the Lite path, where no pool query
+	// runs and the pool gate is a no-op.
+	poolBudgets, poolOccupied, err := s.loadPoolBudget(ctx, runs)
+	if err != nil {
+		return err
+	}
 	for i := range runs {
 		run := runs[i]
 		activeByDAG[run.DagID]++
 		run.ActiveTaskCount = activeTasksByDAG[run.DagID] + admittedTasksByDAG[run.DagID]
-		admittedTasksByDAG[run.DagID] += s.advanceSafely(ctx, run)
+		run.PoolsEnabled = s.poolsEnabled
+		run.PoolBudgets = poolBudgets
+		run.PoolActive = poolOccupied
+		admitted, admittedByPool := s.advanceSafely(ctx, run)
+		admittedTasksByDAG[run.DagID] += admitted
+		for k, n := range admittedByPool {
+			poolOccupied[k] += n
+		}
 	}
 	createErr := s.createDueRuns(ctx, activeByDAG)
 	s.reapOrphansIfLeader(ctx)
@@ -640,29 +691,65 @@ func activeTaskCounts(runs []RunState) map[string]int {
 	return counts
 }
 
+// loadPoolBudget prepares the cross-DAG named-pool admission state for a tick
+// (ADR 0053 Stage 3): the per-pool slot caps (queried once) and the current
+// per-pool occupancy (derived from the runs already loaded). It is a strict
+// no-op on the Lite/non-Pro path — it returns nil maps and issues NO pool query
+// — so a Lite tick is byte-identical to the pre-pool behavior. A query error is
+// returned so the tick surfaces it rather than silently disabling the gate.
+func (s *Scheduler) loadPoolBudget(ctx context.Context, runs []RunState) (budgets, occupied map[string]int, err error) {
+	if !s.poolsEnabled {
+		return nil, nil, nil
+	}
+	budgets, err = s.store.PoolBudgets(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading pool budgets: %w", err)
+	}
+	return budgets, activePoolCounts(runs), nil
+}
+
+// activePoolCounts tallies, per pool (keyed by PoolKey), the task instances that
+// already occupy a slot — those queued or running across every active run,
+// cross-DAG (ADR 0053 Stage 3). A task instance's pool is its spec pool, or the
+// implicit default pool. Reuses the runs Step already loaded, so it adds no
+// per-tick query. Only built on the Pro path (see loadPoolBudget).
+func activePoolCounts(runs []RunState) map[string]int {
+	counts := make(map[string]int, len(runs))
+	for i := range runs {
+		for _, t := range runs[i].Tasks {
+			if st := runs[i].States[t.TaskID]; st == domain.TaskStateQueued || st == domain.TaskStateRunning {
+				counts[PoolKey(runs[i].TenantID, resolvePool(t.Pool))]++
+			}
+		}
+	}
+	return counts
+}
+
 // advanceSafely advances one run, isolating it: a panic or error in a single run
 // is recovered, logged, and metered, but never aborts the tick. This keeps one
 // poison run (a malformed spec, a panicking dispatcher, a transient per-run DB
 // error) from stalling every other run or crashing the process — the scheduler
 // may fall behind on that run, but it stays alive and keeps the rest moving. It
-// returns how many tasks it admitted to queued (zero on a panic or error), which
-// the caller folds into the per-DAG max_active_tasks budget for sibling runs.
-func (s *Scheduler) advanceSafely(ctx context.Context, run RunState) (admitted int) {
+// returns how many tasks it admitted to queued (zero on a panic or error), and
+// the per-pool breakdown of those admissions (nil unless the pool gate is on),
+// which the caller folds into the per-DAG max_active_tasks and per-pool budgets
+// for sibling runs.
+func (s *Scheduler) advanceSafely(ctx context.Context, run RunState) (admitted int, admittedByPool map[string]int) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Error("scheduler run panic recovered",
 				"run", run.RunID, "dag", run.DagID, "panic", r, "stack", string(debug.Stack()))
 			s.record("panic")
-			admitted = 0
+			admitted, admittedByPool = 0, nil
 		}
 	}()
-	admitted, err := s.advance(ctx, run)
+	admitted, admittedByPool, err := s.advance(ctx, run)
 	if err != nil {
 		s.logger.Error("advancing run", "run", run.RunID, "dag", run.DagID, "error", err)
 		s.record("run_error")
-		return 0
+		return 0, nil
 	}
-	return admitted
+	return admitted, admittedByPool
 }
 
 // createDueRuns creates a new run for each scheduled DAG whose next cron slot
@@ -777,21 +864,22 @@ func (s *Scheduler) createScheduledRun(ctx context.Context, dagID string, logica
 }
 
 // advance plans and applies one run's transitions, returning how many tasks it
-// promoted to queued this tick — the number that spent against the DAG's
-// max_active_tasks budget (ADR 0053 Stage 1), which the caller folds into
-// sibling runs of the same DAG so the per-DAG cap holds across runs.
-func (s *Scheduler) advance(ctx context.Context, run RunState) (int, error) {
+// promoted to queued this tick (the per-DAG max_active_tasks charge, ADR 0053
+// Stage 1) and the per-pool breakdown of those promotions (the cross-DAG pool
+// charge, Stage 3; nil when the pool gate is off). The caller folds both into
+// the sibling runs' budgets so a single tick cannot breach either cap.
+func (s *Scheduler) advance(ctx context.Context, run RunState) (admitted int, admittedByPool map[string]int, err error) {
 	// Materialize task instances on first sight of a queued run, then start it.
 	if run.State == domain.DagRunStateQueued && len(run.States) == 0 {
-		if err := s.store.MaterializeTasks(ctx, run.RunID, run.Tasks); err != nil {
-			return 0, fmt.Errorf("materializing tasks: %w", err)
+		if err = s.store.MaterializeTasks(ctx, run.RunID, run.Tasks); err != nil {
+			return 0, nil, fmt.Errorf("materializing tasks: %w", err)
 		}
-		if err := s.store.SetRunState(ctx, run.RunID, domain.DagRunStateRunning); err != nil {
-			return 0, fmt.Errorf("starting run: %w", err)
+		if err = s.store.SetRunState(ctx, run.RunID, domain.DagRunStateRunning); err != nil {
+			return 0, nil, fmt.Errorf("starting run: %w", err)
 		}
-		return 0, nil
+		return 0, nil, nil
 	}
-	admitted := 0
+	poolOf := taskPools(run) // taskID → pool key; nil when the pool gate is off.
 	// Plain state-set transitions (no side effect beyond the write + metric) are
 	// collected and flushed grouped by target state in one UPDATE each, instead of
 	// one per task. The queued (dispatch) and none (guarded reset) rails keep their
@@ -803,21 +891,41 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) (int, error) {
 	for _, t := range PlanRun(run) {
 		if t.To == domain.TaskStateQueued {
 			admitted++
+			if poolOf != nil {
+				if admittedByPool == nil {
+					admittedByPool = map[string]int{}
+				}
+				admittedByPool[poolOf[t.TaskID]]++
+			}
 		}
-		if err := s.applyPlanned(ctx, run, t, batch); err != nil {
-			return admitted, err
+		if aerr := s.applyPlanned(ctx, run, t, batch); aerr != nil {
+			return admitted, admittedByPool, aerr
 		}
 	}
-	if err := s.flushTransitions(ctx, run, batch); err != nil {
-		return admitted, err
+	if ferr := s.flushTransitions(ctx, run, batch); ferr != nil {
+		return admitted, admittedByPool, ferr
 	}
 	if state, done := FinalizeRun(run); done {
-		if err := s.store.SetRunState(ctx, run.RunID, state); err != nil {
-			return admitted, fmt.Errorf("finalizing run: %w", err)
+		if err = s.store.SetRunState(ctx, run.RunID, state); err != nil {
+			return admitted, admittedByPool, fmt.Errorf("finalizing run: %w", err)
 		}
 		s.maybeAlertFailure(ctx, state, run)
 	}
-	return admitted, nil
+	return admitted, admittedByPool, nil
+}
+
+// taskPools maps each of a run's task IDs to its pool budget key (ADR 0053 Stage
+// 3), applying the implicit-default-pool fallback. It returns nil when the pool
+// gate is off (Lite / non-Pro), so advance does no per-pool bookkeeping there.
+func taskPools(run RunState) map[string]string {
+	if !run.PoolsEnabled {
+		return nil
+	}
+	m := make(map[string]string, len(run.Tasks))
+	for _, t := range run.Tasks {
+		m[t.TaskID] = PoolKey(run.TenantID, resolvePool(t.Pool))
+	}
+	return m
 }
 
 // alertMaxAttempts bounds how many times one failure episode may be sent before

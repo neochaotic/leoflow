@@ -11,7 +11,7 @@ import (
 	apiclient "github.com/neochaotic/leoflow/pkg/client"
 )
 
-// runsServer serves one DAG ("etl") whose dagRuns endpoint honours the ?state
+// runsServer serves one DAG ("etl") whose dagRuns endpoint honors the ?state
 // filter and returns runs with fixed start dates so age filtering is testable.
 func runsServer(t *testing.T, now time.Time) *httptest.Server {
 	t.Helper()

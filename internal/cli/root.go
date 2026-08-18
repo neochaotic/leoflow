@@ -36,12 +36,14 @@ func NewRootCommand() *cobra.Command {
 		&cobra.Group{ID: "authoring", Title: "Authoring loop (write → check → package → push):"},
 		&cobra.Group{ID: "runtime", Title: "Runtime (start the control plane):"},
 		&cobra.Group{ID: "inspection", Title: "Inspection (query DAGs / runs / auth):"},
+		&cobra.Group{ID: "operations", Title: "Operations (operate a running control plane):"},
 		&cobra.Group{ID: "lifecycle", Title: "Lifecycle (install, configure, repair, retire):"},
 	)
 
 	authoring := []*cobra.Command{newInitCommand(), newValidateCommand(), newCompileCommand(), newPushCommand(), newDeployCommand()}
 	runtime := []*cobra.Command{newLiteCommand(), newServerCommand()}
 	inspection := []*cobra.Command{newDagsCommand(), newRunsCommand(), newAuthCommand()}
+	operations := []*cobra.Command{newAdminCommand()}
 	lifecycle := []*cobra.Command{newSetupCommand(), newDoctorCommand(), newDBCommand(), newUninstallCommand(), newVersionCommand()}
 
 	for _, c := range authoring {
@@ -54,6 +56,10 @@ func NewRootCommand() *cobra.Command {
 	}
 	for _, c := range inspection {
 		c.GroupID = "inspection"
+		root.AddCommand(c)
+	}
+	for _, c := range operations {
+		c.GroupID = "operations"
 		root.AddCommand(c)
 	}
 	for _, c := range lifecycle {

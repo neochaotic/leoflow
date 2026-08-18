@@ -32,6 +32,7 @@ func TestBuildPodAppliesUnconditionalHardening(t *testing.T) {
 	sc := pod.Spec.Containers[0].SecurityContext
 	if sc == nil {
 		t.Fatal("container SecurityContext is nil — PSA restricted rejects the pod outright")
+		return // unreachable; makes the non-nil invariant explicit to staticcheck (SA5011)
 	}
 	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
 		t.Error("AllowPrivilegeEscalation must be false")
@@ -62,6 +63,7 @@ func TestBuildPodLeavesRootFilesystemWritableByDefault(t *testing.T) {
 	sc := pod.Spec.Containers[0].SecurityContext
 	if sc == nil {
 		t.Fatal("container SecurityContext is nil")
+		return // unreachable; makes the non-nil invariant explicit to staticcheck (SA5011)
 	}
 	if sc.ReadOnlyRootFilesystem != nil && *sc.ReadOnlyRootFilesystem {
 		t.Error("ReadOnlyRootFilesystem must default to off: PSA restricted does not require it " +

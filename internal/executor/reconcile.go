@@ -150,6 +150,19 @@ type OutcomeReporter interface {
 	RescheduleTask(ctx context.Context, taskInstanceID string, tryNumber int, at time.Time) error
 }
 
+// PodSnapshotter supplies the reconciler's task-pod set from a local cache instead
+// of a live LIST every tick (PR-10). It is safe here without a live confirm: the
+// signal the reconciler acts on is presence of a terminal pod, which is monotonic
+// (a pod that reached Failed/Succeeded stays terminal), and every settle is
+// attempt- and state-guarded (ADR 0052), so at worst cache lag delays a settle by
+// a tick. A nil snapshotter (Lite/subprocess, or a cold start) keeps the live LIST.
+type PodSnapshotter interface {
+	// SnapshotTaskPods returns the managed task pods currently known, or an error
+	// (e.g. the cache has not synced) so the reconciler retries next tick rather
+	// than treating an unsynced cache as an empty cluster.
+	SnapshotTaskPods() ([]*corev1.Pod, error)
+}
+
 // podGCGracePeriod is how long a finished pod is kept before garbage collection,
 // leaving a window to inspect a failed pod with kubectl.
 const podGCGracePeriod = 10 * time.Minute
@@ -172,6 +185,10 @@ type Reconciler struct {
 	reporter  OutcomeReporter
 	now       func() time.Time
 	ttl       time.Duration
+	// snapshot, when set, replaces the per-tick live LIST with a cache read
+	// (PR-10). Nil keeps the live LIST (Lite/subprocess, or before the informer
+	// is wired). GC deletes still go straight to the apiserver.
+	snapshot PodSnapshotter
 }
 
 // NewReconciler builds a Reconciler over the given cluster and outcome reporter.
@@ -179,18 +196,20 @@ func NewReconciler(clientset kubernetes.Interface, namespace string, reporter Ou
 	return &Reconciler{clientset: clientset, namespace: namespace, reporter: reporter, now: time.Now, ttl: podGCGracePeriod}
 }
 
+// SetPodSnapshotter wires a cache-backed pod source so Reconcile reads its
+// task-pod set from the shared informer instead of a live LIST every tick
+// (PR-10). Left unset, the reconciler keeps the live LIST — today's behavior.
+func (r *Reconciler) SetPodSnapshotter(s PodSnapshotter) { r.snapshot = s }
+
 // Reconcile lists managed task pods, records each terminal one's outcome against
 // its task instance, and garbage-collects finished pods older than the grace
 // period.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
-	pods, err := r.clientset.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "leoflow.io/run-id",
-	})
+	pods, err := r.listTaskPods(ctx)
 	if err != nil {
-		return fmt.Errorf("listing task pods: %w", err)
+		return err
 	}
-	for i := range pods.Items {
-		pod := &pods.Items[i]
+	for _, pod := range pods {
 		v := classifyPod(pod)
 		if !v.terminal {
 			continue
@@ -221,6 +240,38 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// listTaskPods returns the managed task-pod set to reconcile, from the cache
+// snapshot when a PodSnapshotter is wired (PR-10) and from a live LIST otherwise.
+// The live path selects on the leoflow.io/run-id label, matching the informer's
+// scope, and copies to pointers so both paths share one loop shape.
+func (r *Reconciler) listTaskPods(ctx context.Context) ([]*corev1.Pod, error) {
+	if r.snapshot != nil {
+		pods, err := r.snapshot.SnapshotTaskPods()
+		if err == nil {
+			return pods, nil
+		}
+		// The snapshot is unavailable (e.g. the informer never synced — RBAC
+		// drift denying watch, or a broken watch). Degrade to the live LIST
+		// rather than propagate: a returned error would stall Reconcile every
+		// tick and silently disable ADR-0052 lost-outcome recovery and
+		// finished-pod GC. This mirrors the reapers' cold-cache fallback; at the
+		// ~30s reconcile cadence a live LIST during an informer outage is
+		// O(P)/30s, not the per-second storm this read-path removed.
+		slog.DebugContext(ctx, "task-pod snapshot unavailable; falling back to live LIST", "err", err)
+	}
+	list, err := r.clientset.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "leoflow.io/run-id",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing task pods: %w", err)
+	}
+	out := make([]*corev1.Pod, 0, len(list.Items))
+	for i := range list.Items {
+		out = append(out, &list.Items[i])
+	}
+	return out, nil
 }
 
 // settlePod records the pod's recovered outcome against its task instance,

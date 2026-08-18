@@ -14,10 +14,13 @@ type fakePodManager struct {
 	deletedTasks []deletedTask
 	deletedRuns  []string
 	// active maps "runID/taskID" -> whether a live pod exists; absent key is false.
-	active     map[string]bool
-	activeErr  error
-	deleteErr  error
-	deleteRunE error
+	active map[string]bool
+	// activeCalls counts TaskPodActive invocations, so a test can assert the live
+	// (quorum) read was skipped when the presence cache already deferred.
+	activeCalls int
+	activeErr   error
+	deleteErr   error
+	deleteRunE  error
 }
 
 type deletedTask struct {
@@ -43,6 +46,7 @@ func (f *fakePodManager) DeleteRunPods(_ context.Context, runID string) error {
 }
 
 func (f *fakePodManager) TaskPodActive(_ context.Context, runID, taskID string) (bool, error) {
+	f.activeCalls++
 	if f.activeErr != nil {
 		return false, f.activeErr
 	}

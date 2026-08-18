@@ -283,6 +283,7 @@ func (d *DAGSpec) validateResourceQuantities() error {
 			for _, f := range []struct{ name, value string }{
 				{"cpu", q.val.CPU},
 				{"memory", q.val.Memory},
+				{"ephemeral-storage", q.val.EphemeralStorage},
 			} {
 				if f.value == "" {
 					continue

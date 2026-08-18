@@ -81,6 +81,17 @@ func BuildPod(req Request) *corev1.Pod {
 			RestartPolicy: corev1.RestartPolicyNever,
 			NodeSelector:  req.Execution.NodeSelector,
 			Tolerations:   buildTolerations(req.Execution.Tolerations),
+			// Placement and scheduling passthrough for a shared cluster (ADR 0054):
+			// pin/spread/prioritize task pods and run accelerator (DRA) DAGs. Each
+			// is applied verbatim from the declaration, mirroring tolerations; a
+			// value left unset stays the zero value so a DAG that declares none is
+			// byte-identical to today.
+			PriorityClassName:             req.Execution.PriorityClassName,
+			TerminationGracePeriodSeconds: req.Execution.TerminationGracePeriodSeconds,
+			RuntimeClassName:              req.Execution.RuntimeClassName,
+			TopologySpreadConstraints:     decodeStructuredSlice[corev1.TopologySpreadConstraint](req.Execution.TopologySpreadConstraints),
+			Affinity:                      buildAffinity(req.Execution.Affinity),
+			ResourceClaims:                decodeStructuredSlice[corev1.PodResourceClaim](req.Execution.ResourceClaims),
 			// The task pod authenticates to the control plane with its own
 			// per-task token over gRPC and never calls the Kubernetes API, so a
 			// mounted ServiceAccount token is a credential handed to untrusted
@@ -111,6 +122,8 @@ func BuildPod(req Request) *corev1.Pod {
 	if req.Execution.ServiceAccount != "" {
 		pod.Spec.ServiceAccountName = req.Execution.ServiceAccount
 	}
+	mergeMetadata(pod.Labels, req.Execution.Labels)
+	mergeMetadata(pod.Annotations, req.Execution.Annotations)
 	mountStagingVolume(pod, req)
 	mountAgentTLSCA(pod, req)
 	mountTaskSecret(pod, req)
@@ -238,32 +251,74 @@ func ptr[T any](v T) *T { return &v }
 //
 // readOnlyRootFilesystem is opt-in for a different reason: `restricted` never
 // asks for it, and turning it on by default breaks any task that writes to /tmp.
-// buildTolerations converts a task's declared tolerations — an untyped
-// []map[string]any carried verbatim from the DAG spec — into typed pod
-// tolerations via a JSON round-trip (the map keys match corev1.Toleration's JSON
-// field names). A malformed entry is skipped rather than failing the whole pod
-// build, matching how BuildPod treats other optional placement hints. Returns nil
-// when none are declared, so the field stays unset for a DAG that declares none.
-func buildTolerations(raw []map[string]any) []corev1.Toleration {
+// decodeStructured converts one untyped map — carried verbatim from the DAG spec
+// — into a typed Kubernetes object via a JSON round-trip (the map keys match the
+// target type's JSON field names). ok is false when the entry cannot be
+// marshaled or decoded, so callers skip it rather than failing the whole pod
+// build, matching how BuildPod treats other optional placement hints.
+func decodeStructured[T any](m map[string]any) (out T, ok bool) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return out, false
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return out, false
+	}
+	return out, true
+}
+
+// decodeStructuredSlice maps decodeStructured over a slice of untyped entries,
+// skipping malformed ones. It returns nil when none are declared or none survive,
+// so the field stays unset for a DAG that declares none.
+func decodeStructuredSlice[T any](raw []map[string]any) []T {
 	if len(raw) == 0 {
 		return nil
 	}
-	out := make([]corev1.Toleration, 0, len(raw))
+	out := make([]T, 0, len(raw))
 	for _, m := range raw {
-		b, err := json.Marshal(m)
-		if err != nil {
-			continue
+		if v, ok := decodeStructured[T](m); ok {
+			out = append(out, v)
 		}
-		var t corev1.Toleration
-		if err := json.Unmarshal(b, &t); err != nil {
-			continue
-		}
-		out = append(out, t)
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// buildTolerations converts a task's declared tolerations — an untyped
+// []map[string]any carried verbatim from the DAG spec — into typed pod
+// tolerations via a JSON round-trip. A malformed entry is skipped and omission
+// stays unset (nil).
+func buildTolerations(raw []map[string]any) []corev1.Toleration {
+	return decodeStructuredSlice[corev1.Toleration](raw)
+}
+
+// buildAffinity converts a task's declared affinity — an untyped map[string]any
+// carried verbatim from the DAG spec — into a typed *corev1.Affinity via a JSON
+// round-trip. Returns nil when none is declared or the entry is malformed, so the
+// field stays unset for a DAG that declares none.
+func buildAffinity(m map[string]any) *corev1.Affinity {
+	if len(m) == 0 {
+		return nil
+	}
+	if v, ok := decodeStructured[corev1.Affinity](m); ok {
+		return &v
+	}
+	return nil
+}
+
+// mergeMetadata overlays operator-declared labels or annotations onto Leoflow's
+// own pod metadata, but Leoflow's keys always win a collision: the leoflow.io/*
+// identity labels and the task-instance-id annotation are load-bearing (the
+// reconciler and terminate path select on them), so a DAG cannot shadow them. The
+// own map is mutated in place; a nil declared map is a no-op.
+func mergeMetadata(own, declared map[string]string) {
+	for k, v := range declared {
+		if _, taken := own[k]; !taken {
+			own[k] = v
+		}
+	}
 }
 
 func buildSecurityContext(ps PodSecurity) *corev1.SecurityContext {
@@ -284,21 +339,30 @@ func buildSecurityContext(ps PodSecurity) *corev1.SecurityContext {
 func buildResources(r domain.Resources) corev1.ResourceRequirements {
 	out := corev1.ResourceRequirements{}
 	if r.Requests != nil {
-		out.Requests = quantities(r.Requests.CPU, r.Requests.Memory)
+		out.Requests = quantities(*r.Requests)
 	}
 	if r.Limits != nil {
-		out.Limits = quantities(r.Limits.CPU, r.Limits.Memory)
+		out.Limits = quantities(*r.Limits)
 	}
+	// Container-side Dynamic Resource Allocation: the claims (declared pod-level in
+	// Execution.ResourceClaims) this container consumes (ADR 0054).
+	out.Claims = decodeStructuredSlice[corev1.ResourceClaim](r.Claims)
 	return out
 }
 
-func quantities(cpu, memory string) corev1.ResourceList {
+func quantities(q domain.ResourceQuantity) corev1.ResourceList {
 	list := corev1.ResourceList{}
-	if q, err := resource.ParseQuantity(cpu); err == nil && cpu != "" {
-		list[corev1.ResourceCPU] = q
-	}
-	if q, err := resource.ParseQuantity(memory); err == nil && memory != "" {
-		list[corev1.ResourceMemory] = q
+	for name, value := range map[corev1.ResourceName]string{
+		corev1.ResourceCPU:              q.CPU,
+		corev1.ResourceMemory:           q.Memory,
+		corev1.ResourceEphemeralStorage: q.EphemeralStorage,
+	} {
+		if value == "" {
+			continue
+		}
+		if parsed, err := resource.ParseQuantity(value); err == nil {
+			list[name] = parsed
+		}
 	}
 	if len(list) == 0 {
 		return nil

@@ -7,7 +7,7 @@ import (
 )
 
 // The public /api/v2 endpoints below back Airflow features Leoflow does not
-// implement yet (tags, warnings, import errors, assets, plugins, pools,
+// implement yet (tags, warnings, import errors, assets, plugins,
 // human-in-the-loop). The 3.2.1 UI polls them on the DAG list and detail
 // screens; a 404 surfaces as a broken detail view and console errors. Each
 // returns a schema-valid empty collection so the UI degrades gracefully. Real
@@ -31,10 +31,11 @@ func registerAPIStubs(r gin.IRouter) {
 	r.GET("/api/v2/assets", apiEmptyCollection("assets"))                      // #29
 	r.GET("/api/v2/assets/events", apiEmptyCollection("asset_events"))         // #29
 	r.GET("/api/v2/plugins", apiEmptyCollection("plugins"))                    // #30
-	r.GET("/api/v2/pools", apiEmptyCollection("pools"))                        // #31
-	r.GET("/api/v2/providers", apiEmptyCollection("providers"))                // #30
-	r.GET("/api/v2/jobs", apiEmptyCollection("jobs"))                          // #30
-	r.GET("/api/v2/backfills", apiEmptyCollection("backfills"))                // Backfills screen
+	// /api/v2/pools is owned by registerUIPools: real Pro-only CRUD when the Pro
+	// edition sets a PoolStore, else the same empty-collection stub (ADR 0053, #31).
+	r.GET("/api/v2/providers", apiEmptyCollection("providers")) // #30
+	r.GET("/api/v2/jobs", apiEmptyCollection("jobs"))           // #30
+	r.GET("/api/v2/backfills", apiEmptyCollection("backfills")) // Backfills screen
 	// The connection form's "create default connections" action: the SPA POSTs
 	// here when the Connections area opens and its generated client handles only
 	// 401/403 — an unhandled 404 crashed the React view, so the connector config

@@ -50,6 +50,11 @@ type Dependencies struct {
 	// request as an admin (no login). It is for `leoflow dev` only and must never
 	// be set in production. See DevBypassAuth.
 	DevNoAuth bool
+	// Edition marks the running edition ("pro", "lite", or empty). It gates
+	// Pro-only surfaces: named-pool CRUD is registered as real endpoints only when
+	// Edition == "pro" (ADR 0053), otherwise the Pools screen gets the graceful
+	// empty-collection stub, matching how the scheduler's pool gate is Pro-gated.
+	Edition string
 
 	// Resource repositories. Routes for nil repositories are not registered.
 	Dags           DagRepository
@@ -69,6 +74,7 @@ type Dependencies struct {
 	UserAudit      UserAuditWriter
 	Connections    ConnectionStore
 	ConnectionTest ConnectionTester
+	Pools          PoolStore
 	Favorites      FavoriteStore
 	ImportErrors   ImportErrorStore
 	Audit          AuditWriter
@@ -153,6 +159,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	registerUIVariables(r, deps.Variables)
 	registerUsers(r, deps.Users, deps.UserAudit)
 	registerUIConnections(r, deps.Connections, deps.ConnectionTest)
+	registerUIPools(r, deps.Pools, deps.Edition == "pro")
 	registerUIFavorites(r, deps.Favorites)
 	registerImportErrors(r, deps.ImportErrors)
 	registerIDE(r, deps.Workspace, deps.MonacoDir, deps.ExamplesFS)

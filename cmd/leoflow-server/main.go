@@ -401,6 +401,7 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		InstanceName:                 cfg.UI.InstanceName,
 		UIAutoRefreshIntervalSeconds: cfg.UI.AutoRefreshIntervalSeconds,
 		DevNoAuth:                    cfg.Auth.DevNoAuth,
+		Edition:                      cfg.UI.Edition,
 
 		Dags:            repo,
 		DagRuns:         repo,
@@ -418,6 +419,7 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		Users:           repo,
 		UserAudit:       repo,
 		Connections:     repo,
+		Pools:           repo,
 		Favorites:       repo,
 		ImportErrors:    repo,
 		Audit:           repo,
@@ -766,6 +768,12 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 	sched := scheduler.NewScheduler(store, logger,
 		time.Duration(cfg.Scheduler.LoopIntervalMS)*time.Millisecond)
 	sched.SetRecorder(metrics)
+	// Named pools are Pro-only (ADR 0053): enable the cross-DAG slot gate only on
+	// the Pro edition. Left off on Lite/non-Pro, the tick never queries pool
+	// budgets and planning is byte-identical to the max_active_tasks-only path.
+	if cfg.UI.Edition == "pro" {
+		sched.EnablePools()
+	}
 	// Native on-failure alerting (#424): the scheduler fires Slack/webhook rules
 	// declared in leoflow.yaml when a run finalizes failed, resolving each rule's
 	// managed connection to its endpoint URL. Best-effort, off the tick path.

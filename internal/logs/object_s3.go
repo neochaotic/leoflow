@@ -72,20 +72,24 @@ func NewS3Store(ctx context.Context, cfg S3Config) (*S3Store, error) {
 	return &S3Store{client: client, bucket: cfg.Bucket}, nil
 }
 
-// Put writes the object under key. The body is buffered because request signing
-// needs a length-known payload; a task attempt's log is already fully buffered
-// by the caller, so this adds no unbounded cost.
+// Put writes the object under key. Request signing needs a length-known,
+// seekable payload; the object sink already hands a *bytes.Reader, so the common
+// path passes it straight through with no extra copy. A non-seekable reader is
+// materialized once as a fallback so the interface stays honest for other callers.
 func (s *S3Store) Put(ctx context.Context, key string, r io.Reader) error {
-	body, err := io.ReadAll(r)
-	if err != nil {
-		return fmt.Errorf("reading log body: %w", err)
+	body, ok := r.(io.ReadSeeker)
+	if !ok {
+		buf, err := io.ReadAll(r)
+		if err != nil {
+			return fmt.Errorf("reading log body: %w", err)
+		}
+		body = bytes.NewReader(buf)
 	}
-	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+	if _, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
-		Body:   bytes.NewReader(body),
-	})
-	if err != nil {
+		Body:   body,
+	}); err != nil {
 		return fmt.Errorf("putting log object: %w", err)
 	}
 	return nil

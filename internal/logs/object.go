@@ -85,9 +85,18 @@ func (o *ObjectSink) Read(ref Ref) (io.ReadCloser, error) {
 	return rc, nil
 }
 
+// maxBufferedAttemptBytes caps how much of a single task attempt the object sink
+// buffers in the control plane. Object stores have no append, so the whole
+// attempt is held in RAM until Close; without a cap one chatty task could OOM the
+// shared control plane (unlike the disk sink, which flushes incrementally). This
+// bound is far above any sane task log yet keeps the blast radius of a runaway
+// task to its own attempt.
+// var (not const) so tests can lower it without buffering 128 MiB.
+var maxBufferedAttemptBytes = 128 << 20 // 128 MiB
+
 // objectWriter accumulates a task attempt's events in memory and writes them as
 // a single object on Close. Object stores do not support append, so the whole
-// attempt is one Put; memory use is bounded by the attempt's total log size.
+// attempt is one Put; memory use is bounded by maxBufferedAttemptBytes.
 type objectWriter struct {
 	ctx   context.Context
 	store ObjectStore
@@ -96,9 +105,16 @@ type objectWriter struct {
 }
 
 // WriteEvent appends an event to the in-memory buffer as a JSON line, matching
-// the JSONL format the disk sink writes and the UI reader decodes.
+// the JSONL format the disk sink writes and the UI reader decodes. It fails
+// loudly once the attempt exceeds maxBufferedAttemptBytes rather than growing the
+// control plane's memory without bound; whatever was buffered before the cap is
+// still flushed on Close.
 func (w *objectWriter) WriteEvent(ev Event) error {
-	if _, err := w.buf.WriteString(EncodeLine(ev) + "\n"); err != nil {
+	line := EncodeLine(ev) + "\n"
+	if w.buf.Len()+len(line) > maxBufferedAttemptBytes {
+		return fmt.Errorf("task attempt log exceeds the %d-byte object-sink buffer cap; not buffering further lines", maxBufferedAttemptBytes)
+	}
+	if _, err := w.buf.WriteString(line); err != nil {
 		return fmt.Errorf("buffering log line: %w", err)
 	}
 	return nil

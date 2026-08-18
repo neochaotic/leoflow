@@ -157,6 +157,36 @@ func TestObjectSinkClosePropagatesPutError(t *testing.T) {
 	}
 }
 
+// TestObjectWriterBufferCapFailsLoud pins MEDIUM-1: the object sink buffers a
+// whole attempt in the control plane (no append), so it must fail loudly at the
+// cap rather than grow memory without bound — while still flushing what it held.
+func TestObjectWriterBufferCapFailsLoud(t *testing.T) {
+	orig := maxBufferedAttemptBytes
+	maxBufferedAttemptBytes = 64
+	defer func() { maxBufferedAttemptBytes = orig }()
+
+	store := newMemStore()
+	sink := NewObjectSink(context.Background(), store, "")
+	w, err := sink.Open(sampleRef())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	var capErr error
+	for i := 0; i < 100 && capErr == nil; i++ {
+		capErr = w.WriteEvent(Event{Message: "a log line that pushes us past the tiny cap"})
+	}
+	if capErr == nil {
+		t.Fatal("WriteEvent should fail loudly once the buffer cap is exceeded")
+	}
+	// Close still flushes the lines buffered before the cap — a partial log beats none.
+	if cerr := w.Close(); cerr != nil {
+		t.Fatalf("Close after cap should still flush buffered lines: %v", cerr)
+	}
+	if _, ok := store.objs[sink.key(sampleRef())]; !ok {
+		t.Error("buffered lines before the cap should still be written on Close")
+	}
+}
+
 func TestDiskSinkImplementsPrunerObjectSinkDoesNot(t *testing.T) {
 	var disk Sink = NewDiskSink(t.TempDir())
 	if _, ok := disk.(Pruner); !ok {

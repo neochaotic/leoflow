@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -268,6 +269,10 @@ type RedisSection struct {
 type AuthSection struct {
 	Provider string     `mapstructure:"provider"`
 	JWT      JWTSection `mapstructure:"jwt"`
+	// OIDC configures the OIDC/SSO login flow. It is read only when Provider is
+	// "oidc" (Pro-gated); the JWT authenticator remains the request-path verifier
+	// in both modes.
+	OIDC OIDCSection `mapstructure:"oidc"`
 	// DevNoAuth disables authentication entirely, treating every request as an
 	// admin. It exists ONLY for `leoflow dev` (local, unsandboxed). It is false by
 	// default and the server logs a prominent warning when it is on. NEVER set
@@ -284,6 +289,73 @@ type AuthSection struct {
 type JWTSection struct {
 	Secret          string `mapstructure:"secret"`
 	TokenTTLSeconds int    `mapstructure:"token_ttl_seconds"`
+}
+
+// OIDCSection configures the OIDC/SSO login flow (Authorization Code + PKCE).
+// It is read only when auth.provider is "oidc", which is Pro-gated and fails
+// boot closed unless Issuer, ClientID, and RedirectURL are all set.
+//
+// Verification is keyless: the ID token is validated against the issuer's
+// public JWKS discovered from Issuer, so no secret is stored for the verify
+// path. ClientSecret is used solely for the authorization-code exchange and is
+// injected via LEOFLOW_AUTH_OIDC_CLIENT_SECRET (env, never persisted, never
+// logged) — the same posture as the JWT secret.
+type OIDCSection struct {
+	// Issuer is the org's single-tenant issuer URL (https). It is pinned: any ID
+	// token whose iss claim differs is rejected (fail-closed tenant pin).
+	Issuer string `mapstructure:"issuer"`
+	// ClientID is the registered application (client) id; it is the expected
+	// audience of every ID token.
+	ClientID string `mapstructure:"client_id"`
+	// ClientSecret is used only for the code exchange. Set via
+	// LEOFLOW_AUTH_OIDC_CLIENT_SECRET; never persist it in a config file.
+	ClientSecret string `mapstructure:"client_secret"`
+	// RedirectURL is this server's callback URL registered with the IdP
+	// (…/api/v2/auth/oidc/callback).
+	RedirectURL string `mapstructure:"redirect_url"`
+	// Scopes are the OAuth scopes requested; defaults to openid, email, profile.
+	// Add the IdP's groups scope here when group→role mapping is used.
+	Scopes []string `mapstructure:"scopes"`
+	// GroupsClaim is the ID-token claim carrying the user's IdP groups (default
+	// "groups"). Its values drive RoleMappings.
+	GroupsClaim string `mapstructure:"groups_claim"`
+	// RoleMappings maps an IdP group value to an existing Leoflow role name.
+	// Default-DENY: a group with no mapping grants no role. Configure via the
+	// config file / Helm values (maps do not bind from a single env var).
+	RoleMappings map[string]string `mapstructure:"role_mappings"`
+	// DefaultRole softens the default-deny WITHOUT weakening the secure default:
+	// when an authenticated user resolves to zero mapped roles and DefaultRole is
+	// set, they are granted this single role (operators are advised to use a
+	// read-only role such as "viewer"). Empty (the default) keeps strict
+	// default-deny — an unmapped user gets no role. It must name an existing DB
+	// role for the resolved tenant; an unknown role fails the login closed.
+	DefaultRole string `mapstructure:"default_role"`
+	// TenantClaim selects which IdP claim identifies the tenant: "tid" (Entra) or
+	// "hd" (Google Workspace).
+	TenantClaim string `mapstructure:"tenant_claim"`
+	// TenantClaims maps a TenantClaim value to a Leoflow tenant name. A value not
+	// present here is rejected (403) — the login never falls back to "default".
+	TenantClaims map[string]string `mapstructure:"tenant_claims"`
+	// AllowedEmailDomains is an install-time, login-level allowlist layered on TOP
+	// of the tid/hd tenant pin — it is NOT the pin itself (that stays issuer +
+	// tid/hd + email_verified per D6). The check runs only AFTER the pin and
+	// email_verified==true have passed, so the email domain is trustworthy at that
+	// point. Empty (the default) imposes no domain restriction — the tid/hd pin is
+	// the sole boundary. Non-empty admits a login (pre-provisioned OR JIT) only
+	// when the verified email's domain is in the list; every other login is
+	// rejected 403. It gates EVERY OIDC login, not just auto-provisioning.
+	AllowedEmailDomains []string `mapstructure:"allowed_email_domains"`
+	// BreakGlassEmails is the allowlist of local password logins permitted while
+	// provider is "oidc"; every other password login is rejected (SSO-only).
+	BreakGlassEmails []string `mapstructure:"break_glass_emails"`
+	// JITProvisioning creates a user row on first OIDC login when no matching one
+	// exists. OFF by default (a pre-provisioned user is required); when ON, the new
+	// row is granted the roles from RoleMappings.
+	JITProvisioning bool `mapstructure:"jit_provisioning"`
+	// ClockSkewSeconds is the tolerance applied to the ID token's exp/iat/nbf
+	// checks to absorb small clock differences between the IdP and this server.
+	// Defaults to 60.
+	ClockSkewSeconds int `mapstructure:"clock_skew_seconds"`
 }
 
 // SchedulerSection configures the scheduler loop.
@@ -345,8 +417,27 @@ var serverDefaults = map[string]any{
 	"auth.jwt.secret":                  "",
 	"auth.jwt.token_ttl_seconds":       3600,
 	"auth.login_rate_limit_per_minute": 5,
-	"scheduler.loop_interval_ms":       1000,
-	"scheduler.enabled":                true,
+	// OIDC leaves. Every leaf is registered so viper's AutomaticEnv binds the
+	// scalar LEOFLOW_AUTH_OIDC_* env vars (notably the client secret). The map and
+	// slice leaves are config-file / Helm-values driven — viper does not split a
+	// single env var into a map or list — but they must appear here so Unmarshal
+	// resolves them from the file.
+	"auth.oidc.issuer":                "",
+	"auth.oidc.client_id":             "",
+	"auth.oidc.client_secret":         "",
+	"auth.oidc.redirect_url":          "",
+	"auth.oidc.scopes":                []string{"openid", "email", "profile"},
+	"auth.oidc.groups_claim":          "groups",
+	"auth.oidc.role_mappings":         map[string]string{},
+	"auth.oidc.default_role":          "",
+	"auth.oidc.tenant_claim":          "",
+	"auth.oidc.tenant_claims":         map[string]string{},
+	"auth.oidc.allowed_email_domains": []string{},
+	"auth.oidc.break_glass_emails":    []string{},
+	"auth.oidc.jit_provisioning":      false,
+	"auth.oidc.clock_skew_seconds":    60,
+	"scheduler.loop_interval_ms":      1000,
+	"scheduler.enabled":               true,
 	// Default: synchronous dispatch (BufferSize=0). Safe and zero-overhead for
 	// Lite. Pro deployments should set buffer_size>=1 + workers>=1 in their
 	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).
@@ -423,15 +514,14 @@ func LoadServer(configFile string, flags *pflag.FlagSet) (*ServerConfig, error) 
 	return &c, nil
 }
 
-// Auth providers (auth.provider allowlist). "jwt" is the only implemented
-// authenticator; "oidc" is a recognized-but-unimplemented value that is
-// rejected at boot rather than silently falling back to JWT.
+// Auth providers (auth.provider allowlist). "jwt" is the default credential
+// authenticator; "oidc" adds the SSO login flow on top of it (the JWT
+// authenticator stays the request-path verifier in both modes).
 const (
-	// AuthProviderJWT is the only auth.provider main.go can build an
-	// Authenticator for today.
+	// AuthProviderJWT is the default: username/password issues an HS256 token.
 	AuthProviderJWT = "jwt"
-	// AuthProviderOIDC is a declared future provider with no implementation;
-	// selecting it is a boot failure, not a silent JWT fallback.
+	// AuthProviderOIDC enables the OIDC/SSO login flow. It is Pro-gated and
+	// requires the auth.oidc.* configuration; boot fails closed otherwise.
 	AuthProviderOIDC = "oidc"
 )
 
@@ -446,7 +536,9 @@ func (c *ServerConfig) Validate() error {
 	if err := c.validateLogs(); err != nil {
 		return err
 	}
-	if c.Auth.Provider == AuthProviderJWT && c.Auth.JWT.Secret == "" {
+	// Both providers mint the app's own HS256 _token (oidc mints it after the IdP
+	// verify), so the JWT secret is required for either.
+	if (c.Auth.Provider == AuthProviderJWT || c.Auth.Provider == AuthProviderOIDC) && c.Auth.JWT.Secret == "" {
 		return errors.New("auth.jwt.secret is required (set LEOFLOW_AUTH_JWT_SECRET)")
 	}
 	// auth.dev_no_auth disables authentication entirely; permit it only when the
@@ -490,22 +582,84 @@ func (c *ServerConfig) validateLogs() error {
 	}
 }
 
-// validateProvider rejects an unknown or unimplemented auth.provider, failing
-// closed at boot instead of letting main.go build a JWTAuthenticator regardless
-// of what was configured. Empty is valid: serverDefaults sets auth.provider to
-// "jwt", so an unset provider in an existing config keeps defaulting to JWT and
-// is unaffected. "oidc" is recognized but has no implementation, so it is
-// rejected with an actionable hint rather than a silent JWT fallback.
+// validateProvider rejects an unknown auth.provider, failing closed at boot
+// instead of letting main.go build an authenticator regardless of what was
+// configured. Empty is valid: serverDefaults sets auth.provider to "jwt", so an
+// unset provider in an existing config keeps defaulting to JWT and is
+// unaffected. "oidc" is valid only when its Pro-gated prerequisites are met
+// (validateOIDC); anything else is a loud boot failure.
 func (c *ServerConfig) validateProvider() error {
 	switch c.Auth.Provider {
 	case "", AuthProviderJWT:
 		return nil
 	case AuthProviderOIDC:
-		return errors.New("auth.provider: oidc is declared but not yet implemented; set provider: jwt")
+		return c.validateOIDC()
 	default:
-		return fmt.Errorf("invalid auth.provider %q: must be %q (or empty = %q)",
-			c.Auth.Provider, AuthProviderJWT, AuthProviderJWT)
+		return fmt.Errorf("invalid auth.provider %q: must be %q or %q (or empty = %q)",
+			c.Auth.Provider, AuthProviderJWT, AuthProviderOIDC, AuthProviderJWT)
 	}
+}
+
+// validateOIDC enforces the fail-closed prerequisites for auth.provider: oidc
+// (D7): the Pro edition, and the three fields the login flow cannot run without
+// (issuer, client_id, redirect_url). The issuer must be https so discovery and
+// JWKS are fetched over TLS (keyless verify, ADR 0035). A misconfigured OIDC
+// deployment fails boot with an actionable message rather than starting a login
+// flow that cannot complete.
+func (c *ServerConfig) validateOIDC() error {
+	if c.UI.Edition != "pro" {
+		return errors.New("auth.provider: oidc requires the Pro edition (set ui.edition: pro)")
+	}
+	var missing []string
+	if c.Auth.OIDC.Issuer == "" {
+		missing = append(missing, "auth.oidc.issuer")
+	}
+	if c.Auth.OIDC.ClientID == "" {
+		missing = append(missing, "auth.oidc.client_id")
+	}
+	if c.Auth.OIDC.RedirectURL == "" {
+		missing = append(missing, "auth.oidc.redirect_url")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("auth.provider: oidc requires %s to be set", strings.Join(missing, ", "))
+	}
+	if !strings.HasPrefix(c.Auth.OIDC.Issuer, "https://") {
+		return fmt.Errorf("auth.oidc.issuer must be an https:// URL (got %q)", c.Auth.OIDC.Issuer)
+	}
+	return validateRedirectURL(c.Auth.OIDC.RedirectURL)
+}
+
+// validateRedirectURL requires the OIDC callback URL to use https so the
+// authorization code is never returned over plaintext, with an http exception
+// for loopback hosts (localhost, 127.0.0.1, [::1]) to keep local dev workable.
+func validateRedirectURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("auth.oidc.redirect_url must be a valid URL (got %q): %w", raw, err)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("auth.oidc.redirect_url must be an https:// URL (got %q); http:// is only allowed for loopback hosts (localhost, 127.0.0.1, [::1])", raw)
+	default:
+		return fmt.Errorf("auth.oidc.redirect_url must be an https:// URL (got %q)", raw)
+	}
+}
+
+// isLoopbackHost reports whether host is a loopback name or address. url.Hostname
+// strips the brackets from an IPv6 literal, so [::1] arrives as "::1".
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // validateRole rejects an unknown server.role (ADR 0049). Empty is valid (defaults

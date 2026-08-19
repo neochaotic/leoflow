@@ -5,11 +5,15 @@ import (
 	"log/slog"
 	"net/http"
 
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/neochaotic/leoflow/internal/auth"
+	"github.com/neochaotic/leoflow/internal/config"
+	"github.com/neochaotic/leoflow/internal/oidc"
 )
 
 // UIServer serves the embedded single-page app: static assets and an
@@ -99,6 +103,23 @@ type Dependencies struct {
 
 	// UI serves the embedded SPA. When nil the server is API-only.
 	UI UIServer
+
+	// OIDC wiring (registered only when OIDCFlow is non-nil — provider: oidc).
+	// The JWT authenticator above stays the request-path verifier in both modes.
+	//
+	// OIDCFlow is the discovered Authorization Code + PKCE flow; nil in JWT mode,
+	// in which case the /api/v2/auth/oidc/* routes are not registered.
+	OIDCFlow *oidc.Flow
+	// OIDCSettings carries the role mappings, JIT policy, default_role, and
+	// break-glass allowlist the login flow and the credential gate read.
+	OIDCSettings config.OIDCSection
+	// OIDCUsers resolves and JIT-provisions OIDC identities (the storage repo).
+	OIDCUsers OIDCUserStore
+	// AuthAudit records authentication events (login, tenant-pin rejection, JIT,
+	// break-glass, logout) to the audit sink.
+	AuthAudit AuthAuditWriter
+	// JWTSecret is the HS256 secret the OIDC callback mints the app's _token with.
+	JWTSecret string
 }
 
 // NewServer builds the gin engine with the full middleware chain, health and
@@ -141,10 +162,28 @@ func NewServer(deps Dependencies) *gin.Engine {
 	// public API/UI surface. deps.Registry is retained for that listener's wiring.
 	registerDocs(r)
 
-	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs))
+	// Under OIDC the credential path is break-glass-only (D8): pass the allowlist
+	// so every non-allowlisted password login is rejected and audited. In JWT mode
+	// the allowlist is empty, newBreakGlass returns nil, and the path is unchanged.
+	bg := newBreakGlass(deps.OIDCSettings.BreakGlassEmails, deps.AuthAudit)
+	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs, bg))
 	// The Airflow UI redirects unauthenticated users to GET /api/v2/auth/login.
 	r.GET("/api/v2/auth/login", loginPageHandler())
 	r.GET("/api/v2/auth/logout", logoutHandler())
+	// OIDC/SSO login flow (D1): registered only when a provider was discovered at
+	// boot. Both routes sit under the public /api/v2/auth/ prefix.
+	if deps.OIDCFlow != nil {
+		r.GET("/api/v2/auth/oidc/login", oidcLoginHandler(deps.OIDCFlow, deps.Logger))
+		r.GET("/api/v2/auth/oidc/callback", oidcCallbackHandler(oidcDeps{
+			flow:      deps.OIDCFlow,
+			users:     deps.OIDCUsers,
+			audit:     deps.AuthAudit,
+			cfg:       deps.OIDCSettings,
+			jwtSecret: deps.JWTSecret,
+			tokenTTL:  time.Duration(deps.TokenTTLSecs) * time.Second,
+			logger:    deps.Logger,
+		}))
+	}
 	r.GET("/api/v2/monitor/health", monitorHealthHandler(deps.HealthChecks, deps.SchedulerHealth))
 	r.GET("/api/v2/monitor/executor", monitorExecutorHandler(deps.ExecutorInfo))
 

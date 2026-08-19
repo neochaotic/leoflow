@@ -66,6 +66,9 @@ type Querier interface {
 	// The implicit default pool is never deletable (Airflow parity): the guard is in
 	// the query so a direct call cannot orphan the fallback pool the gate resolves to.
 	DeletePool(ctx context.Context, arg DeletePoolParams) (int64, error)
+	// Remove every role grant for a user: the delete half of the IdP-authoritative
+	// reconcile that sets the grants to exactly the group-mapped set on each login.
+	DeleteUserRoles(ctx context.Context, userID pgtype.UUID) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	// The dispatch-attempt budget is spent (ADR 0031 Amendment A): fail the task with
 	// a dispatch_failed reason so the run can finalize instead of looping forever.
@@ -89,18 +92,33 @@ type Querier interface {
 	GetDefaultTenant(ctx context.Context) (GetDefaultTenantRow, error)
 	GetPool(ctx context.Context, arg GetPoolParams) (GetPoolRow, error)
 	GetRoleByName(ctx context.Context, arg GetRoleByNameParams) (pgtype.UUID, error)
+	// Resolve a role name to its id within the user's OWN tenant, so an OIDC login
+	// can reconcile the user's grants to the group-mapped set without the caller
+	// passing the tenant separately. A name that is not a role in that tenant yields
+	// no row, which the reconcile turns into a fail-closed error.
+	GetRoleIDForUserTenant(ctx context.Context, arg GetRoleIDForUserTenantParams) (pgtype.UUID, error)
 	GetTenantByName(ctx context.Context, name string) (GetTenantByNameRow, error)
 	GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) (GetUserByEmailRow, error)
 	// The by-id lookup backing the per-request authz reload. Returns the tenant
 	// name (not the uuid) so the reconstructed principal matches the login path's
 	// User.TenantID, plus the active flag the authenticator gates on.
 	GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDRow, error)
+	// Resolve an OIDC identity to a Leoflow user by its immutable (provider,
+	// subject) pair (the trusted link key). Returns the tenant name (not the uuid)
+	// so the reconstructed principal matches the login path's User.TenantID, plus
+	// the active flag the login gates on. Never selects password_hash.
+	GetUserByOIDCSubject(ctx context.Context, arg GetUserByOIDCSubjectParams) (GetUserByOIDCSubjectRow, error)
 	GetUserPermissions(ctx context.Context, userID pgtype.UUID) ([]GetUserPermissionsRow, error)
 	GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]string, error)
 	GetVariable(ctx context.Context, arg GetVariableParams) (GetVariableRow, error)
 	GetXComByNames(ctx context.Context, arg GetXComByNamesParams) (GetXComByNamesRow, error)
 	GetXComEntry(ctx context.Context, arg GetXComEntryParams) (GetXComEntryRow, error)
 	InsertDagVersion(ctx context.Context, arg InsertDagVersionParams) (DagVersion, error)
+	// Just-in-time provisioning insert for a first OIDC login: an OIDC-only user
+	// (NULL password) linked by (oidc_provider, oidc_subject). The unique
+	// (oidc_provider, oidc_subject) constraint makes a concurrent double-provision
+	// surface as a conflict rather than a duplicate identity.
+	InsertOIDCUser(ctx context.Context, arg InsertOIDCUserParams) (InsertOIDCUserRow, error)
 	// Mirrors the bootstrap CreateUser insert (tenant_id, email, password_hash) but
 	// returns the columns the admin create-user API echoes back to the caller.
 	InsertUser(ctx context.Context, arg InsertUserParams) (InsertUserRow, error)

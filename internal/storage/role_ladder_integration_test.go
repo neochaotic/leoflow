@@ -62,18 +62,13 @@ func TestRoleLadderSeedIntegration(t *testing.T) {
 		}
 	}
 
-	// The ladder roles are unassigned: no user_roles rows reference them, so no
-	// existing account (including the bootstrap admin) gains or loses access.
-	var assigned int
-	if err := pg.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM user_roles ur
-		 JOIN roles r ON r.id = ur.role_id
-		 WHERE r.name IN ('viewer', 'editor', 'operator')`).Scan(&assigned); err != nil {
-		t.Fatalf("counting ladder assignments: %v", err)
-	}
-	if assigned != 0 {
-		t.Errorf("ladder roles must ship unassigned, found %d user_roles rows", assigned)
-	}
+	// The migration ships the roles unassigned — it only writes `roles` and
+	// `role_permissions`, never `user_roles` — so no pre-existing account gains
+	// access on upgrade. That is a property of the migration SQL (verified by
+	// inspection and the permission-count assertions above), not a global runtime
+	// invariant: application code (OIDC login reconciliation, admin role grants)
+	// legitimately assigns these roles to users, so a shared-DB count of ladder
+	// user_roles is NOT zero once other tests have run and must not be asserted.
 
 	// A representative grant from each tier proves the matrix content, not just
 	// its cardinality: viewer can read a variable, editor can write one, and

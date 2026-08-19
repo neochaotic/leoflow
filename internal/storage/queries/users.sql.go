@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteUserRoles = `-- name: DeleteUserRoles :exec
+DELETE FROM user_roles WHERE user_id = $1
+`
+
+// Remove every role grant for a user: the delete half of the IdP-authoritative
+// reconcile that sets the grants to exactly the group-mapped set on each login.
+func (q *Queries) DeleteUserRoles(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUserRoles, userID)
+	return err
+}
+
 const getDefaultTenant = `-- name: GetDefaultTenant :one
 SELECT id, name FROM tenants WHERE name = 'default'
 `
@@ -25,6 +36,29 @@ func (q *Queries) GetDefaultTenant(ctx context.Context) (GetDefaultTenantRow, er
 	var i GetDefaultTenantRow
 	err := row.Scan(&i.ID, &i.Name)
 	return i, err
+}
+
+const getRoleIDForUserTenant = `-- name: GetRoleIDForUserTenant :one
+SELECT r.id
+FROM roles r
+JOIN users u ON u.tenant_id = r.tenant_id
+WHERE u.id = $1 AND r.name = $2
+`
+
+type GetRoleIDForUserTenantParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+// Resolve a role name to its id within the user's OWN tenant, so an OIDC login
+// can reconcile the user's grants to the group-mapped set without the caller
+// passing the tenant separately. A name that is not a role in that tenant yields
+// no row, which the reconcile turns into a fail-closed error.
+func (q *Queries) GetRoleIDForUserTenant(ctx context.Context, arg GetRoleIDForUserTenantParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getRoleIDForUserTenant, arg.ID, arg.Name)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getTenantByName = `-- name: GetTenantByName :one
@@ -105,6 +139,41 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDR
 	return i, err
 }
 
+const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
+SELECT u.id, t.name AS tenant, u.email, u.is_active
+FROM users u
+JOIN tenants t ON t.id = u.tenant_id
+WHERE u.oidc_provider = $1 AND u.oidc_subject = $2
+`
+
+type GetUserByOIDCSubjectParams struct {
+	OidcProvider *string `json:"oidc_provider"`
+	OidcSubject  *string `json:"oidc_subject"`
+}
+
+type GetUserByOIDCSubjectRow struct {
+	ID       pgtype.UUID `json:"id"`
+	Tenant   string      `json:"tenant"`
+	Email    string      `json:"email"`
+	IsActive bool        `json:"is_active"`
+}
+
+// Resolve an OIDC identity to a Leoflow user by its immutable (provider,
+// subject) pair (the trusted link key). Returns the tenant name (not the uuid)
+// so the reconstructed principal matches the login path's User.TenantID, plus
+// the active flag the login gates on. Never selects password_hash.
+func (q *Queries) GetUserByOIDCSubject(ctx context.Context, arg GetUserByOIDCSubjectParams) (GetUserByOIDCSubjectRow, error) {
+	row := q.db.QueryRow(ctx, getUserByOIDCSubject, arg.OidcProvider, arg.OidcSubject)
+	var i GetUserByOIDCSubjectRow
+	err := row.Scan(
+		&i.ID,
+		&i.Tenant,
+		&i.Email,
+		&i.IsActive,
+	)
+	return i, err
+}
+
 const getUserPermissions = `-- name: GetUserPermissions :many
 SELECT DISTINCT p.action, p.resource
 FROM user_roles ur
@@ -163,6 +232,47 @@ func (q *Queries) GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]strin
 		return nil, err
 	}
 	return items, nil
+}
+
+const insertOIDCUser = `-- name: InsertOIDCUser :one
+INSERT INTO users (tenant_id, email, oidc_provider, oidc_subject)
+VALUES ($1, $2, $3, $4)
+RETURNING id, email, is_active, created_at
+`
+
+type InsertOIDCUserParams struct {
+	TenantID     pgtype.UUID `json:"tenant_id"`
+	Email        string      `json:"email"`
+	OidcProvider *string     `json:"oidc_provider"`
+	OidcSubject  *string     `json:"oidc_subject"`
+}
+
+type InsertOIDCUserRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Email     string             `json:"email"`
+	IsActive  bool               `json:"is_active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Just-in-time provisioning insert for a first OIDC login: an OIDC-only user
+// (NULL password) linked by (oidc_provider, oidc_subject). The unique
+// (oidc_provider, oidc_subject) constraint makes a concurrent double-provision
+// surface as a conflict rather than a duplicate identity.
+func (q *Queries) InsertOIDCUser(ctx context.Context, arg InsertOIDCUserParams) (InsertOIDCUserRow, error) {
+	row := q.db.QueryRow(ctx, insertOIDCUser,
+		arg.TenantID,
+		arg.Email,
+		arg.OidcProvider,
+		arg.OidcSubject,
+	)
+	var i InsertOIDCUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.IsActive,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const insertUser = `-- name: InsertUser :one

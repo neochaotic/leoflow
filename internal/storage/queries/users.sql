@@ -17,6 +17,25 @@ FROM users u
 JOIN tenants t ON t.id = u.tenant_id
 WHERE t.name = $1 AND u.email = $2;
 
+-- name: GetUserByOIDCSubject :one
+-- Resolve an OIDC identity to a Leoflow user by its immutable (provider,
+-- subject) pair (the trusted link key). Returns the tenant name (not the uuid)
+-- so the reconstructed principal matches the login path's User.TenantID, plus
+-- the active flag the login gates on. Never selects password_hash.
+SELECT u.id, t.name AS tenant, u.email, u.is_active
+FROM users u
+JOIN tenants t ON t.id = u.tenant_id
+WHERE u.oidc_provider = $1 AND u.oidc_subject = $2;
+
+-- name: InsertOIDCUser :one
+-- Just-in-time provisioning insert for a first OIDC login: an OIDC-only user
+-- (NULL password) linked by (oidc_provider, oidc_subject). The unique
+-- (oidc_provider, oidc_subject) constraint makes a concurrent double-provision
+-- surface as a conflict rather than a duplicate identity.
+INSERT INTO users (tenant_id, email, oidc_provider, oidc_subject)
+VALUES ($1, $2, $3, $4)
+RETURNING id, email, is_active, created_at;
+
 -- name: GetUserByID :one
 -- The by-id lookup backing the per-request authz reload. Returns the tenant
 -- name (not the uuid) so the reconstructed principal matches the login path's
@@ -51,6 +70,21 @@ SELECT r.name
 FROM user_roles ur
 JOIN roles r ON r.id = ur.role_id
 WHERE ur.user_id = $1;
+
+-- name: GetRoleIDForUserTenant :one
+-- Resolve a role name to its id within the user's OWN tenant, so an OIDC login
+-- can reconcile the user's grants to the group-mapped set without the caller
+-- passing the tenant separately. A name that is not a role in that tenant yields
+-- no row, which the reconcile turns into a fail-closed error.
+SELECT r.id
+FROM roles r
+JOIN users u ON u.tenant_id = r.tenant_id
+WHERE u.id = $1 AND r.name = $2;
+
+-- name: DeleteUserRoles :exec
+-- Remove every role grant for a user: the delete half of the IdP-authoritative
+-- reconcile that sets the grants to exactly the group-mapped set on each login.
+DELETE FROM user_roles WHERE user_id = $1;
 
 -- name: GetUserPermissions :many
 SELECT DISTINCT p.action, p.resource

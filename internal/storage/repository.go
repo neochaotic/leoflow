@@ -142,6 +142,153 @@ func (r *Repository) FindUserByID(ctx context.Context, id string) (*auth.User, b
 	return user, row.IsActive, nil
 }
 
+// FindUserByOIDCSubject resolves an OIDC identity to a Leoflow user by its
+// immutable (provider, subject) pair — the trusted link key for a returning SSO
+// login. Like FindUserByID it loads the current tenant, roles, and permissions
+// plus the active flag, so the caller reconstructs the same principal the
+// credential path would. A pair matching no row yields auth.ErrUserNotFound (the
+// signal to consider just-in-time provisioning); any other failure is returned
+// as-is so the caller can fail closed.
+func (r *Repository) FindUserByOIDCSubject(ctx context.Context, provider, subject string) (*auth.User, bool, error) {
+	row, err := r.q.GetUserByOIDCSubject(ctx, queries.GetUserByOIDCSubjectParams{
+		OidcProvider: strPtr(provider), OidcSubject: strPtr(subject),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, auth.ErrUserNotFound
+		}
+		return nil, false, fmt.Errorf("loading user by oidc subject: %w", err)
+	}
+	roles, err := r.q.GetUserRoles(ctx, row.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading roles: %w", err)
+	}
+	perms, err := r.q.GetUserPermissions(ctx, row.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading permissions: %w", err)
+	}
+	user := &auth.User{ID: uuidToString(row.ID), TenantID: row.Tenant, Email: row.Email, Roles: roles}
+	for _, p := range perms {
+		user.Permissions = append(user.Permissions, auth.Permission{Action: p.Action, Resource: p.Resource})
+	}
+	return user, row.IsActive, nil
+}
+
+// CreateOIDCUser just-in-time provisions an OIDC-only account (NULL password),
+// linked by (oidc_provider, oidc_subject), and grants it the given roles. It
+// mirrors CreateUser's atomicity: every role is resolved BEFORE the insert so an
+// unknown role fails cleanly as domain.ErrValidation without leaving an orphaned
+// account, and the insert plus the grants run in one transaction so a failed
+// grant rolls the account back. An empty role set grants none (default-deny).
+// A concurrent double-provision surfaces as domain.ErrConflict via the unique
+// (oidc_provider, oidc_subject) constraint. The returned user carries the
+// granted role names so the caller can mint a token without a reload.
+func (r *Repository) CreateOIDCUser(ctx context.Context, tenant, email, provider, subject string, roles []string) (*auth.User, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	roleIDs := make([]pgtype.UUID, 0, len(roles))
+	for _, role := range roles {
+		roleID, rerr := r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: role})
+		if rerr != nil {
+			if errors.Is(rerr, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("unknown role %q: %w", role, domain.ErrValidation)
+			}
+			return nil, fmt.Errorf("looking up role: %w", rerr)
+		}
+		roleIDs = append(roleIDs, roleID)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning create-oidc-user tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort; the commit path returns the meaningful error
+	qtx := r.q.WithTx(tx)
+	row, err := qtx.InsertOIDCUser(ctx, queries.InsertOIDCUserParams{
+		TenantID: tid, Email: email, OidcProvider: strPtr(provider), OidcSubject: strPtr(subject),
+	})
+	if err != nil {
+		return nil, mapConflict(err)
+	}
+	for _, roleID := range roleIDs {
+		if aerr := qtx.AssignUserRole(ctx, queries.AssignUserRoleParams{UserID: row.ID, RoleID: roleID}); aerr != nil {
+			return nil, fmt.Errorf("assigning role: %w", aerr)
+		}
+	}
+	if cerr := tx.Commit(ctx); cerr != nil {
+		return nil, fmt.Errorf("committing create-oidc-user tx: %w", cerr)
+	}
+	return &auth.User{ID: uuidToString(row.ID), TenantID: tenant, Email: row.Email, Roles: roles}, nil
+}
+
+// RoleExists reports whether a role name exists for the tenant. The OIDC login
+// path uses it to fail closed on a misconfigured default_role before minting a
+// token for a returning user (the JIT path validates roles inside CreateOIDCUser).
+func (r *Repository) RoleExists(ctx context.Context, tenant, role string) (bool, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return false, err
+	}
+	if _, err := r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: role}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("looking up role: %w", err)
+	}
+	return true, nil
+}
+
+// ReconcileUserRoles makes the user's granted roles exactly roleNames, atomically:
+// it is how the identity provider stays authoritative over an OIDC user's roles.
+// On each OIDC login the caller passes the group-mapped role set, and this sets
+// the DB user_roles to precisely that set, so a demotion or deprovisioning at the
+// IdP takes effect on the next login and the per-request authz reload sees it.
+//
+// Every name is resolved to a role id in the user's OWN tenant BEFORE any write,
+// so a name that is not a role in that tenant fails closed as domain.ErrValidation
+// with the prior grants untouched — the login path turns that into a rejected,
+// audited login rather than silently wiping the user's roles. The delete and the
+// inserts run in one transaction, making the operation idempotent (reconciling
+// the same set yields the same rows) and an empty roleNames a full clear
+// (default-deny).
+func (r *Repository) ReconcileUserRoles(ctx context.Context, userID string, roleNames []string) error {
+	uid, err := parseUUID(userID)
+	if err != nil {
+		return err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning reconcile-user-roles tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort; the commit path returns the meaningful error
+	qtx := r.q.WithTx(tx)
+	// Resolve every role id first so an unknown name aborts before any mutation.
+	roleIDs := make([]pgtype.UUID, 0, len(roleNames))
+	for _, name := range roleNames {
+		roleID, rerr := qtx.GetRoleIDForUserTenant(ctx, queries.GetRoleIDForUserTenantParams{ID: uid, Name: name})
+		if rerr != nil {
+			if errors.Is(rerr, pgx.ErrNoRows) {
+				return fmt.Errorf("unknown role %q: %w", name, domain.ErrValidation)
+			}
+			return fmt.Errorf("looking up role: %w", rerr)
+		}
+		roleIDs = append(roleIDs, roleID)
+	}
+	if derr := qtx.DeleteUserRoles(ctx, uid); derr != nil {
+		return fmt.Errorf("clearing user roles: %w", derr)
+	}
+	for _, roleID := range roleIDs {
+		if aerr := qtx.AssignUserRole(ctx, queries.AssignUserRoleParams{UserID: uid, RoleID: roleID}); aerr != nil {
+			return fmt.Errorf("assigning role: %w", aerr)
+		}
+	}
+	if cerr := tx.Commit(ctx); cerr != nil {
+		return fmt.Errorf("committing reconcile-user-roles tx: %w", cerr)
+	}
+	return nil
+}
+
 // ListDags returns a page of DAGs for the tenant and the total count.
 func (r *Repository) ListDags(ctx context.Context, tenant string, limit, offset int) ([]domain.DAG, int, error) {
 	tid, err := r.tenantID(ctx, tenant)
@@ -503,6 +650,61 @@ func (r *Repository) RecordUserCreatedAudit(ctx context.Context, tenant, actorUs
 		ResourceType: strPtr("user"), ResourceID: strPtr(createdUserID), Metadata: meta,
 	}); err != nil {
 		return fmt.Errorf("writing user-created audit: %w", err)
+	}
+	return nil
+}
+
+// RecordAuthEvent records an authentication event to the audit log (H5): OIDC
+// login success/failure, tenant-pin rejection, JIT provisioning, break-glass
+// login, and logout. It NEVER records tokens or the client secret — only the
+// actor's email, the resolved tenant (best-effort), the outcome, and small
+// non-secret detail fields (e.g. the rejection reason, the attempted tenant
+// claim). It is best-effort: the caller logs and continues on error so a flaky
+// audit sink never turns a security decision (a 403 rejection, a successful
+// login) into a 5xx.
+//
+// The event is scoped to the resolved tenant when known; events that never
+// resolved a tenant (a login failure, a tenant-pin rejection) fall back to the
+// "default" tenant so the row still lands, with the attempted values in the
+// metadata. resourceID carries the email so account-scoped auth activity is
+// filterable alongside user.create.
+func (r *Repository) RecordAuthEvent(ctx context.Context, tenant, actorUserID, action, email, outcome string, extra map[string]string) error {
+	if tenant == "" {
+		tenant = "default"
+	}
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		// The resolved tenant may not exist (an attacker-supplied claim); fall back
+		// to default so the security event is never silently dropped.
+		tid, err = r.tenantID(ctx, "default")
+		if err != nil {
+			return fmt.Errorf("resolving audit tenant: %w", err)
+		}
+	}
+	var uid pgtype.UUID
+	if u, perr := parseUUID(actorUserID); perr == nil {
+		uid = u
+	}
+	fields := map[string]any{"outcome": outcome}
+	if email != "" {
+		fields["email"] = email
+	}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	meta, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("encoding audit metadata: %w", err)
+	}
+	var resourceID *string
+	if email != "" {
+		resourceID = strPtr(email)
+	}
+	if err := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
+		TenantID: tid, UserID: uid, Action: action,
+		ResourceType: strPtr("auth"), ResourceID: resourceID, Metadata: meta,
+	}); err != nil {
+		return fmt.Errorf("writing auth-event audit: %w", err)
 	}
 	return nil
 }

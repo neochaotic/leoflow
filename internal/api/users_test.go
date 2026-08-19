@@ -19,20 +19,21 @@ import (
 // that the plaintext password is delegated to the store (which hashes it) and
 // never echoed back in the response.
 type fakeUserStore struct {
-	created                        domain.User
-	err                            error
-	called                         bool
-	gotEmail, gotPassword, gotRole string
-	enforceUnique                  bool
-	seen                           map[string]bool
-	users                          []domain.User
-	listErr                        error
-	listCalled                     bool
+	created               domain.User
+	err                   error
+	called                bool
+	gotEmail, gotPassword string
+	gotRoles              []string
+	enforceUnique         bool
+	seen                  map[string]bool
+	users                 []domain.User
+	listErr               error
+	listCalled            bool
 }
 
-func (f *fakeUserStore) CreateUser(_ context.Context, _, email, password, role string) (domain.User, error) {
+func (f *fakeUserStore) CreateUser(_ context.Context, _, email, password string, roles []string) (domain.User, error) {
 	f.called = true
-	f.gotEmail, f.gotPassword, f.gotRole = email, password, role
+	f.gotEmail, f.gotPassword, f.gotRoles = email, password, roles
 	if f.err != nil {
 		return domain.User{}, f.err
 	}
@@ -71,10 +72,10 @@ type fakeUserAudit struct {
 	err     error
 }
 
-type userAuditEntry struct{ tenant, actorID, createdID, email, role string }
+type userAuditEntry struct{ tenant, actorID, createdID, email, roles string }
 
-func (f *fakeUserAudit) RecordUserCreatedAudit(_ context.Context, tenant, actorUserID, createdUserID, email, role string) error {
-	f.entries = append(f.entries, userAuditEntry{tenant, actorUserID, createdUserID, email, role})
+func (f *fakeUserAudit) RecordUserCreatedAudit(_ context.Context, tenant, actorUserID, createdUserID, email, roles string) error {
+	f.entries = append(f.entries, userAuditEntry{tenant, actorUserID, createdUserID, email, roles})
 	return f.err
 }
 
@@ -99,12 +100,12 @@ func adminUser() *auth.User {
 
 func TestCreateUserReturnsCreatedUserWithoutSecret(t *testing.T) {
 	store := &fakeUserStore{created: domain.User{
-		ID: "u-1", Email: "alice@example.com", Role: "admin", IsActive: true,
+		ID: "u-1", Email: "alice@example.com", Roles: []string{"admin"}, IsActive: true,
 		CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	}}
 	srv := userServer(store, adminUser())
 
-	body := `{"email":"alice@example.com","password":"s3cret-pass","role":"admin"}`
+	body := `{"email":"alice@example.com","password":"s3cret-pass","roles":["admin"]}`
 	rec := authGet(srv, http.MethodPost, "/api/v2/users", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create = %d (%s)", rec.Code, rec.Body.String())
@@ -114,16 +115,23 @@ func TestCreateUserReturnsCreatedUserWithoutSecret(t *testing.T) {
 	if store.gotPassword != "s3cret-pass" {
 		t.Errorf("store should receive the plaintext password, got %q", store.gotPassword)
 	}
+	if len(store.gotRoles) != 1 || store.gotRoles[0] != "admin" {
+		t.Errorf("store should receive the requested roles, got %v", store.gotRoles)
+	}
 	if strings.Contains(rec.Body.String(), "s3cret-pass") ||
 		strings.Contains(rec.Body.String(), "password") ||
 		strings.Contains(rec.Body.String(), "hash") {
 		t.Errorf("response leaked a secret: %s", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"roles":["admin"]`) {
+		t.Errorf("response missing roles: %s", rec.Body.String())
+	}
 	var dto userDTO
 	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
 		t.Fatal(err)
 	}
-	if dto.ID != "u-1" || dto.Email != "alice@example.com" || dto.Role != "admin" || !dto.IsActive {
+	if dto.ID != "u-1" || dto.Email != "alice@example.com" ||
+		len(dto.Roles) != 1 || dto.Roles[0] != "admin" || !dto.IsActive {
 		t.Errorf("unexpected user dto: %+v", dto)
 	}
 	if dto.CreatedAt != "2026-01-02T03:04:05Z" {
@@ -143,14 +151,15 @@ func TestCreateUserDuplicateEmailConflict(t *testing.T) {
 func TestCreateUserUnknownRoleIsBadRequest(t *testing.T) {
 	store := &fakeUserStore{err: domain.ErrValidation}
 	rec := authGet(userServer(store, adminUser()), http.MethodPost, "/api/v2/users",
-		`{"email":"bob@example.com","password":"pw-12345678","role":"wizard"}`)
+		`{"email":"bob@example.com","password":"pw-12345678","roles":["wizard"]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown role = %d, want 400", rec.Code)
 	}
 }
 
 func TestCreateUserRequiresAdmin(t *testing.T) {
-	// A non-admin principal (no admin role, no admin permission) is forbidden.
+	// A non-admin principal (no write:user permission, no admin short-circuit) is
+	// forbidden by the write:user gate on POST.
 	viewer := &auth.User{ID: "v-1", TenantID: "default", Roles: []string{"viewer"}}
 	store := &fakeUserStore{}
 	rec := authGet(userServer(store, viewer), http.MethodPost, "/api/v2/users",
@@ -184,10 +193,10 @@ func TestCreateUserValidatesRequiredFields(t *testing.T) {
 }
 
 func TestCreateUserWritesAuditOnSuccess(t *testing.T) {
-	store := &fakeUserStore{created: domain.User{ID: "u-7", Email: "alice@example.com", Role: "admin", IsActive: true}}
+	store := &fakeUserStore{created: domain.User{ID: "u-7", Email: "alice@example.com", Roles: []string{"admin"}, IsActive: true}}
 	audit := &fakeUserAudit{}
 	rec := authGet(userServerAudit(store, audit, adminUser()), http.MethodPost, "/api/v2/users",
-		`{"email":"alice@example.com","password":"pw-12345678","role":"admin"}`)
+		`{"email":"alice@example.com","password":"pw-12345678","roles":["admin"]}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create = %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -195,7 +204,7 @@ func TestCreateUserWritesAuditOnSuccess(t *testing.T) {
 		t.Fatalf("audit entries = %d, want exactly 1", len(audit.entries))
 	}
 	e := audit.entries[0]
-	if e.actorID != "admin-1" || e.createdID != "u-7" || e.email != "alice@example.com" || e.role != "admin" || e.tenant != "default" {
+	if e.actorID != "admin-1" || e.createdID != "u-7" || e.email != "alice@example.com" || e.roles != "admin" || e.tenant != "default" {
 		t.Errorf("unexpected audit entry: %+v", e)
 	}
 }

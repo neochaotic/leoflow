@@ -86,7 +86,7 @@ func TestCreateUserRollsBackWhenRoleAssignFails(t *testing.T) {
 	fc := &fakeConn{}
 	repo := &Repository{q: queries.New(fc), pool: fakeBeginner{tx: fc}}
 
-	_, err := repo.CreateUser(context.Background(), "default", "alice@example.com", "pw-12345678", "admin")
+	_, err := repo.CreateUser(context.Background(), "default", "alice@example.com", "pw-12345678", []string{"admin"})
 	if err == nil {
 		t.Fatal("expected an error when the role assignment fails")
 	}

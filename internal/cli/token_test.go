@@ -45,22 +45,25 @@ func TestCreateUserSendsRoleAndReturnsUser(t *testing.T) {
 		gotBody = string(b)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(w, `{"id":"u-9","email":"alice@example.com","role":"admin","is_active":true}`)
+		_, _ = io.WriteString(w, `{"id":"u-9","email":"alice@example.com","roles":["admin"],"is_active":true}`)
 	}))
 	defer srv.Close()
 
-	user, err := createUser(context.Background(), srv.URL, "admin-jwt", "alice@example.com", "pw-12345678", "admin")
+	user, err := createUser(context.Background(), srv.URL, "admin-jwt", "alice@example.com", "pw-12345678", []string{"admin"})
 	if err != nil {
 		t.Fatalf("createUser: %v", err)
 	}
 	if user.Id != "u-9" || user.Email != "alice@example.com" {
 		t.Errorf("unexpected user: %+v", user)
 	}
+	if len(user.Roles) != 1 || user.Roles[0] != "admin" {
+		t.Errorf("unexpected roles: %v", user.Roles)
+	}
 	if gotAuth != "Bearer admin-jwt" {
 		t.Errorf("Authorization = %q, want the admin bearer", gotAuth)
 	}
-	if !strings.Contains(gotBody, `"role":"admin"`) {
-		t.Errorf("request body missing role: %s", gotBody)
+	if !strings.Contains(gotBody, `"roles":["admin"]`) {
+		t.Errorf("request body missing roles: %s", gotBody)
 	}
 }
 
@@ -71,7 +74,7 @@ func TestCreateUserRejectsBadStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := createUser(context.Background(), srv.URL, "t", "dupe@example.com", "pw-12345678", ""); err == nil {
+	if _, err := createUser(context.Background(), srv.URL, "t", "dupe@example.com", "pw-12345678", nil); err == nil {
 		t.Error("expected error on 409")
 	}
 }

@@ -3,13 +3,17 @@
 package storage_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/auth"
+	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/storage"
 )
 
 // TestCreateUserIntegration exercises the admin create-user query end to end:
@@ -20,11 +24,11 @@ func TestCreateUserIntegration(t *testing.T) {
 	email := fmt.Sprintf("newuser_%d@example.com", time.Now().UnixNano())
 	const password = "create-user-secret-1"
 
-	got, err := repo.CreateUser(ctx, "default", email, password, "admin")
+	got, err := repo.CreateUser(ctx, "default", email, password, []string{"admin"})
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if got.ID == "" || got.Email != email || got.Role != "admin" || !got.IsActive {
+	if got.ID == "" || got.Email != email || len(got.Roles) != 1 || got.Roles[0] != "admin" || !got.IsActive {
 		t.Fatalf("unexpected created user: %+v", got)
 	}
 
@@ -42,10 +46,10 @@ func TestCreateUserDuplicateEmailIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
 	email := fmt.Sprintf("dupe_%d@example.com", time.Now().UnixNano())
 
-	if _, err := repo.CreateUser(ctx, "default", email, "pw-first-1234", "admin"); err != nil {
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-first-1234", []string{"admin"}); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	if _, err := repo.CreateUser(ctx, "default", email, "pw-second-1234", "admin"); !errors.Is(err, domain.ErrConflict) {
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-second-1234", []string{"admin"}); !errors.Is(err, domain.ErrConflict) {
 		t.Errorf("duplicate create err = %v, want ErrConflict", err)
 	}
 }
@@ -57,12 +61,12 @@ func TestCreateUserUnknownRoleIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
 	email := fmt.Sprintf("norole_%d@example.com", time.Now().UnixNano())
 
-	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", "wizard"); !errors.Is(err, domain.ErrValidation) {
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", []string{"wizard"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("unknown role err = %v, want ErrValidation", err)
 	}
-	// No account was created, so a subsequent create with a valid (empty) role
-	// succeeds rather than colliding.
-	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", ""); err != nil {
+	// No account was created, so a subsequent create with no roles succeeds rather
+	// than colliding.
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", nil); err != nil {
 		t.Errorf("create after rejected role: %v", err)
 	}
 }
@@ -73,7 +77,7 @@ func TestCreateUserUnknownRoleIntegration(t *testing.T) {
 func TestListUsersIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
 	email := fmt.Sprintf("listed_%d@example.com", time.Now().UnixNano())
-	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", "admin"); err != nil {
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", []string{"admin"}); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
@@ -102,13 +106,70 @@ func TestListUsersIntegration(t *testing.T) {
 	}
 }
 
+// TestCreateUserAssignsMultipleRolesIntegration proves the create path grants
+// every role in the slice, and the list reflects all of them. It seeds a second
+// grantable role in the default tenant (removed on cleanup; its user_roles rows
+// cascade) so the account can hold more than one.
+func TestCreateUserAssignsMultipleRolesIntegration(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL must point at a migrated database for integration tests")
+	}
+	ctx := context.Background()
+	pg, err := storage.NewPostgres(ctx, config.DatabaseSection{URL: url})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pg.Close)
+	repo := storage.NewRepository(pg)
+
+	const extraRole = "editor"
+	if _, err := pg.Pool.Exec(ctx,
+		`INSERT INTO roles (tenant_id, name, description, is_system)
+		 SELECT id, $1, 'grantable test role', false FROM tenants WHERE name = 'default'
+		 ON CONFLICT (tenant_id, name) DO NOTHING`, extraRole); err != nil {
+		t.Fatalf("seeding role: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pg.Pool.Exec(context.Background(),
+			`DELETE FROM roles WHERE name = $1 AND tenant_id = (SELECT id FROM tenants WHERE name = 'default')`, extraRole)
+	})
+
+	email := fmt.Sprintf("multirole_%d@example.com", time.Now().UnixNano())
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", []string{"admin", extraRole}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	users, _, err := repo.ListUsers(ctx, "default", 1000, 0)
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	var found *domain.User
+	for i := range users {
+		if users[i].Email == email {
+			found = &users[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("created user %q not in list", email)
+	}
+	got := map[string]bool{}
+	for _, r := range found.Roles {
+		got[r] = true
+	}
+	if len(found.Roles) != 2 || !got["admin"] || !got[extraRole] {
+		t.Errorf("roles = %v, want both admin and %s", found.Roles, extraRole)
+	}
+}
+
 // TestListUsersRoleAggregationIntegration proves a user with more than one role
 // comes back with every role name, and one with none comes back with an empty
 // (non-nil) set rather than a null.
 func TestListUsersRoleAggregationIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
 	email := fmt.Sprintf("noroles_%d@example.com", time.Now().UnixNano())
-	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", ""); err != nil {
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", nil); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 

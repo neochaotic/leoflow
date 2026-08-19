@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -31,7 +32,8 @@ func newAuthCommand() *cobra.Command {
 // existing admin's bearer token, resolved with the same precedence as `deploy`:
 // --token, then LEOFLOW_TOKEN, then the session saved by `auth login`.
 func newCreateUserCommand() *cobra.Command {
-	var serverURL, token, email, password, role string
+	var serverURL, token, email, password string
+	var roles []string
 	cmd := &cobra.Command{
 		Use:   "create-user",
 		Short: "Create a user on the control plane (admin only).",
@@ -44,12 +46,12 @@ func newCreateUserCommand() *cobra.Command {
 			if email == "" || password == "" {
 				return fmt.Errorf("--email and --password are required")
 			}
-			created, err := createUser(cmdContext(cmd), resolvedServer, resolvedToken, email, password, role)
+			created, err := createUser(cmdContext(cmd), resolvedServer, resolvedToken, email, password, roles)
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Created user %s (id %s, role %s)\n",
-				created.Email, created.Id, roleOrNone(created.Role))
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Created user %s (id %s, roles %s)\n",
+				created.Email, created.Id, rolesOrNone(created.Roles))
 			return err
 		},
 	}
@@ -57,21 +59,21 @@ func newCreateUserCommand() *cobra.Command {
 	cmd.Flags().StringVar(&token, "token", os.Getenv("LEOFLOW_TOKEN"), "admin JWT bearer token (default: config token)")
 	cmd.Flags().StringVar(&email, "email", "", "email of the user to create")
 	cmd.Flags().StringVar(&password, "password", os.Getenv("LEOFLOW_PASSWORD"), "password for the new user")
-	cmd.Flags().StringVar(&role, "role", "", "existing role to grant (e.g. admin); empty grants none")
+	cmd.Flags().StringArrayVar(&roles, "role", nil, "existing role to grant (repeatable); empty grants none")
 	return cmd
 }
 
 // createUser posts to /api/v2/users through the shared typed client, carrying the
 // admin bearer, and returns the created user. It mirrors requestToken's use of
 // the generated client (ADR 0050 D8) rather than hand-rolling HTTP.
-func createUser(ctx context.Context, serverURL, token, email, password, role string) (apiclient.User, error) {
+func createUser(ctx context.Context, serverURL, token, email, password string, roles []string) (apiclient.User, error) {
 	c, err := apiclient.New(serverURL, token)
 	if err != nil {
 		return apiclient.User{}, err
 	}
 	body := apiclient.CreateUserRequest{Email: email, Password: &password}
-	if role != "" {
-		body.Role = &role
+	if len(roles) > 0 {
+		body.Roles = &roles
 	}
 	resp, err := c.CreateUserWithResponse(ctx, body)
 	if err != nil {
@@ -86,13 +88,13 @@ func createUser(ctx context.Context, serverURL, token, email, password, role str
 	return *resp.JSON201, nil
 }
 
-// roleOrNone renders an optional role for CLI output, showing "(none)" when the
-// user was created without one.
-func roleOrNone(role *string) string {
-	if role == nil || *role == "" {
+// rolesOrNone renders the granted roles for CLI output, showing "(none)" when the
+// user was created without any.
+func rolesOrNone(roles []string) string {
+	if len(roles) == 0 {
 		return "(none)"
 	}
-	return *role
+	return strings.Join(roles, ",")
 }
 
 func newCreateTokenCommand() *cobra.Command {

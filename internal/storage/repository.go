@@ -445,9 +445,10 @@ func (r *Repository) RecordTaskActionAudit(ctx context.Context, tenant, userID, 
 }
 
 // RecordUserCreatedAudit logs an account creation with the acting admin as the
-// owner and the new account's email and role in metadata, scoped to the "user"
-// resource so account-management actions are visible in the Audit Log.
-func (r *Repository) RecordUserCreatedAudit(ctx context.Context, tenant, actorUserID, createdUserID, email, role string) error {
+// owner and the new account's email and granted roles in metadata, scoped to the
+// "user" resource so account-management actions are visible in the Audit Log. The
+// roles arrive as a single comma-joined string (empty when none were granted).
+func (r *Repository) RecordUserCreatedAudit(ctx context.Context, tenant, actorUserID, createdUserID, email, roles string) error {
 	tid, err := r.tenantID(ctx, tenant)
 	if err != nil {
 		return err
@@ -457,8 +458,8 @@ func (r *Repository) RecordUserCreatedAudit(ctx context.Context, tenant, actorUs
 		uid = u
 	}
 	fields := map[string]any{"email": email}
-	if role != "" {
-		fields["role"] = role
+	if roles != "" {
+		fields["roles"] = roles
 	}
 	meta, err := json.Marshal(fields)
 	if err != nil {
@@ -667,36 +668,37 @@ func (r *Repository) BootstrapAdmin(ctx context.Context, tenant, email, password
 	return r.BootstrapAdminHash(ctx, tenant, email, hash)
 }
 
-// CreateUser provisions a new account in the tenant and grants it at most one
-// role, returning the created user (never its password or hash). It reuses the
-// same bcrypt hashing as the bootstrap admin path (auth.HashPassword) and the
+// CreateUser provisions a new account in the tenant and grants it the given set
+// of roles, returning the created user (never its password or hash). It reuses
+// the same bcrypt hashing as the bootstrap admin path (auth.HashPassword) and the
 // same email uniqueness guarantee, so a duplicate email surfaces as
-// domain.ErrConflict (the API maps it to 409). The role is resolved BEFORE the
-// insert so an unknown role fails cleanly as domain.ErrValidation without
-// leaving an orphaned account; an empty role grants none — the most restrictive
-// default, leaving the user with no permissions until an admin grants a role.
+// domain.ErrConflict (the API maps it to 409). Every role is resolved BEFORE the
+// insert so an unknown role fails cleanly as domain.ErrValidation without leaving
+// an orphaned account; an empty set grants none — the most restrictive default,
+// leaving the user with no permissions until an admin grants a role.
 //
-// The insert and the role grant run in a single transaction, so a failure in the
-// grant rolls the user insert back. Without that atomicity a failed grant would
-// leave a role-less account that the (tenant_id, email) UNIQUE makes impossible
-// to recreate — every retry would 409 forever with no recovery path.
+// The insert and the role grants run in a single transaction, so a failure in
+// any grant rolls the user insert back. Without that atomicity a failed grant
+// would leave an account the (tenant_id, email) UNIQUE makes impossible to
+// recreate — every retry would 409 forever with no recovery path.
 //
 // This backs `leoflow auth create-user` (ADR 0008) and is purely additive: it
 // does not touch the bootstrap/reconcile path.
-func (r *Repository) CreateUser(ctx context.Context, tenant, email, password, role string) (domain.User, error) {
+func (r *Repository) CreateUser(ctx context.Context, tenant, email, password string, roles []string) (domain.User, error) {
 	tid, err := r.tenantID(ctx, tenant)
 	if err != nil {
 		return domain.User{}, err
 	}
-	var roleID pgtype.UUID
-	if role != "" {
-		roleID, err = r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: role})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+	roleIDs := make([]pgtype.UUID, 0, len(roles))
+	for _, role := range roles {
+		roleID, rerr := r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: role})
+		if rerr != nil {
+			if errors.Is(rerr, pgx.ErrNoRows) {
 				return domain.User{}, fmt.Errorf("unknown role %q: %w", role, domain.ErrValidation)
 			}
-			return domain.User{}, fmt.Errorf("looking up role: %w", err)
+			return domain.User{}, fmt.Errorf("looking up role: %w", rerr)
 		}
+		roleIDs = append(roleIDs, roleID)
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {
@@ -714,7 +716,7 @@ func (r *Repository) CreateUser(ctx context.Context, tenant, email, password, ro
 	if err != nil {
 		return domain.User{}, mapConflict(err)
 	}
-	if role != "" {
+	for _, roleID := range roleIDs {
 		if aerr := qtx.AssignUserRole(ctx, queries.AssignUserRoleParams{UserID: row.ID, RoleID: roleID}); aerr != nil {
 			return domain.User{}, fmt.Errorf("assigning role: %w", aerr)
 		}
@@ -725,7 +727,7 @@ func (r *Repository) CreateUser(ctx context.Context, tenant, email, password, ro
 	return domain.User{
 		ID:        uuidToString(row.ID),
 		Email:     row.Email,
-		Role:      role,
+		Roles:     roles,
 		IsActive:  row.IsActive,
 		CreatedAt: timeVal(row.CreatedAt),
 	}, nil

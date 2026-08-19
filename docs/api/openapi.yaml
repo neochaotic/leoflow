@@ -63,8 +63,8 @@ paths:
       summary: Create a user
       description: |
         Admin-only. Creates a control-plane account with the given email and
-        password and grants at most one role. The password is write-only and is
-        never returned. Requires the admin:tenant permission.
+        password and grants the requested roles. The password is write-only and
+        is never returned. Requires the write:user permission.
       operationId: createUser
       tags: [Users]
       requestBody:
@@ -513,20 +513,21 @@ components:
           description: >-
             Plaintext password (write-only; never returned). Must be at least 8
             characters — the server rejects anything shorter with 400.
-        role:
-          type: string
+        roles:
+          type: array
+          items: { type: string }
           description: >-
-            Name of an existing role to grant (e.g. "admin"). Omit to grant no
-            role — the most restrictive default; the user then holds no
-            permissions until an admin grants one.
+            Names of existing roles to grant; omit or empty to grant none.
 
     User:
       type: object
-      required: [id, email]
+      required: [id, email, roles, is_active, created_at]
       properties:
         id: { type: string }
         email: { type: string }
-        role: { type: string }
+        roles:
+          type: array
+          items: { type: string }
         is_active: { type: boolean }
         created_at: { type: string, format: date-time }
 

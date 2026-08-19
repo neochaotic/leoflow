@@ -153,8 +153,8 @@ type CreateUserRequest struct {
 	// Password Plaintext password (write-only; never returned). Must be at least 8 characters — the server rejects anything shorter with 400.
 	Password *string `json:"password,omitempty"`
 
-	// Role Name of an existing role to grant (e.g. "admin"). Omit to grant no role — the most restrictive default; the user then holds no permissions until an admin grants one.
-	Role *string `json:"role,omitempty"`
+	// Roles Names of existing roles to grant; omit or empty to grant none.
+	Roles *[]string `json:"roles,omitempty"`
 }
 
 // DAG defines model for DAG.
@@ -321,11 +321,11 @@ type TokenResponse struct {
 
 // User defines model for User.
 type User struct {
-	CreatedAt *time.Time `json:"created_at,omitempty"`
-	Email     string     `json:"email"`
-	Id        string     `json:"id"`
-	IsActive  *bool      `json:"is_active,omitempty"`
-	Role      *string    `json:"role,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	Email     string    `json:"email"`
+	Id        string    `json:"id"`
+	IsActive  bool      `json:"is_active"`
+	Roles     []string  `json:"roles"`
 }
 
 // UserCollection defines model for UserCollection.
@@ -613,8 +613,8 @@ type ClientInterface interface {
 	// CreateUserWithBody Create a user
 	//
 	// Admin-only. Creates a control-plane account with the given email and
-	// password and grants at most one role. The password is write-only and is
-	// never returned. Requires the admin:tenant permission.
+	// password and grants the requested roles. The password is write-only and
+	// is never returned. Requires the write:user permission.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -624,8 +624,8 @@ type ClientInterface interface {
 	// CreateUser Create a user
 	//
 	// Admin-only. Creates a control-plane account with the given email and
-	// password and grants at most one role. The password is write-only and is
-	// never returned. Requires the admin:tenant permission.
+	// password and grants the requested roles. The password is write-only and
+	// is never returned. Requires the write:user permission.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -986,8 +986,8 @@ func (c *Client) ListUsers(ctx context.Context, params *ListUsersParams, reqEdit
 // CreateUserWithBody Create a user
 //
 // Admin-only. Creates a control-plane account with the given email and
-// password and grants at most one role. The password is write-only and is
-// never returned. Requires the admin:tenant permission.
+// password and grants the requested roles. The password is write-only and
+// is never returned. Requires the write:user permission.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1007,8 +1007,8 @@ func (c *Client) CreateUserWithBody(ctx context.Context, contentType string, bod
 // CreateUser Create a user
 //
 // Admin-only. Creates a control-plane account with the given email and
-// password and grants at most one role. The password is write-only and is
-// never returned. Requires the admin:tenant permission.
+// password and grants the requested roles. The password is write-only and
+// is never returned. Requires the write:user permission.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -2336,8 +2336,8 @@ type ClientWithResponsesInterface interface {
 	// CreateUserWithBodyWithResponse Create a user
 	//
 	// Admin-only. Creates a control-plane account with the given email and
-	// password and grants at most one role. The password is write-only and is
-	// never returned. Requires the admin:tenant permission.
+	// password and grants the requested roles. The password is write-only and
+	// is never returned. Requires the write:user permission.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -2347,8 +2347,8 @@ type ClientWithResponsesInterface interface {
 	// CreateUserWithResponse Create a user
 	//
 	// Admin-only. Creates a control-plane account with the given email and
-	// password and grants at most one role. The password is write-only and is
-	// never returned. Requires the admin:tenant permission.
+	// password and grants the requested roles. The password is write-only and
+	// is never returned. Requires the write:user permission.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -3664,8 +3664,8 @@ func (c *ClientWithResponses) ListUsersWithResponse(ctx context.Context, params 
 // CreateUserWithBodyWithResponse Create a user
 //
 // Admin-only. Creates a control-plane account with the given email and
-// password and grants at most one role. The password is write-only and is
-// never returned. Requires the admin:tenant permission.
+// password and grants the requested roles. The password is write-only and
+// is never returned. Requires the write:user permission.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -3681,8 +3681,8 @@ func (c *ClientWithResponses) CreateUserWithBodyWithResponse(ctx context.Context
 // CreateUserWithResponse Create a user
 //
 // Admin-only. Creates a control-plane account with the given email and
-// password and grants at most one role. The password is write-only and is
-// never returned. Requires the admin:tenant permission.
+// password and grants the requested roles. The password is write-only and
+// is never returned. Requires the write:user permission.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //

@@ -123,7 +123,11 @@ func TestCreateUserAssignsMultipleRolesIntegration(t *testing.T) {
 	t.Cleanup(pg.Close)
 	repo := storage.NewRepository(pg)
 
-	const extraRole = "editor"
+	// A tenant-defined, non-built-in role planted just for this test. It must not
+	// be one of the built-in ladder roles (viewer/editor/operator): those are
+	// seeded by migration and marked is_system, so the destructive cleanup below
+	// would delete real seeded data rather than the fixture.
+	const extraRole = "grantable-test-role"
 	if _, err := pg.Pool.Exec(ctx,
 		`INSERT INTO roles (tenant_id, name, description, is_system)
 		 SELECT id, $1, 'grantable test role', false FROM tenants WHERE name = 'default'

@@ -626,10 +626,7 @@ func (c *ServerConfig) validateOIDC() error {
 	if !strings.HasPrefix(c.Auth.OIDC.Issuer, "https://") {
 		return fmt.Errorf("auth.oidc.issuer must be an https:// URL (got %q)", c.Auth.OIDC.Issuer)
 	}
-	if err := validateRedirectURL(c.Auth.OIDC.RedirectURL); err != nil {
-		return err
-	}
-	return nil
+	return validateRedirectURL(c.Auth.OIDC.RedirectURL)
 }
 
 // validateRedirectURL requires the OIDC callback URL to use https so the

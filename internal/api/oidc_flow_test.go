@@ -200,7 +200,7 @@ func (s *fakeOIDCStore) ReconcileUserRoles(_ context.Context, userID string, rol
 	}
 	s.reconciled = append(s.reconciled, reconcileCall{userID: userID, roles: append([]string(nil), roleNames...)})
 	// Reflect the reconciled set onto the resolvable user so a later
-	// FindUserByOIDCSubject (the per-request reload analogue) observes it.
+	// FindUserByOIDCSubject (standing in for the per-request reload) observes it.
 	for k, u := range s.users {
 		if u.ID == userID {
 			u.Roles = append([]string(nil), roleNames...)

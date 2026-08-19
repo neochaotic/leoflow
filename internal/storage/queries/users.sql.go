@@ -105,6 +105,41 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDR
 	return i, err
 }
 
+const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
+SELECT u.id, t.name AS tenant, u.email, u.is_active
+FROM users u
+JOIN tenants t ON t.id = u.tenant_id
+WHERE u.oidc_provider = $1 AND u.oidc_subject = $2
+`
+
+type GetUserByOIDCSubjectParams struct {
+	OidcProvider *string `json:"oidc_provider"`
+	OidcSubject  *string `json:"oidc_subject"`
+}
+
+type GetUserByOIDCSubjectRow struct {
+	ID       pgtype.UUID `json:"id"`
+	Tenant   string      `json:"tenant"`
+	Email    string      `json:"email"`
+	IsActive bool        `json:"is_active"`
+}
+
+// Resolve an OIDC identity to a Leoflow user by its immutable (provider,
+// subject) pair (the trusted link key). Returns the tenant name (not the uuid)
+// so the reconstructed principal matches the login path's User.TenantID, plus
+// the active flag the login gates on. Never selects password_hash.
+func (q *Queries) GetUserByOIDCSubject(ctx context.Context, arg GetUserByOIDCSubjectParams) (GetUserByOIDCSubjectRow, error) {
+	row := q.db.QueryRow(ctx, getUserByOIDCSubject, arg.OidcProvider, arg.OidcSubject)
+	var i GetUserByOIDCSubjectRow
+	err := row.Scan(
+		&i.ID,
+		&i.Tenant,
+		&i.Email,
+		&i.IsActive,
+	)
+	return i, err
+}
+
 const getUserPermissions = `-- name: GetUserPermissions :many
 SELECT DISTINCT p.action, p.resource
 FROM user_roles ur
@@ -163,6 +198,47 @@ func (q *Queries) GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]strin
 		return nil, err
 	}
 	return items, nil
+}
+
+const insertOIDCUser = `-- name: InsertOIDCUser :one
+INSERT INTO users (tenant_id, email, oidc_provider, oidc_subject)
+VALUES ($1, $2, $3, $4)
+RETURNING id, email, is_active, created_at
+`
+
+type InsertOIDCUserParams struct {
+	TenantID     pgtype.UUID `json:"tenant_id"`
+	Email        string      `json:"email"`
+	OidcProvider *string     `json:"oidc_provider"`
+	OidcSubject  *string     `json:"oidc_subject"`
+}
+
+type InsertOIDCUserRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Email     string             `json:"email"`
+	IsActive  bool               `json:"is_active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Just-in-time provisioning insert for a first OIDC login: an OIDC-only user
+// (NULL password) linked by (oidc_provider, oidc_subject). The unique
+// (oidc_provider, oidc_subject) constraint makes a concurrent double-provision
+// surface as a conflict rather than a duplicate identity.
+func (q *Queries) InsertOIDCUser(ctx context.Context, arg InsertOIDCUserParams) (InsertOIDCUserRow, error) {
+	row := q.db.QueryRow(ctx, insertOIDCUser,
+		arg.TenantID,
+		arg.Email,
+		arg.OidcProvider,
+		arg.OidcSubject,
+	)
+	var i InsertOIDCUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.IsActive,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const insertUser = `-- name: InsertUser :one

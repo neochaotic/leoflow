@@ -257,6 +257,17 @@ type Permission struct {
 	Description *string     `json:"description"`
 }
 
+type Pool struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	Name        string             `json:"name"`
+	Slots       int32              `json:"slots"`
+	Description *string            `json:"description"`
+	IsDefault   bool               `json:"is_default"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Replica struct {
 	ID              pgtype.UUID        `json:"id"`
 	Hostname        string             `json:"hostname"`

@@ -274,8 +274,8 @@ func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateSched
 }
 
 const createTaskInstance = `-- name: CreateTaskInstance :one
-INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
-VALUES ($1, $2, $3, $4, $5, $6, 1)
+INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, pool, try_number)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
 RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts
 `
 
@@ -286,6 +286,7 @@ type CreateTaskInstanceParams struct {
 	Operator string      `json:"operator"`
 	MaxTries int32       `json:"max_tries"`
 	State    TaskState   `json:"state"`
+	Pool     *string     `json:"pool"`
 }
 
 // try_number starts at 1 to match Airflow (1-based attempts): the first run's
@@ -299,6 +300,7 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 		arg.Operator,
 		arg.MaxTries,
 		arg.State,
+		arg.Pool,
 	)
 	var i TaskInstance
 	err := row.Scan(
@@ -342,6 +344,7 @@ type CreateTaskInstancesParams struct {
 	Operator  string      `json:"operator"`
 	MaxTries  int32       `json:"max_tries"`
 	State     TaskState   `json:"state"`
+	Pool      *string     `json:"pool"`
 	TryNumber int32       `json:"try_number"`
 }
 

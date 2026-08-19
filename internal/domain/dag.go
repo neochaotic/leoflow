@@ -111,10 +111,16 @@ type DefaultArgs struct {
 
 // TaskSpec describes a single unit of work within a DAG.
 type TaskSpec struct {
-	TaskID                  string              `json:"task_id"`
-	Type                    TaskType            `json:"type"`
-	DependsOn               []string            `json:"depends_on,omitempty"`
-	TriggerRule             TriggerRule         `json:"trigger_rule,omitempty"`
+	TaskID      string      `json:"task_id"`
+	Type        TaskType    `json:"type"`
+	DependsOn   []string    `json:"depends_on,omitempty"`
+	TriggerRule TriggerRule `json:"trigger_rule,omitempty"`
+	// Pool is the named task pool this task draws a slot from (Airflow's `pool`),
+	// the cross-DAG concurrency budget admission enforces (ADR 0053 Stage 3). Empty
+	// (the default) means the implicit default_pool, so every task is always in a
+	// well-defined pool. The pool gate is Pro-only; Lite ignores this field, so a
+	// DAG that sets it plans identically on Lite.
+	Pool                    string              `json:"pool,omitempty"`
 	Retries                 *int                `json:"retries,omitempty"`
 	RetryDelaySeconds       *int                `json:"retry_delay_seconds,omitempty"`
 	ExecutionTimeoutSeconds *int                `json:"execution_timeout_seconds,omitempty"`

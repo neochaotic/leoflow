@@ -467,3 +467,129 @@ func TestPlanRunMaxActiveTasksNonPositiveUnlimited(t *testing.T) {
 		t.Errorf("negative cap promoted %d, want all 3 (unlimited)", got)
 	}
 }
+
+// --- Named-pool admission gate (ADR 0053 Stage 3) ---------------------------
+
+const testTenant = "t1"
+
+// pooledTasks returns n independent tasks all drawing on the named pool.
+func pooledTasks(n int, pool string) []domain.TaskSpec {
+	tasks := independent(n)
+	for i := range tasks {
+		tasks[i].Pool = pool
+	}
+	return tasks
+}
+
+// poolRun builds an enabled-pool run: every task scheduled, in the given tenant,
+// with the supplied per-pool budget and current occupancy maps (keyed by PoolKey).
+func poolRun(tasks []domain.TaskSpec, budgets, active map[string]int) RunState {
+	return RunState{
+		TenantID: testTenant, Tasks: tasks, States: scheduledStates(tasks),
+		PoolsEnabled: true, PoolBudgets: budgets, PoolActive: active,
+	}
+}
+
+// TestPlanRunPoolGatesPromotion: a fan-out of tasks all in a 2-slot pool promotes
+// exactly 2 this tick; the rest stay scheduled (ADR 0053 Stage 3).
+func TestPlanRunPoolGatesPromotion(t *testing.T) {
+	tasks := pooledTasks(5, "p")
+	budgets := map[string]int{PoolKey(testTenant, "p"): 2}
+	if got := countQueued(PlanRun(poolRun(tasks, budgets, nil))); got != 2 {
+		t.Errorf("promoted %d, want 2 (pool slot cap)", got)
+	}
+}
+
+// TestPlanRunPoolCountsActiveOccupancy: the cap is against the pool's cross-DAG
+// active occupancy, so a pool of 3 already holding 1 active TI admits 2 more.
+func TestPlanRunPoolCountsActiveOccupancy(t *testing.T) {
+	tasks := pooledTasks(5, "p")
+	budgets := map[string]int{PoolKey(testTenant, "p"): 3}
+	active := map[string]int{PoolKey(testTenant, "p"): 1}
+	if got := countQueued(PlanRun(poolRun(tasks, budgets, active))); got != 2 {
+		t.Errorf("promoted %d, want 2 (3 slots − 1 occupied)", got)
+	}
+}
+
+// TestPlanRunPoolFullAdmitsNone: a pool at capacity promotes nothing; tasks stay
+// parked until a slot frees, the same discipline max_active_tasks uses.
+func TestPlanRunPoolFullAdmitsNone(t *testing.T) {
+	tasks := pooledTasks(4, "p")
+	budgets := map[string]int{PoolKey(testTenant, "p"): 2}
+	active := map[string]int{PoolKey(testTenant, "p"): 2}
+	if got := countQueued(PlanRun(poolRun(tasks, budgets, active))); got != 0 {
+		t.Errorf("promoted %d, want 0 (pool full)", got)
+	}
+}
+
+// TestPlanRunPoolUnsetTaskUsesDefaultPool: a task with no declared pool draws on
+// the implicit default_pool, so a 2-slot default_pool bounds it to 2.
+func TestPlanRunPoolUnsetTaskUsesDefaultPool(t *testing.T) {
+	tasks := independent(5) // no Pool set → default_pool
+	budgets := map[string]int{PoolKey(testTenant, domain.DefaultPoolName): 2}
+	if got := countQueued(PlanRun(poolRun(tasks, budgets, nil))); got != 2 {
+		t.Errorf("promoted %d, want 2 (unset pool → default_pool cap)", got)
+	}
+}
+
+// TestPlanRunPoolDisabledIsNoOp is the Lite-safety lock: with PoolsEnabled false,
+// the pool gate never runs even when a budget would otherwise bind, so planning is
+// byte-identical to the max_active_tasks-only path — every ready task promotes.
+func TestPlanRunPoolDisabledIsNoOp(t *testing.T) {
+	tasks := pooledTasks(5, "p")
+	run := RunState{
+		TenantID: testTenant, Tasks: tasks, States: scheduledStates(tasks),
+		PoolsEnabled: false, // Lite / non-Pro
+		PoolBudgets:  map[string]int{PoolKey(testTenant, "p"): 2},
+		PoolActive:   map[string]int{PoolKey(testTenant, "p"): 0},
+	}
+	if got := countQueued(PlanRun(run)); got != 5 {
+		t.Errorf("pools disabled promoted %d, want all 5 (Lite no-op)", got)
+	}
+}
+
+// TestPlanRunPoolUndefinedIsUnlimited: an enabled gate whose task references a
+// pool with no budget entry fails open (unlimited) rather than deadlocking the DAG.
+func TestPlanRunPoolUndefinedIsUnlimited(t *testing.T) {
+	tasks := pooledTasks(3, "ghost")
+	budgets := map[string]int{PoolKey(testTenant, "other"): 1} // no "ghost" entry
+	if got := countQueued(PlanRun(poolRun(tasks, budgets, nil))); got != 3 {
+		t.Errorf("undefined pool promoted %d, want all 3 (fail open)", got)
+	}
+}
+
+// TestPlanRunPoolComposesWithMaxActiveTasks: both gates must pass, so the tighter
+// of the two caps wins in each direction.
+func TestPlanRunPoolComposesWithMaxActiveTasks(t *testing.T) {
+	// max_active_tasks is the tighter gate.
+	tasks := pooledTasks(6, "p")
+	budgets := map[string]int{PoolKey(testTenant, "p"): 5}
+	run := poolRun(tasks, budgets, nil)
+	run.MaxActiveTasks = 2
+	if got := countQueued(PlanRun(run)); got != 2 {
+		t.Errorf("promoted %d, want 2 (max_active_tasks is tighter)", got)
+	}
+	// pool is the tighter gate.
+	budgets2 := map[string]int{PoolKey(testTenant, "p"): 2}
+	run2 := poolRun(pooledTasks(6, "p"), budgets2, nil)
+	run2.MaxActiveTasks = 5
+	if got := countQueued(PlanRun(run2)); got != 2 {
+		t.Errorf("promoted %d, want 2 (pool is tighter)", got)
+	}
+}
+
+// TestPlanRunPoolSeparatePoolsIndependent: tasks in different pools draw on
+// separate budgets, so one full pool does not starve another.
+func TestPlanRunPoolSeparatePoolsIndependent(t *testing.T) {
+	tasks := append(pooledTasks(2, "a"), pooledTasks(2, "b")...)
+	// task ids collide across the two pooledTasks calls (t0,t1 each); rekey b's.
+	tasks[2].TaskID, tasks[3].TaskID = "b0", "b1"
+	budgets := map[string]int{
+		PoolKey(testTenant, "a"): 1,
+		PoolKey(testTenant, "b"): 2,
+	}
+	run := poolRun(tasks, budgets, nil)
+	if got := countQueued(PlanRun(run)); got != 3 {
+		t.Errorf("promoted %d, want 3 (1 from pool a + 2 from pool b)", got)
+	}
+}

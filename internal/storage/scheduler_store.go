@@ -186,12 +186,17 @@ func (s *SchedulerStore) MaterializeTasks(ctx context.Context, runID string, tas
 			maxTries = toInt32(*t.Retries + 1)
 		}
 		rows[i] = queries.CreateTaskInstancesParams{
-			TenantID:  run.TenantID,
-			DagRunID:  rid,
-			TaskID:    t.TaskID,
-			Operator:  string(t.Type),
-			MaxTries:  maxTries,
-			State:     queries.TaskStateNone,
+			TenantID: run.TenantID,
+			DagRunID: rid,
+			TaskID:   t.TaskID,
+			Operator: string(t.Type),
+			MaxTries: maxTries,
+			State:    queries.TaskStateNone,
+			// A NULL pool is the implicit default_pool; the pool-usage query and the
+			// admission gate both resolve it the same way, so an unset pool needs no
+			// sentinel value written here. Carried through the batched COPY path so
+			// pool occupancy is attributed correctly (Wave-2 review HIGH-1).
+			Pool:      poolOrNil(t.Pool),
 			TryNumber: 1,
 		}
 	}
@@ -201,7 +206,33 @@ func (s *SchedulerStore) MaterializeTasks(ctx context.Context, runID string, tas
 	return nil
 }
 
-// ApplyTransition moves a single task instance to a new state.
+// poolOrNil maps an unset task pool to a NULL column so a task with no declared
+// pool is stored as the implicit default_pool (resolved at read time), matching
+// the admission gate's default-pool fallback.
+func poolOrNil(pool string) *string {
+	if pool == "" {
+		return nil
+	}
+	return &pool
+}
+
+// PoolBudgets returns every named pool's slot cap keyed by
+// scheduler.PoolKey(tenantID, name) — the cross-DAG admission budget the pool
+// gate enforces (ADR 0053 Stage 3). The scheduler calls it once per tick, and
+// only on the Pro path; Lite never loads pool budgets.
+func (s *SchedulerStore) PoolBudgets(ctx context.Context) (map[string]int, error) {
+	rows, err := s.q.PoolBudgets(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading pool budgets: %w", err)
+	}
+	out := make(map[string]int, len(rows))
+	for _, row := range rows {
+		out[scheduler.PoolKey(uuidToString(row.TenantID), row.Name)] = int(row.Slots)
+	}
+	return out, nil
+}
+
+// ApplyTransition moves a task instance to a new state.
 func (s *SchedulerStore) ApplyTransition(ctx context.Context, runID, taskID string, to domain.TaskState) error {
 	rid, err := parseUUID(runID)
 	if err != nil {

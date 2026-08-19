@@ -37,12 +37,18 @@ func PlanRun(run RunState) []PlannedTransition {
 
 	out = append(out, planRetryTransitions(run, effective, decided)...)
 
-	// Admission gate (ADR 0053 Stage 1): headroom is how many scheduled tasks may
-	// still be promoted to queued for this DAG this tick under max_active_tasks;
-	// promoted tracks what we spend against it. An unset cap yields math.MaxInt,
-	// so the gate never trips and the loop behaves exactly as before.
+	// Admission gates (ADR 0053): a scheduled task promotes to queued only if it
+	// clears BOTH the per-DAG max_active_tasks gate (Stage 1) and, on the Pro
+	// path, the cross-DAG named-pool slot gate (Stage 3). headroom is the
+	// remaining max_active_tasks budget this tick (math.MaxInt when unset, so that
+	// gate is a no-op); promoted tracks what we spend against it. poolPromoted
+	// tracks per-pool promotions this call so several ready tasks in one pool
+	// cannot together overshoot the pool's free slots. Both gates only ever leave
+	// a task parked (scheduled), the same "downstream waits" discipline the retry
+	// and reschedule rails use.
 	headroom := admissionHeadroom(run)
 	promoted := 0
+	var poolPromoted map[string]int
 	for _, t := range run.Tasks {
 		if decided[t.TaskID] {
 			continue
@@ -59,19 +65,74 @@ func PlanRun(run RunState) []PlannedTransition {
 				continue
 			}
 			if promoted >= headroom {
-				// DAG is at max_active_tasks: leave the task scheduled so a
-				// finishing sibling frees a slot and a later tick promotes it —
-				// the same "park it, downstream waits" discipline the retry and
-				// reschedule rails use.
-				continue
+				continue // DAG at max_active_tasks — park until a sibling frees a slot.
+			}
+			pk := poolKeyFor(run, t)
+			if !poolHasSlot(run, pk, poolPromoted) {
+				continue // pool at capacity — park until a slot frees anywhere in the pool.
 			}
 			out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateQueued})
 			promoted++
+			if pk != "" {
+				if poolPromoted == nil {
+					poolPromoted = map[string]int{}
+				}
+				poolPromoted[pk]++
+			}
 		default:
 			// queued/running/terminal/up_for_retry: nothing to plan here.
 		}
 	}
 	return out
+}
+
+// defaultPoolName is the implicit pool a task with no declared pool draws from,
+// so the pool gate is always well-defined (ADR 0053: "a task with no pool uses
+// an implicit default pool"). Mirrors domain.DefaultPoolName.
+const defaultPoolName = "default_pool"
+
+// PoolKey composes the cross-DAG admission-budget key for a (tenant, pool) pair.
+// Pools are tenant-scoped, so a pool name is only meaningful within its tenant;
+// the key namespaces the pool budget and occupancy maps by tenant. The NUL
+// separator cannot occur in a tenant UUID or an Airflow pool name, so the join is
+// unambiguous. The scheduler store builds its budget map with the same key.
+func PoolKey(tenant, pool string) string {
+	return tenant + "\x00" + pool
+}
+
+// resolvePool maps an unset task pool to the implicit default pool.
+func resolvePool(pool string) string {
+	if pool == "" {
+		return defaultPoolName
+	}
+	return pool
+}
+
+// poolKeyFor returns the admission-budget key for a task's pool, or "" when the
+// named-pool gate is disabled (Lite / non-Pro). Returning "" makes poolHasSlot a
+// no-op, so planning on the Lite path is byte-identical to the
+// max_active_tasks-only path.
+func poolKeyFor(run RunState, t domain.TaskSpec) string {
+	if !run.PoolsEnabled {
+		return ""
+	}
+	return PoolKey(run.TenantID, resolvePool(t.Pool))
+}
+
+// poolHasSlot reports whether the task's pool has a free slot this tick: the
+// pool's cap minus its cross-DAG active occupancy (PoolActive) minus what this
+// run already promoted into the pool this call (promotedByPool). A disabled gate
+// (key ""), or a pool with a non-positive or absent budget (unset/undefined),
+// is unlimited — fail open, never deadlock a DAG on a misconfigured pool.
+func poolHasSlot(run RunState, poolKey string, promotedByPool map[string]int) bool {
+	if poolKey == "" {
+		return true
+	}
+	budget := run.PoolBudgets[poolKey]
+	if budget <= 0 {
+		return true
+	}
+	return run.PoolActive[poolKey]+promotedByPool[poolKey] < budget
 }
 
 // admissionHeadroom returns how many more of this DAG's scheduled tasks PlanRun

@@ -136,19 +136,19 @@ WHERE id = sqlc.arg(id);
 -- try_number starts at 1 to match Airflow (1-based attempts): the first run's
 -- logs live at .../1.log, which is where the UI's log view looks. Retries bump
 -- it via ResetForRetry.
-INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
-VALUES ($1, $2, $3, $4, $5, $6, 1)
+INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, pool, try_number)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
 RETURNING *;
 
 -- name: CreateTaskInstances :copyfrom
 -- Batched form of CreateTaskInstance: materializes every task of one run in a
 -- single COPY instead of T INSERT round-trips. The caller supplies one param row
--- per task with try_number pinned to 1 (matching CreateTaskInstance's literal);
--- columns omitted from the list take their table defaults, exactly as the
--- per-row INSERT relied on, so the rows are byte-identical to the loop — only the
--- statement count changes (T INSERTs → 1 COPY).
-INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, try_number)
-VALUES ($1, $2, $3, $4, $5, $6, $7);
+-- per task with try_number pinned to 1 (matching CreateTaskInstance's literal)
+-- and pool carried through so cross-DAG pool occupancy is attributed correctly;
+-- columns omitted from the list take their table defaults, so the rows are
+-- byte-identical to the loop — only the statement count changes (T INSERTs → 1 COPY).
+INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, pool, try_number)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 
 -- name: ListTaskInstancesByRun :many
 SELECT * FROM task_instances

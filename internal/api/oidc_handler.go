@@ -44,6 +44,10 @@ type OIDCUserStore interface {
 	// RoleExists reports whether a role name exists for the tenant, used to fail
 	// closed on a misconfigured default_role or role mapping.
 	RoleExists(ctx context.Context, tenant, role string) (bool, error)
+	// ReconcileUserRoles sets the user's DB roles to EXACTLY roleNames (the IdP is
+	// authoritative). It fails closed on a name that is not a role in the tenant,
+	// leaving the prior grants intact.
+	ReconcileUserRoles(ctx context.Context, userID string, roleNames []string) error
 }
 
 // AuthAuditWriter records authentication events to the audit sink (H5). It is
@@ -165,7 +169,7 @@ func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 		}
 		setSessionCookie(c, token, deps.tokenTTL)
 		deps.record(c, auditOIDCLoginSuccess, identity.Tenant, user.ID, identity.Email, "success",
-			map[string]string{"subject": identity.Subject})
+			map[string]string{"subject": identity.Subject, "roles": strings.Join(user.Roles, ",")})
 		c.Redirect(http.StatusFound, sanitizeNext(payload.Next))
 	}
 }
@@ -212,22 +216,36 @@ func (d oidcDeps) resolveUser(c *gin.Context, id *oidc.VerifiedIdentity) (*auth.
 	}
 
 	user, active, err := d.users.FindUserByOIDCSubject(ctx, id.Provider, id.Subject)
+	var resolved *auth.User
 	switch {
 	case err == nil:
 		if !active {
 			d.deny(c, auditOIDCLoginFailure, id.Tenant, user.ID, id.Email, "inactive")
 			return nil, errRejected
 		}
-		// Returning user: token carries the IdP-mapped roles (D5); per-request
-		// reload (PR-A) remains the authority for live permissions.
-		return &auth.User{ID: user.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}, nil
+		resolved = &auth.User{ID: user.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}
 	case errors.Is(err, auth.ErrUserNotFound):
-		return d.jitProvision(c, id, loginRoles)
+		resolved, err = d.jitProvision(c, id, loginRoles)
+		if err != nil {
+			return nil, err // jitProvision already audited + wrote the 403
+		}
 	default:
 		d.logger.Error("oidc: resolving user", "error", err)
 		d.deny(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "user_lookup_failed")
 		return nil, errRejected
 	}
+
+	// IdP-authoritative role reconciliation (D5): set the DB roles to EXACTLY the
+	// group-mapped set for BOTH new and returning users, so the per-request authz
+	// reload reflects the IdP's current groups — an IdP demotion or deprovisioning
+	// takes effect on the next login instead of stale DB grants winning. A failure
+	// here rejects the login rather than minting a token the DB does not back.
+	if rerr := d.users.ReconcileUserRoles(ctx, resolved.ID, loginRoles); rerr != nil {
+		d.logger.Error("oidc: reconciling roles", "error", rerr)
+		d.deny(c, auditOIDCLoginFailure, id.Tenant, resolved.ID, id.Email, "role_reconcile_failed")
+		return nil, errRejected
+	}
+	return resolved, nil
 }
 
 // jitProvision handles the no-matching-row case per D4: reject when JIT is off,

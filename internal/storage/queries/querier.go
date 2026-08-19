@@ -66,6 +66,9 @@ type Querier interface {
 	// The implicit default pool is never deletable (Airflow parity): the guard is in
 	// the query so a direct call cannot orphan the fallback pool the gate resolves to.
 	DeletePool(ctx context.Context, arg DeletePoolParams) (int64, error)
+	// Remove every role grant for a user: the delete half of the IdP-authoritative
+	// reconcile that sets the grants to exactly the group-mapped set on each login.
+	DeleteUserRoles(ctx context.Context, userID pgtype.UUID) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	// The dispatch-attempt budget is spent (ADR 0031 Amendment A): fail the task with
 	// a dispatch_failed reason so the run can finalize instead of looping forever.
@@ -89,6 +92,11 @@ type Querier interface {
 	GetDefaultTenant(ctx context.Context) (GetDefaultTenantRow, error)
 	GetPool(ctx context.Context, arg GetPoolParams) (GetPoolRow, error)
 	GetRoleByName(ctx context.Context, arg GetRoleByNameParams) (pgtype.UUID, error)
+	// Resolve a role name to its id within the user's OWN tenant, so an OIDC login
+	// can reconcile the user's grants to the group-mapped set without the caller
+	// passing the tenant separately. A name that is not a role in that tenant yields
+	// no row, which the reconcile turns into a fail-closed error.
+	GetRoleIDForUserTenant(ctx context.Context, arg GetRoleIDForUserTenantParams) (pgtype.UUID, error)
 	GetTenantByName(ctx context.Context, name string) (GetTenantByNameRow, error)
 	GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) (GetUserByEmailRow, error)
 	// The by-id lookup backing the per-request authz reload. Returns the tenant

@@ -71,6 +71,21 @@ FROM user_roles ur
 JOIN roles r ON r.id = ur.role_id
 WHERE ur.user_id = $1;
 
+-- name: GetRoleIDForUserTenant :one
+-- Resolve a role name to its id within the user's OWN tenant, so an OIDC login
+-- can reconcile the user's grants to the group-mapped set without the caller
+-- passing the tenant separately. A name that is not a role in that tenant yields
+-- no row, which the reconcile turns into a fail-closed error.
+SELECT r.id
+FROM roles r
+JOIN users u ON u.tenant_id = r.tenant_id
+WHERE u.id = $1 AND r.name = $2;
+
+-- name: DeleteUserRoles :exec
+-- Remove every role grant for a user: the delete half of the IdP-authoritative
+-- reconcile that sets the grants to exactly the group-mapped set on each login.
+DELETE FROM user_roles WHERE user_id = $1;
+
 -- name: GetUserPermissions :many
 SELECT DISTINCT p.action, p.resource
 FROM user_roles ur

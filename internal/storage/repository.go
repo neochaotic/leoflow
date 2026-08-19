@@ -239,6 +239,56 @@ func (r *Repository) RoleExists(ctx context.Context, tenant, role string) (bool,
 	return true, nil
 }
 
+// ReconcileUserRoles makes the user's granted roles exactly roleNames, atomically:
+// it is how the identity provider stays authoritative over an OIDC user's roles.
+// On each OIDC login the caller passes the group-mapped role set, and this sets
+// the DB user_roles to precisely that set, so a demotion or deprovisioning at the
+// IdP takes effect on the next login and the per-request authz reload sees it.
+//
+// Every name is resolved to a role id in the user's OWN tenant BEFORE any write,
+// so a name that is not a role in that tenant fails closed as domain.ErrValidation
+// with the prior grants untouched — the login path turns that into a rejected,
+// audited login rather than silently wiping the user's roles. The delete and the
+// inserts run in one transaction, making the operation idempotent (reconciling
+// the same set yields the same rows) and an empty roleNames a full clear
+// (default-deny).
+func (r *Repository) ReconcileUserRoles(ctx context.Context, userID string, roleNames []string) error {
+	uid, err := parseUUID(userID)
+	if err != nil {
+		return err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning reconcile-user-roles tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort; the commit path returns the meaningful error
+	qtx := r.q.WithTx(tx)
+	// Resolve every role id first so an unknown name aborts before any mutation.
+	roleIDs := make([]pgtype.UUID, 0, len(roleNames))
+	for _, name := range roleNames {
+		roleID, rerr := qtx.GetRoleIDForUserTenant(ctx, queries.GetRoleIDForUserTenantParams{ID: uid, Name: name})
+		if rerr != nil {
+			if errors.Is(rerr, pgx.ErrNoRows) {
+				return fmt.Errorf("unknown role %q: %w", name, domain.ErrValidation)
+			}
+			return fmt.Errorf("looking up role: %w", rerr)
+		}
+		roleIDs = append(roleIDs, roleID)
+	}
+	if derr := qtx.DeleteUserRoles(ctx, uid); derr != nil {
+		return fmt.Errorf("clearing user roles: %w", derr)
+	}
+	for _, roleID := range roleIDs {
+		if aerr := qtx.AssignUserRole(ctx, queries.AssignUserRoleParams{UserID: uid, RoleID: roleID}); aerr != nil {
+			return fmt.Errorf("assigning role: %w", aerr)
+		}
+	}
+	if cerr := tx.Commit(ctx); cerr != nil {
+		return fmt.Errorf("committing reconcile-user-roles tx: %w", cerr)
+	}
+	return nil
+}
+
 // ListDags returns a page of DAGs for the tenant and the total count.
 func (r *Repository) ListDags(ctx context.Context, tenant string, limit, offset int) ([]domain.DAG, int, error) {
 	tid, err := r.tenantID(ctx, tenant)

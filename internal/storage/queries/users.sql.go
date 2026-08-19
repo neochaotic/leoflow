@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteUserRoles = `-- name: DeleteUserRoles :exec
+DELETE FROM user_roles WHERE user_id = $1
+`
+
+// Remove every role grant for a user: the delete half of the IdP-authoritative
+// reconcile that sets the grants to exactly the group-mapped set on each login.
+func (q *Queries) DeleteUserRoles(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUserRoles, userID)
+	return err
+}
+
 const getDefaultTenant = `-- name: GetDefaultTenant :one
 SELECT id, name FROM tenants WHERE name = 'default'
 `
@@ -25,6 +36,29 @@ func (q *Queries) GetDefaultTenant(ctx context.Context) (GetDefaultTenantRow, er
 	var i GetDefaultTenantRow
 	err := row.Scan(&i.ID, &i.Name)
 	return i, err
+}
+
+const getRoleIDForUserTenant = `-- name: GetRoleIDForUserTenant :one
+SELECT r.id
+FROM roles r
+JOIN users u ON u.tenant_id = r.tenant_id
+WHERE u.id = $1 AND r.name = $2
+`
+
+type GetRoleIDForUserTenantParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+// Resolve a role name to its id within the user's OWN tenant, so an OIDC login
+// can reconcile the user's grants to the group-mapped set without the caller
+// passing the tenant separately. A name that is not a role in that tenant yields
+// no row, which the reconcile turns into a fail-closed error.
+func (q *Queries) GetRoleIDForUserTenant(ctx context.Context, arg GetRoleIDForUserTenantParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getRoleIDForUserTenant, arg.ID, arg.Name)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getTenantByName = `-- name: GetTenantByName :one

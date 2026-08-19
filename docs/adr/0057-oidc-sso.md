@@ -58,9 +58,12 @@ password) with the roles from D5. When OFF and no row matches, the login is
 rejected (403) — never auto-created.
 
 **D5. Group→role mapping = explicit config map to existing DB role names,
-default-DENY.** `auth.oidc.role_mappings: {<idp_group_value>: <leoflow_role>}`. An
-unmapped group grants no role. The mapped role names go into the minted token's
-roles; the per-request reload turns DB roles into permissions.
+default-DENY, IdP-authoritative.** `auth.oidc.role_mappings: {<idp_group_value>:
+<leoflow_role>}`. An unmapped group grants no role. On every login the mapped set
+is written to the DB `user_roles` as the user's EXACTLY-current roles (see the
+reconciliation consequence below) and also carried in the minted token; the
+per-request reload then turns those DB roles into permissions. The identity
+provider therefore stays authoritative for an OIDC user's roles.
 
 **D5a. `default_role` (opt-in UX softener).** `auth.oidc.default_role` softens
 default-deny **without weakening the secure default**: when an authenticated
@@ -139,10 +142,17 @@ the security event still lands, with the attempted values in the metadata.
 - Session length is bounded by the JWT TTL; full logout propagation is deferred
   with the rest of ADR 0055. The per-request `is_active` reload gives
   revocation-within-TTL.
-- For a returning (pre-provisioned) user the minted token carries the IdP-mapped
-  roles (D5); the per-request reload against the DB remains the authority for
-  live permissions, so an admin-managed DB grant is never silently overwritten by
-  a login.
+- The identity provider is authoritative for an OIDC user's roles. On every
+  successful login — for both JIT-created and returning users — the user's DB
+  `user_roles` are reconciled to EXACTLY the group→role-mapped set (D5), falling
+  back to `[default_role]` when the mapping is empty and one is set, or to no
+  roles otherwise. The per-request reload then reads that freshly-written set, so
+  an IdP demotion or deprovisioning takes effect on the next login. The
+  consequence is that a manual DB role grant for an OIDC user is overwritten by
+  the next login: OIDC users' roles are managed through IdP group membership, not
+  through admin DB grants. A role name (mapped or `default_role`) that does not
+  exist in the tenant fails the login closed and is audited, rather than silently
+  granting nothing.
 
 ## Security review — folded in
 

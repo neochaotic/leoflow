@@ -37,39 +37,97 @@ func normalizeEmail(email string) string {
 // scheme) and returns the created user without any secret. A duplicate email
 // must surface as domain.ErrConflict and an unknown role as domain.ErrValidation.
 type UserStore interface {
-	CreateUser(ctx context.Context, tenant, email, password, role string) (domain.User, error)
+	CreateUser(ctx context.Context, tenant, email, password string, roles []string) (domain.User, error)
+	ListUsers(ctx context.Context, tenant string, limit, offset int) ([]domain.User, int, error)
 }
 
 // UserAuditWriter records account-creation events for the Audit Log. It is a
 // separate, narrow interface (not the task-shaped AuditWriter) so account
-// management writes a "user" resource entry with the acting admin as owner.
+// management writes a "user" resource entry with the acting admin as owner. The
+// granted roles are passed as a single joined string so the record captures the
+// full set.
 type UserAuditWriter interface {
-	RecordUserCreatedAudit(ctx context.Context, tenant, actorUserID, createdUserID, email, role string) error
+	RecordUserCreatedAudit(ctx context.Context, tenant, actorUserID, createdUserID, email, roles string) error
 }
 
 // createUserBody is the POST /api/v2/users payload. Password is write-only.
 type createUserBody struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Role     string `json:"role"`
+	Email    string   `json:"email"`
+	Password string   `json:"password"`
+	Roles    []string `json:"roles"`
 }
 
 // userDTO is the create-user response. It never includes the password or hash.
 type userDTO struct {
-	ID        string `json:"id"`
-	Email     string `json:"email"`
-	Role      string `json:"role"`
-	IsActive  bool   `json:"is_active"`
-	CreatedAt string `json:"created_at"`
+	ID        string   `json:"id"`
+	Email     string   `json:"email"`
+	Roles     []string `json:"roles"`
+	IsActive  bool     `json:"is_active"`
+	CreatedAt string   `json:"created_at"`
 }
 
 func toUserDTO(u domain.User) userDTO {
+	roles := u.Roles
+	if roles == nil {
+		roles = []string{}
+	}
 	return userDTO{
 		ID:        u.ID,
 		Email:     u.Email,
-		Role:      u.Role,
+		Roles:     roles,
 		IsActive:  u.IsActive,
 		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// userListItemDTO is one row of the user list. Unlike the Airflow FAB users API
+// (which is username-keyed with first_name/last_name columns Leoflow does not
+// have), Leoflow accounts are email-keyed and carry a set of RBAC roles, so the
+// list is expressed in that native shape rather than the Airflow one. The
+// password and its hash are write-only and never appear here.
+type userListItemDTO struct {
+	ID        string   `json:"id"`
+	Email     string   `json:"email"`
+	Roles     []string `json:"roles"`
+	IsActive  bool     `json:"is_active"`
+	CreatedAt string   `json:"created_at"`
+}
+
+// userCollectionDTO is the paged list response: the page of users plus the
+// unpaged total, matching the {items, total_entries} shape of the other
+// /api/v2 collections.
+type userCollectionDTO struct {
+	Users        []userListItemDTO `json:"users"`
+	TotalEntries int               `json:"total_entries"`
+}
+
+func toUserListItemDTO(u domain.User) userListItemDTO {
+	roles := u.Roles
+	if roles == nil {
+		roles = []string{}
+	}
+	return userListItemDTO{
+		ID:        u.ID,
+		Email:     u.Email,
+		Roles:     roles,
+		IsActive:  u.IsActive,
+		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func listUsersHandler(store UserStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		limit, offset := pagination(c)
+		users, total, err := store.ListUsers(c.Request.Context(), tenantOf(c), limit, offset)
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		out := userCollectionDTO{Users: make([]userListItemDTO, 0, len(users)), TotalEntries: total}
+		for _, u := range users {
+			out.Users = append(out.Users, toUserListItemDTO(u))
+		}
+		c.JSON(http.StatusOK, out)
 	}
 }
 
@@ -94,7 +152,7 @@ func createUserHandler(store UserStore, audit UserAuditWriter) gin.HandlerFunc {
 				fmt.Sprintf("password must be at least %d characters", minPasswordLength))
 			return
 		}
-		user, err := store.CreateUser(c.Request.Context(), tenantOf(c), email, body.Password, body.Role)
+		user, err := store.CreateUser(c.Request.Context(), tenantOf(c), email, body.Password, body.Roles)
 		if err != nil {
 			handleUserWriteError(c, err)
 			return
@@ -115,7 +173,7 @@ func recordUserCreatedAudit(c *gin.Context, audit UserAuditWriter, u domain.User
 	if actor, ok := UserFromContext(c); ok {
 		actorID = actor.ID
 	}
-	if err := audit.RecordUserCreatedAudit(c.Request.Context(), tenantOf(c), actorID, u.ID, u.Email, u.Role); err != nil {
+	if err := audit.RecordUserCreatedAudit(c.Request.Context(), tenantOf(c), actorID, u.ID, u.Email, strings.Join(u.Roles, ",")); err != nil {
 		slog.Warn("recording user-created audit", "user", u.ID, "error", err)
 	}
 }
@@ -131,13 +189,16 @@ func handleUserWriteError(c *gin.Context, err error) {
 	handleRepoError(c, err)
 }
 
-// registerUsers mounts the admin create-user route when a store is wired. It is
-// gated with the admin:tenant permission, matching how other privileged /api/v2
-// mutations are gated (RequirePermission), so only administrators may create
-// users. With no store it is left unregistered (unknown route -> 404).
+// registerUsers mounts the admin user-management surface. The list is gated with
+// read:user and the create with write:user (both admin-only in practice — the
+// admin role short-circuits every permission check). With no store wired the
+// list still renders an empty collection (matching the other Admin resources, so
+// the page never 404s), while the create route is left unregistered.
 func registerUsers(r gin.IRouter, store UserStore, audit UserAuditWriter) {
 	if store == nil {
+		r.GET("/api/v2/users", apiEmptyCollection("users"))
 		return
 	}
-	r.POST("/api/v2/users", RequirePermission("admin", "tenant"), createUserHandler(store, audit))
+	r.GET("/api/v2/users", RequirePermission("read", "user"), listUsersHandler(store))
+	r.POST("/api/v2/users", RequirePermission("write", "user"), createUserHandler(store, audit))
 }

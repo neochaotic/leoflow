@@ -165,6 +165,10 @@ type Querier interface {
 	// get them via the JOIN.
 	ListTaskInstanceAttempts(ctx context.Context, arg ListTaskInstanceAttemptsParams) ([]ListTaskInstanceAttemptsRow, error)
 	ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UUID) ([]TaskInstance, error)
+	// One row per user in the tenant, newest first, with every granted role name
+	// aggregated into a text array (empty when the user holds none). Paged by the
+	// caller. Never selects password_hash — the list must not expose secrets.
+	ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
 	// Stamp a run's on-failure alert as DELIVERED. Called only after a successful

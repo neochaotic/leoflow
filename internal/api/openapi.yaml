@@ -40,12 +40,31 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
   /api/v2/users:
+    get:
+      summary: List users
+      description: |
+        Lists the tenant's control-plane accounts, newest first. Each entry
+        carries the full set of roles the user holds; the password and its hash
+        are write-only and never returned. Requires the read:user permission.
+      operationId: listUsers
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of users
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserCollection" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     post:
       summary: Create a user
       description: |
         Admin-only. Creates a control-plane account with the given email and
-        password and grants at most one role. The password is write-only and is
-        never returned. Requires the admin:tenant permission.
+        password and grants the requested roles. The password is write-only and
+        is never returned. Requires the write:user permission.
       operationId: createUser
       tags: [Users]
       requestBody:
@@ -494,22 +513,47 @@ components:
           description: >-
             Plaintext password (write-only; never returned). Must be at least 8
             characters — the server rejects anything shorter with 400.
-        role:
-          type: string
+        roles:
+          type: array
+          items: { type: string }
           description: >-
-            Name of an existing role to grant (e.g. "admin"). Omit to grant no
-            role — the most restrictive default; the user then holds no
-            permissions until an admin grants one.
+            Names of existing roles to grant; omit or empty to grant none.
 
     User:
       type: object
-      required: [id, email]
+      required: [id, email, roles, is_active, created_at]
       properties:
         id: { type: string }
         email: { type: string }
-        role: { type: string }
+        roles:
+          type: array
+          items: { type: string }
         is_active: { type: boolean }
         created_at: { type: string, format: date-time }
+
+    UserListItem:
+      type: object
+      required: [id, email, roles, is_active, created_at]
+      description: >-
+        One account in the user list. Leoflow accounts are email-keyed and carry
+        a set of RBAC roles, so this diverges from the Airflow FAB users API
+        (username-keyed with first_name/last_name).
+      properties:
+        id: { type: string }
+        email: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    UserCollection:
+      type: object
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/UserListItem" }
+        total_entries: { type: integer }
 
     DAG:
       type: object

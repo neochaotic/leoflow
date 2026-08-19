@@ -23,6 +23,20 @@ SET password_hash = $3
 WHERE email = $2
   AND tenant_id = (SELECT id FROM tenants WHERE name = $1);
 
+-- name: ListUsers :many
+-- One row per user in the tenant, newest first, with every granted role name
+-- aggregated into a text array (empty when the user holds none). Paged by the
+-- caller. Never selects password_hash — the list must not expose secrets.
+SELECT u.id, u.email, u.is_active, u.created_at,
+    COALESCE(array_remove(array_agg(r.name), NULL), '{}')::text[] AS roles
+FROM users u
+LEFT JOIN user_roles ur ON ur.user_id = u.id
+LEFT JOIN roles r ON r.id = ur.role_id
+WHERE u.tenant_id = $1
+GROUP BY u.id, u.email, u.is_active, u.created_at
+ORDER BY u.created_at DESC, u.id DESC
+LIMIT $2 OFFSET $3;
+
 -- name: GetUserRoles :many
 SELECT r.name
 FROM user_roles ur

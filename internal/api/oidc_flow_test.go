@@ -138,16 +138,23 @@ func writeJSON(w http.ResponseWriter, v any) {
 // ─────────────────────────── fakes ───────────────────────────
 
 type fakeOIDCStore struct {
-	users     map[string]*auth.User // provider|subject → user
-	active    map[string]bool
-	roles     map[string]bool
-	created   []createdOIDC
-	createErr error
+	users        map[string]*auth.User // provider|subject → user
+	active       map[string]bool
+	roles        map[string]bool
+	created      []createdOIDC
+	createErr    error
+	reconciled   []reconcileCall
+	reconcileErr error
 }
 
 type createdOIDC struct {
 	tenant, email, provider, subject string
 	roles                            []string
+}
+
+type reconcileCall struct {
+	userID string
+	roles  []string
 }
 
 func newFakeOIDCStore() *fakeOIDCStore {
@@ -185,6 +192,33 @@ func (s *fakeOIDCStore) CreateOIDCUser(_ context.Context, tenant, email, provide
 
 func (s *fakeOIDCStore) RoleExists(_ context.Context, _ string, role string) (bool, error) {
 	return s.roles[role], nil
+}
+
+func (s *fakeOIDCStore) ReconcileUserRoles(_ context.Context, userID string, roleNames []string) error {
+	if s.reconcileErr != nil {
+		return s.reconcileErr
+	}
+	s.reconciled = append(s.reconciled, reconcileCall{userID: userID, roles: append([]string(nil), roleNames...)})
+	// Reflect the reconciled set onto the resolvable user so a later
+	// FindUserByOIDCSubject (the per-request reload analogue) observes it.
+	for k, u := range s.users {
+		if u.ID == userID {
+			u.Roles = append([]string(nil), roleNames...)
+			s.users[k] = u
+		}
+	}
+	return nil
+}
+
+// lastReconcile returns the roles from the most recent reconcile for userID, and
+// whether any reconcile happened for it.
+func (s *fakeOIDCStore) lastReconcile(userID string) ([]string, bool) {
+	for i := len(s.reconciled) - 1; i >= 0; i-- {
+		if s.reconciled[i].userID == userID {
+			return s.reconciled[i].roles, true
+		}
+	}
+	return nil, false
 }
 
 type fakeAuthAudit struct {

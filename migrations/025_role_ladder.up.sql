@@ -15,7 +15,12 @@ INSERT INTO permissions (action, resource, description) VALUES
     ('write', 'connection', 'Create, update, delete connections'),
     ('read',  'variable',   'Read variables'),
     ('write', 'variable',   'Create, update, delete variables'),
-    ('read',  'config',     'Read configuration')
+    ('read',  'config',     'Read configuration'),
+    -- The task-detail routes gate on the "task" resource (distinct from the
+    -- "task_instance" name 001 seeded); seed it so a non-admin role can open a
+    -- task without a 403. Unifying the two names is tracked as RBAC-vocabulary
+    -- cleanup; here the ladder simply grants both.
+    ('read',  'task',       'Read task detail')
 ON CONFLICT (action, resource) DO NOTHING;
 
 -- The three built-in roles, created for the default tenant (mirrors the admin
@@ -49,6 +54,7 @@ JOIN (VALUES
     ('viewer',   'read',  'dag'),
     ('viewer',   'read',  'dag_run'),
     ('viewer',   'read',  'task_instance'),
+    ('viewer',   'read',  'task'),
     ('viewer',   'read',  'xcom'),
     ('viewer',   'read',  'pool'),
     ('viewer',   'read',  'connection'),
@@ -58,6 +64,7 @@ JOIN (VALUES
     ('editor',   'read',  'dag'),
     ('editor',   'read',  'dag_run'),
     ('editor',   'read',  'task_instance'),
+    ('editor',   'read',  'task'),
     ('editor',   'read',  'xcom'),
     ('editor',   'read',  'pool'),
     ('editor',   'read',  'connection'),
@@ -70,6 +77,7 @@ JOIN (VALUES
     ('operator', 'read',  'dag'),
     ('operator', 'read',  'dag_run'),
     ('operator', 'read',  'task_instance'),
+    ('operator', 'read',  'task'),
     ('operator', 'read',  'xcom'),
     ('operator', 'read',  'pool'),
     ('operator', 'read',  'connection'),
@@ -80,7 +88,9 @@ JOIN (VALUES
     ('operator', 'write', 'connection'),
     ('operator', 'write', 'dag_run'),
     ('operator', 'write', 'task_instance'),
-    ('operator', 'write', 'pool')
+    ('operator', 'write', 'pool'),
+    -- operator operates DAG runs, so it can trigger them (execute:dag exists from 001).
+    ('operator', 'execute', 'dag')
 ) AS ladder(role_name, action, resource) ON ladder.role_name = r.name
 JOIN permissions p ON p.action = ladder.action AND p.resource = ladder.resource
 ON CONFLICT DO NOTHING;

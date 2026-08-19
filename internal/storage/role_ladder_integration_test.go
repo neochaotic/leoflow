@@ -32,9 +32,9 @@ func TestRoleLadderSeedIntegration(t *testing.T) {
 	// Each ladder role must exist as a built-in (is_system) role in the default
 	// tenant, and grant the expected number of permissions.
 	wantGrants := map[string]int{
-		"viewer":   8,  // read on dag, dag_run, task_instance, xcom, pool, connection, variable, config
-		"editor":   11, // viewer + write on dag, variable, connection
-		"operator": 14, // editor + write on dag_run, task_instance, pool
+		"viewer":   9,  // read on dag, dag_run, task_instance, task, xcom, pool, connection, variable, config
+		"editor":   12, // viewer + write on dag, variable, connection
+		"operator": 16, // editor + write on dag_run, task_instance, pool + execute on dag
 	}
 
 	for role, want := range wantGrants {

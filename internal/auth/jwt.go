@@ -11,6 +11,11 @@ import (
 
 const tokenIssuer = "leoflow"
 
+// DevTokenSubject is the subject of the in-process token that `leoflow dev` mints
+// for its admin. It intentionally has no user row, so Authenticate trusts its
+// signed claims as the ONLY subject exempt from the per-request DB authz reload.
+const DevTokenSubject = "leoflow-dev"
+
 // audienceUser scopes tokens minted for human and API users, distinguishing them
 // from agent identity tokens (see audienceAgent).
 const audienceUser = "leoflow-user"
@@ -84,7 +89,11 @@ func (a *JWTAuthenticator) Authenticate(ctx context.Context, token string) (*Use
 	}
 	user, active, err := a.store.FindUserByID(ctx, c.Subject)
 	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
+		// A subject with no user row is trusted from its signed claims ONLY for the
+		// in-process dev token (which has no DB row by design); any other missing
+		// subject fails closed, so a hard-deleted user cannot keep claimed roles
+		// until the token expires — deletion revokes at once, like is_active=false.
+		if errors.Is(err, ErrUserNotFound) && c.Subject == DevTokenSubject {
 			return claimed, nil
 		}
 		return nil, errors.Join(ErrInvalidToken, err)

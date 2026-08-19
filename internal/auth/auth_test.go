@@ -189,6 +189,20 @@ func TestAuthenticateFallsBackToClaimsForMintedToken(t *testing.T) {
 	}
 }
 
+// TestAuthenticateRejectsMissingNonDevSubject pins the hardening: the claims
+// fallback is ONLY for the dev-token subject. Any other token whose subject has
+// no user row (e.g. a hard-deleted user) fails closed instead of keeping the
+// roles baked into its signed claims until the token expires.
+func TestAuthenticateRejectsMissingNonDevSubject(t *testing.T) {
+	const secret = "minted-secret"
+	tok, _ := MintUserToken(secret, time.Hour, User{ID: "deleted-user-id", TenantID: "default", Email: "gone@leoflow.local", Roles: []string{"admin"}})
+	store := &fakeStore{byIDErr: ErrUserNotFound}
+	a := NewJWTAuthenticator(store, secret, time.Hour)
+	if _, err := a.Authenticate(context.Background(), tok); err == nil {
+		t.Fatal("a non-dev subject with no user row must be rejected, not trusted from claims")
+	}
+}
+
 func TestRateLimiter(t *testing.T) {
 	now := time.Now()
 	r := NewRateLimiter(3, time.Minute)

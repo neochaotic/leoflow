@@ -34,6 +34,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/failurealert"
 	"github.com/neochaotic/leoflow/internal/logs"
 	"github.com/neochaotic/leoflow/internal/observability"
+	"github.com/neochaotic/leoflow/internal/oidc"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/secrets"
 	"github.com/neochaotic/leoflow/internal/storage"
@@ -190,7 +191,14 @@ func run() error {
 	// constructed — apiSrv stays nil and serveHTTP omits it.
 	var apiSrv *http.Server
 	if servesAPI {
-		apiSrv = buildAPIServer(cfg, tel, authn, pg, repo, xcomReader, logSink, logTailer, checks, executorInfo, schedulerHealth)
+		// Under provider: oidc, discover the IdP and build the login flow now, so a
+		// misconfigured issuer fails boot closed rather than at first login. The JWT
+		// authenticator built above stays the request-path verifier in both modes.
+		oidcFlow, ferr := buildOIDCFlow(ctx, cfg, tel.Logger)
+		if ferr != nil {
+			return ferr
+		}
+		apiSrv = buildAPIServer(cfg, tel, authn, pg, repo, xcomReader, logSink, logTailer, checks, executorInfo, schedulerHealth, oidcFlow)
 	}
 
 	// The metrics listener also serves /healthz + /readyz in every role so a
@@ -370,7 +378,27 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 // role (ADR 0049). It is called only when the role serves the API, so the UI
 // shell, editor FS, rate limiter, and full route set are never constructed in a
 // scheduler-only process.
-func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, authn *auth.JWTAuthenticator, pg *storage.Postgres, repo *storage.Repository, xcomReader *storage.XComReader, logSink logs.Sink, logTailer logs.Tailer, checks map[string]api.HealthChecker, executorInfo api.ExecutorInfo, schedulerHealth api.Heartbeater) *http.Server {
+// buildOIDCFlow discovers the IdP and builds the Authorization Code + PKCE login
+// flow when provider is "oidc"; it returns nil in JWT mode (the default), where
+// the OIDC routes are never registered. The client secret comes from the
+// environment (LEOFLOW_AUTH_OIDC_CLIENT_SECRET, bound by viper); it is never
+// logged. Discovery failure is a boot failure — fail closed.
+func buildOIDCFlow(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger) (*oidc.Flow, error) {
+	if cfg.Auth.Provider != config.AuthProviderOIDC {
+		return nil, nil
+	}
+	flow, err := oidc.NewFlow(ctx, cfg.Auth.OIDC, cfg.Auth.JWT.Secret)
+	if err != nil {
+		return nil, fmt.Errorf("oidc setup: %w", err)
+	}
+	logger.Info("oidc login enabled",
+		"issuer", cfg.Auth.OIDC.Issuer,
+		"jit_provisioning", cfg.Auth.OIDC.JITProvisioning,
+		"break_glass_accounts", len(cfg.Auth.OIDC.BreakGlassEmails))
+	return flow, nil
+}
+
+func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, authn *auth.JWTAuthenticator, pg *storage.Postgres, repo *storage.Repository, xcomReader *storage.XComReader, logSink logs.Sink, logTailer logs.Tailer, checks map[string]api.HealthChecker, executorInfo api.ExecutorInfo, schedulerHealth api.Heartbeater, oidcFlow *oidc.Flow) *http.Server {
 	if cfg.Auth.DevNoAuth {
 		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
 	}
@@ -426,6 +454,14 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		Workspace:       editorFS,
 		MonacoDir:       cfg.UI.MonacoDir,
 		ExamplesFS:      leoflow.ExampleDAGs(),
+
+		// OIDC/SSO login flow (nil in JWT mode → routes not registered). The repo
+		// resolves/JIT-provisions identities and records auth-event audit.
+		OIDCFlow:     oidcFlow,
+		OIDCSettings: cfg.Auth.OIDC,
+		OIDCUsers:    repo,
+		AuthAudit:    repo,
+		JWTSecret:    cfg.Auth.JWT.Secret,
 	})
 	return &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 }

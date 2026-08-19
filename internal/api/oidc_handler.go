@@ -1,0 +1,321 @@
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/neochaotic/leoflow/internal/auth"
+	"github.com/neochaotic/leoflow/internal/config"
+	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/oidc"
+)
+
+// oidcStateCookie carries the signed state/nonce/PKCE-verifier between the login
+// redirect and the callback. Scoped to the auth path and short-lived.
+const oidcStateCookie = "_oidc_state"
+
+// Auth audit actions (H5).
+const (
+	auditOIDCLoginSuccess = "oidc.login.success"
+	auditOIDCLoginFailure = "oidc.login.failure"
+	auditOIDCTenantReject = "oidc.tenant_pin_rejected"
+	auditOIDCJITProvision = "oidc.jit_provision"
+	auditBreakGlass       = "auth.break_glass"
+)
+
+// OIDCUserStore resolves and just-in-time-provisions OIDC identities. storage
+// implements it. The interface lives with its consumer (the callback handler).
+type OIDCUserStore interface {
+	// FindUserByOIDCSubject resolves a returning identity by its (provider,
+	// subject) pair, returning the user, whether it is active, and
+	// auth.ErrUserNotFound when no row matches.
+	FindUserByOIDCSubject(ctx context.Context, provider, subject string) (*auth.User, bool, error)
+	// CreateOIDCUser JIT-provisions an OIDC-only user with the given roles.
+	CreateOIDCUser(ctx context.Context, tenant, email, provider, subject string, roles []string) (*auth.User, error)
+	// RoleExists reports whether a role name exists for the tenant, used to fail
+	// closed on a misconfigured default_role or role mapping.
+	RoleExists(ctx context.Context, tenant, role string) (bool, error)
+}
+
+// AuthAuditWriter records authentication events to the audit sink (H5). It is
+// best-effort: a write error never changes the auth outcome.
+type AuthAuditWriter interface {
+	RecordAuthEvent(ctx context.Context, tenant, actorUserID, action, email, outcome string, extra map[string]string) error
+}
+
+// oidcDeps bundles what the callback handler needs beyond the flow itself.
+type oidcDeps struct {
+	flow      *oidc.Flow
+	users     OIDCUserStore
+	audit     AuthAuditWriter
+	cfg       config.OIDCSection
+	jwtSecret string
+	tokenTTL  time.Duration
+	logger    *slog.Logger
+}
+
+// randomURLToken returns a cryptographically random, URL-safe token used for the
+// CSRF state and the ID-token nonce.
+func randomURLToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// setSessionCookie sets the app's _token session cookie server-side, hardened
+// HttpOnly; Secure; SameSite=Lax (D2). Unlike the client-JS cookie the login
+// page sets, this one is never readable by scripts.
+func setSessionCookie(c *gin.Context, token string, ttl time.Duration) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(authTokenCookie, token, int(ttl.Seconds()), "/", "", true, true)
+}
+
+// oidcLoginHandler implements GET /api/v2/auth/oidc/login: it starts the
+// Authorization Code + PKCE flow. It generates the CSRF state, the nonce, and
+// the PKCE verifier, seals them (plus the sanitized post-login target) in a
+// signed HttpOnly state cookie, and redirects the browser to the IdP.
+func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		state, serr := randomURLToken()
+		nonce, nerr := randomURLToken()
+		if serr != nil || nerr != nil {
+			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not start login")
+			return
+		}
+		verifier := oidc.GenerateCodeVerifier()
+		next := sanitizeNext(c.Query("next"))
+		cookie, err := flow.Codec().Encode(oidc.StatePayload{
+			State: state, Nonce: nonce, Verifier: verifier, Next: next,
+		}, oidc.StateCookieTTL)
+		if err != nil {
+			logger.Error("oidc: encoding state cookie", "error", err)
+			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not start login")
+			return
+		}
+		c.SetSameSite(http.SameSiteLaxMode)
+		c.SetCookie(oidcStateCookie, cookie, int(oidc.StateCookieTTL.Seconds()), "/api/v2/auth/", "", true, true)
+		c.Redirect(http.StatusFound, flow.AuthCodeURL(state, nonce, verifier))
+	}
+}
+
+// oidcCallbackHandler implements GET /api/v2/auth/oidc/callback: it validates the
+// CSRF state, exchanges the code (PKCE + client secret), verifies the ID token
+// (issuer pin, audience, nonce, azp, clock skew, email_verified, tenant pin,
+// email-domain allowlist), resolves or JIT-provisions the user, mints the app's
+// _token session cookie, and redirects. Every terminal path is audited; a
+// verification failure is a 403 that never falls back to a default identity.
+func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		payload, ok := deps.readState(c)
+		if !ok {
+			return
+		}
+		// CSRF: the state query param must match the signed cookie.
+		if subtle.ConstantTimeCompare([]byte(c.Query("state")), []byte(payload.State)) != 1 {
+			deps.deny(c, auditOIDCLoginFailure, "", "", "", "state_mismatch")
+			return
+		}
+		// RFC 9207 issuer response param, when the IdP provides it, must be the
+		// pinned issuer (H4/H1).
+		if iss := c.Query("iss"); iss != "" && iss != deps.cfg.Issuer {
+			deps.deny(c, auditOIDCLoginFailure, "", "", "", "iss_param_mismatch")
+			return
+		}
+		// The IdP may redirect back with an error instead of a code.
+		if e := c.Query("error"); e != "" {
+			deps.deny(c, auditOIDCLoginFailure, "", "", "", "idp_error:"+e)
+			return
+		}
+		code := c.Query("code")
+		if code == "" {
+			deps.deny(c, auditOIDCLoginFailure, "", "", "", "missing_code")
+			return
+		}
+		rawIDToken, err := deps.flow.Exchange(c.Request.Context(), code, payload.Verifier)
+		if err != nil {
+			deps.logger.Warn("oidc: code exchange failed", "error", err)
+			deps.deny(c, auditOIDCLoginFailure, "", "", "", "exchange_failed")
+			return
+		}
+		identity, err := deps.flow.Verifier().Verify(c.Request.Context(), rawIDToken, payload.Nonce)
+		if err != nil {
+			deps.rejectVerify(c, err)
+			return
+		}
+		user, err := deps.resolveUser(c, identity)
+		if err != nil {
+			return // resolveUser already audited + wrote the 403
+		}
+		token, terr := auth.MintUserToken(deps.jwtSecret, deps.tokenTTL, *user)
+		if terr != nil {
+			deps.logger.Error("oidc: minting session token", "error", terr)
+			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not mint session")
+			return
+		}
+		setSessionCookie(c, token, deps.tokenTTL)
+		deps.record(c, auditOIDCLoginSuccess, identity.Tenant, user.ID, identity.Email, "success",
+			map[string]string{"subject": identity.Subject})
+		c.Redirect(http.StatusFound, sanitizeNext(payload.Next))
+	}
+}
+
+// readState reads and verifies the signed state cookie. A missing or invalid
+// cookie is a 403 (CSRF/replay), audited.
+func (d oidcDeps) readState(c *gin.Context) (oidc.StatePayload, bool) {
+	cookie, err := c.Request.Cookie(oidcStateCookie)
+	if err != nil || cookie.Value == "" {
+		d.deny(c, auditOIDCLoginFailure, "", "", "", "missing_state")
+		return oidc.StatePayload{}, false
+	}
+	payload, err := d.flow.Codec().Decode(cookie.Value)
+	if err != nil {
+		d.deny(c, auditOIDCLoginFailure, "", "", "", "invalid_state")
+		return oidc.StatePayload{}, false
+	}
+	// The state cookie is single-use for this attempt; clear it regardless of
+	// outcome so it cannot be replayed.
+	c.SetCookie(oidcStateCookie, "", -1, "/api/v2/auth/", "", true, true)
+	return payload, true
+}
+
+// resolveUser turns a verified identity into a Leoflow user, applying the
+// group→role mapping (with the default_role fallback), the JIT policy, and
+// fail-closed role validation. On any rejection it audits and writes the 403,
+// returning errRejected so the caller stops.
+func (d oidcDeps) resolveUser(c *gin.Context, id *oidc.VerifiedIdentity) (*auth.User, error) {
+	ctx := c.Request.Context()
+	loginRoles := oidc.ApplyDefaultRole(oidc.MapRoles(id.Groups, d.cfg.RoleMappings), d.cfg.DefaultRole)
+	// Fail closed on a role name (mapped or default_role) that does not exist for
+	// the tenant, rather than minting a token referencing an unknown role.
+	for _, role := range loginRoles {
+		exists, err := d.users.RoleExists(ctx, id.Tenant, role)
+		if err != nil {
+			d.logger.Error("oidc: checking role", "error", err)
+			d.deny(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "role_check_failed")
+			return nil, errRejected
+		}
+		if !exists {
+			d.deny(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "unknown_role:"+role)
+			return nil, errRejected
+		}
+	}
+
+	user, active, err := d.users.FindUserByOIDCSubject(ctx, id.Provider, id.Subject)
+	switch {
+	case err == nil:
+		if !active {
+			d.deny(c, auditOIDCLoginFailure, id.Tenant, user.ID, id.Email, "inactive")
+			return nil, errRejected
+		}
+		// Returning user: token carries the IdP-mapped roles (D5); per-request
+		// reload (PR-A) remains the authority for live permissions.
+		return &auth.User{ID: user.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}, nil
+	case errors.Is(err, auth.ErrUserNotFound):
+		return d.jitProvision(c, id, loginRoles)
+	default:
+		d.logger.Error("oidc: resolving user", "error", err)
+		d.deny(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "user_lookup_failed")
+		return nil, errRejected
+	}
+}
+
+// jitProvision handles the no-matching-row case per D4: reject when JIT is off,
+// create the user with the mapped roles when it is on.
+func (d oidcDeps) jitProvision(c *gin.Context, id *oidc.VerifiedIdentity, loginRoles []string) (*auth.User, error) {
+	ctx := c.Request.Context()
+	if !d.cfg.JITProvisioning {
+		d.deny(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "no_user_jit_off")
+		return nil, errRejected
+	}
+	created, err := d.users.CreateOIDCUser(ctx, id.Tenant, id.Email, id.Provider, id.Subject, loginRoles)
+	if err != nil {
+		if errors.Is(err, domain.ErrValidation) {
+			d.deny(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "unknown_role")
+			return nil, errRejected
+		}
+		// A concurrent login may have provisioned the same identity first.
+		if errors.Is(err, domain.ErrConflict) {
+			if u, active, ferr := d.users.FindUserByOIDCSubject(ctx, id.Provider, id.Subject); ferr == nil && active {
+				return &auth.User{ID: u.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}, nil
+			}
+		}
+		d.logger.Error("oidc: jit provisioning", "error", err)
+		d.deny(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "jit_failed")
+		return nil, errRejected
+	}
+	d.recordCtx(ctx, auditOIDCJITProvision, id.Tenant, created.ID, id.Email, "success",
+		map[string]string{"subject": id.Subject, "roles": strings.Join(loginRoles, ",")})
+	return &auth.User{ID: created.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}, nil
+}
+
+// errRejected is a sentinel signalling that a helper already wrote the 403 and
+// audited; the caller must simply stop.
+var errRejected = errors.New("oidc: request already rejected")
+
+// rejectVerify maps a verification error to a 403, choosing the audit action so
+// tenant-pin rejections are distinguishable from other verification failures.
+func (d oidcDeps) rejectVerify(c *gin.Context, err error) {
+	action := auditOIDCLoginFailure
+	if errors.Is(err, oidc.ErrTenantNotAllowed) || errors.Is(err, oidc.ErrEmailNotVerified) || errors.Is(err, oidc.ErrEmailDomainNotAllowed) {
+		action = auditOIDCTenantReject
+	}
+	d.deny(c, action, "", "", "", verifyReason(err))
+}
+
+// verifyReason returns a stable, non-secret audit reason for a verification
+// error.
+func verifyReason(err error) string {
+	switch {
+	case errors.Is(err, oidc.ErrIssuerMismatch):
+		return "issuer_mismatch"
+	case errors.Is(err, oidc.ErrNonceMismatch):
+		return "nonce_mismatch"
+	case errors.Is(err, oidc.ErrAzpMismatch):
+		return "azp_mismatch"
+	case errors.Is(err, oidc.ErrTokenExpired):
+		return "token_expired"
+	case errors.Is(err, oidc.ErrEmailNotVerified):
+		return "email_not_verified"
+	case errors.Is(err, oidc.ErrTenantNotAllowed):
+		return "tenant_not_allowed"
+	case errors.Is(err, oidc.ErrEmailDomainNotAllowed):
+		return "email_domain_not_allowed"
+	default:
+		return "token_invalid"
+	}
+}
+
+// deny audits a failed login (outcome "denied", with a non-secret reason) and
+// writes the 403. Every fail-closed path funnels through here so a rejection is
+// always both recorded and answered — never a silent fall-through.
+func (d oidcDeps) deny(c *gin.Context, action, tenant, userID, email, reason string) {
+	d.recordCtx(c.Request.Context(), action, tenant, userID, email, "denied", map[string]string{"reason": reason})
+	AbortProblem(c, http.StatusForbidden, "forbidden", "single sign-on was rejected")
+}
+
+// record audits an event using the request context.
+func (d oidcDeps) record(c *gin.Context, action, tenant, userID, email, outcome string, extra map[string]string) {
+	d.recordCtx(c.Request.Context(), action, tenant, userID, email, outcome, extra)
+}
+
+// recordCtx writes one audit event, best-effort: a sink error is logged and
+// dropped so it never changes the auth outcome.
+func (d oidcDeps) recordCtx(ctx context.Context, action, tenant, userID, email, outcome string, extra map[string]string) {
+	if d.audit == nil {
+		return
+	}
+	if err := d.audit.RecordAuthEvent(ctx, tenant, userID, action, email, outcome, extra); err != nil {
+		d.logger.Error("oidc: recording audit event", "action", action, "error", err)
+	}
+}

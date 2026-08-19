@@ -25,6 +25,9 @@ type fakeUserStore struct {
 	gotEmail, gotPassword, gotRole string
 	enforceUnique                  bool
 	seen                           map[string]bool
+	users                          []domain.User
+	listErr                        error
+	listCalled                     bool
 }
 
 func (f *fakeUserStore) CreateUser(_ context.Context, _, email, password, role string) (domain.User, error) {
@@ -43,6 +46,23 @@ func (f *fakeUserStore) CreateUser(_ context.Context, _, email, password, role s
 		f.seen[email] = true
 	}
 	return f.created, nil
+}
+
+func (f *fakeUserStore) ListUsers(_ context.Context, _ string, limit, offset int) ([]domain.User, int, error) {
+	f.listCalled = true
+	if f.listErr != nil {
+		return nil, 0, f.listErr
+	}
+	total := len(f.users)
+	lo := offset
+	if lo > total {
+		lo = total
+	}
+	hi := lo + limit
+	if hi > total {
+		hi = total
+	}
+	return f.users[lo:hi], total, nil
 }
 
 // fakeUserAudit records the audit entries the handler writes on success.
@@ -228,5 +248,60 @@ func TestCreateUserWithoutStoreNotRegistered(t *testing.T) {
 		`{"email":"a@example.com","password":"pw-12345678"}`)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("nil store = %d, want 404", rec.Code)
+	}
+}
+
+func TestListUsersReturnsCollectionWithoutSecret(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{{
+		ID: "u-1", Email: "alice@example.com", Roles: []string{"admin"}, IsActive: true,
+		CreatedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}}}
+	rec := authGet(userServer(store, adminUser()), http.MethodGet, "/api/v2/users", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list = %d (%s)", rec.Code, rec.Body.String())
+	}
+	// The list must never expose a password or hash column.
+	if strings.Contains(rec.Body.String(), "password") || strings.Contains(rec.Body.String(), "hash") {
+		t.Errorf("list leaked a secret: %s", rec.Body.String())
+	}
+	var col userCollectionDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &col); err != nil {
+		t.Fatal(err)
+	}
+	if col.TotalEntries != 1 || len(col.Users) != 1 {
+		t.Fatalf("unexpected collection: %+v", col)
+	}
+	u := col.Users[0]
+	if u.ID != "u-1" || u.Email != "alice@example.com" || !u.IsActive ||
+		len(u.Roles) != 1 || u.Roles[0] != "admin" || u.CreatedAt != "2026-01-02T03:04:05Z" {
+		t.Errorf("unexpected user item: %+v", u)
+	}
+}
+
+func TestListUsersRequiresPermission(t *testing.T) {
+	// A non-admin principal without read:user is forbidden and must not reach
+	// the store.
+	viewer := &auth.User{ID: "v-1", TenantID: "default", Roles: []string{"viewer"}}
+	store := &fakeUserStore{}
+	rec := authGet(userServer(store, viewer), http.MethodGet, "/api/v2/users", "")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("non-admin list = %d, want 403", rec.Code)
+	}
+	if store.listCalled {
+		t.Error("store must not be reached when the caller lacks permission")
+	}
+}
+
+func TestListUsersEmptyStubWithoutStore(t *testing.T) {
+	// With no user store wired, the list still renders an empty collection (200)
+	// rather than 404, matching the other Admin resources.
+	rec := authGet(userServer(nil, adminUser()), http.MethodGet, "/api/v2/users", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nil store list = %d", rec.Code)
+	}
+	var col map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &col)
+	if col["total_entries"].(float64) != 0 {
+		t.Errorf("nil store should yield empty collection, got %v", col)
 	}
 }

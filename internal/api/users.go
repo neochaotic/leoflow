@@ -38,6 +38,7 @@ func normalizeEmail(email string) string {
 // must surface as domain.ErrConflict and an unknown role as domain.ErrValidation.
 type UserStore interface {
 	CreateUser(ctx context.Context, tenant, email, password, role string) (domain.User, error)
+	ListUsers(ctx context.Context, tenant string, limit, offset int) ([]domain.User, int, error)
 }
 
 // UserAuditWriter records account-creation events for the Audit Log. It is a

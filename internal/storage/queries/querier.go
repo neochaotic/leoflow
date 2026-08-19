@@ -95,12 +95,22 @@ type Querier interface {
 	// name (not the uuid) so the reconstructed principal matches the login path's
 	// User.TenantID, plus the active flag the authenticator gates on.
 	GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDRow, error)
+	// Resolve an OIDC identity to a Leoflow user by its immutable (provider,
+	// subject) pair (the trusted link key). Returns the tenant name (not the uuid)
+	// so the reconstructed principal matches the login path's User.TenantID, plus
+	// the active flag the login gates on. Never selects password_hash.
+	GetUserByOIDCSubject(ctx context.Context, arg GetUserByOIDCSubjectParams) (GetUserByOIDCSubjectRow, error)
 	GetUserPermissions(ctx context.Context, userID pgtype.UUID) ([]GetUserPermissionsRow, error)
 	GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]string, error)
 	GetVariable(ctx context.Context, arg GetVariableParams) (GetVariableRow, error)
 	GetXComByNames(ctx context.Context, arg GetXComByNamesParams) (GetXComByNamesRow, error)
 	GetXComEntry(ctx context.Context, arg GetXComEntryParams) (GetXComEntryRow, error)
 	InsertDagVersion(ctx context.Context, arg InsertDagVersionParams) (DagVersion, error)
+	// Just-in-time provisioning insert for a first OIDC login: an OIDC-only user
+	// (NULL password) linked by (oidc_provider, oidc_subject). The unique
+	// (oidc_provider, oidc_subject) constraint makes a concurrent double-provision
+	// surface as a conflict rather than a duplicate identity.
+	InsertOIDCUser(ctx context.Context, arg InsertOIDCUserParams) (InsertOIDCUserRow, error)
 	// Mirrors the bootstrap CreateUser insert (tenant_id, email, password_hash) but
 	// returns the columns the admin create-user API echoes back to the caller.
 	InsertUser(ctx context.Context, arg InsertUserParams) (InsertUserRow, error)

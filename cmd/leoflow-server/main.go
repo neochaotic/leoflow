@@ -189,16 +189,9 @@ func run() error {
 	// The API side (HTTP + embedded UI) is built only in the api/"all" role. The
 	// scheduler role serves no API, so none of the UI/handler machinery is even
 	// constructed — apiSrv stays nil and serveHTTP omits it.
-	var apiSrv *http.Server
-	if servesAPI {
-		// Under provider: oidc, discover the IdP and build the login flow now, so a
-		// misconfigured issuer fails boot closed rather than at first login. The JWT
-		// authenticator built above stays the request-path verifier in both modes.
-		oidcFlow, ferr := buildOIDCFlow(ctx, cfg, tel.Logger)
-		if ferr != nil {
-			return ferr
-		}
-		apiSrv = buildAPIServer(cfg, tel, authn, pg, repo, xcomReader, logSink, logTailer, checks, executorInfo, schedulerHealth, oidcFlow)
+	apiSrv, aerr := startAPISide(ctx, cfg, tel, authn, pg, repo, xcomReader, logSink, logTailer, checks, executorInfo, schedulerHealth, servesAPI)
+	if aerr != nil {
+		return aerr
 	}
 
 	// The metrics listener also serves /healthz + /readyz in every role so a
@@ -378,15 +371,33 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 // role (ADR 0049). It is called only when the role serves the API, so the UI
 // shell, editor FS, rate limiter, and full route set are never constructed in a
 // scheduler-only process.
-// buildOIDCFlow discovers the IdP and builds the Authorization Code + PKCE login
-// flow when provider is "oidc"; it returns nil in JWT mode (the default), where
-// the OIDC routes are never registered. The client secret comes from the
-// environment (LEOFLOW_AUTH_OIDC_CLIENT_SECRET, bound by viper); it is never
-// logged. Discovery failure is a boot failure — fail closed.
-func buildOIDCFlow(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger) (*oidc.Flow, error) {
-	if cfg.Auth.Provider != config.AuthProviderOIDC {
-		return nil, nil
+// startAPISide builds the HTTP API + embedded UI server, or nothing in a
+// scheduler-only role (ADR 0049). It is factored out of run() so the OIDC-flow
+// build and its error handling do not inflate run()'s complexity. Under
+// provider: oidc it discovers the IdP and builds the login flow now, so a
+// misconfigured issuer fails boot closed rather than at first login.
+func startAPISide(ctx context.Context, cfg *config.ServerConfig, tel *observability.Telemetry, authn *auth.JWTAuthenticator, pg *storage.Postgres, repo *storage.Repository, xcomReader *storage.XComReader, logSink logs.Sink, logTailer logs.Tailer, checks map[string]api.HealthChecker, executorInfo api.ExecutorInfo, schedulerHealth api.Heartbeater, servesAPI bool) (*http.Server, error) {
+	if !servesAPI {
+		return nil, nil //nolint:nilnil // scheduler-only role serves no API; that is not an error
 	}
+	var oidcFlow *oidc.Flow
+	if cfg.Auth.Provider == config.AuthProviderOIDC {
+		flow, err := discoverOIDCFlow(ctx, cfg, tel.Logger)
+		if err != nil {
+			return nil, err
+		}
+		oidcFlow = flow
+	}
+	//nolint:contextcheck // buildAPIServer wires per-request handlers; each request carries its own context
+	return buildAPIServer(cfg, tel, authn, pg, repo, xcomReader, logSink, logTailer, checks, executorInfo, schedulerHealth, oidcFlow), nil
+}
+
+// discoverOIDCFlow discovers the IdP and builds the Authorization Code + PKCE
+// login flow. It is only called under provider: oidc (so it always returns a
+// flow or an error, never nil,nil). The client secret comes from the environment
+// (LEOFLOW_AUTH_OIDC_CLIENT_SECRET, bound by viper); it is never logged.
+// Discovery failure is a boot failure — fail closed.
+func discoverOIDCFlow(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger) (*oidc.Flow, error) {
 	flow, err := oidc.NewFlow(ctx, cfg.Auth.OIDC, cfg.Auth.JWT.Secret)
 	if err != nil {
 		return nil, fmt.Errorf("oidc setup: %w", err)

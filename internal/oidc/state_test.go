@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -36,7 +37,7 @@ func TestStateCodecRejectsTamper(t *testing.T) {
 	} else {
 		b[mid] = 'a'
 	}
-	if _, err := c.Decode(string(b)); err != ErrInvalidState {
+	if _, err := c.Decode(string(b)); !errors.Is(err, ErrInvalidState) {
 		t.Errorf("Decode(tampered) err = %v, want ErrInvalidState", err)
 	}
 }
@@ -48,7 +49,7 @@ func TestStateCodecRejectsWrongKey(t *testing.T) {
 	}
 	// A codec derived from a different app secret must not validate the cookie —
 	// this is what stops a state cookie and a session token from cross-verifying.
-	if _, err := NewStateCodec("secret-two").Decode(tok); err != ErrInvalidState {
+	if _, err := NewStateCodec("secret-two").Decode(tok); !errors.Is(err, ErrInvalidState) {
 		t.Errorf("Decode(wrong key) err = %v, want ErrInvalidState", err)
 	}
 }
@@ -59,7 +60,7 @@ func TestStateCodecRejectsExpired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Decode(tok); err != ErrInvalidState {
+	if _, err := c.Decode(tok); !errors.Is(err, ErrInvalidState) {
 		t.Errorf("Decode(expired) err = %v, want ErrInvalidState", err)
 	}
 }

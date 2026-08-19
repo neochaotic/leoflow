@@ -259,7 +259,7 @@ func (d oidcDeps) jitProvision(c *gin.Context, id *oidc.VerifiedIdentity, loginR
 	return &auth.User{ID: created.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}, nil
 }
 
-// errRejected is a sentinel signalling that a helper already wrote the 403 and
+// errRejected is a sentinel signaling that a helper already wrote the 403 and
 // audited; the caller must simply stop.
 var errRejected = errors.New("oidc: request already rejected")
 

@@ -56,6 +56,10 @@ func NewFlow(ctx context.Context, cfg config.OIDCSection, hs256Secret string) (*
 	}, nil
 }
 
+// GenerateCodeVerifier returns a fresh PKCE code verifier (high-entropy,
+// URL-safe). The caller stores it in the state cookie and passes it to Exchange.
+func GenerateCodeVerifier() string { return oauth2.GenerateVerifier() }
+
 // Codec returns the state-cookie codec so the caller can encode the cookie on
 // login and decode it on callback.
 func (f *Flow) Codec() *StateCodec { return f.codec }

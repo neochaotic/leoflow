@@ -26,11 +26,11 @@ import (
 
 // ─────────────────────────── fake IdP ───────────────────────────
 
-// fakeIdP is an in-process OpenID Provider: it serves discovery + JWKS + a token
+// fakeIDP is an in-process OpenID Provider: it serves discovery + JWKS + a token
 // endpoint, and signs ID tokens with an in-test RSA key. The token endpoint
 // verifies the PKCE code_verifier against the challenge staged for the code, so
 // the tests exercise a real PKCE round-trip.
-type fakeIdP struct {
+type fakeIDP struct {
 	srv    *httptest.Server
 	key    *rsa.PrivateKey
 	kid    string
@@ -45,13 +45,13 @@ type stagedCode struct {
 	idToken   string
 }
 
-func newFakeIdP(t *testing.T) *fakeIdP {
+func newFakeIDP(t *testing.T) *fakeIDP {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa keygen: %v", err)
 	}
-	f := &fakeIdP{key: key, kid: "test-key-1", staged: map[string]stagedCode{}}
+	f := &fakeIDP{key: key, kid: "test-key-1", staged: map[string]stagedCode{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", f.handleDiscovery)
 	mux.HandleFunc("/jwks", f.handleJWKS)
@@ -62,7 +62,7 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	return f
 }
 
-func (f *fakeIdP) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
+func (f *fakeIDP) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
 		"issuer":                                f.issuer,
 		"authorization_endpoint":                f.issuer + "/authorize",
@@ -74,7 +74,7 @@ func (f *fakeIdP) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (f *fakeIdP) handleJWKS(w http.ResponseWriter, _ *http.Request) {
+func (f *fakeIDP) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 	pub := f.key.PublicKey
 	writeJSON(w, map[string]any{"keys": []map[string]any{{
 		"kty": "RSA",
@@ -86,7 +86,7 @@ func (f *fakeIdP) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 	}}})
 }
 
-func (f *fakeIdP) handleToken(w http.ResponseWriter, r *http.Request) {
+func (f *fakeIDP) handleToken(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
@@ -114,7 +114,7 @@ func (f *fakeIdP) handleToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (f *fakeIdP) signIDToken(claims jwt.MapClaims) string {
+func (f *fakeIDP) signIDToken(claims jwt.MapClaims) string {
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = f.kid
 	s, err := tok.SignedString(f.key)
@@ -124,7 +124,7 @@ func (f *fakeIdP) signIDToken(claims jwt.MapClaims) string {
 	return s
 }
 
-func (f *fakeIdP) stage(code, challenge, idToken string) {
+func (f *fakeIDP) stage(code, challenge, idToken string) {
 	f.mu.Lock()
 	f.staged[code] = stagedCode{challenge: challenge, idToken: idToken}
 	f.mu.Unlock()
@@ -219,7 +219,7 @@ func (a *fakeAuthAudit) has(action, outcome string) bool {
 
 const testHS256Secret = "oidc-flow-test-secret"
 
-func baseOIDCConfig(f *fakeIdP) config.OIDCSection {
+func baseOIDCConfig(f *fakeIDP) config.OIDCSection {
 	return config.OIDCSection{
 		Issuer:           f.issuer,
 		ClientID:         "client-abc",
@@ -234,7 +234,7 @@ func baseOIDCConfig(f *fakeIdP) config.OIDCSection {
 	}
 }
 
-func oidcServer(t *testing.T, f *fakeIdP, cfg config.OIDCSection, store OIDCUserStore, audit AuthAuditWriter, authn auth.Authenticator) *gin.Engine {
+func oidcServer(t *testing.T, f *fakeIDP, cfg config.OIDCSection, store OIDCUserStore, audit AuthAuditWriter, authn auth.Authenticator) *gin.Engine {
 	t.Helper()
 	flow, err := oidc.NewFlow(context.Background(), cfg, testHS256Secret)
 	if err != nil {
@@ -265,7 +265,7 @@ type loginState struct {
 
 func startLogin(t *testing.T, srv *gin.Engine) loginState {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/v2/auth/oidc/login?next=/dags", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/auth/oidc/login?next=/dags", http.NoBody)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
@@ -312,10 +312,10 @@ func baseClaims(cfg config.OIDCSection, nonce string) jwt.MapClaims {
 
 // completeCallback stages the given raw ID token for a fresh code and invokes the
 // callback with the login state's state + cookie.
-func completeCallback(srv *gin.Engine, f *fakeIdP, st loginState, idToken string) *httptest.ResponseRecorder {
+func completeCallback(srv *gin.Engine, f *fakeIDP, st loginState, idToken string) *httptest.ResponseRecorder {
 	code := "code-" + st.state[:12]
 	f.stage(code, st.challenge, idToken)
-	req := httptest.NewRequest(http.MethodGet, "/api/v2/auth/oidc/callback?code="+code+"&state="+url.QueryEscape(st.state), nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/auth/oidc/callback?code="+code+"&state="+url.QueryEscape(st.state), http.NoBody)
 	req.AddCookie(st.cookie)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
@@ -324,7 +324,7 @@ func completeCallback(srv *gin.Engine, f *fakeIdP, st loginState, idToken string
 
 // driveCallback runs the full login→callback, minting claims from baseClaims with
 // the login nonce and an optional mutation.
-func driveCallback(t *testing.T, srv *gin.Engine, f *fakeIdP, cfg config.OIDCSection, mutate func(jwt.MapClaims)) *httptest.ResponseRecorder {
+func driveCallback(t *testing.T, srv *gin.Engine, f *fakeIDP, cfg config.OIDCSection, mutate func(jwt.MapClaims)) *httptest.ResponseRecorder {
 	t.Helper()
 	st := startLogin(t, srv)
 	claims := baseClaims(cfg, st.nonce)
@@ -364,7 +364,7 @@ func tokenRoles(t *testing.T, token string) []string {
 // ─────────────────────────── happy path ───────────────────────────
 
 func TestOIDCHappyPathResolvesUserAndMintsSession(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	store := newFakeOIDCStore()
 	// Pre-provisioned user, resolved by the immutable (issuer, subject) pair.
@@ -410,7 +410,7 @@ func TestOIDCTenantPinFailsClosed(t *testing.T) {
 		{"email_verified absent", func(c jwt.MapClaims) { delete(c, "email_verified") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeIdP(t)
+			f := newFakeIDP(t)
 			cfg := baseOIDCConfig(f)
 			store := newFakeOIDCStore()
 			store.seed(cfg.Issuer, "subject-123", &auth.User{ID: "user-1", TenantID: "default"}, true)
@@ -434,7 +434,7 @@ func TestOIDCTenantPinFailsClosed(t *testing.T) {
 }
 
 func TestOIDCTenantPinRejectionIsAudited(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	audit := &fakeAuthAudit{}
 	srv := oidcServer(t, f, cfg, newFakeOIDCStore(), audit, nil)
@@ -460,7 +460,7 @@ func TestOIDCTokenVerificationFailsClosed(t *testing.T) {
 		{"azp mismatch", func(c jwt.MapClaims) { c["azp"] = "some-other-client" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeIdP(t)
+			f := newFakeIDP(t)
 			cfg := baseOIDCConfig(f)
 			store := newFakeOIDCStore()
 			store.seed(cfg.Issuer, "subject-123", &auth.User{ID: "user-1", TenantID: "default"}, true)
@@ -479,7 +479,7 @@ func TestOIDCTokenVerificationFailsClosed(t *testing.T) {
 }
 
 func TestOIDCTamperedSignatureRejected(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	store := newFakeOIDCStore()
 	store.seed(cfg.Issuer, "subject-123", &auth.User{ID: "user-1", TenantID: "default"}, true)
@@ -507,7 +507,7 @@ func TestOIDCTamperedSignatureRejected(t *testing.T) {
 }
 
 func TestOIDCWithinSkewAccepted(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	store := newFakeOIDCStore()
 	store.seed(cfg.Issuer, "subject-123", &auth.User{ID: "user-1", TenantID: "default", Roles: []string{"editor"}}, true)
@@ -525,11 +525,11 @@ func TestOIDCWithinSkewAccepted(t *testing.T) {
 // ─────────────────────────── state / CSRF ───────────────────────────
 
 func TestOIDCCallbackRejectsMissingStateCookie(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	srv := oidcServer(t, f, cfg, newFakeOIDCStore(), &fakeAuthAudit{}, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v2/auth/oidc/callback?code=x&state=y", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/auth/oidc/callback?code=x&state=y", http.NoBody)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -538,13 +538,13 @@ func TestOIDCCallbackRejectsMissingStateCookie(t *testing.T) {
 }
 
 func TestOIDCCallbackRejectsStateMismatch(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	srv := oidcServer(t, f, cfg, newFakeOIDCStore(), &fakeAuthAudit{}, nil)
 
 	st := startLogin(t, srv)
 	// Present a different state query param than the one sealed in the cookie.
-	req := httptest.NewRequest(http.MethodGet, "/api/v2/auth/oidc/callback?code=x&state=forged-state", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/auth/oidc/callback?code=x&state=forged-state", http.NoBody)
 	req.AddCookie(st.cookie)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
@@ -554,13 +554,13 @@ func TestOIDCCallbackRejectsStateMismatch(t *testing.T) {
 }
 
 func TestOIDCCallbackRejectsIssParamMismatch(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	srv := oidcServer(t, f, cfg, newFakeOIDCStore(), &fakeAuthAudit{}, nil)
 
 	st := startLogin(t, srv)
-	req := httptest.NewRequest(http.MethodGet,
-		"/api/v2/auth/oidc/callback?code=x&state="+url.QueryEscape(st.state)+"&iss=https://evil.example", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/api/v2/auth/oidc/callback?code=x&state="+url.QueryEscape(st.state)+"&iss=https://evil.example", http.NoBody)
 	req.AddCookie(st.cookie)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
@@ -572,7 +572,7 @@ func TestOIDCCallbackRejectsIssParamMismatch(t *testing.T) {
 // ─────────────────────────── D4: JIT provisioning ───────────────────────────
 
 func TestOIDCJITOffRejectsUnknownSubject(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f) // JITProvisioning defaults off
 	store := newFakeOIDCStore()
 	audit := &fakeAuthAudit{}
@@ -589,7 +589,7 @@ func TestOIDCJITOffRejectsUnknownSubject(t *testing.T) {
 }
 
 func TestOIDCJITOnCreatesUserWithMappedRoles(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	cfg.JITProvisioning = true
 	store := newFakeOIDCStore()
@@ -619,7 +619,7 @@ func TestOIDCJITOnCreatesUserWithMappedRoles(t *testing.T) {
 // ─────────────────────────── D5 + default_role ───────────────────────────
 
 func TestOIDCUnmappedGroupGrantsNoRole(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	cfg.JITProvisioning = true
 	store := newFakeOIDCStore()
@@ -635,7 +635,7 @@ func TestOIDCUnmappedGroupGrantsNoRole(t *testing.T) {
 }
 
 func TestOIDCDefaultRoleFallback(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	cfg.JITProvisioning = true
 	cfg.DefaultRole = "viewer"
@@ -652,7 +652,7 @@ func TestOIDCDefaultRoleFallback(t *testing.T) {
 }
 
 func TestOIDCDefaultRoleEmptyKeepsDeny(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	cfg.JITProvisioning = true
 	cfg.DefaultRole = "" // secure default
@@ -666,7 +666,7 @@ func TestOIDCDefaultRoleEmptyKeepsDeny(t *testing.T) {
 }
 
 func TestOIDCDefaultRoleNonexistentRejected(t *testing.T) {
-	f := newFakeIdP(t)
+	f := newFakeIDP(t)
 	cfg := baseOIDCConfig(f)
 	cfg.JITProvisioning = true
 	cfg.DefaultRole = "wizard" // not a real role
@@ -696,7 +696,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 	}
 
 	t.Run("domain in allowlist, pre-existing user → ok", func(t *testing.T) {
-		f := newFakeIdP(t)
+		f := newFakeIDP(t)
 		cfg := baseOIDCConfig(f)
 		cfg.AllowedEmailDomains = []string{"corp.example"}
 		srv := oidcServer(t, f, cfg, seededUser(cfg), &fakeAuthAudit{}, nil)
@@ -706,7 +706,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 	})
 
 	t.Run("domain NOT in allowlist, pre-existing user → 403", func(t *testing.T) {
-		f := newFakeIdP(t)
+		f := newFakeIDP(t)
 		cfg := baseOIDCConfig(f)
 		cfg.AllowedEmailDomains = []string{"trusted.example"}
 		store := seededUser(cfg)
@@ -721,7 +721,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 	})
 
 	t.Run("domain NOT in allowlist, JIT-on → 403, no row", func(t *testing.T) {
-		f := newFakeIdP(t)
+		f := newFakeIDP(t)
 		cfg := baseOIDCConfig(f)
 		cfg.JITProvisioning = true
 		cfg.AllowedEmailDomains = []string{"trusted.example"}
@@ -737,7 +737,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 	})
 
 	t.Run("empty allowlist → no domain restriction", func(t *testing.T) {
-		f := newFakeIdP(t)
+		f := newFakeIDP(t)
 		cfg := baseOIDCConfig(f) // AllowedEmailDomains empty
 		srv := oidcServer(t, f, cfg, seededUser(cfg), &fakeAuthAudit{}, nil)
 		if rec := driveCallback(t, srv, f, cfg, nil); rec.Code != http.StatusFound {
@@ -746,7 +746,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 	})
 
 	t.Run("unverified email is rejected before the domain check", func(t *testing.T) {
-		f := newFakeIdP(t)
+		f := newFakeIDP(t)
 		cfg := baseOIDCConfig(f)
 		cfg.AllowedEmailDomains = []string{"corp.example"} // domain WOULD pass
 		srv := oidcServer(t, f, cfg, seededUser(cfg), &fakeAuthAudit{}, nil)

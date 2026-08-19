@@ -124,8 +124,9 @@ func (v *Verifier) Verify(ctx context.Context, rawIDToken, expectedNonce string)
 	idToken, err := v.verifier.Verify(ctx, rawIDToken)
 	if err != nil {
 		// Covers a tampered/invalid signature, a wrong audience, and an issuer that
-		// does not match the pinned discovery issuer.
-		if strings.Contains(err.Error(), "issuer") {
+		// does not match the pinned discovery issuer (go-oidc phrases the last as
+		// "issued by a different provider").
+		if strings.Contains(err.Error(), "different provider") || strings.Contains(err.Error(), "issuer") {
 			return nil, ErrIssuerMismatch
 		}
 		return nil, fmt.Errorf("oidc: token verification failed: %w", err)
@@ -134,29 +135,14 @@ func (v *Verifier) Verify(ctx context.Context, rawIDToken, expectedNonce string)
 	if idToken.Issuer != v.cfg.Issuer {
 		return nil, ErrIssuerMismatch
 	}
-	// Nonce binding (H4): constant-time compare against the state cookie.
-	if expectedNonce == "" || subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(expectedNonce)) != 1 {
-		return nil, ErrNonceMismatch
-	}
-
 	var claims idClaims
 	if cerr := idToken.Claims(&claims); cerr != nil {
 		return nil, fmt.Errorf("oidc: decoding claims: %w", cerr)
 	}
-	// azp, when present, must be this client (H4).
-	if claims.Azp != "" && claims.Azp != v.cfg.ClientID {
-		return nil, ErrAzpMismatch
-	}
-	// Clock-skew-aware exp/iat/nbf (H4).
-	if err := v.checkTimes(idToken, claims.NotBefore); err != nil {
-		return nil, err
-	}
-	if idToken.Subject == "" {
-		return nil, ErrNoSubject
-	}
-	// email_verified must be explicitly true (absent → false, D6c).
-	if !claims.EmailVerified {
-		return nil, ErrEmailNotVerified
+	// The explicit H4 checks go-oidc does not perform (nonce, azp, clock skew),
+	// plus subject presence and email_verified.
+	if berr := v.checkBindings(idToken, claims, expectedNonce); berr != nil {
+		return nil, berr
 	}
 	// Tenant pin (D6b/d): resolve from the configured tid/hd claim; absent or
 	// unmapped is a hard reject, never a default fallback.
@@ -166,8 +152,8 @@ func (v *Verifier) Verify(ctx context.Context, rawIDToken, expectedNonce string)
 	}
 	// Login-level email-domain allowlist, layered on top of the pin. Only reached
 	// after email_verified, so the domain is trustworthy here.
-	if err := v.checkEmailDomain(claims.Email); err != nil {
-		return nil, err
+	if derr := v.checkEmailDomain(claims.Email); derr != nil {
+		return nil, derr
 	}
 
 	groups, err := extractGroups(idToken, v.cfg.GroupsClaim)
@@ -182,6 +168,32 @@ func (v *Verifier) Verify(ctx context.Context, rawIDToken, expectedNonce string)
 		Tenant:        tenant,
 		Groups:        groups,
 	}, nil
+}
+
+// checkBindings performs the fail-closed checks go-oidc does not: the nonce
+// binding to the state cookie, azp when present, the clock-skew-aware validity
+// window, subject presence, and email_verified.
+func (v *Verifier) checkBindings(idToken *gooidc.IDToken, claims idClaims, expectedNonce string) error {
+	// Nonce binding (H4): constant-time compare against the state cookie.
+	if expectedNonce == "" || subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(expectedNonce)) != 1 {
+		return ErrNonceMismatch
+	}
+	// azp, when present, must be this client (H4).
+	if claims.Azp != "" && claims.Azp != v.cfg.ClientID {
+		return ErrAzpMismatch
+	}
+	// Clock-skew-aware exp/iat/nbf (H4).
+	if terr := v.checkTimes(idToken, claims.NotBefore); terr != nil {
+		return terr
+	}
+	if idToken.Subject == "" {
+		return ErrNoSubject
+	}
+	// email_verified must be explicitly true (absent → false, D6c).
+	if !claims.EmailVerified {
+		return ErrEmailNotVerified
+	}
+	return nil
 }
 
 // checkTimes enforces exp/iat/nbf within the configured clock skew.
@@ -213,8 +225,8 @@ func (v *Verifier) resolveTenant(idToken *gooidc.IDToken) (string, error) {
 	if err := idToken.Claims(&raw); err != nil {
 		return "", fmt.Errorf("oidc: decoding tenant claim: %w", err)
 	}
-	val, _ := raw[v.cfg.TenantClaim].(string)
-	if val == "" {
+	val, ok := raw[v.cfg.TenantClaim].(string)
+	if !ok || val == "" {
 		return "", ErrTenantNotAllowed
 	}
 	tenant, ok := v.cfg.TenantClaims[val]

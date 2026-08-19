@@ -73,8 +73,8 @@ rbac:
 # Both are cluster-operator decisions on purpose: they are not exposed in the DAG
 # spec, so an author cannot elevate their own task.
 taskPodSecurity:
-  # -- Refuse to start a task container whose image runs as UID 0. This completes Pod Security Admission's `restricted` set, so a `restricted` namespace will admit your task pods. Off by default because the images Leoflow ships cannot satisfy it yet: the `examples/` images run as root, and the runtime base declares `USER leoflow` — a name the kubelet cannot resolve to a UID, so it rejects the container even though the user is not root. Turn it on once your own task images carry numeric non-root UIDs, and provide a writable path for anything using the staging volume.
-  runAsNonRoot: false
+  # -- Refuse to start a task container whose image runs as UID 0. This completes Pod Security Admission's `restricted` set, so a `restricted` namespace will admit your task pods. On by default: the runtime base image runs as the numeric non-root UID 65532 (`USER 65532:65532`, the distroless `nonroot` UID) and the `examples/` images inherit it, and the executor pairs it with a pod-level `fsGroup` so the per-run staging PVC stays writable. **This default changed from `false` to `true`** — a fleet whose task images legitimately run as root must set this to `false` (or rebuild those images non-root), else every such task pod fails to start with `CreateContainerConfigError` ("container has runAsNonRoot and image will run as root"). This is a cluster-wide switch by design: pod security is not a per-DAG setting, so a DAG author cannot elevate their own task.
+  runAsNonRoot: true
   # -- Mount every task container's root filesystem read-only. Off by default deliberately: `restricted` does not require it, and it breaks ordinary Python tasks that write to `/tmp`, the pip cache, or a matplotlib config dir. Turn it on for a fleet of tasks known to write only to their mounted volumes.
   readOnlyRootFilesystem: false
 

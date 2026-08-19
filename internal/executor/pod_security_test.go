@@ -9,12 +9,20 @@ import (
 // Pod Security Admission's `restricted` profile requires four things of a
 // container: no privilege escalation, every capability dropped, a seccomp
 // profile, and a non-root user. The first three cost an ordinary task nothing
-// and are applied unconditionally; the fourth is opt-in until the images this
-// repo ships can satisfy it (see PodSecurity.RunAsNonRoot).
+// and are applied unconditionally; the fourth reaches BuildPod through
+// req.PodSecurity — on by default now that the shipped task images carry numeric
+// non-root UIDs (runtime/Dockerfile: USER 65532:65532), and paired with a
+// pod-level fsGroup so the non-root user can write its mounted volumes.
 //
 // readOnlyRootFilesystem is not part of `restricted` at all, and it is the field
 // most likely to break an ordinary Python task (pip cache, /tmp, matplotlib
 // config). Opt-in for that reason, not this one.
+
+// wantNonRootFSGroup mirrors the GID the task base image runs as
+// (runtime/Dockerfile: USER 65532:65532). BuildPod carries it as the pod's
+// fsGroup for a non-root task so the kubelet makes mounted volumes — the per-run
+// staging PVC above all (ADR 0022) — group-writable by that user.
+const wantNonRootFSGroup int64 = 65532
 
 func TestBuildPodAppliesUnconditionalHardening(t *testing.T) {
 	pod := BuildPod(sampleReq())
@@ -24,6 +32,7 @@ func TestBuildPodAppliesUnconditionalHardening(t *testing.T) {
 	sc := pod.Spec.Containers[0].SecurityContext
 	if sc == nil {
 		t.Fatal("container SecurityContext is nil — PSA restricted rejects the pod outright")
+		return // unreachable; makes the non-nil invariant explicit to staticcheck (SA5011)
 	}
 	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
 		t.Error("AllowPrivilegeEscalation must be false")
@@ -54,6 +63,7 @@ func TestBuildPodLeavesRootFilesystemWritableByDefault(t *testing.T) {
 	sc := pod.Spec.Containers[0].SecurityContext
 	if sc == nil {
 		t.Fatal("container SecurityContext is nil")
+		return // unreachable; makes the non-nil invariant explicit to staticcheck (SA5011)
 	}
 	if sc.ReadOnlyRootFilesystem != nil && *sc.ReadOnlyRootFilesystem {
 		t.Error("ReadOnlyRootFilesystem must default to off: PSA restricted does not require it " +
@@ -61,15 +71,16 @@ func TestBuildPodLeavesRootFilesystemWritableByDefault(t *testing.T) {
 	}
 }
 
-// runAsNonRoot stays off unless asked for. Every examples/*/Dockerfile in this
-// repo runs as root and runtime/Dockerfile declares a non-numeric USER, so
-// defaulting it on would stop every shipped example from scheduling. This pins
-// the sequencing: fix the images first, then flip the default.
-func TestBuildPodLeavesRunAsNonRootOptIn(t *testing.T) {
+// BuildPod is pure: it sets runAsNonRoot only when the request asks for it and
+// never invents it. Whether a task runs non-root by default is a config/Helm
+// decision — on by default now — that reaches BuildPod through req.PodSecurity,
+// so a request that leaves it unset must still produce a pod without
+// runAsNonRoot (and, being potentially root, without an fsGroup to fix up).
+func TestBuildPodLeavesRunAsNonRootUnsetWhenNotRequested(t *testing.T) {
 	pod := BuildPod(sampleReq())
 	sc := pod.Spec.Containers[0].SecurityContext
 	if sc.RunAsNonRoot != nil && *sc.RunAsNonRoot {
-		t.Error("RunAsNonRoot must stay opt-in until the shipped images carry numeric non-root UIDs")
+		t.Error("RunAsNonRoot must not be set when the request does not ask for it")
 	}
 	// The protections that cost nothing apply regardless of the UID.
 	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
@@ -80,15 +91,34 @@ func TestBuildPodLeavesRunAsNonRootOptIn(t *testing.T) {
 	}
 }
 
-// An operator whose images do carry numeric non-root UIDs can complete the
-// `restricted` set.
-func TestBuildPodHonorsRunAsNonRootOptIn(t *testing.T) {
+// A non-root request completes the `restricted` set and pairs runAsNonRoot with
+// a pod-level fsGroup, so the non-root user can write the per-run staging PVC
+// (ADR 0022) instead of landing locked out of a root-owned volume.
+func TestBuildPodHonorsRunAsNonRootAndSetsFSGroup(t *testing.T) {
 	req := sampleReq()
 	req.PodSecurity.RunAsNonRoot = true
 	pod := BuildPod(req)
 	sc := pod.Spec.Containers[0].SecurityContext
 	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
-		t.Error("RunAsNonRoot opt-in was not honored")
+		t.Error("RunAsNonRoot was not honored")
+	}
+	psc := pod.Spec.SecurityContext
+	if psc == nil || psc.FSGroup == nil {
+		t.Fatal("pod SecurityContext.FSGroup must be set for a non-root task so its mounted volumes are group-writable")
+	}
+	if *psc.FSGroup != wantNonRootFSGroup {
+		t.Errorf("FSGroup = %d, want %d (task base image GID)", *psc.FSGroup, wantNonRootFSGroup)
+	}
+}
+
+// A task that may run as root writes its volumes as root, so there is nothing
+// for an fsGroup to fix. BuildPod leaves the pod SecurityContext unset — keeping
+// the spec byte-identical to before this feature and skipping the kubelet's
+// recursive volume chown.
+func TestBuildPodOmitsFSGroupWhenNotNonRoot(t *testing.T) {
+	pod := BuildPod(sampleReq())
+	if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.FSGroup != nil {
+		t.Errorf("FSGroup must be unset when the task may run as root, got %d", *pod.Spec.SecurityContext.FSGroup)
 	}
 }
 

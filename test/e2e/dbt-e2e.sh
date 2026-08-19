@@ -122,8 +122,10 @@ USER root
 RUN pip install --no-cache-dir "dbt-postgres==1.9.*"
 COPY . /home/leoflow/
 ENV DBT_PROFILES_DIR=/home/leoflow
-RUN chown -R leoflow:leoflow /home/leoflow
-USER leoflow
+RUN chown -R 65532:65532 /home/leoflow
+# Numeric UID so PodSecurity runAsNonRoot (on by default) admits the pod: the
+# kubelet cannot verify a login NAME. Matches the base image's USER 65532:65532.
+USER 65532:65532
 WORKDIR /home/leoflow
 DOCKER
 

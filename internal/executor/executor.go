@@ -13,18 +13,15 @@ import (
 // `restricted` profile admits.
 type PodSecurity struct {
 	// RunAsNonRoot refuses to start a task container whose image resolves to
-	// UID 0. It completes the `restricted` set, and it is opt-in rather than
-	// default for a reason that is about this repo, not about the profile:
-	// none of the images Leoflow ships can satisfy it yet. Every
-	// examples/*/Dockerfile runs as root, and runtime/Dockerfile declares
-	// `USER leoflow` — a name, which the kubelet cannot resolve to a UID, so it
-	// rejects the container even though the user is not root. Turning this on
-	// by default would mean no example DAG runs on Pro.
+	// UID 0. It completes the `restricted` set and is on by default: the images
+	// Leoflow ships now satisfy it. runtime/Dockerfile runs as the numeric
+	// non-root UID 65532 (`USER 65532:65532` — a name the kubelet cannot resolve
+	// is what previously blocked this), and every examples/*/image inherits it.
+	// When set, BuildPod also stamps a pod-level fsGroup (nonRootFSGroup) so the
+	// per-run staging PVC (ADR 0022) stays writable by that non-root user.
 	//
-	// Flipping the default is tracked as its own change: give the images
-	// numeric non-root UIDs, add an fsGroup so the staging PVC stays writable,
-	// then make this the default. A secure default the platform's own images
-	// cannot meet is not a secure default.
+	// It stays a knob rather than a constant so an operator can turn it off for a
+	// fleet whose task images legitimately run as root.
 	RunAsNonRoot bool
 
 	// ReadOnlyRootFilesystem mounts the container root read-only. Off by

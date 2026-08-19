@@ -161,6 +161,7 @@ func TestLogsStructuredCarriesTimestamp(t *testing.T) {
 	}
 	if line == nil {
 		t.Fatalf("log line not found in content: %+v", got.Content)
+		return // unreachable; makes the non-nil invariant explicit to staticcheck (SA5011)
 	}
 	if line.Timestamp == "" {
 		t.Errorf("log line missing timestamp (Airflow viewer needs it to render): %+v", *line)

@@ -55,11 +55,12 @@ type PlatformDefaults struct {
 	// Resources defaults a task's requests/limits when neither the task override
 	// nor the DAG set any.
 	Resources *domain.Resources
-	// PodSecurity relaxes the task-pod hardening defaults. It lives here, not in
+	// PodSecurity carries the task-pod hardening choices. It lives here, not in
 	// the DAG spec, on purpose: whether untrusted task code may run as root is a
 	// cluster-operator decision. Exposing it per-DAG would let an author elevate
 	// their own task, which is the same self-service escalation as picking an
-	// arbitrary service_account. Zero value is the secure default.
+	// arbitrary service_account. It is populated from the cluster's configured
+	// defaults (runAsNonRoot on), which an operator can override.
 	PodSecurity executor.PodSecurity
 }
 

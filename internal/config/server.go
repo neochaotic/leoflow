@@ -90,11 +90,12 @@ type PlatformDefaultsSection struct {
 	ResourcesCPU    string `mapstructure:"resources_cpu"`
 	ResourcesMemory string `mapstructure:"resources_memory"`
 	// RunTasksAsNonRoot refuses to start a task container whose image resolves
-	// to UID 0, completing Pod Security Admission's `restricted` set. Off by
-	// default because the images this repo ships cannot satisfy it yet: every
-	// examples/*/Dockerfile runs as root and runtime/Dockerfile declares a
-	// non-numeric USER the kubelet cannot verify. Turn it on for a cluster whose
-	// task images carry numeric non-root UIDs.
+	// to UID 0, completing Pod Security Admission's `restricted` set. On by
+	// default now that the images this repo ships carry a numeric non-root UID:
+	// runtime/Dockerfile runs as `USER 65532:65532` and every examples/*/image
+	// inherits it, and the executor pairs it with a pod-level fsGroup so the
+	// per-run staging PVC stays writable. Turn it off for a cluster whose task
+	// images legitimately run as root.
 	//
 	// Deliberately a cluster setting rather than a DAG field: whether untrusted
 	// task code may run as root belongs to whoever operates the cluster, not to
@@ -317,7 +318,7 @@ var serverDefaults = map[string]any{
 	"executor.task_secret_name":                        "",
 	"executor.task_secret_mount_path":                  "/etc/leoflow/secrets",
 	"executor.defaults.staging_access_mode":            "ReadWriteMany",
-	"executor.defaults.run_tasks_as_non_root":          false,
+	"executor.defaults.run_tasks_as_non_root":          true,
 	"executor.defaults.read_only_task_root_filesystem": false,
 	"logs.dir":                    "/var/log/leoflow",
 	"observability.otel.enabled":  true,

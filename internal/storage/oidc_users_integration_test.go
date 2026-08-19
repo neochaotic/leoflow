@@ -90,6 +90,117 @@ func TestCreateOIDCUserDuplicateSubjectIntegration(t *testing.T) {
 	}
 }
 
+// TestReconcileUserRolesDemotionIntegration proves the IdP-authoritative
+// reconcile: an OIDC user first granted [operator] whose IdP groups later map to
+// [viewer] ends with EXACTLY [viewer] in the DB, losing operator's extra
+// permissions. Because the resolve path (FindUserByOIDCSubject) reads the same
+// user_roles rows the per-request authz reload reads, the demotion takes effect
+// on the next request.
+func TestReconcileUserRolesDemotionIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	email := fmt.Sprintf("oidc_demote_%d@example.com", time.Now().UnixNano())
+	subject := fmt.Sprintf("subdemote-%d", time.Now().UnixNano())
+
+	created, err := repo.CreateOIDCUser(ctx, "default", email, "azure", subject, []string{"operator"})
+	if err != nil {
+		t.Fatalf("CreateOIDCUser: %v", err)
+	}
+
+	if err := repo.ReconcileUserRoles(ctx, created.ID, []string{"viewer"}); err != nil {
+		t.Fatalf("ReconcileUserRoles([viewer]): %v", err)
+	}
+
+	got, active, err := repo.FindUserByOIDCSubject(ctx, "azure", subject)
+	if err != nil || !active {
+		t.Fatalf("FindUserByOIDCSubject: user=%v active=%v err=%v", got, active, err)
+	}
+	if len(got.Roles) != 1 || got.Roles[0] != "viewer" {
+		t.Errorf("roles after demotion = %v, want [viewer]", got.Roles)
+	}
+	if !got.HasPermission("read", "dag") {
+		t.Error("demoted viewer lost read:dag")
+	}
+	if got.HasPermission("write", "dag_run") {
+		t.Error("demoted user still holds operator's write:dag_run — demotion did not take effect")
+	}
+}
+
+// TestReconcileUserRolesEmptyIntegration proves reconciling to the empty set
+// clears all grants (default-deny), the shape produced when a login maps to no
+// role and no default_role is configured.
+func TestReconcileUserRolesEmptyIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	email := fmt.Sprintf("oidc_empty_%d@example.com", time.Now().UnixNano())
+	subject := fmt.Sprintf("subempty-%d", time.Now().UnixNano())
+
+	created, err := repo.CreateOIDCUser(ctx, "default", email, "azure", subject, []string{"viewer"})
+	if err != nil {
+		t.Fatalf("CreateOIDCUser: %v", err)
+	}
+	if err := repo.ReconcileUserRoles(ctx, created.ID, nil); err != nil {
+		t.Fatalf("ReconcileUserRoles(nil): %v", err)
+	}
+	got, _, err := repo.FindUserByOIDCSubject(ctx, "azure", subject)
+	if err != nil {
+		t.Fatalf("FindUserByOIDCSubject: %v", err)
+	}
+	if len(got.Roles) != 0 {
+		t.Errorf("roles after empty reconcile = %v, want none", got.Roles)
+	}
+}
+
+// TestReconcileUserRolesIdempotentIntegration proves re-login with the same
+// groups yields the same rows: reconciling to [viewer] twice leaves exactly one
+// grant (no duplicate rows, no error).
+func TestReconcileUserRolesIdempotentIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	email := fmt.Sprintf("oidc_idem_%d@example.com", time.Now().UnixNano())
+	subject := fmt.Sprintf("subidem-%d", time.Now().UnixNano())
+
+	created, err := repo.CreateOIDCUser(ctx, "default", email, "azure", subject, nil)
+	if err != nil {
+		t.Fatalf("CreateOIDCUser: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := repo.ReconcileUserRoles(ctx, created.ID, []string{"viewer"}); err != nil {
+			t.Fatalf("ReconcileUserRoles pass %d: %v", i, err)
+		}
+	}
+	got, _, err := repo.FindUserByOIDCSubject(ctx, "azure", subject)
+	if err != nil {
+		t.Fatalf("FindUserByOIDCSubject: %v", err)
+	}
+	if len(got.Roles) != 1 || got.Roles[0] != "viewer" {
+		t.Errorf("roles after idempotent reconcile = %v, want [viewer]", got.Roles)
+	}
+}
+
+// TestReconcileUserRolesUnknownRoleFailsClosedIntegration proves an unknown role
+// name fails closed as ErrValidation and leaves the prior grants intact — the
+// login path turns this into a rejected, audited login rather than silently
+// wiping the user's roles.
+func TestReconcileUserRolesUnknownRoleFailsClosedIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	email := fmt.Sprintf("oidc_unknown_%d@example.com", time.Now().UnixNano())
+	subject := fmt.Sprintf("subunknown-%d", time.Now().UnixNano())
+
+	created, err := repo.CreateOIDCUser(ctx, "default", email, "azure", subject, []string{"operator"})
+	if err != nil {
+		t.Fatalf("CreateOIDCUser: %v", err)
+	}
+	if err := repo.ReconcileUserRoles(ctx, created.ID, []string{"wizard"}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ReconcileUserRoles([wizard]) = %v, want ErrValidation", err)
+	}
+	// The failed reconcile must not have wiped the existing grant.
+	got, _, err := repo.FindUserByOIDCSubject(ctx, "azure", subject)
+	if err != nil {
+		t.Fatalf("FindUserByOIDCSubject: %v", err)
+	}
+	if len(got.Roles) != 1 || got.Roles[0] != "operator" {
+		t.Errorf("roles after failed reconcile = %v, want unchanged [operator]", got.Roles)
+	}
+}
+
 // TestRoleExistsIntegration proves the role existence check the OIDC login path
 // uses to fail closed on a misconfigured default_role: a seeded role is found, a
 // nonexistent one is not, and neither is an error.

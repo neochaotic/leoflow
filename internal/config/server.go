@@ -335,6 +335,15 @@ type OIDCSection struct {
 	// TenantClaims maps a TenantClaim value to a Leoflow tenant name. A value not
 	// present here is rejected (403) — the login never falls back to "default".
 	TenantClaims map[string]string `mapstructure:"tenant_claims"`
+	// AllowedEmailDomains is an install-time, login-level allowlist layered on TOP
+	// of the tid/hd tenant pin — it is NOT the pin itself (that stays issuer +
+	// tid/hd + email_verified per D6). The check runs only AFTER the pin and
+	// email_verified==true have passed, so the email domain is trustworthy at that
+	// point. Empty (the default) imposes no domain restriction — the tid/hd pin is
+	// the sole boundary. Non-empty admits a login (pre-provisioned OR JIT) only
+	// when the verified email's domain is in the list; every other login is
+	// rejected 403. It gates EVERY OIDC login, not just auto-provisioning.
+	AllowedEmailDomains []string `mapstructure:"allowed_email_domains"`
 	// BreakGlassEmails is the allowlist of local password logins permitted while
 	// provider is "oidc"; every other password login is rejected (SSO-only).
 	BreakGlassEmails []string `mapstructure:"break_glass_emails"`
@@ -412,21 +421,22 @@ var serverDefaults = map[string]any{
 	// slice leaves are config-file / Helm-values driven — viper does not split a
 	// single env var into a map or list — but they must appear here so Unmarshal
 	// resolves them from the file.
-	"auth.oidc.issuer":             "",
-	"auth.oidc.client_id":          "",
-	"auth.oidc.client_secret":      "",
-	"auth.oidc.redirect_url":       "",
-	"auth.oidc.scopes":             []string{"openid", "email", "profile"},
-	"auth.oidc.groups_claim":       "groups",
-	"auth.oidc.role_mappings":      map[string]string{},
-	"auth.oidc.default_role":       "",
-	"auth.oidc.tenant_claim":       "",
-	"auth.oidc.tenant_claims":      map[string]string{},
-	"auth.oidc.break_glass_emails": []string{},
-	"auth.oidc.jit_provisioning":   false,
-	"auth.oidc.clock_skew_seconds": 60,
-	"scheduler.loop_interval_ms":       1000,
-	"scheduler.enabled":                true,
+	"auth.oidc.issuer":                "",
+	"auth.oidc.client_id":             "",
+	"auth.oidc.client_secret":         "",
+	"auth.oidc.redirect_url":          "",
+	"auth.oidc.scopes":                []string{"openid", "email", "profile"},
+	"auth.oidc.groups_claim":          "groups",
+	"auth.oidc.role_mappings":         map[string]string{},
+	"auth.oidc.default_role":          "",
+	"auth.oidc.tenant_claim":          "",
+	"auth.oidc.tenant_claims":         map[string]string{},
+	"auth.oidc.allowed_email_domains": []string{},
+	"auth.oidc.break_glass_emails":    []string{},
+	"auth.oidc.jit_provisioning":      false,
+	"auth.oidc.clock_skew_seconds":    60,
+	"scheduler.loop_interval_ms":      1000,
+	"scheduler.enabled":               true,
 	// Default: synchronous dispatch (BufferSize=0). Safe and zero-overhead for
 	// Lite. Pro deployments should set buffer_size>=1 + workers>=1 in their
 	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).

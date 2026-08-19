@@ -147,7 +147,7 @@ func TestServerConfigValidateProviderAllowlist(t *testing.T) {
 		{"unset defaults to jwt", "", "set", false},
 		{"jwt with secret", "jwt", "set", false},
 		{"jwt without secret", "jwt", "", true},
-		{"oidc known but unimplemented", "oidc", "set", true},
+		{"oidc without pro edition or fields", "oidc", "set", true},
 		{"garbage unknown provider", "garbage", "set", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,19 +165,85 @@ func TestServerConfigValidateProviderAllowlist(t *testing.T) {
 	}
 }
 
-// TestServerConfigValidateOIDCMessage locks the actionable hint for the known
-// but unimplemented oidc provider, so an operator is told to switch to jwt
-// rather than left guessing why boot failed.
-func TestServerConfigValidateOIDCMessage(t *testing.T) {
+// validOIDCConfig returns a ServerConfig that passes the OIDC boot gate: Pro
+// edition, a JWT secret (oidc still mints the app's own _token), and the three
+// required oidc fields with an https issuer.
+func validOIDCConfig() *ServerConfig {
 	c := &ServerConfig{}
 	c.Auth.Provider = "oidc"
 	c.Auth.JWT.Secret = "set"
+	c.UI.Edition = "pro"
+	c.Auth.OIDC.Issuer = "https://idp.example.com"
+	c.Auth.OIDC.ClientID = "client-123"
+	c.Auth.OIDC.RedirectURL = "https://app.example.com/api/v2/auth/oidc/callback"
+	return c
+}
+
+// TestServerConfigValidateOIDCPassesWhenComplete locks that a fully-configured,
+// Pro-edition OIDC deployment boots.
+func TestServerConfigValidateOIDCPassesWhenComplete(t *testing.T) {
+	if err := validOIDCConfig().Validate(); err != nil {
+		t.Errorf("Validate() = %v for a complete Pro OIDC config, want nil", err)
+	}
+}
+
+// TestServerConfigValidateOIDCRequiresPro locks D7: provider oidc without the
+// Pro edition fails boot closed.
+func TestServerConfigValidateOIDCRequiresPro(t *testing.T) {
+	c := validOIDCConfig()
+	c.UI.Edition = ""
 	err := c.Validate()
 	if err == nil {
-		t.Fatal("Validate() = nil for oidc provider, want error")
+		t.Fatal("Validate() = nil for oidc without Pro edition, want error")
 	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Errorf("oidc error = %q, want it to mention it is not yet implemented", err.Error())
+	if !strings.Contains(err.Error(), "Pro edition") {
+		t.Errorf("error = %q, want it to mention the Pro edition", err.Error())
+	}
+}
+
+// TestServerConfigValidateOIDCRequiresFields locks D7: each missing required
+// oidc field fails boot closed and names the offending key.
+func TestServerConfigValidateOIDCRequiresFields(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mut  func(*ServerConfig)
+		want string
+	}{
+		{"missing issuer", func(c *ServerConfig) { c.Auth.OIDC.Issuer = "" }, "auth.oidc.issuer"},
+		{"missing client_id", func(c *ServerConfig) { c.Auth.OIDC.ClientID = "" }, "auth.oidc.client_id"},
+		{"missing redirect_url", func(c *ServerConfig) { c.Auth.OIDC.RedirectURL = "" }, "auth.oidc.redirect_url"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validOIDCConfig()
+			tc.mut(c)
+			err := c.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil with %s, want error", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to name %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+// TestServerConfigValidateOIDCRequiresHTTPSIssuer locks that a non-https issuer
+// is rejected: discovery and JWKS must be fetched over TLS (keyless verify).
+func TestServerConfigValidateOIDCRequiresHTTPSIssuer(t *testing.T) {
+	c := validOIDCConfig()
+	c.Auth.OIDC.Issuer = "http://idp.example.com"
+	if err := c.Validate(); err == nil {
+		t.Error("Validate() = nil for an http:// issuer, want error")
+	}
+}
+
+// TestServerConfigValidateOIDCRequiresJWTSecret locks that oidc still needs the
+// JWT secret, because the callback mints the app's own HS256 _token.
+func TestServerConfigValidateOIDCRequiresJWTSecret(t *testing.T) {
+	c := validOIDCConfig()
+	c.Auth.JWT.Secret = ""
+	if err := c.Validate(); err == nil {
+		t.Error("Validate() = nil for oidc without a JWT secret, want error")
 	}
 }
 

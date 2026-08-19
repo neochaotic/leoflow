@@ -328,6 +328,21 @@ type User struct {
 	Role      *string    `json:"role,omitempty"`
 }
 
+// UserCollection defines model for UserCollection.
+type UserCollection struct {
+	TotalEntries *int            `json:"total_entries,omitempty"`
+	Users        *[]UserListItem `json:"users,omitempty"`
+}
+
+// UserListItem One account in the user list. Leoflow accounts are email-keyed and carry a set of RBAC roles, so this diverges from the Airflow FAB users API (username-keyed with first_name/last_name).
+type UserListItem struct {
+	CreatedAt time.Time `json:"created_at"`
+	Email     string    `json:"email"`
+	Id        string    `json:"id"`
+	IsActive  bool      `json:"is_active"`
+	Roles     []string  `json:"roles"`
+}
+
 // VersionInfo defines model for VersionInfo.
 type VersionInfo struct {
 	GitVersion *string `json:"git_version,omitempty"`
@@ -383,6 +398,12 @@ type ListDagRunsParams struct {
 
 // ListDagRunsParamsState defines parameters for ListDagRuns.
 type ListDagRunsParamsState string
+
+// ListUsersParams defines parameters for ListUsers.
+type ListUsersParams struct {
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
 
 // UpdateDagJSONRequestBody defines body for UpdateDag for application/json ContentType.
 type UpdateDagJSONRequestBody = DAGUpdate
@@ -579,6 +600,15 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
 	GetMonitorHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListUsers List users
+	//
+	// Lists the tenant's control-plane accounts, newest first. Each entry
+	// carries the full set of roles the user holds; the password and its hash
+	// are write-only and never returned. Requires the read:user permission.
+	//
+	// Corresponds with GET /api/v2/users (the `ListUsers` operationId).
+	ListUsers(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateUserWithBody Create a user
 	//
@@ -924,6 +954,25 @@ func (c *Client) GetMonitorExecutor(ctx context.Context, reqEditors ...RequestEd
 // Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
 func (c *Client) GetMonitorHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetMonitorHealthRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListUsers List users
+//
+// Lists the tenant's control-plane accounts, newest first. Each entry
+// carries the full set of roles the user holds; the password and its hash
+// are write-only and never returned. Requires the read:user permission.
+//
+// Corresponds with GET /api/v2/users (the `ListUsers` operationId).
+func (c *Client) ListUsers(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListUsersRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1814,6 +1863,72 @@ func NewGetMonitorHealthRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewListUsersRequest constructs an http.Request for the ListUsers method
+func NewListUsersRequest(server string, params *ListUsersParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/users")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "offset", *params.Offset, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewCreateUserRequest calls the generic CreateUser builder with application/json body
 func NewCreateUserRequest(server string, body CreateUserJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -2206,6 +2321,17 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/monitor/health (the `GetMonitorHealth` operationId).
 	GetMonitorHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMonitorHealthResponse, error)
+
+	// ListUsersWithResponse List users
+	//
+	// Lists the tenant's control-plane accounts, newest first. Each entry
+	// carries the full set of roles the user holds; the password and its hash
+	// are write-only and never returned. Requires the read:user permission.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/users (the `ListUsers` operationId).
+	ListUsersWithResponse(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*ListUsersResponse, error)
 
 	// CreateUserWithBodyWithResponse Create a user
 	//
@@ -2956,6 +3082,54 @@ func (r GetMonitorHealthResponse) ContentType() string {
 	return ""
 }
 
+type ListUsersResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *UserCollection
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListUsersResponse) GetJSON200() *UserCollection {
+	return r.JSON200
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r ListUsersResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetBody returns the raw response body bytes
+func (r ListUsersResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListUsersResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListUsersResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListUsersResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type CreateUserResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3468,6 +3642,23 @@ func (c *ClientWithResponses) GetMonitorHealthWithResponse(ctx context.Context, 
 		return nil, err
 	}
 	return ParseGetMonitorHealthResponse(rsp)
+}
+
+// ListUsersWithResponse List users
+//
+// Lists the tenant's control-plane accounts, newest first. Each entry
+// carries the full set of roles the user holds; the password and its hash
+// are write-only and never returned. Requires the read:user permission.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/users (the `ListUsers` operationId).
+func (c *ClientWithResponses) ListUsersWithResponse(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*ListUsersResponse, error) {
+	rsp, err := c.ListUsers(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListUsersResponse(rsp)
 }
 
 // CreateUserWithBodyWithResponse Create a user
@@ -4017,6 +4208,39 @@ func ParseGetMonitorHealthResponse(rsp *http.Response) (*GetMonitorHealthRespons
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListUsersResponse parses an HTTP response from a ListUsersWithResponse call
+func ParseListUsersResponse(rsp *http.Response) (*ListUsersResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListUsersResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest UserCollection
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
 
 	}
 

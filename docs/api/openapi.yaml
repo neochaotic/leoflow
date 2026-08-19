@@ -40,6 +40,25 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
   /api/v2/users:
+    get:
+      summary: List users
+      description: |
+        Lists the tenant's control-plane accounts, newest first. Each entry
+        carries the full set of roles the user holds; the password and its hash
+        are write-only and never returned. Requires the read:user permission.
+      operationId: listUsers
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of users
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserCollection" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     post:
       summary: Create a user
       description: |
@@ -510,6 +529,30 @@ components:
         role: { type: string }
         is_active: { type: boolean }
         created_at: { type: string, format: date-time }
+
+    UserListItem:
+      type: object
+      required: [id, email, roles, is_active, created_at]
+      description: >-
+        One account in the user list. Leoflow accounts are email-keyed and carry
+        a set of RBAC roles, so this diverges from the Airflow FAB users API
+        (username-keyed with first_name/last_name).
+      properties:
+        id: { type: string }
+        email: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    UserCollection:
+      type: object
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/UserListItem" }
+        total_entries: { type: integer }
 
     DAG:
       type: object

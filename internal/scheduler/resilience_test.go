@@ -82,6 +82,17 @@ func (f *flakyStore) ApplyTransition(_ context.Context, runID, taskID string, to
 	return nil
 }
 
+// ApplyTransitions records one transition per task, matching the equivalent
+// per-task ApplyTransition calls, so the scheduler's batching is invisible here.
+func (f *flakyStore) ApplyTransitions(_ context.Context, runID string, taskIDs []string, to domain.TaskState) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, taskID := range taskIDs {
+		f.transitions = append(f.transitions, transition{runID, taskID, to})
+	}
+	return nil
+}
+
 func (f *flakyStore) ResetForRetry(context.Context, string, string) (bool, error) { return true, nil }
 func (f *flakyStore) ResetForInfraReplace(context.Context, string, string) (bool, error) {
 	return true, nil

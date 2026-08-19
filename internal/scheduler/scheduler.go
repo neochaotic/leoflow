@@ -136,6 +136,14 @@ type Store interface {
 	ActiveRuns(ctx context.Context) ([]RunState, error)
 	MaterializeTasks(ctx context.Context, runID string, tasks []domain.TaskSpec) error
 	ApplyTransition(ctx context.Context, runID, taskID string, to domain.TaskState) error
+	// ApplyTransitions moves every listed task of a run to the SAME target state
+	// in one statement — the batched form of calling ApplyTransition once per
+	// task. The scheduler groups a tick's plain state-set transitions
+	// (scheduled/skipped/upstream_failed/up_for_retry) by target state and flushes
+	// each group here, so R updates collapse to one per distinct state with a
+	// byte-identical result. It carries no source-state guard, matching
+	// ApplyTransition; the guarded none-rail resets stay on their own methods.
+	ApplyTransitions(ctx context.Context, runID string, taskIDs []string, to domain.TaskState) error
 	// ResetForRetry returns a task to 'none' and increments its try number so a
 	// retry re-evaluates and re-runs it. It is guarded to the up_for_retry source
 	// state; the bool reports whether the reset actually fired (false = the TI was
@@ -784,13 +792,24 @@ func (s *Scheduler) advance(ctx context.Context, run RunState) (int, error) {
 		return 0, nil
 	}
 	admitted := 0
+	// Plain state-set transitions (no side effect beyond the write + metric) are
+	// collected and flushed grouped by target state in one UPDATE each, instead of
+	// one per task. The queued (dispatch) and none (guarded reset) rails keep their
+	// per-task paths inside applyPlanned. Deferring the plain writes to after the
+	// loop is safe: each targets a distinct row, FinalizeRun reads the in-memory
+	// run (not the DB), and dispatch depends on task specs, not sibling TI state —
+	// so the per-tick effect is byte-identical, only the statement count drops.
+	batch := newTransitionBatch()
 	for _, t := range PlanRun(run) {
 		if t.To == domain.TaskStateQueued {
 			admitted++
 		}
-		if err := s.applyPlanned(ctx, run, t); err != nil {
+		if err := s.applyPlanned(ctx, run, t, batch); err != nil {
 			return admitted, err
 		}
+	}
+	if err := s.flushTransitions(ctx, run, batch); err != nil {
+		return admitted, err
 	}
 	if state, done := FinalizeRun(run); done {
 		if err := s.store.SetRunState(ctx, run.RunID, state); err != nil {
@@ -907,9 +926,13 @@ func (s *Scheduler) maybeAlertFailure(ctx context.Context, state domain.DagRunSt
 // alongside the dispatcher's "sent"/"failed" on the same metric.
 const alertResultDropped = "dropped"
 
-// applyPlanned launches a task as it becomes queued and records the resulting
-// transition. Non-queued transitions are recorded directly.
-func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTransition) error {
+// applyPlanned routes one planned transition. The queued rail launches the task
+// (a dispatch side effect) and the none rail runs the guarded retry/reschedule/
+// infra-replace resets — both stay per-task, applied in plan order. Every other
+// transition is a plain state set with no side effect beyond the write and its
+// metric, so it is collected into the batch and flushed grouped by target state
+// after the loop.
+func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTransition, batch *transitionBatch) error {
 	switch t.To {
 	case domain.TaskStateQueued:
 		return s.launchQueued(ctx, run, t)
@@ -925,8 +948,54 @@ func (s *Scheduler) applyPlanned(ctx context.Context, run RunState, t PlannedTra
 		}
 		return s.resetForRetry(ctx, run, t.TaskID)
 	default:
-		return s.recordTransition(ctx, run, t.TaskID, t.To)
+		batch.add(t.To, t.TaskID)
+		return nil
 	}
+}
+
+// transitionBatch groups a tick's plain state-set transitions by target state so
+// each group can be flushed in one UPDATE (SchedulerStore.ApplyTransitions)
+// rather than one per task. It carries only side-effect-free transitions; the
+// queued (dispatch) and none (guarded reset) rails never enter it.
+type transitionBatch struct {
+	// order lists target states in first-seen order so the flush — and the
+	// metrics it emits — is deterministic regardless of Go's map iteration.
+	order   []domain.TaskState
+	byState map[domain.TaskState][]string
+}
+
+// newTransitionBatch builds an empty batch.
+func newTransitionBatch() *transitionBatch {
+	return &transitionBatch{byState: make(map[domain.TaskState][]string)}
+}
+
+// add records that taskID transitions to the given target state this tick.
+func (b *transitionBatch) add(to domain.TaskState, taskID string) {
+	if _, seen := b.byState[to]; !seen {
+		b.order = append(b.order, to)
+	}
+	b.byState[to] = append(b.byState[to], taskID)
+}
+
+// flushTransitions applies each collected target-state group in one UPDATE, then
+// records the per-task metrics recordTransition would have. Metrics are emitted
+// only after the group's write succeeds — the same "record nothing we did not
+// persist" contract the per-task path had — and per-task counts are identical to
+// the unbatched path (metric ordering is not an observable output).
+func (s *Scheduler) flushTransitions(ctx context.Context, run RunState, b *transitionBatch) error {
+	for _, to := range b.order {
+		taskIDs := b.byState[to]
+		if err := s.store.ApplyTransitions(ctx, run.RunID, taskIDs, to); err != nil {
+			return fmt.Errorf("applying %s transitions: %w", to, err)
+		}
+		if s.recorder != nil {
+			for _, taskID := range taskIDs {
+				s.recorder.RecordSchedulerDecision(string(to))
+				s.recorder.RecordTaskTransition(string(run.States[taskID]), string(to), run.DagID)
+			}
+		}
+	}
+	return nil
 }
 
 // resetForRetry returns a task to 'none' with an incremented try number so the

@@ -237,6 +237,42 @@ func TestServerConfigValidateOIDCRequiresHTTPSIssuer(t *testing.T) {
 	}
 }
 
+// TestServerConfigValidateOIDCRedirectURLScheme locks that the callback URL the
+// browser is redirected to (and where the IdP posts the code back) is https,
+// except for loopback hosts which may use http for local dev. A plaintext
+// redirect to a non-loopback host would expose the code in transit, so it fails
+// boot closed.
+func TestServerConfigValidateOIDCRedirectURLScheme(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"https non-loopback ok", "https://app.example.com/api/v2/auth/oidc/callback", false},
+		{"http localhost ok", "http://localhost:8080/api/v2/auth/oidc/callback", false},
+		{"http 127.0.0.1 ok", "http://127.0.0.1:8080/api/v2/auth/oidc/callback", false},
+		{"http ipv6 loopback ok", "http://[::1]:8080/api/v2/auth/oidc/callback", false},
+		{"https localhost ok", "https://localhost:8080/api/v2/auth/oidc/callback", false},
+		{"http non-loopback rejected", "http://app.example.com/api/v2/auth/oidc/callback", true},
+		{"non-url rejected", "not-a-url", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validOIDCConfig()
+			c.Auth.OIDC.RedirectURL = tc.url
+			err := c.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("Validate() = nil for redirect_url %q, want error", tc.url)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Validate() = %v for redirect_url %q, want nil", err, tc.url)
+			}
+			if tc.wantErr && err != nil && !strings.Contains(err.Error(), "auth.oidc.redirect_url") {
+				t.Errorf("error = %q, want it to name auth.oidc.redirect_url", err.Error())
+			}
+		})
+	}
+}
+
 // TestServerConfigValidateOIDCRequiresJWTSecret locks that oidc still needs the
 // JWT secret, because the callback mints the app's own HS256 _token.
 func TestServerConfigValidateOIDCRequiresJWTSecret(t *testing.T) {

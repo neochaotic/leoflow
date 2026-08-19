@@ -19,6 +19,34 @@ import (
 // are advertised; still-stubbed sections stay hidden. See docs/ui-compatibility.md.
 var supportedMenuItems = []string{"Dags", "Variables", "Connections", "Audit Log", "Docs"}
 
+// menuItemPermission maps an advertised menu section to the RBAC permission the
+// caller needs to use it, so /ui/auth/menus advertises only the sections the
+// caller can actually reach. Each mapping mirrors the RequirePermission gate on
+// that section's data routes, so the menu never advertises a section that would
+// 403 on click. Sections with no backing resource (Docs) are omitted from the
+// map and stay baseline-visible to any authenticated user.
+var menuItemPermission = map[string]auth.Permission{
+	"Dags":        {Action: "read", Resource: "dag"},
+	"Variables":   {Action: "read", Resource: "variable"},
+	"Connections": {Action: "read", Resource: "connection"},
+	"Audit Log":   {Action: "read", Resource: "audit_log"},
+}
+
+// authorizedMenuItems filters supportedMenuItems to those the user may use,
+// preserving the advertised order. An item with no permission mapping is
+// baseline-visible. The advertised SET is unchanged, so an admin (whose
+// permission checks short-circuit) still sees every section.
+func authorizedMenuItems(user *auth.User) []string {
+	items := make([]string, 0, len(supportedMenuItems))
+	for _, item := range supportedMenuItems {
+		perm, gated := menuItemPermission[item]
+		if !gated || user.HasPermission(perm.Action, perm.Resource) {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
 // validMenuItems is the Airflow 3.2.1 MenuItem string enum. /ui/auth/menus may
 // only advertise values from this set; the SPA ignores unknown items.
 var validMenuItems = map[string]bool{
@@ -127,16 +155,26 @@ func uiMeHandler() gin.HandlerFunc {
 			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "no authenticated user")
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"id": user.ID, "username": user.Email})
+		roles := user.Roles
+		if roles == nil {
+			roles = []string{}
+		}
+		c.JSON(http.StatusOK, gin.H{"id": user.ID, "username": user.Email, "roles": roles})
 	}
 }
 
-// uiMenusHandler returns only the menu sections Leoflow backs, so the UI hides
-// the rest (MenuItemCollectionResponse).
+// uiMenusHandler returns the menu sections Leoflow backs, filtered to those the
+// current user is authorized for, so the UI hides both unbacked sections and
+// sections the caller lacks permission to use (MenuItemCollectionResponse).
 func uiMenusHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		user, ok := UserFromContext(c)
+		if !ok {
+			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "no authenticated user")
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"authorized_menu_items": supportedMenuItems,
+			"authorized_menu_items": authorizedMenuItems(user),
 			"extra_menu_items":      []any{},
 		})
 	}

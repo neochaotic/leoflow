@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +148,50 @@ func TestUIMenusHidesUnsupportedSections(t *testing.T) {
 		if !validMenuItems[m] {
 			t.Errorf("menu item %q is not a 3.2.1 MenuItem enum value", m)
 		}
+	}
+}
+
+func TestAuthorizedMenuItemsFiltersByPermission(t *testing.T) {
+	// Admin short-circuits every permission check, so it sees the full advertised
+	// menu — the Lite bootstrap admin's view is unchanged.
+	admin := &auth.User{Roles: []string{"admin"}}
+	if got := authorizedMenuItems(admin); !reflect.DeepEqual(got, supportedMenuItems) {
+		t.Errorf("admin menu = %v, want the full set %v", got, supportedMenuItems)
+	}
+
+	// A viewer holds read on dag/variable/connection but not audit_log, so the
+	// Audit Log section (gated on read:audit_log, like its data route) drops out
+	// while Docs stays baseline-visible. Order follows the advertised slice.
+	viewer := &auth.User{Roles: []string{"viewer"}, Permissions: []auth.Permission{
+		{Action: "read", Resource: "dag"},
+		{Action: "read", Resource: "variable"},
+		{Action: "read", Resource: "connection"},
+	}}
+	wantViewer := []string{"Dags", "Variables", "Connections", "Docs"}
+	if got := authorizedMenuItems(viewer); !reflect.DeepEqual(got, wantViewer) {
+		t.Errorf("viewer menu = %v, want %v", got, wantViewer)
+	}
+
+	// A principal with no permissions still sees the baseline-visible items only.
+	if got := authorizedMenuItems(&auth.User{}); !reflect.DeepEqual(got, []string{"Docs"}) {
+		t.Errorf("no-permission menu = %v, want [Docs]", got)
+	}
+}
+
+func TestUIMeIncludesRoles(t *testing.T) {
+	rec := authGet(uiServer(), http.MethodGet, "/ui/auth/me", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/ui/auth/me = %d, want 200", rec.Code)
+	}
+	var me struct {
+		Username string   `json:"username"`
+		Roles    []string `json:"roles"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil {
+		t.Fatal(err)
+	}
+	if len(me.Roles) != 1 || me.Roles[0] != "admin" {
+		t.Errorf("roles = %v, want [admin]", me.Roles)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -625,7 +626,43 @@ func (c *ServerConfig) validateOIDC() error {
 	if !strings.HasPrefix(c.Auth.OIDC.Issuer, "https://") {
 		return fmt.Errorf("auth.oidc.issuer must be an https:// URL (got %q)", c.Auth.OIDC.Issuer)
 	}
+	if err := validateRedirectURL(c.Auth.OIDC.RedirectURL); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateRedirectURL requires the OIDC callback URL to use https so the
+// authorization code is never returned over plaintext, with an http exception
+// for loopback hosts (localhost, 127.0.0.1, [::1]) to keep local dev workable.
+func validateRedirectURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("auth.oidc.redirect_url must be a valid URL (got %q): %w", raw, err)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("auth.oidc.redirect_url must be an https:// URL (got %q); http:// is only allowed for loopback hosts (localhost, 127.0.0.1, [::1])", raw)
+	default:
+		return fmt.Errorf("auth.oidc.redirect_url must be an https:// URL (got %q)", raw)
+	}
+}
+
+// isLoopbackHost reports whether host is a loopback name or address. url.Hostname
+// strips the brackets from an IPv6 literal, so [::1] arrives as "::1".
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // validateRole rejects an unknown server.role (ADR 0049). Empty is valid (defaults

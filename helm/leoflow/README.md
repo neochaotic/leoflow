@@ -246,6 +246,13 @@ differ from what's committed.
 | logs.persistence.enabled | bool | `true` | Persist control-plane logs in a PVC (default ON). Disable for ephemeral emptyDir (dev only — logs lost on pod restart). |
 | logs.persistence.size | string | `"50Gi"` | PVC size for control-plane logs. ~1 GB/day per ~1000 active task runs is a sane starting point. |
 | logs.persistence.storageClass | string | `""` | StorageClass for the PVC. Empty uses the cluster default. Specify an RWX class when `accessMode: ReadWriteMany`. |
+| logs.sink.bucket | string | `""` | Target bucket. Required when `provider` is `s3` or `gcs`. |
+| logs.sink.endpoint | string | `""` | [s3] Endpoint override for S3-compatible stores (MinIO, Ceph RGW). Empty uses the AWS default. NOT the way to reach GCS — use `provider: gcs`. |
+| logs.sink.existingSecret | string | `""` | [s3] Name of a Secret with keys `accessKeyId` and `secretAccessKey` for static credentials. Discouraged — prefer keyless (IRSA). Empty (recommended) uses the ambient credential chain. (For `gcs`, use keyless Workload Identity — the discouraged file escape hatch is a config-level `logs.sink.credentials_file`.) |
+| logs.sink.forcePathStyle | bool | `false` | [s3] Use path-style addressing (bucket in the path, not the host). Required by MinIO and some S3-compatible stores. |
+| logs.sink.prefix | string | `""` | Optional key prefix under which attempt objects are laid out (`{prefix}/{tenant}/{dag}/{run}/{task}/{try}.log`). |
+| logs.sink.provider | string | `"disk"` | Durable task-log backend: `disk` (default — the PVC above), `s3` (AWS S3, MinIO, Ceph RGW), or `gcs` (Google Cloud Storage). Object storage is opt-in; `disk` leaves the on-disk path unchanged. |
+| logs.sink.region | string | `""` | [s3] Store region (e.g. `us-east-1`). Required by AWS S3; ignored by some S3-compatible stores. |
 | metrics.serviceMonitor.additionalLabels | object | `{}` | Extra labels on the ServiceMonitor. Required when the Prometheus instance has a `serviceMonitorSelector` filter (e.g. `{release: kube-prometheus-stack}`). |
 | metrics.serviceMonitor.enabled | bool | `false` | Enable ServiceMonitor for Prometheus scraping. Requires kube-prometheus-stack CRDs. |
 | metrics.serviceMonitor.interval | string | `"30s"` | Prometheus scrape interval. |

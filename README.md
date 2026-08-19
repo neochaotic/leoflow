@@ -286,11 +286,11 @@ Versioning follows [ADR 0037](docs/adr/0037-release-version-scheme.md):
 - **CLI + parser** — `leoflow init / validate / compile / push / runs trigger / runs status / auth create-token`; the Python DAG parser; `compile --build / --push` builds and pushes the DAG image (out-of-process).
 - **Control plane** — Airflow-compatible `/api/v2` API, JWT auth + RBAC + multi-tenant, the scheduler state machine with cron scheduling, Postgres advisory-lock leader election, **task retries**, embedded Scalar API docs, and Prometheus + OpenTelemetry observability.
 - **Execution** — real pod-per-task execution via the `leoflow-agent` over gRPC (Kubernetes, ADR 0015); orphaned-pod reconciliation and completed-pod garbage collection.
-- **Data flow** — XCom on Redis (256 KB limit, TTL, optional schema validation) passed between tasks; log shipping to disk with a read API and live tailing over Redis pub/sub.
+- **Data flow** — XCom on Redis (256 KB limit, TTL, optional schema validation) passed between tasks; log shipping to disk **or an opt-in S3/GCS object-store sink** (S3-compatible, keyless-first per ADR 0035) with a read API and live tailing over Redis pub/sub.
 - **dbt** — a dbt project runs as a DAG (pod-per-model or fused groups); managed warehouse connections generate `profiles.yml` in-pod, with modern service-account auth (Snowflake key-pair, BigQuery keyless / Workload Identity, Databricks OAuth M2M).
 - **MCP + typed client** — an experimental [`leoflow-mcp`](docs/adr/0050-mcp-server.md) Model Context Protocol server (read tools + resources over stdio / Streamable HTTP) and a generated, typed Go client for `/api/v2` (`pkg/client`).
 
-**Not yet implemented:** load tests and S3/GCS log sinks. Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).
+**Not yet implemented:** load tests. Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).
 
 ## Features
 

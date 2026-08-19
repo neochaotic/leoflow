@@ -2,8 +2,10 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/logs"
@@ -61,7 +63,20 @@ func (r *LogReader) ReadLogs(ctx context.Context, tenant, dagID, runID, taskID s
 		TryNumber: tryNumber,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", domain.ErrNotFound, err.Error())
+		return nil, classifyLogReadError(err)
 	}
 	return rc, nil
+}
+
+// classifyLogReadError maps a sink read error to the API-facing error. Only a
+// genuine absence becomes domain.ErrNotFound (which the API renders as 404 / "no
+// logs available"); every other failure — throttling, 5xx, denied or expired
+// keyless creds, wrong region, missing bucket — is propagated so the API returns
+// 5xx rather than a misleading 200. The disk sink signals absence with
+// os.ErrNotExist; the object sink with logs.ErrObjectNotFound.
+func classifyLogReadError(err error) error {
+	if errors.Is(err, logs.ErrObjectNotFound) || errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %s", domain.ErrNotFound, err.Error())
+	}
+	return fmt.Errorf("reading task log: %w", err)
 }

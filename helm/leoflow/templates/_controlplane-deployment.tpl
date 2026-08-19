@@ -93,6 +93,40 @@ spec:
               value: {{ .ctx.Values.taskNamespace | quote }}
             - name: LEOFLOW_LOGS_DIR
               value: {{ .ctx.Values.config.logsDir | quote }}
+            {{- if ne .ctx.Values.logs.sink.provider "disk" }}
+            # Object-store log backend (opt-in, ADR 0035/0056 keyless-first). With
+            # provider s3 or gcs, task logs ship to a bucket instead of the PVC; set
+            # logs.persistence.enabled=false to drop the (RWX) log PVC entirely.
+            # Keyless: bind this control-plane ServiceAccount to a cloud identity
+            # (IRSA for s3, Workload Identity for gcs) via serviceAccount.annotations
+            # and leave the credential fields empty.
+            - name: LEOFLOW_LOGS_BACKEND
+              value: {{ .ctx.Values.logs.sink.provider | quote }}
+            - name: LEOFLOW_LOGS_SINK_BUCKET
+              value: {{ .ctx.Values.logs.sink.bucket | quote }}
+            - name: LEOFLOW_LOGS_SINK_PREFIX
+              value: {{ .ctx.Values.logs.sink.prefix | quote }}
+            {{- if eq .ctx.Values.logs.sink.provider "s3" }}
+            - name: LEOFLOW_LOGS_SINK_REGION
+              value: {{ .ctx.Values.logs.sink.region | quote }}
+            - name: LEOFLOW_LOGS_SINK_ENDPOINT
+              value: {{ .ctx.Values.logs.sink.endpoint | quote }}
+            - name: LEOFLOW_LOGS_SINK_FORCE_PATH_STYLE
+              value: {{ .ctx.Values.logs.sink.forcePathStyle | quote }}
+            {{- if .ctx.Values.logs.sink.existingSecret }}
+            - name: LEOFLOW_LOGS_SINK_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .ctx.Values.logs.sink.existingSecret }}
+                  key: accessKeyId
+            - name: LEOFLOW_LOGS_SINK_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .ctx.Values.logs.sink.existingSecret }}
+                  key: secretAccessKey
+            {{- end }}
+            {{- end }}
+            {{- end }}
             - name: LEOFLOW_SCHEDULER_ENABLED
               value: {{ .ctx.Values.config.scheduler.enabled | quote }}
             - name: LEOFLOW_SCHEDULER_LOOP_INTERVAL_MS

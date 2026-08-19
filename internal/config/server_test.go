@@ -230,3 +230,106 @@ func TestLoadServerReadsUIAutoRefreshIntervalFromEnv(t *testing.T) {
 		t.Errorf("UI.AutoRefreshIntervalSeconds = %d, want 1 (env var must override default)", c.UI.AutoRefreshIntervalSeconds)
 	}
 }
+
+// TestLoadServerLogsBackendDefaultsToDisk locks the off-by-default guarantee:
+// with nothing configured the log backend is "disk", so the on-disk path (Lite
+// and every install that does not opt in) is unchanged.
+func TestLoadServerLogsBackendDefaultsToDisk(t *testing.T) {
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if c.Logs.Backend != "disk" {
+		t.Errorf("Logs.Backend = %q, want \"disk\" (object storage must be opt-in)", c.Logs.Backend)
+	}
+	if c.Logs.Sink.Bucket != "" {
+		t.Errorf("Logs.Sink.Bucket = %q, want empty by default", c.Logs.Sink.Bucket)
+	}
+}
+
+// TestLoadServerReadsLogsSinkS3FromEnv checks the S3 surface binds from
+// LEOFLOW_LOGS_SINK_* env vars, the path the Helm chart uses.
+func TestLoadServerReadsLogsSinkS3FromEnv(t *testing.T) {
+	t.Setenv("LEOFLOW_LOGS_BACKEND", "s3")
+	t.Setenv("LEOFLOW_LOGS_SINK_BUCKET", "my-bucket")
+	t.Setenv("LEOFLOW_LOGS_SINK_PREFIX", "acme")
+	t.Setenv("LEOFLOW_LOGS_SINK_ENDPOINT", "http://minio.internal:9000")
+	t.Setenv("LEOFLOW_LOGS_SINK_FORCE_PATH_STYLE", "true")
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if c.Logs.Backend != "s3" {
+		t.Errorf("Logs.Backend = %q, want \"s3\"", c.Logs.Backend)
+	}
+	if c.Logs.Sink.Bucket != "my-bucket" {
+		t.Errorf("Logs.Sink.Bucket = %q, want \"my-bucket\"", c.Logs.Sink.Bucket)
+	}
+	if c.Logs.Sink.Prefix != "acme" {
+		t.Errorf("Logs.Sink.Prefix = %q, want \"acme\"", c.Logs.Sink.Prefix)
+	}
+	if c.Logs.Sink.Endpoint != "http://minio.internal:9000" {
+		t.Errorf("Logs.Sink.Endpoint = %q, want the MinIO endpoint", c.Logs.Sink.Endpoint)
+	}
+	if !c.Logs.Sink.ForcePathStyle {
+		t.Error("Logs.Sink.ForcePathStyle = false, want true from env")
+	}
+}
+
+// TestLoadServerReadsLogsSinkGCSFromEnv checks the GCS surface binds from the same
+// LEOFLOW_LOGS_SINK_* env vars — a bucket (and optional keyless-escape-hatch
+// credentials file), with no S3-only region/endpoint required.
+func TestLoadServerReadsLogsSinkGCSFromEnv(t *testing.T) {
+	t.Setenv("LEOFLOW_LOGS_BACKEND", "gcs")
+	t.Setenv("LEOFLOW_LOGS_SINK_BUCKET", "gcs-logs")
+	t.Setenv("LEOFLOW_LOGS_SINK_PREFIX", "team-a")
+	t.Setenv("LEOFLOW_LOGS_SINK_CREDENTIALS_FILE", "/var/run/secrets/gcs/key.json")
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if c.Logs.Backend != "gcs" {
+		t.Errorf("Logs.Backend = %q, want \"gcs\"", c.Logs.Backend)
+	}
+	if c.Logs.Sink.Bucket != "gcs-logs" {
+		t.Errorf("Logs.Sink.Bucket = %q, want \"gcs-logs\"", c.Logs.Sink.Bucket)
+	}
+	if c.Logs.Sink.CredentialsFile != "/var/run/secrets/gcs/key.json" {
+		t.Errorf("Logs.Sink.CredentialsFile = %q, want the mounted key path", c.Logs.Sink.CredentialsFile)
+	}
+}
+
+// TestValidateLogsBackend locks the log-backend validation: "s3" and "gcs" each
+// require a bucket, an unknown backend fails closed, and disk/empty stay valid.
+func TestValidateLogsBackend(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backend string
+		bucket  string
+		wantErr bool
+	}{
+		{"empty defaults to disk", "", "", false},
+		{"disk", "disk", "", false},
+		{"s3 with bucket", "s3", "b", false},
+		{"s3 without bucket", "s3", "", true},
+		{"gcs with bucket", "gcs", "b", false},
+		{"gcs without bucket", "gcs", "", true},
+		{"unknown backend", "gopher", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &ServerConfig{}
+			c.Auth.Provider = AuthProviderJWT
+			c.Auth.JWT.Secret = "set"
+			c.Server.HTTPAddr = "0.0.0.0:8080"
+			c.Logs.Backend = tc.backend
+			c.Logs.Sink.Bucket = tc.bucket
+			err := c.Validate()
+			if tc.wantErr && err == nil {
+				t.Errorf("backend %q bucket %q: Validate() = nil, want error", tc.backend, tc.bucket)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("backend %q bucket %q: Validate() = %v, want nil", tc.backend, tc.bucket, err)
+			}
+		})
+	}
+}

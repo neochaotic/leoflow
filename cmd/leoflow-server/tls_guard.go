@@ -24,6 +24,17 @@ func guardInsecureSecretsForEdition(edition string, allowInsecure bool) error {
 		"(see ADR 0014 and issue #58)")
 }
 
+// guardEditionSecurity runs the edition-gated boot guards in order: the
+// insecure-secrets escape hatch must not be set in Pro, and Pro requires TLS on
+// the agent gRPC channel. It returns the first failure so run() keeps a single
+// boot gate for edition security.
+func guardEditionSecurity(edition string, allowInsecure bool, grpcTLSCert, grpcTLSKey string) error {
+	if err := guardInsecureSecretsForEdition(edition, allowInsecure); err != nil {
+		return err
+	}
+	return guardTLSForEdition(edition, grpcTLSCert, grpcTLSKey)
+}
+
 // guardTLSForEdition refuses boot when a Pro deployment has no TLS on the agent
 // gRPC channel (#281). Without it the control plane boots and looks healthy, but
 // guardSecretChannel then rejects every secrets RPC to a task pod

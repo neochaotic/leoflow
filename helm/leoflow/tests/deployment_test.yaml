@@ -457,3 +457,126 @@ tests:
       - equal:
           path: spec.template.spec.securityContext.seccompProfile.type
           value: RuntimeDefault
+
+  - it: omits the object-store log env by default (disk provider, on-disk PVC path unchanged)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_BACKEND
+            value: s3
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_BACKEND
+            value: gcs
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_DIR
+            value: /var/log/leoflow
+
+  - it: wires the s3 log backend + keyless config when logs.sink.provider is s3
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.sink.provider: s3
+      logs.sink.bucket: my-task-logs
+      logs.sink.region: us-east-1
+      logs.sink.endpoint: http://minio.internal:9000
+      logs.sink.forcePathStyle: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_BACKEND
+            value: s3
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_BUCKET
+            value: my-task-logs
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_ENDPOINT
+            value: http://minio.internal:9000
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_FORCE_PATH_STYLE
+            value: "true"
+      # Keyless-first (ADR 0035): no static-credential env unless an existingSecret is set.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_ACCESS_KEY_ID
+
+  - it: wires the gcs log backend without S3-only env when logs.sink.provider is gcs
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.sink.provider: gcs
+      logs.sink.bucket: gcs-task-logs
+      logs.sink.prefix: team-a
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_BACKEND
+            value: gcs
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_BUCKET
+            value: gcs-task-logs
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_PREFIX
+            value: team-a
+      # GCS is keyless (Workload Identity) and needs no region/endpoint/path-style.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_ENDPOINT
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_FORCE_PATH_STYLE
+
+  - it: sources static s3 credentials from a Secret when existingSecret is set
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.sink.provider: s3
+      logs.sink.bucket: my-task-logs
+      logs.sink.existingSecret: my-object-creds
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: my-object-creds
+                key: accessKeyId
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_LOGS_SINK_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-object-creds
+                key: secretAccessKey

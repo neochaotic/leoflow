@@ -30,8 +30,52 @@ type ServerConfig struct {
 
 // LogsSection configures task log shipping.
 type LogsSection struct {
-	// Dir is the root directory for the disk log sink.
+	// Dir is the root directory for the disk log sink (the default backend).
 	Dir string `mapstructure:"dir"`
+	// Backend selects the durable task-log store: "disk" (default) writes files
+	// under Dir; "s3" ships each attempt to an S3-compatible bucket (AWS S3,
+	// MinIO, Ceph RGW); "gcs" ships to Google Cloud Storage via its native SDK.
+	// Object storage is opt-in — Lite and every deployment that does not set this
+	// keep the exact on-disk path unchanged.
+	Backend string `mapstructure:"backend"`
+	// Sink configures the object-store backend; read only when Backend is "s3" or
+	// "gcs".
+	Sink ObjectLogSection `mapstructure:"sink"`
+}
+
+// ObjectLogSection configures the object-store log backend for both the "s3" and
+// "gcs" providers. Auth is keyless-first (ADR 0035): leave the credential fields
+// empty to use the ambient chain — IRSA / instance profile for S3, GKE Workload
+// Identity (ADC) for GCS. Static keys and credential files are a discouraged
+// escape hatch for dev and clusters without an identity broker.
+//
+// Bucket and Prefix apply to both providers. Region, Endpoint, ForcePathStyle,
+// AccessKeyID and SecretAccessKey are S3-only. CredentialsFile is GCS-only. A
+// field set for the other provider is simply ignored.
+type ObjectLogSection struct {
+	// Bucket is the target bucket. Required when Backend is "s3" or "gcs".
+	Bucket string `mapstructure:"bucket"`
+	// Prefix is an optional key prefix under which attempt objects are laid out.
+	Prefix string `mapstructure:"prefix"`
+	// Region is the S3 store region (e.g. "us-east-1"). Required by AWS S3;
+	// ignored by some S3-compatible stores. S3-only.
+	Region string `mapstructure:"region"`
+	// Endpoint overrides the S3 endpoint for S3-compatible stores (MinIO, Ceph
+	// RGW). Empty uses the AWS default endpoint. S3-only — it is NOT the way to
+	// reach GCS, which has its own keyless "gcs" backend.
+	Endpoint string `mapstructure:"endpoint"`
+	// ForcePathStyle uses path-style addressing (bucket in the path, not the
+	// host). Required by MinIO and some S3-compatible stores. S3-only.
+	ForcePathStyle bool `mapstructure:"force_path_style"`
+	// AccessKeyID is a static S3 access key. Empty (recommended) uses the keyless
+	// credential chain (ADR 0035). S3-only.
+	AccessKeyID string `mapstructure:"access_key_id"`
+	// SecretAccessKey pairs with AccessKeyID. Discouraged; prefer keyless. S3-only.
+	SecretAccessKey string `mapstructure:"secret_access_key"`
+	// CredentialsFile is a path to a GCS service-account JSON key. Empty
+	// (recommended) uses Application Default Credentials — GKE Workload Identity
+	// keyless. GCS-only.
+	CredentialsFile string `mapstructure:"credentials_file"`
 }
 
 // ExecutorSection configures how tasks are executed.
@@ -321,6 +365,15 @@ var serverDefaults = map[string]any{
 	"executor.defaults.run_tasks_as_non_root":          true,
 	"executor.defaults.read_only_task_root_filesystem": false,
 	"logs.dir":                    "/var/log/leoflow",
+	"logs.backend":                "disk",
+	"logs.sink.bucket":            "",
+	"logs.sink.prefix":            "",
+	"logs.sink.region":            "",
+	"logs.sink.endpoint":          "",
+	"logs.sink.force_path_style":  false,
+	"logs.sink.access_key_id":     "",
+	"logs.sink.secret_access_key": "",
+	"logs.sink.credentials_file":  "",
 	"observability.otel.enabled":  true,
 	"observability.otel.endpoint": "localhost:4317",
 	"observability.log_level":     "info",
@@ -390,6 +443,9 @@ func (c *ServerConfig) Validate() error {
 	if err := c.validateProvider(); err != nil {
 		return err
 	}
+	if err := c.validateLogs(); err != nil {
+		return err
+	}
 	if c.Auth.Provider == AuthProviderJWT && c.Auth.JWT.Secret == "" {
 		return errors.New("auth.jwt.secret is required (set LEOFLOW_AUTH_JWT_SECRET)")
 	}
@@ -414,6 +470,24 @@ func isLoopbackListenAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// validateLogs rejects an unknown logs.backend and requires a bucket when an
+// object backend is selected, so a misconfigured object sink fails closed at
+// boot instead of losing every task log to a nonexistent bucket. Empty and
+// "disk" are always valid — the on-disk default is unaffected.
+func (c *ServerConfig) validateLogs() error {
+	switch c.Logs.Backend {
+	case "", "disk":
+		return nil
+	case "s3", "gcs":
+		if c.Logs.Sink.Bucket == "" {
+			return fmt.Errorf(`logs.sink.bucket is required when logs.backend is %q (set LEOFLOW_LOGS_SINK_BUCKET)`, c.Logs.Backend)
+		}
+		return nil
+	default:
+		return fmt.Errorf(`unknown logs.backend %q (want "disk", "s3" or "gcs")`, c.Logs.Backend)
+	}
 }
 
 // validateProvider rejects an unknown or unimplemented auth.provider, failing

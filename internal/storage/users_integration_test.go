@@ -66,3 +66,66 @@ func TestCreateUserUnknownRoleIntegration(t *testing.T) {
 		t.Errorf("create after rejected role: %v", err)
 	}
 }
+
+// TestListUsersIntegration proves the list surfaces a just-created account with
+// its granted role aggregated, reports a total that counts it, and never exposes
+// a password or hash (there is no such field to expose on the returned type).
+func TestListUsersIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	email := fmt.Sprintf("listed_%d@example.com", time.Now().UnixNano())
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", "admin"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	users, total, err := repo.ListUsers(ctx, "default", 100, 0)
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	if total < 1 {
+		t.Fatalf("total = %d, want at least the created user", total)
+	}
+	var found *domain.User
+	for i := range users {
+		if users[i].Email == email {
+			found = &users[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("created user %q not in list", email)
+	}
+	if found.ID == "" || !found.IsActive {
+		t.Errorf("unexpected listed user: %+v", *found)
+	}
+	if len(found.Roles) != 1 || found.Roles[0] != "admin" {
+		t.Errorf("roles = %v, want [admin]", found.Roles)
+	}
+}
+
+// TestListUsersRoleAggregationIntegration proves a user with more than one role
+// comes back with every role name, and one with none comes back with an empty
+// (non-nil) set rather than a null.
+func TestListUsersRoleAggregationIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	email := fmt.Sprintf("noroles_%d@example.com", time.Now().UnixNano())
+	if _, err := repo.CreateUser(ctx, "default", email, "pw-12345678", ""); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	users, _, err := repo.ListUsers(ctx, "default", 100, 0)
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	for i := range users {
+		if users[i].Email == email {
+			if users[i].Roles == nil {
+				t.Errorf("a role-less user must list an empty (non-nil) role set")
+			}
+			if len(users[i].Roles) != 0 {
+				t.Errorf("roles = %v, want empty", users[i].Roles)
+			}
+			return
+		}
+	}
+	t.Fatalf("role-less user %q not in list", email)
+}

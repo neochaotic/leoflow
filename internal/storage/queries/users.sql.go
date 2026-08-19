@@ -169,6 +169,61 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (InsertU
 	return i, err
 }
 
+const listUsers = `-- name: ListUsers :many
+SELECT u.id, u.email, u.is_active, u.created_at,
+    COALESCE(array_remove(array_agg(r.name), NULL), '{}')::text[] AS roles
+FROM users u
+LEFT JOIN user_roles ur ON ur.user_id = u.id
+LEFT JOIN roles r ON r.id = ur.role_id
+WHERE u.tenant_id = $1
+GROUP BY u.id, u.email, u.is_active, u.created_at
+ORDER BY u.created_at DESC, u.id DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListUsersParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
+}
+
+type ListUsersRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Email     string             `json:"email"`
+	IsActive  bool               `json:"is_active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Roles     []string           `json:"roles"`
+}
+
+// One row per user in the tenant, newest first, with every granted role name
+// aggregated into a text array (empty when the user holds none). Paged by the
+// caller. Never selects password_hash — the list must not expose secrets.
+func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error) {
+	rows, err := q.db.Query(ctx, listUsers, arg.TenantID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsersRow{}
+	for rows.Next() {
+		var i ListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.IsActive,
+			&i.CreatedAt,
+			&i.Roles,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateUserPassword = `-- name: UpdateUserPassword :execrows
 UPDATE users
 SET password_hash = $3

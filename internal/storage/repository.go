@@ -731,6 +731,36 @@ func (r *Repository) CreateUser(ctx context.Context, tenant, email, password, ro
 	}, nil
 }
 
+// ListUsers returns a page of the tenant's accounts, newest first, each with the
+// full set of role names it holds. It never reads or returns password_hash — the
+// list must not expose secrets. The second result is the unpaged total, so the
+// caller can render total_entries independent of the page size.
+func (r *Repository) ListUsers(ctx context.Context, tenant string, limit, offset int) ([]domain.User, int, error) {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, err := r.q.ListUsers(ctx, queries.ListUsersParams{TenantID: tid, Limit: toInt32(limit), Offset: toInt32(offset)})
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing users: %w", err)
+	}
+	total, err := r.q.CountUsers(ctx, tid)
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting users: %w", err)
+	}
+	out := make([]domain.User, 0, len(rows))
+	for _, u := range rows {
+		out = append(out, domain.User{
+			ID:        uuidToString(u.ID),
+			Email:     u.Email,
+			Roles:     u.Roles,
+			IsActive:  u.IsActive,
+			CreatedAt: timeVal(u.CreatedAt),
+		})
+	}
+	return out, int(total), nil
+}
+
 // SetUserPassword sets a user's bcrypt hash by email, returning whether a user
 // was updated (false when no such user exists). Used by `leoflow lite
 // reset-password`.

@@ -17,6 +17,15 @@ FROM users u
 JOIN tenants t ON t.id = u.tenant_id
 WHERE t.name = $1 AND u.email = $2;
 
+-- name: GetUserByID :one
+-- The by-id lookup backing the per-request authz reload. Returns the tenant
+-- name (not the uuid) so the reconstructed principal matches the login path's
+-- User.TenantID, plus the active flag the authenticator gates on.
+SELECT u.id, t.name AS tenant, u.email, u.is_active
+FROM users u
+JOIN tenants t ON t.id = u.tenant_id
+WHERE u.id = $1;
+
 -- name: UpdateUserPassword :execrows
 UPDATE users
 SET password_hash = $3

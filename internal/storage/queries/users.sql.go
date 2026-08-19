@@ -76,6 +76,35 @@ func (q *Queries) GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) 
 	return i, err
 }
 
+const getUserByID = `-- name: GetUserByID :one
+SELECT u.id, t.name AS tenant, u.email, u.is_active
+FROM users u
+JOIN tenants t ON t.id = u.tenant_id
+WHERE u.id = $1
+`
+
+type GetUserByIDRow struct {
+	ID       pgtype.UUID `json:"id"`
+	Tenant   string      `json:"tenant"`
+	Email    string      `json:"email"`
+	IsActive bool        `json:"is_active"`
+}
+
+// The by-id lookup backing the per-request authz reload. Returns the tenant
+// name (not the uuid) so the reconstructed principal matches the login path's
+// User.TenantID, plus the active flag the authenticator gates on.
+func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDRow, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i GetUserByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Tenant,
+		&i.Email,
+		&i.IsActive,
+	)
+	return i, err
+}
+
 const getUserPermissions = `-- name: GetUserPermissions :many
 SELECT DISTINCT p.action, p.resource
 FROM user_roles ur

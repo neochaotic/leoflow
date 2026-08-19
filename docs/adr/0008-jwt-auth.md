@@ -113,6 +113,32 @@ No API contract changes. No refactor.
 - Failed login attempts are rate-limited per IP (configurable, default 5 per minute).
 - All auth events emit structured audit logs.
 
+## Amendment: per-request authz reload
+
+The original validation step "load the user and roles from the JWT claims" left
+a gap: the token carries `roles` but never the resolved `permissions`, so a
+principal reconstructed purely from claims had an empty permission set. Only the
+`admin` role short-circuit worked; every other role could gate nothing.
+
+`Authenticate` now reloads the principal from the database on every request:
+after the signature and registered claims validate, it looks the user up by the
+token subject (the user id) and rebuilds roles, permissions, and the `is_active`
+flag from current state. Consequences:
+
+- **Non-admin roles gate.** Permissions come from the store, so the role ladder
+  (viewer/editor/operator) takes effect on the password path.
+- **Revocation within the token TTL.** Deactivating a user (`is_active = false`)
+  rejects their still-valid tokens on the next request, without waiting for
+  expiry.
+- **Fail-closed.** A database error during the reload rejects the request rather
+  than falling through to the token claims.
+- **Trusted-mint fallback.** A token whose subject has no backing row (a
+  directly-minted in-process token) or an authenticator with no store bound
+  falls back to its signed claims, preserving the local dev loop.
+
+The reload is one extra indexed lookup per request. A short-lived in-memory
+cache keyed by user id is a noted follow-up if it shows up in latency budgets.
+
 ## Alternatives Rejected
 
 - **Full OIDC in MVP:** rejected as too expensive.

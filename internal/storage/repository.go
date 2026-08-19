@@ -109,6 +109,39 @@ func (r *Repository) FindUserByLogin(ctx context.Context, tenant, username strin
 	return user, strOrEmpty(row.PasswordHash), nil
 }
 
+// FindUserByID reloads a user's current authorization state by id: its tenant,
+// roles, and permissions, plus whether the account is active. It is the per-
+// request source of truth the authenticator uses on token validation. A subject
+// that is not a valid uuid, or that matches no row, yields auth.ErrUserNotFound
+// (the trusted in-process minting path has no backing user); any other failure
+// is returned as-is so the caller can fail closed.
+func (r *Repository) FindUserByID(ctx context.Context, id string) (*auth.User, bool, error) {
+	uid, err := parseUUID(id)
+	if err != nil {
+		return nil, false, auth.ErrUserNotFound
+	}
+	row, err := r.q.GetUserByID(ctx, uid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, auth.ErrUserNotFound
+		}
+		return nil, false, fmt.Errorf("loading user by id: %w", err)
+	}
+	roles, err := r.q.GetUserRoles(ctx, row.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading roles: %w", err)
+	}
+	perms, err := r.q.GetUserPermissions(ctx, row.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading permissions: %w", err)
+	}
+	user := &auth.User{ID: uuidToString(row.ID), TenantID: row.Tenant, Email: row.Email, Roles: roles}
+	for _, p := range perms {
+		user.Permissions = append(user.Permissions, auth.Permission{Action: p.Action, Resource: p.Resource})
+	}
+	return user, row.IsActive, nil
+}
+
 // ListDags returns a page of DAGs for the tenant and the total count.
 func (r *Repository) ListDags(ctx context.Context, tenant string, limit, offset int) ([]domain.DAG, int, error) {
 	tid, err := r.tenantID(ctx, tenant)

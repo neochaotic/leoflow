@@ -57,8 +57,20 @@ func (a *JWTAuthenticator) IssueToken(ctx context.Context, creds Credentials) (s
 	return a.sign(user)
 }
 
-// Authenticate validates a bearer token and reconstructs the user from its claims.
-func (a *JWTAuthenticator) Authenticate(_ context.Context, token string) (*User, error) {
+// Authenticate validates a bearer token and resolves the current principal.
+// After the signature and registered claims check out, it reloads the user's
+// roles, permissions, and active flag from the store keyed by the token subject
+// (the user id). The store — not the token — is the source of truth for
+// authorization: this is what makes non-admin role grants gate anything (the
+// token carries roles but never permissions) and lets deactivating a user
+// revoke their live tokens within the token TTL.
+//
+// Two cases fall back to the signed claims instead of the reload: a nil store
+// (no data plane bound — the trusted in-process minting context) and a subject
+// with no backing row (a directly-minted token, e.g. `leoflow dev`). Any other
+// store failure fails closed, so a flaky database cannot silently disable
+// revocation.
+func (a *JWTAuthenticator) Authenticate(ctx context.Context, token string) (*User, error) {
 	var c jwtClaims
 	parsed, err := jwt.ParseWithClaims(token, &c, func(t *jwt.Token) (any, error) {
 		return a.secret, nil
@@ -66,7 +78,21 @@ func (a *JWTAuthenticator) Authenticate(_ context.Context, token string) (*User,
 	if err != nil || !parsed.Valid {
 		return nil, errors.Join(ErrInvalidToken, err)
 	}
-	return &User{ID: c.Subject, TenantID: c.TenantID, Email: c.Email, Roles: c.Roles}, nil
+	claimed := &User{ID: c.Subject, TenantID: c.TenantID, Email: c.Email, Roles: c.Roles}
+	if a.store == nil {
+		return claimed, nil
+	}
+	user, active, err := a.store.FindUserByID(ctx, c.Subject)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return claimed, nil
+		}
+		return nil, errors.Join(ErrInvalidToken, err)
+	}
+	if !active {
+		return nil, ErrInvalidToken
+	}
+	return user, nil
 }
 
 func (a *JWTAuthenticator) sign(user *User) (string, error) {

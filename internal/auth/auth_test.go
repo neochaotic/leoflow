@@ -11,10 +11,30 @@ type fakeStore struct {
 	user *User
 	hash string
 	err  error
+
+	// byIDUser, when set, is what FindUserByID returns; otherwise it falls back
+	// to user so login-only tests need not set it. inactive makes the reload
+	// report the account as deactivated; byIDErr forces a store error (the
+	// fail-closed path) and is errors.Is-matchable so a test can pass
+	// ErrUserNotFound to exercise the trusted-token claims fallback.
+	byIDUser *User
+	inactive bool
+	byIDErr  error
 }
 
 func (f *fakeStore) FindUserByLogin(_ context.Context, _, _ string) (*User, string, error) {
 	return f.user, f.hash, f.err
+}
+
+func (f *fakeStore) FindUserByID(_ context.Context, _ string) (*User, bool, error) {
+	if f.byIDErr != nil {
+		return nil, false, f.byIDErr
+	}
+	u := f.byIDUser
+	if u == nil {
+		u = f.user
+	}
+	return u, !f.inactive, nil
 }
 
 func must(s string, err error) string {
@@ -101,6 +121,85 @@ func TestJWTRejectsExpired(t *testing.T) {
 	tok, _ := a.IssueToken(context.Background(), Credentials{Password: "pw"})
 	if _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, ErrInvalidToken) {
 		t.Errorf("expired token should yield ErrInvalidToken, got %v", err)
+	}
+}
+
+func TestAuthenticateReloadsAuthzFromStore(t *testing.T) {
+	// The token carries roles only (sign() never puts permissions in the JWT).
+	// Permissions must be reloaded from the store on every request, or a
+	// non-admin role can never gate anything. Mint a viewer token with an empty
+	// permission set and prove the store's current grant shows up on the result.
+	const secret = "reload-secret"
+	tok, err := MintUserToken(secret, time.Hour, User{ID: "u-viewer", TenantID: "default", Email: "v@x.y", Roles: []string{"viewer"}})
+	if err != nil {
+		t.Fatalf("MintUserToken: %v", err)
+	}
+	store := &fakeStore{byIDUser: &User{
+		ID: "u-viewer", TenantID: "default", Email: "v@x.y", Roles: []string{"viewer"},
+		Permissions: []Permission{{Action: "read", Resource: "dag"}},
+	}}
+	a := NewJWTAuthenticator(store, secret, time.Hour)
+	u, err := a.Authenticate(context.Background(), tok)
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if !u.HasPermission("read", "dag") {
+		t.Errorf("permissions must come from the store reload, got %+v", u.Permissions)
+	}
+}
+
+func TestAuthenticateRejectsInactiveUser(t *testing.T) {
+	// Deactivating a user must revoke their live tokens within the token TTL.
+	const secret = "inactive-secret"
+	tok, _ := MintUserToken(secret, time.Hour, User{ID: "u1", TenantID: "default", Roles: []string{"admin"}})
+	store := &fakeStore{user: &User{ID: "u1", Roles: []string{"admin"}}, inactive: true}
+	a := NewJWTAuthenticator(store, secret, time.Hour)
+	if _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("deactivated user must be rejected, got %v", err)
+	}
+}
+
+func TestAuthenticateFailsClosedOnStoreError(t *testing.T) {
+	// A DB failure during the reload must reject the request, never fall through
+	// to the token claims (which would let a failing store silently disable
+	// revocation) and never panic.
+	const secret = "dberr-secret"
+	tok, _ := MintUserToken(secret, time.Hour, User{ID: "u1", TenantID: "default", Roles: []string{"admin"}})
+	store := &fakeStore{byIDErr: errors.New("connection refused")}
+	a := NewJWTAuthenticator(store, secret, time.Hour)
+	if _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("a store error must fail closed as ErrInvalidToken, got %v", err)
+	}
+}
+
+func TestAuthenticateFallsBackToClaimsForMintedToken(t *testing.T) {
+	// A directly-minted token (leoflow dev / in-process trusted caller) has no
+	// backing user row. Its signed claims stay the source of truth so the dev
+	// inner loop keeps working even when the control plane enforces real auth.
+	const secret = "minted-secret"
+	tok, _ := MintUserToken(secret, time.Hour, User{ID: "leoflow-dev", TenantID: "default", Email: "dev@leoflow.local", Roles: []string{"admin"}})
+	store := &fakeStore{byIDErr: ErrUserNotFound}
+	a := NewJWTAuthenticator(store, secret, time.Hour)
+	u, err := a.Authenticate(context.Background(), tok)
+	if err != nil {
+		t.Fatalf("minted token must authenticate via claims fallback: %v", err)
+	}
+	if u.ID != "leoflow-dev" || len(u.Roles) != 1 || u.Roles[0] != "admin" {
+		t.Errorf("claims not preserved on fallback: %+v", u)
+	}
+}
+
+// TestAuthenticateRejectsMissingNonDevSubject pins the hardening: the claims
+// fallback is ONLY for the dev-token subject. Any other token whose subject has
+// no user row (e.g. a hard-deleted user) fails closed instead of keeping the
+// roles baked into its signed claims until the token expires.
+func TestAuthenticateRejectsMissingNonDevSubject(t *testing.T) {
+	const secret = "minted-secret"
+	tok, _ := MintUserToken(secret, time.Hour, User{ID: "deleted-user-id", TenantID: "default", Email: "gone@leoflow.local", Roles: []string{"admin"}})
+	store := &fakeStore{byIDErr: ErrUserNotFound}
+	a := NewJWTAuthenticator(store, secret, time.Hour)
+	if _, err := a.Authenticate(context.Background(), tok); err == nil {
+		t.Fatal("a non-dev subject with no user row must be rejected, not trusted from claims")
 	}
 }
 

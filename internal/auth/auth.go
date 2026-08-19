@@ -13,6 +13,12 @@ var ErrInvalidCredentials = errors.New("invalid credentials")
 // ErrInvalidToken is returned when a token is malformed, expired, or unsigned by us.
 var ErrInvalidToken = errors.New("invalid token")
 
+// ErrUserNotFound is returned by UserStore.FindUserByID when no user has the
+// given id. Authenticate treats it as a signal to trust the token's signed
+// claims (the in-process minting path has no backing row), distinct from a
+// store failure, which fails closed.
+var ErrUserNotFound = errors.New("user not found")
+
 // Permission is an action on a resource (e.g. {Action: "read", Resource: "dag"}).
 type Permission struct {
 	Action   string `json:"action"`
@@ -61,4 +67,10 @@ type Authenticator interface {
 // UserStore loads users for authentication. storage implements it.
 type UserStore interface {
 	FindUserByLogin(ctx context.Context, tenant, username string) (user *User, passwordHash string, err error)
+	// FindUserByID reloads a user's current authorization state (tenant, roles,
+	// permissions) by id, along with whether the account is active. It is the
+	// per-request source of truth for token validation: it makes non-admin role
+	// grants take effect and lets deactivating a user revoke live tokens within
+	// the token TTL. It returns ErrUserNotFound when no user has the id.
+	FindUserByID(ctx context.Context, id string) (user *User, isActive bool, err error)
 }

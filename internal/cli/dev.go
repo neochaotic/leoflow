@@ -649,7 +649,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	logf := func(format string, args ...any) { devPrintf(cmd.OutOrStdout(), format+"\n", args...) }
 	mintToken := func() string {
 		tok, err := auth.MintUserToken(resolveLiteJWTSecret(o.jwtSecret), time.Hour, auth.User{
-			ID: "leoflow-dev", TenantID: "default", Email: devAdminUser, Roles: []string{"admin"},
+			ID: auth.DevTokenSubject, TenantID: "default", Email: devAdminUser, Roles: []string{"admin"},
 		})
 		if err != nil {
 			logf("✗ minting dev token: %v", err)

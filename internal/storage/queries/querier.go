@@ -91,6 +91,10 @@ type Querier interface {
 	GetRoleByName(ctx context.Context, arg GetRoleByNameParams) (pgtype.UUID, error)
 	GetTenantByName(ctx context.Context, name string) (GetTenantByNameRow, error)
 	GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) (GetUserByEmailRow, error)
+	// The by-id lookup backing the per-request authz reload. Returns the tenant
+	// name (not the uuid) so the reconstructed principal matches the login path's
+	// User.TenantID, plus the active flag the authenticator gates on.
+	GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDRow, error)
 	GetUserPermissions(ctx context.Context, userID pgtype.UUID) ([]GetUserPermissionsRow, error)
 	GetUserRoles(ctx context.Context, userID pgtype.UUID) ([]string, error)
 	GetVariable(ctx context.Context, arg GetVariableParams) (GetVariableRow, error)

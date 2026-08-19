@@ -32,6 +32,7 @@ func newAdminCommand() *cobra.Command {
 		newAdminDagsCommand(),
 		newAdminDrainCommand(),
 		newAdminRunsCommand(),
+		newAdminUsersCommand(),
 	)
 	return cmd
 }

@@ -152,7 +152,15 @@ type Server struct {
 	renewer              AgentTokenRenewer
 	renewalTTL           time.Duration
 	maxAttemptLifetime   time.Duration
-	now                  func() time.Time
+	// Projected-SA-token exchange (ADR 0055 Fix #3). All nil/zero by default, so a
+	// deployment that does not opt into the exchange transport is byte-identical to
+	// today (env-var token); ExchangeToken then reports Unimplemented.
+	reviewer              TokenReviewer
+	podResolver           PodTaskResolver
+	tokenMinter           AgentTokenMinter
+	exchangeTTL           time.Duration
+	allowInsecureExchange bool
+	now                   func() time.Time
 }
 
 // NewServer builds an AgentService server backed by the given authenticator,

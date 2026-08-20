@@ -261,6 +261,15 @@ func TestVerifyClockSkew(t *testing.T) {
 		}
 	})
 
+	t.Run("missing exp is rejected", func(t *testing.T) {
+		v := newTestVerifier(t, cfg)
+		claims := baseClaims(cfg, testNonce)
+		delete(claims, "exp") // a token with no expiry has no validity window
+		if _, err := v.Verify(context.Background(), f.signIDToken(t, claims), testNonce); !errors.Is(err, ErrMissingExpiry) {
+			t.Fatalf("Verify(no exp) = %v, want ErrMissingExpiry", err)
+		}
+	})
+
 	t.Run("within skew boundary is accepted", func(t *testing.T) {
 		v := newTestVerifier(t, cfg)
 		claims := baseClaims(cfg, testNonce)

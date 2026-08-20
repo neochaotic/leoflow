@@ -29,6 +29,10 @@ var (
 	// ErrTokenExpired is returned when exp/iat/nbf fall outside the allowed clock
 	// skew (H4).
 	ErrTokenExpired = errors.New("oidc: token outside validity window")
+	// ErrMissingExpiry is returned when the ID token carries no exp claim; with
+	// go-oidc's own expiry check disabled, an absent exp must fail closed rather
+	// than grant an unbounded session.
+	ErrMissingExpiry = errors.New("oidc: token has no expiry")
 	// ErrEmailNotVerified is returned when email_verified is not true; an absent
 	// claim is treated as false (D6c).
 	ErrEmailNotVerified = errors.New("oidc: email not verified")
@@ -200,7 +204,13 @@ func (v *Verifier) checkBindings(idToken *gooidc.IDToken, claims idClaims, expec
 func (v *Verifier) checkTimes(idToken *gooidc.IDToken, nbfUnix int64) error {
 	skew := time.Duration(v.cfg.ClockSkewSeconds) * time.Second
 	now := v.now()
-	if !idToken.Expiry.IsZero() && now.After(idToken.Expiry.Add(skew)) {
+	// A token with no exp has no validity window. Because go-oidc runs with
+	// SkipExpiryCheck (this package is the time authority), a missing exp would
+	// otherwise sail through unbounded — fail closed instead.
+	if idToken.Expiry.IsZero() {
+		return ErrMissingExpiry
+	}
+	if now.After(idToken.Expiry.Add(skew)) {
 		return ErrTokenExpired
 	}
 	if !idToken.IssuedAt.IsZero() && idToken.IssuedAt.After(now.Add(skew)) {

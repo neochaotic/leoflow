@@ -162,6 +162,64 @@ func (q *Queries) ListConnectionSecrets(ctx context.Context, tenantID pgtype.UUI
 	return items, nil
 }
 
+const listConnectionSecretsScoped = `-- name: ListConnectionSecretsScoped :many
+SELECT conn_id, conn_type, host, conn_schema, login, password, port, extra
+FROM connections
+WHERE tenant_id = $1 AND conn_id = ANY($2::text[])
+ORDER BY conn_id
+`
+
+type ListConnectionSecretsScopedParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	ConnIds  []string    `json:"conn_ids"`
+}
+
+type ListConnectionSecretsScopedRow struct {
+	ConnID     string  `json:"conn_id"`
+	ConnType   string  `json:"conn_type"`
+	Host       *string `json:"host"`
+	ConnSchema *string `json:"conn_schema"`
+	Login      *string `json:"login"`
+	Password   *string `json:"password"`
+	Port       *int32  `json:"port"`
+	Extra      *string `json:"extra"`
+}
+
+// The tenant's connections WITH the encrypted password, restricted to the given
+// conn_ids and filtered in the query (ADR 0055 D1: scope in the SQL, never
+// post-filter the decrypted whole vault). Never use this for UI/API responses,
+// which must mask the password. Used under secret_scoping: enforce so a task
+// receives only the connections it declared. An empty conn_id set never reaches
+// here — the handler returns nothing without a query.
+func (q *Queries) ListConnectionSecretsScoped(ctx context.Context, arg ListConnectionSecretsScopedParams) ([]ListConnectionSecretsScopedRow, error) {
+	rows, err := q.db.Query(ctx, listConnectionSecretsScoped, arg.TenantID, arg.ConnIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectionSecretsScopedRow{}
+	for rows.Next() {
+		var i ListConnectionSecretsScopedRow
+		if err := rows.Scan(
+			&i.ConnID,
+			&i.ConnType,
+			&i.Host,
+			&i.ConnSchema,
+			&i.Login,
+			&i.Password,
+			&i.Port,
+			&i.Extra,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConnections = `-- name: ListConnections :many
 SELECT conn_id, conn_type, host, conn_schema, login, port, extra, description
 FROM connections

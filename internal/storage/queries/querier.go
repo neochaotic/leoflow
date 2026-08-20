@@ -130,6 +130,20 @@ type Querier interface {
 	// Mirrors the bootstrap CreateUser insert (tenant_id, email, password_hash) but
 	// returns the columns the admin create-user API echoes back to the caller.
 	InsertUser(ctx context.Context, arg InsertUserParams) (InsertUserRow, error)
+	// Reports whether the attempt (dag_run_id, task_id, try_number) is still live:
+	// present and in an active (non-terminal) state. This is exactly the predicate
+	// RecordTaskHeartbeat stamps on — the same (dag_run_id, task_id, try_number)
+	// tuple and the same state IN ('queued', 'running') guard — but as a pure READ
+	// with no write. It is the read-only revocation signal the secret path consults
+	// (ADR 0055): a terminal or superseded attempt (try_number moved on) is not
+	// live, so a token that carries it stops resolving secrets, even while its
+	// signature is still valid.
+	//
+	// It MUST derive ONLY from (run, task, try) + active state. It must NEVER gain a
+	// "run is not current / archived / logical_date in the past" clause: a recency
+	// term would deny a legitimate clear-and-rerun of an old run — credential
+	// lifetime binds to the attempt, never to the run's age or logical date.
+	IsTaskInstanceLive(ctx context.Context, arg IsTaskInstanceLiveParams) (bool, error)
 	LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsParams) ([]LatestRunsForDagsRow, error)
 	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
 	// run_id is the dag_run's UUID (StagingClaimName uses it), so join on dag_runs.id,
@@ -147,6 +161,13 @@ type Querier interface {
 	// credentials to task pods (ADR 0021). Never use this for UI/API responses,
 	// which must mask the password.
 	ListConnectionSecrets(ctx context.Context, tenantID pgtype.UUID) ([]ListConnectionSecretsRow, error)
+	// The tenant's connections WITH the encrypted password, restricted to the given
+	// conn_ids and filtered in the query (ADR 0055 D1: scope in the SQL, never
+	// post-filter the decrypted whole vault). Never use this for UI/API responses,
+	// which must mask the password. Used under secret_scoping: enforce so a task
+	// receives only the connections it declared. An empty conn_id set never reaches
+	// here — the handler returns nothing without a query.
+	ListConnectionSecretsScoped(ctx context.Context, arg ListConnectionSecretsScopedParams) ([]ListConnectionSecretsScopedRow, error)
 	ListConnections(ctx context.Context, arg ListConnectionsParams) ([]ListConnectionsRow, error)
 	ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagParams) ([]DagRun, error)
 	ListDagVersions(ctx context.Context, arg ListDagVersionsParams) ([]ListDagVersionsRow, error)
@@ -200,6 +221,12 @@ type Querier interface {
 	// caller. Never selects password_hash — the list must not expose secrets.
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
+	// The tenant's variables restricted to the given keys, filtered in the query
+	// (ADR 0055 D1: scope in the SQL, never post-filter the decrypted whole vault in
+	// the handler). Used under secret_scoping: enforce so a task receives only the
+	// Variables it declared. An empty key set never reaches here — the handler
+	// returns nothing without a query.
+	ListVariablesScoped(ctx context.Context, arg ListVariablesScopedParams) ([]ListVariablesScopedRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
 	// Stamp a run's on-failure alert as DELIVERED. Called only after a successful
 	// send, which is the whole point of the split: alerted_at now answers "did the

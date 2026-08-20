@@ -737,6 +737,40 @@ func (r *Repository) RecordSecretScopeWarning(ctx context.Context, tenant, dagID
 	return nil
 }
 
+// RecordSecretLivenessDenial records that the secret-path liveness gate fired
+// for a task instance whose attempt is no longer live (ADR 0055): a
+// would-have-denied in observe mode, or a denial in enforce mode. It is scoped
+// to the DAG resource so the event surfaces on the DAG's Audit Log tab, with the
+// kind ("variables" or "connections"), the run, task, attempt, and the gate mode
+// in metadata. It records identity + kind + mode only — never secret names or
+// values.
+func (r *Repository) RecordSecretLivenessDenial(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int, kind, mode string) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	meta, err := json.Marshal(map[string]any{
+		"kind": kind, "run_id": runID, "task_id": taskID,
+		"try_number": tryNumber, "mode": mode,
+	})
+	if err != nil {
+		return fmt.Errorf("encoding audit metadata: %w", err)
+	}
+	// Distinct actions per mode so an operator can tell an observe-phase
+	// would-have-denied from an enforce-phase denial at a glance.
+	action := "secret.liveness_would_deny"
+	if mode == "enforce" {
+		action = "secret.liveness_denied"
+	}
+	if err := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
+		TenantID: tid, Action: action,
+		ResourceType: strPtr("dag"), ResourceID: strPtr(dagID), Metadata: meta,
+	}); err != nil {
+		return fmt.Errorf("writing secret-path liveness audit: %w", err)
+	}
+	return nil
+}
+
 // SetTaskInstanceState sets a task instance's state directly, backing the UI's
 // "mark success"/"mark failed" actions. It does not run the task.
 func (r *Repository) SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error {
@@ -1332,6 +1366,73 @@ func (r *Repository) SecretConnectionURIs(ctx context.Context, tenantID string) 
 		// different LEOFLOW_SECRET_KEY) must NOT blind the whole tenant: skip it
 		// with a warning and deliver the rest. The task that needs the bad
 		// connection still fails — correctly — but every other task keeps working.
+		pass, derr := r.decryptExtra(row.Password)
+		if derr != nil {
+			slog.Warn("skipping connection: password decrypt failed (key rotated or wrong LEOFLOW_SECRET_KEY?)",
+				"conn_id", row.ConnID, "error", derr)
+			continue
+		}
+		extra, eerr := r.decryptExtra(row.Extra)
+		if eerr != nil {
+			slog.Warn("skipping connection: extra decrypt failed (key rotated or wrong LEOFLOW_SECRET_KEY?)",
+				"conn_id", row.ConnID, "error", eerr)
+			continue
+		}
+		out[row.ConnID] = airflowConnURI(domain.Connection{
+			ConnID: row.ConnID, ConnType: row.ConnType, Host: strOrEmpty(row.Host),
+			Schema: strOrEmpty(row.ConnSchema), Login: strOrEmpty(row.Login),
+			Password: pass, Port: int32PtrToInt(row.Port), Extra: extra,
+		})
+	}
+	return out, nil
+}
+
+// SecretVariablesScoped returns only the named subset of the tenant's variables,
+// filtered in the query (ADR 0055 D1: scope in the SQL, never post-filter the
+// decrypted whole vault in the handler). It backs secret_scoping: enforce, where
+// a task receives only the Variables it declared. An empty name set returns
+// nothing without a query — enforce's load-bearing [] case. tenantID is the
+// tenant UUID carried by the agent token.
+func (r *Repository) SecretVariablesScoped(ctx context.Context, tenantID string, names []string) (map[string]string, error) {
+	if len(names) == 0 {
+		return map[string]string{}, nil
+	}
+	tid, err := parseUUID(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.ListVariablesScoped(ctx, queries.ListVariablesScopedParams{TenantID: tid, Keys: names})
+	if err != nil {
+		return nil, fmt.Errorf("listing scoped variables: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, v := range rows {
+		out[v.Key] = v.Value
+	}
+	return out, nil
+}
+
+// SecretConnectionURIsScoped returns only the named subset of the tenant's
+// connections as Airflow URIs (password decrypted), filtered in the query
+// (ADR 0055 D1). It backs secret_scoping: enforce. An empty name set returns
+// nothing without a query. Never expose these in UI/API responses. It shares the
+// per-connection decrypt-and-skip-on-failure semantics of SecretConnectionURIs:
+// one undecryptable connection is skipped with a warning, never blinding the
+// rest of the declared set.
+func (r *Repository) SecretConnectionURIsScoped(ctx context.Context, tenantID string, names []string) (map[string]string, error) {
+	if len(names) == 0 {
+		return map[string]string{}, nil
+	}
+	tid, err := parseUUID(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.ListConnectionSecretsScoped(ctx, queries.ListConnectionSecretsScopedParams{TenantID: tid, ConnIds: names})
+	if err != nil {
+		return nil, fmt.Errorf("listing scoped connection secrets: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
 		pass, derr := r.decryptExtra(row.Password)
 		if derr != nil {
 			slog.Warn("skipping connection: password decrypt failed (key rotated or wrong LEOFLOW_SECRET_KEY?)",

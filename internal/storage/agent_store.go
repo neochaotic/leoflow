@@ -221,6 +221,29 @@ func (s *ExecutionStore) RecordHeartbeat(ctx context.Context, id auth.AgentIdent
 	return nil
 }
 
+// IsTaskInstanceLive reports whether the attempt (runID, taskID, tryNumber) is
+// still live — present and in an active (non-terminal) state — derived from the
+// same predicate RecordHeartbeat writes on, but as a pure read with no
+// side-effect (ADR 0055). It is the read-only revocation signal the secret path
+// consults: a terminal, superseded (try_number moved on), or reaped attempt is
+// not live, so its token stops resolving secrets even while the signature holds.
+//
+// It derives ONLY from (run, task, try) + active state, exactly as the heartbeat
+// predicate does. It must never gain a run-recency / logical_date clause: a
+// recency term would deny a legitimate clear-and-rerun of an old run, binding
+// credential lifetime to the run's age rather than to the attempt.
+func (s *ExecutionStore) IsTaskInstanceLive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error) {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return false, err
+	}
+	return s.q.IsTaskInstanceLive(ctx, queries.IsTaskInstanceLiveParams{
+		DagRunID:  rid,
+		TaskID:    taskID,
+		TryNumber: toInt32(tryNumber),
+	})
+}
+
 // FailTask marks a task instance failed by its ID, guarded by the attempt
 // (try_number) and the active states so it never clobbers a different attempt or a
 // terminal row. It implements part of executor.OutcomeReporter for the pod

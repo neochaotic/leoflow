@@ -11,9 +11,12 @@ import (
 )
 
 type fakeSecrets struct {
-	vars     map[string]string
-	conns    map[string]string
-	gotVarTn string
+	vars        map[string]string
+	conns       map[string]string
+	gotVarTn    string
+	gotVarNames []string // the declared set the scoped variables path received
+	scopedVar   bool     // whether the scoped variables path was taken
+	scopedConn  bool     // whether the scoped connections path was taken
 }
 
 func (f *fakeSecrets) SecretVariables(_ context.Context, tenant string) (map[string]string, error) {
@@ -22,6 +25,29 @@ func (f *fakeSecrets) SecretVariables(_ context.Context, tenant string) (map[str
 }
 func (f *fakeSecrets) SecretConnectionURIs(_ context.Context, _ string) (map[string]string, error) {
 	return f.conns, nil
+}
+func (f *fakeSecrets) SecretVariablesScoped(_ context.Context, tenant string, names []string) (map[string]string, error) {
+	f.gotVarTn = tenant
+	f.gotVarNames = names
+	f.scopedVar = true
+	return fakeSubset(f.vars, names), nil
+}
+func (f *fakeSecrets) SecretConnectionURIsScoped(_ context.Context, _ string, names []string) (map[string]string, error) {
+	f.scopedConn = true
+	return fakeSubset(f.conns, names), nil
+}
+
+// fakeSubset mirrors the real store's scoped query: it returns only the named
+// subset of the tenant set (an empty name set returns nothing), so handler-level
+// scoping is exercised exactly as the SQL would filter it.
+func fakeSubset(all map[string]string, names []string) map[string]string {
+	out := map[string]string{}
+	for _, n := range names {
+		if v, ok := all[n]; ok {
+			out[n] = v
+		}
+	}
+	return out
 }
 
 func TestGetVariablesAndConnections(t *testing.T) {

@@ -283,6 +283,19 @@ type AuthSection struct {
 	// consumes budget. Lite raises this well above the production default because
 	// it is a local single-user tool where lockouts are pure friction.
 	LoginRateLimitPerMinute int `mapstructure:"login_rate_limit_per_minute"`
+	// SecretScoping is the operator scope-by-declaration policy (ADR 0055 D9):
+	// "permissive" | "enforce" | "off". permissive (the default) delivers the
+	// whole tenant vault when a DAG declares nothing and warns — but still
+	// delivers the whole vault — when a DAG declares a narrower set; enforce
+	// delivers only the declared subset (empty declaration → nothing); off
+	// disables scoping. It is operator-scoped, NEVER author-settable. Empty = the
+	// permissive default.
+	SecretScoping string `mapstructure:"secret_scoping"`
+	// SecretLivenessMode gates secret delivery on task-instance liveness (ADR 0055
+	// E2): "observe" | "enforce". observe (the default) logs + audits a
+	// would-have-denied when the caller's TI is not live but still delivers;
+	// enforce denies with PermissionDenied. Empty = the observe default.
+	SecretLivenessMode string `mapstructure:"secret_liveness_mode"`
 }
 
 // JWTSection configures JWT issuance and validation.
@@ -417,6 +430,12 @@ var serverDefaults = map[string]any{
 	"auth.jwt.secret":                  "",
 	"auth.jwt.token_ttl_seconds":       3600,
 	"auth.login_rate_limit_per_minute": 5,
+	// Secret scope-by-declaration and token-liveness policies (ADR 0055). Both
+	// ship SAFE by default: permissive delivers the whole tenant vault (today's
+	// behavior) and observe logs a would-have-denied without denying. The go-live
+	// flips (enforce) are separate operator decisions after an observe period.
+	"auth.secret_scoping":       "permissive",
+	"auth.secret_liveness_mode": "observe",
 	// OIDC leaves. Every leaf is registered so viper's AutomaticEnv binds the
 	// scalar LEOFLOW_AUTH_OIDC_* env vars (notably the client secret). The map and
 	// slice leaves are config-file / Helm-values driven — viper does not split a
@@ -525,6 +544,23 @@ const (
 	AuthProviderOIDC = "oidc"
 )
 
+// Secret policy allowlists (ADR 0055). auth.secret_scoping and
+// auth.secret_liveness_mode are validated against these; an unknown value fails
+// boot closed. Empty is valid — serverDefaults sets the safe default for each.
+const (
+	// SecretScopingPermissive delivers the whole tenant vault (today's behavior),
+	// scoping only where a DAG declared; the default.
+	SecretScopingPermissive = "permissive"
+	// SecretScopingEnforce delivers only the declared subset.
+	SecretScopingEnforce = "enforce"
+	// SecretScopingOff disables scope-by-declaration entirely.
+	SecretScopingOff = "off"
+	// SecretLivenessObserve logs a would-have-denied without denying; the default.
+	SecretLivenessObserve = "observe"
+	// SecretLivenessEnforce denies secret delivery when the caller's TI is not live.
+	SecretLivenessEnforce = "enforce"
+)
+
 // Validate reports configuration errors that must abort startup.
 func (c *ServerConfig) Validate() error {
 	if err := c.validateRole(); err != nil {
@@ -534,6 +570,9 @@ func (c *ServerConfig) Validate() error {
 		return err
 	}
 	if err := c.validateLogs(); err != nil {
+		return err
+	}
+	if err := c.validateSecretPolicies(); err != nil {
 		return err
 	}
 	// Both providers mint the app's own HS256 _token (oidc mints it after the IdP
@@ -580,6 +619,26 @@ func (c *ServerConfig) validateLogs() error {
 	default:
 		return fmt.Errorf(`unknown logs.backend %q (want "disk", "s3" or "gcs")`, c.Logs.Backend)
 	}
+}
+
+// validateSecretPolicies rejects an unknown auth.secret_scoping or
+// auth.secret_liveness_mode, failing closed at boot rather than letting main.go
+// wire an unrecognized policy (ADR 0055). Empty is valid: serverDefaults sets
+// the safe default (permissive / observe) for each.
+func (c *ServerConfig) validateSecretPolicies() error {
+	switch c.Auth.SecretScoping {
+	case "", SecretScopingPermissive, SecretScopingEnforce, SecretScopingOff:
+	default:
+		return fmt.Errorf("invalid auth.secret_scoping %q: must be %q, %q or %q",
+			c.Auth.SecretScoping, SecretScopingPermissive, SecretScopingEnforce, SecretScopingOff)
+	}
+	switch c.Auth.SecretLivenessMode {
+	case "", SecretLivenessObserve, SecretLivenessEnforce:
+	default:
+		return fmt.Errorf("invalid auth.secret_liveness_mode %q: must be %q or %q",
+			c.Auth.SecretLivenessMode, SecretLivenessObserve, SecretLivenessEnforce)
+	}
+	return nil
 }
 
 // validateProvider rejects an unknown auth.provider, failing closed at boot

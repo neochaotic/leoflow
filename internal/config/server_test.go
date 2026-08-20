@@ -165,6 +165,72 @@ func TestServerConfigValidateProviderAllowlist(t *testing.T) {
 	}
 }
 
+// TestServerConfigSecretPolicyDefaults locks the SAFE defaults (ADR 0055): a
+// fresh config binds secret_scoping=permissive and secret_liveness_mode=observe,
+// so a default deploy denies nothing.
+func TestServerConfigSecretPolicyDefaults(t *testing.T) {
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Auth.SecretScoping != "permissive" {
+		t.Errorf("SecretScoping default = %q, want permissive", c.Auth.SecretScoping)
+	}
+	if c.Auth.SecretLivenessMode != "observe" {
+		t.Errorf("SecretLivenessMode default = %q, want observe", c.Auth.SecretLivenessMode)
+	}
+}
+
+// TestServerConfigSecretPolicyEnvBinding proves the two keys bind from their
+// LEOFLOW_* env vars (they are registered in serverDefaults so AutomaticEnv sees
+// them).
+func TestServerConfigSecretPolicyEnvBinding(t *testing.T) {
+	t.Setenv("LEOFLOW_AUTH_SECRET_SCOPING", "enforce")
+	t.Setenv("LEOFLOW_AUTH_SECRET_LIVENESS_MODE", "enforce")
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Auth.SecretScoping != "enforce" {
+		t.Errorf("SecretScoping = %q, want enforce (from env)", c.Auth.SecretScoping)
+	}
+	if c.Auth.SecretLivenessMode != "enforce" {
+		t.Errorf("SecretLivenessMode = %q, want enforce (from env)", c.Auth.SecretLivenessMode)
+	}
+}
+
+// TestServerConfigValidateSecretPolicies locks the enum allowlist: valid values
+// (and empty = default) pass; an unknown value fails closed at boot.
+func TestServerConfigValidateSecretPolicies(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		scoping  string
+		liveness string
+		wantErr  bool
+	}{
+		{"empty defaults", "", "", false},
+		{"permissive+observe", "permissive", "observe", false},
+		{"enforce+enforce", "enforce", "enforce", false},
+		{"off+observe", "off", "observe", false},
+		{"bad scoping", "loose", "observe", true},
+		{"bad liveness", "permissive", "loud", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &ServerConfig{}
+			c.Auth.JWT.Secret = "set"
+			c.Auth.SecretScoping = tc.scoping
+			c.Auth.SecretLivenessMode = tc.liveness
+			err := c.Validate()
+			if tc.wantErr && err == nil {
+				t.Errorf("scoping=%q liveness=%q: Validate() = nil, want error", tc.scoping, tc.liveness)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("scoping=%q liveness=%q: Validate() = %v, want nil", tc.scoping, tc.liveness, err)
+			}
+		})
+	}
+}
+
 // validOIDCConfig returns a ServerConfig that passes the OIDC boot gate: Pro
 // edition, a JWT secret (oidc still mints the app's own _token), and the three
 // required oidc fields with an https issuer.

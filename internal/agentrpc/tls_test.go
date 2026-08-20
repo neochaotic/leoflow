@@ -72,6 +72,12 @@ func (fakeSecretsTLS) SecretVariables(context.Context, string) (map[string]strin
 func (fakeSecretsTLS) SecretConnectionURIs(context.Context, string) (map[string]string, error) {
 	return map[string]string{}, nil
 }
+func (fakeSecretsTLS) SecretVariablesScoped(context.Context, string, []string) (map[string]string, error) {
+	return map[string]string{"FOO": "bar"}, nil
+}
+func (fakeSecretsTLS) SecretConnectionURIsScoped(context.Context, string, []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
 
 type tlsFakeStore struct{}
 

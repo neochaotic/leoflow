@@ -691,6 +691,28 @@ WHERE dag_run_id = $1
   AND try_number = $3
   AND state IN ('queued', 'running');
 
+-- name: IsTaskInstanceLive :one
+-- Reports whether the attempt (dag_run_id, task_id, try_number) is still live:
+-- present and in an active (non-terminal) state. This is exactly the predicate
+-- RecordTaskHeartbeat stamps on — the same (dag_run_id, task_id, try_number)
+-- tuple and the same state IN ('queued', 'running') guard — but as a pure READ
+-- with no write. It is the read-only revocation signal the secret path consults
+-- (ADR 0055): a terminal or superseded attempt (try_number moved on) is not
+-- live, so a token that carries it stops resolving secrets, even while its
+-- signature is still valid.
+--
+-- It MUST derive ONLY from (run, task, try) + active state. It must NEVER gain a
+-- "run is not current / archived / logical_date in the past" clause: a recency
+-- term would deny a legitimate clear-and-rerun of an old run — credential
+-- lifetime binds to the attempt, never to the run's age or logical date.
+SELECT EXISTS (
+    SELECT 1 FROM task_instances
+    WHERE dag_run_id = $1
+      AND task_id = $2
+      AND try_number = $3
+      AND state IN ('queued', 'running')
+);
+
 -- name: ListAgentLostCandidates :many
 -- Lists running TIs that have heartbeated at least once and whose latest
 -- heartbeat is non-null, alongside enough identity to log + observe.

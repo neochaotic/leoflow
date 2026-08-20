@@ -6,3 +6,7 @@ tags:
   - example
 python_version: "3.11"
 dependencies: []
+# The managed Connection this DAG reads (ADR 0045, ADR 0055). Declaring it keeps
+# the DAG valid once secret delivery is scoped to the declared set.
+connections:
+  - http_target

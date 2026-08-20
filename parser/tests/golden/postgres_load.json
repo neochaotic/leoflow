@@ -1,4 +1,7 @@
 {
+  "connections": [
+    "pg_target"
+  ],
   "dag_id": "postgres_load",
   "dag_version": "v1",
   "owner": "examples",

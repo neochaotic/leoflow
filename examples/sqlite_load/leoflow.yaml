@@ -7,3 +7,7 @@ tags:
 python_version: "3.11"
 # sqlite3 is part of the Python stdlib — no third-party dependency needed.
 dependencies: []
+# The managed Connection this DAG reads (ADR 0045, ADR 0055). Declaring it keeps
+# the DAG valid once secret delivery is scoped to the declared set.
+connections:
+  - sqlite_target

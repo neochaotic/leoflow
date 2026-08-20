@@ -97,6 +97,43 @@ func TestOverlayProjectAppliesTaskOverrides(t *testing.T) {
 	}
 }
 
+// The overlay carries the leoflow.yaml per-task declared secret sets
+// (connections/variables) onto the compiled task, narrowing the DAG-level
+// declaration (ADR 0045, ADR 0055). A set list replaces the compiled value.
+func TestOverlayProjectAppliesDeclaredSecretNarrowing(t *testing.T) {
+	path := writeDagJSON(t)
+	cfg := &domain.LeoflowConfig{
+		DagID: "proj",
+		Tasks: map[string]*domain.TaskConfig{
+			"transform": {
+				Connections: []string{"warehouse"},
+				Variables:   []string{"greeting"},
+			},
+		},
+	}
+	if err := overlayProject(path, cfg); err != nil {
+		t.Fatalf("overlayProject: %v", err)
+	}
+	got := readSpec(t, path)
+
+	transform, ok := taskByID(got, "transform")
+	if !ok {
+		t.Fatal("transform task missing after overlay")
+	}
+	if len(transform.Connections) != 1 || transform.Connections[0] != "warehouse" {
+		t.Errorf("transform connections = %v, want [warehouse]", transform.Connections)
+	}
+	if len(transform.Variables) != 1 || transform.Variables[0] != "greeting" {
+		t.Errorf("transform variables = %v, want [greeting]", transform.Variables)
+	}
+
+	// The untouched task declares nothing (no narrowing leaked onto it).
+	extract, _ := taskByID(got, "extract")
+	if len(extract.Connections) != 0 || len(extract.Variables) != 0 {
+		t.Errorf("extract gained a declaration from overlay: %+v", extract)
+	}
+}
+
 func TestOverlayProjectUnknownTaskIDErrors(t *testing.T) {
 	path := writeDagJSON(t)
 	cfg := &domain.LeoflowConfig{

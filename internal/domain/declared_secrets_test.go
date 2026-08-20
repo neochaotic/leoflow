@@ -75,6 +75,21 @@ func TestDAGSpecDeclaredSecretsAbsentIsEmpty(t *testing.T) {
 	}
 }
 
+// leoflow.yaml may declare variables/connections per-DAG and per-task; the
+// author-facing config validates against the leoflow.yaml schema (the source
+// keys the compiler carries into dag.json).
+func TestLeoflowConfigValidateAcceptsDeclaredSecrets(t *testing.T) {
+	cfg := validLeoflowConfig()
+	cfg.Connections = []string{"warehouse"}
+	cfg.Variables = []string{"greeting"}
+	cfg.Tasks = map[string]*TaskConfig{
+		"extract": {Connections: []string{"warehouse"}, Variables: []string{"greeting"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with declarations = %v, want nil", err)
+	}
+}
+
 // A spec declaring variables/connections at both DAG and task level passes
 // schema validation (the schema grew the two array fields at both scopes).
 func TestDAGSpecValidateAcceptsDeclaredSecrets(t *testing.T) {

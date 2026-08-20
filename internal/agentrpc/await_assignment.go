@@ -1,0 +1,130 @@
+package agentrpc
+
+import (
+	"errors"
+	"io"
+	"log/slog"
+
+	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// SetWarmPools wires a prebuilt warm-worker assignment registry (ADR 0058 N1b).
+// A nil registry (the default) leaves AwaitAssignment inert — it returns
+// FailedPrecondition — so with execution.warm_pools_enabled off the transport is
+// completely dormant and no running path changes. Used by tests to inject a
+// registry with a deterministic lease; callers wire it via EnableWarmPools.
+func (s *Server) SetWarmPools(reg *workerRegistry) { s.warmPools = reg }
+
+// EnableWarmPools turns on the warm-worker assignment transport with a
+// production registry (ADR 0058 N1b). onReclaim (may be nil) observes reclaim
+// events for the future placement layer to consume. Call only when
+// execution.warm_pools_enabled is set — the default leaves the handler inert.
+func (s *Server) EnableWarmPools(onReclaim func(ReclaimEvent)) {
+	s.SetWarmPools(newWorkerRegistry(onReclaim))
+}
+
+// AwaitAssignment is the warm-worker assignment transport (ADR 0058 N1b): a
+// long-lived bidi stream over which the control plane pushes per-attempt
+// WorkAssignments down and the worker sends its registration, acks, and
+// slot-free signals up.
+//
+// Inert-when-off: if warm pools are not wired the handler refuses immediately
+// with FailedPrecondition — the flag-gated dormant state.
+//
+// Identity: the registry key is the worker's AUTHENTICATED identity from the
+// stream's bearer token (via identify), NOT the dag_version_id in the register
+// payload — a worker cannot claim an arbitrary identity through the message. The
+// payload's dag_version_id only names which pool the worker serves and must be
+// non-empty.
+//
+// After registration two flows run concurrently: the receive loop drains
+// WorkerMessages (acks feed the H1 lease machine, slot-free frees the worker)
+// while the main select pumps assignments from the worker's outbound channel
+// down the stream. The handler exits — deregistering the worker (defer) — on
+// context cancellation, a stream Send error, or the receive loop ending (clean
+// EOF or a transport error).
+func (s *Server) AwaitAssignment(stream agentv1.AgentService_AwaitAssignmentServer) error {
+	if s.warmPools == nil {
+		return status.Error(codes.FailedPrecondition, "warm pools disabled")
+	}
+	ctx := stream.Context()
+	id, err := s.identify(ctx)
+	if err != nil {
+		return err
+	}
+	worker, err := s.registerFromStream(stream, id.TaskInstanceID)
+	if err != nil {
+		return err
+	}
+	defer s.warmPools.Deregister(worker)
+
+	// Receive loop: acks and slot-free signals feed the registry. It ends on EOF
+	// (clean close) or any transport error, reported once on recvErr.
+	recvErr := make(chan error, 1)
+	go s.pumpWorkerMessages(stream, id.TaskInstanceID, recvErr)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return status.FromContextError(ctx.Err()).Err()
+		case rerr := <-recvErr:
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return status.Errorf(codes.Internal, "receiving worker message: %v", rerr)
+		case a := <-worker.send:
+			if serr := stream.Send(a); serr != nil {
+				return serr
+			}
+		}
+	}
+}
+
+// registerFromStream reads and validates the mandatory first WorkerMessage (a
+// WorkerRegister) and registers the worker under its authenticated identity. The
+// dag_version_id in the payload names the pool and must be non-empty; the
+// identity is NOT taken from the payload. The bearer token is never logged.
+func (s *Server) registerFromStream(stream agentv1.AgentService_AwaitAssignmentServer, identity string) (*registeredWorker, error) {
+	first, err := stream.Recv()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, status.Error(codes.FailedPrecondition, "stream closed before worker registration")
+		}
+		return nil, status.Errorf(codes.Internal, "receiving worker registration: %v", err)
+	}
+	reg := first.GetRegister()
+	if reg == nil {
+		return nil, status.Error(codes.FailedPrecondition, "first worker message must be a register")
+	}
+	dagVersion := reg.GetDagVersionId()
+	if dagVersion == "" {
+		return nil, status.Error(codes.InvalidArgument, "worker register missing dag_version_id")
+	}
+	send := make(chan *agentv1.WorkAssignment, 1)
+	worker := s.warmPools.Register(identity, dagVersion, send)
+	slog.Info("warm worker registered", "identity", identity, "dag_version", dagVersion)
+	return worker, nil
+}
+
+// pumpWorkerMessages drains WorkerMessages off the stream into the registry
+// until the stream ends, then reports the terminating error once on recvErr.
+func (s *Server) pumpWorkerMessages(stream agentv1.AgentService_AwaitAssignmentServer, identity string, recvErr chan<- error) {
+	for {
+		msg, rerr := stream.Recv()
+		if rerr != nil {
+			recvErr <- rerr
+			return
+		}
+		switch m := msg.Msg.(type) {
+		case *agentv1.WorkerMessage_Ack:
+			s.warmPools.Ack(m.Ack.GetAssignmentId(), m.Ack.GetStarted())
+		case *agentv1.WorkerMessage_SlotFree:
+			s.warmPools.MarkFree(identity)
+		case *agentv1.WorkerMessage_Register:
+			// A re-registration on an established stream is redundant; the worker is
+			// already keyed by its authenticated identity. Ignore.
+		}
+	}
+}

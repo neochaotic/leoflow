@@ -23,16 +23,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_ExchangeToken_FullMethodName  = "/leoflow.agent.v1.AgentService/ExchangeToken"
-	AgentService_Register_FullMethodName       = "/leoflow.agent.v1.AgentService/Register"
-	AgentService_GetTaskSpec_FullMethodName    = "/leoflow.agent.v1.AgentService/GetTaskSpec"
-	AgentService_FetchXCom_FullMethodName      = "/leoflow.agent.v1.AgentService/FetchXCom"
-	AgentService_PushXCom_FullMethodName       = "/leoflow.agent.v1.AgentService/PushXCom"
-	AgentService_StreamLogs_FullMethodName     = "/leoflow.agent.v1.AgentService/StreamLogs"
-	AgentService_ReportState_FullMethodName    = "/leoflow.agent.v1.AgentService/ReportState"
-	AgentService_Heartbeat_FullMethodName      = "/leoflow.agent.v1.AgentService/Heartbeat"
-	AgentService_GetVariables_FullMethodName   = "/leoflow.agent.v1.AgentService/GetVariables"
-	AgentService_GetConnections_FullMethodName = "/leoflow.agent.v1.AgentService/GetConnections"
+	AgentService_ExchangeToken_FullMethodName   = "/leoflow.agent.v1.AgentService/ExchangeToken"
+	AgentService_Register_FullMethodName        = "/leoflow.agent.v1.AgentService/Register"
+	AgentService_GetTaskSpec_FullMethodName     = "/leoflow.agent.v1.AgentService/GetTaskSpec"
+	AgentService_FetchXCom_FullMethodName       = "/leoflow.agent.v1.AgentService/FetchXCom"
+	AgentService_PushXCom_FullMethodName        = "/leoflow.agent.v1.AgentService/PushXCom"
+	AgentService_StreamLogs_FullMethodName      = "/leoflow.agent.v1.AgentService/StreamLogs"
+	AgentService_ReportState_FullMethodName     = "/leoflow.agent.v1.AgentService/ReportState"
+	AgentService_Heartbeat_FullMethodName       = "/leoflow.agent.v1.AgentService/Heartbeat"
+	AgentService_GetVariables_FullMethodName    = "/leoflow.agent.v1.AgentService/GetVariables"
+	AgentService_GetConnections_FullMethodName  = "/leoflow.agent.v1.AgentService/GetConnections"
+	AgentService_AwaitAssignment_FullMethodName = "/leoflow.agent.v1.AgentService/AwaitAssignment"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -73,6 +74,13 @@ type AgentServiceClient interface {
 	// Agent fetches the tenant's Connections (as Airflow connection URIs) to
 	// export as AIRFLOW_CONN_* env vars.
 	GetConnections(ctx context.Context, in *GetConnectionsRequest, opts ...grpc.CallOption) (*GetConnectionsResponse, error)
+	// A warm worker awaits per-attempt assignments over a long-lived bidi stream
+	// (ADR 0058 N1b). Down: the control plane pushes WorkAssignments. Up: the
+	// worker sends its initial WorkerRegister, per-assignment AssignmentAcks, and
+	// SlotFree signals. Gated on execution.warm_pools_enabled — the handler
+	// returns FailedPrecondition when warm pools are off, so the transport is
+	// inert by default.
+	AwaitAssignment(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WorkerMessage, WorkAssignment], error)
 }
 
 type agentServiceClient struct {
@@ -186,6 +194,19 @@ func (c *agentServiceClient) GetConnections(ctx context.Context, in *GetConnecti
 	return out, nil
 }
 
+func (c *agentServiceClient) AwaitAssignment(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WorkerMessage, WorkAssignment], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[1], AgentService_AwaitAssignment_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WorkerMessage, WorkAssignment]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_AwaitAssignmentClient = grpc.BidiStreamingClient[WorkerMessage, WorkAssignment]
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -224,6 +245,13 @@ type AgentServiceServer interface {
 	// Agent fetches the tenant's Connections (as Airflow connection URIs) to
 	// export as AIRFLOW_CONN_* env vars.
 	GetConnections(context.Context, *GetConnectionsRequest) (*GetConnectionsResponse, error)
+	// A warm worker awaits per-attempt assignments over a long-lived bidi stream
+	// (ADR 0058 N1b). Down: the control plane pushes WorkAssignments. Up: the
+	// worker sends its initial WorkerRegister, per-assignment AssignmentAcks, and
+	// SlotFree signals. Gated on execution.warm_pools_enabled — the handler
+	// returns FailedPrecondition when warm pools are off, so the transport is
+	// inert by default.
+	AwaitAssignment(grpc.BidiStreamingServer[WorkerMessage, WorkAssignment]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -263,6 +291,9 @@ func (UnimplementedAgentServiceServer) GetVariables(context.Context, *GetVariabl
 }
 func (UnimplementedAgentServiceServer) GetConnections(context.Context, *GetConnectionsRequest) (*GetConnectionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetConnections not implemented")
+}
+func (UnimplementedAgentServiceServer) AwaitAssignment(grpc.BidiStreamingServer[WorkerMessage, WorkAssignment]) error {
+	return status.Error(codes.Unimplemented, "method AwaitAssignment not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -454,6 +485,13 @@ func _AgentService_GetConnections_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_AwaitAssignment_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentServiceServer).AwaitAssignment(&grpc.GenericServerStream[WorkerMessage, WorkAssignment]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_AwaitAssignmentServer = grpc.BidiStreamingServer[WorkerMessage, WorkAssignment]
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -502,6 +540,12 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamLogs",
 			Handler:       _AgentService_StreamLogs_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "AwaitAssignment",
+			Handler:       _AgentService_AwaitAssignment_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

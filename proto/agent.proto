@@ -54,6 +54,14 @@ service AgentService {
     // Agent fetches the tenant's Connections (as Airflow connection URIs) to
     // export as AIRFLOW_CONN_* env vars.
     rpc GetConnections (GetConnectionsRequest) returns (GetConnectionsResponse);
+
+    // A warm worker awaits per-attempt assignments over a long-lived bidi stream
+    // (ADR 0058 N1b). Down: the control plane pushes WorkAssignments. Up: the
+    // worker sends its initial WorkerRegister, per-assignment AssignmentAcks, and
+    // SlotFree signals. Gated on execution.warm_pools_enabled — the handler
+    // returns FailedPrecondition when warm pools are off, so the transport is
+    // inert by default.
+    rpc AwaitAssignment (stream WorkerMessage) returns (stream WorkAssignment);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -217,6 +225,51 @@ message HeartbeatRequest {
     google.protobuf.Timestamp sent_at = 1;
     map<string, double> custom_metrics = 2;       // optional task-reported metrics
 }
+
+// WorkAssignment is one unit of per-attempt work the control plane hands to a
+// warm worker over AwaitAssignment (ADR 0058 N1b). The control plane mints the
+// attempt_token and generates assignment_id; the worker replies with an
+// AssignmentAck referencing assignment_id.
+message WorkAssignment {
+    string assignment_id = 1;   // control-plane-generated correlation id for this hand-off
+    string attempt_token = 2;   // per-attempt agent JWT the worker adopts for this attempt; NEVER logged
+    string dag_run_id = 3;
+    string task_id = 4;
+    int32 try_number = 5;
+    string dag_version_id = 6;  // the pool identity this assignment belongs to
+    int64 lease_seconds = 7;    // ack deadline: unacked within it => the attempt is reclaimed
+}
+
+// WorkerMessage is everything a warm worker sends UP the AwaitAssignment stream:
+// its one initial registration, then per-assignment acks and slot-free signals.
+message WorkerMessage {
+    oneof msg {
+        WorkerRegister register = 1;
+        AssignmentAck ack = 2;
+        SlotFree slot_free = 3;
+    }
+}
+
+// WorkerRegister is the mandatory first WorkerMessage. dag_version_id names which
+// pool the worker serves. The worker's IDENTITY (registry key) is taken from its
+// authenticated pod/bootstrap credential on the stream context, NOT from this
+// payload — a worker must not be able to claim an arbitrary identity here.
+message WorkerRegister {
+    string dag_version_id = 1;
+}
+
+// AssignmentAck answers a WorkAssignment. started=true means the worker began the
+// attempt (the control plane marks it active and cancels the lease). started=false
+// means the worker refuses or cannot start it (the control plane reclaims it).
+message AssignmentAck {
+    string assignment_id = 1;
+    bool started = 2;
+}
+
+// SlotFree signals that the worker freed an execution slot. Reserved for the
+// placement layer (N1b1-place); the transport carries it now and the registry
+// records it.
+message SlotFree {}
 
 message HeartbeatResponse {
     bool should_terminate = 1;

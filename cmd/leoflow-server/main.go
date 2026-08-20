@@ -18,6 +18,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -345,7 +346,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if !servesScheduler {
 		return nil, false, func() {}, nil
 	}
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, buildTokenExchange(cfg, logger), cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, logger)
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, buildTokenExchange(cfg, logger), cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, cfg.Execution.WarmPoolsEnabled, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -517,7 +518,7 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv,
 // shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
 // channel is plaintext (dev). The per-task bearer token in metadata authenticates
 // each call regardless.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, logger *slog.Logger) (*grpc.Server, error) {
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPoolsEnabled bool, logger *slog.Logger) (*grpc.Server, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -559,12 +560,37 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	if auditor, ok := secretsStore.(agentrpc.SecretLivenessAuditor); ok {
 		agentSrv.SetSecretLivenessAuditor(auditor)
 	}
+	// Warm worker assignment transport (ADR 0058 N1b). Wired only when the operator
+	// enabled warm pools (which the boot guard already gated on the token-exchange +
+	// liveness prerequisites). Off by default => AwaitAssignment stays inert
+	// (FailedPrecondition) and no running path changes. N1b1 wires the transport
+	// only; there is no placement caller yet, so no assignment is ever handed out
+	// and the reclaim observer never fires — a debug log is enough for now.
+	if warmPoolsEnabled {
+		agentSrv.EnableWarmPools(func(ev agentrpc.ReclaimEvent) {
+			logger.Debug("warm worker assignment reclaimed", "assignment", ev.AssignmentID, "dag_version", ev.DagVersionID, "reason", ev.Reason)
+		})
+		logger.Warn("warm worker pools enabled (ADR 0058); assignment transport is live but no placement caller exists yet (N1b1)")
+	}
 
 	// Recover panics in any agent RPC handler so a single malformed request from a
 	// worker pod cannot crash the control plane (it returns Internal instead).
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(agentrpc.RecoveryUnaryInterceptor(logger)),
 		grpc.ChainStreamInterceptor(agentrpc.RecoveryStreamInterceptor(logger)),
+		// Tolerate a warm worker's keepalive pings on an otherwise idle assignment
+		// stream so gRPC does not GOAWAY it as abusive (ADR 0058 N1b). This only
+		// RELAXES the server's default client-ping enforcement (5m, streams-only),
+		// so it cannot change StreamLogs behavior — an active StreamLogs already
+		// satisfies both the old and new policy. Server-initiated keepalive
+		// (ServerParameters: MaxConnectionIdle / Time pings) is deliberately NOT
+		// added here: it would start pinging existing idle StreamLogs connections,
+		// a behavior change with no benefit until a real warm worker connects.
+		// Deferred to N1b1-place as a documented TODO.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
 	}
 	secure := tlsCert != "" && tlsKey != ""
 	if secure {

@@ -97,6 +97,15 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	// Warm-worker mode (ADR 0058): a long-lived process that registers once with
+	// the bootstrap token and serves MANY attempts over the AwaitAssignment stream,
+	// each in a fresh forked child. Selected by env; the bootstrap credential comes
+	// from the same path as single-shot. Anything else falls through to the
+	// byte-identical single-shot path below.
+	if os.Getenv("LEOFLOW_WARM_WORKER") == "1" {
+		return runWarm(ctx, client, addr, token, allowInsecure, caFile)
+	}
+
 	// Exchange the projected bootstrap token for the task-scoped JWT before any
 	// other RPC, then swap it into the shared TokenSource so every subsequent call
 	// authenticates as the task instance. Fails startup if the exchange is refused.
@@ -162,6 +171,69 @@ func run() int {
 	}
 	if rerr := runner.Run(ctx); rerr != nil {
 		slog.Error("task failed", "error", rerr)
+		return 1
+	}
+	return 0
+}
+
+// runWarm serves the warm-worker loop (ADR 0058). streamClient carries the
+// worker's bootstrap identity (Register + AwaitAssignment). A SECOND dial gives
+// the WorkClient its own connection bound to an attempt-scoped TokenSource, which
+// the loop swaps to each assignment's attempt_token — so the per-attempt work RPCs
+// authenticate as the attempt while the stream keeps the bootstrap identity it was
+// opened with. The work dial is seeded with the bootstrap token only to satisfy
+// Dial's non-empty check; no work RPC fires before the first attempt_token swap.
+func runWarm(ctx context.Context, streamClient agentv1.AgentServiceClient, addr, seedToken string, allowInsecure bool, caFile string) int {
+	dagVersionID := os.Getenv("LEOFLOW_DAG_VERSION_ID")
+	if dagVersionID == "" {
+		slog.Error("warm worker requires LEOFLOW_DAG_VERSION_ID")
+		return 1
+	}
+
+	workClient, workConn, attemptTokens, err := agent.Dial(addr, seedToken, allowInsecure, caFile)
+	if err != nil {
+		slog.Error("dialing control plane for per-attempt work", "error", err)
+		return 1
+	}
+	defer func() {
+		if cerr := workConn.Close(); cerr != nil {
+			slog.Warn("closing work connection", "error", cerr)
+		}
+	}()
+
+	hostname, herr := os.Hostname()
+	if herr != nil {
+		hostname = "unknown"
+	}
+
+	// The agent-owned scratch root, wiped and recreated before every attempt
+	// (D4 isolation). Removed on exit.
+	scratchDir, err := os.MkdirTemp("", "leoflow-warm-")
+	if err != nil {
+		slog.Error("preparing warm scratch dir", "error", err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(scratchDir) }() //nolint:errcheck // best-effort cleanup on exit
+
+	w := &agent.WarmRunner{
+		StreamClient:  streamClient,
+		WorkClient:    workClient,
+		AttemptTokens: attemptTokens,
+		// A fresh per-attempt log sink on the work client, so each attempt's logs
+		// ship under its own attempt_token.
+		NewSink: func(ctx context.Context) (agent.LogSink, error) {
+			return agent.OpenLogSink(ctx, workClient)
+		},
+		Cmd:                agent.NewExecRunner(),
+		Hostname:           hostname,
+		Version:            version.Get().Version,
+		Env:                os.Environ(),
+		ScratchDir:         scratchDir,
+		TerminationLogPath: os.Getenv("LEOFLOW_TERMINATION_LOG_PATH"),
+		HeartbeatInterval:  agent.DefaultHeartbeatInterval,
+	}
+	if rerr := w.Run(ctx, dagVersionID); rerr != nil {
+		slog.Error("warm worker failed", "error", rerr)
 		return 1
 	}
 	return 0

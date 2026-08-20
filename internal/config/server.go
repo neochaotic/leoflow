@@ -21,6 +21,7 @@ type ServerConfig struct {
 	Auth          AuthSection          `mapstructure:"auth"`
 	Scheduler     SchedulerSection     `mapstructure:"scheduler"`
 	Executor      ExecutorSection      `mapstructure:"executor"`
+	Execution     ExecutionSection     `mapstructure:"execution"`
 	Logs          LogsSection          `mapstructure:"logs"`
 	Observability ObservabilitySection `mapstructure:"observability"`
 	UI            UISection            `mapstructure:"ui"`
@@ -152,6 +153,37 @@ type PlatformDefaultsSection struct {
 	// breaks ordinary Python tasks (pip cache, /tmp, matplotlib config); turn it
 	// on for a fleet of tasks known not to write outside their volumes.
 	ReadOnlyTaskRootFilesystem bool `mapstructure:"read_only_task_root_filesystem"`
+}
+
+// ExecutionSection configures warm worker pools — Pro-gated N:1 pod reuse
+// (ADR 0058). Every field is operator-set (never DAG-author-set), consistent
+// with the secret-scoping stance: whether a pod may be reused across attempts is
+// an operator's security decision, not a DAG author's. All fields default to a
+// byte-for-byte no-op — warm pools OFF means dedicated pod-per-task, today's
+// behavior — and are read for runtime behavior only in a later brick; N1a
+// introduces the knobs plus the fail-closed boot guard (validateExecution).
+type ExecutionSection struct {
+	// WarmPoolsEnabled turns on N:1 pod reuse (ADR 0058). Default false = a
+	// dedicated pod per task attempt, today's behavior byte-for-byte. Turning it on
+	// is gated at boot on the security prerequisites (token-exchange transport +
+	// liveness enforcement) because a warm pod reuses one credential across attempts.
+	WarmPoolsEnabled bool `mapstructure:"warm_pools_enabled"`
+	// MaxAttemptsPerWorker caps how many attempts a warm worker serves before it is
+	// drained and recycled (ADR 0058 D9). Bounds credential-leak and stale-image
+	// exposure by forcing a fresh pod periodically. Default 50.
+	MaxAttemptsPerWorker int `mapstructure:"max_attempts_per_worker"`
+	// MaxWorkerLifetime is the wall-clock cap on a warm worker before it is drained
+	// and recycled (ADR 0058 D9), independent of the attempt count. Default 1h. When
+	// warm pools are on it MUST be >= auth.max_attempt_credential_lifetime, so a
+	// worker is never force-recycled mid-attempt by its token lapsing.
+	MaxWorkerLifetime time.Duration `mapstructure:"max_worker_lifetime"`
+	// MinIdleWorkers is the number of warm workers kept ready per DAG version
+	// (ADR 0058 D6). Default 0 = scale-to-zero, preserving the ADR 0002 zero-idle
+	// floor; an operator opts into warmth by raising it.
+	MinIdleWorkers int `mapstructure:"min_idle_workers"`
+	// WorkerIdleTTL is how long an idle warm worker is kept before it is recycled
+	// (ADR 0058 D6). Default 5m.
+	WorkerIdleTTL time.Duration `mapstructure:"worker_idle_ttl"`
 }
 
 // UISection configures the embedded Airflow UI.
@@ -503,24 +535,34 @@ var serverDefaults = map[string]any{
 	"executor.defaults.staging_access_mode":            "ReadWriteMany",
 	"executor.defaults.run_tasks_as_non_root":          true,
 	"executor.defaults.read_only_task_root_filesystem": false,
-	"logs.dir":                    "/var/log/leoflow",
-	"logs.backend":                "disk",
-	"logs.sink.bucket":            "",
-	"logs.sink.prefix":            "",
-	"logs.sink.region":            "",
-	"logs.sink.endpoint":          "",
-	"logs.sink.force_path_style":  false,
-	"logs.sink.access_key_id":     "",
-	"logs.sink.secret_access_key": "",
-	"logs.sink.credentials_file":  "",
-	"observability.otel.enabled":  true,
-	"observability.otel.endpoint": "localhost:4317",
-	"observability.log_level":     "info",
-	"observability.log_format":    "json",
-	"ui.instance_name":            "Leoflow",
-	"ui.edition":                  "",
-	"ui.workspace":                "",
-	"ui.monaco_dir":               "",
+	// Warm worker pools (ADR 0058). Ships a byte-for-byte no-op: warm pools OFF =
+	// dedicated pod-per-task, today's behavior. The D6/D9 caps carry their
+	// documented values so an operator who flips warm_pools_enabled on inherits sane
+	// bounds. Durations are written as strings and parsed by viper's decode hook,
+	// matching auth.max_attempt_credential_lifetime.
+	"execution.warm_pools_enabled":      false,
+	"execution.max_attempts_per_worker": 50,
+	"execution.max_worker_lifetime":     "1h",
+	"execution.min_idle_workers":        0,
+	"execution.worker_idle_ttl":         "5m",
+	"logs.dir":                          "/var/log/leoflow",
+	"logs.backend":                      "disk",
+	"logs.sink.bucket":                  "",
+	"logs.sink.prefix":                  "",
+	"logs.sink.region":                  "",
+	"logs.sink.endpoint":                "",
+	"logs.sink.force_path_style":        false,
+	"logs.sink.access_key_id":           "",
+	"logs.sink.secret_access_key":       "",
+	"logs.sink.credentials_file":        "",
+	"observability.otel.enabled":        true,
+	"observability.otel.endpoint":       "localhost:4317",
+	"observability.log_level":           "info",
+	"observability.log_format":          "json",
+	"ui.instance_name":                  "Leoflow",
+	"ui.edition":                        "",
+	"ui.workspace":                      "",
+	"ui.monaco_dir":                     "",
 	// Must appear here even though the zero value is meaningful (the handler
 	// falls back to api.DefaultUIAutoRefreshIntervalSeconds when ≤ 0): viper's
 	// AutomaticEnv only binds env vars for keys it has seen via SetDefault or
@@ -611,6 +653,9 @@ func (c *ServerConfig) Validate() error {
 	if err := c.validateSecretPolicies(); err != nil {
 		return err
 	}
+	if err := c.validateExecution(); err != nil {
+		return err
+	}
 	// Both providers mint the app's own HS256 _token (oidc mints it after the IdP
 	// verify), so the JWT secret is required for either.
 	if (c.Auth.Provider == AuthProviderJWT || c.Auth.Provider == AuthProviderOIDC) && c.Auth.JWT.Secret == "" {
@@ -679,6 +724,44 @@ func (c *ServerConfig) validateSecretPolicies() error {
 	default:
 		return fmt.Errorf("invalid auth.agent_token_transport %q: must be %q or %q",
 			c.Auth.AgentTokenTransport, AgentTokenTransportEnvVar, AgentTokenTransportExchange)
+	}
+	return nil
+}
+
+// validateExecution enforces the warm-pool boot gate (ADR 0058 N1a), fail-closed.
+// The whole block is gated on WarmPoolsEnabled: with warm pools OFF (the default)
+// none of these fields is validated, so an operator who never turns warm pools on
+// is unaffected. With warm pools ON it rejects, rather than silently correcting:
+//
+//	(a) HIGH #1 — the security coupling. A warm pod reuses one credential across
+//	    attempts; without token-exchange transport and liveness enforcement a
+//	    superseded attempt's token would still resolve secrets. So warm pools
+//	    require auth.agent_token_transport=exchange AND auth.secret_liveness_mode=
+//	    enforce (ADR 0058 D2/HIGH-1).
+//	(b) D9 ordering — max_worker_lifetime must be >= the attempt-credential ceiling,
+//	    else a worker could be force-recycled mid-attempt by its token lapsing.
+//	(c) sanity — a zero/negative attempts cap, worker lifetime, or idle TTL would
+//	    recycle instantly or never; each must be positive.
+func (c *ServerConfig) validateExecution() error {
+	if !c.Execution.WarmPoolsEnabled {
+		return nil
+	}
+	if c.Auth.AgentTokenTransport != AgentTokenTransportExchange || c.Auth.SecretLivenessMode != SecretLivenessEnforce {
+		return fmt.Errorf("execution.warm_pools_enabled requires auth.agent_token_transport=%q and auth.secret_liveness_mode=%q (a warm pod reuses one credential across attempts; without token-exchange + liveness enforcement a superseded attempt's token would still resolve secrets — ADR 0058 D2/HIGH-1)",
+			AgentTokenTransportExchange, SecretLivenessEnforce)
+	}
+	if c.Execution.MaxAttemptsPerWorker < 1 {
+		return fmt.Errorf("execution.max_attempts_per_worker must be >= 1 when execution.warm_pools_enabled (got %d): a zero cap would recycle a warm worker instantly (ADR 0058 D9)", c.Execution.MaxAttemptsPerWorker)
+	}
+	if c.Execution.MaxWorkerLifetime <= 0 {
+		return fmt.Errorf("execution.max_worker_lifetime must be > 0 when execution.warm_pools_enabled (got %v): a non-positive lifetime would recycle a warm worker instantly (ADR 0058 D9)", c.Execution.MaxWorkerLifetime)
+	}
+	if c.Execution.WorkerIdleTTL <= 0 {
+		return fmt.Errorf("execution.worker_idle_ttl must be > 0 when execution.warm_pools_enabled (got %v): a non-positive TTL would recycle an idle warm worker instantly (ADR 0058 D6)", c.Execution.WorkerIdleTTL)
+	}
+	if c.Execution.MaxWorkerLifetime < c.Auth.MaxAttemptCredentialLifetime {
+		return fmt.Errorf("execution.max_worker_lifetime (%v) must be >= auth.max_attempt_credential_lifetime (%v) when execution.warm_pools_enabled: a shorter worker lifetime could force-recycle a worker mid-attempt when its credential outlives the pod (ADR 0058 D9)",
+			c.Execution.MaxWorkerLifetime, c.Auth.MaxAttemptCredentialLifetime)
 	}
 	return nil
 }

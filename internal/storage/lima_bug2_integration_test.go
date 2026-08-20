@@ -31,7 +31,7 @@ type dispatchCall struct {
 	at           time.Time
 }
 
-func (d *recordingDispatcher) Dispatch(_ context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error) {
+func (d *recordingDispatcher) Dispatch(_ context.Context, runID, dagID, _ string, task domain.TaskSpec) (executor.Disposition, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls = append(d.calls, dispatchCall{runID: runID, dagID: dagID, taskID: task.TaskID, at: time.Now()})

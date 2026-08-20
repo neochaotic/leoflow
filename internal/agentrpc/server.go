@@ -164,7 +164,7 @@ type Server struct {
 	// Warm worker assignment transport (ADR 0058 N1b). nil by default, so
 	// AwaitAssignment is inert (returns FailedPrecondition) unless the operator
 	// enabled warm pools and the server wired a registry via SetWarmPools.
-	warmPools *workerRegistry
+	warmPools *WorkerRegistry
 }
 
 // NewServer builds an AgentService server backed by the given authenticator,

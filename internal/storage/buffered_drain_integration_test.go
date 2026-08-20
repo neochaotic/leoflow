@@ -31,7 +31,7 @@ import (
 // the FailureSink (the real SchedulerStore) exactly as a genuine dispatch would.
 type failingInner struct{}
 
-func (failingInner) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+func (failingInner) Dispatch(context.Context, string, string, string, domain.TaskSpec) (executor.Disposition, error) {
 	return executor.Rejected, errors.New("simulated inner dispatch failure during drain")
 }
 
@@ -62,7 +62,7 @@ func TestBuffered_Close_DrainsToRealSink_NoStuckQueuedIntegration(t *testing.T) 
 	bd := dispatch.NewBuffered(failingInner{}, sched,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
 		dispatch.BufferConfig{BufferSize: 4, Workers: 1})
-	if _, err := bd.Dispatch(ctx, runUUID, dagID, tasks[0]); err != nil {
+	if _, err := bd.Dispatch(ctx, runUUID, dagID, "v1", tasks[0]); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 

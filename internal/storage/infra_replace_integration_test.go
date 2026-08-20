@@ -20,7 +20,7 @@ import (
 
 type okDispatcher struct{}
 
-func (okDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+func (okDispatcher) Dispatch(context.Context, string, string, string, domain.TaskSpec) (executor.Disposition, error) {
 	return executor.Dispatched, nil
 }
 

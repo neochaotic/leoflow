@@ -15,14 +15,14 @@ import (
 // FailedPrecondition — so with execution.warm_pools_enabled off the transport is
 // completely dormant and no running path changes. Used by tests to inject a
 // registry with a deterministic lease; callers wire it via EnableWarmPools.
-func (s *Server) SetWarmPools(reg *workerRegistry) { s.warmPools = reg }
+func (s *Server) SetWarmPools(reg *WorkerRegistry) { s.warmPools = reg }
 
 // EnableWarmPools turns on the warm-worker assignment transport with a
 // production registry (ADR 0058 N1b). onReclaim (may be nil) observes reclaim
 // events for the future placement layer to consume. Call only when
 // execution.warm_pools_enabled is set — the default leaves the handler inert.
 func (s *Server) EnableWarmPools(onReclaim func(ReclaimEvent)) {
-	s.SetWarmPools(newWorkerRegistry(onReclaim))
+	s.SetWarmPools(NewWorkerRegistry(onReclaim))
 }
 
 // AwaitAssignment is the warm-worker assignment transport (ADR 0058 N1b): a

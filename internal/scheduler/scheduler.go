@@ -51,10 +51,16 @@ type RunState struct {
 	// second query.
 	LogicalDate string
 	DagID       string
-	TenantID    string
-	State       domain.DagRunState
-	Tasks       []domain.TaskSpec
-	States      map[string]domain.TaskState
+	// DagVersionID is the dag_versions row this run pins (dag_runs.dag_version_id).
+	// It names the warm-worker pool a task is placed onto (ADR 0058 N1b1-place):
+	// dispatch threads it to the placer so an attempt reuses a worker of the exact
+	// version it compiled against. Empty for runs loaded by paths that do not set
+	// it; the dedicated pod path ignores it.
+	DagVersionID string
+	TenantID     string
+	State        domain.DagRunState
+	Tasks        []domain.TaskSpec
+	States       map[string]domain.TaskState
 	// Tries and MaxTries hold the current and maximum attempt counts per task,
 	// driving retry decisions. Absent entries mean no retry budget.
 	Tries    map[string]int
@@ -240,7 +246,7 @@ type Recorder interface {
 // task as it becomes queued; the concrete implementation builds the executor
 // request and routes it to the right executor.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error)
+	Dispatch(ctx context.Context, runID, dagID, dagVersionID string, task domain.TaskSpec) (executor.Disposition, error)
 }
 
 // maxCatchupSlotsPerTick caps how many missed cron slots are backfilled for
@@ -1073,7 +1079,7 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 		return fmt.Errorf("task %s not found in run %s", t.TaskID, run.RunID)
 	}
 	if s.dispatcher != nil {
-		disp, err := s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task)
+		disp, err := s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, run.DagVersionID, task)
 		if err != nil {
 			return s.handleDispatchFailure(ctx, run, t.TaskID, disp, err)
 		}

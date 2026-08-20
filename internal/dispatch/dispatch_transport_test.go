@@ -11,7 +11,7 @@ import (
 func TestDispatchDefaultTransportIsEnvVar(t *testing.T) {
 	exec := &fakeExecutor{}
 	d := newDispatcher(&fakeResolver{resolved: Resolved{TaskInstanceID: "ti-1"}}, &fakeIssuer{token: "t"}, exec)
-	if _, err := d.Dispatch(context.Background(), "run", "etl", pythonTask()); err != nil {
+	if _, err := d.Dispatch(context.Background(), "run", "etl", "", pythonTask()); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	if exec.req.AgentTokenTransport == "exchange" {
@@ -26,7 +26,7 @@ func TestDispatchExchangeTransportThreaded(t *testing.T) {
 	exec := &fakeExecutor{}
 	d := newDispatcher(&fakeResolver{resolved: Resolved{TaskInstanceID: "ti-1"}}, &fakeIssuer{token: "t"}, exec)
 	d.SetAgentTokenTransport("exchange", "leoflow-control-plane", 900)
-	if _, err := d.Dispatch(context.Background(), "run", "etl", pythonTask()); err != nil {
+	if _, err := d.Dispatch(context.Background(), "run", "etl", "", pythonTask()); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	if exec.req.AgentTokenTransport != "exchange" {

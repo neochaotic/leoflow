@@ -13,7 +13,7 @@ import (
 
 type noopInner struct{}
 
-func (noopInner) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+func (noopInner) Dispatch(context.Context, string, string, string, domain.TaskSpec) (executor.Disposition, error) {
 	return executor.Dispatched, nil
 }
 

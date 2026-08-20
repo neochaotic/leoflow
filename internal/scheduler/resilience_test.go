@@ -180,7 +180,7 @@ func (r *capturingRecorder) count(decision string) int {
 // would otherwise crash the scheduler goroutine (and the whole process).
 type panicDispatcher struct{ onTask string }
 
-func (p *panicDispatcher) Dispatch(_ context.Context, _, _ string, task domain.TaskSpec) (executor.Disposition, error) {
+func (p *panicDispatcher) Dispatch(_ context.Context, _, _, _ string, task domain.TaskSpec) (executor.Disposition, error) {
 	if task.TaskID == p.onTask {
 		panic("boom: dispatching " + task.TaskID)
 	}

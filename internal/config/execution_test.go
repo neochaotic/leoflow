@@ -29,6 +29,9 @@ func TestExecutionDefaults(t *testing.T) {
 	if got := c.Execution.WorkerIdleTTL; got != 5*time.Minute {
 		t.Errorf("execution.worker_idle_ttl default = %v, want 5m", got)
 	}
+	if got := c.Execution.MaxPoolSize; got != 8 {
+		t.Errorf("execution.max_pool_size default = %d, want 8", got)
+	}
 }
 
 // TestExecutionEnvBinds proves each execution key binds from its LEOFLOW_* env var
@@ -39,6 +42,7 @@ func TestExecutionEnvBinds(t *testing.T) {
 	t.Setenv("LEOFLOW_EXECUTION_MAX_WORKER_LIFETIME", "2h")
 	t.Setenv("LEOFLOW_EXECUTION_MIN_IDLE_WORKERS", "3")
 	t.Setenv("LEOFLOW_EXECUTION_WORKER_IDLE_TTL", "90s")
+	t.Setenv("LEOFLOW_EXECUTION_MAX_POOL_SIZE", "16")
 	c, err := LoadServer("", nil)
 	if err != nil {
 		t.Fatalf("LoadServer: %v", err)
@@ -58,6 +62,9 @@ func TestExecutionEnvBinds(t *testing.T) {
 	if got := c.Execution.WorkerIdleTTL; got != 90*time.Second {
 		t.Errorf("execution.worker_idle_ttl = %v, want 90s (from env)", got)
 	}
+	if got := c.Execution.MaxPoolSize; got != 16 {
+		t.Errorf("execution.max_pool_size = %d, want 16 (from env)", got)
+	}
 }
 
 // validWarmConfig returns a ServerConfig that passes the warm-pool boot gate: warm
@@ -75,6 +82,7 @@ func validWarmConfig() *ServerConfig {
 	c.Execution.MaxAttemptsPerWorker = 50
 	c.Execution.MaxWorkerLifetime = time.Hour
 	c.Execution.WorkerIdleTTL = 5 * time.Minute
+	c.Execution.MaxPoolSize = 8
 	return c
 }
 
@@ -153,6 +161,22 @@ func TestValidateExecutionAllowsShortWorkerLifetime(t *testing.T) {
 	}
 }
 
+// TestValidateExecutionMaxPoolSizeZeroFails locks the N1b1-place knob: warm pools
+// on with max_pool_size=0 fails boot closed and names the offending setting. The
+// cap is recorded and validated now; defer-at-max enforcement is deferred to
+// N1b2/N1d where real pool accounting exists.
+func TestValidateExecutionMaxPoolSizeZeroFails(t *testing.T) {
+	c := validWarmConfig()
+	c.Execution.MaxPoolSize = 0
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil for warm pools on with max_pool_size=0, want error")
+	}
+	if !strings.Contains(err.Error(), "max_pool_size") {
+		t.Errorf("error = %q, want it to name execution.max_pool_size", err.Error())
+	}
+}
+
 // TestValidateExecutionSanityCaps locks the D9 sanity caps (only enforced when warm
 // pools are on): a zero/negative attempts cap, worker lifetime, or idle TTL fails
 // boot closed rather than recycling instantly or never.
@@ -169,6 +193,8 @@ func TestValidateExecutionSanityCaps(t *testing.T) {
 			c.Execution.MaxWorkerLifetime = 0
 		}, "max_worker_lifetime"},
 		{"zero idle ttl", func(c *ServerConfig) { c.Execution.WorkerIdleTTL = 0 }, "worker_idle_ttl"},
+		{"zero pool size", func(c *ServerConfig) { c.Execution.MaxPoolSize = 0 }, "max_pool_size"},
+		{"negative pool size", func(c *ServerConfig) { c.Execution.MaxPoolSize = -1 }, "max_pool_size"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := validWarmConfig()

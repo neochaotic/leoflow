@@ -1,4 +1,4 @@
-package scheduler
+package executor
 
 import (
 	"context"
@@ -111,40 +111,5 @@ func TestReapDispatchLost_PerTIErrorIsolated(t *testing.T) {
 	r := newDispatchLostReaper(store, reapTestLogger(), 3*time.Minute, nil)
 	if err := r.run(context.Background()); err != nil {
 		t.Errorf("run err = %v, want nil (per-TI errors isolated)", err)
-	}
-}
-
-// TestStepRunsDispatchLostReaperOnLeader is the end-to-end wiring check:
-// Step → reapOrphansIfLeader → newDispatchLostReaper.run. A leader that ticks
-// with a stale queued candidate must fail it; a follower never reaps.
-func TestStepRunsDispatchLostReaperOnLeader(t *testing.T) {
-	store := newFakeStore()
-	store.staleQueuedCands = []StaleQueuedCandidate{
-		{TaskInstanceID: "stuck-ti", QueuedAt: time.Now().UTC().Add(-10 * time.Minute)},
-	}
-	s := newScheduler(store)
-	s.SetLeading(true)
-	if err := s.Step(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.dispatchLostMarked) != 1 || store.dispatchLostMarked[0] != "stuck-ti" {
-		t.Errorf("leader Step should reap stuck-ti, got %v", store.dispatchLostMarked)
-	}
-}
-
-// TestStepSkipsDispatchLostReaperOnFollower mirrors TestStepDoesNotReapOnFollower:
-// reaping writes state and must be single-writer across the fleet.
-func TestStepSkipsDispatchLostReaperOnFollower(t *testing.T) {
-	store := newFakeStore()
-	store.staleQueuedCands = []StaleQueuedCandidate{
-		{TaskInstanceID: "stuck-ti", QueuedAt: time.Now().UTC().Add(-10 * time.Minute)},
-	}
-	s := newScheduler(store)
-	s.SetLeading(false) // newScheduler defaults to leader; opt out for follower-mode test.
-	if err := s.Step(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.dispatchLostMarked) != 0 {
-		t.Errorf("follower must not reap, got %v", store.dispatchLostMarked)
 	}
 }

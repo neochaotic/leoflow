@@ -1,4 +1,4 @@
-package scheduler
+package executor
 
 import (
 	"context"
@@ -64,14 +64,14 @@ type agentLostReaper struct {
 	store     HeartbeatReapStore
 	logger    *slog.Logger
 	threshold time.Duration
-	recorder  Recorder
+	recorder  DecisionRecorder
 	// pods tears down the reaped TI's pod after the DB transition (#474). A
 	// silent agent may be a network-partitioned but still-running container;
 	// deleting the pod is what actually stops the abandoned work. Nil in Lite.
 	pods PodManager
 }
 
-func newAgentLostReaper(store HeartbeatReapStore, logger *slog.Logger, threshold time.Duration, rec Recorder) *agentLostReaper {
+func newAgentLostReaper(store HeartbeatReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *agentLostReaper {
 	return &agentLostReaper{store: store, logger: logger, threshold: threshold, recorder: rec}
 }
 

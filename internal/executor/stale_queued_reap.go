@@ -1,4 +1,4 @@
-package scheduler
+package executor
 
 import (
 	"context"
@@ -60,7 +60,7 @@ type dispatchLostReaper struct {
 	store     DispatchLostReapStore
 	logger    *slog.Logger
 	threshold time.Duration
-	recorder  Recorder
+	recorder  DecisionRecorder
 	// pods makes the reaper K8s-aware (#461): before failing a past-threshold
 	// queued TI, it checks whether the TI's pod is actually live (Pending/
 	// Running) — a slow image pull on a cold node means the dispatch DID land,
@@ -75,7 +75,7 @@ type dispatchLostReaper struct {
 	cache PodPresenceCache
 }
 
-func newDispatchLostReaper(store DispatchLostReapStore, logger *slog.Logger, threshold time.Duration, rec Recorder) *dispatchLostReaper {
+func newDispatchLostReaper(store DispatchLostReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *dispatchLostReaper {
 	return &dispatchLostReaper{store: store, logger: logger, threshold: threshold, recorder: rec}
 }
 

@@ -30,13 +30,7 @@ type fakeStore struct {
 	scheduled            []ScheduledDAG
 	createdRuns          []string
 	notes                map[string]string
-	reapCands            []ReapCandidate
-	reaped               []string
 	createErr            bool
-	agentLostCands       []AgentLostCandidate
-	agentLostMarked      []string
-	staleQueuedCands     []StaleQueuedCandidate
-	dispatchLostMarked   []string
 	dispatchFailures     []transition
 	dispatchBackpressure []transition
 	dispatchExhausted    []string
@@ -194,30 +188,6 @@ func (f *fakeStore) SetTaskNote(_ context.Context, _, taskID, note string) error
 	f.notes[taskID] = note
 	return nil
 }
-func (f *fakeStore) ListReapCandidates(context.Context) ([]ReapCandidate, error) {
-	return f.reapCands, nil
-}
-func (f *fakeStore) ReapRun(_ context.Context, runID string) error {
-	f.reaped = append(f.reaped, runID)
-	return nil
-}
-func (f *fakeStore) ListAgentLostCandidates(context.Context) ([]AgentLostCandidate, error) {
-	return f.agentLostCands, nil
-}
-func (f *fakeStore) MarkTaskAgentLost(_ context.Context, tiID string) (bool, error) {
-	f.agentLostMarked = append(f.agentLostMarked, tiID)
-	return true, nil
-}
-func (f *fakeStore) ListStaleQueuedCandidates(context.Context) ([]StaleQueuedCandidate, error) {
-	return f.staleQueuedCands, nil
-}
-func (f *fakeStore) MarkTaskDispatchLost(_ context.Context, tiID string) error {
-	f.dispatchLostMarked = append(f.dispatchLostMarked, tiID)
-	return nil
-}
-func (f *fakeStore) ListRunningTasks(context.Context) ([]PodLostCandidate, error) { return nil, nil }
-func (f *fakeStore) MarkTaskPodLost(context.Context, string) (bool, error)        { return true, nil }
-
 func newScheduler(store Store) *Scheduler {
 	s := NewScheduler(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
 	// Default tests to leader so the writer-path assertions (which is most of
@@ -473,66 +443,6 @@ func TestStepFinalizesCompletedRun(t *testing.T) {
 	}
 }
 
-// TestStepReapsOrphanRunsOnLeader covers the #120 fix end-to-end at the
-// scheduler layer: a leader tick must reap any candidate older than the orphan
-// threshold (default 5 min), turning a stuck `running` dag run into `failed` so
-// the dashboard's "Dags em Execução" gauge drops back to zero. Fresh candidates
-// stay untouched.
-func TestStepReapsOrphanRunsOnLeader(t *testing.T) {
-	store := newFakeStore()
-	now := time.Now().UTC()
-	store.reapCands = []ReapCandidate{
-		{RunID: "stuck", DagID: "etl", LastActivity: now.Add(-1 * time.Hour)},
-		{RunID: "fresh", DagID: "etl", LastActivity: now.Add(-30 * time.Second)},
-	}
-	s := newScheduler(store)
-	s.SetLeading(true)
-	if err := s.Step(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.reaped) != 1 || store.reaped[0] != "stuck" {
-		t.Errorf("reaped = %v, want [stuck]", store.reaped)
-	}
-}
-
-// TestStepReapsEvenIfCreateDueRunsFails covers an important resilience guard:
-// the reaper is a backstop, so it must run even when the rest of the tick is
-// degraded (a DB hiccup on createScheduledRun, for example). The reverse — a
-// sick DB hiding orphans precisely when you want to see them — would be a
-// silent failure mode the dashboard counter would never recover from.
-func TestStepReapsEvenIfCreateDueRunsFails(t *testing.T) {
-	store := newFakeStore()
-	store.reapCands = []ReapCandidate{
-		{RunID: "stuck", LastActivity: time.Now().UTC().Add(-1 * time.Hour)},
-	}
-	last := time.Now().UTC().Add(-2 * time.Hour)
-	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "@hourly", LastLogical: &last}}
-	store.createErr = true
-	s := newScheduler(store)
-	s.SetLeading(true)
-	_ = s.Step(context.Background())
-	if len(store.reaped) != 1 || store.reaped[0] != "stuck" {
-		t.Errorf("reaper must run even when createScheduledRun fails; reaped = %v", store.reaped)
-	}
-}
-
-// TestStepDoesNotReapOnFollower: a follower (or an instance that lost the
-// lock) must not write — reaping is a state-changing operation reserved for the
-// leader. The followers tick to keep their heartbeat path warm but skip the
-// reaper.
-func TestStepDoesNotReapOnFollower(t *testing.T) {
-	store := newFakeStore()
-	store.reapCands = []ReapCandidate{{RunID: "stuck", LastActivity: time.Now().UTC().Add(-1 * time.Hour)}}
-	s := newScheduler(store)
-	s.SetLeading(false) // newScheduler defaults to leader; this test wants follower.
-	if err := s.Step(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.reaped) != 0 {
-		t.Errorf("follower must not reap; got %v", store.reaped)
-	}
-}
-
 // TestStepFollowerSkipsAllWrites: a follower (no leadership lock) MUST NOT read
 // or write scheduler state. Today only the reaper is gated; ActiveRuns and
 // createDueRuns also run on every follower, violating the single-writer
@@ -545,9 +455,10 @@ func TestStepFollowerSkipsAllWrites(t *testing.T) {
 		Tries:  map[string]int{"a": 1, "b": 1}, MaxTries: map[string]int{"a": 3, "b": 3},
 	})
 	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "@hourly"}}
-	store.reapCands = []ReapCandidate{{RunID: "stuck", LastActivity: time.Now().UTC().Add(-1 * time.Hour)}}
 	s := newScheduler(store)
 	s.SetLeading(false) // newScheduler defaults to leader; opt out for this follower-mode test.
+	reaper := &spyExecutionReaper{}
+	s.SetExecutionReaper(reaper)
 
 	if err := s.Step(context.Background()); err != nil {
 		t.Fatalf("Step on follower must not return infra-level error: %v", err)
@@ -561,8 +472,8 @@ func TestStepFollowerSkipsAllWrites(t *testing.T) {
 	if len(store.createdRuns) != 0 {
 		t.Errorf("follower must not create scheduled runs; got %v", store.createdRuns)
 	}
-	if len(store.reaped) != 0 {
-		t.Errorf("follower must not reap; got %v", store.reaped)
+	if reaper.calls != 0 {
+		t.Errorf("follower must not drive the execution reaper; got %d calls", reaper.calls)
 	}
 	// Heartbeat MUST still fire — the leadership check sits AFTER lastTick.Store
 	// so the orchestrator can prove the instance is alive without granting it

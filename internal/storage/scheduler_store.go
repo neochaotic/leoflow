@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage/queries"
 )
@@ -519,18 +520,18 @@ func (s *SchedulerStore) MarkStagingDeleted(ctx context.Context, pvcName, reason
 // the timestamp of its most recent activity, for the scheduler's orphan reaper.
 // The query (sqlc.runs.ListOrphanCandidates) is the authority on how to compute
 // the timestamp; the reaper only decides whether each one is past its threshold.
-func (s *SchedulerStore) ListReapCandidates(ctx context.Context) ([]scheduler.ReapCandidate, error) {
+func (s *SchedulerStore) ListReapCandidates(ctx context.Context) ([]executor.ReapCandidate, error) {
 	rows, err := s.q.ListOrphanCandidates(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing orphan candidates: %w", err)
 	}
-	out := make([]scheduler.ReapCandidate, 0, len(rows))
+	out := make([]executor.ReapCandidate, 0, len(rows))
 	for _, r := range rows {
 		var last time.Time
 		if r.LastActivity.Valid {
 			last = r.LastActivity.Time.UTC()
 		}
-		out = append(out, scheduler.ReapCandidate{
+		out = append(out, executor.ReapCandidate{
 			RunID:        uuidToString(r.ID),
 			DagID:        r.DagIDText,
 			LastActivity: last,
@@ -585,18 +586,18 @@ func (s *SchedulerStore) ReapRun(ctx context.Context, runID string) error {
 // ListAgentLostCandidates returns every `running` TI with a non-null
 // last_heartbeat_at, for the scheduler's TI heartbeat reaper (#128). The
 // reaper applies the threshold per row so the SQL stays simple.
-func (s *SchedulerStore) ListAgentLostCandidates(ctx context.Context) ([]scheduler.AgentLostCandidate, error) {
+func (s *SchedulerStore) ListAgentLostCandidates(ctx context.Context) ([]executor.AgentLostCandidate, error) {
 	rows, err := s.q.ListAgentLostCandidates(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing agent-lost candidates: %w", err)
 	}
-	out := make([]scheduler.AgentLostCandidate, 0, len(rows))
+	out := make([]executor.AgentLostCandidate, 0, len(rows))
 	for _, r := range rows {
 		var last time.Time
 		if r.LastHeartbeatAt.Valid {
 			last = r.LastHeartbeatAt.Time.UTC()
 		}
-		out = append(out, scheduler.AgentLostCandidate{
+		out = append(out, executor.AgentLostCandidate{
 			TaskInstanceID: uuidToString(r.TaskInstanceID),
 			DagRunID:       uuidToString(r.DagRunID),
 			DagID:          r.DagIDText,
@@ -645,18 +646,18 @@ func (s *SchedulerStore) MarkTaskAgentLost(ctx context.Context, taskInstanceID s
 // ListStaleQueuedCandidates returns every `queued` TI with its queued_at, for
 // the dispatch-lost reaper (#202). The reaper applies the threshold per row
 // so the SQL stays simple.
-func (s *SchedulerStore) ListStaleQueuedCandidates(ctx context.Context) ([]scheduler.StaleQueuedCandidate, error) {
+func (s *SchedulerStore) ListStaleQueuedCandidates(ctx context.Context) ([]executor.StaleQueuedCandidate, error) {
 	rows, err := s.q.ListStaleQueuedTaskInstances(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing stale-queued candidates: %w", err)
 	}
-	out := make([]scheduler.StaleQueuedCandidate, 0, len(rows))
+	out := make([]executor.StaleQueuedCandidate, 0, len(rows))
 	for _, r := range rows {
 		var qed time.Time
 		if r.QueuedAt.Valid {
 			qed = r.QueuedAt.Time.UTC()
 		}
-		out = append(out, scheduler.StaleQueuedCandidate{
+		out = append(out, executor.StaleQueuedCandidate{
 			TaskInstanceID: uuidToString(r.TaskInstanceID),
 			DagRunID:       uuidToString(r.DagRunID),
 			DagID:          r.DagIDText,
@@ -685,18 +686,18 @@ func (s *SchedulerStore) MarkTaskDispatchLost(ctx context.Context, taskInstanceI
 // ListRunningTasks returns every `running` TI with the timestamp it entered
 // running, for the pod-lost reaper (#527). The reaper applies the grace period
 // and the pod-liveness check per row, so the SQL stays simple.
-func (s *SchedulerStore) ListRunningTasks(ctx context.Context) ([]scheduler.PodLostCandidate, error) {
+func (s *SchedulerStore) ListRunningTasks(ctx context.Context) ([]executor.PodLostCandidate, error) {
 	rows, err := s.q.ListRunningTasks(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing running tasks: %w", err)
 	}
-	out := make([]scheduler.PodLostCandidate, 0, len(rows))
+	out := make([]executor.PodLostCandidate, 0, len(rows))
 	for _, r := range rows {
 		var since time.Time
 		if r.StartedAt.Valid {
 			since = r.StartedAt.Time.UTC()
 		}
-		out = append(out, scheduler.PodLostCandidate{
+		out = append(out, executor.PodLostCandidate{
 			TaskInstanceID: uuidToString(r.TaskInstanceID),
 			DagRunID:       uuidToString(r.DagRunID),
 			DagID:          r.DagIDText,

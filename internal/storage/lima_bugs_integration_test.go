@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
-	"github.com/neochaotic/leoflow/internal/scheduler"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
@@ -124,8 +124,8 @@ func TestLimaBug1_ClearResetsQueuedAtIntegration(t *testing.T) {
 	// re-mark the TI. (The threshold check IsDispatchLost(now - queued_at)
 	// is in Go — we exercise it here with a generous threshold so the
 	// freshly-re-queued TI is well under it.)
-	cand := scheduler.StaleQueuedCandidate{QueuedAt: newQueuedAt}
-	if scheduler.IsDispatchLost(cand, 60*time.Second, time.Now()) {
+	cand := executor.StaleQueuedCandidate{QueuedAt: newQueuedAt}
+	if executor.IsDispatchLost(cand, 60*time.Second, time.Now()) {
 		t.Fatalf("Bug 1: freshly re-queued TI was flagged dispatch_lost — " +
 			"the reaper sees the stale timestamp from before the clear")
 	}

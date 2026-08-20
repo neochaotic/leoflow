@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
-	"github.com/neochaotic/leoflow/internal/scheduler"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 // TestListRunningTasksIntegration is the query contract for the pod-lost reaper
@@ -111,7 +111,7 @@ func TestMarkTaskPodLostIntegration(t *testing.T) {
 }
 
 // findPodLostCandidate returns the candidate matching (run uuid, task id), or nil.
-func findPodLostCandidate(cands []scheduler.PodLostCandidate, runUUID, taskID string) *scheduler.PodLostCandidate {
+func findPodLostCandidate(cands []executor.PodLostCandidate, runUUID, taskID string) *executor.PodLostCandidate {
 	for i := range cands {
 		if cands[i].DagRunID == runUUID && cands[i].TaskID == taskID {
 			return &cands[i]

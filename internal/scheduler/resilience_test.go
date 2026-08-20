@@ -123,23 +123,6 @@ func (f *flakyStore) MarkRunAlertDelivered(context.Context, string, int) error {
 
 func (f *flakyStore) SetTaskNote(context.Context, string, string, string) error { return nil }
 
-func (f *flakyStore) ListReapCandidates(context.Context) ([]ReapCandidate, error) {
-	return nil, nil
-}
-func (f *flakyStore) ReapRun(context.Context, string) error { return nil }
-func (f *flakyStore) ListAgentLostCandidates(context.Context) ([]AgentLostCandidate, error) {
-	return nil, nil
-}
-func (f *flakyStore) MarkTaskAgentLost(context.Context, string) (bool, error) { return true, nil }
-func (f *flakyStore) ListStaleQueuedCandidates(context.Context) ([]StaleQueuedCandidate, error) {
-	return nil, nil
-}
-func (f *flakyStore) MarkTaskDispatchLost(context.Context, string) error { return nil }
-func (f *flakyStore) ListRunningTasks(context.Context) ([]PodLostCandidate, error) {
-	return nil, nil
-}
-func (f *flakyStore) MarkTaskPodLost(context.Context, string) (bool, error) { return true, nil }
-
 func (f *flakyStore) snapshotMaterialized() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

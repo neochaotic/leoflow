@@ -1190,21 +1190,26 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 	disp, closer := wrapBuffered(dispatcher, store, logger, metrics, cfg.Scheduler.Dispatch) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	sched.SetDispatcher(disp)
-	// Let the reapers tear down a reaped task's pod and gate the dispatch-lost
-	// decision on real pod liveness (#474, #461). Only wired on the pod path;
-	// Lite/subprocess leaves it nil and the reapers stay DB-only.
-	sched.SetPodManager(podExec)
 	// Shared informer read-path (PR-10): one long-lived watch replaces the
 	// reapers' per-running-TI LIST storm and the reconciler's 30s LIST. Consulted
 	// only to DEFER a reap; the live TaskPodActive kill path is unchanged (#461).
-	// A typed-nil pointer would defeat the reconciler's nil check, so the
-	// snapshotter interface is only populated when the informer actually built.
+	// A typed-nil pointer would defeat the reconciler's / reaper's nil check, so
+	// the interfaces are only populated when the informer actually built.
 	podInformer := buildPodInformer(ctx, cfg, cs, logger)
-	var snapshotter executor.PodSnapshotter
+	var (
+		snapshotter executor.PodSnapshotter
+		cache       executor.PodPresenceCache
+	)
 	if podInformer != nil {
-		sched.SetPodPresenceCache(podInformer)
 		snapshotter = podInformer
+		cache = podInformer
 	}
+	// The execution reaper (#120/#128/#202/#527) fails stuck runs and TIs; it
+	// tears down a reaped task's pod and gates the dispatch-lost decision on real
+	// pod liveness (#474, #461), so it is wired only on the pod path. Lite/
+	// subprocess leaves the scheduler's reaper unset and does no reaping.
+	reaper := executor.NewReaper(store, podExec, cache, metrics, logger, executor.DefaultReaperConfig(), sched.SteppingDown)
+	sched.SetExecutionReaper(reaper)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)
 	logger.Info("pod dispatch enabled", "namespace", cfg.Executor.TaskNamespace, "agent_control_plane_addr", controlAddr)

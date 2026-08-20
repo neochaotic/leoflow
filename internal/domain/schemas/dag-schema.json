@@ -130,6 +130,18 @@
       },
       "additionalProperties": false
     },
+    "variables": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "description": "Airflow Variable names this DAG declares (ADR 0045, ADR 0055). A task receives a Variable only if declared; tasks may narrow further. Absent (empty) declares none."
+    },
+    "connections": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "description": "Managed connection ids this DAG declares (ADR 0045, ADR 0055). A task receives a connection only if declared; tasks may narrow further. Distinct from connectors: (pip provider packages, ADR 0038). Absent (empty) declares none."
+    },
     "tasks": {
       "type": "array",
       "minItems": 1,
@@ -230,31 +242,17 @@
           },
           "description": "Environment variables for the worker pod / process."
         },
-        "secrets": {
+        "variables": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "name",
-              "source"
-            ],
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "source": {
-                "type": "string",
-                "enum": [
-                  "env",
-                  "vault",
-                  "k8s_secret"
-                ]
-              },
-              "reference": {
-                "type": "string"
-              }
-            }
-          }
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Airflow Variable names this task declares, narrowing the DAG-level declaration (ADR 0045, ADR 0055). Absent inherits the DAG's declaration."
+        },
+        "connections": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Managed connection ids this task declares, narrowing the DAG-level declaration (ADR 0045, ADR 0055). Absent inherits the DAG's declaration."
         },
         "resources": {
           "type": "object",

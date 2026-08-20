@@ -124,5 +124,5 @@ func (s *Server) guardExchangeChannel(ctx context.Context) error {
 		return nil
 	}
 	return status.Error(codes.PermissionDenied,
-		"refusing to exchange a token over an insecure channel; enable gRPC TLS (see issue #58)")
+		"refusing to exchange a token over an insecure channel; enable gRPC TLS")
 }

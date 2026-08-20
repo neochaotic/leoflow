@@ -76,7 +76,18 @@ type DAGSpec struct {
 	// default) means unlimited: a DAG that never sets it, and all of Lite, plans
 	// exactly as before. The scheduler enforces it in PlanRun's scheduled→queued
 	// admission gate.
-	MaxActiveTasks int          `json:"max_active_tasks,omitempty"`
+	MaxActiveTasks int `json:"max_active_tasks,omitempty"`
+	// MinIdleWorkers is the number of warm workers the DAG AUTHOR wants kept ready
+	// for this DAG version so its tasks skip cold-pod startup (ADR 0058 N1b2b,
+	// warm pools model A2). It mirrors MaxActiveTasks as a per-DAG author-declared
+	// spec field: zero (the default) means no warmth, and a DAG that never sets it
+	// — and all of Lite — behaves exactly as before. It is only a REQUEST: the
+	// operator caps it at execution.max_pool_size, floors an unset value at
+	// execution.min_idle_workers, and the whole thing is inert unless the operator
+	// enabled execution.warm_pools_enabled (see config.ExecutionSection.
+	// EffectiveMinIdle). Whether a pod may be reused across attempts stays the
+	// operator's security decision; this field only tunes how many.
+	MinIdleWorkers int          `json:"min_idle_workers,omitempty"`
 	Catchup        bool         `json:"catchup,omitempty"`
 	DefaultArgs    *DefaultArgs `json:"default_args,omitempty"`
 	// Staging, when enabled, requests an ephemeral RWX volume shared by the run's

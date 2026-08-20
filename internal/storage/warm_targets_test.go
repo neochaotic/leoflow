@@ -1,0 +1,48 @@
+package storage
+
+import (
+	"testing"
+
+	"github.com/neochaotic/leoflow/internal/config"
+)
+
+// TestWarmTargets locks the pure active-version -> warm-target projection (ADR
+// 0058 N1b2b): distinct active dag_versions each resolve to their effective warm
+// target via the operator's clamp/fallback/flag gate, and duplicates (many active
+// runs of one version) collapse to a single target.
+func TestWarmTargets(t *testing.T) {
+	exec := config.ExecutionSection{WarmPoolsEnabled: true, MinIdleWorkers: 1, MaxPoolSize: 8}
+	versions := []activeWarmVersion{
+		{dagVersionID: "dv1", image: "img1", dagMinIdle: 2},  // author 2 -> 2
+		{dagVersionID: "dv1", image: "img1", dagMinIdle: 2},  // dup of dv1, collapses
+		{dagVersionID: "dv2", image: "img2", dagMinIdle: 0},  // unset -> operator floor 1
+		{dagVersionID: "dv3", image: "img3", dagMinIdle: 20}, // over cap -> clamped 8
+	}
+	got := warmTargets(versions, exec)
+	if len(got) != 3 {
+		t.Fatalf("warmTargets returned %d entries, want 3 distinct versions: %+v", len(got), got)
+	}
+	want := map[string]int{"dv1": 2, "dv2": 1, "dv3": 8}
+	for _, tgt := range got {
+		if w, ok := want[tgt.DagVersionID]; !ok || tgt.EffectiveMinIdle != w {
+			t.Errorf("target %s = %d, want %d", tgt.DagVersionID, tgt.EffectiveMinIdle, w)
+		}
+	}
+	// Image is threaded through so the reconciler can build the warm pod.
+	for _, tgt := range got {
+		if tgt.Image == "" {
+			t.Errorf("target %s carries no image", tgt.DagVersionID)
+		}
+	}
+}
+
+// TestWarmTargetsWarmPoolsOff locks that with warm pools off every effective
+// target is 0, so the reconciler (were it even running) would keep every pool
+// empty.
+func TestWarmTargetsWarmPoolsOff(t *testing.T) {
+	exec := config.ExecutionSection{WarmPoolsEnabled: false, MinIdleWorkers: 5, MaxPoolSize: 8}
+	got := warmTargets([]activeWarmVersion{{dagVersionID: "dv1", image: "i", dagMinIdle: 4}}, exec)
+	if len(got) != 1 || got[0].EffectiveMinIdle != 0 {
+		t.Errorf("warmTargets with pools off = %+v, want single dv1 with target 0", got)
+	}
+}

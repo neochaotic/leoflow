@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
@@ -936,6 +937,65 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace str
 	})
 }
 
+// startWarmPoolReconciler runs the leader-gated warm-pool reconciler (ADR 0058
+// N1b2b): each tick it reconciles the number of warm workers per active
+// dag_version to that version's effective min_idle. Like the pod reconciler it
+// mutates cluster state, so it runs on the leader alone via the gated ticker. It
+// is only called when warm pools are enabled.
+func startWarmPoolReconciler(ctx context.Context, cfg *config.ServerConfig, cs kubernetes.Interface, targets executor.WarmTargetSource, authn *auth.JWTAuthenticator, controlAddr string, leading func() bool, rec executor.DecisionRecorder, logger *slog.Logger) {
+	pods := executor.NewKubernetesWarmPods(cs, cfg.Executor.TaskNamespace, warmPodSpecFunc(cfg, authn, controlAddr))
+	rc := executor.NewWarmPoolReconciler(targets, pods, logger, rec)
+	startGatedTicker(ctx, "warm-pool-reconcile", reconcileInterval, leading, logger, func() {
+		if err := rc.Reconcile(ctx); err != nil {
+			logger.Error("warm pool reconcile", "error", err)
+		}
+	})
+}
+
+// warmPodSpecFunc returns the per-target warm-pod spec builder the warm-pod client
+// calls on each create. It mints a fresh, UNIQUE bootstrap credential per pod
+// (each worker registers as a distinct member of its dag_version pool) and stamps
+// the connection + hardening fields.
+//
+// The bootstrap token rides the ENV-VAR transport deliberately, regardless of
+// auth.agent_token_transport: it authorizes ONLY Register + AwaitAssignment and
+// resolves no secrets, so it needs neither the projected-token exchange nor the
+// liveness enforcement that guard the per-attempt credential. The warm agent
+// registers with it directly (it does not exchange a bootstrap token), so env-var
+// is the transport that actually works against the warm loop. The per-attempt
+// token — the one that resolves secrets — arrives in-band over AwaitAssignment and
+// is exchange/liveness-gated upstream (N1b1/N1b2a); the durable identity binding
+// (H2) is deferred to N1d.
+func warmPodSpecFunc(cfg *config.ServerConfig, authn *auth.JWTAuthenticator, controlAddr string) executor.WarmPodSpecFunc {
+	defaults := platformDefaults(cfg.Executor.Defaults)
+	return func(t executor.WarmTarget) (executor.WarmPodSpec, error) {
+		token, err := authn.IssueAgentToken(auth.AgentIdentity{
+			TaskInstanceID: "warm-" + t.DagVersionID + "-" + uuid.NewString(),
+		}, warmBootstrapTokenTTL(cfg))
+		if err != nil {
+			return executor.WarmPodSpec{}, fmt.Errorf("minting warm bootstrap token: %w", err)
+		}
+		return executor.WarmPodSpec{
+			DagVersionID:        t.DagVersionID,
+			Image:               t.Image,
+			ControlPlaneAddr:    controlAddr,
+			AgentTLSCAConfigMap: cfg.Executor.AgentTLSCAConfigMap,
+			BootstrapToken:      token,
+			PodSecurity:         defaults.PodSecurity,
+		}, nil
+	}
+}
+
+// warmBootstrapTokenTTL sizes the bootstrap credential to outlive the worker's
+// whole life (the stream bearer is validated once at open), anchored to the worker
+// lifetime cap so it cannot lapse while the worker is still valid.
+func warmBootstrapTokenTTL(cfg *config.ServerConfig) time.Duration {
+	if cfg.Execution.MaxWorkerLifetime > 0 {
+		return cfg.Execution.MaxWorkerLifetime + time.Hour
+	}
+	return 2 * time.Hour
+}
+
 // stagingGCInterval is how often the per-run staging-volume GC sweeps; stagingTTL
 // is how long a FAILED run's volume is kept after its terminal time before the
 // PVC is deleted (ADR 0022 — long enough for a clear+re-run to re-attach the
@@ -1264,6 +1324,15 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	sched.SetExecutionReaper(reaper)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)
+	// Warm-pool reconciler (ADR 0058 N1b2b, model A2): keeps min_idle warm workers
+	// ready per active dag_version. Started ONLY when warm pools are enabled — with
+	// them off it is never constructed, so no warm pod is ever created and dispatch
+	// stays byte-for-byte today's dedicated pod-per-task.
+	if cfg.Execution.WarmPoolsEnabled {
+		store.SetWarmExecution(cfg.Execution)
+		startWarmPoolReconciler(ctx, cfg, cs, store, authn, controlAddr, sched.IsLeading, metrics, logger)
+		logger.Warn("warm pool reconciler enabled (ADR 0058 N1b2b); maintaining min_idle warm workers per active dag_version", "namespace", cfg.Executor.TaskNamespace)
+	}
 	logger.Info("pod dispatch enabled", "namespace", cfg.Executor.TaskNamespace, "agent_control_plane_addr", controlAddr)
 	return true, closer
 }

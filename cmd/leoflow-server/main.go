@@ -346,7 +346,21 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if !servesScheduler {
 		return nil, false, func() {}, nil
 	}
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, buildTokenExchange(cfg, logger), cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, cfg.Execution.WarmPoolsEnabled, logger)
+	// Warm-worker assignment registry (ADR 0058 N1b1-place). Built ONCE here, only
+	// when warm pools are enabled, and shared between the gRPC handler (workers
+	// register/ack on it via SetWarmPools) and the dispatcher's placer (Assign).
+	// nil when warm pools are off => the handler stays inert (FailedPrecondition)
+	// and the dispatcher's placer stays nil, so every path is byte-for-byte
+	// today's dedicated pod-per-task. The reclaim-observer debug log is kept; a
+	// reclaimed attempt is re-placed by the buffered dispatch path on the next tick.
+	var warmReg *agentrpc.WorkerRegistry
+	if cfg.Execution.WarmPoolsEnabled {
+		warmReg = agentrpc.NewWorkerRegistry(func(ev agentrpc.ReclaimEvent) {
+			logger.Debug("warm worker assignment reclaimed", "assignment", ev.AssignmentID, "dag_version", ev.DagVersionID, "reason", ev.Reason)
+		})
+		logger.Warn("warm worker pools enabled (ADR 0058 N1b1-place); admitted tasks place on a free warm worker of their dag_version, else dispatch dedicated")
+	}
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, buildTokenExchange(cfg, logger), cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -356,7 +370,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 
 	drain := func() {}
 	if cfg.Scheduler.Enabled {
-		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, logger, metrics)
+		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, warmReg, logger, metrics)
 		if serr != nil {
 			grpcSrv.GracefulStop()
 			return nil, false, nil, serr
@@ -518,7 +532,7 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv,
 // shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
 // channel is plaintext (dev). The per-task bearer token in metadata authenticates
 // each call regardless.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPoolsEnabled bool, logger *slog.Logger) (*grpc.Server, error) {
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger) (*grpc.Server, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -560,17 +574,13 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	if auditor, ok := secretsStore.(agentrpc.SecretLivenessAuditor); ok {
 		agentSrv.SetSecretLivenessAuditor(auditor)
 	}
-	// Warm worker assignment transport (ADR 0058 N1b). Wired only when the operator
-	// enabled warm pools (which the boot guard already gated on the token-exchange +
-	// liveness prerequisites). Off by default => AwaitAssignment stays inert
-	// (FailedPrecondition) and no running path changes. N1b1 wires the transport
-	// only; there is no placement caller yet, so no assignment is ever handed out
-	// and the reclaim observer never fires — a debug log is enough for now.
-	if warmPoolsEnabled {
-		agentSrv.EnableWarmPools(func(ev agentrpc.ReclaimEvent) {
-			logger.Debug("warm worker assignment reclaimed", "assignment", ev.AssignmentID, "dag_version", ev.DagVersionID, "reason", ev.Reason)
-		})
-		logger.Warn("warm worker pools enabled (ADR 0058); assignment transport is live but no placement caller exists yet (N1b1)")
+	// Warm worker assignment transport (ADR 0058 N1b1-place). The registry is built
+	// once by startSchedulerSide and shared: the dispatcher's placer Assign()s onto
+	// the SAME instance whose workers register/ack here. nil (warm pools off, the
+	// default) leaves AwaitAssignment inert (FailedPrecondition) and no running path
+	// changes.
+	if warmPools != nil {
+		agentSrv.SetWarmPools(warmPools)
 	}
 
 	// Recover panics in any agent RPC handler so a single malformed request from a
@@ -948,7 +958,7 @@ func startStagingGC(ctx context.Context, cs kubernetes.Interface, namespace stri
 	})
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, io.Closer, error) {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, io.Closer, error) {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
 		return nil, false, nil, fmt.Errorf("leader pool: %w", err)
@@ -972,7 +982,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		metrics,
 		logger,
 	))
-	podDispatch, dispatchCloser := setupDispatch(ctx, cfg, sched, execStore, authn, store, logger, metrics)
+	podDispatch, dispatchCloser := setupDispatch(ctx, cfg, sched, execStore, authn, store, warmPools, logger, metrics)
 	leader := scheduler.NewLeader(leaderPool)
 	go func() {
 		defer leaderPool.Close()
@@ -1163,11 +1173,23 @@ func serve(s *http.Server, errCh chan<- error) {
 // setupDispatch wires the pod-path executor selected by executor.type onto the
 // scheduler and returns whether pod dispatch is active. "subprocess" runs the
 // agent on the host (dev only); "kubernetes" (default) launches task pods.
-func setupDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
+func setupDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
 	if cfg.Executor.Type == "subprocess" {
-		return setupSubprocessDispatch(cfg, sched, execStore, authn, logger, store, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
+		return setupSubprocessDispatch(cfg, sched, execStore, authn, warmPools, logger, store, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	}
-	return setupK8sDispatch(ctx, cfg, sched, execStore, authn, store, logger, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
+	return setupK8sDispatch(ctx, cfg, sched, execStore, authn, store, warmPools, logger, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
+}
+
+// setWarmPlacer attaches the warm-worker placement seam to the dispatcher, but
+// only when the registry is actually present (ADR 0058 N1b1-place). The nil check
+// is on the concrete *agentrpc.WorkerRegistry BEFORE it is boxed into the
+// dispatch.WarmPlacer interface: passing a typed-nil pointer would make the
+// interface non-nil, so the dispatcher would try to place onto a nil registry
+// instead of taking the dedicated path. Warm pools off => reg nil => no placer.
+func setWarmPlacer(d *dispatch.Dispatcher, reg *agentrpc.WorkerRegistry) {
+	if reg != nil {
+		d.SetWarmPlacer(reg)
+	}
 }
 
 // resolveAgentControlAddr returns the address task agents dial back, defaulting
@@ -1181,11 +1203,12 @@ func resolveAgentControlAddr(cfg *config.ServerConfig) string {
 
 // setupSubprocessDispatch wires the dev-only subprocess executor (ADR 0023): it
 // runs the agent on the host with no isolation, so it is gated to dev use.
-func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger, sink dispatch.FailureSink, metrics *observability.Metrics) (bool, io.Closer) {
+func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger, sink dispatch.FailureSink, metrics *observability.Metrics) (bool, io.Closer) {
 	subExec := executor.NewSubprocessExecutor(cfg.Executor.AgentPath, logger)
 	subExec.SetWorkDir(cfg.Executor.SubprocessWorkDir)
 	dispatcher := dispatch.NewDispatcher(subExec, execStore, authn, resolveAgentControlAddr(cfg), attemptTokenTTL)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
+	setWarmPlacer(dispatcher, warmPools)
 	disp, closer := wrapBuffered(dispatcher, sink, logger, metrics, cfg.Scheduler.Dispatch)
 	sched.SetDispatcher(disp)
 	logger.Warn("subprocess dispatch enabled (dev only; user code runs unsandboxed)")
@@ -1195,7 +1218,7 @@ func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Schedule
 // setupK8sDispatch wires the production pod-per-task executor; it is a no-op
 // (tasks have no executor and are failed as undispatchable) when no Kubernetes
 // client is available.
-func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
+func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
 	cs, perr := buildK8sClient()
 	if perr != nil {
 		logger.Warn("pod dispatch disabled; tasks have no executor and will fail as undispatchable", "error", perr)
@@ -1214,6 +1237,9 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// BuildPod.
 	dispatcher.SetAgentTokenTransport(cfg.Auth.AgentTokenTransport, executor.DefaultAgentTokenAudience, 0)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
+	// Warm placement seam (ADR 0058 N1b1-place): the dispatcher Assign()s onto the
+	// SAME registry the gRPC handler serves. nil when warm pools are off.
+	setWarmPlacer(dispatcher, warmPools)
 	disp, closer := wrapBuffered(dispatcher, store, logger, metrics, cfg.Scheduler.Dispatch) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	sched.SetDispatcher(disp)
 	// Shared informer read-path (PR-10): one long-lived watch replaces the

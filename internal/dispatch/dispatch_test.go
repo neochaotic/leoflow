@@ -64,7 +64,7 @@ func TestDispatchBuildsRequest(t *testing.T) {
 	iss := &fakeIssuer{token: "agent-token"}
 	exec := &fakeExecutor{}
 
-	if _, err := newDispatcher(res, iss, exec).Dispatch(context.Background(), "run-uuid", "etl", pythonTask()); err != nil {
+	if _, err := newDispatcher(res, iss, exec).Dispatch(context.Background(), "run-uuid", "etl", "", pythonTask()); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestDispatchAppliesPlatformDefaults(t *testing.T) {
 		d.SetPlatformDefaults(defaults)
 
 		bare := domain.TaskSpec{TaskID: "t", Type: domain.TaskTypePython, Entrypoint: "dag:t"} // no resources
-		if _, err := d.Dispatch(context.Background(), "run", "etl", bare); err != nil {
+		if _, err := d.Dispatch(context.Background(), "run", "etl", "", bare); err != nil {
 			t.Fatalf("Dispatch: %v", err)
 		}
 		if exec.req.StagingSize != "10Gi" || exec.req.StagingStorageClass != "efs-sc" {
@@ -123,7 +123,7 @@ func TestDispatchAppliesPlatformDefaults(t *testing.T) {
 		d := newDispatcher(res, &fakeIssuer{token: "t"}, exec)
 		d.SetPlatformDefaults(defaults)
 
-		if _, err := d.Dispatch(context.Background(), "run", "etl", pythonTask()); err != nil {
+		if _, err := d.Dispatch(context.Background(), "run", "etl", "", pythonTask()); err != nil {
 			t.Fatalf("Dispatch: %v", err)
 		}
 		if exec.req.StagingSize != "1Gi" || exec.req.StagingStorageClass != "fast" {
@@ -143,7 +143,7 @@ func TestDispatchPropagatesErrors(t *testing.T) {
 	}
 	for name, d := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := d.Dispatch(context.Background(), "run", "etl", pythonTask()); err == nil {
+			if _, err := d.Dispatch(context.Background(), "run", "etl", "", pythonTask()); err == nil {
 				t.Errorf("%s failure should abort dispatch", name)
 			}
 		})

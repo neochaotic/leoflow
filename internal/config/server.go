@@ -184,6 +184,13 @@ type ExecutionSection struct {
 	// WorkerIdleTTL is how long an idle warm worker is kept before it is recycled
 	// (ADR 0058 D6). Default 5m.
 	WorkerIdleTTL time.Duration `mapstructure:"worker_idle_ttl"`
+	// MaxPoolSize caps the total warm workers a single DAG version may hold —
+	// registered workers plus in-flight dedicated pods. Default 8, operator-set.
+	// N1b1-place records the knob and validates it (>= 1 when warm pools are on)
+	// but does NOT enforce the cap yet: defer-at-max needs real pool accounting
+	// (registered workers + in-flight pods), which arrives with the worker
+	// lifecycle in N1b2/N1d. Today's placer is assign-if-free-else-dedicated.
+	MaxPoolSize int `mapstructure:"max_pool_size"`
 }
 
 // UISection configures the embedded Airflow UI.
@@ -545,6 +552,7 @@ var serverDefaults = map[string]any{
 	"execution.max_worker_lifetime":     "1h",
 	"execution.min_idle_workers":        0,
 	"execution.worker_idle_ttl":         "5m",
+	"execution.max_pool_size":           8,
 	"logs.dir":                          "/var/log/leoflow",
 	"logs.backend":                      "disk",
 	"logs.sink.bucket":                  "",
@@ -768,6 +776,9 @@ func (c *ServerConfig) validateExecution() error {
 	}
 	if c.Execution.WorkerIdleTTL <= 0 {
 		return fmt.Errorf("execution.worker_idle_ttl must be > 0 when execution.warm_pools_enabled (got %v): a non-positive TTL would recycle an idle warm worker instantly (ADR 0058 D6)", c.Execution.WorkerIdleTTL)
+	}
+	if c.Execution.MaxPoolSize < 1 {
+		return fmt.Errorf("execution.max_pool_size must be >= 1 when execution.warm_pools_enabled (got %d): a zero cap would forbid every warm worker (ADR 0058)", c.Execution.MaxPoolSize)
 	}
 	return nil
 }

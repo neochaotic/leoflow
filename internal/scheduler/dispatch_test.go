@@ -11,6 +11,10 @@ import (
 
 type fakeDispatcher struct {
 	dispatched []string
+	// dagVersions records the dag_version_id passed to each Dispatch call, in the
+	// same order as dispatched, so a test can assert RunState.DagVersionID reaches
+	// the dispatcher (ADR 0058 N1b1-place placement key).
+	dagVersions []string
 	// disp is the typed disposition returned alongside err. It defaults to the
 	// zero value (executor.Dispatched); a test that exercises a failure path sets
 	// it to executor.Rejected or executor.Backpressure to mirror what the real
@@ -19,8 +23,9 @@ type fakeDispatcher struct {
 	err  error
 }
 
-func (d *fakeDispatcher) Dispatch(_ context.Context, _, _ string, task domain.TaskSpec) (executor.Disposition, error) {
+func (d *fakeDispatcher) Dispatch(_ context.Context, _, _, dagVersionID string, task domain.TaskSpec) (executor.Disposition, error) {
 	d.dispatched = append(d.dispatched, task.TaskID)
+	d.dagVersions = append(d.dagVersions, dagVersionID)
 	return d.disp, d.err
 }
 
@@ -44,6 +49,28 @@ func TestStepUsesDispatcherForPodTasks(t *testing.T) {
 	}
 	if len(dispatcher.dispatched) != 1 || !hasTransition(store.transitions, "a", domain.TaskStateQueued) {
 		t.Errorf("python task should dispatch then queue, got dispatched=%v transitions=%v", dispatcher.dispatched, store.transitions)
+	}
+}
+
+// TestStepThreadsDagVersionToDispatcher locks the N1b1-place plumbing: the
+// dag_version_id carried on RunState reaches the dispatcher, which uses it as the
+// warm-worker placement key. Without this thread the placer could never target
+// the right pool.
+func TestStepThreadsDagVersionToDispatcher(t *testing.T) {
+	store := newFakeStore(RunState{
+		RunID: "r1", DagID: "etl", DagVersionID: "ver-42",
+		State: domain.DagRunStateRunning, Tasks: linearTasks(),
+		States: map[string]domain.TaskState{"a": domain.TaskStateScheduled, "b": domain.TaskStateNone},
+	})
+	d := &fakeDispatcher{}
+	s := newScheduler(store)
+	s.SetDispatcher(d)
+
+	if err := s.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.dagVersions) != 1 || d.dagVersions[0] != "ver-42" {
+		t.Errorf("dispatcher got dag_versions %v, want [ver-42]", d.dagVersions)
 	}
 }
 

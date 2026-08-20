@@ -67,10 +67,10 @@ func ackMsg(assignmentID string, started bool) *agentv1.WorkerMessage {
 
 // newWarmServer builds a Server with warm pools ENABLED (a registry wired) plus
 // the JWT authenticator whose token ctxWithToken mints (identity "ti-1").
-func newWarmServer(t *testing.T, onReclaim func(ReclaimEvent)) (*Server, *auth.JWTAuthenticator, *workerRegistry) {
+func newWarmServer(t *testing.T, onReclaim func(ReclaimEvent)) (*Server, *auth.JWTAuthenticator, *WorkerRegistry) {
 	t.Helper()
 	srv, a := newServer(&fakeStore{})
-	reg := newWorkerRegistry(onReclaim)
+	reg := NewWorkerRegistry(onReclaim)
 	srv.SetWarmPools(reg)
 	return srv, a, reg
 }
@@ -156,7 +156,7 @@ func TestAwaitAssignmentDeliversAssignment(t *testing.T) {
 
 func TestAckStartedWithinLeaseMarksBusyNoReclaim(t *testing.T) {
 	reclaims := make(chan ReclaimEvent, 4)
-	reg := newWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
+	reg := NewWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
 	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour } // long lease
 
 	send := make(chan *agentv1.WorkAssignment, 1)
@@ -181,7 +181,7 @@ func TestAckStartedWithinLeaseMarksBusyNoReclaim(t *testing.T) {
 
 func TestLeaseExpiryReclaims(t *testing.T) {
 	reclaims := make(chan ReclaimEvent, 4)
-	reg := newWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
+	reg := NewWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
 	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return 5 * time.Millisecond }
 
 	send := make(chan *agentv1.WorkAssignment, 1)
@@ -203,7 +203,7 @@ func TestLeaseExpiryReclaims(t *testing.T) {
 
 func TestAckRefusedReclaims(t *testing.T) {
 	reclaims := make(chan ReclaimEvent, 4)
-	reg := newWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
+	reg := NewWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
 	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour }
 
 	send := make(chan *agentv1.WorkAssignment, 1)

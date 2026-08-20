@@ -8,10 +8,28 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/executor"
+	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
+
+// warmLeaseSeconds is the ack deadline placed on a warm-worker assignment: the
+// worker must ack it as started within this window or the registry reclaims the
+// attempt (ADR 0058 N1b, H1). It is a fixed, sensible constant here — the pool
+// does not yet tune it per DAG.
+const warmLeaseSeconds = 30
+
+// WarmPlacer hands a per-attempt WorkAssignment to a free warm worker of a
+// dag_version, returning false when none is free (ADR 0058 N1b1-place). It is a
+// narrow structural view of the agentrpc worker registry: the executor package
+// must not import agentrpc, so the seam lives here and main.go passes the
+// registry, which satisfies it. A nil WarmPlacer on the Dispatcher means warm
+// pools are off — every task takes the dedicated pod path, today's behavior.
+type WarmPlacer interface {
+	Assign(dagVersionID string, a *agentv1.WorkAssignment) bool
+}
 
 // Resolved is the execution context the dispatcher needs to launch a task.
 type Resolved struct {
@@ -82,6 +100,11 @@ type Dispatcher struct {
 	tokenTransport         string
 	tokenAudience          string
 	tokenExpirationSeconds int64
+	// placer, when non-nil, is the warm-worker placement seam (ADR 0058
+	// N1b1-place). Dispatch tries to place an admitted attempt on a free warm
+	// worker of its dag_version before falling back to a dedicated pod. nil means
+	// warm pools are off — the dedicated pod path is byte-for-byte today's behavior.
+	placer WarmPlacer
 }
 
 // NewDispatcher builds a Dispatcher that launches tasks via exec, resolves their
@@ -90,6 +113,12 @@ type Dispatcher struct {
 func NewDispatcher(exec executor.Executor, resolver Resolver, issuer TokenIssuer, controlAddr string, tokenTTL time.Duration) *Dispatcher {
 	return &Dispatcher{exec: exec, resolver: resolver, issuer: issuer, controlAddr: controlAddr, tokenTTL: tokenTTL}
 }
+
+// SetWarmPlacer wires the warm-worker placement seam (ADR 0058 N1b1-place). With
+// a placer set, Dispatch tries to place an admitted attempt on a free warm worker
+// of its dag_version and only falls back to a dedicated pod on a warm miss. Leave
+// it unset (nil) — the default — to keep dedicated pod-per-task, today's behavior.
+func (d *Dispatcher) SetWarmPlacer(p WarmPlacer) { d.placer = p }
 
 // SetAgentTLSCAConfigMap configures the CA ConfigMap mounted into task pods so
 // agents verify the control plane's gRPC TLS cert (issue #58). Empty = the agent
@@ -124,7 +153,7 @@ func (d *Dispatcher) SetAgentTokenTransport(transport, audience string, expirati
 // happens BEFORE Execute (task resolve, token mint) is permanent and so returns
 // executor.Rejected — those bare errors classified as permanent before this
 // change, so Rejected preserves the behavior exactly.
-func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error) {
+func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID, dagVersionID string, task domain.TaskSpec) (executor.Disposition, error) {
 	r, err := d.resolver.ResolveTask(ctx, runID, task.TaskID)
 	if err != nil {
 		return executor.Rejected, fmt.Errorf("resolving task %s: %w", task.TaskID, err)
@@ -139,6 +168,30 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 	}, d.tokenTTL)
 	if err != nil {
 		return executor.Rejected, fmt.Errorf("issuing agent token for %s: %w", task.TaskID, err)
+	}
+
+	// Warm placement (ADR 0058 N1b1-place). With warm pools on, offer the attempt
+	// to a free warm worker of this dag_version, carrying the same identity
+	// (run/dag/task/try) and per-attempt token the dedicated path would use. On a
+	// hit the worker owns the attempt — return Dispatched. On a miss (no free
+	// worker) fall through to the dedicated pod path: degrade, never strand.
+	//
+	// N1b1-place is assign-if-free-else-dedicated. The pool-size cap and
+	// defer-at-max belong to N1b2/N1d, where real pool accounting (registered
+	// workers + in-flight pods) exists; there is no admission cap here.
+	if d.placer != nil {
+		wa := &agentv1.WorkAssignment{
+			AssignmentId: uuid.NewString(),
+			AttemptToken: token,
+			DagRunId:     runID,
+			TaskId:       task.TaskID,
+			TryNumber:    int32(r.TryNumber), //nolint:gosec // try number is a small bounded attempt counter, never near int32 max
+			DagVersionId: dagVersionID,
+			LeaseSeconds: warmLeaseSeconds,
+		}
+		if d.placer.Assign(dagVersionID, wa) {
+			return executor.Dispatched, nil
+		}
 	}
 
 	req := executor.Request{

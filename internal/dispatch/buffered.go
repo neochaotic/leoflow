@@ -28,7 +28,7 @@ var ErrDrainTimeout = errors.New("drain timed out")
 // Inner is the underlying synchronous dispatcher BufferedDispatcher wraps —
 // matches scheduler.Dispatcher exactly so production wires through one type.
 type Inner interface {
-	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error)
+	Dispatch(ctx context.Context, runID, dagID, dagVersionID string, task domain.TaskSpec) (executor.Disposition, error)
 }
 
 // FailureSink lets a worker report that an asynchronously-dispatched task
@@ -69,13 +69,13 @@ type BufferConfig struct {
 const defaultDrainTimeout = 15 * time.Second
 
 // dispatchRequest carries one queued dispatch from the scheduler to a worker.
-// runID, dagID, task are the same arguments the synchronous interface takes;
-// ctx is the scheduler's caller context — the worker uses a derived
-// background context so a cancellation of the caller does not abandon work
-// the scheduler already considers "accepted".
+// runID, dagID, dagVersionID, task are the same arguments the synchronous
+// interface takes; ctx is the scheduler's caller context — the worker uses a
+// derived background context so a cancellation of the caller does not abandon
+// work the scheduler already considers "accepted".
 type dispatchRequest struct {
-	runID, dagID string
-	task         domain.TaskSpec
+	runID, dagID, dagVersionID string
+	task                       domain.TaskSpec
 }
 
 // BufferedDispatcher fronts a synchronous Inner dispatcher with a bounded
@@ -130,9 +130,9 @@ func NewBuffered(inner Inner, sink FailureSink, logger *slog.Logger, metrics Met
 // ErrAtCapacity). Rejected preserves today's behavior exactly: ErrAtCapacity is
 // a plain error, which the old scheduler classified as permanent — the bounded
 // path that leaves the TI scheduled for the next tick.
-func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error) {
+func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID, dagVersionID string, task domain.TaskSpec) (executor.Disposition, error) {
 	if b.queue == nil {
-		return b.inner.Dispatch(ctx, runID, dagID, task)
+		return b.inner.Dispatch(ctx, runID, dagID, dagVersionID, task)
 	}
 	// RLock pairs with Close's Lock: while any Dispatch holds it, Close can't
 	// close the queue channel, so the non-blocking send below can never hit a
@@ -146,7 +146,7 @@ func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID string, 
 		return executor.Rejected, ErrAtCapacity
 	}
 	select {
-	case b.queue <- dispatchRequest{runID: runID, dagID: dagID, task: task}:
+	case b.queue <- dispatchRequest{runID: runID, dagID: dagID, dagVersionID: dagVersionID, task: task}:
 		if b.metrics != nil {
 			b.metrics.RecordDispatchQueueDepth(len(b.queue))
 		}
@@ -232,7 +232,7 @@ func (b *BufferedDispatcher) dispatchOne(req dispatchRequest) {
 	// and does not act on classification (it never did — a queued TI whose async
 	// dispatch failed is failed, not re-offered), so the disposition is ignored
 	// here.
-	if _, err := b.inner.Dispatch(context.Background(), req.runID, req.dagID, req.task); err != nil { //nolint:contextcheck // worker intentionally detaches from the caller's ctx
+	if _, err := b.inner.Dispatch(context.Background(), req.runID, req.dagID, req.dagVersionID, req.task); err != nil { //nolint:contextcheck // worker intentionally detaches from the caller's ctx
 		b.logger.Error("dispatch failed in worker",
 			"run", req.runID, "dag", req.dagID, "task", req.task.TaskID, "error", err)
 		if b.metrics != nil {

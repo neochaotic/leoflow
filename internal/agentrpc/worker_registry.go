@@ -49,7 +49,7 @@ type leaseState struct {
 	timer      *time.Timer
 }
 
-// workerRegistry is the concurrency-safe home of the warm-worker fleet and the
+// WorkerRegistry is the concurrency-safe home of the warm-worker fleet and the
 // H1 ack/lease machine (ADR 0058 N1b).
 //
 // Data structures and complexity:
@@ -58,7 +58,7 @@ type leaseState struct {
 //     of a dag_version in O(1) (a single map-range that breaks on the first
 //     element), then removes it in O(1).
 //   - leases:  assignment_id -> in-flight lease. Ack and lease-expiry are O(1).
-type workerRegistry struct {
+type WorkerRegistry struct {
 	mu      sync.Mutex
 	workers map[string]*registeredWorker
 	free    map[string]map[string]*registeredWorker
@@ -70,10 +70,10 @@ type workerRegistry struct {
 	leaseFor func(*agentv1.WorkAssignment) time.Duration
 }
 
-// newWorkerRegistry builds a registry whose reclaim events are delivered to
+// NewWorkerRegistry builds a registry whose reclaim events are delivered to
 // onReclaim (may be nil).
-func newWorkerRegistry(onReclaim func(ReclaimEvent)) *workerRegistry {
-	return &workerRegistry{
+func NewWorkerRegistry(onReclaim func(ReclaimEvent)) *WorkerRegistry {
+	return &WorkerRegistry{
 		workers:   map[string]*registeredWorker{},
 		free:      map[string]map[string]*registeredWorker{},
 		leases:    map[string]*leaseState{},
@@ -88,7 +88,7 @@ func newWorkerRegistry(onReclaim func(ReclaimEvent)) *workerRegistry {
 // work for dagVersion. Idempotent: a reconnect with the same identity replaces
 // the prior entry (never adds a second), and the fresh entry starts free. It
 // returns the entry so the caller can Deregister exactly the entry it created.
-func (r *workerRegistry) Register(identity, dagVersion string, send chan *agentv1.WorkAssignment) *registeredWorker {
+func (r *WorkerRegistry) Register(identity, dagVersion string, send chan *agentv1.WorkAssignment) *registeredWorker {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if old, ok := r.workers[identity]; ok {
@@ -107,7 +107,7 @@ func (r *workerRegistry) Register(identity, dagVersion string, send chan *agentv
 // and the stale stream's later Deregister must not evict the live one. Any
 // in-flight leases the worker still held are reclaimed: a gone worker can never
 // ack them.
-func (r *workerRegistry) Deregister(w *registeredWorker) {
+func (r *WorkerRegistry) Deregister(w *registeredWorker) {
 	if w == nil {
 		return
 	}
@@ -136,7 +136,7 @@ func (r *workerRegistry) Deregister(w *registeredWorker) {
 // onto that worker's outbound channel and starting its lease. It returns false
 // when no free worker of that dag_version exists (nothing was handed out and no
 // lease was started).
-func (r *workerRegistry) Assign(dagVersion string, a *agentv1.WorkAssignment) bool {
+func (r *WorkerRegistry) Assign(dagVersion string, a *agentv1.WorkAssignment) bool {
 	r.mu.Lock()
 	w := r.takeFreeLocked(dagVersion)
 	if w == nil {
@@ -165,7 +165,7 @@ func (r *workerRegistry) Assign(dagVersion string, a *agentv1.WorkAssignment) bo
 // Ack settles the lease for assignmentID. started=true marks the worker busy and
 // cancels the lease (no reclaim). started=false reclaims the assignment. An ack
 // for an unknown assignment (already expired or already settled) is ignored.
-func (r *workerRegistry) Ack(assignmentID string, started bool) {
+func (r *WorkerRegistry) Ack(assignmentID string, started bool) {
 	r.mu.Lock()
 	ls, ok := r.leases[assignmentID]
 	if !ok {
@@ -186,7 +186,7 @@ func (r *workerRegistry) Ack(assignmentID string, started bool) {
 
 // MarkFree records a worker's SlotFree signal: it clears busy and returns the
 // worker to the free set so it can take new work. Unknown identities are ignored.
-func (r *workerRegistry) MarkFree(identity string) {
+func (r *WorkerRegistry) MarkFree(identity string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	w, ok := r.workers[identity]
@@ -199,7 +199,7 @@ func (r *workerRegistry) MarkFree(identity string) {
 
 // onLeaseExpire reclaims an assignment whose lease elapsed with no ack. If the
 // lease was already settled (acked or the worker deregistered), it is a no-op.
-func (r *workerRegistry) onLeaseExpire(assignmentID string) {
+func (r *WorkerRegistry) onLeaseExpire(assignmentID string) {
 	r.mu.Lock()
 	ls, ok := r.leases[assignmentID]
 	if !ok {
@@ -214,7 +214,7 @@ func (r *workerRegistry) onLeaseExpire(assignmentID string) {
 
 // emitReclaim delivers a reclaim event to the observer, always OUTSIDE the lock
 // so the observer may re-enter the registry without deadlocking.
-func (r *workerRegistry) emitReclaim(ev ReclaimEvent) {
+func (r *WorkerRegistry) emitReclaim(ev ReclaimEvent) {
 	if r.onReclaim != nil {
 		r.onReclaim(ev)
 	}
@@ -222,7 +222,7 @@ func (r *workerRegistry) emitReclaim(ev ReclaimEvent) {
 
 // ── free-set helpers (all require r.mu held) ────────────────────────────────
 
-func (r *workerRegistry) addFreeLocked(w *registeredWorker) {
+func (r *WorkerRegistry) addFreeLocked(w *registeredWorker) {
 	set := r.free[w.dagVersion]
 	if set == nil {
 		set = map[string]*registeredWorker{}
@@ -231,7 +231,7 @@ func (r *workerRegistry) addFreeLocked(w *registeredWorker) {
 	set[w.identity] = w
 }
 
-func (r *workerRegistry) removeFreeLocked(w *registeredWorker) {
+func (r *WorkerRegistry) removeFreeLocked(w *registeredWorker) {
 	set := r.free[w.dagVersion]
 	if set == nil {
 		return
@@ -242,7 +242,7 @@ func (r *workerRegistry) removeFreeLocked(w *registeredWorker) {
 	}
 }
 
-func (r *workerRegistry) takeFreeLocked(dagVersion string) *registeredWorker {
+func (r *WorkerRegistry) takeFreeLocked(dagVersion string) *registeredWorker {
 	set := r.free[dagVersion]
 	for id, w := range set {
 		delete(set, id)
@@ -256,27 +256,27 @@ func (r *workerRegistry) takeFreeLocked(dagVersion string) *registeredWorker {
 
 // ── test/introspection helpers ──────────────────────────────────────────────
 
-func (r *workerRegistry) registered(identity string) bool {
+func (r *WorkerRegistry) registered(identity string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, ok := r.workers[identity]
 	return ok
 }
 
-func (r *workerRegistry) size() int {
+func (r *WorkerRegistry) size() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.workers)
 }
 
-func (r *workerRegistry) busy(identity string) bool {
+func (r *WorkerRegistry) busy(identity string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	w, ok := r.workers[identity]
 	return ok && w.busy
 }
 
-func (r *workerRegistry) dagVersionOf(identity string) string {
+func (r *WorkerRegistry) dagVersionOf(identity string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if w, ok := r.workers[identity]; ok {

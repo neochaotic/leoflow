@@ -1,0 +1,197 @@
+package executor
+
+import (
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// Warm-worker pod labels (ADR 0058 N1b2b). The warm-pool reconciler lists and
+// counts warm pods per dag_version by selecting on these, so they are the stable
+// contract between BuildWarmPod (writes them) and the reconciler (reads them).
+const (
+	// warmWorkerLabelKey marks a pod as a warm worker; its value is always "true".
+	// It is the selector the reconciler lists the warm fleet by.
+	warmWorkerLabelKey = "leoflow.io/warm-worker"
+	warmWorkerLabelVal = "true"
+	// warmDagVersionLabelKey names the dag_version pool a warm worker serves, so
+	// the reconciler can group and reconcile counts per version.
+	warmDagVersionLabelKey = "leoflow.io/dag-version-id"
+)
+
+// WarmPodSpec is everything BuildWarmPod needs to build one long-lived warm-worker
+// pod: which dag_version pool it serves, the image (the DAG's image — a warm
+// worker runs the agent in warm mode and forks a child per attempt), the
+// control-plane connection, and how its BOOTSTRAP credential reaches it (the same
+// transport a task pod uses). It carries NO task instance: the per-attempt token
+// and task identity arrive in-band over AwaitAssignment, never on this spec.
+type WarmPodSpec struct {
+	DagVersionID    string
+	Image           string
+	ImagePullPolicy string
+	Namespace       string
+
+	// ControlPlaneAddr / AgentTLSCAConfigMap mirror the task-pod connection knobs:
+	// where the agent dials and (when set) the CA ConfigMap it verifies the server
+	// cert against. Reused verbatim so a warm worker connects exactly as a task pod.
+	ControlPlaneAddr    string
+	AgentTLSCAConfigMap string
+
+	// Bootstrap-credential transport (ADR 0055 Fix #3), mirroring Request's token
+	// fields: BootstrapToken rides plaintext on the env-var default; the exchange
+	// transport keeps it off the pod and projects a ServiceAccount token instead.
+	// The credential authorizes only Register + AwaitAssignment (no secret access —
+	// secrets resolve per-attempt against the in-band attempt token), so a warm
+	// worker never stamps a task-instance identity annotation.
+	BootstrapToken              string
+	AgentTokenTransport         string
+	AgentTokenAudience          string
+	AgentTokenExpirationSeconds int64
+	AgentTokenSecretName        string
+	AgentTokenSecretKey         string
+
+	// PodSecurity carries the same container/pod hardening choices as a task pod.
+	PodSecurity PodSecurity
+
+	// Labels / Annotations are operator-declared metadata overlaid onto the pod;
+	// Leoflow's own warm-worker labels always win a collision (see mergeMetadata).
+	Labels      map[string]string
+	Annotations map[string]string
+}
+
+// BuildWarmPod constructs the pod spec for one warm worker. It reuses BuildPod's
+// machinery — the token transport, the CA mount, the control-plane env, and the
+// security contexts — but for a LONG-LIVED worker bound to a dag_version rather
+// than a single task attempt. The differences from a task pod are deliberate:
+//
+//   - Env: LEOFLOW_WARM_WORKER=1 + LEOFLOW_DAG_VERSION_ID select the agent's warm
+//     loop, and there is NO task env (no task-instance id, no per-attempt token, no
+//     durable-outcome path) — a warm worker has no task until an attempt is pushed
+//     to it in-band.
+//   - Labels: a stable warm-worker label set (warmWorkerLabelKey +
+//     warmDagVersionLabelKey) so the reconciler can list, count, and reap warm
+//     pods per version. None of the task identity labels are set.
+//   - RestartPolicy Never: a warm worker that exits (drain, idle recycle, or a
+//     crash) is REPLACED by the reconciler with a fresh pod that re-registers
+//     cleanly, rather than restarted in place with stale in-container state. This
+//     is the clean model for the reconciler-owned lifecycle; the D9 lifetime/
+//     attempt caps and the idle-TTL recycle that drive drains are deferred to N1d.
+//
+// It is pure (modulo the random name suffix) and unit-tested independently of any
+// cluster. It bakes NO task token in; the GC-anchor ConfigMap (D11) is deferred to
+// N1d — a bare warm pod deleted by the reconciler is fine for now.
+func BuildWarmPod(spec WarmPodSpec) *corev1.Pod {
+	pullPolicy := corev1.PullIfNotPresent
+	if spec.ImagePullPolicy != "" {
+		pullPolicy = corev1.PullPolicy(spec.ImagePullPolicy)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: warmPodName(spec.DagVersionID),
+			Labels: map[string]string{
+				warmWorkerLabelKey:     warmWorkerLabelVal,
+				warmDagVersionLabelKey: sanitizeLabel(spec.DagVersionID),
+			},
+			Annotations: map[string]string{},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy:   corev1.RestartPolicyNever,
+			SecurityContext: buildPodSecurityContext(spec.PodSecurity),
+			// The warm agent authenticates to the control plane with its bootstrap
+			// token over gRPC and never calls the Kubernetes API, so a mounted
+			// ServiceAccount token is a credential handed to code for no reason.
+			AutomountServiceAccountToken: ptr(false),
+			Containers: []corev1.Container{{
+				Name:            warmContainerName,
+				Image:           spec.Image,
+				ImagePullPolicy: pullPolicy,
+				Env:             warmPodEnv(spec),
+				SecurityContext: buildSecurityContext(spec.PodSecurity),
+			}},
+		},
+	}
+	mergeMetadata(pod.Labels, spec.Labels)
+	mergeMetadata(pod.Annotations, spec.Annotations)
+	mountWarmAgentTLSCA(pod, spec)
+	// Bootstrap-credential transport, shared with the task pod. identity is nil: a
+	// warm worker registers under its bearer's own identity, so no task-instance
+	// identity annotation is stamped even under the exchange transport.
+	mountAgentToken(pod, spec.agentToken())
+	return pod
+}
+
+// warmContainerName is the warm worker's single container.
+const warmContainerName = "warm-worker"
+
+// agentToken projects a WarmPodSpec's token fields into the shared transport
+// carrier. identity is left nil so mountAgentToken projects the token (under
+// exchange) without stamping a task-instance identity annotation.
+func (spec WarmPodSpec) agentToken() agentToken {
+	return agentToken{
+		transport:         spec.AgentTokenTransport,
+		token:             spec.BootstrapToken,
+		secretName:        spec.AgentTokenSecretName,
+		secretKey:         spec.AgentTokenSecretKey,
+		audience:          spec.AgentTokenAudience,
+		expirationSeconds: spec.AgentTokenExpirationSeconds,
+		identity:          nil,
+	}
+}
+
+// warmPodEnv builds the warm worker's container env: the control-plane address,
+// the bootstrap-token transport env (reused from the task path), the warm-mode
+// selectors, and — when a CA is configured — the TLS env. It deliberately omits
+// every task-specific var.
+func warmPodEnv(spec WarmPodSpec) []corev1.EnvVar {
+	env := make([]corev1.EnvVar, 0, 6)
+	env = append(env, corev1.EnvVar{Name: "LEOFLOW_CONTROL_PLANE_ADDR", Value: spec.ControlPlaneAddr})
+	tok := spec.agentToken()
+	env = append(env, tok.env()...)
+	env = append(env, tok.pathEnv()...)
+	// Select the agent's warm-worker loop for this dag_version pool.
+	env = append(env,
+		corev1.EnvVar{Name: "LEOFLOW_WARM_WORKER", Value: "1"},
+		corev1.EnvVar{Name: "LEOFLOW_DAG_VERSION_ID", Value: spec.DagVersionID},
+	)
+	if spec.AgentTLSCAConfigMap != "" {
+		env = append(env,
+			corev1.EnvVar{Name: "LEOFLOW_AGENT_INSECURE", Value: "false"},
+			corev1.EnvVar{Name: "LEOFLOW_AGENT_TLS_CA", Value: agentCADir + "/" + agentCAFile},
+		)
+	}
+	return env
+}
+
+// mountWarmAgentTLSCA mounts the CA ConfigMap (when configured) into the warm pod
+// so the agent can verify the control plane's TLS cert, mirroring the task pod's
+// mountAgentTLSCA (the matching env is set in warmPodEnv).
+func mountWarmAgentTLSCA(pod *corev1.Pod, spec WarmPodSpec) {
+	if spec.AgentTLSCAConfigMap == "" {
+		return
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name: agentCAVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: spec.AgentTLSCAConfigMap},
+			},
+		},
+	})
+	c := &pod.Spec.Containers[0]
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: agentCAVolumeName, MountPath: agentCADir, ReadOnly: true})
+}
+
+// warmPodName builds a DNS-safe, collision-resistant name for a warm pod:
+// leoflow-warm-<dag-version>-<rand>, truncated to the 63-char label limit like
+// podName. The random suffix lets the reconciler create many workers for one
+// version without name clashes.
+func warmPodName(dagVersionID string) string {
+	suffix := randSuffix()
+	base := "leoflow-warm-" + sanitizeLabel(dagVersionID)
+	maxBase := 63 - len(suffix) - 1
+	if len(base) > maxBase {
+		base = strings.TrimRight(base[:maxBase], "-")
+	}
+	return base + "-" + suffix
+}

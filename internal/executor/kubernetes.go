@@ -138,7 +138,7 @@ func BuildPod(req Request) *corev1.Pod {
 	mountStagingVolume(pod, req)
 	mountAgentTLSCA(pod, req)
 	mountTaskSecret(pod, req)
-	mountAgentToken(pod, req)
+	mountAgentToken(pod, agentTokenOf(req))
 	return pod
 }
 
@@ -191,50 +191,101 @@ func ParseAgentIdentity(raw string) (PodIdentity, error) {
 	return id, nil
 }
 
-// usesTokenExchange reports whether this request opted into the projected-token
-// exchange transport. Empty / "envvar" is the default (plaintext env var).
-func usesTokenExchange(req Request) bool { return req.AgentTokenTransport == agentTransportExchange }
+// agentToken is the transport-independent description of how an agent's bootstrap
+// bearer credential reaches a pod, shared by the task-pod (BuildPod) and warm-pod
+// (BuildWarmPod) builders so the token transport is wired one way for both. A task
+// pod fills identity so the exchange resolver can map the projected token back to
+// its task instance; a warm worker leaves identity nil (it registers under its
+// bearer's own identity, not a task instance), so no identity annotation is
+// stamped for it.
+type agentToken struct {
+	transport         string
+	token             string
+	secretName        string
+	secretKey         string
+	audience          string
+	expirationSeconds int64
+	identity          *PodIdentity
+}
 
-// agentTokenEnv returns the env var(s) carrying (or pointing at) the agent's
-// bearer credential, per the selected transport:
+// agentTokenOf projects a Request's token fields into the shared carrier, stamping
+// the task-instance identity so the exchange path is byte-identical to before.
+func agentTokenOf(req Request) agentToken {
+	return agentToken{
+		transport:         req.AgentTokenTransport,
+		token:             req.AgentToken,
+		secretName:        req.AgentTokenSecretName,
+		secretKey:         req.AgentTokenSecretKey,
+		audience:          req.AgentTokenAudience,
+		expirationSeconds: req.AgentTokenExpirationSeconds,
+		identity: &PodIdentity{
+			TaskInstanceID: req.TaskInstanceID, TenantID: req.TenantID, DagID: req.DagID,
+			RunID: req.RunID, TaskID: req.TaskID, TryNumber: req.TryNumber,
+		},
+	}
+}
+
+// usesExchange reports whether the token opted into the projected-token exchange
+// transport. Empty / "envvar" is the default (plaintext env var).
+func (t agentToken) usesExchange() bool { return t.transport == agentTransportExchange }
+
+// env returns the env var(s) carrying (or pointing at) the agent's bearer
+// credential, per the selected transport:
 //   - env-var (default): a plaintext LEOFLOW_AGENT_TOKEN — today's behavior.
 //   - exchange + SecretKeyRef fallback: LEOFLOW_AGENT_TOKEN sourced from a Secret.
 //   - exchange (projected, primary): NO token env var at all — the agent reads the
 //     projected token from LEOFLOW_AGENT_TOKEN_PATH and exchanges it. The path and
-//     transport marker are added by podEnv.
-func agentTokenEnv(req Request) []corev1.EnvVar {
-	if !usesTokenExchange(req) {
-		return []corev1.EnvVar{{Name: "LEOFLOW_AGENT_TOKEN", Value: req.AgentToken}}
+//     transport marker are added by pathEnv.
+func (t agentToken) env() []corev1.EnvVar {
+	if !t.usesExchange() {
+		return []corev1.EnvVar{{Name: "LEOFLOW_AGENT_TOKEN", Value: t.token}}
 	}
-	if req.AgentTokenSecretName != "" {
-		key := req.AgentTokenSecretKey
+	if t.secretName != "" {
+		key := t.secretKey
 		if key == "" {
 			key = agentTokenFile
 		}
 		return []corev1.EnvVar{{
 			Name: "LEOFLOW_AGENT_TOKEN",
 			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: req.AgentTokenSecretName},
+				LocalObjectReference: corev1.LocalObjectReference{Name: t.secretName},
 				Key:                  key,
 			}},
 		}}
 	}
-	return nil // projected primary path: no token env var, only the path (podEnv).
+	return nil // projected primary path: no token env var, only the path (pathEnv).
+}
+
+// pathEnv returns the transport marker + token-file path the agent reads under the
+// projected exchange path, or nil for the env-var default and the SecretKeyRef
+// fallback (whose token is already in LEOFLOW_AGENT_TOKEN), keeping those pod specs
+// unchanged.
+func (t agentToken) pathEnv() []corev1.EnvVar {
+	if !t.usesExchange() || t.secretName != "" {
+		return nil
+	}
+	return []corev1.EnvVar{
+		{Name: "LEOFLOW_AGENT_TOKEN_TRANSPORT", Value: agentTransportExchange},
+		{Name: "LEOFLOW_AGENT_TOKEN_PATH", Value: agentTokenMountDir + "/" + agentTokenFile},
+	}
 }
 
 // mountAgentToken projects the ServiceAccount token the agent exchanges (ADR 0055
-// Fix #3), and stamps the identity annotation the control plane resolves the pod
-// to on exchange. It is a no-op for the env-var default and for the SecretKeyRef
-// fallback (neither projects a token), keeping those pod specs unchanged.
-func mountAgentToken(pod *corev1.Pod, req Request) {
-	if !usesTokenExchange(req) || req.AgentTokenSecretName != "" {
+// Fix #3), and — for a task pod — stamps the identity annotation the control plane
+// resolves the pod to on exchange. It is a no-op for the env-var default and for
+// the SecretKeyRef fallback (neither projects a token), keeping those pod specs
+// unchanged. A warm worker (identity nil) projects the token but stamps no
+// task-instance identity: it authenticates its stream under its bootstrap bearer
+// and serves any task of its dag_version, so a task identity would be wrong.
+func mountAgentToken(pod *corev1.Pod, t agentToken) {
+	if !t.usesExchange() || t.secretName != "" {
 		return
 	}
-	audience := req.AgentTokenAudience
+	audience := t.audience
 	if audience == "" {
 		audience = DefaultAgentTokenAudience
 	}
-	exp := req.AgentTokenExpirationSeconds
+	exp := t.expirationSeconds
 	if exp < minProjectedTokenExpirationSeconds {
 		exp = minProjectedTokenExpirationSeconds
 	}
@@ -256,11 +307,10 @@ func mountAgentToken(pod *corev1.Pod, req Request) {
 	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
 		Name: agentTokenVolumeName, MountPath: agentTokenMountDir, ReadOnly: true,
 	})
-	id := PodIdentity{
-		TaskInstanceID: req.TaskInstanceID, TenantID: req.TenantID, DagID: req.DagID,
-		RunID: req.RunID, TaskID: req.TaskID, TryNumber: req.TryNumber,
+	if t.identity == nil {
+		return
 	}
-	if raw, err := json.Marshal(id); err == nil {
+	if raw, err := json.Marshal(*t.identity); err == nil {
 		pod.Annotations[AgentIdentityAnnotation] = string(raw)
 	}
 }
@@ -343,9 +393,10 @@ func mountStagingVolume(pod *corev1.Pod, req Request) {
 func podEnv(req Request) []corev1.EnvVar {
 	env := make([]corev1.EnvVar, 0, 4+len(req.Env))
 	env = append(env, corev1.EnvVar{Name: "LEOFLOW_CONTROL_PLANE_ADDR", Value: req.ControlPlaneAddr})
+	tok := agentTokenOf(req)
 	// The bearer credential: a plaintext env var (env-var default), a SecretKeyRef
 	// (exchange fallback), or nothing on the pod object (exchange projected path).
-	env = append(env, agentTokenEnv(req)...)
+	env = append(env, tok.env()...)
 	env = append(env,
 		corev1.EnvVar{Name: "LEOFLOW_TASK_INSTANCE_ID", Value: req.TaskInstanceID},
 		// Tell the pod agent where to write its durable outcome record; it matches
@@ -357,12 +408,7 @@ func podEnv(req Request) []corev1.EnvVar {
 	// bootstrap token from the mounted file and exchange it for a task-scoped JWT.
 	// The SecretKeyRef fallback and the env-var default leave these unset (the
 	// token is already in LEOFLOW_AGENT_TOKEN), so those pod specs are unchanged.
-	if usesTokenExchange(req) && req.AgentTokenSecretName == "" {
-		env = append(env,
-			corev1.EnvVar{Name: "LEOFLOW_AGENT_TOKEN_TRANSPORT", Value: agentTransportExchange},
-			corev1.EnvVar{Name: "LEOFLOW_AGENT_TOKEN_PATH", Value: agentTokenMountDir + "/" + agentTokenFile},
-		)
-	}
+	env = append(env, tok.pathEnv()...)
 	if req.StagingClaim != "" {
 		env = append(env, corev1.EnvVar{Name: "LEOFLOW_STAGING_DIR", Value: stagingMountPath})
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/scheduler"
@@ -20,6 +21,10 @@ type SchedulerStore struct {
 	q     *queries.Queries
 	pool  poolBeginner
 	specs *specCache
+	// warmExec is the operator's warm-pool config, consulted by ActiveWarmTargets
+	// to resolve each active dag_version's effective warm target (ADR 0058 N1b2b).
+	// Zero value = warm pools off, so ActiveWarmTargets reports every target as 0.
+	warmExec config.ExecutionSection
 }
 
 // poolBeginner is the slice of pgxpool.Pool the store uses to start the orphan
@@ -162,6 +167,75 @@ func (s *SchedulerStore) ActiveRuns(ctx context.Context) ([]scheduler.RunState, 
 		})
 	}
 	return out, nil
+}
+
+// SetWarmExecution records the operator's warm-pool config so ActiveWarmTargets
+// can resolve each active dag_version's effective warm target. main.go calls it
+// only when warm pools are enabled; left unset, warm pools read as off (every
+// target 0).
+func (s *SchedulerStore) SetWarmExecution(exec config.ExecutionSection) { s.warmExec = exec }
+
+// activeWarmVersion is one active dag_version's warm-relevant spec fields — the
+// pure input to warmTargets, extracted so the projection is unit-testable without
+// a database.
+type activeWarmVersion struct {
+	dagVersionID string
+	image        string
+	dagMinIdle   int
+}
+
+// warmTargets dedupes the active versions (many runs share one immutable
+// dag_version) and resolves each to its effective warm target through the
+// operator's clamp/fallback/flag gate (config.ExecutionSection.EffectiveMinIdle).
+// The result is the executor.WarmTargetSource contract: one entry per distinct
+// active dag_version.
+func warmTargets(versions []activeWarmVersion, exec config.ExecutionSection) []executor.WarmTarget {
+	seen := make(map[string]bool, len(versions))
+	out := make([]executor.WarmTarget, 0, len(versions))
+	for _, v := range versions {
+		if seen[v.dagVersionID] {
+			continue
+		}
+		seen[v.dagVersionID] = true
+		out = append(out, executor.WarmTarget{
+			DagVersionID:     v.dagVersionID,
+			Image:            v.image,
+			EffectiveMinIdle: exec.EffectiveMinIdle(v.dagMinIdle),
+		})
+	}
+	return out
+}
+
+// ActiveWarmTargets returns one warm target per distinct active dag_version with
+// its effective warm-worker count (ADR 0058 N1b2b), the read side of a warm-pool
+// reconcile tick. It reuses the same active-runs + cached-spec path as ActiveRuns:
+// the spec is immutable per dag_version_id, so N active runs sharing a version
+// decode it once and the effective target is derived from the DAG author's
+// min_idle_workers under the operator's clamp/fallback. It implements
+// executor.WarmTargetSource without the executor importing storage.
+func (s *SchedulerStore) ActiveWarmTargets(ctx context.Context) ([]executor.WarmTarget, error) {
+	runs, err := s.q.ListActiveDagRuns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing active runs: %w", err)
+	}
+	versions := make([]activeWarmVersion, 0, len(runs))
+	seen := make(map[pgtype.UUID]bool, len(runs))
+	for _, run := range runs {
+		if seen[run.DagVersionID] {
+			continue
+		}
+		seen[run.DagVersionID] = true
+		_, spec, err := s.specs.get(ctx, s.q, run.DagVersionID)
+		if err != nil {
+			return nil, err
+		}
+		versions = append(versions, activeWarmVersion{
+			dagVersionID: uuidToString(run.DagVersionID),
+			image:        spec.Image,
+			dagMinIdle:   spec.MinIdleWorkers,
+		})
+	}
+	return warmTargets(versions, s.warmExec), nil
 }
 
 // MaterializeTasks creates a none-state task instance for each task in the run,
@@ -488,6 +562,7 @@ func applyDefaultRetries(spec *domain.DAGSpec) {
 }
 
 var _ scheduler.Store = (*SchedulerStore)(nil)
+var _ executor.WarmTargetSource = (*SchedulerStore)(nil)
 
 // RecordStagingVolume records a per-run staging volume as active, keyed by PVC
 // name (idempotent — called per task as the PVC is ensured). ADR 0022.

@@ -75,6 +75,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "min_idle_workers": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Warm workers the author wants kept ready for this DAG version so its tasks skip cold-pod startup (ADR 0058, warm pools). Operator-capped at execution.max_pool_size and inert unless the operator enabled warm pools; 0 (default) means no warmth."
+    },
     "catchup": {
       "type": "boolean",
       "default": false

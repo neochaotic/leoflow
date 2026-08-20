@@ -23,7 +23,7 @@ import (
 // tasks fast (#50), which is a config gap, not the path this test exercises.
 type noopDispatcher struct{}
 
-func (noopDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+func (noopDispatcher) Dispatch(context.Context, string, string, string, domain.TaskSpec) (executor.Disposition, error) {
 	return executor.Dispatched, nil
 }
 

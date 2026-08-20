@@ -20,7 +20,7 @@ import (
 
 type failingDispatcher struct{}
 
-func (failingDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+func (failingDispatcher) Dispatch(context.Context, string, string, string, domain.TaskSpec) (executor.Disposition, error) {
 	return executor.Rejected, context.DeadlineExceeded // any non-nil permanent error → bounded backoff path
 }
 

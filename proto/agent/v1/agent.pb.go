@@ -1356,6 +1356,344 @@ func (x *HeartbeatRequest) GetCustomMetrics() map[string]float64 {
 	return nil
 }
 
+// WorkAssignment is one unit of per-attempt work the control plane hands to a
+// warm worker over AwaitAssignment (ADR 0058 N1b). The control plane mints the
+// attempt_token and generates assignment_id; the worker replies with an
+// AssignmentAck referencing assignment_id.
+type WorkAssignment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AssignmentId  string                 `protobuf:"bytes,1,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"` // control-plane-generated correlation id for this hand-off
+	AttemptToken  string                 `protobuf:"bytes,2,opt,name=attempt_token,json=attemptToken,proto3" json:"attempt_token,omitempty"` // per-attempt agent JWT the worker adopts for this attempt; NEVER logged
+	DagRunId      string                 `protobuf:"bytes,3,opt,name=dag_run_id,json=dagRunId,proto3" json:"dag_run_id,omitempty"`
+	TaskId        string                 `protobuf:"bytes,4,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	TryNumber     int32                  `protobuf:"varint,5,opt,name=try_number,json=tryNumber,proto3" json:"try_number,omitempty"`
+	DagVersionId  string                 `protobuf:"bytes,6,opt,name=dag_version_id,json=dagVersionId,proto3" json:"dag_version_id,omitempty"` // the pool identity this assignment belongs to
+	LeaseSeconds  int64                  `protobuf:"varint,7,opt,name=lease_seconds,json=leaseSeconds,proto3" json:"lease_seconds,omitempty"`  // ack deadline: unacked within it => the attempt is reclaimed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkAssignment) Reset() {
+	*x = WorkAssignment{}
+	mi := &file_agent_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkAssignment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkAssignment) ProtoMessage() {}
+
+func (x *WorkAssignment) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkAssignment.ProtoReflect.Descriptor instead.
+func (*WorkAssignment) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *WorkAssignment) GetAssignmentId() string {
+	if x != nil {
+		return x.AssignmentId
+	}
+	return ""
+}
+
+func (x *WorkAssignment) GetAttemptToken() string {
+	if x != nil {
+		return x.AttemptToken
+	}
+	return ""
+}
+
+func (x *WorkAssignment) GetDagRunId() string {
+	if x != nil {
+		return x.DagRunId
+	}
+	return ""
+}
+
+func (x *WorkAssignment) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *WorkAssignment) GetTryNumber() int32 {
+	if x != nil {
+		return x.TryNumber
+	}
+	return 0
+}
+
+func (x *WorkAssignment) GetDagVersionId() string {
+	if x != nil {
+		return x.DagVersionId
+	}
+	return ""
+}
+
+func (x *WorkAssignment) GetLeaseSeconds() int64 {
+	if x != nil {
+		return x.LeaseSeconds
+	}
+	return 0
+}
+
+// WorkerMessage is everything a warm worker sends UP the AwaitAssignment stream:
+// its one initial registration, then per-assignment acks and slot-free signals.
+type WorkerMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Msg:
+	//
+	//	*WorkerMessage_Register
+	//	*WorkerMessage_Ack
+	//	*WorkerMessage_SlotFree
+	Msg           isWorkerMessage_Msg `protobuf_oneof:"msg"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerMessage) Reset() {
+	*x = WorkerMessage{}
+	mi := &file_agent_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerMessage) ProtoMessage() {}
+
+func (x *WorkerMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerMessage.ProtoReflect.Descriptor instead.
+func (*WorkerMessage) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *WorkerMessage) GetMsg() isWorkerMessage_Msg {
+	if x != nil {
+		return x.Msg
+	}
+	return nil
+}
+
+func (x *WorkerMessage) GetRegister() *WorkerRegister {
+	if x != nil {
+		if x, ok := x.Msg.(*WorkerMessage_Register); ok {
+			return x.Register
+		}
+	}
+	return nil
+}
+
+func (x *WorkerMessage) GetAck() *AssignmentAck {
+	if x != nil {
+		if x, ok := x.Msg.(*WorkerMessage_Ack); ok {
+			return x.Ack
+		}
+	}
+	return nil
+}
+
+func (x *WorkerMessage) GetSlotFree() *SlotFree {
+	if x != nil {
+		if x, ok := x.Msg.(*WorkerMessage_SlotFree); ok {
+			return x.SlotFree
+		}
+	}
+	return nil
+}
+
+type isWorkerMessage_Msg interface {
+	isWorkerMessage_Msg()
+}
+
+type WorkerMessage_Register struct {
+	Register *WorkerRegister `protobuf:"bytes,1,opt,name=register,proto3,oneof"`
+}
+
+type WorkerMessage_Ack struct {
+	Ack *AssignmentAck `protobuf:"bytes,2,opt,name=ack,proto3,oneof"`
+}
+
+type WorkerMessage_SlotFree struct {
+	SlotFree *SlotFree `protobuf:"bytes,3,opt,name=slot_free,json=slotFree,proto3,oneof"`
+}
+
+func (*WorkerMessage_Register) isWorkerMessage_Msg() {}
+
+func (*WorkerMessage_Ack) isWorkerMessage_Msg() {}
+
+func (*WorkerMessage_SlotFree) isWorkerMessage_Msg() {}
+
+// WorkerRegister is the mandatory first WorkerMessage. dag_version_id names which
+// pool the worker serves. The worker's IDENTITY (registry key) is taken from its
+// authenticated pod/bootstrap credential on the stream context, NOT from this
+// payload — a worker must not be able to claim an arbitrary identity here.
+type WorkerRegister struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DagVersionId  string                 `protobuf:"bytes,1,opt,name=dag_version_id,json=dagVersionId,proto3" json:"dag_version_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerRegister) Reset() {
+	*x = WorkerRegister{}
+	mi := &file_agent_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerRegister) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerRegister) ProtoMessage() {}
+
+func (x *WorkerRegister) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerRegister.ProtoReflect.Descriptor instead.
+func (*WorkerRegister) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *WorkerRegister) GetDagVersionId() string {
+	if x != nil {
+		return x.DagVersionId
+	}
+	return ""
+}
+
+// AssignmentAck answers a WorkAssignment. started=true means the worker began the
+// attempt (the control plane marks it active and cancels the lease). started=false
+// means the worker refuses or cannot start it (the control plane reclaims it).
+type AssignmentAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AssignmentId  string                 `protobuf:"bytes,1,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
+	Started       bool                   `protobuf:"varint,2,opt,name=started,proto3" json:"started,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssignmentAck) Reset() {
+	*x = AssignmentAck{}
+	mi := &file_agent_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssignmentAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssignmentAck) ProtoMessage() {}
+
+func (x *AssignmentAck) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssignmentAck.ProtoReflect.Descriptor instead.
+func (*AssignmentAck) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *AssignmentAck) GetAssignmentId() string {
+	if x != nil {
+		return x.AssignmentId
+	}
+	return ""
+}
+
+func (x *AssignmentAck) GetStarted() bool {
+	if x != nil {
+		return x.Started
+	}
+	return false
+}
+
+// SlotFree signals that the worker freed an execution slot. Reserved for the
+// placement layer (N1b1-place); the transport carries it now and the registry
+// records it.
+type SlotFree struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SlotFree) Reset() {
+	*x = SlotFree{}
+	mi := &file_agent_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SlotFree) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SlotFree) ProtoMessage() {}
+
+func (x *SlotFree) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SlotFree.ProtoReflect.Descriptor instead.
+func (*SlotFree) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{24}
+}
+
 type HeartbeatResponse struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ShouldTerminate bool                   `protobuf:"varint,1,opt,name=should_terminate,json=shouldTerminate,proto3" json:"should_terminate,omitempty"`
@@ -1373,7 +1711,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_agent_proto_msgTypes[20]
+	mi := &file_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1385,7 +1723,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[20]
+	mi := &file_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1398,7 +1736,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{20}
+	return file_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *HeartbeatResponse) GetShouldTerminate() bool {
@@ -1538,7 +1876,29 @@ const file_agent_proto_rawDesc = "" +
 	"\x0ecustom_metrics\x18\x02 \x03(\v25.leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntryR\rcustomMetrics\x1a@\n" +
 	"\x12CustomMetricsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xa0\x01\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xfb\x01\n" +
+	"\x0eWorkAssignment\x12#\n" +
+	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12#\n" +
+	"\rattempt_token\x18\x02 \x01(\tR\fattemptToken\x12\x1c\n" +
+	"\n" +
+	"dag_run_id\x18\x03 \x01(\tR\bdagRunId\x12\x17\n" +
+	"\atask_id\x18\x04 \x01(\tR\x06taskId\x12\x1d\n" +
+	"\n" +
+	"try_number\x18\x05 \x01(\x05R\ttryNumber\x12$\n" +
+	"\x0edag_version_id\x18\x06 \x01(\tR\fdagVersionId\x12#\n" +
+	"\rlease_seconds\x18\a \x01(\x03R\fleaseSeconds\"\xc6\x01\n" +
+	"\rWorkerMessage\x12>\n" +
+	"\bregister\x18\x01 \x01(\v2 .leoflow.agent.v1.WorkerRegisterH\x00R\bregister\x123\n" +
+	"\x03ack\x18\x02 \x01(\v2\x1f.leoflow.agent.v1.AssignmentAckH\x00R\x03ack\x129\n" +
+	"\tslot_free\x18\x03 \x01(\v2\x1a.leoflow.agent.v1.SlotFreeH\x00R\bslotFreeB\x05\n" +
+	"\x03msg\"6\n" +
+	"\x0eWorkerRegister\x12$\n" +
+	"\x0edag_version_id\x18\x01 \x01(\tR\fdagVersionId\"N\n" +
+	"\rAssignmentAck\x12#\n" +
+	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x18\n" +
+	"\astarted\x18\x02 \x01(\bR\astarted\"\n" +
+	"\n" +
+	"\bSlotFree\"\xa0\x01\n" +
 	"\x11HeartbeatResponse\x12)\n" +
 	"\x10should_terminate\x18\x01 \x01(\bR\x0fshouldTerminate\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
@@ -1556,7 +1916,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x12TASK_STATE_SUCCESS\x10\x02\x12\x15\n" +
 	"\x11TASK_STATE_FAILED\x10\x03\x12\x16\n" +
 	"\x12TASK_STATE_SKIPPED\x10\x04\x12 \n" +
-	"\x1cTASK_STATE_UP_FOR_RESCHEDULE\x10\x052\xfa\x06\n" +
+	"\x1cTASK_STATE_UP_FOR_RESCHEDULE\x10\x052\xd4\a\n" +
 	"\fAgentService\x12`\n" +
 	"\rExchangeToken\x12&.leoflow.agent.v1.ExchangeTokenRequest\x1a'.leoflow.agent.v1.ExchangeTokenResponse\x12Q\n" +
 	"\bRegister\x12!.leoflow.agent.v1.RegisterRequest\x1a\".leoflow.agent.v1.RegisterResponse\x12O\n" +
@@ -1568,7 +1928,8 @@ const file_agent_proto_rawDesc = "" +
 	"\vReportState\x12$.leoflow.agent.v1.ReportStateRequest\x1a%.leoflow.agent.v1.ReportStateResponse\x12T\n" +
 	"\tHeartbeat\x12\".leoflow.agent.v1.HeartbeatRequest\x1a#.leoflow.agent.v1.HeartbeatResponse\x12]\n" +
 	"\fGetVariables\x12%.leoflow.agent.v1.GetVariablesRequest\x1a&.leoflow.agent.v1.GetVariablesResponse\x12c\n" +
-	"\x0eGetConnections\x12'.leoflow.agent.v1.GetConnectionsRequest\x1a(.leoflow.agent.v1.GetConnectionsResponseB6Z4github.com/neochaotic/leoflow/proto/agent/v1;agentv1b\x06proto3"
+	"\x0eGetConnections\x12'.leoflow.agent.v1.GetConnectionsRequest\x1a(.leoflow.agent.v1.GetConnectionsResponse\x12X\n" +
+	"\x0fAwaitAssignment\x12\x1f.leoflow.agent.v1.WorkerMessage\x1a .leoflow.agent.v1.WorkAssignment(\x010\x01B6Z4github.com/neochaotic/leoflow/proto/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_proto_rawDescOnce sync.Once
@@ -1583,7 +1944,7 @@ func file_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_agent_proto_goTypes = []any{
 	(LogLevel)(0),                  // 0: leoflow.agent.v1.LogLevel
 	(TaskState)(0),                 // 1: leoflow.agent.v1.TaskState
@@ -1607,59 +1968,69 @@ var file_agent_proto_goTypes = []any{
 	(*ReportStateRequest)(nil),     // 19: leoflow.agent.v1.ReportStateRequest
 	(*ReportStateResponse)(nil),    // 20: leoflow.agent.v1.ReportStateResponse
 	(*HeartbeatRequest)(nil),       // 21: leoflow.agent.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),      // 22: leoflow.agent.v1.HeartbeatResponse
-	nil,                            // 23: leoflow.agent.v1.GetVariablesResponse.VariablesEntry
-	nil,                            // 24: leoflow.agent.v1.GetConnectionsResponse.ConnectionUrisEntry
-	nil,                            // 25: leoflow.agent.v1.RegisterRequest.EnvironmentEntry
-	nil,                            // 26: leoflow.agent.v1.TaskSpec.EnvironmentEntry
-	nil,                            // 27: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry
-	nil,                            // 28: leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
-	(*timestamppb.Timestamp)(nil),  // 29: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),        // 30: google.protobuf.Struct
+	(*WorkAssignment)(nil),         // 22: leoflow.agent.v1.WorkAssignment
+	(*WorkerMessage)(nil),          // 23: leoflow.agent.v1.WorkerMessage
+	(*WorkerRegister)(nil),         // 24: leoflow.agent.v1.WorkerRegister
+	(*AssignmentAck)(nil),          // 25: leoflow.agent.v1.AssignmentAck
+	(*SlotFree)(nil),               // 26: leoflow.agent.v1.SlotFree
+	(*HeartbeatResponse)(nil),      // 27: leoflow.agent.v1.HeartbeatResponse
+	nil,                            // 28: leoflow.agent.v1.GetVariablesResponse.VariablesEntry
+	nil,                            // 29: leoflow.agent.v1.GetConnectionsResponse.ConnectionUrisEntry
+	nil,                            // 30: leoflow.agent.v1.RegisterRequest.EnvironmentEntry
+	nil,                            // 31: leoflow.agent.v1.TaskSpec.EnvironmentEntry
+	nil,                            // 32: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry
+	nil,                            // 33: leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
+	(*timestamppb.Timestamp)(nil),  // 34: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),        // 35: google.protobuf.Struct
 }
 var file_agent_proto_depIdxs = []int32{
-	23, // 0: leoflow.agent.v1.GetVariablesResponse.variables:type_name -> leoflow.agent.v1.GetVariablesResponse.VariablesEntry
-	24, // 1: leoflow.agent.v1.GetConnectionsResponse.connection_uris:type_name -> leoflow.agent.v1.GetConnectionsResponse.ConnectionUrisEntry
-	25, // 2: leoflow.agent.v1.RegisterRequest.environment:type_name -> leoflow.agent.v1.RegisterRequest.EnvironmentEntry
-	29, // 3: leoflow.agent.v1.RegisterResponse.server_time:type_name -> google.protobuf.Timestamp
-	26, // 4: leoflow.agent.v1.TaskSpec.environment:type_name -> leoflow.agent.v1.TaskSpec.EnvironmentEntry
-	27, // 5: leoflow.agent.v1.TaskSpec.xcom_input_mapping:type_name -> leoflow.agent.v1.TaskSpec.XcomInputMappingEntry
-	30, // 6: leoflow.agent.v1.TaskSpec.extra:type_name -> google.protobuf.Struct
-	29, // 7: leoflow.agent.v1.FetchXComResponse.created_at:type_name -> google.protobuf.Timestamp
-	29, // 8: leoflow.agent.v1.LogLine.time:type_name -> google.protobuf.Timestamp
+	28, // 0: leoflow.agent.v1.GetVariablesResponse.variables:type_name -> leoflow.agent.v1.GetVariablesResponse.VariablesEntry
+	29, // 1: leoflow.agent.v1.GetConnectionsResponse.connection_uris:type_name -> leoflow.agent.v1.GetConnectionsResponse.ConnectionUrisEntry
+	30, // 2: leoflow.agent.v1.RegisterRequest.environment:type_name -> leoflow.agent.v1.RegisterRequest.EnvironmentEntry
+	34, // 3: leoflow.agent.v1.RegisterResponse.server_time:type_name -> google.protobuf.Timestamp
+	31, // 4: leoflow.agent.v1.TaskSpec.environment:type_name -> leoflow.agent.v1.TaskSpec.EnvironmentEntry
+	32, // 5: leoflow.agent.v1.TaskSpec.xcom_input_mapping:type_name -> leoflow.agent.v1.TaskSpec.XcomInputMappingEntry
+	35, // 6: leoflow.agent.v1.TaskSpec.extra:type_name -> google.protobuf.Struct
+	34, // 7: leoflow.agent.v1.FetchXComResponse.created_at:type_name -> google.protobuf.Timestamp
+	34, // 8: leoflow.agent.v1.LogLine.time:type_name -> google.protobuf.Timestamp
 	0,  // 9: leoflow.agent.v1.LogLine.level:type_name -> leoflow.agent.v1.LogLevel
 	1,  // 10: leoflow.agent.v1.ReportStateRequest.state:type_name -> leoflow.agent.v1.TaskState
-	29, // 11: leoflow.agent.v1.ReportStateRequest.occurred_at:type_name -> google.protobuf.Timestamp
-	29, // 12: leoflow.agent.v1.ReportStateRequest.reschedule_at:type_name -> google.protobuf.Timestamp
-	29, // 13: leoflow.agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
-	28, // 14: leoflow.agent.v1.HeartbeatRequest.custom_metrics:type_name -> leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
-	29, // 15: leoflow.agent.v1.HeartbeatResponse.server_time:type_name -> google.protobuf.Timestamp
-	12, // 16: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry.value:type_name -> leoflow.agent.v1.XComUpstreams
-	6,  // 17: leoflow.agent.v1.AgentService.ExchangeToken:input_type -> leoflow.agent.v1.ExchangeTokenRequest
-	8,  // 18: leoflow.agent.v1.AgentService.Register:input_type -> leoflow.agent.v1.RegisterRequest
-	10, // 19: leoflow.agent.v1.AgentService.GetTaskSpec:input_type -> leoflow.agent.v1.GetTaskSpecRequest
-	13, // 20: leoflow.agent.v1.AgentService.FetchXCom:input_type -> leoflow.agent.v1.FetchXComRequest
-	15, // 21: leoflow.agent.v1.AgentService.PushXCom:input_type -> leoflow.agent.v1.PushXComRequest
-	17, // 22: leoflow.agent.v1.AgentService.StreamLogs:input_type -> leoflow.agent.v1.LogLine
-	19, // 23: leoflow.agent.v1.AgentService.ReportState:input_type -> leoflow.agent.v1.ReportStateRequest
-	21, // 24: leoflow.agent.v1.AgentService.Heartbeat:input_type -> leoflow.agent.v1.HeartbeatRequest
-	2,  // 25: leoflow.agent.v1.AgentService.GetVariables:input_type -> leoflow.agent.v1.GetVariablesRequest
-	4,  // 26: leoflow.agent.v1.AgentService.GetConnections:input_type -> leoflow.agent.v1.GetConnectionsRequest
-	7,  // 27: leoflow.agent.v1.AgentService.ExchangeToken:output_type -> leoflow.agent.v1.ExchangeTokenResponse
-	9,  // 28: leoflow.agent.v1.AgentService.Register:output_type -> leoflow.agent.v1.RegisterResponse
-	11, // 29: leoflow.agent.v1.AgentService.GetTaskSpec:output_type -> leoflow.agent.v1.TaskSpec
-	14, // 30: leoflow.agent.v1.AgentService.FetchXCom:output_type -> leoflow.agent.v1.FetchXComResponse
-	16, // 31: leoflow.agent.v1.AgentService.PushXCom:output_type -> leoflow.agent.v1.PushXComResponse
-	18, // 32: leoflow.agent.v1.AgentService.StreamLogs:output_type -> leoflow.agent.v1.LogAck
-	20, // 33: leoflow.agent.v1.AgentService.ReportState:output_type -> leoflow.agent.v1.ReportStateResponse
-	22, // 34: leoflow.agent.v1.AgentService.Heartbeat:output_type -> leoflow.agent.v1.HeartbeatResponse
-	3,  // 35: leoflow.agent.v1.AgentService.GetVariables:output_type -> leoflow.agent.v1.GetVariablesResponse
-	5,  // 36: leoflow.agent.v1.AgentService.GetConnections:output_type -> leoflow.agent.v1.GetConnectionsResponse
-	27, // [27:37] is the sub-list for method output_type
-	17, // [17:27] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	34, // 11: leoflow.agent.v1.ReportStateRequest.occurred_at:type_name -> google.protobuf.Timestamp
+	34, // 12: leoflow.agent.v1.ReportStateRequest.reschedule_at:type_name -> google.protobuf.Timestamp
+	34, // 13: leoflow.agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
+	33, // 14: leoflow.agent.v1.HeartbeatRequest.custom_metrics:type_name -> leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntry
+	24, // 15: leoflow.agent.v1.WorkerMessage.register:type_name -> leoflow.agent.v1.WorkerRegister
+	25, // 16: leoflow.agent.v1.WorkerMessage.ack:type_name -> leoflow.agent.v1.AssignmentAck
+	26, // 17: leoflow.agent.v1.WorkerMessage.slot_free:type_name -> leoflow.agent.v1.SlotFree
+	34, // 18: leoflow.agent.v1.HeartbeatResponse.server_time:type_name -> google.protobuf.Timestamp
+	12, // 19: leoflow.agent.v1.TaskSpec.XcomInputMappingEntry.value:type_name -> leoflow.agent.v1.XComUpstreams
+	6,  // 20: leoflow.agent.v1.AgentService.ExchangeToken:input_type -> leoflow.agent.v1.ExchangeTokenRequest
+	8,  // 21: leoflow.agent.v1.AgentService.Register:input_type -> leoflow.agent.v1.RegisterRequest
+	10, // 22: leoflow.agent.v1.AgentService.GetTaskSpec:input_type -> leoflow.agent.v1.GetTaskSpecRequest
+	13, // 23: leoflow.agent.v1.AgentService.FetchXCom:input_type -> leoflow.agent.v1.FetchXComRequest
+	15, // 24: leoflow.agent.v1.AgentService.PushXCom:input_type -> leoflow.agent.v1.PushXComRequest
+	17, // 25: leoflow.agent.v1.AgentService.StreamLogs:input_type -> leoflow.agent.v1.LogLine
+	19, // 26: leoflow.agent.v1.AgentService.ReportState:input_type -> leoflow.agent.v1.ReportStateRequest
+	21, // 27: leoflow.agent.v1.AgentService.Heartbeat:input_type -> leoflow.agent.v1.HeartbeatRequest
+	2,  // 28: leoflow.agent.v1.AgentService.GetVariables:input_type -> leoflow.agent.v1.GetVariablesRequest
+	4,  // 29: leoflow.agent.v1.AgentService.GetConnections:input_type -> leoflow.agent.v1.GetConnectionsRequest
+	23, // 30: leoflow.agent.v1.AgentService.AwaitAssignment:input_type -> leoflow.agent.v1.WorkerMessage
+	7,  // 31: leoflow.agent.v1.AgentService.ExchangeToken:output_type -> leoflow.agent.v1.ExchangeTokenResponse
+	9,  // 32: leoflow.agent.v1.AgentService.Register:output_type -> leoflow.agent.v1.RegisterResponse
+	11, // 33: leoflow.agent.v1.AgentService.GetTaskSpec:output_type -> leoflow.agent.v1.TaskSpec
+	14, // 34: leoflow.agent.v1.AgentService.FetchXCom:output_type -> leoflow.agent.v1.FetchXComResponse
+	16, // 35: leoflow.agent.v1.AgentService.PushXCom:output_type -> leoflow.agent.v1.PushXComResponse
+	18, // 36: leoflow.agent.v1.AgentService.StreamLogs:output_type -> leoflow.agent.v1.LogAck
+	20, // 37: leoflow.agent.v1.AgentService.ReportState:output_type -> leoflow.agent.v1.ReportStateResponse
+	27, // 38: leoflow.agent.v1.AgentService.Heartbeat:output_type -> leoflow.agent.v1.HeartbeatResponse
+	3,  // 39: leoflow.agent.v1.AgentService.GetVariables:output_type -> leoflow.agent.v1.GetVariablesResponse
+	5,  // 40: leoflow.agent.v1.AgentService.GetConnections:output_type -> leoflow.agent.v1.GetConnectionsResponse
+	22, // 41: leoflow.agent.v1.AgentService.AwaitAssignment:output_type -> leoflow.agent.v1.WorkAssignment
+	31, // [31:42] is the sub-list for method output_type
+	20, // [20:31] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -1667,13 +2038,18 @@ func file_agent_proto_init() {
 	if File_agent_proto != nil {
 		return
 	}
+	file_agent_proto_msgTypes[21].OneofWrappers = []any{
+		(*WorkerMessage_Register)(nil),
+		(*WorkerMessage_Ack)(nil),
+		(*WorkerMessage_SlotFree)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   27,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

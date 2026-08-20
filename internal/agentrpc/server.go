@@ -161,6 +161,10 @@ type Server struct {
 	exchangeTTL           time.Duration
 	allowInsecureExchange bool
 	now                   func() time.Time
+	// Warm worker assignment transport (ADR 0058 N1b). nil by default, so
+	// AwaitAssignment is inert (returns FailedPrecondition) unless the operator
+	// enabled warm pools and the server wired a registry via SetWarmPools.
+	warmPools *workerRegistry
 }
 
 // NewServer builds an AgentService server backed by the given authenticator,

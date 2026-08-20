@@ -499,6 +499,42 @@ func (q *Queries) GetDagVersionByID(ctx context.Context, id pgtype.UUID) (DagVer
 	return i, err
 }
 
+const isTaskInstanceLive = `-- name: IsTaskInstanceLive :one
+SELECT EXISTS (
+    SELECT 1 FROM task_instances
+    WHERE dag_run_id = $1
+      AND task_id = $2
+      AND try_number = $3
+      AND state IN ('queued', 'running')
+)
+`
+
+type IsTaskInstanceLiveParams struct {
+	DagRunID  pgtype.UUID `json:"dag_run_id"`
+	TaskID    string      `json:"task_id"`
+	TryNumber int32       `json:"try_number"`
+}
+
+// Reports whether the attempt (dag_run_id, task_id, try_number) is still live:
+// present and in an active (non-terminal) state. This is exactly the predicate
+// RecordTaskHeartbeat stamps on — the same (dag_run_id, task_id, try_number)
+// tuple and the same state IN ('queued', 'running') guard — but as a pure READ
+// with no write. It is the read-only revocation signal the secret path consults
+// (ADR 0055): a terminal or superseded attempt (try_number moved on) is not
+// live, so a token that carries it stops resolving secrets, even while its
+// signature is still valid.
+//
+// It MUST derive ONLY from (run, task, try) + active state. It must NEVER gain a
+// "run is not current / archived / logical_date in the past" clause: a recency
+// term would deny a legitimate clear-and-rerun of an old run — credential
+// lifetime binds to the attempt, never to the run's age or logical date.
+func (q *Queries) IsTaskInstanceLive(ctx context.Context, arg IsTaskInstanceLiveParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isTaskInstanceLive, arg.DagRunID, arg.TaskID, arg.TryNumber)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const latestRunsForDags = `-- name: LatestRunsForDags :many
 SELECT d.dag_id AS dag_id_text,
        r.run_id, r.logical_date, r.state, r.trigger, r.queued_at, r.started_at, r.ended_at

@@ -130,6 +130,20 @@ type Querier interface {
 	// Mirrors the bootstrap CreateUser insert (tenant_id, email, password_hash) but
 	// returns the columns the admin create-user API echoes back to the caller.
 	InsertUser(ctx context.Context, arg InsertUserParams) (InsertUserRow, error)
+	// Reports whether the attempt (dag_run_id, task_id, try_number) is still live:
+	// present and in an active (non-terminal) state. This is exactly the predicate
+	// RecordTaskHeartbeat stamps on — the same (dag_run_id, task_id, try_number)
+	// tuple and the same state IN ('queued', 'running') guard — but as a pure READ
+	// with no write. It is the read-only revocation signal the secret path consults
+	// (ADR 0055): a terminal or superseded attempt (try_number moved on) is not
+	// live, so a token that carries it stops resolving secrets, even while its
+	// signature is still valid.
+	//
+	// It MUST derive ONLY from (run, task, try) + active state. It must NEVER gain a
+	// "run is not current / archived / logical_date in the past" clause: a recency
+	// term would deny a legitimate clear-and-rerun of an old run — credential
+	// lifetime binds to the attempt, never to the run's age or logical date.
+	IsTaskInstanceLive(ctx context.Context, arg IsTaskInstanceLiveParams) (bool, error)
 	LatestRunsForDags(ctx context.Context, arg LatestRunsForDagsParams) ([]LatestRunsForDagsRow, error)
 	ListActiveDagRuns(ctx context.Context) ([]DagRun, error)
 	// run_id is the dag_run's UUID (StagingClaimName uses it), so join on dag_runs.id,

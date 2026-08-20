@@ -132,7 +132,13 @@ func agentEnv(req Request) []string {
 // before the scheduler recorded queued, and the queued write would clobber it.
 // A non-zero exit is therefore NOT a synchronous error; only a failure to start
 // is. The process is reaped in the background.
-func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
+//
+// A subprocess dispatch failure is always Rejected: a Lite executor talks to no
+// apiserver, so its errors are never cluster backpressure — this preserves
+// today's "every Lite error is permanent" behavior across the typed seam (ADR
+// 0051 Phase 4). Success is Dispatched (the agent reports its terminal state
+// over gRPC).
+func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) (Disposition, error) {
 	// Materialize the DAG's source into a per-TI temp dir so `python -m
 	// leoflow_runtime dag:<task>` can importlib it. Mirrors the Pro container's
 	// "source is staged at the worker's CWD" contract — but without Docker.
@@ -142,7 +148,7 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
 	if err != nil {
 		e.logger.Error("staging task workdir failed",
 			"task", req.TaskID, "task_instance_id", req.TaskInstanceID, "error", err)
-		return err
+		return Rejected, err
 	}
 	if workDir == "" {
 		workDir = e.workDir
@@ -181,7 +187,7 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
 		cleanupWorkDir()
 		e.logger.Error("agent subprocess failed to start",
 			"task", req.TaskID, "agent_path", e.agentPath, "error", err)
-		return fmt.Errorf("starting agent subprocess for task %s: %w", req.TaskID, err)
+		return Rejected, fmt.Errorf("starting agent subprocess for task %s: %w", req.TaskID, err)
 	}
 	e.logger.Info("agent subprocess started",
 		"task", req.TaskID, "run", req.RunID, "pid", cmd.Process.Pid)
@@ -196,5 +202,5 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) error {
 		e.logger.Debug("agent subprocess exited cleanly",
 			"task", req.TaskID, "pid", cmd.Process.Pid)
 	}()
-	return nil
+	return Dispatched, nil
 }

@@ -13,13 +13,16 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
 type okDispatcher struct{}
 
-func (okDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) error { return nil }
+func (okDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+	return executor.Dispatched, nil
+}
 
 // openInfra connects to the migrated test DB (or skips) and returns a repository,
 // scheduler store, and the raw pool for direct-read assertions.

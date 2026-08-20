@@ -37,19 +37,26 @@ func NewKubernetesExecutor(clientset kubernetes.Interface, namespace string) *Ku
 }
 
 // Execute creates the task pod. The agent inside the pod reports state over gRPC.
-func (e *KubernetesExecutor) Execute(ctx context.Context, req Request) error {
+// A dispatch failure is classified on this layer — where the apiserver's error
+// types are known — into transient Backpressure (a ResourceQuota 403 or an APF
+// 429) or a permanent Rejected, so the scheduler acts on the disposition without
+// importing Kubernetes error types (ADR 0051 Phase 4). The cause is returned
+// alongside so its text still feeds the scheduler's note/log.
+func (e *KubernetesExecutor) Execute(ctx context.Context, req Request) (Disposition, error) {
 	// Provision the run's shared staging PVC on first use (idempotent), before the
 	// pod that mounts it (ADR 0022).
 	if req.StagingClaim != "" {
 		if err := e.ensureStagingClaim(ctx, req); err != nil {
-			return fmt.Errorf("provisioning staging volume for task %s: %w", req.TaskID, err)
+			cause := fmt.Errorf("provisioning staging volume for task %s: %w", req.TaskID, err)
+			return classifyDispatchError(cause), cause
 		}
 	}
 	pod := BuildPod(req)
 	if _, err := e.clientset.CoreV1().Pods(e.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("creating pod for task %s: %w", req.TaskID, err)
+		cause := fmt.Errorf("creating pod for task %s: %w", req.TaskID, err)
+		return classifyDispatchError(cause), cause
 	}
-	return nil
+	return Dispatched, nil
 }
 
 // terminationMessagePath is where the task container surfaces its termination

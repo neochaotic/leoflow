@@ -24,14 +24,15 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/dispatch"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 // failingInner is a dispatch.Inner that always errors, so the drain path hits
 // the FailureSink (the real SchedulerStore) exactly as a genuine dispatch would.
 type failingInner struct{}
 
-func (failingInner) Dispatch(context.Context, string, string, domain.TaskSpec) error {
-	return errors.New("simulated inner dispatch failure during drain")
+func (failingInner) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+	return executor.Rejected, errors.New("simulated inner dispatch failure during drain")
 }
 
 func TestBuffered_Close_DrainsToRealSink_NoStuckQueuedIntegration(t *testing.T) {
@@ -61,7 +62,7 @@ func TestBuffered_Close_DrainsToRealSink_NoStuckQueuedIntegration(t *testing.T) 
 	bd := dispatch.NewBuffered(failingInner{}, sched,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
 		dispatch.BufferConfig{BufferSize: 4, Workers: 1})
-	if err := bd.Dispatch(ctx, runUUID, dagID, tasks[0]); err != nil {
+	if _, err := bd.Dispatch(ctx, runUUID, dagID, tasks[0]); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 

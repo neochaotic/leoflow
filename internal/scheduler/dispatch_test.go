@@ -6,16 +6,22 @@ import (
 	"testing"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 type fakeDispatcher struct {
 	dispatched []string
-	err        error
+	// disp is the typed disposition returned alongside err. It defaults to the
+	// zero value (executor.Dispatched); a test that exercises a failure path sets
+	// it to executor.Rejected or executor.Backpressure to mirror what the real
+	// executor would classify the error as.
+	disp executor.Disposition
+	err  error
 }
 
-func (d *fakeDispatcher) Dispatch(_ context.Context, _, _ string, task domain.TaskSpec) error {
+func (d *fakeDispatcher) Dispatch(_ context.Context, _, _ string, task domain.TaskSpec) (executor.Disposition, error) {
 	d.dispatched = append(d.dispatched, task.TaskID)
-	return d.err
+	return d.disp, d.err
 }
 
 func hasTransition(ts []transition, taskID string, to domain.TaskState) bool {
@@ -67,7 +73,7 @@ func TestStepDispatchesQueuedTaskBeforeTransition(t *testing.T) {
 
 func TestStepLeavesTaskScheduledWhenDispatchFails(t *testing.T) {
 	store := runWithScheduledRoot()
-	d := &fakeDispatcher{err: errors.New("executor unavailable")}
+	d := &fakeDispatcher{disp: executor.Rejected, err: errors.New("executor unavailable")}
 	s := newScheduler(store)
 	s.SetDispatcher(d)
 
@@ -99,7 +105,7 @@ func TestStepWithoutDispatcherFailsUndispatchable(t *testing.T) {
 // backoff is what the planner gates the next attempt on.
 func TestStepBacksOffOnDispatchFailure(t *testing.T) {
 	store := runWithScheduledRoot()
-	d := &fakeDispatcher{err: errors.New("kube-apiserver unreachable")}
+	d := &fakeDispatcher{disp: executor.Rejected, err: errors.New("kube-apiserver unreachable")}
 	s := newScheduler(store)
 	s.SetDispatcher(d)
 
@@ -125,7 +131,7 @@ func TestStepFailsTaskWhenDispatchExhausted(t *testing.T) {
 		States:           map[string]domain.TaskState{"a": domain.TaskStateScheduled, "b": domain.TaskStateNone},
 		DispatchAttempts: map[string]int{"a": dispatchMaxAttempts - 1}, // one more failure exhausts it
 	})
-	d := &fakeDispatcher{err: errors.New("RBAC: cannot create pods")}
+	d := &fakeDispatcher{disp: executor.Rejected, err: errors.New("RBAC: cannot create pods")}
 	s := newScheduler(store)
 	s.SetDispatcher(d)
 

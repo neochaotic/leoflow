@@ -20,7 +20,7 @@ func TestDispatchWiresStagingVolume(t *testing.T) {
 	d := newDispatcher(res, &fakeIssuer{token: "t"}, exec)
 	d.SetPlatformDefaults(PlatformDefaults{StagingAccessMode: "ReadWriteMany"})
 
-	if err := d.Dispatch(context.Background(), "run-1", "etl", pythonTask()); err != nil {
+	if _, err := d.Dispatch(context.Background(), "run-1", "etl", pythonTask()); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	if want := executor.StagingClaimName("etl", "run-1"); exec.req.StagingClaim != want {
@@ -39,7 +39,7 @@ func TestDispatchStagingDefaultsFillFromPlatform(t *testing.T) {
 	d := newDispatcher(res, &fakeIssuer{token: "t"}, exec)
 	d.SetPlatformDefaults(PlatformDefaults{StagingSize: "10Gi", StagingStorageClass: "std", StagingAccessMode: "ReadWriteOnce"})
 
-	if err := d.Dispatch(context.Background(), "run-1", "etl", pythonTask()); err != nil {
+	if _, err := d.Dispatch(context.Background(), "run-1", "etl", pythonTask()); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	if exec.req.StagingSize != "10Gi" || exec.req.StagingStorageClass != "std" {
@@ -52,7 +52,7 @@ func TestDispatchStagingDefaultsFillFromPlatform(t *testing.T) {
 func TestDispatchDisabledStagingLeavesNoClaim(t *testing.T) {
 	res := &fakeResolver{resolved: Resolved{Staging: &domain.StagingConfig{Enabled: false}}}
 	exec := &fakeExecutor{}
-	if err := newDispatcher(res, &fakeIssuer{token: "t"}, exec).Dispatch(context.Background(), "r", "etl", pythonTask()); err != nil {
+	if _, err := newDispatcher(res, &fakeIssuer{token: "t"}, exec).Dispatch(context.Background(), "r", "etl", pythonTask()); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	if exec.req.StagingClaim != "" {
@@ -66,7 +66,7 @@ func TestDispatchSetsAgentTLSCAConfigMap(t *testing.T) {
 	exec := &fakeExecutor{}
 	d := newDispatcher(&fakeResolver{}, &fakeIssuer{token: "t"}, exec)
 	d.SetAgentTLSCAConfigMap("agent-ca")
-	if err := d.Dispatch(context.Background(), "r", "etl", pythonTask()); err != nil {
+	if _, err := d.Dispatch(context.Background(), "r", "etl", pythonTask()); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	if exec.req.AgentTLSCAConfigMap != "agent-ca" {

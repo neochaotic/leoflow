@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 // flakyStore is a Store that can be told to fail or panic for specific runs, so
@@ -179,11 +180,11 @@ func (r *capturingRecorder) count(decision string) int {
 // would otherwise crash the scheduler goroutine (and the whole process).
 type panicDispatcher struct{ onTask string }
 
-func (p *panicDispatcher) Dispatch(_ context.Context, _, _ string, task domain.TaskSpec) error {
+func (p *panicDispatcher) Dispatch(_ context.Context, _, _ string, task domain.TaskSpec) (executor.Disposition, error) {
 	if task.TaskID == p.onTask {
 		panic("boom: dispatching " + task.TaskID)
 	}
-	return nil
+	return executor.Dispatched, nil
 }
 
 func queuedEmptyRun(id string) RunState {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 // logSchedulerError logs an error from the scheduler loop or one of its
@@ -239,7 +240,7 @@ type Recorder interface {
 // task as it becomes queued; the concrete implementation builds the executor
 // request and routes it to the right executor.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error
+	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error)
 }
 
 // maxCatchupSlotsPerTick caps how many missed cron slots are backfilled for
@@ -1072,8 +1073,9 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 		return fmt.Errorf("task %s not found in run %s", t.TaskID, run.RunID)
 	}
 	if s.dispatcher != nil {
-		if err := s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task); err != nil {
-			return s.handleDispatchFailure(ctx, run, t.TaskID, err)
+		disp, err := s.dispatcher.Dispatch(ctx, run.RunID, run.DagID, task)
+		if err != nil {
+			return s.handleDispatchFailure(ctx, run, t.TaskID, disp, err)
 		}
 		return s.recordTransition(ctx, run, t.TaskID, domain.TaskStateQueued)
 	}
@@ -1095,9 +1097,12 @@ func (s *Scheduler) launchQueued(ctx context.Context, run RunState, t PlannedTra
 // (ADR 0053): it is retriable-forever, so it is backed off WITHOUT touching the
 // dispatch-attempt counter and can never reach the dispatch_failed give-up below.
 // Leoflow holds the task and re-offers it until the cluster has room, rather than
-// failing the user's task because the cluster asked it to slow down.
-func (s *Scheduler) handleDispatchFailure(ctx context.Context, run RunState, taskID string, cause error) error {
-	if classifyDispatchError(cause) == dispatchRetriableForever {
+// failing the user's task because the cluster asked it to slow down. The
+// disposition that split is decided on is classified on the execution layer and
+// arrives typed over the seam (ADR 0051 Phase 4), so the scheduler never inspects
+// Kubernetes error types itself.
+func (s *Scheduler) handleDispatchFailure(ctx context.Context, run RunState, taskID string, disp executor.Disposition, cause error) error {
+	if disp == executor.Backpressure {
 		return s.backoffBackpressure(ctx, run, taskID, cause)
 	}
 	attempts := run.DispatchAttempts[taskID] + 1

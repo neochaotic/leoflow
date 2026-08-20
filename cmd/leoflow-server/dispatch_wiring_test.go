@@ -8,11 +8,14 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 type noopInner struct{}
 
-func (noopInner) Dispatch(context.Context, string, string, domain.TaskSpec) error { return nil }
+func (noopInner) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+	return executor.Dispatched, nil
+}
 
 // wrapBuffered must hand back a closeable pool ONLY in buffered mode, so run()
 // can drain it on shutdown (#133). Passthrough (Lite, BufferSize=0) has no pool

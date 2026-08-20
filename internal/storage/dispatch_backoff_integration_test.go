@@ -13,14 +13,15 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
 type failingDispatcher struct{}
 
-func (failingDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) error {
-	return context.DeadlineExceeded // any non-nil error
+func (failingDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+	return executor.Rejected, context.DeadlineExceeded // any non-nil permanent error → bounded backoff path
 }
 
 // TestDispatchBackoffPersists exercises the two dispatch-backoff queries and the

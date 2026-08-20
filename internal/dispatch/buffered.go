@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 // ErrAtCapacity is returned by BufferedDispatcher.Dispatch when the buffered
@@ -27,7 +28,7 @@ var ErrDrainTimeout = errors.New("drain timed out")
 // Inner is the underlying synchronous dispatcher BufferedDispatcher wraps —
 // matches scheduler.Dispatcher exactly so production wires through one type.
 type Inner interface {
-	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error
+	Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error)
 }
 
 // FailureSink lets a worker report that an asynchronously-dispatched task
@@ -124,10 +125,12 @@ func NewBuffered(inner Inner, sink FailureSink, logger *slog.Logger, metrics Met
 
 // Dispatch hands a task off to the inner dispatcher. In passthrough mode the
 // inner call happens inline. In buffered mode the request is enqueued non-
-// blockingly: success returns nil immediately (the scheduler then records the
-// TI as `queued`); a full channel returns ErrAtCapacity (the scheduler treats
-// it as a transient failure and leaves the TI scheduled).
-func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error {
+// blockingly: success returns (Dispatched, nil) immediately (the scheduler then
+// records the TI as `queued`); a full or closed channel returns (Rejected,
+// ErrAtCapacity). Rejected preserves today's behavior exactly: ErrAtCapacity is
+// a plain error, which the old scheduler classified as permanent — the bounded
+// path that leaves the TI scheduled for the next tick.
+func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error) {
 	if b.queue == nil {
 		return b.inner.Dispatch(ctx, runID, dagID, task)
 	}
@@ -140,19 +143,19 @@ func (b *BufferedDispatcher) Dispatch(ctx context.Context, runID, dagID string, 
 		if b.metrics != nil {
 			b.metrics.RecordDispatchAtCapacity()
 		}
-		return ErrAtCapacity
+		return executor.Rejected, ErrAtCapacity
 	}
 	select {
 	case b.queue <- dispatchRequest{runID: runID, dagID: dagID, task: task}:
 		if b.metrics != nil {
 			b.metrics.RecordDispatchQueueDepth(len(b.queue))
 		}
-		return nil
+		return executor.Dispatched, nil
 	default:
 		if b.metrics != nil {
 			b.metrics.RecordDispatchAtCapacity()
 		}
-		return ErrAtCapacity
+		return executor.Rejected, ErrAtCapacity
 	}
 }
 
@@ -225,7 +228,11 @@ func (b *BufferedDispatcher) dispatchOne(req dispatchRequest) {
 	// would leave a `queued` TI without a runner. Hanging is bounded from two
 	// sides instead: the Kubernetes client carries a per-call timeout, and
 	// Close stops waiting after cfg.DrainTimeout (#463).
-	if err := b.inner.Dispatch(context.Background(), req.runID, req.dagID, req.task); err != nil { //nolint:contextcheck // worker intentionally detaches from the caller's ctx
+	// The async buffer path reports any dispatch failure via the sink verbatim
+	// and does not act on classification (it never did — a queued TI whose async
+	// dispatch failed is failed, not re-offered), so the disposition is ignored
+	// here.
+	if _, err := b.inner.Dispatch(context.Background(), req.runID, req.dagID, req.task); err != nil { //nolint:contextcheck // worker intentionally detaches from the caller's ctx
 		b.logger.Error("dispatch failed in worker",
 			"run", req.runID, "dag", req.dagID, "task", req.task.TaskID, "error", err)
 		if b.metrics != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
@@ -22,7 +23,9 @@ import (
 // tasks fast (#50), which is a config gap, not the path this test exercises.
 type noopDispatcher struct{}
 
-func (noopDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) error { return nil }
+func (noopDispatcher) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
+	return executor.Dispatched, nil
+}
 
 // TestEndToEndPushTriggerSchedule exercises the Phase 2 vertical slice against a
 // real Postgres: register a version, create a run, and tick the scheduler until

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 )
 
@@ -30,11 +31,14 @@ type dispatchCall struct {
 	at           time.Time
 }
 
-func (d *recordingDispatcher) Dispatch(_ context.Context, runID, dagID string, task domain.TaskSpec) error {
+func (d *recordingDispatcher) Dispatch(_ context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls = append(d.calls, dispatchCall{runID: runID, dagID: dagID, taskID: task.TaskID, at: time.Now()})
-	return d.err
+	if d.err != nil {
+		return executor.Rejected, d.err
+	}
+	return executor.Dispatched, nil
 }
 
 func (d *recordingDispatcher) callCount() int {

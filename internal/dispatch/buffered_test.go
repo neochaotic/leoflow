@@ -12,6 +12,7 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/dispatch"
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 func discardLogger() *slog.Logger {
@@ -28,7 +29,7 @@ type recordingInner struct {
 	callCount atomic.Int64
 }
 
-func (r *recordingInner) Dispatch(_ context.Context, _, _ string, task domain.TaskSpec) error {
+func (r *recordingInner) Dispatch(_ context.Context, _, _ string, task domain.TaskSpec) (executor.Disposition, error) {
 	r.callCount.Add(1)
 	if r.delay > 0 {
 		time.Sleep(r.delay)
@@ -36,7 +37,10 @@ func (r *recordingInner) Dispatch(_ context.Context, _, _ string, task domain.Ta
 	r.mu.Lock()
 	r.calls = append(r.calls, task.TaskID)
 	r.mu.Unlock()
-	return r.err
+	if r.err != nil {
+		return executor.Rejected, r.err
+	}
+	return executor.Dispatched, nil
 }
 
 func (r *recordingInner) seen() []string {
@@ -78,7 +82,7 @@ func TestBuffered_Passthrough_BufferSizeZero(t *testing.T) {
 	inner := &recordingInner{}
 	d := dispatch.NewBuffered(inner, nil, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 0, Workers: 0})
 	defer d.Close()
-	err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "extract"})
+	_, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "extract"})
 	if err != nil {
 		t.Fatalf("passthrough err = %v", err)
 	}
@@ -94,7 +98,7 @@ func TestBuffered_Passthrough_PropagatesInnerError(t *testing.T) {
 	inner := &recordingInner{err: innerErr}
 	d := dispatch.NewBuffered(inner, nil, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 0, Workers: 0})
 	defer d.Close()
-	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "t"}); !errors.Is(err, innerErr) {
+	if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "t"}); !errors.Is(err, innerErr) {
 		t.Errorf("passthrough err = %v, want wrap of innerErr", err)
 	}
 }
@@ -108,7 +112,7 @@ func TestBuffered_Async_AcceptsAndDrains(t *testing.T) {
 	d := dispatch.NewBuffered(inner, &recordingSink{}, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 4, Workers: 2})
 	defer d.Close()
 	for _, id := range []string{"a", "b", "c"} {
-		if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: id}); err != nil {
+		if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: id}); err != nil {
 			t.Fatalf("Dispatch %s: %v", id, err)
 		}
 	}
@@ -134,14 +138,14 @@ func TestBuffered_Async_BackpressureWhenChannelFull(t *testing.T) {
 	d := dispatch.NewBuffered(inner, &recordingSink{}, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 1, Workers: 1})
 	defer d.Close()
 
-	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "slow"}); err != nil {
+	if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "slow"}); err != nil {
 		t.Fatalf("first Dispatch: %v", err)
 	}
 	// At least one more must end up "at capacity": the worker is asleep on the
 	// first call, the channel has only one slot, and the test floods the queue.
 	hitCapacity := false
 	for i := 0; i < 10 && !hitCapacity; i++ {
-		err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "flood"})
+		_, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "flood"})
 		if errors.Is(err, dispatch.ErrAtCapacity) {
 			hitCapacity = true
 		}
@@ -164,7 +168,7 @@ func TestBuffered_Async_WorkerFailureMarksTIFailed(t *testing.T) {
 	d := dispatch.NewBuffered(inner, sink, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 4, Workers: 1})
 	defer d.Close()
 
-	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "doomed"}); err != nil {
+	if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "doomed"}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -197,7 +201,7 @@ func TestBuffered_Async_FailureReportToSinkSurvivesSinkError(t *testing.T) {
 	// second task only drains if the worker stayed alive after the first
 	// double-failure — that is the regression this guards against.
 	for _, taskID := range []string{"first", "second"} {
-		if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: taskID}); err != nil {
+		if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: taskID}); err != nil {
 			t.Fatalf("Dispatch(%s): %v", taskID, err)
 		}
 	}
@@ -224,7 +228,7 @@ func TestBuffered_Async_FailureSilentlyDroppedWithoutSink(t *testing.T) {
 	d := dispatch.NewBuffered(inner, nil, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 2, Workers: 1})
 	defer d.Close()
 
-	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "lost"}); err != nil {
+	if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "lost"}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	// The inner dispatcher records every call (success or error), so we use
@@ -238,7 +242,7 @@ func TestBuffered_Async_FailureSilentlyDroppedWithoutSink(t *testing.T) {
 	}
 	// If we get here without panic the early-return path is exercised. The
 	// next Dispatch keeps draining, confirming the worker survived.
-	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "alive"}); err != nil {
+	if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "alive"}); err != nil {
 		t.Fatalf("second Dispatch: %v", err)
 	}
 }
@@ -253,7 +257,7 @@ func TestBuffered_Async_PanicInInnerDoesNotCrash(t *testing.T) {
 	d := dispatch.NewBuffered(panicker, sink, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 2, Workers: 1})
 	defer d.Close()
 
-	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "boom"}); err != nil {
+	if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "boom"}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -267,7 +271,7 @@ func TestBuffered_Async_PanicInInnerDoesNotCrash(t *testing.T) {
 
 type panicInner struct{}
 
-func (panicInner) Dispatch(context.Context, string, string, domain.TaskSpec) error {
+func (panicInner) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
 	panic("boom: inner dispatcher")
 }
 
@@ -279,7 +283,7 @@ func TestBuffered_Close_DrainsPendingWork(t *testing.T) {
 	inner := &recordingInner{}
 	d := dispatch.NewBuffered(inner, &recordingSink{}, discardLogger(), nil, dispatch.BufferConfig{BufferSize: 8, Workers: 2})
 	for _, id := range []string{"a", "b", "c", "d"} {
-		if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: id}); err != nil {
+		if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: id}); err != nil {
 			t.Fatalf("Dispatch %s: %v", id, err)
 		}
 	}
@@ -297,7 +301,7 @@ func TestBuffered_DispatchAfterClose_ReturnsAtCapacity(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close err = %v", err)
 	}
-	err := d.Dispatch(context.Background(), "r", "d", domain.TaskSpec{TaskID: "t"})
+	_, err := d.Dispatch(context.Background(), "r", "d", domain.TaskSpec{TaskID: "t"})
 	if !errors.Is(err, dispatch.ErrAtCapacity) {
 		t.Fatalf("Dispatch after Close = %v, want ErrAtCapacity (must not panic)", err)
 	}
@@ -313,7 +317,7 @@ func TestBuffered_ConcurrentDispatchAndClose_NoPanic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = d.Dispatch(context.Background(), "r", "d", domain.TaskSpec{TaskID: "t"})
+			_, _ = d.Dispatch(context.Background(), "r", "d", domain.TaskSpec{TaskID: "t"})
 		}()
 	}
 	_ = d.Close() // races with the in-flight Dispatch goroutines
@@ -330,7 +334,7 @@ func TestBuffered_Close_DrainsAllBufferedRequests(t *testing.T) {
 		dispatch.BufferConfig{BufferSize: 8, Workers: 1})
 	const n = 8
 	for i := 0; i < n; i++ {
-		if err := d.Dispatch(context.Background(), "r", "etl", domain.TaskSpec{TaskID: "t"}); err != nil {
+		if _, err := d.Dispatch(context.Background(), "r", "etl", domain.TaskSpec{TaskID: "t"}); err != nil {
 			t.Fatalf("Dispatch %d: %v (all %d should fit the buffer)", i, err, n)
 		}
 	}
@@ -353,10 +357,10 @@ type blockingInner struct {
 	once    sync.Once
 }
 
-func (b *blockingInner) Dispatch(context.Context, string, string, domain.TaskSpec) error {
+func (b *blockingInner) Dispatch(context.Context, string, string, domain.TaskSpec) (executor.Disposition, error) {
 	b.once.Do(func() { close(b.entered) })
 	<-b.release
-	return nil
+	return executor.Dispatched, nil
 }
 
 // TestBuffered_Close_ReturnsWhenWorkerHangs: Close must not wait forever on a
@@ -369,7 +373,7 @@ func TestBuffered_Close_ReturnsWhenWorkerHangs(t *testing.T) {
 	defer close(inner.release)
 	d := dispatch.NewBuffered(inner, &recordingSink{}, discardLogger(), nil,
 		dispatch.BufferConfig{BufferSize: 4, Workers: 1, DrainTimeout: 100 * time.Millisecond})
-	if err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "stuck"}); err != nil {
+	if _, err := d.Dispatch(context.Background(), "r1", "etl", domain.TaskSpec{TaskID: "stuck"}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	<-inner.entered // the worker is now inside the hanging inner dispatcher

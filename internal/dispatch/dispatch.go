@@ -118,11 +118,16 @@ func (d *Dispatcher) SetAgentTokenTransport(transport, audience string, expirati
 	d.tokenTransport, d.tokenAudience, d.tokenExpirationSeconds = transport, audience, expirationSeconds
 }
 
-// Dispatch resolves the task, mints its agent token, and executes it.
-func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error {
+// Dispatch resolves the task, mints its agent token, and executes it. The
+// executor classifies its own dispatch outcome and returns it as an
+// executor.Disposition (ADR 0051 Phase 4). A dispatcher-INTERNAL failure that
+// happens BEFORE Execute (task resolve, token mint) is permanent and so returns
+// executor.Rejected — those bare errors classified as permanent before this
+// change, so Rejected preserves the behavior exactly.
+func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) (executor.Disposition, error) {
 	r, err := d.resolver.ResolveTask(ctx, runID, task.TaskID)
 	if err != nil {
-		return fmt.Errorf("resolving task %s: %w", task.TaskID, err)
+		return executor.Rejected, fmt.Errorf("resolving task %s: %w", task.TaskID, err)
 	}
 	token, err := d.issuer.IssueAgentToken(auth.AgentIdentity{
 		TaskInstanceID: r.TaskInstanceID,
@@ -133,7 +138,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 		TryNumber:      r.TryNumber,
 	}, d.tokenTTL)
 	if err != nil {
-		return fmt.Errorf("issuing agent token for %s: %w", task.TaskID, err)
+		return executor.Rejected, fmt.Errorf("issuing agent token for %s: %w", task.TaskID, err)
 	}
 
 	req := executor.Request{

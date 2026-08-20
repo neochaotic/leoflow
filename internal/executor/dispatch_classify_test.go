@@ -1,4 +1,4 @@
-package scheduler
+package executor
 
 import (
 	"errors"
@@ -41,29 +41,29 @@ func admissionDenied() error {
 	}}
 }
 
-// TestClassifyDispatchError pins the classification each dispatch-failure shape
-// gets: only genuine cluster backpressure (quota 403, APF 429) is
-// retriable-forever; RBAC denials, admission-webhook rejections, and every
-// unrecognized error keep the permanent (bounded → dispatch_failed) path.
+// TestClassifyDispatchError pins the disposition each dispatch-failure shape
+// gets: only genuine cluster backpressure (quota 403, APF 429) is Backpressure;
+// RBAC denials, admission-webhook rejections, and every unrecognized error keep
+// the Rejected (bounded → dispatch_failed) path.
 func TestClassifyDispatchError(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
-		want dispatchErrorClass
+		want Disposition
 	}{
-		{"quota_403_retriable", quota403(), dispatchRetriableForever},
-		{"quota_403_wrapped_retriable", fmt.Errorf("creating pod for task a: %w", quota403()), dispatchRetriableForever},
-		{"apf_429_retriable", apierrors.NewTooManyRequests("Priority and Fairness: request rejected", 1), dispatchRetriableForever},
-		{"apf_429_wrapped_retriable", fmt.Errorf("creating pod for task a: %w", apierrors.NewTooManyRequests("APF", 1)), dispatchRetriableForever},
-		{"rbac_403_permanent", rbac403(), dispatchPermanent},
-		{"admission_denied_permanent", admissionDenied(), dispatchPermanent},
-		{"invalid_spec_permanent", apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "a", nil), dispatchPermanent},
-		{"generic_error_permanent", errors.New("kube-apiserver unreachable"), dispatchPermanent},
+		{"quota_403_retriable", quota403(), Backpressure},
+		{"quota_403_wrapped_retriable", fmt.Errorf("creating pod for task a: %w", quota403()), Backpressure},
+		{"apf_429_retriable", apierrors.NewTooManyRequests("Priority and Fairness: request rejected", 1), Backpressure},
+		{"apf_429_wrapped_retriable", fmt.Errorf("creating pod for task a: %w", apierrors.NewTooManyRequests("APF", 1)), Backpressure},
+		{"rbac_403_permanent", rbac403(), Rejected},
+		{"admission_denied_permanent", admissionDenied(), Rejected},
+		{"invalid_spec_permanent", apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "a", nil), Rejected},
+		{"generic_error_permanent", errors.New("kube-apiserver unreachable"), Rejected},
 		// A plain (non-apiserver) error whose text happens to mention quota must
-		// stay permanent: the quota verdict keys on the Forbidden status, never on
+		// stay Rejected: the quota verdict keys on the Forbidden status, never on
 		// message text alone, so a Lite subprocess error can never trip it.
-		{"non_apierror_quota_text_permanent", errors.New("job failed: exceeded quota on disk"), dispatchPermanent},
-		{"nil_permanent", nil, dispatchPermanent},
+		{"non_apierror_quota_text_permanent", errors.New("job failed: exceeded quota on disk"), Rejected},
+		{"nil_permanent", nil, Rejected},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := classifyDispatchError(tc.err); got != tc.want {

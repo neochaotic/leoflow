@@ -449,7 +449,7 @@ func TestBuildPodSanitizesName(t *testing.T) {
 func TestKubernetesExecutorCreatesPod(t *testing.T) {
 	cs := fake.NewClientset()
 	e := NewKubernetesExecutor(cs, "leoflow")
-	if err := e.Execute(context.Background(), sampleReq()); err != nil {
+	if _, err := e.Execute(context.Background(), sampleReq()); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	pods, err := cs.CoreV1().Pods("leoflow").List(context.Background(), metav1.ListOptions{})

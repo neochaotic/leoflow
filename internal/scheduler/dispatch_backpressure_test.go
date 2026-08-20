@@ -3,11 +3,10 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/neochaotic/leoflow/internal/domain"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 // A retriable-forever dispatch failure (cluster backpressure) must back the task
@@ -16,6 +15,11 @@ import (
 // already reached the exhaustion budget. This is the load-bearing guarantee of
 // ADR 0053: backpressure never drives a task terminal, no matter how long the
 // cluster stays full.
+//
+// The disposition is now classified on the execution layer and arrives typed
+// over the seam (ADR 0051 Phase 4), so the scheduler test sets it directly on the
+// fake dispatcher rather than round-tripping a Kubernetes apierror through a
+// scheduler-side classifier that no longer exists.
 func TestStepBackpressureRetriesForeverOffBudget(t *testing.T) {
 	store := newFakeStore(RunState{
 		RunID: "r1", DagID: "etl", State: domain.DagRunStateRunning, Tasks: linearTasks(),
@@ -24,9 +28,7 @@ func TestStepBackpressureRetriesForeverOffBudget(t *testing.T) {
 		// tick. A backpressure error must not.
 		DispatchAttempts: map[string]int{"a": dispatchMaxAttempts},
 	})
-	quota := apierrors.NewForbidden(podsGR, "etl-a-0", errors.New(
-		"exceeded quota: compute-resources, requested: requests.cpu=1, used: requests.cpu=4, limited: requests.cpu=4"))
-	d := &fakeDispatcher{err: fmt.Errorf("creating pod for task a: %w", quota)}
+	d := &fakeDispatcher{disp: executor.Backpressure, err: errors.New("creating pod for task a: exceeded quota: compute-resources")}
 	s := newScheduler(store)
 	s.SetDispatcher(d)
 
@@ -56,9 +58,7 @@ func TestStepPermanentErrorStillExhausts(t *testing.T) {
 		States:           map[string]domain.TaskState{"a": domain.TaskStateScheduled, "b": domain.TaskStateNone},
 		DispatchAttempts: map[string]int{"a": dispatchMaxAttempts - 1},
 	})
-	rbac := apierrors.NewForbidden(podsGR, "", errors.New(
-		`cannot create resource "pods" in API group "" in the namespace "prod"`))
-	d := &fakeDispatcher{err: fmt.Errorf("creating pod for task a: %w", rbac)}
+	d := &fakeDispatcher{disp: executor.Rejected, err: errors.New(`creating pod for task a: cannot create resource "pods" in the namespace "prod"`)}
 	s := newScheduler(store)
 	s.SetDispatcher(d)
 

@@ -71,7 +71,7 @@ func TestSubprocessExecuteRunsInWorkDir(t *testing.T) {
 	// run there (so a dev host can import the project's dag.py).
 	e := NewSubprocessExecutor(writeScript(t, "pwd > cwd.txt"), discardLogger())
 	e.SetWorkDir(dir)
-	if err := e.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
+	if _, err := e.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	got := waitForFile(t, filepath.Join(dir, "cwd.txt"))
@@ -94,7 +94,7 @@ func TestSubprocessExecuteSurvivesContextCancel(t *testing.T) {
 	marker := filepath.Join(dir, "marker")
 	e := NewSubprocessExecutor(writeScript(t, "sleep 0.3; echo ran > "+marker), discardLogger())
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := e.Execute(ctx, Request{TaskID: "t"}); err != nil {
+	if _, err := e.Execute(ctx, Request{TaskID: "t"}); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	cancel()               // the dispatch context ends immediately; the agent must keep running
@@ -110,13 +110,13 @@ func TestSubprocessExecuteLaunchesAsync(t *testing.T) {
 	// non-zero exit is NOT surfaced synchronously. Only a failure to START errors.
 	dir := t.TempDir()
 	e := NewSubprocessExecutor(writeScript(t, "echo ran > "+filepath.Join(dir, "marker")+"; exit 7"), discardLogger())
-	if err := e.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
+	if _, err := e.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
 		t.Errorf("Execute should return nil once the agent starts, got %v", err)
 	}
 	waitForFile(t, filepath.Join(dir, "marker")) // proves it actually ran async
 
 	// A binary that cannot start is a synchronous error.
-	if err := NewSubprocessExecutor("/no/such/agent-binary", discardLogger()).Execute(context.Background(), Request{TaskID: "t"}); err == nil {
+	if _, err := NewSubprocessExecutor("/no/such/agent-binary", discardLogger()).Execute(context.Background(), Request{TaskID: "t"}); err == nil {
 		t.Error("an un-startable agent binary should error synchronously")
 	}
 }

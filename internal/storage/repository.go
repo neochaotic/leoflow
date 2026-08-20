@@ -737,6 +737,40 @@ func (r *Repository) RecordSecretScopeWarning(ctx context.Context, tenant, dagID
 	return nil
 }
 
+// RecordSecretLivenessDenial records that the secret-path liveness gate fired
+// for a task instance whose attempt is no longer live (ADR 0055): a
+// would-have-denied in observe mode, or a denial in enforce mode. It is scoped
+// to the DAG resource so the event surfaces on the DAG's Audit Log tab, with the
+// kind ("variables" or "connections"), the run, task, attempt, and the gate mode
+// in metadata. It records identity + kind + mode only — never secret names or
+// values.
+func (r *Repository) RecordSecretLivenessDenial(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int, kind, mode string) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	meta, err := json.Marshal(map[string]any{
+		"kind": kind, "run_id": runID, "task_id": taskID,
+		"try_number": tryNumber, "mode": mode,
+	})
+	if err != nil {
+		return fmt.Errorf("encoding audit metadata: %w", err)
+	}
+	// Distinct actions per mode so an operator can tell an observe-phase
+	// would-have-denied from an enforce-phase denial at a glance.
+	action := "secret.liveness_would_deny"
+	if mode == "enforce" {
+		action = "secret.liveness_denied"
+	}
+	if err := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
+		TenantID: tid, Action: action,
+		ResourceType: strPtr("dag"), ResourceID: strPtr(dagID), Metadata: meta,
+	}); err != nil {
+		return fmt.Errorf("writing secret-path liveness audit: %w", err)
+	}
+	return nil
+}
+
 // SetTaskInstanceState sets a task instance's state directly, backing the UI's
 // "mark success"/"mark failed" actions. It does not run the task.
 func (r *Repository) SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error {

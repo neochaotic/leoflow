@@ -4,6 +4,7 @@ package storage_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -437,6 +438,60 @@ func TestListAuditLogsIntegration(t *testing.T) {
 		if e.ResourceID == dagID {
 			t.Errorf("dag filter leaked entry for %s", dagID)
 		}
+	}
+}
+
+// TestRecordSecretScopeWarningIntegration checks the warn-phase audit event
+// (ADR 0045, ADR 0055): a task that received the full vault while declaring a
+// narrower set records a secret.scope_warning row against the DAG, carrying the
+// kind and the declared/total counts in metadata — and no secret names.
+func TestRecordSecretScopeWarningIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_scopewarn_%d", time.Now().UnixNano())
+	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}})
+
+	if err := repo.RecordSecretScopeWarning(ctx, "default", dagID, "run-1", "t", "connections", 1, 3); err != nil {
+		t.Fatalf("RecordSecretScopeWarning: %v", err)
+	}
+
+	entries, _, err := repo.ListAuditLogs(ctx, "default", dagID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListAuditLogs: %v", err)
+	}
+	var found *domain.AuditLogEntry
+	for i := range entries {
+		if entries[i].Action == "secret.scope_warning" {
+			found = &entries[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("secret.scope_warning entry not found for %s: %+v", dagID, entries)
+	}
+	if found.ResourceType != "dag" || found.ResourceID != dagID {
+		t.Errorf("resource = %s/%s, want dag/%s", found.ResourceType, found.ResourceID, dagID)
+	}
+	// Parse the metadata JSON and compare fields — jsonb normalizes spacing, so a
+	// substring match on `"kind":"connections"` is brittle (the stored form is
+	// `"kind": "connections"`). Numbers decode to float64.
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(found.Extra), &meta); err != nil {
+		t.Fatalf("metadata is not valid JSON: %v (%q)", err, found.Extra)
+	}
+	if meta["kind"] != "connections" {
+		t.Errorf("kind = %v, want connections", meta["kind"])
+	}
+	if meta["run_id"] != "run-1" {
+		t.Errorf("run_id = %v, want run-1", meta["run_id"])
+	}
+	if meta["task_id"] != "t" {
+		t.Errorf("task_id = %v, want t", meta["task_id"])
+	}
+	if meta["declared"] != float64(1) {
+		t.Errorf("declared = %v, want 1", meta["declared"])
+	}
+	if meta["total"] != float64(3) {
+		t.Errorf("total = %v, want 3", meta["total"])
 	}
 }
 

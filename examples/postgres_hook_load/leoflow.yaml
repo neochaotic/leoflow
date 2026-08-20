@@ -11,3 +11,9 @@ python_version: "3.11"
 # dependencies: and uses psycopg2 directly. ADR 0038.
 connectors:
   - postgres
+# The managed Connection this DAG reads via PostgresHook(postgres_conn_id=...)
+# (ADR 0045, ADR 0055) — distinct from connectors: above, which is the pip
+# provider package (ADR 0038). Declaring it keeps the DAG valid once secret
+# delivery is scoped to the declared set.
+connections:
+  - pg_target

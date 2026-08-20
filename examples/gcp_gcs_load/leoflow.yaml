@@ -10,6 +10,15 @@ dependencies:
   - google-cloud-storage==2.18.2
   - google-cloud-secret-manager==2.20.2
 
+# The managed Connection and Variable this DAG reads (ADR 0045, ADR 0055):
+# the google_cloud_default Connection for credentials and the GCS_BUCKET
+# Variable for the target bucket. Declaring them keeps the DAG valid once
+# secret delivery is scoped to the declared set.
+connections:
+  - google_cloud_default
+variables:
+  - GCS_BUCKET
+
 # Keyless on Pro/GKE: run the task pod as a Kubernetes ServiceAccount bound to a
 # GCP service account via Workload Identity, so credentials come from the
 # metadata server (no key). Create/annotate the KSA per the README, or drop this

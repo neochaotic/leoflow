@@ -17,7 +17,6 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from leoflow_parser.compiler import compile_dag  # noqa: E402  (sys.path set above)
 
-
 _TRIVIAL_DAG = """
     from airflow.sdk import DAG
     from airflow.providers.standard.operators.python import PythonOperator

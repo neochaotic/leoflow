@@ -10,7 +10,23 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/secrets"
 )
+
+// withTestCipher configures a deterministic AES-GCM cipher on the repo so
+// connection seeding (which encrypts at rest, ADR 0019) works in the test.
+func withTestCipher(t *testing.T, repo interface{ SetCipher(secrets.Cipher) }) {
+	t.Helper()
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	c, err := secrets.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.SetCipher(c)
+}
 
 // registerDeclaring registers a DAG that declares the given variable/connection
 // names and returns the RegisterDagVersion error (nil on success).
@@ -36,6 +52,7 @@ func registerDeclaring(t *testing.T, repo interface {
 // tenant is rejected at registration (ADR 0055 D6). The error names the offender.
 func TestRegisterRejectsUnknownDeclaredNamesIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
+	withTestCipher(t, repo)
 	suffix := time.Now().UnixNano()
 
 	// Seed one real variable and one real connection.
@@ -72,6 +89,7 @@ func TestRegisterRejectsUnknownDeclaredNamesIntegration(t *testing.T) {
 // declares anything, so none is rejected.
 func TestRegisterAcceptsValidAndEmptyDeclarationsIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
+	withTestCipher(t, repo)
 	suffix := time.Now().UnixNano()
 
 	if err := repo.SetVariable(ctx, "default", domain.Variable{Key: "greeting", Value: "hi"}); err != nil {
@@ -93,6 +111,7 @@ func TestRegisterAcceptsValidAndEmptyDeclarationsIntegration(t *testing.T) {
 // only at the task level is rejected too (ADR 0055 D6).
 func TestRegisterRejectsUnknownTaskLevelDeclarationIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
+	withTestCipher(t, repo)
 	suffix := time.Now().UnixNano()
 
 	spec := domain.DAGSpec{

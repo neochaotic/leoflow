@@ -86,6 +86,15 @@ type Authenticator interface {
 	AuthenticateAgent(token string) (*auth.AgentIdentity, error)
 }
 
+// AgentTokenRenewer re-mints a live attempt's agent token with a fresh short
+// TTL, preserving the identity and the attempt's first-dispatch origin. It is
+// consulted only on a liveness-proven heartbeat (ADR 0055 Fix #4). ok is false
+// when the attempt has outlived its max-lifetime ceiling — the signal to let the
+// credential lapse rather than refresh it. Implemented by *auth.JWTAuthenticator.
+type AgentTokenRenewer interface {
+	RenewAgentToken(token string, ttl, maxLifetime time.Duration) (string, bool, error)
+}
+
 // ErrStaleReport is returned by Store.ReportState when the report did not apply
 // because the task instance had already moved on — a reaper settled it, or a
 // retry advanced past the attempt the reporting agent was dispatched for. It is
@@ -140,6 +149,9 @@ type Server struct {
 	livenessAudit        SecretLivenessAuditor
 	scoping              string
 	allowInsecureSecrets bool
+	renewer              AgentTokenRenewer
+	renewalTTL           time.Duration
+	maxAttemptLifetime   time.Duration
 	now                  func() time.Time
 }
 
@@ -147,6 +159,17 @@ type Server struct {
 // store, and XCom service.
 func NewServer(authn Authenticator, store Store, xcomSvc XComService) *Server {
 	return &Server{auth: authn, store: store, xcom: xcomSvc, now: time.Now}
+}
+
+// SetTokenRenewal wires per-attempt token renewal (ADR 0055 Fix #4): on a
+// liveness-proven heartbeat the server re-mints the caller's bearer with a fresh
+// renewalTTL and returns it on HeartbeatResponse.renewed_token, so a long task
+// keeps a working credential while the short TTL bounds a stolen/finished one.
+// maxAttemptLifetime is the hard ceiling on an attempt's total credential age
+// since dispatch (0 disables it). A nil renewer or non-positive renewalTTL
+// leaves renewal off — the heartbeat returns no token (unchanged behavior).
+func (s *Server) SetTokenRenewal(renewer AgentTokenRenewer, renewalTTL, maxAttemptLifetime time.Duration) {
+	s.renewer, s.renewalTTL, s.maxAttemptLifetime = renewer, renewalTTL, maxAttemptLifetime
 }
 
 // SetLogSink attaches the log sink that StreamLogs writes to. Without it,
@@ -264,6 +287,9 @@ func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*a
 		// (the same "moved on" predicate the state report is guarded by, #467).
 		// Signal terminate so a reaped-but-alive pod stops itself (#474). The live,
 		// matching attempt stamps a row (no error), so it never gets the signal.
+		// Deliberately NO renewed token here: a superseded attempt's credential must
+		// lapse, never be refreshed — renewal happens ONLY on the liveness-proven
+		// (nil) branch below.
 		if errors.Is(hbErr, ErrStaleReport) {
 			slog.Warn("stale heartbeat from a superseded attempt; signaling terminate",
 				"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "try", id.TryNumber)
@@ -271,11 +297,49 @@ func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*a
 		}
 		// A genuine (non-stale) store error is logged but does not fail the RPC or
 		// signal terminate — failing would risk the agent killing a live task on a
-		// transient DB blip. The scheduler's heartbeat reaper is the backstop.
+		// transient DB blip. The scheduler's heartbeat reaper is the backstop. It
+		// also does NOT renew: liveness is not proven, so the credential is not
+		// refreshed on a blip.
 		slog.Warn("recording heartbeat",
 			"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "error", hbErr)
+		return &agentv1.HeartbeatResponse{ServerTime: timestamppb.New(s.now())}, nil
 	}
-	return &agentv1.HeartbeatResponse{ServerTime: timestamppb.New(s.now())}, nil
+	// Liveness proven (RecordHeartbeat applied for this exact attempt): refresh the
+	// bearer so a long-running task keeps a working credential while the short
+	// per-attempt TTL bounds a stolen or finished one (ADR 0055 Fix #4).
+	resp := &agentv1.HeartbeatResponse{ServerTime: timestamppb.New(s.now())}
+	s.renewToken(ctx, id, resp)
+	return resp, nil
+}
+
+// renewToken re-mints the caller's agent token onto resp.RenewedToken when a
+// renewer is configured and the attempt has not outlived its lifetime ceiling.
+// It runs ONLY on the liveness-proven heartbeat branch. Best-effort: a renewer
+// error or a past-ceiling result leaves the response without a renewed token
+// (the agent keeps its current bearer) and never fails the heartbeat. The token
+// is never logged.
+func (s *Server) renewToken(ctx context.Context, id *auth.AgentIdentity, resp *agentv1.HeartbeatResponse) {
+	if s.renewer == nil || s.renewalTTL <= 0 {
+		return
+	}
+	token, ok := bearerFromContext(ctx)
+	if !ok || token == "" {
+		return
+	}
+	renewed, ok, err := s.renewer.RenewAgentToken(token, s.renewalTTL, s.maxAttemptLifetime)
+	if err != nil {
+		slog.Warn("renewing agent token on heartbeat; agent keeps its current bearer",
+			"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "try", id.TryNumber, "error", err)
+		return
+	}
+	if !ok {
+		// Past max_attempt_credential_lifetime: let the credential lapse rather than
+		// keep a runaway attempt alive.
+		slog.Warn("not renewing agent token: attempt past max_attempt_credential_lifetime",
+			"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "try", id.TryNumber)
+		return
+	}
+	resp.RenewedToken = renewed
 }
 
 // PushXCom stores a value the task produced, keyed by the caller's identity.
@@ -460,20 +524,31 @@ func toXComUpstreamsMap(in map[string][]string) map[string]*agentv1.XComUpstream
 
 // identify extracts and verifies the agent token from the request metadata.
 func (s *Server) identify(ctx context.Context) (*auth.AgentIdentity, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
+	token, ok := bearerFromContext(ctx)
 	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "missing request metadata")
-	}
-	values := md.Get("authorization")
-	if len(values) == 0 {
 		return nil, status.Error(codes.Unauthenticated, "missing authorization token")
 	}
-	token := strings.TrimPrefix(values[0], "Bearer ")
 	id, err := s.auth.AuthenticateAgent(token)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "invalid agent token")
 	}
 	return id, nil
+}
+
+// bearerFromContext pulls the raw bearer token (Bearer prefix stripped) from the
+// incoming gRPC metadata. ok is false when no metadata or no authorization
+// header is present. It is the shared extraction used by both identify (to
+// authenticate) and renewToken (to re-mint the same token).
+func bearerFromContext(ctx context.Context) (string, bool) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", false
+	}
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return "", false
+	}
+	return strings.TrimPrefix(values[0], "Bearer "), true
 }
 
 // mapState translates a protobuf task state into the domain vocabulary.

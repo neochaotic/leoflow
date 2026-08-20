@@ -45,7 +45,7 @@ func (f *fakeLivenessAuditor) RecordSecretLivenessDenial(_ context.Context, tena
 // the strongest guard against a pipeline-breaking bug: a NOT-live TI does NOT
 // deny in observe mode — the secrets are still delivered — and the
 // would-have-denied is recorded on the audit surface. Observe mode must never
-// change behaviour.
+// change behavior.
 func TestSecretLivenessObserveDeliversWhenNotLive(t *testing.T) {
 	srv, a := newServer(&fakeStore{})
 	sec := &fakeSecrets{vars: map[string]string{"FOO": "bar"}, conns: map[string]string{"pg": "postgres://u:p@h/db"}}

@@ -432,7 +432,7 @@ var serverDefaults = map[string]any{
 	"auth.login_rate_limit_per_minute": 5,
 	// Secret scope-by-declaration and token-liveness policies (ADR 0055). Both
 	// ship SAFE by default: permissive delivers the whole tenant vault (today's
-	// behaviour) and observe logs a would-have-denied without denying. The go-live
+	// behavior) and observe logs a would-have-denied without denying. The go-live
 	// flips (enforce) are separate operator decisions after an observe period.
 	"auth.secret_scoping":       "permissive",
 	"auth.secret_liveness_mode": "observe",
@@ -548,7 +548,7 @@ const (
 // auth.secret_liveness_mode are validated against these; an unknown value fails
 // boot closed. Empty is valid — serverDefaults sets the safe default for each.
 const (
-	// SecretScopingPermissive delivers the whole tenant vault (today's behaviour),
+	// SecretScopingPermissive delivers the whole tenant vault (today's behavior),
 	// scoping only where a DAG declared; the default.
 	SecretScopingPermissive = "permissive"
 	// SecretScopingEnforce delivers only the declared subset.
@@ -623,7 +623,7 @@ func (c *ServerConfig) validateLogs() error {
 
 // validateSecretPolicies rejects an unknown auth.secret_scoping or
 // auth.secret_liveness_mode, failing closed at boot rather than letting main.go
-// wire an unrecognised policy (ADR 0055). Empty is valid: serverDefaults sets
+// wire an unrecognized policy (ADR 0055). Empty is valid: serverDefaults sets
 // the safe default (permissive / observe) for each.
 func (c *ServerConfig) validateSecretPolicies() error {
 	switch c.Auth.SecretScoping {

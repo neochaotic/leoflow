@@ -160,7 +160,7 @@ func TestSecretScopingOffWholeVaultNoWarn(t *testing.T) {
 }
 
 // TestSecretScopingUnknownFallsBackToPermissive proves the setter fails safe: an
-// unrecognised policy value is treated as permissive (whole vault), never as a
+// unrecognized policy value is treated as permissive (whole vault), never as a
 // silent enforce that would deny.
 func TestSecretScopingUnknownFallsBackToPermissive(t *testing.T) {
 	store := &fakeStore{spec: TaskSpec{DeclaredVariables: []string{"FOO"}}}

@@ -31,7 +31,7 @@ type SecretsStore interface {
 // Secret scoping policy (ADR 0055 D9), operator-set, NEVER author-settable.
 const (
 	// ScopingPermissive delivers the whole tenant vault when a DAG declares
-	// nothing (today's behaviour) and warns — but still delivers the whole vault —
+	// nothing (today's behavior) and warns — but still delivers the whole vault —
 	// when a DAG declares a narrower set. Subsetting is reserved for enforce, so no
 	// already-declaring pipeline loses access. It is the default for this shipment.
 	ScopingPermissive = "permissive"
@@ -58,7 +58,7 @@ type SecretScopeAuditor interface {
 const (
 	// LivenessObserve logs a structured warn + records a would-have-denied audit
 	// event when the caller's TI is not live, but STILL delivers. It is the
-	// default: no behaviour change, the observe half of the warn→enforce arc.
+	// default: no behavior change, the observe half of the warn→enforce arc.
 	LivenessObserve = "observe"
 	// LivenessEnforce denies with codes.PermissionDenied when the caller's TI is
 	// not live. It is the operator's later flip, after an observe period.
@@ -98,7 +98,7 @@ func (s *Server) SetSecretScopeAuditor(a SecretScopeAuditor) { s.secretAudit = a
 
 // SetLivenessGate attaches the read-only task-instance liveness predicate the
 // secret path consults, in the given mode ("observe" | "enforce", ADR 0055 E2).
-// An unrecognised mode falls back to observe — the safe, non-denying default.
+// An unrecognized mode falls back to observe — the safe, non-denying default.
 // A nil checker leaves the gate off (delivery unchanged), so the gate is opt-in.
 func (s *Server) SetLivenessGate(checker TaskLivenessChecker, mode string) {
 	s.liveness = checker
@@ -115,7 +115,7 @@ func (s *Server) SetLivenessGate(checker TaskLivenessChecker, mode string) {
 func (s *Server) SetSecretLivenessAuditor(a SecretLivenessAuditor) { s.livenessAudit = a }
 
 // SetSecretScoping sets the operator scope-by-declaration policy (ADR 0055 D9):
-// "enforce" | "permissive" | "off". An unrecognised value falls back to
+// "enforce" | "permissive" | "off". An unrecognized value falls back to
 // permissive — the safe, non-denying default — so a misconfiguration never
 // silently denies. The policy is operator-scoped, never author-settable.
 func (s *Server) SetSecretScoping(policy string) { s.scoping = policy }
@@ -156,7 +156,7 @@ func (s *Server) guardSecretChannel(ctx context.Context) error {
 //
 // It returns a PermissionDenied error ONLY in enforce mode on a POSITIVE
 // not-live result. In observe mode a not-live result logs + audits a
-// would-have-denied and returns nil (delivery proceeds — no behaviour change).
+// would-have-denied and returns nil (delivery proceeds — no behavior change).
 //
 // Transient-error rule (both modes): an inconclusive liveness read (a nil
 // checker, or a DB error) NEVER denies and NEVER warns-as-not-live — an errored

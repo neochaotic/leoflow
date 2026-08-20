@@ -520,6 +520,13 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	agentSrv.SetLogSink(logSink)
 	agentSrv.SetLogPublisher(logTailer)
 	agentSrv.SetSecrets(secretsStore, allowInsecureSecrets)
+	// The secrets store is the Repository, which also records the warn-phase
+	// secret-scope audit event (ADR 0045, ADR 0055); wire it as the auditor so a
+	// narrowly-declared task's full-vault delivery is surfaced. Optional: without
+	// it the WARN log still fires.
+	if auditor, ok := secretsStore.(agentrpc.SecretScopeAuditor); ok {
+		agentSrv.SetSecretScopeAuditor(auditor)
+	}
 
 	// Recover panics in any agent RPC handler so a single malformed request from a
 	// worker pod cannot crash the control plane (it returns Internal instead).

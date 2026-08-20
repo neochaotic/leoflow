@@ -1,7 +1,8 @@
 # ADR 0055: Secret scoping and token liveness — scope by declaration, exchange the token, bind it to task liveness
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-17
+**Accepted:** 2026-08-19
 **Relates:** ADR 0045 (secrets reach a task because it declared it — this ADR is the code that ships its open half), ADR 0021 (exposing variables/connections to pods — the MVP that shipped fetch-all), ADR 0008 (JWT auth — the token this ADR binds to liveness), ADR 0052 (durable task outcome — the same liveness signal, on a different path), ADR 0053 (admission + placement — the warm-worker roadmap this ADR gates), ADR 0054 (shared-cluster coexistence — the namespace split that shrinks, but does not close, B1)
 **Issues:** #59 (scope to declared secrets), #388 (declaration in `leoflow.yaml` → storage), #486 (Lite fixed encryption key — bounded here, not fixed), #507 (token liveness / revocation)
 
@@ -185,6 +186,79 @@ a captured token dangerous. None of the four is a reason to defer the others —
 each narrows a different dimension (what a token can fetch, when it works, who can
 read it, how long it lives) — and Fix #1 is not independently shippable, because
 the token must identify the task for the scope filter to bind (Fix #3).
+
+## Resolved decisions (D1–D8)
+
+The design above (Fixes #1–#4, the rejection, and the hard ordering) stands. The
+mechanical questions it left open are resolved as follows; these bind the
+implementation.
+
+- **D1 — scope in the query, not the handler.** The secret RPCs pass the resolved
+  task identity to the store, which resolves the declared set and returns only it
+  in one scoped query. Post-filtering in the handler is barred: it decrypts the
+  whole vault into control-plane memory before discarding it, which is the exposure
+  scoping exists to remove. This replaces the current fetch-all `SecretVariables`/
+  `SecretConnectionURIs(tenant)`.
+- **D2 — liveness gate wraps the secret RPCs only, never the shared `identify()`.**
+  `Heartbeat`/`ReportState` are designed to run for a stale or superseded task
+  instance so they can return the terminate signal; gating the shared identity path
+  on liveness would break that signal. Only `GetVariables`/`GetConnections` consult
+  liveness.
+- **D3 — revocation v1 derives from terminal task-instance state, no new table.** A
+  read-only `IsTaskInstanceLive(run, task, try)` predicate — the same terminal-state
+  / attempt-superseded signal the heartbeat path already computes, minus the write —
+  is the revocation mechanism. A finished, failed, or superseded task instance is
+  not live, so its token stops resolving secrets. An explicit revoked-token set is
+  deferred until there is a need to kill a token before its task instance reaches a
+  terminal state.
+- **D4 — short per-attempt token TTL, renewed on liveness, no author knob.** Once
+  the secret path consults liveness, a finished attempt's token is dead the instant
+  its task instance is terminal, regardless of the clock; the TTL then only bounds a
+  token exfiltrated from a still-live task. So the lever for long tasks is not a
+  bigger clock but tying credential lifetime to the liveness signal: the per-attempt
+  token is short-lived (a derived internal value, not author- or duration-set) and
+  re-minted on each successful heartbeat, returned in the heartbeat response for the
+  agent to swap in. The stale/superseded branch returns the terminate signal and no
+  token, so renewal can never outrun liveness. The only operator control is a global
+  ceiling on attempt-credential lifetime as a runaway-task backstop; an author-set
+  TTL is barred as a confused-deputy self-authorization of the exfil window.
+- **D5 — record undeclared runtime use on the existing audit surface**, not a new
+  table. The warn phase instruments the runtime resolution path; a task reading an
+  undeclared name is an audit event, already queryable, fitting the two-release
+  warn→enforce arc.
+- **D6 — reject at both compile and registration.** The compiler warns on an
+  obviously-unknown declared name; the server rejects at DAG registration when a
+  declared `variables`/`connections` name does not exist for the tenant, via an
+  existence check against the variables/connections tables. An empty declaration is
+  always valid.
+- **D7 — bound-token `extra` keys resolved at implementation.** The exact
+  apiserver keys used to resolve pod → task instance for the `TokenReview` exchange
+  are apiserver-version-dependent and are pinned when the transport-exchange work
+  lands, not here. This is the one genuinely environment-dependent item and does not
+  block the scoping or liveness core.
+- **D8 — the declaration rides the existing `dag_version` spec blob, no new
+  table.** `variables`/`connections` string lists live on the DAG spec (per-DAG) and
+  the task spec (per-task narrowing), serialized into `dag.json`, schema-validated,
+  and threaded through the agent-facing task spec so scoping can key on them. The
+  dead `secretKeyRef`-shaped secret struct is deleted rather than reused.
+
+### Invariants the implementation must hold
+
+- **Retry and clear-and-rerun are a new attempt.** Both bump the attempt number and
+  dispatch now, minting a fresh per-attempt credential dated from the new dispatch
+  and renewed on its own heartbeats; the superseded attempt's token goes non-live
+  via the `(run, task, try)` + active-state predicate, so a zombie previous-attempt
+  pod stops resolving secrets the instant the retry supersedes it. An expired token
+  is never terminal for the task — the next attempt gets a new credential.
+- **Age-independence.** Clearing and rerunning an arbitrarily old task instance
+  mints a fresh credential and succeeds; credential lifetime binds to the new
+  attempt, never to the original run's age, logical date, or recency.
+- **D3 implementation hazard.** `IsTaskInstanceLive` must derive only from
+  `(run, task, try)` plus active-state, exactly as the heartbeat predicate does. It
+  must never gain a "run is not current / archived / logical date in the past"
+  clause: a recency term would deny a legitimate clear-and-rerun of an old run with a
+  spurious secret-denied, the exact unacceptable case. The safe design is already in
+  the tree; the only risk is "improving" the predicate with a recency term.
 
 ## Ordering (hard — this gates the warm-worker roadmap)
 

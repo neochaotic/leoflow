@@ -70,6 +70,14 @@ type Querier interface {
 	// reconcile that sets the grants to exactly the group-mapped set on each login.
 	DeleteUserRoles(ctx context.Context, userID pgtype.UUID) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
+	// The subset of the given conn_ids that exist for the tenant. Used to reject a
+	// DAG that declares an unknown connection at registration (ADR 0055 D6); a name
+	// absent from the result does not exist.
+	ExistingConnectionIDs(ctx context.Context, arg ExistingConnectionIDsParams) ([]string, error)
+	// The subset of the given keys that exist for the tenant. Used to reject a DAG
+	// that declares an unknown Variable at registration (ADR 0055 D6); a name absent
+	// from the result does not exist.
+	ExistingVariableKeys(ctx context.Context, arg ExistingVariableKeysParams) ([]string, error)
 	// The dispatch-attempt budget is spent (ADR 0031 Amendment A): fail the task with
 	// a dispatch_failed reason so the run can finalize instead of looping forever.
 	// error_message carries the underlying cause. Guarded to 'scheduled' for the same

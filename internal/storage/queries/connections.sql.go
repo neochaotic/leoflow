@@ -39,6 +39,39 @@ func (q *Queries) DeleteConnection(ctx context.Context, arg DeleteConnectionPara
 	return result.RowsAffected(), nil
 }
 
+const existingConnectionIDs = `-- name: ExistingConnectionIDs :many
+SELECT conn_id FROM connections
+WHERE tenant_id = $1 AND conn_id = ANY($2::text[])
+`
+
+type ExistingConnectionIDsParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	ConnIds  []string    `json:"conn_ids"`
+}
+
+// The subset of the given conn_ids that exist for the tenant. Used to reject a
+// DAG that declares an unknown connection at registration (ADR 0055 D6); a name
+// absent from the result does not exist.
+func (q *Queries) ExistingConnectionIDs(ctx context.Context, arg ExistingConnectionIDsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, existingConnectionIDs, arg.TenantID, arg.ConnIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var conn_id string
+		if err := rows.Scan(&conn_id); err != nil {
+			return nil, err
+		}
+		items = append(items, conn_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getConnection = `-- name: GetConnection :one
 SELECT conn_id, conn_type, host, conn_schema, login, password, port, extra, description
 FROM connections

@@ -127,7 +127,7 @@ func TestSecretsOverTLSWithoutInsecureFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	// allowInsecure=false + the cert as the CA → verified TLS.
-	client, conn, err := agent.Dial(lis.Addr().String(), token, false, certPath)
+	client, conn, _, err := agent.Dial(lis.Addr().String(), token, false, certPath)
 	if err != nil {
 		t.Fatal(err)
 	}

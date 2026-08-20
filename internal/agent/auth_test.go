@@ -6,7 +6,7 @@ import (
 )
 
 func TestTokenAuthAttachesBearer(t *testing.T) {
-	creds := tokenAuth{token: "abc123", secure: true}
+	creds := tokenAuth{source: NewTokenSource("abc123"), secure: true}
 	md, err := creds.GetRequestMetadata(context.Background())
 	if err != nil {
 		t.Fatalf("GetRequestMetadata: %v", err)
@@ -20,7 +20,7 @@ func TestTokenAuthAttachesBearer(t *testing.T) {
 }
 
 func TestTokenAuthInsecureForLocalDev(t *testing.T) {
-	creds := tokenAuth{token: "x", secure: false}
+	creds := tokenAuth{source: NewTokenSource("x"), secure: false}
 	if creds.RequireTransportSecurity() {
 		t.Error("insecure credentials must not require transport security")
 	}

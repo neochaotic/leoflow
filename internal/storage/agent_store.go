@@ -111,7 +111,30 @@ func (s *ExecutionStore) TaskSpec(ctx context.Context, id auth.AgentIdentity) (a
 		FirstRescheduleAt: firstRescheduleAt,
 		MaxTries:          maxTries(task),
 		OnFailureCallback: task.OnFailureCallback,
+		// Carry the declared secret set (ADR 0045, ADR 0055) so a later increment
+		// can scope delivery. Data only here — no secret is filtered by it yet.
+		DeclaredVariables:   declaredVariables(task, spec),
+		DeclaredConnections: declaredConnections(task, spec),
 	}, nil
+}
+
+// declaredVariables and declaredConnections resolve the effective declared
+// secret names for a task: the task's own declaration when it narrows the
+// DAG-level set, otherwise the DAG-level declaration it inherits (ADR 0045
+// §Settled #1). These carry the declared set onto the agent-facing spec; they
+// do not filter what secrets are delivered — enforcement lands separately.
+func declaredVariables(task domain.TaskSpec, spec domain.DAGSpec) []string {
+	if len(task.Variables) > 0 {
+		return task.Variables
+	}
+	return spec.Variables
+}
+
+func declaredConnections(task domain.TaskSpec, spec domain.DAGSpec) []string {
+	if len(task.Connections) > 0 {
+		return task.Connections
+	}
+	return spec.Connections
 }
 
 // maxTries is a task's total attempt budget: retries + 1 (a task with no retries

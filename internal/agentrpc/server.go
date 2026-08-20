@@ -71,6 +71,14 @@ type TaskSpec struct {
 	// (#424). The agent stamps LEOFLOW_ON_FAILURE_CALLBACK=1 so the runtime runs it
 	// in-process on the task's final failure.
 	OnFailureCallback bool
+	// DeclaredVariables and DeclaredConnections are the secret names this task
+	// declared (ADR 0045, ADR 0055): the task's own set when it narrows, otherwise
+	// the DAG's. They are carried on the resolved spec so a later increment can
+	// scope secret delivery server-side to the declared set. Today this is data
+	// only: the secret RPCs still return the whole tenant vault, so a declaration
+	// changes nothing about what the agent receives.
+	DeclaredVariables   []string
+	DeclaredConnections []string
 }
 
 // Authenticator verifies an agent bearer token into a task instance identity.

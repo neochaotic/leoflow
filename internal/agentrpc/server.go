@@ -134,6 +134,7 @@ type Server struct {
 	logs                 LogSink
 	tail                 LogPublisher
 	secrets              SecretsStore
+	secretAudit          SecretScopeAuditor
 	allowInsecureSecrets bool
 	now                  func() time.Time
 }

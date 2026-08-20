@@ -338,7 +338,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if !servesScheduler {
 		return nil, false, func() {}, nil
 	}
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, logger)
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -510,7 +510,7 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv,
 // shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
 // channel is plaintext (dev). The per-task bearer token in metadata authenticates
 // each call regardless.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, tlsCert, tlsKey string, logger *slog.Logger) (*grpc.Server, error) {
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode, tlsCert, tlsKey string, logger *slog.Logger) (*grpc.Server, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -520,12 +520,25 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	agentSrv.SetLogSink(logSink)
 	agentSrv.SetLogPublisher(logTailer)
 	agentSrv.SetSecrets(secretsStore, allowInsecureSecrets)
+	// Scope-by-declaration policy (ADR 0055 D9). Default permissive: the whole
+	// tenant vault, warning on a narrow declaration but never denying.
+	agentSrv.SetSecretScoping(secretScoping)
+	// Bind secret delivery to task-instance liveness (ADR 0055 E2). The
+	// ExecutionStore is the read-only liveness predicate; the mode defaults to
+	// observe (log a would-have-denied, still deliver). Secret-path only.
+	agentSrv.SetLivenessGate(store, secretLivenessMode)
 	// The secrets store is the Repository, which also records the warn-phase
 	// secret-scope audit event (ADR 0045, ADR 0055); wire it as the auditor so a
 	// narrowly-declared task's full-vault delivery is surfaced. Optional: without
 	// it the WARN log still fires.
 	if auditor, ok := secretsStore.(agentrpc.SecretScopeAuditor); ok {
 		agentSrv.SetSecretScopeAuditor(auditor)
+	}
+	// The Repository also records the secret-path liveness would-have-denied /
+	// denial audit event (ADR 0055 E2); wire it so the observe phase is
+	// observable. Optional: without it the WARN log still fires.
+	if auditor, ok := secretsStore.(agentrpc.SecretLivenessAuditor); ok {
+		agentSrv.SetSecretLivenessAuditor(auditor)
 	}
 
 	// Recover panics in any agent RPC handler so a single malformed request from a

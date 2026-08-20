@@ -1273,8 +1273,15 @@ type HeartbeatResponse struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ShouldTerminate bool                   `protobuf:"varint,1,opt,name=should_terminate,json=shouldTerminate,proto3" json:"should_terminate,omitempty"`
 	ServerTime      *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// A freshly minted, task-scoped agent token the control plane issues when the
+	// heartbeat proves the attempt is still live (ADR 0055 Fix #4). When non-empty
+	// the agent atomically swaps its bearer to this value, so a long task keeps a
+	// working credential while the short per-attempt TTL bounds a stolen/finished
+	// one. Empty means "keep the current token" (no renewal this beat, or the
+	// attempt is superseded/past its lifetime ceiling). Never logged.
+	RenewedToken  string `protobuf:"bytes,3,opt,name=renewed_token,json=renewedToken,proto3" json:"renewed_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatResponse) Reset() {
@@ -1319,6 +1326,13 @@ func (x *HeartbeatResponse) GetServerTime() *timestamppb.Timestamp {
 		return x.ServerTime
 	}
 	return nil
+}
+
+func (x *HeartbeatResponse) GetRenewedToken() string {
+	if x != nil {
+		return x.RenewedToken
+	}
+	return ""
 }
 
 var File_agent_proto protoreflect.FileDescriptor
@@ -1433,11 +1447,12 @@ const file_agent_proto_rawDesc = "" +
 	"\x0ecustom_metrics\x18\x02 \x03(\v25.leoflow.agent.v1.HeartbeatRequest.CustomMetricsEntryR\rcustomMetrics\x1a@\n" +
 	"\x12CustomMetricsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"{\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xa0\x01\n" +
 	"\x11HeartbeatResponse\x12)\n" +
 	"\x10should_terminate\x18\x01 \x01(\bR\x0fshouldTerminate\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"serverTime*w\n" +
+	"serverTime\x12#\n" +
+	"\rrenewed_token\x18\x03 \x01(\tR\frenewedToken*w\n" +
 	"\bLogLevel\x12\x19\n" +
 	"\x15LOG_LEVEL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n" +

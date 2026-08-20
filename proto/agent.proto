@@ -199,4 +199,11 @@ message HeartbeatRequest {
 message HeartbeatResponse {
     bool should_terminate = 1;
     google.protobuf.Timestamp server_time = 2;
+    // A freshly minted, task-scoped agent token the control plane issues when the
+    // heartbeat proves the attempt is still live (ADR 0055 Fix #4). When non-empty
+    // the agent atomically swaps its bearer to this value, so a long task keeps a
+    // working credential while the short per-attempt TTL bounds a stolen/finished
+    // one. Empty means "keep the current token" (no renewal this beat, or the
+    // attempt is superseded/past its lifetime ceiling). Never logged.
+    string renewed_token = 3;
 }

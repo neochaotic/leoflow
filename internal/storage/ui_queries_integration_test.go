@@ -440,6 +440,43 @@ func TestListAuditLogsIntegration(t *testing.T) {
 	}
 }
 
+// TestRecordSecretScopeWarningIntegration checks the warn-phase audit event
+// (ADR 0045, ADR 0055): a task that received the full vault while declaring a
+// narrower set records a secret.scope_warning row against the DAG, carrying the
+// kind and the declared/total counts in metadata — and no secret names.
+func TestRecordSecretScopeWarningIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_scopewarn_%d", time.Now().UnixNano())
+	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}})
+
+	if err := repo.RecordSecretScopeWarning(ctx, "default", dagID, "run-1", "t", "connections", 1, 3); err != nil {
+		t.Fatalf("RecordSecretScopeWarning: %v", err)
+	}
+
+	entries, _, err := repo.ListAuditLogs(ctx, "default", dagID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListAuditLogs: %v", err)
+	}
+	var found *domain.AuditLogEntry
+	for i := range entries {
+		if entries[i].Action == "secret.scope_warning" {
+			found = &entries[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("secret.scope_warning entry not found for %s: %+v", dagID, entries)
+	}
+	if found.ResourceType != "dag" || found.ResourceID != dagID {
+		t.Errorf("resource = %s/%s, want dag/%s", found.ResourceType, found.ResourceID, dagID)
+	}
+	for _, want := range []string{`"kind":"connections"`, `"declared":1`, `"total":3`, `"run_id":"run-1"`, `"task_id":"t"`} {
+		if !strings.Contains(found.Extra, want) {
+			t.Errorf("metadata %q missing %q", found.Extra, want)
+		}
+	}
+}
+
 // TestListDagsFilteredIntegration guards the DAG list filters: by latest-run
 // state and by paused flag, with correct totals.
 func TestListDagsFilteredIntegration(t *testing.T) {

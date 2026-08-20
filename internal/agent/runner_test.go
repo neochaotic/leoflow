@@ -65,6 +65,13 @@ func (f *fakeClient) GetTaskSpec(context.Context, *agentv1.GetTaskSpecRequest, .
 	return f.spec, nil
 }
 
+// AwaitAssignment satisfies the AgentServiceClient interface (warm-worker
+// transport, ADR 0058 N1b). No single-shot agent test drives it; the embedding
+// fakes (exchangeClient, registerErrClient, secretsErrClient) inherit this stub.
+func (f *fakeClient) AwaitAssignment(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentv1.WorkerMessage, agentv1.WorkAssignment], error) {
+	return nil, status.Error(codes.Unimplemented, "AwaitAssignment not used in this test")
+}
+
 func (f *fakeClient) FetchXCom(_ context.Context, in *agentv1.FetchXComRequest, _ ...grpc.CallOption) (*agentv1.FetchXComResponse, error) {
 	if resp, ok := f.xcom[in.GetUpstreamTaskId()]; ok {
 		return resp, nil

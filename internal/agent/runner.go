@@ -75,6 +75,11 @@ type Runner struct {
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
+	// Token, when set, is the swappable bearer the gRPC per-RPC credential reads.
+	// On a heartbeat carrying a renewed_token the loop atomically swaps it here so
+	// every subsequent RPC uses the new credential (ADR 0055 Fix #4). Nil disables
+	// bearer swapping (a heartbeat's renewed_token is then ignored).
+	Token *TokenSource
 	// BeforeReport, if set, is invoked with the terminal state AFTER the durable
 	// outcome record is written and BEFORE the report is delivered. It is a
 	// fault-injection seam for the durable-outcome E2E (ADR 0052) — the agent
@@ -577,13 +582,26 @@ func (r *Runner) heartbeat(ctx context.Context, cancel context.CancelFunc) {
 				slog.Warn("heartbeat failed", "error", err)
 				continue
 			}
-			if resp.GetShouldTerminate() {
+			if r.applyHeartbeatResponse(resp) {
 				slog.Warn("control plane requested task termination")
 				cancel()
 				return
 			}
 		}
 	}
+}
+
+// applyHeartbeatResponse handles a heartbeat reply: it swaps in a renewed bearer
+// (ADR 0055 Fix #4) and reports whether the control plane asked the task to
+// terminate. The swap happens before the terminate check, but the two are
+// mutually exclusive on the wire — the server sends a renewed token only on the
+// live branch and should_terminate only on the superseded branch. The token is
+// never logged.
+func (r *Runner) applyHeartbeatResponse(resp *agentv1.HeartbeatResponse) (terminate bool) {
+	if r.Token != nil {
+		r.Token.Set(resp.GetRenewedToken()) // no-op on empty (keep current bearer)
+	}
+	return resp.GetShouldTerminate()
 }
 
 func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode int32, msg string) error {

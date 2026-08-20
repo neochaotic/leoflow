@@ -92,7 +92,7 @@ func (a *JWTAuthenticator) mintAgentToken(id AgentIdentity, ttl time.Duration, o
 //
 // An invalid incoming token (bad signature, wrong audience, expired) returns an
 // error and is never re-minted.
-func (a *JWTAuthenticator) RenewAgentToken(token string, ttl, maxLifetime time.Duration) (string, bool, error) {
+func (a *JWTAuthenticator) RenewAgentToken(token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error) {
 	var c agentClaims
 	parsed, err := jwt.ParseWithClaims(token, &c, func(*jwt.Token) (any, error) {
 		return a.secret, nil
@@ -119,7 +119,7 @@ func (a *JWTAuthenticator) RenewAgentToken(token string, ttl, maxLifetime time.D
 		TaskID:         c.TaskID,
 		TryNumber:      c.TryNumber,
 	}
-	renewed, err := a.mintAgentToken(id, ttl, origin)
+	renewed, err = a.mintAgentToken(id, ttl, origin)
 	if err != nil {
 		return "", false, err
 	}

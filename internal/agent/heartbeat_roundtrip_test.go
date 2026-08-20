@@ -63,7 +63,7 @@ func ttlOf(t *testing.T, token string) time.Duration {
 	if iat == nil || exp == nil {
 		t.Fatal("token missing iat/exp")
 	}
-	return exp.Time.Sub(iat.Time)
+	return exp.Sub(iat.Time)
 }
 
 // TestHeartbeatRenewalRoundTrip drives real gRPC across two heartbeats: the
@@ -81,7 +81,8 @@ func TestHeartbeatRenewalRoundTrip(t *testing.T) {
 	)
 	srv.SetTokenRenewal(authn, renewalTTL, 24*time.Hour)
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

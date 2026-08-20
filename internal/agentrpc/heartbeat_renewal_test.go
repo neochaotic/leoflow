@@ -33,7 +33,7 @@ func ttlOfToken(t *testing.T, token string) time.Duration {
 	if err != nil || exp == nil {
 		t.Fatalf("renewed token has no exp: %v", err)
 	}
-	return exp.Time.Sub(iat.Time)
+	return exp.Sub(iat.Time)
 }
 
 // TestHeartbeatRenewsTokenOnLiveAttempt is the live side of the two-sided

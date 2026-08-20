@@ -86,7 +86,15 @@ type DAGSpec struct {
 	// at compile time so the scheduler fires it from the artifact without re-reading
 	// the project config. nil means no alerting.
 	Alerts *AlertsConfig `json:"alerts,omitempty"`
-	Tasks  []TaskSpec    `json:"tasks"`
+	// Variables and Connections are the secret names this DAG declares (ADR 0045,
+	// ADR 0055). A task receives a variable or connection only if the DAG declared
+	// it; TaskSpec may narrow the set further per task. Absent (empty) is always
+	// valid and means the DAG declares nothing — the additive, back-compatible
+	// default. These carry the declaration only; secret delivery still ships the
+	// whole tenant vault until enforcement lands on a later increment.
+	Variables   []string   `json:"variables,omitempty"`
+	Connections []string   `json:"connections,omitempty"`
+	Tasks       []TaskSpec `json:"tasks"`
 	// Source is the original dag.py text, captured at compile time so the UI's
 	// Code tab can show the Python a human wrote (not the compiled spec). It is
 	// part of the artifact: changing it produces a new version.
@@ -120,18 +128,22 @@ type TaskSpec struct {
 	// (the default) means the implicit default_pool, so every task is always in a
 	// well-defined pool. The pool gate is Pro-only; Lite ignores this field, so a
 	// DAG that sets it plans identically on Lite.
-	Pool                    string              `json:"pool,omitempty"`
-	Retries                 *int                `json:"retries,omitempty"`
-	RetryDelaySeconds       *int                `json:"retry_delay_seconds,omitempty"`
-	ExecutionTimeoutSeconds *int                `json:"execution_timeout_seconds,omitempty"`
-	ExecutionMode           ExecutionMode       `json:"execution_mode,omitempty"`
-	Entrypoint              string              `json:"entrypoint,omitempty"`
-	Env                     map[string]string   `json:"env,omitempty"`
-	Secrets                 []Secret            `json:"secrets,omitempty"`
-	Resources               *Resources          `json:"resources,omitempty"`
-	Execution               *Execution          `json:"execution,omitempty"`
-	XComInput               map[string][]string `json:"xcom_input,omitempty"`
-	XComSchema              map[string]any      `json:"xcom_schema,omitempty"`
+	Pool                    string            `json:"pool,omitempty"`
+	Retries                 *int              `json:"retries,omitempty"`
+	RetryDelaySeconds       *int              `json:"retry_delay_seconds,omitempty"`
+	ExecutionTimeoutSeconds *int              `json:"execution_timeout_seconds,omitempty"`
+	ExecutionMode           ExecutionMode     `json:"execution_mode,omitempty"`
+	Entrypoint              string            `json:"entrypoint,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	// Variables and Connections narrow the DAG's declared secret set to this task
+	// (ADR 0045 §Settled #1, ADR 0055). Absent (empty) means the task inherits the
+	// DAG-level declaration. Carries the declaration only; delivery is unchanged.
+	Variables   []string            `json:"variables,omitempty"`
+	Connections []string            `json:"connections,omitempty"`
+	Resources   *Resources          `json:"resources,omitempty"`
+	Execution   *Execution          `json:"execution,omitempty"`
+	XComInput   map[string][]string `json:"xcom_input,omitempty"`
+	XComSchema  map[string]any      `json:"xcom_schema,omitempty"`
 	// CallArgs carries TaskFlow literal call arguments captured at compile time
 	// (#115). The agent serializes the whole map as a single env var
 	// LEOFLOW_CALL_ARGS_JSON; the runtime decodes and delivers each value to
@@ -153,13 +165,6 @@ type TaskSpec struct {
 	// runtime re-imports dag.py and runs it in the task process on failure. The
 	// flag lets the agent/UI know a callback will run without importing user code.
 	OnFailureCallback bool `json:"on_failure_callback,omitempty"`
-}
-
-// Secret references a credential injected into the worker at run time.
-type Secret struct {
-	Name      string `json:"name"`
-	Source    string `json:"source"`
-	Reference string `json:"reference,omitempty"`
 }
 
 // Resources holds Kubernetes-style resource requests and limits for a task.

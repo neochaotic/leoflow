@@ -702,6 +702,15 @@ func applyTaskOverride(task *domain.TaskSpec, o *domain.TaskConfig) {
 	if o.Execution != nil {
 		task.Execution = o.Execution
 	}
+	// Per-task declared secret sets narrow the DAG-level declaration (ADR 0045,
+	// ADR 0055). A set list replaces (does not merge with) the compiled value,
+	// matching the override semantics of the other scalar/struct fields above.
+	if len(o.Connections) > 0 {
+		task.Connections = o.Connections
+	}
+	if len(o.Variables) > 0 {
+		task.Variables = o.Variables
+	}
 	if len(o.Env) > 0 {
 		if task.Env == nil {
 			task.Env = make(map[string]string, len(o.Env))

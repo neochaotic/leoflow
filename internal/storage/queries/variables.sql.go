@@ -39,6 +39,39 @@ func (q *Queries) DeleteVariable(ctx context.Context, arg DeleteVariableParams) 
 	return result.RowsAffected(), nil
 }
 
+const existingVariableKeys = `-- name: ExistingVariableKeys :many
+SELECT key FROM variables
+WHERE tenant_id = $1 AND key = ANY($2::text[])
+`
+
+type ExistingVariableKeysParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Keys     []string    `json:"keys"`
+}
+
+// The subset of the given keys that exist for the tenant. Used to reject a DAG
+// that declares an unknown Variable at registration (ADR 0055 D6); a name absent
+// from the result does not exist.
+func (q *Queries) ExistingVariableKeys(ctx context.Context, arg ExistingVariableKeysParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, existingVariableKeys, arg.TenantID, arg.Keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		items = append(items, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getVariable = `-- name: GetVariable :one
 SELECT key, value, description
 FROM variables

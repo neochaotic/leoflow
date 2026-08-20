@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -839,6 +840,13 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 	if err != nil {
 		return false, err
 	}
+	// A DAG may not declare a variable/connection that does not exist for the
+	// tenant (ADR 0055 D6). Checked before any write so a bad declaration fails
+	// fast with no partial state. An empty declaration is always valid, so no
+	// pre-declaration DAG is ever rejected.
+	if verr := r.validateDeclaredSecrets(ctx, tid, spec); verr != nil {
+		return false, verr
+	}
 	maxRuns := spec.MaxActiveRuns
 	if maxRuns == 0 {
 		maxRuns = defaultMaxActiveRuns
@@ -890,6 +898,82 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 		return false, fmt.Errorf("writing audit log: %w", err)
 	}
 	return true, nil
+}
+
+// validateDeclaredSecrets rejects a spec that declares a variable or connection
+// name that does not exist for the tenant (ADR 0055 D6). It gathers every
+// declared name — DAG-level and per-task narrowing — and confirms each with one
+// existence query per kind. A name renamed in the UI but not in the DAG surfaces
+// here at registration rather than silently at run time; the error names both
+// the DAG and the offending names so the author knows which side to fix.
+//
+// An empty declaration is always valid. Because declaration is new, no existing
+// DAG declares anything, so this never rejects a pre-declaration DAG — the
+// Lite/back-compat safety.
+func (r *Repository) validateDeclaredSecrets(ctx context.Context, tid pgtype.UUID, spec domain.DAGSpec) error {
+	varNames := declaredSecretNames(spec.Variables, spec.Tasks, func(t domain.TaskSpec) []string { return t.Variables })
+	if len(varNames) > 0 {
+		existing, err := r.q.ExistingVariableKeys(ctx, queries.ExistingVariableKeysParams{TenantID: tid, Keys: varNames})
+		if err != nil {
+			return fmt.Errorf("checking declared variables: %w", err)
+		}
+		if missing := missingNames(varNames, existing); len(missing) > 0 {
+			return fmt.Errorf(
+				"dag %q declares unknown variable(s) %s; define them (leoflow variables set) or remove them from the DAG's variables: declaration: %w",
+				spec.DagID, strings.Join(missing, ", "), domain.ErrValidation)
+		}
+	}
+	connNames := declaredSecretNames(spec.Connections, spec.Tasks, func(t domain.TaskSpec) []string { return t.Connections })
+	if len(connNames) > 0 {
+		existing, err := r.q.ExistingConnectionIDs(ctx, queries.ExistingConnectionIDsParams{TenantID: tid, ConnIds: connNames})
+		if err != nil {
+			return fmt.Errorf("checking declared connections: %w", err)
+		}
+		if missing := missingNames(connNames, existing); len(missing) > 0 {
+			return fmt.Errorf(
+				"dag %q declares unknown connection(s) %s; define them (leoflow connections set) or remove them from the DAG's connections: declaration: %w",
+				spec.DagID, strings.Join(missing, ", "), domain.ErrValidation)
+		}
+	}
+	return nil
+}
+
+// declaredSecretNames collects the deduplicated set of declared names across the
+// DAG-level declaration and every task's narrowing declaration, preserving first
+// occurrence order so error messages are stable.
+func declaredSecretNames(dagLevel []string, tasks []domain.TaskSpec, taskLevel func(domain.TaskSpec) []string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(dagLevel))
+	add := func(names []string) {
+		for _, n := range names {
+			if _, ok := seen[n]; ok {
+				continue
+			}
+			seen[n] = struct{}{}
+			out = append(out, n)
+		}
+	}
+	add(dagLevel)
+	for _, t := range tasks {
+		add(taskLevel(t))
+	}
+	return out
+}
+
+// missingNames returns the declared names absent from the existing set, in
+// declaration order.
+func missingNames(declared, existing []string) []string {
+	have := make(map[string]struct{}, len(existing))
+	for _, e := range existing {
+		have[e] = struct{}{}
+	}
+	var missing []string
+	for _, d := range declared {
+		if _, ok := have[d]; !ok {
+			missing = append(missing, d)
+		}
+	}
+	return missing
 }
 
 // BootstrapAdmin creates a default admin user with the given password when the

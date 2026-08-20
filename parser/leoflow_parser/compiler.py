@@ -56,6 +56,17 @@ def compile_dag(
     tags = config.get("tags") or sorted(getattr(dag, "tags", []) or [])
     if tags:
         spec["tags"] = list(tags)
+    # Declared secret sets (ADR 0045, ADR 0055): the per-DAG variables/connections
+    # a task may receive. Airflow-native keys, distinct from connectors: (pip
+    # provider packages, ADR 0038) which is a build concern the parser never emits.
+    # Absent or empty declares nothing — omit the key so the compiled shape of a
+    # DAG that declares nothing is unchanged (additive/back-compatible).
+    connections = config.get("connections")
+    if connections:
+        spec["connections"] = list(connections)
+    variables = config.get("variables")
+    if variables:
+        spec["variables"] = list(variables)
     default_args = _default_args(config)
     if default_args:
         spec["default_args"] = default_args

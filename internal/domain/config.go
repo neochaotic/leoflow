@@ -11,15 +11,21 @@ import (
 // leoflow.yaml. It mirrors docs/api/leoflow-yaml-schema.json and is consumed
 // by `leoflow compile` to build an image and emit a DAGSpec.
 type LeoflowConfig struct {
-	SchemaVersion  string          `json:"schema_version,omitempty" yaml:"schema_version,omitempty"`
-	DagID          string          `json:"dag_id" yaml:"dag_id"`
-	Description    string          `json:"description,omitempty" yaml:"description,omitempty"`
-	Owner          string          `json:"owner,omitempty" yaml:"owner,omitempty"`
-	Tags           []string        `json:"tags,omitempty" yaml:"tags,omitempty"`
-	PythonVersion  string          `json:"python_version,omitempty" yaml:"python_version,omitempty"`
-	BaseImage      string          `json:"base_image,omitempty" yaml:"base_image,omitempty"`
-	Dependencies   []string        `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
-	Connectors     []string        `json:"connectors,omitempty" yaml:"connectors,omitempty"`
+	SchemaVersion string   `json:"schema_version,omitempty" yaml:"schema_version,omitempty"`
+	DagID         string   `json:"dag_id" yaml:"dag_id"`
+	Description   string   `json:"description,omitempty" yaml:"description,omitempty"`
+	Owner         string   `json:"owner,omitempty" yaml:"owner,omitempty"`
+	Tags          []string `json:"tags,omitempty" yaml:"tags,omitempty"`
+	PythonVersion string   `json:"python_version,omitempty" yaml:"python_version,omitempty"`
+	BaseImage     string   `json:"base_image,omitempty" yaml:"base_image,omitempty"`
+	Dependencies  []string `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
+	Connectors    []string `json:"connectors,omitempty" yaml:"connectors,omitempty"`
+	// Connections and Variables are the per-DAG declared secret sets (ADR 0045,
+	// ADR 0055). Carried verbatim to the parser, which emits them into dag.json.
+	// Distinct from Connectors (pip provider packages, ADR 0038) — a different key
+	// one letter away. Empty declares nothing.
+	Connections    []string        `json:"connections,omitempty" yaml:"connections,omitempty"`
+	Variables      []string        `json:"variables,omitempty" yaml:"variables,omitempty"`
 	SystemPackages []string        `json:"system_packages,omitempty" yaml:"system_packages,omitempty"`
 	DagSource      string          `json:"dag_source,omitempty" yaml:"dag_source,omitempty"`
 	IncludePaths   []string        `json:"include_paths,omitempty" yaml:"include_paths,omitempty"`
@@ -107,8 +113,13 @@ type TaskConfig struct {
 	RetryDelaySeconds       *int              `json:"retry_delay_seconds,omitempty" yaml:"retry_delay_seconds,omitempty"`
 	ExecutionTimeoutSeconds *int              `json:"execution_timeout_seconds,omitempty" yaml:"execution_timeout_seconds,omitempty"`
 	Env                     map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
-	Resources               *Resources        `json:"resources,omitempty" yaml:"resources,omitempty"`
-	Execution               *Execution        `json:"execution,omitempty" yaml:"execution,omitempty"`
+	// Connections and Variables narrow the DAG-level declared secret set to this
+	// task (ADR 0045 §Settled #1, ADR 0055). Empty means the task inherits the
+	// DAG-level declaration.
+	Connections []string   `json:"connections,omitempty" yaml:"connections,omitempty"`
+	Variables   []string   `json:"variables,omitempty" yaml:"variables,omitempty"`
+	Resources   *Resources `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Execution   *Execution `json:"execution,omitempty" yaml:"execution,omitempty"`
 }
 
 // BuildConfig controls how the container image is built from the project.

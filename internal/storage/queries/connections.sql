@@ -22,6 +22,13 @@ SELECT conn_id, conn_type, host, conn_schema, login, password, port, extra, desc
 FROM connections
 WHERE tenant_id = $1 AND conn_id = $2;
 
+-- name: ExistingConnectionIDs :many
+-- The subset of the given conn_ids that exist for the tenant. Used to reject a
+-- DAG that declares an unknown connection at registration (ADR 0055 D6); a name
+-- absent from the result does not exist.
+SELECT conn_id FROM connections
+WHERE tenant_id = $1 AND conn_id = ANY(sqlc.arg(conn_ids)::text[]);
+
 -- name: UpsertConnection :exec
 INSERT INTO connections (tenant_id, conn_id, conn_type, host, conn_schema, login, password, port, extra, description)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)

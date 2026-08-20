@@ -1,4 +1,4 @@
-package scheduler
+package executor
 
 import (
 	"context"
@@ -53,13 +53,13 @@ type orphanReaper struct {
 	store     ReapStore
 	logger    *slog.Logger
 	threshold time.Duration
-	recorder  Recorder
+	recorder  DecisionRecorder
 	// pods tears down the reaped run's pods after the DB transition (#474).
 	// Nil in Lite (no pods); the delete is skipped.
 	pods PodManager
 }
 
-func newOrphanReaper(store ReapStore, logger *slog.Logger, threshold time.Duration, rec Recorder) *orphanReaper {
+func newOrphanReaper(store ReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *orphanReaper {
 	return &orphanReaper{store: store, logger: logger, threshold: threshold, recorder: rec}
 }
 

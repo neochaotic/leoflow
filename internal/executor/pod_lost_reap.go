@@ -1,4 +1,4 @@
-package scheduler
+package executor
 
 import (
 	"context"
@@ -67,7 +67,7 @@ type podLostReaper struct {
 	store    PodLostReapStore
 	logger   *slog.Logger
 	grace    time.Duration
-	recorder Recorder
+	recorder DecisionRecorder
 	// pods is required for this reaper to do anything; nil (Lite) makes run a
 	// no-op. See the type doc.
 	pods PodManager
@@ -79,7 +79,7 @@ type podLostReaper struct {
 	cache PodPresenceCache
 }
 
-func newPodLostReaper(store PodLostReapStore, logger *slog.Logger, grace time.Duration, rec Recorder) *podLostReaper {
+func newPodLostReaper(store PodLostReapStore, logger *slog.Logger, grace time.Duration, rec DecisionRecorder) *podLostReaper {
 	return &podLostReaper{store: store, logger: logger, grace: grace, recorder: rec}
 }
 

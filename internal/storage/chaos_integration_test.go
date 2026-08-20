@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 )
 
@@ -26,9 +27,9 @@ import (
 //     run up and fails it with `orphaned`.
 //
 // Wall-clock dogfood would wait 3 min + 5 min for the production thresholds;
-// here we shrink them to a couple hundred ms via SetDispatchLostThreshold /
-// SetOrphanThreshold so the test stays fast. We are validating the contract
-// SHAPE, not the production tuning.
+// here we shrink them to a couple hundred ms in the ReaperConfig wired to the
+// scheduler's execution-reaper seam so the test stays fast. We are validating
+// the contract SHAPE, not the production tuning.
 //
 // Skips when DATABASE_URL is absent (no PG available).
 func TestChaosMidTickCrashRecoveryIntegration(t *testing.T) {
@@ -60,11 +61,20 @@ func TestChaosMidTickCrashRecoveryIntegration(t *testing.T) {
 	//    while still well above the per-tick wall-clock latency the in-
 	//    process Step() takes (~ms). The leader flag is the gate the
 	//    reapers check before writing — must be on for any of this to run.
-	s := scheduler.NewScheduler(sched, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := scheduler.NewScheduler(sched, logger, time.Millisecond)
 	s.SetLeading(true)
-	s.SetDispatchLostThreshold(200 * time.Millisecond)
-	s.SetOrphanThreshold(400 * time.Millisecond)
-	s.SetAgentLostThreshold(time.Minute) // irrelevant here, default keeps it from firing on unrelated rows
+	// The reapers now live behind the execution-reaper seam. Wire one over the
+	// same store (Lite path: nil pods/cache/recorder) with thresholds tight
+	// enough for a fast test but well above the ~ms in-process Step() latency.
+	// AgentLostThreshold is a minute — irrelevant here, kept high so it can't fire
+	// on unrelated rows; PodLostGrace is a no-op with nil pods.
+	s.SetExecutionReaper(executor.NewReaper(sched, nil, nil, nil, logger, executor.ReaperConfig{
+		OrphanThreshold:       400 * time.Millisecond,
+		AgentLostThreshold:    time.Minute,
+		DispatchLostThreshold: 200 * time.Millisecond,
+		PodLostGrace:          time.Minute,
+	}, s.SteppingDown))
 
 	// 3. Wait past the dispatch-lost threshold, then tick. The reaper must
 	//    flip our queued TI to failed/dispatch_lost.

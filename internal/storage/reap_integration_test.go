@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/scheduler"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
@@ -203,7 +204,7 @@ func resolveRunUUID(t *testing.T, sched *storage.SchedulerStore, ctx context.Con
 }
 
 // findCandidate returns the candidate matching runUUID or nil.
-func findCandidate(cands []scheduler.ReapCandidate, runUUID string) *scheduler.ReapCandidate {
+func findCandidate(cands []executor.ReapCandidate, runUUID string) *executor.ReapCandidate {
 	for i := range cands {
 		if cands[i].RunID == runUUID {
 			return &cands[i]

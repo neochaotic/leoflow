@@ -47,10 +47,6 @@ import (
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
-// neverReap is a threshold long enough that none of Step's reapers touch our
-// synthetic runs during a measurement window, so the active set stays fixed at N.
-const neverReap = 1000 * time.Hour
-
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "scheduler_ceiling: %v\n", err)
@@ -97,11 +93,9 @@ func run() error {
 	sched := scheduler.NewScheduler(store, logger, time.Second)
 	sched.SetRecorder(metrics) // captures step-downs; scraped per N below
 	sched.SetLeading(true)     // Step is a no-op for a follower
-	// Keep every reaper off our synthetic runs for the run of the experiment.
-	sched.SetOrphanThreshold(neverReap)
-	sched.SetAgentLostThreshold(neverReap)
-	sched.SetDispatchLostThreshold(neverReap)
-	sched.SetPodLostGrace(neverReap)
+	// No execution reaper is wired, so no reaper ever touches our synthetic runs
+	// and the active set stays fixed at N for the measurement window (reaping now
+	// lives behind the scheduler's ExecutionReaper seam, off by default).
 	// No dispatcher is wired: a `running` task is never re-dispatched, so the
 	// scheduler advances state only and launches nothing.
 

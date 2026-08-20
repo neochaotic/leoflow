@@ -213,25 +213,6 @@ type Store interface {
 	// SetTaskNote attaches operational context to a task instance (shown in the
 	// UI), e.g. why it is queued but not running.
 	SetTaskNote(ctx context.Context, runID, taskID, note string) error
-	// ReapStore methods drive the orphan reaper (#120): they list running runs
-	// that have gone quiet and fail them so the dashboard counter is correct.
-	ReapStore
-	// HeartbeatReapStore methods drive the TI heartbeat reaper (#128): they
-	// list `running` task instances whose agent has gone silent and fail them
-	// as `agent_lost` so the dashboard counter recovers from agent-side crashes.
-	HeartbeatReapStore
-	// DispatchLostReapStore methods drive the dispatch-lost reaper (#202):
-	// they list `queued` task instances whose dispatch has been pending past
-	// the threshold and fail them as `dispatch_lost`. This unblocks the
-	// orphan-run reaper for runs stuck by a mid-tick scheduler crash, which
-	// would otherwise keep stuck queued TIs out of the candidate set forever
-	// (the orphan reaper's "no active TI" safety guard).
-	DispatchLostReapStore
-	// PodLostReapStore methods drive the pod-lost reaper (#527): they list
-	// `running` task instances and fail as `pod_lost` any whose backing pod has
-	// vanished past a grace period, closing the window where a pod killed before
-	// its first heartbeat sat `running` until the 5-minute orphan reaper.
-	PodLostReapStore
 }
 
 // Recorder records scheduler metrics. observability.Metrics implements it.
@@ -269,40 +250,11 @@ type Dispatcher interface {
 // ADR 0031).
 const maxCatchupSlotsPerTick = 100
 
-// defaultOrphanThreshold is how long a running dag run may stay quiet before
-// the reaper declares it orphaned. Five minutes is well above any healthy tick
-// or task hand-off latency, so a live run is never reaped, but short enough
-// that a real orphan is reaped before the operator looks at the dashboard.
-const defaultOrphanThreshold = 5 * time.Minute
-
 // defaultAlertConcurrency caps concurrent on-failure alert dispatches (#424) so a
 // mass failure can't spawn an unbounded burst of alert goroutines/POSTs. Each
 // dispatch is short (bounded by the notifier's HTTP timeout), so a small pool
 // absorbs normal bursts; beyond it, extra alerts are dropped best-effort.
 const defaultAlertConcurrency = 8
-
-// defaultAgentLostThreshold is how long a running TI may go without an agent
-// heartbeat before the TI reaper declares the agent lost. 90 s is 6x the
-// default agent heartbeat interval (15 s, see cmd/leoflow-agent/main.go),
-// tolerating a handful of missed pings before failing the task.
-const defaultAgentLostThreshold = 90 * time.Second
-
-// defaultDispatchLostThreshold is how long a TI may stay `queued` before the
-// dispatch-lost reaper declares it dispatch-lost. 3 minutes is well above
-// any healthy dispatch latency on Lite (sub-millisecond passthrough) or Pro
-// (bounded pool, low single-digit seconds even under load), so a live
-// dispatch is never reaped, but short enough that a stuck queued TI from a
-// mid-tick scheduler crash is reaped before the operator notices (#202).
-const defaultDispatchLostThreshold = 3 * time.Minute
-
-// defaultPodLostGrace is how long a TI may be `running` before the pod-lost
-// reaper checks whether its pod still exists (#527). It only matters as a floor
-// against a transient "pod not listed yet" blip right after the running
-// transition — the actual reap needs TaskPodActive to report NO live pod, so a
-// slow-starting (Pending) pod is deferred regardless. 60 s catches a pod that
-// vanished in its first seconds ~5x faster than the 5-minute orphan reaper,
-// while staying well clear of any real pod lifecycle timing. Kubernetes-only.
-const defaultPodLostGrace = 60 * time.Second
 
 // Scheduler advances dag runs by applying the planning rules each tick.
 type Scheduler struct {
@@ -317,24 +269,16 @@ type Scheduler struct {
 	// failure must not spawn an unbounded burst of alert goroutines/POSTs. A
 	// buffered channel used as a counting semaphore; a saturated slot drops the
 	// alert (best-effort) rather than blocking the tick.
-	alertSem              chan struct{}
-	orphanThreshold       time.Duration
-	agentLostThreshold    time.Duration
-	dispatchLostThreshold time.Duration
-	podLostGrace          time.Duration
-	// podManager lets the reapers tear down a reaped task's pod and gate the
-	// dispatch-lost decision on pod liveness (#474, #461). Nil in Lite; the
-	// reapers guard the nil and fall back to DB-only behavior.
-	podManager PodManager
-	// podPresenceCache is an optional informer-backed read cache (PR-10) the
-	// pod-lost and dispatch-lost reapers consult to DEFER a reap without an
-	// apiserver LIST. Trusted only in the safe (presence) direction; a miss falls
-	// through to podManager's live read (#461). Nil in Lite and before the
-	// informer is wired — every candidate then uses the live path.
-	podPresenceCache PodPresenceCache
-	lastTick         atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
-	leading          atomic.Bool  // true only while this instance holds leadership and ticks
-	steppingDown     atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
+	alertSem chan struct{}
+	// executionReaper is the execution-side backstop that fails stuck runs and
+	// task instances (the four reapers, #120/#128/#202/#527). It lives in the
+	// executor package because reaping tears down pods and gates on pod liveness;
+	// the scheduler only drives it once per leader tick through this seam. Nil
+	// leaves the tick with no reaping (e.g. a load harness that opts out).
+	executionReaper ExecutionReaper
+	lastTick        atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	leading         atomic.Bool  // true only while this instance holds leadership and ticks
+	steppingDown    atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
@@ -351,53 +295,30 @@ type Scheduler struct {
 // NewScheduler builds a Scheduler over the given store, ticking every interval.
 func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Scheduler {
 	return &Scheduler{
-		store:                 store,
-		logger:                logger,
-		interval:              interval,
-		stepTimeout:           defaultStepTimeout(interval),
-		orphanThreshold:       defaultOrphanThreshold,
-		agentLostThreshold:    defaultAgentLostThreshold,
-		dispatchLostThreshold: defaultDispatchLostThreshold,
-		podLostGrace:          defaultPodLostGrace,
-		warnedSchedules:       map[string]string{},
-		alertSem:              make(chan struct{}, defaultAlertConcurrency),
+		store:           store,
+		logger:          logger,
+		interval:        interval,
+		stepTimeout:     defaultStepTimeout(interval),
+		warnedSchedules: map[string]string{},
+		alertSem:        make(chan struct{}, defaultAlertConcurrency),
 	}
 }
 
-// SetOrphanThreshold overrides the stall-detection window the reaper uses to
-// declare a running dag run orphaned (optional; mainly for tests). The default
-// is defaultOrphanThreshold.
-func (s *Scheduler) SetOrphanThreshold(d time.Duration) { s.orphanThreshold = d }
+// ExecutionReaper is the execution-side backstop the scheduler drives once per
+// leader tick to fail stuck runs and task instances. It is the seam between the
+// scheduler (which owns the leader gate and the tick) and the executor package
+// (which owns pod teardown and pod-liveness). executor.Reaper satisfies it.
+type ExecutionReaper interface {
+	// ReapOnce runs every reaper once. Implementations isolate per-reaper and
+	// per-candidate failures internally and log/meter list errors, so the
+	// scheduler ignores the return today; the error is kept for the seam.
+	ReapOnce(ctx context.Context) error
+}
 
-// SetAgentLostThreshold overrides the silence window the TI heartbeat reaper
-// uses to declare a task's agent lost (optional; mainly for tests). The default
-// is defaultAgentLostThreshold.
-func (s *Scheduler) SetAgentLostThreshold(d time.Duration) { s.agentLostThreshold = d }
-
-// SetDispatchLostThreshold overrides the wait window the dispatch-lost reaper
-// uses to declare a queued task's dispatch lost (optional; mainly for tests).
-// The default is defaultDispatchLostThreshold.
-func (s *Scheduler) SetDispatchLostThreshold(d time.Duration) { s.dispatchLostThreshold = d }
-
-// SetPodLostGrace overrides how long a TI may be `running` before the pod-lost
-// reaper checks pod liveness (optional; mainly for tests). The default is
-// defaultPodLostGrace.
-func (s *Scheduler) SetPodLostGrace(d time.Duration) { s.podLostGrace = d }
-
-// SetPodManager wires the pod-teardown / liveness capability the reapers use to
-// stop a reaped task's pod and to defer the dispatch-lost decision when a
-// queued TI's pod is actually live (#474, #461). Left unset in Lite/subprocess,
-// where the reapers stay DB-only. Called from main once the K8s client exists.
-func (s *Scheduler) SetPodManager(pm PodManager) { s.podManager = pm }
-
-// SetPodPresenceCache wires the informer-backed presence cache the pod-lost and
-// dispatch-lost reapers use to defer a reap without a live apiserver LIST (PR-10).
-// It is consulted only in the safe direction: a cached Pending/Running pod defers;
-// a miss falls through to the live TaskPodActive read, so cache lag can never
-// cause a false-positive reap (#461). Left unset in Lite/subprocess and until the
-// informer is constructed, where the reapers stay on the live path. Called from
-// main on the Pro (scheduler/all) K8s path only.
-func (s *Scheduler) SetPodPresenceCache(c PodPresenceCache) { s.podPresenceCache = c }
+// SetExecutionReaper wires the execution-side reaper the scheduler drives on the
+// leader tick. Left unset (e.g. a load harness, or a Lite path that opts out of
+// reaping), the tick simply reaps nothing.
+func (s *Scheduler) SetExecutionReaper(r ExecutionReaper) { s.executionReaper = r }
 
 // defaultStepTimeout bounds how long one scheduling tick may run before it is
 // canceled so the loop can recover, rather than hang forever on a stuck query.
@@ -463,8 +384,9 @@ func (s *Scheduler) RecordReacquireSince(stepDownAt time.Time) {
 }
 
 // SteppingDown exposes the current step-down state for tests and callers that
-// want to classify an error themselves (the four scheduler.go log sites call
-// logSchedulerError with this value).
+// want to classify an error themselves: the scheduler's own log sites pass it to
+// logSchedulerError, and the execution reaper receives it (as the inStepDown
+// callback) so an expected step-down cancel logs at WARN, not ERROR (#311).
 func (s *Scheduler) SteppingDown() bool { return s.steppingDown.Load() }
 
 // SetRecorder attaches a metrics recorder (optional).
@@ -626,51 +548,25 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	return createErr
 }
 
-// reapOrphansIfLeader runs both reapers (run-level orphans + TI-level
-// agent-lost) exactly once per tick, only on the leader: reaping writes state
-// and we want one writer at a time across the fleet. A list error is logged
-// (not returned) because it should not stall the rest of the loop — the
-// reapers are backstops, not on the critical path. The two reapers are
-// independent: a failure in one does not prevent the other from running.
+// reapOrphansIfLeader drives the execution-side reaper exactly once per tick,
+// only on the leader: reaping writes state and we want one writer at a time
+// across the fleet. The reaper (executor.Reaper) isolates per-reaper and
+// per-candidate failures internally and logs/meters its own list errors, so the
+// tick neither returns nor stalls on a reap error — the reapers are backstops,
+// not on the critical path. Nil executionReaper (a harness that opts out, or a
+// role that does no reaping) makes this a no-op.
 func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
 	if !s.leading.Load() {
 		return
 	}
-	runReaper := newOrphanReaper(s.store, s.logger, s.orphanThreshold, s.recorder)
-	runReaper.pods = s.podManager
-	if err := runReaper.run(ctx); err != nil {
-		logSchedulerError(s.logger, "orphan reaper", err, s.steppingDown.Load())
-		s.record("orphan_list_error")
+	if s.executionReaper == nil {
+		return
 	}
-	tiReaper := newAgentLostReaper(s.store, s.logger, s.agentLostThreshold, s.recorder)
-	tiReaper.pods = s.podManager
-	if err := tiReaper.run(ctx); err != nil {
-		logSchedulerError(s.logger, "agent-lost reaper", err, s.steppingDown.Load())
-		s.record("agent_lost_list_error")
-	}
-	// The dispatch-lost reaper (#202) catches TIs left in `queued` after a
-	// scheduler crash mid-tick: the orphan-run reaper's "no active TI" guard
-	// would otherwise keep the stuck run alive forever. Running it AFTER the
-	// orphan-run reaper means a clean stuck-queued → failed → orphan-run-failed
-	// chain takes two ticks; running here in the same tick gives a one-tick
-	// chain once the threshold elapses.
-	dispatchReaper := newDispatchLostReaper(s.store, s.logger, s.dispatchLostThreshold, s.recorder)
-	dispatchReaper.pods = s.podManager
-	dispatchReaper.cache = s.podPresenceCache
-	if err := dispatchReaper.run(ctx); err != nil {
-		logSchedulerError(s.logger, "dispatch-lost reaper", err, s.steppingDown.Load())
-		s.record("dispatch_lost_list_error")
-	}
-
-	// Pod-lost reaper (#527): fails a running TI whose pod vanished before any
-	// other reaper could catch it. Kubernetes-only — nil podManager (Lite) makes
-	// it a no-op, so a live subprocess task is never reaped.
-	podLostReaper := newPodLostReaper(s.store, s.logger, s.podLostGrace, s.recorder)
-	podLostReaper.pods = s.podManager
-	podLostReaper.cache = s.podPresenceCache
-	if err := podLostReaper.run(ctx); err != nil {
-		logSchedulerError(s.logger, "pod-lost reaper", err, s.steppingDown.Load())
-		s.record("pod_lost_list_error")
+	// ReapOnce isolates and logs its own per-reaper failures and returns nil
+	// today; the guarded log keeps the scheduler honest if the seam ever grows a
+	// hard-failure return, matching how the tick logs (never returns) reap errors.
+	if err := s.executionReaper.ReapOnce(ctx); err != nil {
+		logSchedulerError(s.logger, "execution reaper", err, s.steppingDown.Load())
 	}
 }
 

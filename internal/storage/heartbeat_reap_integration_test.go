@@ -12,7 +12,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/config"
 	"github.com/neochaotic/leoflow/internal/domain"
-	"github.com/neochaotic/leoflow/internal/scheduler"
+	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
 
@@ -154,7 +154,7 @@ func TestMarkTaskAgentLostIntegration(t *testing.T) {
 
 // findAgentLostCandidate returns the candidate matching the run uuid (a
 // single-TI test set), or nil.
-func findAgentLostCandidate(cands []scheduler.AgentLostCandidate, runUUID string) *scheduler.AgentLostCandidate {
+func findAgentLostCandidate(cands []executor.AgentLostCandidate, runUUID string) *executor.AgentLostCandidate {
 	for i := range cands {
 		if cands[i].DagRunID == runUUID {
 			return &cands[i]

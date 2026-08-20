@@ -1,4 +1,4 @@
-package scheduler
+package executor
 
 import (
 	"context"
@@ -199,26 +199,6 @@ func TestDispatchLostReaper_CacheAbsentAndLiveAbsent_Reaps(t *testing.T) {
 	}
 	if len(pods.deletedTasks) != 1 || pods.deletedTasks[0] != (deletedTask{"run-a", "work", 4}) {
 		t.Fatalf("teardown must be pinned to (run-a,work,try 4), got %v", pods.deletedTasks)
-	}
-}
-
-// TestStepThreadsPresenceCacheToReapers is the wiring check: a presence cache set
-// via SetPodPresenceCache must reach the dispatch-lost reaper through
-// Step → reapOrphansIfLeader. A stale queued TI whose pod the cache shows as
-// active is deferred, so a leader tick does NOT fail it — proving the cache is
-// threaded, not dropped on the floor.
-func TestStepThreadsPresenceCacheToReapers(t *testing.T) {
-	store := newFakeStore()
-	store.staleQueuedCands = []StaleQueuedCandidate{
-		{TaskInstanceID: "slow", DagRunID: "run-a", TaskID: "work", QueuedAt: time.Now().UTC().Add(-10 * time.Minute)},
-	}
-	s := newScheduler(store)
-	s.SetPodPresenceCache(&fakePresenceCache{active: map[string]bool{"run-a/work": true}})
-	if err := s.Step(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.dispatchLostMarked) != 0 {
-		t.Errorf("a cache-active queued TI must be deferred through Step, got %v", store.dispatchLostMarked)
 	}
 }
 

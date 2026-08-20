@@ -67,6 +67,28 @@ type Request struct {
 	ControlPlaneAddr string
 	AgentToken       string
 
+	// AgentTokenTransport selects how the agent's bearer credential reaches the
+	// pod (ADR 0055 Fix #3): "" / "envvar" (the default) sets AgentToken as a
+	// plaintext LEOFLOW_AGENT_TOKEN env var — today's behavior, byte-identical;
+	// "exchange" keeps the plaintext token OFF the pod object and instead projects
+	// a ServiceAccount token the agent exchanges for a task-scoped JWT. Ignored by
+	// the subprocess executor (Lite has no pod/SA).
+	AgentTokenTransport string
+	// AgentTokenAudience is the audience of the projected ServiceAccount token
+	// under the exchange transport (the control plane's audience). Empty falls back
+	// to the default control-plane audience.
+	AgentTokenAudience string
+	// AgentTokenExpirationSeconds is the projected token's expiration under the
+	// exchange transport. Floored to a safe minimum so a very short task's
+	// bootstrap token has not already expired at exchange time.
+	AgentTokenExpirationSeconds int64
+	// AgentTokenSecretName / AgentTokenSecretKey select the SecretKeyRef fallback
+	// for the exchange transport (a cluster that cannot project an SA token): when
+	// AgentTokenSecretName is set, LEOFLOW_AGENT_TOKEN is sourced from that Secret
+	// via SecretKeyRef rather than projected — still off the plaintext pod spec.
+	AgentTokenSecretName string
+	AgentTokenSecretKey  string
+
 	// StagingClaim, when set, is the name of the per-DAG-run RWX PVC mounted at
 	// /staging in the task pod for large intermediate data shared across the run
 	// (ADR 0022). Empty means no staging volume. StagingSize/StagingStorageClass

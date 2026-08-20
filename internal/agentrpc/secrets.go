@@ -138,14 +138,20 @@ func (s *Server) guardSecretChannel(ctx context.Context) error {
 	if s.secrets == nil {
 		return status.Error(codes.Unavailable, "secrets delivery is not configured")
 	}
-	if s.allowInsecureSecrets {
+	if s.allowInsecureSecrets || channelIsSecure(ctx) {
 		return nil
-	}
-	if p, ok := peer.FromContext(ctx); ok && p.AuthInfo != nil {
-		return nil // TLS (AuthInfo present) — secure
 	}
 	return status.Error(codes.PermissionDenied,
 		"refusing to send secrets over an insecure channel; enable gRPC TLS (see issue #58)")
+}
+
+// channelIsSecure reports whether the incoming gRPC call arrived over a secure
+// (TLS) transport — the peer carries AuthInfo only when the channel is
+// encrypted. It is the shared secure-transport check used by both the secret and
+// the token-exchange channel guards.
+func channelIsSecure(ctx context.Context) bool {
+	p, ok := peer.FromContext(ctx)
+	return ok && p.AuthInfo != nil
 }
 
 // checkLiveness consults the read-only task-instance liveness predicate on the

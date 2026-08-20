@@ -49,6 +49,10 @@ func (f *fakeClient) GetConnections(context.Context, *agentv1.GetConnectionsRequ
 	return &agentv1.GetConnectionsResponse{ConnectionUris: f.conns}, nil
 }
 
+func (f *fakeClient) ExchangeToken(context.Context, *agentv1.ExchangeTokenRequest, ...grpc.CallOption) (*agentv1.ExchangeTokenResponse, error) {
+	return &agentv1.ExchangeTokenResponse{AgentToken: "exchanged"}, nil
+}
+
 func (f *fakeClient) Register(context.Context, *agentv1.RegisterRequest, ...grpc.CallOption) (*agentv1.RegisterResponse, error) {
 	f.registered = true
 	return &agentv1.RegisterResponse{SessionId: "s1"}, nil

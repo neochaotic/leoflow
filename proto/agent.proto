@@ -15,6 +15,15 @@ import "google/protobuf/struct.proto";
 // Service
 // ─────────────────────────────────────────────────────────────────────────
 service AgentService {
+    // Agent exchanges its bootstrap credential for a task-scoped agent JWT
+    // (ADR 0055 Fix #3). Called once at startup ONLY when the pod was given a
+    // projected ServiceAccount token instead of a plaintext token: the agent
+    // presents that projected token in metadata, the Control Plane validates it
+    // with a Kubernetes TokenReview, resolves the pod to its task instance, and
+    // returns the task-scoped JWT the agent uses as its bearer thereafter. The
+    // default (env-var) transport never calls this.
+    rpc ExchangeToken (ExchangeTokenRequest) returns (ExchangeTokenResponse);
+
     // Agent registers with the Control Plane on container startup.
     // The JWT in metadata identifies the task instance.
     rpc Register (RegisterRequest) returns (RegisterResponse);
@@ -65,6 +74,19 @@ message GetConnectionsRequest {}
 message GetConnectionsResponse {
     // conn_id -> Airflow connection URI, exported as AIRFLOW_CONN_<CONN_ID>.
     map<string, string> connection_uris = 1;
+}
+
+// ExchangeTokenRequest is empty; the agent presents its projected ServiceAccount
+// token as the bootstrap bearer in the authorization metadata. The Control Plane
+// derives everything it needs (the pod, hence the task instance) from that token
+// via a Kubernetes TokenReview.
+message ExchangeTokenRequest {}
+
+message ExchangeTokenResponse {
+    // A freshly minted, task-scoped agent JWT — the same identity scoped and
+    // liveness-checked on the secret path. The agent swaps its bearer to this
+    // value for every subsequent RPC. Never logged.
+    string agent_token = 1;
 }
 
 message RegisterRequest {

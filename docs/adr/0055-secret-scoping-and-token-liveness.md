@@ -434,9 +434,30 @@ landed, #476), not by this ADR.
 
 ## Verify at implementation
 
-- Exact `TokenReview` bound-token `extra` keys
-  (`authentication.kubernetes.io/pod-name`, `authentication.kubernetes.io/pod-uid`)
-  for the target apiserver version, used to resolve pod → task-instance.
-- Projected-token minimum-TTL floor (~10 min) versus the shortest expected
-  attempt, so a very short task's bootstrap token has not already expired at
-  `Register`.
+The transport-exchange transport (Fix #3) ships **flag-gated, default off**
+(`auth.agent_token_transport: envvar | exchange`, default `envvar`). The env-var
+path is byte-identical to before; the exchange path is Pro/Kubernetes-executor
+only, behind the executor interface, and the subprocess (Lite) path is untouched.
+The `TokenReview` call cannot be validated without a real apiserver, so the flip
+to `exchange` in production is a later operator decision (the same posture as the
+scope-enforce and liveness-enforce flips), gated on the owed e2e below.
+
+- **D7 bound-token `extra` keys — pinned.** The resolver keys on
+  `authentication.kubernetes.io/pod-name` (with
+  `authentication.kubernetes.io/pod-uid` as a stale-pod guard) from the
+  `TokenReview` status, then reads the exact (unsanitized) task-instance identity
+  the executor stamped on the pod as the `leoflow.io/agent-identity` annotation —
+  pod labels are sanitized and lossy, so the annotation is the single-sourced
+  contract both sides share. The `TokenReview` client and the pod resolver are
+  injected as interfaces and unit-tested with mocks / a fake clientset; the exact
+  extra-key availability is apiserver-version-dependent and is confirmed only by
+  the owed real-cluster e2e.
+- **Projected-token minimum-TTL floor** is enforced at ~10 min (600s) in the pod
+  builder, floored above any shorter requested value, so a very short task's
+  bootstrap token has not already expired at exchange time.
+- **OWED — real-cluster e2e before the `exchange` flip.** Exercise, against a real
+  apiserver: a projected SA token minted for the control-plane audience →
+  `TokenReview` authenticates it → the bound-token extra keys resolve the pod →
+  the pod's identity annotation resolves the attempt → the minted task-scoped JWT
+  authenticates the steady-state RPCs, and a wrong-audience / expired projected
+  token is rejected. Until this runs, `exchange` must not be the default.

@@ -23,6 +23,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	AgentService_ExchangeToken_FullMethodName  = "/leoflow.agent.v1.AgentService/ExchangeToken"
 	AgentService_Register_FullMethodName       = "/leoflow.agent.v1.AgentService/Register"
 	AgentService_GetTaskSpec_FullMethodName    = "/leoflow.agent.v1.AgentService/GetTaskSpec"
 	AgentService_FetchXCom_FullMethodName      = "/leoflow.agent.v1.AgentService/FetchXCom"
@@ -42,6 +43,14 @@ const (
 // Service
 // ─────────────────────────────────────────────────────────────────────────
 type AgentServiceClient interface {
+	// Agent exchanges its bootstrap credential for a task-scoped agent JWT
+	// (ADR 0055 Fix #3). Called once at startup ONLY when the pod was given a
+	// projected ServiceAccount token instead of a plaintext token: the agent
+	// presents that projected token in metadata, the Control Plane validates it
+	// with a Kubernetes TokenReview, resolves the pod to its task instance, and
+	// returns the task-scoped JWT the agent uses as its bearer thereafter. The
+	// default (env-var) transport never calls this.
+	ExchangeToken(ctx context.Context, in *ExchangeTokenRequest, opts ...grpc.CallOption) (*ExchangeTokenResponse, error)
 	// Agent registers with the Control Plane on container startup.
 	// The JWT in metadata identifies the task instance.
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
@@ -72,6 +81,16 @@ type agentServiceClient struct {
 
 func NewAgentServiceClient(cc grpc.ClientConnInterface) AgentServiceClient {
 	return &agentServiceClient{cc}
+}
+
+func (c *agentServiceClient) ExchangeToken(ctx context.Context, in *ExchangeTokenRequest, opts ...grpc.CallOption) (*ExchangeTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExchangeTokenResponse)
+	err := c.cc.Invoke(ctx, AgentService_ExchangeToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *agentServiceClient) Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error) {
@@ -175,6 +194,14 @@ func (c *agentServiceClient) GetConnections(ctx context.Context, in *GetConnecti
 // Service
 // ─────────────────────────────────────────────────────────────────────────
 type AgentServiceServer interface {
+	// Agent exchanges its bootstrap credential for a task-scoped agent JWT
+	// (ADR 0055 Fix #3). Called once at startup ONLY when the pod was given a
+	// projected ServiceAccount token instead of a plaintext token: the agent
+	// presents that projected token in metadata, the Control Plane validates it
+	// with a Kubernetes TokenReview, resolves the pod to its task instance, and
+	// returns the task-scoped JWT the agent uses as its bearer thereafter. The
+	// default (env-var) transport never calls this.
+	ExchangeToken(context.Context, *ExchangeTokenRequest) (*ExchangeTokenResponse, error)
 	// Agent registers with the Control Plane on container startup.
 	// The JWT in metadata identifies the task instance.
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
@@ -207,6 +234,9 @@ type AgentServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAgentServiceServer struct{}
 
+func (UnimplementedAgentServiceServer) ExchangeToken(context.Context, *ExchangeTokenRequest) (*ExchangeTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExchangeToken not implemented")
+}
 func (UnimplementedAgentServiceServer) Register(context.Context, *RegisterRequest) (*RegisterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Register not implemented")
 }
@@ -253,6 +283,24 @@ func RegisterAgentServiceServer(s grpc.ServiceRegistrar, srv AgentServiceServer)
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&AgentService_ServiceDesc, srv)
+}
+
+func _AgentService_ExchangeToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExchangeTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ExchangeToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ExchangeToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ExchangeToken(ctx, req.(*ExchangeTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _AgentService_Register_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -413,6 +461,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "leoflow.agent.v1.AgentService",
 	HandlerType: (*AgentServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ExchangeToken",
+			Handler:    _AgentService_ExchangeToken_Handler,
+		},
 		{
 			MethodName: "Register",
 			Handler:    _AgentService_Register_Handler,

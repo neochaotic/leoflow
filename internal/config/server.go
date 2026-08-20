@@ -306,6 +306,16 @@ type AuthSection struct {
 	// normal task regresses. Bind via LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME
 	// as a duration (e.g. "24h", "90m"); a non-positive value disables the ceiling.
 	MaxAttemptCredentialLifetime time.Duration `mapstructure:"max_attempt_credential_lifetime"`
+	// AgentTokenTransport selects how the in-pod agent obtains its control-plane
+	// bearer credential (ADR 0055 Fix #3): "envvar" (the default) sets the token as
+	// a plaintext LEOFLOW_AGENT_TOKEN env var on the pod spec — today's behavior,
+	// byte-identical; "exchange" mounts a projected ServiceAccount token that the
+	// agent exchanges once (via a control-plane TokenReview) for the task-scoped
+	// JWT, so no bearer sits in plaintext on the Pod object. The exchange path is
+	// Pro/Kubernetes-executor-only (the subprocess executor has no pod/SA/TokenReview
+	// and ignores this). It is operator-scoped, NEVER author-settable. Empty = the
+	// envvar default. Bind via LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT.
+	AgentTokenTransport string `mapstructure:"agent_token_transport"`
 }
 
 // JWTSection configures JWT issuance and validation.
@@ -446,6 +456,11 @@ var serverDefaults = map[string]any{
 	// flips (enforce) are separate operator decisions after an observe period.
 	"auth.secret_scoping":       "permissive",
 	"auth.secret_liveness_mode": "observe",
+	// Agent-token transport (ADR 0055 Fix #3). Ships SAFE by default: envvar keeps
+	// the plaintext LEOFLOW_AGENT_TOKEN env var (today's behavior, byte-identical).
+	// The projected-SA-token exchange is opt-in ("exchange") and Pro/K8s-only; the
+	// flip to it is a separate operator decision after real-cluster e2e.
+	"auth.agent_token_transport": "envvar",
 	// Hard ceiling on an attempt's total renewed credential lifetime (ADR 0055
 	// Fix #4). Generous by default so nothing regresses; the short per-attempt TTL
 	// is what bounds a stolen token. Parsed as a duration by viper's decode hook.
@@ -573,6 +588,13 @@ const (
 	SecretLivenessObserve = "observe"
 	// SecretLivenessEnforce denies secret delivery when the caller's TI is not live.
 	SecretLivenessEnforce = "enforce"
+	// AgentTokenTransportEnvVar sets the agent token as a plaintext env var on the
+	// pod spec (today's behavior); the default.
+	AgentTokenTransportEnvVar = "envvar"
+	// AgentTokenTransportExchange mounts a projected ServiceAccount token the agent
+	// exchanges (via TokenReview) for a task-scoped JWT, so no bearer sits in
+	// plaintext on the Pod object (ADR 0055 Fix #3). Pro/Kubernetes-executor-only.
+	AgentTokenTransportExchange = "exchange"
 )
 
 // Validate reports configuration errors that must abort startup.
@@ -651,6 +673,12 @@ func (c *ServerConfig) validateSecretPolicies() error {
 	default:
 		return fmt.Errorf("invalid auth.secret_liveness_mode %q: must be %q or %q",
 			c.Auth.SecretLivenessMode, SecretLivenessObserve, SecretLivenessEnforce)
+	}
+	switch c.Auth.AgentTokenTransport {
+	case "", AgentTokenTransportEnvVar, AgentTokenTransportExchange:
+	default:
+		return fmt.Errorf("invalid auth.agent_token_transport %q: must be %q or %q",
+			c.Auth.AgentTokenTransport, AgentTokenTransportEnvVar, AgentTokenTransportExchange)
 	}
 	return nil
 }

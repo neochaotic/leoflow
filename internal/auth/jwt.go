@@ -33,12 +33,26 @@ type JWTAuthenticator struct {
 	store  UserStore
 	secret []byte
 	ttl    time.Duration
+	// now is the clock used when stamping agent-token iat/exp/origin. It defaults
+	// to time.Now and is overridden only in tests, so renewal exp/ceiling math is
+	// deterministic.
+	now func() time.Time
 }
 
 // NewJWTAuthenticator builds a JWTAuthenticator with the given user store,
 // HS256 secret, and token lifetime.
 func NewJWTAuthenticator(store UserStore, secret string, ttl time.Duration) *JWTAuthenticator {
-	return &JWTAuthenticator{store: store, secret: []byte(secret), ttl: ttl}
+	return &JWTAuthenticator{store: store, secret: []byte(secret), ttl: ttl, now: time.Now}
+}
+
+// clock returns the authenticator's time source, tolerating a zero value on an
+// authenticator built as a struct literal (e.g. MintUserToken) rather than via
+// the constructor.
+func (a *JWTAuthenticator) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
 }
 
 // MintUserToken signs a user JWT directly, without checking credentials against

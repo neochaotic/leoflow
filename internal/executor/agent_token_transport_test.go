@@ -52,7 +52,7 @@ func TestBuildPodEnvVarTransportUnchanged(t *testing.T) {
 				t.Errorf("transport %q: projected token volume must not be mounted on the env-var path", transport)
 			}
 		}
-		if _, ok := pod.Annotations[agentIdentityAnnotation]; ok {
+		if _, ok := pod.Annotations[AgentIdentityAnnotation]; ok {
 			t.Errorf("transport %q: identity annotation must not be set on the env-var path", transport)
 		}
 	}
@@ -119,15 +119,15 @@ func TestBuildPodExchangeTransportProjectsToken(t *testing.T) {
 
 	// The identity annotation must round-trip the exact (unsanitized) identity the
 	// resolver needs — pod labels are sanitized and lossy, so the resolver reads this.
-	raw, ok := pod.Annotations[agentIdentityAnnotation]
+	raw, ok := pod.Annotations[AgentIdentityAnnotation]
 	if !ok {
 		t.Fatal("exchange: identity annotation not set")
 	}
-	var got podIdentity
+	var got PodIdentity
 	if err := json.Unmarshal([]byte(raw), &got); err != nil {
 		t.Fatalf("identity annotation is not valid JSON: %v", err)
 	}
-	want := podIdentity{TaskInstanceID: "ti-1", TenantID: "default", DagID: "etl", RunID: "r1", TaskID: "extract", TryNumber: 1}
+	want := PodIdentity{TaskInstanceID: "ti-1", TenantID: "default", DagID: "etl", RunID: "r1", TaskID: "extract", TryNumber: 1}
 	if got != want {
 		t.Errorf("identity annotation = %+v, want %+v", got, want)
 	}

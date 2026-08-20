@@ -248,10 +248,17 @@ implementation.
     (a finished task's token resolving the whole vault for its TTL, from anywhere)
     is real even for a single-tenant deployment.
   - **Scope-by-declaration (Fix #1) is an operator-set policy `secret_scoping:
-    enforce | permissive | off`.** `enforce` = declare-or-receive-nothing (default
-    for multi-tenant); `permissive` = no declaration ⇒ the whole tenant vault
-    (today's behavior), scoping applies only where a DAG declared (opt-in
-    least-privilege — default for single-tenant / Lite); `off` = no scoping. The
+    enforce | permissive | off`.** `permissive` (the initial default everywhere)
+    is the **warn phase**: every task still receives the whole tenant vault
+    (today's behavior), and a task whose non-empty declaration is a strict subset
+    of that vault gets a warn + audit event (E1b) — delivery is NOT subset under
+    permissive. This is deliberate: declarations are populated from static analysis
+    and may be incomplete, so the warn phase surfaces gaps WITHOUT breaking a task
+    that under-declared. `enforce` is the least-privilege flip: a task receives ONLY
+    its declared subset (empty declaration ⇒ nothing); it is the operator's
+    deliberate go-live after the warn phase proves declarations complete (the
+    per-edition enforce default — multi-tenant Pro — is that flip, not the initial
+    ship). `off` = no scoping at all. The
     policy is operator-scoped, NEVER author-settable (a DAG author cannot downgrade
     their own task's scoping — the same confused-deputy bar as the token TTL). The
     declaration mechanism exists for every deployment regardless of policy; only the

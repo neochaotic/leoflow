@@ -737,11 +737,21 @@ func (c *ServerConfig) validateSecretPolicies() error {
 //	    attempts; without token-exchange transport and liveness enforcement a
 //	    superseded attempt's token would still resolve secrets. So warm pools
 //	    require auth.agent_token_transport=exchange AND auth.secret_liveness_mode=
-//	    enforce (ADR 0058 D2/HIGH-1).
-//	(b) D9 ordering — max_worker_lifetime must be >= the attempt-credential ceiling,
-//	    else a worker could be force-recycled mid-attempt by its token lapsing.
-//	(c) sanity — a zero/negative attempts cap, worker lifetime, or idle TTL would
+//	    enforce (ADR 0058 D2/HIGH-1). This half stays fail-closed: there is no safe
+//	    degraded mode — the degraded mode IS the vulnerability.
+//	(b) sanity — a zero/negative attempts cap, worker lifetime, or idle TTL would
 //	    recycle instantly or never; each must be positive.
+//
+// There is deliberately NO max_worker_lifetime >= max_attempt_credential_lifetime
+// ordering guard. That invariant was dropped (ADR 0058 D10 review): recycle is a
+// graceful DRAIN, not a hard mid-attempt kill, so a worker lifetime shorter than
+// the credential ceiling is harmless — the worker finishes its in-flight attempt
+// (on its own renewed credential) before recycling. The guard defended a
+// force-recycle that drain forbids, and with the shipped defaults (1h worker vs
+// 24h ceiling) it also blocked a naive enable and pushed operators toward less-safe
+// config. The real "credential lapses mid-attempt" bound is per-ATTEMPT
+// (execution_timeout / the warm-worker watchdog <= the ceiling), enforced on the
+// execution path, not here.
 func (c *ServerConfig) validateExecution() error {
 	if !c.Execution.WarmPoolsEnabled {
 		return nil
@@ -758,10 +768,6 @@ func (c *ServerConfig) validateExecution() error {
 	}
 	if c.Execution.WorkerIdleTTL <= 0 {
 		return fmt.Errorf("execution.worker_idle_ttl must be > 0 when execution.warm_pools_enabled (got %v): a non-positive TTL would recycle an idle warm worker instantly (ADR 0058 D6)", c.Execution.WorkerIdleTTL)
-	}
-	if c.Execution.MaxWorkerLifetime < c.Auth.MaxAttemptCredentialLifetime {
-		return fmt.Errorf("execution.max_worker_lifetime (%v) must be >= auth.max_attempt_credential_lifetime (%v) when execution.warm_pools_enabled: a shorter worker lifetime could force-recycle a worker mid-attempt when its credential outlives the pod (ADR 0058 D9)",
-			c.Execution.MaxWorkerLifetime, c.Auth.MaxAttemptCredentialLifetime)
 	}
 	return nil
 }

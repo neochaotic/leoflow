@@ -61,14 +61,16 @@ func TestExecutionEnvBinds(t *testing.T) {
 }
 
 // validWarmConfig returns a ServerConfig that passes the warm-pool boot gate: warm
-// pools on, token-exchange transport, liveness enforce, a worker lifetime >= the
-// attempt-credential ceiling, and sane caps.
+// pools on, token-exchange transport, liveness enforce, and sane caps. It uses the
+// SHIPPED defaults for the two durations (1h worker lifetime, 24h credential
+// ceiling) — worker lifetime is deliberately shorter than the ceiling, which the
+// relaxed gate allows (recycle drains, it does not hard-kill; ADR 0058 D10 review).
 func validWarmConfig() *ServerConfig {
 	c := &ServerConfig{}
 	c.Auth.JWT.Secret = "set"
 	c.Auth.AgentTokenTransport = AgentTokenTransportExchange
 	c.Auth.SecretLivenessMode = SecretLivenessEnforce
-	c.Auth.MaxAttemptCredentialLifetime = 30 * time.Minute
+	c.Auth.MaxAttemptCredentialLifetime = 24 * time.Hour
 	c.Execution.WarmPoolsEnabled = true
 	c.Execution.MaxAttemptsPerWorker = 50
 	c.Execution.MaxWorkerLifetime = time.Hour
@@ -98,7 +100,8 @@ func TestValidateExecutionWarmPoolsOffIgnoresCoupling(t *testing.T) {
 }
 
 // TestValidateExecutionWarmPoolsOnSucceeds locks the happy path: warm pools on with
-// the security prerequisites and a compatible lifetime ordering boots.
+// the security prerequisites boots — using the shipped defaults, where the worker
+// lifetime (1h) is shorter than the credential ceiling (24h), which is now allowed.
 func TestValidateExecutionWarmPoolsOnSucceeds(t *testing.T) {
 	if err := validWarmConfig().Validate(); err != nil {
 		t.Errorf("Validate() = %v for a valid warm-pool config, want nil", err)
@@ -134,19 +137,19 @@ func TestValidateExecutionWarmPoolsRequiresLivenessEnforce(t *testing.T) {
 	}
 }
 
-// TestValidateExecutionWorkerLifetimeOrdering locks the D9 guard: a worker lifetime
-// shorter than the attempt-credential ceiling fails boot closed, because a worker
-// could be force-recycled mid-attempt by token lapse.
-func TestValidateExecutionWorkerLifetimeOrdering(t *testing.T) {
+// TestValidateExecutionAllowsShortWorkerLifetime locks the RELAXED gate (ADR 0058
+// D10 review): a worker lifetime far shorter than the attempt-credential ceiling is
+// valid, because recycle is a graceful DRAIN, not a hard mid-attempt kill — the
+// worker finishes its in-flight attempt (on its own renewed credential) before
+// recycling. The old max_worker_lifetime >= credential-ceiling ordering guard was
+// removed: it defended a force-recycle that drain forbids and blocked a naive
+// enable under the shipped defaults (1h vs 24h).
+func TestValidateExecutionAllowsShortWorkerLifetime(t *testing.T) {
 	c := validWarmConfig()
 	c.Auth.MaxAttemptCredentialLifetime = 24 * time.Hour
-	c.Execution.MaxWorkerLifetime = 10 * time.Minute
-	err := c.Validate()
-	if err == nil {
-		t.Fatal("Validate() = nil for worker lifetime < credential lifetime, want error")
-	}
-	if !strings.Contains(err.Error(), "max_worker_lifetime") {
-		t.Errorf("error = %q, want it to name execution.max_worker_lifetime", err.Error())
+	c.Execution.MaxWorkerLifetime = 10 * time.Minute // << ceiling, previously rejected
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate() = %v for worker lifetime < credential ceiling, want nil (recycle drains, ADR 0058 D10)", err)
 	}
 }
 

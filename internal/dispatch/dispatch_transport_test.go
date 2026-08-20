@@ -3,8 +3,6 @@ package dispatch
 import (
 	"context"
 	"testing"
-
-	"github.com/neochaotic/leoflow/internal/executor"
 )
 
 // TestDispatchDefaultTransportIsEnvVar: with no transport configured the request
@@ -15,9 +13,6 @@ func TestDispatchDefaultTransportIsEnvVar(t *testing.T) {
 	d := newDispatcher(&fakeResolver{resolved: Resolved{TaskInstanceID: "ti-1"}}, &fakeIssuer{token: "t"}, exec)
 	if err := d.Dispatch(context.Background(), "run", "etl", pythonTask()); err != nil {
 		t.Fatalf("Dispatch: %v", err)
-	}
-	if exec.req.AgentTokenTransport != "" && exec.req.AgentTokenTransport != executor.DefaultAgentTokenAudience {
-		// only assert it is not "exchange"
 	}
 	if exec.req.AgentTokenTransport == "exchange" {
 		t.Errorf("default transport must not be exchange, got %q", exec.req.AgentTokenTransport)

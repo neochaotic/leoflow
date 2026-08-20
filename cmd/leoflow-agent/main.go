@@ -33,6 +33,25 @@ Flags:
 
 func main() { os.Exit(run()) }
 
+// bootstrapToken resolves the agent's initial bearer and whether a token exchange
+// is required (ADR 0055 Fix #3). Under the exchange transport it reads the
+// projected ServiceAccount token from LEOFLOW_AGENT_TOKEN_PATH (the bootstrap
+// credential to exchange); otherwise it returns LEOFLOW_AGENT_TOKEN unchanged
+// (the env-var default). exchange is true only when both the transport marker and
+// the token path are set.
+func bootstrapToken() (token string, exchange bool, err error) {
+	if os.Getenv("LEOFLOW_AGENT_TOKEN_TRANSPORT") == "exchange" {
+		if path := os.Getenv("LEOFLOW_AGENT_TOKEN_PATH"); path != "" {
+			projected, rerr := agent.ReadTokenFile(path)
+			if rerr != nil {
+				return "", true, rerr
+			}
+			return projected, true, nil
+		}
+	}
+	return os.Getenv("LEOFLOW_AGENT_TOKEN"), false, nil
+}
+
 func run() int {
 	// Answer `--version`/`--help` before connecting, so an operator can query a
 	// deployed agent without a reachable control plane (#593). Without this,
@@ -58,16 +77,10 @@ func run() int {
 	// which the agent exchanges once for a task-scoped JWT after dialing. The
 	// default env-var transport leaves the path unset and uses LEOFLOW_AGENT_TOKEN
 	// directly (byte-identical to before).
-	exchange := os.Getenv("LEOFLOW_AGENT_TOKEN_TRANSPORT") == "exchange"
-	tokenPath := os.Getenv("LEOFLOW_AGENT_TOKEN_PATH")
-	token := os.Getenv("LEOFLOW_AGENT_TOKEN")
-	if exchange && tokenPath != "" {
-		projected, rerr := agent.ReadTokenFile(tokenPath)
-		if rerr != nil {
-			slog.Error("reading projected bootstrap token", "error", rerr)
-			return 1
-		}
-		token = projected
+	token, exchange, berr := bootstrapToken()
+	if berr != nil {
+		slog.Error("reading projected bootstrap token", "error", berr)
+		return 1
 	}
 
 	client, conn, tokens, err := agent.Dial(addr, token, allowInsecure, caFile)
@@ -87,7 +100,7 @@ func run() int {
 	// Exchange the projected bootstrap token for the task-scoped JWT before any
 	// other RPC, then swap it into the shared TokenSource so every subsequent call
 	// authenticates as the task instance. Fails startup if the exchange is refused.
-	if exchange && tokenPath != "" {
+	if exchange {
 		if xerr := agent.ExchangeToken(ctx, client, tokens); xerr != nil {
 			slog.Error("exchanging bootstrap token for a task-scoped credential", "error", xerr)
 			return 1

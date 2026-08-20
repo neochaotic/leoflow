@@ -17,6 +17,18 @@ FROM connections
 WHERE tenant_id = $1
 ORDER BY conn_id;
 
+-- name: ListConnectionSecretsScoped :many
+-- The tenant's connections WITH the encrypted password, restricted to the given
+-- conn_ids and filtered in the query (ADR 0055 D1: scope in the SQL, never
+-- post-filter the decrypted whole vault). Never use this for UI/API responses,
+-- which must mask the password. Used under secret_scoping: enforce so a task
+-- receives only the connections it declared. An empty conn_id set never reaches
+-- here — the handler returns nothing without a query.
+SELECT conn_id, conn_type, host, conn_schema, login, password, port, extra
+FROM connections
+WHERE tenant_id = $1 AND conn_id = ANY(sqlc.arg(conn_ids)::text[])
+ORDER BY conn_id;
+
 -- name: GetConnection :one
 SELECT conn_id, conn_type, host, conn_schema, login, password, port, extra, description
 FROM connections

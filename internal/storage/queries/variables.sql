@@ -5,6 +5,17 @@ WHERE tenant_id = $1
 ORDER BY key
 LIMIT $2 OFFSET $3;
 
+-- name: ListVariablesScoped :many
+-- The tenant's variables restricted to the given keys, filtered in the query
+-- (ADR 0055 D1: scope in the SQL, never post-filter the decrypted whole vault in
+-- the handler). Used under secret_scoping: enforce so a task receives only the
+-- Variables it declared. An empty key set never reaches here — the handler
+-- returns nothing without a query.
+SELECT key, value, description
+FROM variables
+WHERE tenant_id = $1 AND key = ANY(sqlc.arg(keys)::text[])
+ORDER BY key;
+
 -- name: CountVariables :one
 SELECT count(*) FROM variables WHERE tenant_id = $1;
 

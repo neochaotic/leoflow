@@ -15,10 +15,32 @@ import (
 // SecretsStore returns a tenant's Variables and Connections for delivery to a
 // task pod (ADR 0021). Connection URIs carry decrypted credentials, so this is
 // only ever served over the authenticated agent channel — never to the UI/API.
+//
+// The unscoped methods return the whole tenant vault (permissive / off). The
+// scoped methods return ONLY the named subset, filtered IN THE QUERY (ADR 0055
+// D1: never post-filter the decrypted whole vault in the handler); they back
+// secret_scoping: enforce, where a task receives only what it declared. An empty
+// name set returns nothing — enforce's load-bearing [] case.
 type SecretsStore interface {
 	SecretVariables(ctx context.Context, tenant string) (map[string]string, error)
 	SecretConnectionURIs(ctx context.Context, tenant string) (map[string]string, error)
+	SecretVariablesScoped(ctx context.Context, tenant string, names []string) (map[string]string, error)
+	SecretConnectionURIsScoped(ctx context.Context, tenant string, names []string) (map[string]string, error)
 }
+
+// Secret scoping policy (ADR 0055 D9), operator-set, NEVER author-settable.
+const (
+	// ScopingPermissive delivers the whole tenant vault when a DAG declares
+	// nothing (today's behaviour) and warns — but still delivers the whole vault —
+	// when a DAG declares a narrower set. Subsetting is reserved for enforce, so no
+	// already-declaring pipeline loses access. It is the default for this shipment.
+	ScopingPermissive = "permissive"
+	// ScopingEnforce delivers ONLY the declared subset (empty declaration →
+	// nothing), resolved server-side and filtered in the query.
+	ScopingEnforce = "enforce"
+	// ScopingOff disables scoping entirely: the whole tenant vault, no warn.
+	ScopingOff = "off"
+)
 
 // SecretScopeAuditor records a structured audit event when a task receives the
 // full tenant secret set despite declaring only a subset of it — the visibility
@@ -91,6 +113,23 @@ func (s *Server) SetLivenessGate(checker TaskLivenessChecker, mode string) {
 // (optional). Without it, a would-have-denied / denial still produces the WARN
 // log but no audit row.
 func (s *Server) SetSecretLivenessAuditor(a SecretLivenessAuditor) { s.livenessAudit = a }
+
+// SetSecretScoping sets the operator scope-by-declaration policy (ADR 0055 D9):
+// "enforce" | "permissive" | "off". An unrecognised value falls back to
+// permissive — the safe, non-denying default — so a misconfiguration never
+// silently denies. The policy is operator-scoped, never author-settable.
+func (s *Server) SetSecretScoping(policy string) { s.scoping = policy }
+
+// scopingPolicy normalises the configured policy to one of the three known
+// values, defaulting (and failing safe on an unknown value) to permissive.
+func (s *Server) scopingPolicy() string {
+	switch s.scoping {
+	case ScopingEnforce, ScopingOff:
+		return s.scoping
+	default:
+		return ScopingPermissive
+	}
+}
 
 // guardSecretChannel refuses to serve secrets when the store is unconfigured or
 // the transport is not TLS (unless explicitly allowed for dev). This is the
@@ -179,11 +218,25 @@ func (s *Server) GetVariables(ctx context.Context, _ *agentv1.GetVariablesReques
 	if lerr := s.checkLiveness(ctx, id, "variables"); lerr != nil {
 		return nil, lerr
 	}
+	if s.scopingPolicy() == ScopingEnforce {
+		declared, derr := s.declaredNames(ctx, id, "variables")
+		if derr != nil {
+			return nil, derr
+		}
+		vars, verr := s.secrets.SecretVariablesScoped(ctx, id.TenantID, declared)
+		if verr != nil {
+			return nil, status.Errorf(codes.Internal, "fetching variables: %v", verr)
+		}
+		return &agentv1.GetVariablesResponse{Variables: vars}, nil
+	}
 	vars, err := s.secrets.SecretVariables(ctx, id.TenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "fetching variables: %v", err)
 	}
-	s.warnIfNarrowerScope(ctx, id, "variables", vars)
+	// permissive warns on a narrow declaration; off disables the warn entirely.
+	if s.scopingPolicy() == ScopingPermissive {
+		s.warnIfNarrowerScope(ctx, id, "variables", vars)
+	}
 	return &agentv1.GetVariablesResponse{Variables: vars}, nil
 }
 
@@ -200,12 +253,43 @@ func (s *Server) GetConnections(ctx context.Context, _ *agentv1.GetConnectionsRe
 	if lerr := s.checkLiveness(ctx, id, "connections"); lerr != nil {
 		return nil, lerr
 	}
+	if s.scopingPolicy() == ScopingEnforce {
+		declared, derr := s.declaredNames(ctx, id, "connections")
+		if derr != nil {
+			return nil, derr
+		}
+		uris, uerr := s.secrets.SecretConnectionURIsScoped(ctx, id.TenantID, declared)
+		if uerr != nil {
+			return nil, status.Errorf(codes.Internal, "fetching connections: %v", uerr)
+		}
+		return &agentv1.GetConnectionsResponse{ConnectionUris: uris}, nil
+	}
 	uris, err := s.secrets.SecretConnectionURIs(ctx, id.TenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "fetching connections: %v", err)
 	}
-	s.warnIfNarrowerScope(ctx, id, "connections", uris)
+	// permissive warns on a narrow declaration; off disables the warn entirely.
+	if s.scopingPolicy() == ScopingPermissive {
+		s.warnIfNarrowerScope(ctx, id, "connections", uris)
+	}
 	return &agentv1.GetConnectionsResponse{ConnectionUris: uris}, nil
+}
+
+// declaredNames resolves the caller's declared secret set for enforce mode from
+// its task spec (E1a threaded it onto the agent-facing spec). kind is
+// "variables" or "connections". A spec-load failure fails the RPC closed
+// (Internal): under enforce we must never fall back to the whole vault when the
+// declared set cannot be determined. The scoping is resolved server-side from
+// the token identity, never from anything the agent claims.
+func (s *Server) declaredNames(ctx context.Context, id *auth.AgentIdentity, kind string) ([]string, error) {
+	spec, err := s.store.TaskSpec(ctx, *id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "loading task spec for scope enforcement: %v", err)
+	}
+	if kind == "connections" {
+		return spec.DeclaredConnections, nil
+	}
+	return spec.DeclaredVariables, nil
 }
 
 // warnIfNarrowerScope emits a structured WARN log and a best-effort audit event

@@ -1387,6 +1387,73 @@ func (r *Repository) SecretConnectionURIs(ctx context.Context, tenantID string) 
 	return out, nil
 }
 
+// SecretVariablesScoped returns only the named subset of the tenant's variables,
+// filtered in the query (ADR 0055 D1: scope in the SQL, never post-filter the
+// decrypted whole vault in the handler). It backs secret_scoping: enforce, where
+// a task receives only the Variables it declared. An empty name set returns
+// nothing without a query — enforce's load-bearing [] case. tenantID is the
+// tenant UUID carried by the agent token.
+func (r *Repository) SecretVariablesScoped(ctx context.Context, tenantID string, names []string) (map[string]string, error) {
+	if len(names) == 0 {
+		return map[string]string{}, nil
+	}
+	tid, err := parseUUID(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.ListVariablesScoped(ctx, queries.ListVariablesScopedParams{TenantID: tid, Keys: names})
+	if err != nil {
+		return nil, fmt.Errorf("listing scoped variables: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, v := range rows {
+		out[v.Key] = v.Value
+	}
+	return out, nil
+}
+
+// SecretConnectionURIsScoped returns only the named subset of the tenant's
+// connections as Airflow URIs (password decrypted), filtered in the query
+// (ADR 0055 D1). It backs secret_scoping: enforce. An empty name set returns
+// nothing without a query. Never expose these in UI/API responses. It shares the
+// per-connection decrypt-and-skip-on-failure semantics of SecretConnectionURIs:
+// one undecryptable connection is skipped with a warning, never blinding the
+// rest of the declared set.
+func (r *Repository) SecretConnectionURIsScoped(ctx context.Context, tenantID string, names []string) (map[string]string, error) {
+	if len(names) == 0 {
+		return map[string]string{}, nil
+	}
+	tid, err := parseUUID(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.ListConnectionSecretsScoped(ctx, queries.ListConnectionSecretsScopedParams{TenantID: tid, ConnIds: names})
+	if err != nil {
+		return nil, fmt.Errorf("listing scoped connection secrets: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		pass, derr := r.decryptExtra(row.Password)
+		if derr != nil {
+			slog.Warn("skipping connection: password decrypt failed (key rotated or wrong LEOFLOW_SECRET_KEY?)",
+				"conn_id", row.ConnID, "error", derr)
+			continue
+		}
+		extra, eerr := r.decryptExtra(row.Extra)
+		if eerr != nil {
+			slog.Warn("skipping connection: extra decrypt failed (key rotated or wrong LEOFLOW_SECRET_KEY?)",
+				"conn_id", row.ConnID, "error", eerr)
+			continue
+		}
+		out[row.ConnID] = airflowConnURI(domain.Connection{
+			ConnID: row.ConnID, ConnType: row.ConnType, Host: strOrEmpty(row.Host),
+			Schema: strOrEmpty(row.ConnSchema), Login: strOrEmpty(row.Login),
+			Password: pass, Port: int32PtrToInt(row.Port), Extra: extra,
+		})
+	}
+	return out, nil
+}
+
 // AlertEndpoint resolves an alert channel connection (#424) to its endpoint for a
 // tenant UUID: the decrypted password is the channel URL (the full webhook URL,
 // kept encrypted at rest), and an optional `headers` object in the connection's

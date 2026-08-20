@@ -161,6 +161,13 @@ type Querier interface {
 	// credentials to task pods (ADR 0021). Never use this for UI/API responses,
 	// which must mask the password.
 	ListConnectionSecrets(ctx context.Context, tenantID pgtype.UUID) ([]ListConnectionSecretsRow, error)
+	// The tenant's connections WITH the encrypted password, restricted to the given
+	// conn_ids and filtered in the query (ADR 0055 D1: scope in the SQL, never
+	// post-filter the decrypted whole vault). Never use this for UI/API responses,
+	// which must mask the password. Used under secret_scoping: enforce so a task
+	// receives only the connections it declared. An empty conn_id set never reaches
+	// here — the handler returns nothing without a query.
+	ListConnectionSecretsScoped(ctx context.Context, arg ListConnectionSecretsScopedParams) ([]ListConnectionSecretsScopedRow, error)
 	ListConnections(ctx context.Context, arg ListConnectionsParams) ([]ListConnectionsRow, error)
 	ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagParams) ([]DagRun, error)
 	ListDagVersions(ctx context.Context, arg ListDagVersionsParams) ([]ListDagVersionsRow, error)
@@ -214,6 +221,12 @@ type Querier interface {
 	// caller. Never selects password_hash — the list must not expose secrets.
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error)
 	ListVariables(ctx context.Context, arg ListVariablesParams) ([]ListVariablesRow, error)
+	// The tenant's variables restricted to the given keys, filtered in the query
+	// (ADR 0055 D1: scope in the SQL, never post-filter the decrypted whole vault in
+	// the handler). Used under secret_scoping: enforce so a task receives only the
+	// Variables it declared. An empty key set never reaches here — the handler
+	// returns nothing without a query.
+	ListVariablesScoped(ctx context.Context, arg ListVariablesScopedParams) ([]ListVariablesScopedRow, error)
 	ListXComEntries(ctx context.Context, arg ListXComEntriesParams) ([]ListXComEntriesRow, error)
 	// Stamp a run's on-failure alert as DELIVERED. Called only after a successful
 	// send, which is the whole point of the split: alerted_at now answers "did the

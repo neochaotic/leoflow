@@ -136,6 +136,49 @@ func (q *Queries) ListVariables(ctx context.Context, arg ListVariablesParams) ([
 	return items, nil
 }
 
+const listVariablesScoped = `-- name: ListVariablesScoped :many
+SELECT key, value, description
+FROM variables
+WHERE tenant_id = $1 AND key = ANY($2::text[])
+ORDER BY key
+`
+
+type ListVariablesScopedParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Keys     []string    `json:"keys"`
+}
+
+type ListVariablesScopedRow struct {
+	Key         string  `json:"key"`
+	Value       string  `json:"value"`
+	Description *string `json:"description"`
+}
+
+// The tenant's variables restricted to the given keys, filtered in the query
+// (ADR 0055 D1: scope in the SQL, never post-filter the decrypted whole vault in
+// the handler). Used under secret_scoping: enforce so a task receives only the
+// Variables it declared. An empty key set never reaches here — the handler
+// returns nothing without a query.
+func (q *Queries) ListVariablesScoped(ctx context.Context, arg ListVariablesScopedParams) ([]ListVariablesScopedRow, error) {
+	rows, err := q.db.Query(ctx, listVariablesScoped, arg.TenantID, arg.Keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVariablesScopedRow{}
+	for rows.Next() {
+		var i ListVariablesScopedRow
+		if err := rows.Scan(&i.Key, &i.Value, &i.Description); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertVariable = `-- name: UpsertVariable :exec
 INSERT INTO variables (tenant_id, key, value, description)
 VALUES ($1, $2, $3, $4)

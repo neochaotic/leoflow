@@ -100,11 +100,23 @@ func (r *Runner) after(d time.Duration) <-chan time.Time {
 	return time.After(d)
 }
 
-// Run executes the task lifecycle and returns an error if the task failed.
+// Run executes the task lifecycle and returns an error if the task failed. In
+// single-shot mode the agent registers once and serves exactly one attempt, so
+// Run is register followed by runOneAttempt. The warm worker (warm.go) reuses
+// runOneAttempt directly, registering separately and driving many attempts.
 func (r *Runner) Run(ctx context.Context) error {
 	if err := r.register(ctx); err != nil {
 		return err
 	}
+	return r.runOneAttempt(ctx)
+}
+
+// runOneAttempt fetches the task spec, builds the command and its environment, and
+// runs the user process to its terminal ReportState. It is the whole per-attempt
+// body: a single-shot agent calls it once (via Run); a warm worker calls it once
+// per WorkAssignment, each time in a fresh forked child with a freshly-built env.
+// It does NOT register — registration is a per-worker concern the caller owns.
+func (r *Runner) runOneAttempt(ctx context.Context) error {
 	spec, err := r.Client.GetTaskSpec(ctx, &agentv1.GetTaskSpecRequest{})
 	if err != nil {
 		return fmt.Errorf("fetching task spec: %w", err)

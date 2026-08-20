@@ -134,6 +134,42 @@ func TestRenewAgentTokenNoCeiling(t *testing.T) {
 	}
 }
 
+// TestIssueAgentTokenFreshOriginPerDispatch: dispatch mints a fresh credential
+// dated from the dispatch instant, never from the run's age. A retry or
+// clear-and-rerun of an arbitrarily old task instance is a new dispatch, so its
+// token's origin and exp are anchored at the new dispatch — age-independent (D4).
+func TestIssueAgentTokenFreshOriginPerDispatch(t *testing.T) {
+	a := NewJWTAuthenticator(nil, "secret", time.Hour)
+
+	// First attempt dispatched at t0.
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return t0 }
+	try1, err := a.IssueAgentToken(agentIdentity(), 10*time.Minute)
+	if err != nil {
+		t.Fatalf("IssueAgentToken try1: %v", err)
+	}
+	if origin := originOf(t, a, try1); !origin.Equal(t0) {
+		t.Errorf("try1 origin = %v, want the dispatch time %v", origin, t0)
+	}
+
+	// A clear-and-rerun 1000h later is a NEW dispatch: its origin is the new
+	// dispatch instant, not t0, and its short TTL is fresh — the credential is not
+	// aged by the original run's recency.
+	t2 := t0.Add(1000 * time.Hour)
+	a.now = func() time.Time { return t2 }
+	try2, err := a.IssueAgentToken(agentIdentity(), 10*time.Minute)
+	if err != nil {
+		t.Fatalf("IssueAgentToken try2: %v", err)
+	}
+	if origin := originOf(t, a, try2); !origin.Equal(t2) {
+		t.Errorf("clear-and-rerun origin = %v, want the new dispatch time %v (age-independent)", origin, t2)
+	}
+	iat, exp := iatExpOf(t, a, try2)
+	if !iat.Equal(t2) || exp.Sub(iat) != 10*time.Minute {
+		t.Errorf("clear-and-rerun iat/exp = %v/%v, want iat=%v exp-iat=10m", iat, exp, t2)
+	}
+}
+
 // TestRenewAgentTokenRejectsInvalidToken: renewal validates the incoming token
 // exactly as AuthenticateAgent does; a tampered/foreign token is refused with an
 // error, never silently re-minted.

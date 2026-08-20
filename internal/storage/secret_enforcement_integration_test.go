@@ -73,7 +73,7 @@ func dialSecretServer(t *testing.T, exec *storage.ExecutionStore, repo *storage.
 	if err != nil {
 		t.Fatalf("IssueAgentToken: %v", err)
 	}
-	client, conn, err := agent.Dial(lis.Addr().String(), token, true, "")
+	client, conn, _, err := agent.Dial(lis.Addr().String(), token, true, "")
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

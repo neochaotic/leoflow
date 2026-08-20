@@ -68,7 +68,7 @@ func TestCAPoolAcceptsValidCert(t *testing.T) {
 // TestDialPropagatesBadCAFile: the secure path with a broken CA file must fail
 // to dial rather than silently fall back to no verification.
 func TestDialPropagatesBadCAFile(t *testing.T) {
-	if _, _, err := Dial("localhost:50051", "token", false, filepath.Join(t.TempDir(), "absent.pem")); err == nil {
+	if _, _, _, err := Dial("localhost:50051", "token", false, filepath.Join(t.TempDir(), "absent.pem")); err == nil {
 		t.Error("Dial with an unreadable CA file should error")
 	}
 }

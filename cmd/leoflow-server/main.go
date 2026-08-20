@@ -23,6 +23,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	leoflow "github.com/neochaotic/leoflow"
+	"github.com/neochaotic/leoflow/internal/agent"
 	"github.com/neochaotic/leoflow/internal/agentrpc"
 	"github.com/neochaotic/leoflow/internal/alerts"
 	"github.com/neochaotic/leoflow/internal/api"
@@ -313,8 +314,13 @@ func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.
 	return nil
 }
 
-// agentTokenTTL is how long a dispatched task's agent identity token stays valid.
-const agentTokenTTL = 24 * time.Hour
+// attemptTokenTTL is the short per-attempt agent-token lifetime minted at
+// dispatch (ADR 0055 Fix #4), derived from the heartbeat interval so a live task
+// refreshes its credential on every beat (see agentrpc.Server.Heartbeat) while a
+// stolen or finished token lapses in minutes. It replaces the former flat 24h
+// TTL at the dispatch site; the total renewed lifetime is separately capped by
+// auth.max_attempt_credential_lifetime.
+var attemptTokenTTL = agent.AttemptTokenTTL(agent.DefaultHeartbeatInterval)
 
 // loginRateLimit returns the per-minute failed-login cap with a safe floor: a
 // missing or nonsensical (<=0) config value falls back to the conservative
@@ -338,7 +344,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if !servesScheduler {
 		return nil, false, func() {}, nil
 	}
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, logger)
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -510,7 +516,7 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv,
 // shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
 // channel is plaintext (dev). The per-task bearer token in metadata authenticates
 // each call regardless.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode, tlsCert, tlsKey string, logger *slog.Logger) (*grpc.Server, error) {
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, tlsCert, tlsKey string, logger *slog.Logger) (*grpc.Server, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -520,6 +526,11 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	agentSrv.SetLogSink(logSink)
 	agentSrv.SetLogPublisher(logTailer)
 	agentSrv.SetSecrets(secretsStore, allowInsecureSecrets)
+	// Refresh a live attempt's bearer on every heartbeat (ADR 0055 Fix #4) with the
+	// same short per-attempt TTL used at dispatch, so a long task keeps a working
+	// credential while a stolen/finished token lapses in minutes. The renewal total
+	// is capped by auth.max_attempt_credential_lifetime.
+	agentSrv.SetTokenRenewal(authn, attemptTokenTTL, maxAttemptLifetime)
 	// Scope-by-declaration policy (ADR 0055 D9). Default permissive: the whole
 	// tenant vault, warning on a narrow declaration but never denying.
 	agentSrv.SetSecretScoping(secretScoping)
@@ -1109,7 +1120,7 @@ func resolveAgentControlAddr(cfg *config.ServerConfig) string {
 func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, logger *slog.Logger, sink dispatch.FailureSink, metrics *observability.Metrics) (bool, io.Closer) {
 	subExec := executor.NewSubprocessExecutor(cfg.Executor.AgentPath, logger)
 	subExec.SetWorkDir(cfg.Executor.SubprocessWorkDir)
-	dispatcher := dispatch.NewDispatcher(subExec, execStore, authn, resolveAgentControlAddr(cfg), agentTokenTTL)
+	dispatcher := dispatch.NewDispatcher(subExec, execStore, authn, resolveAgentControlAddr(cfg), attemptTokenTTL)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 	disp, closer := wrapBuffered(dispatcher, sink, logger, metrics, cfg.Scheduler.Dispatch)
 	sched.SetDispatcher(disp)
@@ -1129,7 +1140,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	controlAddr := resolveAgentControlAddr(cfg)
 	podExec := executor.NewKubernetesExecutor(cs, cfg.Executor.TaskNamespace)
 	podExec.SetStagingStore(store) // record per-run staging volumes in the metadatabase (ADR 0022)
-	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, agentTokenTTL)
+	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, attemptTokenTTL)
 	dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
 	dispatcher.SetTaskSecret(cfg.Executor.TaskSecretName, cfg.Executor.TaskSecretMountPath)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))

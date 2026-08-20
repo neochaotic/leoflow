@@ -35,12 +35,16 @@ func caPool(path string) (*x509.CertPool, error) {
 // without TLS) the transport is unencrypted; otherwise TLS 1.2+ is required. When
 // caFile is set, the server certificate is verified against that CA (a
 // self-signed / cluster CA); otherwise the system roots are used.
-func Dial(addr, token string, allowInsecure bool, caFile string) (agentv1.AgentServiceClient, *grpc.ClientConn, error) {
+//
+// It also returns the *TokenSource backing the per-RPC credential: the heartbeat
+// loop swaps a renewed token into it (ADR 0055 Fix #4) and the interceptor picks
+// the new bearer up on the next call.
+func Dial(addr, token string, allowInsecure bool, caFile string) (agentv1.AgentServiceClient, *grpc.ClientConn, *TokenSource, error) {
 	if addr == "" {
-		return nil, nil, errors.New("control plane address is required")
+		return nil, nil, nil, errors.New("control plane address is required")
 	}
 	if token == "" {
-		return nil, nil, errors.New("agent token is required")
+		return nil, nil, nil, errors.New("agent token is required")
 	}
 
 	transport := insecure.NewCredentials()
@@ -49,21 +53,22 @@ func Dial(addr, token string, allowInsecure bool, caFile string) (agentv1.AgentS
 		if caFile != "" {
 			pool, cerr := caPool(caFile)
 			if cerr != nil {
-				return nil, nil, cerr
+				return nil, nil, nil, cerr
 			}
 			tlsCfg.RootCAs = pool
 		}
 		transport = credentials.NewTLS(tlsCfg)
 	}
 
+	tokens := NewTokenSource(token)
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(transport),
-		grpc.WithPerRPCCredentials(tokenAuth{token: token, secure: !allowInsecure}),
+		grpc.WithPerRPCCredentials(tokenAuth{source: tokens, secure: !allowInsecure}),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("dialing control plane at %q: %w", addr, err)
+		return nil, nil, nil, fmt.Errorf("dialing control plane at %q: %w", addr, err)
 	}
-	return agentv1.NewAgentServiceClient(conn), conn, nil
+	return agentv1.NewAgentServiceClient(conn), conn, tokens, nil
 }
 
 // grpcLogSink adapts the StreamLogs bidirectional stream to the LogSink

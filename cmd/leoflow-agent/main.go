@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/neochaotic/leoflow/internal/agent"
 	"github.com/neochaotic/leoflow/internal/version"
@@ -55,7 +54,7 @@ func run() int {
 	allowInsecure := os.Getenv("LEOFLOW_AGENT_INSECURE") != "false"
 	caFile := os.Getenv("LEOFLOW_AGENT_TLS_CA") // PEM CA to verify the server cert (TLS)
 
-	client, conn, err := agent.Dial(addr, token, allowInsecure, caFile)
+	client, conn, tokens, err := agent.Dial(addr, token, allowInsecure, caFile)
 	if err != nil {
 		slog.Error("connecting to control plane", "error", err)
 		return 1
@@ -104,7 +103,10 @@ func run() int {
 		// The durable outcome record's destination (the container termination
 		// message), set by the executor's podEnv; empty outside a pod (ADR 0052).
 		TerminationLogPath: os.Getenv("LEOFLOW_TERMINATION_LOG_PATH"),
-		HeartbeatInterval:  15 * time.Second,
+		HeartbeatInterval:  agent.DefaultHeartbeatInterval,
+		// The heartbeat loop swaps a renewed bearer into this source (ADR 0055
+		// Fix #4); the per-RPC credential reads it on every subsequent call.
+		Token: tokens,
 	}
 	// Fault-injection seam for the durable-outcome chaos E2E (ADR 0052): when a DAG
 	// sets LEOFLOW_CHAOS_DIE_BEFORE_REPORT to a task state, the agent writes the

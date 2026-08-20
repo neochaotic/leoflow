@@ -60,4 +60,5 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0055: Secret scoping and token liveness — scope by declaration, exchange the token, bind it to task liveness](adr/0055-secret-scoping-and-token-liveness.md)
 - [ADR 0056: Task-log object sink — native dual-SDK (S3 + GCS), keyless-first](adr/0056-task-log-object-sink.md)
 - [ADR 0057: OIDC/SSO authentication with fail-closed tenant pinning](adr/0057-oidc-sso.md)
+- [ADR 0058: Warm worker pools — pod-reuse semantics (N:1)](adr/0058-warm-worker-pools.md)
 <!-- END ADR INDEX -->

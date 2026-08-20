@@ -53,6 +53,46 @@ func TestDeclaredSecretResolution(t *testing.T) {
 	}
 }
 
+// declaredSecretNames gathers the DAG-level declaration and every task's
+// narrowing declaration into one deduplicated, order-preserving set — the input
+// to the registration existence check (ADR 0055 D6).
+func TestDeclaredSecretNamesCollectsAndDedupes(t *testing.T) {
+	spec := domain.DAGSpec{
+		Variables: []string{"greeting", "farewell"},
+		Tasks: []domain.TaskSpec{
+			{TaskID: "a", Variables: []string{"greeting", "extra"}},
+			{TaskID: "b", Variables: []string{"only_b"}},
+		},
+	}
+	got := declaredSecretNames(spec.Variables, spec.Tasks, func(t domain.TaskSpec) []string { return t.Variables })
+	want := []string{"greeting", "farewell", "extra", "only_b"}
+	if !equalStrings(got, want) {
+		t.Errorf("declaredSecretNames = %v, want %v (deduped, first-occurrence order)", got, want)
+	}
+}
+
+func TestDeclaredSecretNamesEmpty(t *testing.T) {
+	got := declaredSecretNames(nil, []domain.TaskSpec{{TaskID: "a"}}, func(t domain.TaskSpec) []string { return t.Variables })
+	if len(got) != 0 {
+		t.Errorf("declaredSecretNames with no declarations = %v, want empty", got)
+	}
+}
+
+// missingNames returns the declared names absent from the existing set, in
+// declaration order — these are what the registration check reports.
+func TestMissingNames(t *testing.T) {
+	declared := []string{"greeting", "nope", "warehouse", "gone"}
+	existing := []string{"greeting", "warehouse"}
+	got := missingNames(declared, existing)
+	want := []string{"nope", "gone"}
+	if !equalStrings(got, want) {
+		t.Errorf("missingNames = %v, want %v", got, want)
+	}
+	if len(missingNames([]string{"a", "b"}, []string{"a", "b"})) != 0 {
+		t.Error("missingNames should be empty when all declared names exist")
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

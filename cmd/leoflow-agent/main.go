@@ -50,9 +50,25 @@ func run() int {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
 	addr := os.Getenv("LEOFLOW_CONTROL_PLANE_ADDR")
-	token := os.Getenv("LEOFLOW_AGENT_TOKEN")
 	allowInsecure := os.Getenv("LEOFLOW_AGENT_INSECURE") != "false"
 	caFile := os.Getenv("LEOFLOW_AGENT_TLS_CA") // PEM CA to verify the server cert (TLS)
+
+	// Bootstrap credential: under the exchange transport (ADR 0055 Fix #3) the
+	// control plane projects a ServiceAccount token at LEOFLOW_AGENT_TOKEN_PATH,
+	// which the agent exchanges once for a task-scoped JWT after dialing. The
+	// default env-var transport leaves the path unset and uses LEOFLOW_AGENT_TOKEN
+	// directly (byte-identical to before).
+	exchange := os.Getenv("LEOFLOW_AGENT_TOKEN_TRANSPORT") == "exchange"
+	tokenPath := os.Getenv("LEOFLOW_AGENT_TOKEN_PATH")
+	token := os.Getenv("LEOFLOW_AGENT_TOKEN")
+	if exchange && tokenPath != "" {
+		projected, rerr := agent.ReadTokenFile(tokenPath)
+		if rerr != nil {
+			slog.Error("reading projected bootstrap token", "error", rerr)
+			return 1
+		}
+		token = projected
+	}
 
 	client, conn, tokens, err := agent.Dial(addr, token, allowInsecure, caFile)
 	if err != nil {
@@ -67,6 +83,16 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
+	// Exchange the projected bootstrap token for the task-scoped JWT before any
+	// other RPC, then swap it into the shared TokenSource so every subsequent call
+	// authenticates as the task instance. Fails startup if the exchange is refused.
+	if exchange && tokenPath != "" {
+		if xerr := agent.ExchangeToken(ctx, client, tokens); xerr != nil {
+			slog.Error("exchanging bootstrap token for a task-scoped credential", "error", xerr)
+			return 1
+		}
+	}
 
 	sink, err := agent.OpenLogSink(ctx, client)
 	if err != nil {

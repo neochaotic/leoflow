@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -296,6 +297,15 @@ type AuthSection struct {
 	// would-have-denied when the caller's TI is not live but still delivers;
 	// enforce denies with PermissionDenied. Empty = the observe default.
 	SecretLivenessMode string `mapstructure:"secret_liveness_mode"`
+	// MaxAttemptCredentialLifetime is the hard ceiling on how long a single task
+	// attempt's agent credential may be kept alive by heartbeat renewal (ADR 0055
+	// Fix #4). Past this age since first dispatch, the control plane stops renewing
+	// the token on heartbeat and lets it lapse, bounding a runaway attempt. The
+	// short per-attempt TTL still bounds a stolen/finished token independently;
+	// this only caps the total renewed lifetime. Generous by default (24h) so no
+	// normal task regresses. Bind via LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME
+	// as a duration (e.g. "24h", "90m"); a non-positive value disables the ceiling.
+	MaxAttemptCredentialLifetime time.Duration `mapstructure:"max_attempt_credential_lifetime"`
 }
 
 // JWTSection configures JWT issuance and validation.
@@ -436,6 +446,10 @@ var serverDefaults = map[string]any{
 	// flips (enforce) are separate operator decisions after an observe period.
 	"auth.secret_scoping":       "permissive",
 	"auth.secret_liveness_mode": "observe",
+	// Hard ceiling on an attempt's total renewed credential lifetime (ADR 0055
+	// Fix #4). Generous by default so nothing regresses; the short per-attempt TTL
+	// is what bounds a stolen token. Parsed as a duration by viper's decode hook.
+	"auth.max_attempt_credential_lifetime": "24h",
 	// OIDC leaves. Every leaf is registered so viper's AutomaticEnv binds the
 	// scalar LEOFLOW_AUTH_OIDC_* env vars (notably the client secret). The map and
 	// slice leaves are config-file / Helm-values driven — viper does not split a

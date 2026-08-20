@@ -75,6 +75,13 @@ type Dispatcher struct {
 	taskSecret     string
 	taskSecretPath string
 	defaults       PlatformDefaults
+	// Agent-token transport (ADR 0055 Fix #3). Empty tokenTransport = the env-var
+	// default (plaintext token env var), so a deployment that does not opt in is
+	// byte-identical to today. "exchange" threads the projected-token config onto
+	// the request; the audience/expiration are read only under exchange.
+	tokenTransport         string
+	tokenAudience          string
+	tokenExpirationSeconds int64
 }
 
 // NewDispatcher builds a Dispatcher that launches tasks via exec, resolves their
@@ -100,6 +107,16 @@ func (d *Dispatcher) SetTaskSecret(name, mountPath string) {
 // SetPlatformDefaults configures the per-cluster task defaults applied at
 // dispatch to fill gaps the DAG artifact left empty (ADR 0023, layer L0).
 func (d *Dispatcher) SetPlatformDefaults(p PlatformDefaults) { d.defaults = p }
+
+// SetAgentTokenTransport selects how the agent's bearer credential reaches the
+// task pod (ADR 0055 Fix #3). transport is "" / "envvar" (the plaintext env-var
+// default) or "exchange" (project a ServiceAccount token the agent exchanges for
+// a task-scoped JWT). audience and expirationSeconds configure the projected
+// token and are read only under the exchange transport. Ignored by the
+// subprocess (Lite) executor, which has no pod.
+func (d *Dispatcher) SetAgentTokenTransport(transport, audience string, expirationSeconds int64) {
+	d.tokenTransport, d.tokenAudience, d.tokenExpirationSeconds = transport, audience, expirationSeconds
+}
 
 // Dispatch resolves the task, mints its agent token, and executes it.
 func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task domain.TaskSpec) error {
@@ -163,6 +180,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID string, task dom
 	req.AgentTLSCAConfigMap = d.tlsCAConfigMap
 	req.TaskSecretName = d.taskSecret
 	req.TaskSecretMountPath = d.taskSecretPath
+	// Agent-token transport (ADR 0055 Fix #3). Under the exchange transport the
+	// executor projects a ServiceAccount token instead of placing the plaintext
+	// token on the pod; the token is still minted above (the env-var path needs it,
+	// and it is harmless under exchange).
+	req.AgentTokenTransport = d.tokenTransport
+	req.AgentTokenAudience = d.tokenAudience
+	req.AgentTokenExpirationSeconds = d.tokenExpirationSeconds
 	return d.exec.Execute(ctx, req)
 }
 

@@ -139,36 +139,49 @@ func BuildPod(req Request) *corev1.Pod {
 // plaintext token on the pod spec (today's behavior); the exchange transport
 // keeps it OFF and projects a ServiceAccount token instead.
 const (
-	agentTransportEnvVar   = "envvar"
 	agentTransportExchange = "exchange"
 	// agentTokenVolumeName / agentTokenMountDir / agentTokenFile place the
 	// projected ServiceAccount token the agent exchanges for a task-scoped JWT.
 	agentTokenVolumeName = "leoflow-agent-token"
 	agentTokenMountDir   = "/var/run/leoflow"
 	agentTokenFile       = "token"
-	// defaultAgentTokenAudience is the projected token's audience when the request
-	// does not set one — the control plane validates it against this on exchange.
-	defaultAgentTokenAudience = "leoflow-control-plane"
+	// DefaultAgentTokenAudience is the projected token's audience when the request
+	// does not set one — the control plane's TokenReviewer validates the projected
+	// token against this exact audience on exchange, so both sides share the const.
+	DefaultAgentTokenAudience = "leoflow-control-plane"
 	// minProjectedTokenExpirationSeconds floors the projected token's lifetime so a
 	// very short task's bootstrap credential is not already expired at exchange time
 	// (ADR 0055 "Verify at implementation": ~10 min floor). It is also the default.
 	minProjectedTokenExpirationSeconds int64 = 600
-	// agentIdentityAnnotation carries the exact (unsanitized) task-instance identity
+	// AgentIdentityAnnotation carries the exact (unsanitized) task-instance identity
 	// the control plane resolves a reviewed pod to on exchange. Pod labels are
 	// sanitized and lossy, so the resolver reads this instead. Written only under
-	// the exchange transport, so the env-var default pod spec is unchanged.
-	agentIdentityAnnotation = "leoflow.io/agent-identity"
+	// the exchange transport, so the env-var default pod spec is unchanged. It is
+	// exported so the pod → task-instance resolver reads the SAME contract that
+	// wrote it (single-sourced, no drift).
+	AgentIdentityAnnotation = "leoflow.io/agent-identity"
 )
 
-// podIdentity is the JSON payload of agentIdentityAnnotation: the full
+// PodIdentity is the JSON payload of AgentIdentityAnnotation: the full
 // task-instance identity the control plane mints the exchanged JWT for.
-type podIdentity struct {
+type PodIdentity struct {
 	TaskInstanceID string `json:"ti"`
 	TenantID       string `json:"tenant"`
 	DagID          string `json:"dag"`
 	RunID          string `json:"run"`
 	TaskID         string `json:"task"`
 	TryNumber      int    `json:"try"`
+}
+
+// ParseAgentIdentity decodes the AgentIdentityAnnotation payload. It is the read
+// side of the identity contract mountAgentToken writes, used by the pod →
+// task-instance resolver on the exchange path.
+func ParseAgentIdentity(raw string) (PodIdentity, error) {
+	var id PodIdentity
+	if err := json.Unmarshal([]byte(raw), &id); err != nil {
+		return PodIdentity{}, fmt.Errorf("decoding agent-identity annotation: %w", err)
+	}
+	return id, nil
 }
 
 // usesTokenExchange reports whether this request opted into the projected-token
@@ -212,7 +225,7 @@ func mountAgentToken(pod *corev1.Pod, req Request) {
 	}
 	audience := req.AgentTokenAudience
 	if audience == "" {
-		audience = defaultAgentTokenAudience
+		audience = DefaultAgentTokenAudience
 	}
 	exp := req.AgentTokenExpirationSeconds
 	if exp < minProjectedTokenExpirationSeconds {
@@ -236,12 +249,12 @@ func mountAgentToken(pod *corev1.Pod, req Request) {
 	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
 		Name: agentTokenVolumeName, MountPath: agentTokenMountDir, ReadOnly: true,
 	})
-	id := podIdentity{
+	id := PodIdentity{
 		TaskInstanceID: req.TaskInstanceID, TenantID: req.TenantID, DagID: req.DagID,
 		RunID: req.RunID, TaskID: req.TaskID, TryNumber: req.TryNumber,
 	}
 	if raw, err := json.Marshal(id); err == nil {
-		pod.Annotations[agentIdentityAnnotation] = string(raw)
+		pod.Annotations[AgentIdentityAnnotation] = string(raw)
 	}
 }
 

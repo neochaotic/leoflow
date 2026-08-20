@@ -33,6 +33,7 @@ import (
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/executor"
 	"github.com/neochaotic/leoflow/internal/failurealert"
+	"github.com/neochaotic/leoflow/internal/kubeexchange"
 	"github.com/neochaotic/leoflow/internal/logs"
 	"github.com/neochaotic/leoflow/internal/observability"
 	"github.com/neochaotic/leoflow/internal/oidc"
@@ -344,7 +345,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if !servesScheduler {
 		return nil, false, func() {}, nil
 	}
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, logger)
+	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, buildTokenExchange(cfg, logger), cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -516,7 +517,7 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv,
 // shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
 // channel is plaintext (dev). The per-task bearer token in metadata authenticates
 // each call regardless.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, tlsCert, tlsKey string, logger *slog.Logger) (*grpc.Server, error) {
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, logger *slog.Logger) (*grpc.Server, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -538,6 +539,13 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	// ExecutionStore is the read-only liveness predicate; the mode defaults to
 	// observe (log a would-have-denied, still deliver). Secret-path only.
 	agentSrv.SetLivenessGate(store, secretLivenessMode)
+	// Projected-SA-token exchange (ADR 0055 Fix #3). Wired only when the operator
+	// selected the exchange transport on a Kubernetes executor; nil (the default)
+	// leaves ExchangeToken Unimplemented, so the env-var transport is unchanged.
+	if exchange != nil {
+		agentSrv.SetTokenExchange(exchange.reviewer, exchange.resolver, authn, attemptTokenTTL, allowInsecureSecrets)
+		logger.Warn("agent token exchange enabled (projected SA token → TokenReview → task-scoped JWT); real-cluster e2e owed before flipping this on in production")
+	}
 	// The secrets store is the Repository, which also records the warn-phase
 	// secret-scope audit event (ADR 0045, ADR 0055); wire it as the auditor so a
 	// narrowly-declared task's full-vault delivery is surfaced. Optional: without
@@ -575,6 +583,36 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	}()
 	logger.Info("agent grpc server started", "grpc_addr", addr, "tls", secure)
 	return srv, nil
+}
+
+// tokenExchange bundles the Kubernetes-backed dependencies of the agent
+// token-exchange transport (ADR 0055 Fix #3): the TokenReview client and the
+// pod→task-instance resolver. nil means the exchange is not wired (the default
+// env-var transport), in which case ExchangeToken reports Unimplemented.
+type tokenExchange struct {
+	reviewer agentrpc.TokenReviewer
+	resolver agentrpc.PodTaskResolver
+}
+
+// buildTokenExchange constructs the exchange dependencies when the operator
+// selected the exchange transport on a Kubernetes executor; it returns nil
+// otherwise (env-var default, or the subprocess executor, which has no pod/SA/
+// TokenReview). A Kubernetes client that cannot be built leaves the exchange
+// unwired with a warning — matching pod dispatch's warn-and-disable posture —
+// rather than failing boot, since the transport flip is a deliberate opt-in.
+func buildTokenExchange(cfg *config.ServerConfig, logger *slog.Logger) *tokenExchange {
+	if cfg.Auth.AgentTokenTransport != config.AgentTokenTransportExchange || cfg.Executor.Type != "kubernetes" {
+		return nil
+	}
+	cs, err := buildK8sClient()
+	if err != nil {
+		logger.Warn("agent token exchange selected but no Kubernetes client is available; exchange disabled (agents on the exchange transport will fail to start)", "error", err)
+		return nil
+	}
+	return &tokenExchange{
+		reviewer: kubeexchange.NewTokenReviewer(cs, executor.DefaultAgentTokenAudience),
+		resolver: kubeexchange.NewPodResolver(cs, cfg.Executor.TaskNamespace),
+	}
 }
 
 // buildPodExecutor constructs a Kubernetes executor from the in-cluster config
@@ -1143,6 +1181,12 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, attemptTokenTTL)
 	dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
 	dispatcher.SetTaskSecret(cfg.Executor.TaskSecretName, cfg.Executor.TaskSecretMountPath)
+	// Agent-token transport (ADR 0055 Fix #3). Under the exchange transport the
+	// executor projects a ServiceAccount token instead of the plaintext one; the
+	// default (envvar) leaves the pod spec unchanged. The audience is the shared
+	// const the control-plane TokenReviewer validates against; expiration floors in
+	// BuildPod.
+	dispatcher.SetAgentTokenTransport(cfg.Auth.AgentTokenTransport, executor.DefaultAgentTokenAudience, 0)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
 	disp, closer := wrapBuffered(dispatcher, store, logger, metrics, cfg.Scheduler.Dispatch) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	sched.SetDispatcher(disp)

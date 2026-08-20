@@ -9,12 +9,21 @@ import (
 
 // runGatedTicker must run its cycle only while leading() is true, so at
 // replicaCount>1 a follower's reconciler/GC does not sweep and delete pods the
-// leader owns. Deterministic: an unbuffered ticks channel means the send of the
-// next tick blocks until the previous one is fully processed, so no sleeps.
-func TestRunGatedTickerRunsOnlyWhileLeading(t *testing.T) {
+// leader owns.
+//
+// These two tests hold `leading` STABLE for the whole run rather than toggling it
+// mid-flight. Toggling it between two ticks (the previous form) raced: after the
+// follower tick's send rendezvoused, the main goroutine's Store(true) ran
+// concurrently with the ticker goroutine's gate() evaluation for that same tick,
+// so the follower tick could observe `true` and wrongly run the cycle — a real
+// flake reproducible under load (`-count`). With a stable gate the outcome is
+// fully determined by the send/receive ordering, no sleeps and no race.
+
+// A follower (leading=false) never runs the cycle, no matter how many ticks.
+func TestRunGatedTickerSkipsWhileFollower(t *testing.T) {
 	ticks := make(chan time.Time)
 	ran := make(chan struct{}, 8)
-	var leading atomic.Bool
+	var leading atomic.Bool // stays false
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -22,24 +31,38 @@ func TestRunGatedTickerRunsOnlyWhileLeading(t *testing.T) {
 		ran <- struct{}{}
 	})
 
-	// Follower: the tick is processed but the cycle must not run.
-	leading.Store(false)
+	// Two ticks on an unbuffered channel: the second send completes only after the
+	// ticker looped back to receive it, which means the FIRST tick was already
+	// fully processed (gate evaluated, cycle skipped). So once the second send
+	// returns, the first follower tick is guaranteed done and contributed nothing.
 	ticks <- time.Now()
-	// Leader: this send blocks until the follower tick above was processed
-	// (sequential select loop, unbuffered channel), so ordering is guaranteed.
-	leading.Store(true)
 	ticks <- time.Now()
 
 	select {
 	case <-ran:
-	case <-time.After(2 * time.Second):
-		t.Fatal("leader tick did not run the cycle")
-	}
-	// Exactly one run: the follower tick contributed nothing.
-	select {
-	case <-ran:
 		t.Error("a follower tick ran the cycle; it must be skipped when not leading")
 	default:
+	}
+}
+
+// A leader (leading=true) runs the cycle on its tick.
+func TestRunGatedTickerRunsWhileLeading(t *testing.T) {
+	ticks := make(chan time.Time)
+	ran := make(chan struct{}, 8)
+	var leading atomic.Bool
+	leading.Store(true) // stays true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go runGatedTicker(ctx, "test", ticks, leading.Load, discardLog(), func() {
+		ran <- struct{}{}
+	})
+
+	ticks <- time.Now()
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader tick did not run the cycle")
 	}
 }
 

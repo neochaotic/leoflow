@@ -710,6 +710,33 @@ func (r *Repository) RecordAuthEvent(ctx context.Context, tenant, actorUserID, a
 	return nil
 }
 
+// RecordSecretScopeWarning records that a task received the full tenant secret
+// set while it declared only a narrower subset (ADR 0045, ADR 0055): under
+// secret_scoping: enforce it would receive only its declared set. It is scoped to
+// the DAG resource so the event surfaces on the DAG's Audit Log tab, with the
+// kind ("variables" or "connections"), the run and task, and the declared/total
+// counts in metadata. It records counts only — never secret names or values.
+func (r *Repository) RecordSecretScopeWarning(ctx context.Context, tenant, dagID, runID, taskID, kind string, declared, total int) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	meta, err := json.Marshal(map[string]any{
+		"kind": kind, "run_id": runID, "task_id": taskID,
+		"declared": declared, "total": total,
+	})
+	if err != nil {
+		return fmt.Errorf("encoding audit metadata: %w", err)
+	}
+	if err := r.q.CreateAuditLog(ctx, queries.CreateAuditLogParams{
+		TenantID: tid, Action: "secret.scope_warning",
+		ResourceType: strPtr("dag"), ResourceID: strPtr(dagID), Metadata: meta,
+	}); err != nil {
+		return fmt.Errorf("writing secret-scope warning audit: %w", err)
+	}
+	return nil
+}
+
 // SetTaskInstanceState sets a task instance's state directly, backing the UI's
 // "mark success"/"mark failed" actions. It does not run the task.
 func (r *Repository) SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error {

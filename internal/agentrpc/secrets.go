@@ -30,6 +30,38 @@ type SecretScopeAuditor interface {
 	RecordSecretScopeWarning(ctx context.Context, tenant, dagID, runID, taskID, kind string, declared, total int) error
 }
 
+// Secret-path liveness gate modes (ADR 0055 E2). The gate consults the
+// read-only task-instance liveness predicate before serving secrets so a token
+// whose task instance is no longer live stops resolving them.
+const (
+	// LivenessObserve logs a structured warn + records a would-have-denied audit
+	// event when the caller's TI is not live, but STILL delivers. It is the
+	// default: no behaviour change, the observe half of the warn→enforce arc.
+	LivenessObserve = "observe"
+	// LivenessEnforce denies with codes.PermissionDenied when the caller's TI is
+	// not live. It is the operator's later flip, after an observe period.
+	LivenessEnforce = "enforce"
+)
+
+// TaskLivenessChecker reports whether a task-instance attempt is still live —
+// present and in an active (non-terminal) state for the given (run, task, try).
+// It is the read-only revocation signal the secret path consults (ADR 0055 D3):
+// a terminal, superseded, or reaped attempt is not live, so its token stops
+// resolving secrets. The predicate derives ONLY from (run, task, try) + active
+// state — never run recency — so a clear-and-rerun of an old run stays live.
+type TaskLivenessChecker interface {
+	IsTaskInstanceLive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error)
+}
+
+// SecretLivenessAuditor records a structured audit event when the secret-path
+// liveness gate fires: a would-have-denied in observe mode, or a denial in
+// enforce mode (ADR 0055). It carries identity + kind + mode only, never secret
+// names or values. Optional and best-effort: a nil auditor or a write error only
+// skips the row; it never changes the gate's decision.
+type SecretLivenessAuditor interface {
+	RecordSecretLivenessDenial(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int, kind, mode string) error
+}
+
 // SetSecrets attaches the secrets store. allowInsecure permits serving secrets
 // over a non-TLS channel — for local/dev only; production must use TLS (the
 // handlers fail closed otherwise). See ADR 0021 / issue #58.
@@ -41,6 +73,24 @@ func (s *Server) SetSecrets(store SecretsStore, allowInsecure bool) {
 // (optional). Without it, a narrowing declaration still produces the WARN log
 // but no audit row.
 func (s *Server) SetSecretScopeAuditor(a SecretScopeAuditor) { s.secretAudit = a }
+
+// SetLivenessGate attaches the read-only task-instance liveness predicate the
+// secret path consults, in the given mode ("observe" | "enforce", ADR 0055 E2).
+// An unrecognised mode falls back to observe — the safe, non-denying default.
+// A nil checker leaves the gate off (delivery unchanged), so the gate is opt-in.
+func (s *Server) SetLivenessGate(checker TaskLivenessChecker, mode string) {
+	s.liveness = checker
+	if mode == LivenessEnforce {
+		s.livenessMode = LivenessEnforce
+	} else {
+		s.livenessMode = LivenessObserve
+	}
+}
+
+// SetSecretLivenessAuditor attaches the sink for secret-path liveness events
+// (optional). Without it, a would-have-denied / denial still produces the WARN
+// log but no audit row.
+func (s *Server) SetSecretLivenessAuditor(a SecretLivenessAuditor) { s.livenessAudit = a }
 
 // guardSecretChannel refuses to serve secrets when the store is unconfigured or
 // the transport is not TLS (unless explicitly allowed for dev). This is the
@@ -59,6 +109,63 @@ func (s *Server) guardSecretChannel(ctx context.Context) error {
 		"refusing to send secrets over an insecure channel; enable gRPC TLS (see issue #58)")
 }
 
+// checkLiveness consults the read-only task-instance liveness predicate on the
+// secret path (ADR 0055 D2/D3, E2). It is called ONLY by GetVariables and
+// GetConnections — never by the shared identify(), because Heartbeat/ReportState
+// are designed to run for a superseded TI so they can return the terminate
+// signal, and gating them on liveness would break it.
+//
+// It returns a PermissionDenied error ONLY in enforce mode on a POSITIVE
+// not-live result. In observe mode a not-live result logs + audits a
+// would-have-denied and returns nil (delivery proceeds — no behaviour change).
+//
+// Transient-error rule (both modes): an inconclusive liveness read (a nil
+// checker, or a DB error) NEVER denies and NEVER warns-as-not-live — an errored
+// check cannot conclude the TI is dead, and the short token TTL bounds a real
+// blip. Failing closed on a transient read would break a live pipeline.
+func (s *Server) checkLiveness(ctx context.Context, id *auth.AgentIdentity, kind string) error {
+	if s.liveness == nil {
+		return nil // gate not configured — delivery unchanged
+	}
+	live, err := s.liveness.IsTaskInstanceLive(ctx, id.RunID, id.TaskID, id.TryNumber)
+	if err != nil {
+		// Inconclusive: cannot conclude not-live. Never deny, never warn-as-not-live.
+		slog.Warn("secret-path liveness check inconclusive; delivering (transient error, token TTL bounds exposure)",
+			"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "try", id.TryNumber, "kind", kind, "error", err)
+		return nil
+	}
+	if live {
+		return nil
+	}
+	// Positive not-live result: the TI is terminal, superseded, or reaped.
+	if s.livenessMode == LivenessEnforce {
+		slog.Warn("denying secrets: task instance is not live (secret_liveness_mode: enforce)",
+			"ti", id.TaskInstanceID, "tenant", id.TenantID, "dag", id.DagID, "run", id.RunID,
+			"task", id.TaskID, "try", id.TryNumber, "kind", kind)
+		s.recordLiveness(ctx, id, kind, LivenessEnforce)
+		return status.Error(codes.PermissionDenied, "task instance is no longer live")
+	}
+	// Observe mode: would-have-denied, but deliver.
+	slog.Warn("would-have-denied secrets: task instance is not live (secret_liveness_mode: observe; delivering)",
+		"ti", id.TaskInstanceID, "tenant", id.TenantID, "dag", id.DagID, "run", id.RunID,
+		"task", id.TaskID, "try", id.TryNumber, "kind", kind)
+	s.recordLiveness(ctx, id, kind, LivenessObserve)
+	return nil
+}
+
+// recordLiveness writes the best-effort secret-path liveness audit event. A nil
+// auditor or a write error only skips the row; it never changes the gate's
+// decision.
+func (s *Server) recordLiveness(ctx context.Context, id *auth.AgentIdentity, kind, mode string) {
+	if s.livenessAudit == nil {
+		return
+	}
+	if aerr := s.livenessAudit.RecordSecretLivenessDenial(ctx, id.TenantID, id.DagID, id.RunID, id.TaskID, id.TryNumber, kind, mode); aerr != nil {
+		slog.Warn("recording secret-path liveness audit event",
+			"ti", id.TaskInstanceID, "kind", kind, "mode", mode, "error", aerr)
+	}
+}
+
 // GetVariables returns the calling task's tenant Variables for the agent to
 // export as AIRFLOW_VAR_<KEY>.
 func (s *Server) GetVariables(ctx context.Context, _ *agentv1.GetVariablesRequest) (*agentv1.GetVariablesResponse, error) {
@@ -68,6 +175,9 @@ func (s *Server) GetVariables(ctx context.Context, _ *agentv1.GetVariablesReques
 	}
 	if gerr := s.guardSecretChannel(ctx); gerr != nil {
 		return nil, gerr
+	}
+	if lerr := s.checkLiveness(ctx, id, "variables"); lerr != nil {
+		return nil, lerr
 	}
 	vars, err := s.secrets.SecretVariables(ctx, id.TenantID)
 	if err != nil {
@@ -86,6 +196,9 @@ func (s *Server) GetConnections(ctx context.Context, _ *agentv1.GetConnectionsRe
 	}
 	if gerr := s.guardSecretChannel(ctx); gerr != nil {
 		return nil, gerr
+	}
+	if lerr := s.checkLiveness(ctx, id, "connections"); lerr != nil {
+		return nil, lerr
 	}
 	uris, err := s.secrets.SecretConnectionURIs(ctx, id.TenantID)
 	if err != nil {

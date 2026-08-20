@@ -135,6 +135,10 @@ type Server struct {
 	tail                 LogPublisher
 	secrets              SecretsStore
 	secretAudit          SecretScopeAuditor
+	liveness             TaskLivenessChecker
+	livenessMode         string
+	livenessAudit        SecretLivenessAuditor
+	scoping              string
 	allowInsecureSecrets bool
 	now                  func() time.Time
 }

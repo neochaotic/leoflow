@@ -161,15 +161,18 @@ func TestSecretRoundTripPermissiveNoDeclarationWholeVault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetVariables: %v", err)
 	}
-	if len(vresp.GetVariables()) != 2 {
-		t.Errorf("permissive + no declaration must deliver the whole vault {V_DECLARED,V_OTHER}: got %v", vresp.GetVariables())
+	// The shared 'default' tenant may carry variables seeded by sibling tests, so
+	// assert the UNDECLARED seeded var is delivered (proving permissive does not
+	// subset) rather than an exact vault size.
+	if vars := vresp.GetVariables(); vars["V_DECLARED"] != "d" || vars["V_OTHER"] != "o" {
+		t.Errorf("permissive + no declaration must deliver both V_DECLARED and V_OTHER (not subset): got %v", vars)
 	}
 	cresp, err := client.GetConnections(ctx, &agentv1.GetConnectionsRequest{})
 	if err != nil {
 		t.Fatalf("GetConnections: %v", err)
 	}
-	if len(cresp.GetConnectionUris()) != 2 {
-		t.Errorf("permissive + no declaration must deliver both connections: got %v", cresp.GetConnectionUris())
+	if conns := cresp.GetConnectionUris(); conns["c_declared"] == "" || conns["c_other"] == "" {
+		t.Errorf("permissive + no declaration must deliver both connections (not subset): got %v", conns)
 	}
 }
 

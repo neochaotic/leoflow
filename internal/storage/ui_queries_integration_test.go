@@ -4,6 +4,7 @@ package storage_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -470,10 +471,27 @@ func TestRecordSecretScopeWarningIntegration(t *testing.T) {
 	if found.ResourceType != "dag" || found.ResourceID != dagID {
 		t.Errorf("resource = %s/%s, want dag/%s", found.ResourceType, found.ResourceID, dagID)
 	}
-	for _, want := range []string{`"kind":"connections"`, `"declared":1`, `"total":3`, `"run_id":"run-1"`, `"task_id":"t"`} {
-		if !strings.Contains(found.Extra, want) {
-			t.Errorf("metadata %q missing %q", found.Extra, want)
-		}
+	// Parse the metadata JSON and compare fields — jsonb normalizes spacing, so a
+	// substring match on `"kind":"connections"` is brittle (the stored form is
+	// `"kind": "connections"`). Numbers decode to float64.
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(found.Extra), &meta); err != nil {
+		t.Fatalf("metadata is not valid JSON: %v (%q)", err, found.Extra)
+	}
+	if meta["kind"] != "connections" {
+		t.Errorf("kind = %v, want connections", meta["kind"])
+	}
+	if meta["run_id"] != "run-1" {
+		t.Errorf("run_id = %v, want run-1", meta["run_id"])
+	}
+	if meta["task_id"] != "t" {
+		t.Errorf("task_id = %v, want t", meta["task_id"])
+	}
+	if meta["declared"] != float64(1) {
+		t.Errorf("declared = %v, want 1", meta["declared"])
+	}
+	if meta["total"] != float64(3) {
+		t.Errorf("total = %v, want 3", meta["total"])
 	}
 }
 

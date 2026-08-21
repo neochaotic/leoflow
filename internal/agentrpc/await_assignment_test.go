@@ -244,6 +244,106 @@ func TestAckRefusedReclaims(t *testing.T) {
 	}
 }
 
+// ─── (f2) lease expiry returns the worker to the free set (H4) ──────────────
+
+// TestLeaseExpiryReturnsWorkerToFree: a missed ack is a transient slow-start,
+// not a wedge, so onLeaseExpire must return the worker to the free set rather
+// than strand it holding a pool slot forever (ADR 0058 N1d-c, H4). Proven
+// behaviourally: after the lease expires, a fresh Assign for the same
+// dag_version hands the worker out again.
+func TestLeaseExpiryReturnsWorkerToFree(t *testing.T) {
+	reclaims := make(chan ReclaimEvent, 4)
+	reg := NewWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
+	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return 5 * time.Millisecond }
+
+	send := make(chan *agentv1.WorkAssignment, 2)
+	reg.Register("w1", "v1", "pod-1", send)
+	if !reg.Assign("v1", &agentv1.WorkAssignment{AssignmentId: "as-1", DagVersionId: "v1"}) {
+		t.Fatal("first Assign should succeed")
+	}
+	<-send
+
+	// Wait for the reclaim so the lease has certainly expired and the worker
+	// has been returned to free under the lock.
+	select {
+	case ev := <-reclaims:
+		if ev.Reason != ReclaimLeaseExpired {
+			t.Fatalf("reclaim reason = %v, want ReclaimLeaseExpired", ev.Reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected a reclaim on lease expiry")
+	}
+	if reg.busy("w1") {
+		t.Fatal("a worker that never acked must not be busy")
+	}
+
+	// The worker is reusable: a subsequent Assign for the same dag_version hands
+	// it out again (it would return false if the worker were stranded).
+	awaitEventually(t, func() bool {
+		return reg.Assign("v1", &agentv1.WorkAssignment{AssignmentId: "as-2", DagVersionId: "v1"})
+	})
+	select {
+	case got := <-send:
+		if got.GetAssignmentId() != "as-2" {
+			t.Fatalf("re-Assigned assignment = %q, want as-2", got.GetAssignmentId())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected the re-Assigned assignment on the worker's channel")
+	}
+}
+
+// ─── (f3) reclaim events carry the attempt identity ─────────────────────────
+
+// TestReclaimEventCarriesAttemptIdentity: every emit site populates the
+// reclaimed attempt's (run, task, try) from the leaseState, so the observer can
+// re-place the exact attempt (ADR 0058 N1d-c). Proven on the lease-expiry site.
+func TestReclaimEventCarriesAttemptIdentity(t *testing.T) {
+	reclaims := make(chan ReclaimEvent, 4)
+	reg := NewWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
+	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return 5 * time.Millisecond }
+
+	send := make(chan *agentv1.WorkAssignment, 1)
+	reg.Register("w1", "v1", "pod-1", send)
+	reg.Assign("v1", &agentv1.WorkAssignment{
+		AssignmentId: "as-1", DagVersionId: "v1", DagRunId: "run-7", TaskId: "extract", TryNumber: 4,
+	})
+	<-send
+
+	select {
+	case ev := <-reclaims:
+		if ev.RunID != "run-7" || ev.TaskID != "extract" || ev.TryNumber != 4 {
+			t.Fatalf("reclaim identity = %s/%s/%d, want run-7/extract/4", ev.RunID, ev.TaskID, ev.TryNumber)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected a reclaim carrying the attempt identity")
+	}
+}
+
+// TestReclaimRefusedCarriesAttemptIdentity: the refused-ack emit site also
+// carries the attempt identity.
+func TestReclaimRefusedCarriesAttemptIdentity(t *testing.T) {
+	reclaims := make(chan ReclaimEvent, 4)
+	reg := NewWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
+	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour }
+
+	send := make(chan *agentv1.WorkAssignment, 1)
+	reg.Register("w1", "v1", "pod-1", send)
+	reg.Assign("v1", &agentv1.WorkAssignment{
+		AssignmentId: "as-1", DagVersionId: "v1", DagRunId: "run-7", TaskId: "load", TryNumber: 2,
+	})
+	<-send
+	reg.Ack("as-1", false)
+
+	select {
+	case ev := <-reclaims:
+		if ev.Reason != ReclaimRefused || ev.RunID != "run-7" || ev.TaskID != "load" || ev.TryNumber != 2 {
+			t.Fatalf("refused reclaim = %v %s/%s/%d, want Refused run-7/load/2", ev.Reason, ev.RunID, ev.TaskID, ev.TryNumber)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected a refused reclaim carrying the attempt identity")
+	}
+}
+
 // ─── (h) stream close => deregistered ───────────────────────────────────────
 
 func TestAwaitAssignmentDeregistersOnStreamClose(t *testing.T) {

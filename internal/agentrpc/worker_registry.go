@@ -23,12 +23,18 @@ const (
 )
 
 // ReclaimEvent is emitted when a handed-out assignment must be re-placed. The
-// future placement layer (N1b1-place) consumes it to re-dispatch the attempt on
-// the infra budget. It deliberately carries no attempt_token.
+// placement layer consumes it to re-dispatch the attempt on the infra budget. It
+// carries the attempt identity (RunID, TaskID, TryNumber) — populated from the
+// leaseState at every emit site — so the observer can re-place the exact attempt
+// (ADR 0058 N1d-c, H2) without re-deriving it. It deliberately carries no
+// attempt_token.
 type ReclaimEvent struct {
 	AssignmentID string
 	DagVersionID string
 	Reason       ReclaimReason
+	RunID        string
+	TaskID       string
+	TryNumber    int
 }
 
 // WarmBinding is the durable binding an ack (started=true) establishes: the warm
@@ -146,7 +152,14 @@ func (r *WorkerRegistry) Deregister(w *registeredWorker) {
 		if ls.worker == w {
 			ls.timer.Stop()
 			delete(r.leases, aid)
-			reclaims = append(reclaims, ReclaimEvent{AssignmentID: aid, DagVersionID: ls.dagVersion, Reason: ReclaimWorkerGone})
+			reclaims = append(reclaims, ReclaimEvent{
+				AssignmentID: aid,
+				DagVersionID: ls.dagVersion,
+				Reason:       ReclaimWorkerGone,
+				RunID:        ls.runID,
+				TaskID:       ls.taskID,
+				TryNumber:    ls.tryNumber,
+			})
 		}
 	}
 	r.mu.Unlock()
@@ -217,9 +230,16 @@ func (r *WorkerRegistry) Ack(assignmentID string, started bool) (*WarmBinding, b
 		r.mu.Unlock()
 		return binding, true
 	}
-	dagVersion := ls.dagVersion
+	ev := ReclaimEvent{
+		AssignmentID: assignmentID,
+		DagVersionID: ls.dagVersion,
+		Reason:       ReclaimRefused,
+		RunID:        ls.runID,
+		TaskID:       ls.taskID,
+		TryNumber:    ls.tryNumber,
+	}
 	r.mu.Unlock()
-	r.emitReclaim(ReclaimEvent{AssignmentID: assignmentID, DagVersionID: dagVersion, Reason: ReclaimRefused})
+	r.emitReclaim(ev)
 	return nil, false
 }
 
@@ -238,6 +258,14 @@ func (r *WorkerRegistry) MarkFree(identity string) {
 
 // onLeaseExpire reclaims an assignment whose lease elapsed with no ack. If the
 // lease was already settled (acked or the worker deregistered), it is a no-op.
+//
+// H4 (ADR 0058 N1d-c): a missed ack is usually a transient slow-start, not a
+// wedge, so the worker is returned to the free set rather than stranded holding
+// a pool slot forever — but only if the registry still points at exactly this
+// entry (a reconnect under the same identity installs a fresh entry we must not
+// disturb) and it is not busy serving another acked attempt. A genuine wedge is
+// bounded later by the D9 lifetime/attempt caps (out of scope here). Done under
+// the lock, consistent with the other free-set mutations.
 func (r *WorkerRegistry) onLeaseExpire(assignmentID string) {
 	r.mu.Lock()
 	ls, ok := r.leases[assignmentID]
@@ -246,9 +274,19 @@ func (r *WorkerRegistry) onLeaseExpire(assignmentID string) {
 		return
 	}
 	delete(r.leases, assignmentID)
-	dagVersion := ls.dagVersion
+	if w := ls.worker; r.workers[w.identity] == w && !w.busy {
+		r.addFreeLocked(w)
+	}
+	ev := ReclaimEvent{
+		AssignmentID: assignmentID,
+		DagVersionID: ls.dagVersion,
+		Reason:       ReclaimLeaseExpired,
+		RunID:        ls.runID,
+		TaskID:       ls.taskID,
+		TryNumber:    ls.tryNumber,
+	}
 	r.mu.Unlock()
-	r.emitReclaim(ReclaimEvent{AssignmentID: assignmentID, DagVersionID: dagVersion, Reason: ReclaimLeaseExpired})
+	r.emitReclaim(ev)
 }
 
 // emitReclaim delivers a reclaim event to the observer, always OUTSIDE the lock

@@ -390,6 +390,21 @@ type Querier interface {
 	// trading a rare silent corruption for a frequent one. The settled states
 	// (success/failed/skipped/upstream_failed) are what this guard is for.
 	ReportTaskResult(ctx context.Context, arg ReportTaskResultParams) (int64, error)
+	// Re-place a reclaimed warm assignment (ADR 0058 N1d-c, H2): a warm worker was
+	// handed this attempt but demonstrably will NOT run it (its stream ended holding
+	// an unacked lease, or it acked started=false), so the attempt sits `queued`
+	// having never run. Move it back to `scheduled` so the planner re-admits it and
+	// re-dispatches (the planner plans scheduled->queued; it never re-plans a TI
+	// that is already `queued`, which is why a no-op reclaim left it stuck until the
+	// 3-minute dispatch-lost reaper).
+	//
+	// Guarded to state='queued' — bounded by (dag_run_id, task_id, try_number) to the
+	// exact attempt the assignment named — so it never disturbs a running or settled
+	// TI: zero rows is the guard working, a benign no-op, never an error. It does NOT
+	// bump try_number or infra_attempts: the attempt never ran, this is a re-offer of
+	// the SAME attempt, and the existing dispatch_attempts/backoff on the re-dispatch
+	// bounds a reclaim loop.
+	RequeueForRedispatch(ctx context.Context, arg RequeueForRedispatchParams) (int64, error)
 	// A reschedule-mode sensor (mode='reschedule') poked not-ready: park the active TI
 	// in up_for_reschedule with its next-poke time ($3) so the scheduler re-dispatches
 	// it once reschedule_at passes (#380), without consuming retry budget. Guarded to

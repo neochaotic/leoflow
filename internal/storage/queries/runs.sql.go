@@ -1623,6 +1623,40 @@ func (q *Queries) ReportTaskResult(ctx context.Context, arg ReportTaskResultPara
 	return result.RowsAffected(), nil
 }
 
+const requeueForRedispatch = `-- name: RequeueForRedispatch :execrows
+UPDATE task_instances
+SET state = 'scheduled'
+WHERE dag_run_id = $1 AND task_id = $2 AND try_number = $3 AND state = 'queued'
+`
+
+type RequeueForRedispatchParams struct {
+	DagRunID  pgtype.UUID `json:"dag_run_id"`
+	TaskID    string      `json:"task_id"`
+	TryNumber int32       `json:"try_number"`
+}
+
+// Re-place a reclaimed warm assignment (ADR 0058 N1d-c, H2): a warm worker was
+// handed this attempt but demonstrably will NOT run it (its stream ended holding
+// an unacked lease, or it acked started=false), so the attempt sits `queued`
+// having never run. Move it back to `scheduled` so the planner re-admits it and
+// re-dispatches (the planner plans scheduled->queued; it never re-plans a TI
+// that is already `queued`, which is why a no-op reclaim left it stuck until the
+// 3-minute dispatch-lost reaper).
+//
+// Guarded to state='queued' — bounded by (dag_run_id, task_id, try_number) to the
+// exact attempt the assignment named — so it never disturbs a running or settled
+// TI: zero rows is the guard working, a benign no-op, never an error. It does NOT
+// bump try_number or infra_attempts: the attempt never ran, this is a re-offer of
+// the SAME attempt, and the existing dispatch_attempts/backoff on the re-dispatch
+// bounds a reclaim loop.
+func (q *Queries) RequeueForRedispatch(ctx context.Context, arg RequeueForRedispatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueForRedispatch, arg.DagRunID, arg.TaskID, arg.TryNumber)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const rescheduleTaskInstance = `-- name: RescheduleTaskInstance :exec
 UPDATE task_instances
 SET state = 'up_for_reschedule'::task_state,

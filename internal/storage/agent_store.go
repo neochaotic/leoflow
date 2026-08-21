@@ -320,6 +320,29 @@ func (s *ExecutionStore) RescheduleTask(ctx context.Context, taskInstanceID stri
 	})
 }
 
+// RequeueForRedispatch re-places a reclaimed warm assignment (ADR 0058 N1d-c,
+// H2): an attempt that a warm worker was handed but demonstrably will not run
+// (its stream ended holding an unacked lease, or it acked started=false) sits
+// `queued` having never run. This moves it back to `scheduled` so the planner
+// re-admits and re-dispatches it, rather than leaving it stuck until the
+// 3-minute dispatch-lost reaper. Guarded to state='queued' and bounded to the
+// exact attempt (runID, taskID, tryNumber): zero rows is the guard working (the
+// TI is running or settled, or the attempt moved on), a benign no-op, not an
+// error. It bumps neither try_number nor infra_attempts — the attempt never ran,
+// this is a re-offer of the same attempt.
+func (s *ExecutionStore) RequeueForRedispatch(ctx context.Context, runID, taskID string, tryNumber int) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	_, err = s.q.RequeueForRedispatch(ctx, queries.RequeueForRedispatchParams{
+		DagRunID:  rid,
+		TaskID:    taskID,
+		TryNumber: toInt32(tryNumber),
+	})
+	return err
+}
+
 // ResolveTask returns the dispatcher's execution context for a run's task.
 func (s *ExecutionStore) ResolveTask(ctx context.Context, runID, taskID string) (dispatch.Resolved, error) {
 	task, spec, ver, _, err := s.resolve(ctx, runID, taskID)

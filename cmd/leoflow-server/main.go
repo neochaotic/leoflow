@@ -335,6 +335,49 @@ func loginRateLimit(cfg *config.ServerConfig) int {
 	return 5
 }
 
+// redispatchStore is the seam the warm reclaim observer uses to re-place an
+// attempt (ADR 0058 N1d-c, H2). *storage.ExecutionStore satisfies it; a fake
+// records the calls in tests.
+type redispatchStore interface {
+	RequeueForRedispatch(ctx context.Context, runID, taskID string, tryNumber int) error
+}
+
+// reclaimShouldRequeue reports whether a reclaimed warm assignment may be
+// immediately re-placed for fast recovery (ADR 0058 N1d-c, H2). ONLY the reasons
+// where the worker demonstrably will NOT run the attempt qualify, so re-placing
+// cannot double-run:
+//   - ReclaimWorkerGone: the worker's stream ended holding an unacked lease; a
+//     disconnected worker can never run it.
+//   - ReclaimRefused: the worker acked started=false — it explicitly declined.
+//
+// ReclaimLeaseExpired is deliberately NOT re-placed: a lease-expired worker may
+// be alive-but-slow and, by agent order, will still ack-then-run the attempt, so
+// fast-re-placing it could double-run. That case is recovered double-run-free by
+// the 3-minute dispatch-lost reaper + the H3 warm-defer already merged.
+func reclaimShouldRequeue(reason agentrpc.ReclaimReason) bool {
+	switch reason {
+	case agentrpc.ReclaimWorkerGone, agentrpc.ReclaimRefused:
+		return true
+	default: // ReclaimLeaseExpired and any future reason: recover via the reaper.
+		return false
+	}
+}
+
+// handleReclaim is the warm reclaim observer wired into the registry (ADR 0058
+// N1d-c, H2). It logs every reclaim, then re-places the attempt only for the
+// double-run-safe reasons (reclaimShouldRequeue). Re-placement is best-effort:
+// an error is logged, never fatal, so a transient DB blip cannot crash the
+// registry's emit path.
+func handleReclaim(ctx context.Context, store redispatchStore, logger *slog.Logger, ev agentrpc.ReclaimEvent) {
+	logger.Debug("warm worker assignment reclaimed", "assignment", ev.AssignmentID, "dag_version", ev.DagVersionID, "reason", ev.Reason)
+	if !reclaimShouldRequeue(ev.Reason) {
+		return
+	}
+	if err := store.RequeueForRedispatch(ctx, ev.RunID, ev.TaskID, ev.TryNumber); err != nil {
+		logger.Error("warm reclaim re-placement failed", "run", ev.RunID, "task", ev.TaskID, "try", ev.TryNumber, "err", err)
+	}
+}
+
 // startSchedulerSide starts the scheduler-role components (ADR 0049): the agent
 // gRPC endpoint, the XCom/log janitors, and — when cfg.Scheduler.Enabled — the
 // scheduler loop + dispatch pool. It returns the scheduler's health handle (nil
@@ -352,12 +395,13 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	// register/ack on it via SetWarmPools) and the dispatcher's placer (Assign).
 	// nil when warm pools are off => the handler stays inert (FailedPrecondition)
 	// and the dispatcher's placer stays nil, so every path is byte-for-byte
-	// today's dedicated pod-per-task. The reclaim-observer debug log is kept; a
-	// reclaimed attempt is re-placed by the buffered dispatch path on the next tick.
+	// today's dedicated pod-per-task; nothing reclaims and RequeueForRedispatch is
+	// never called. The reclaim observer (ADR 0058 N1d-c, H2) re-places reclaimed
+	// attempts through execStore for the double-run-safe reasons only.
 	var warmReg *agentrpc.WorkerRegistry
 	if cfg.Execution.WarmPoolsEnabled {
 		warmReg = agentrpc.NewWorkerRegistry(func(ev agentrpc.ReclaimEvent) {
-			logger.Debug("warm worker assignment reclaimed", "assignment", ev.AssignmentID, "dag_version", ev.DagVersionID, "reason", ev.Reason)
+			handleReclaim(ctx, execStore, logger, ev)
 		})
 		logger.Warn("warm worker pools enabled (ADR 0058 N1b1-place); admitted tasks place on a free warm worker of their dag_version, else dispatch dedicated")
 	}

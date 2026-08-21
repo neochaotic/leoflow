@@ -97,12 +97,34 @@ func testIdentity() auth.AgentIdentity {
 	}
 }
 
-// ctxWithToken builds an incoming context carrying a freshly minted agent token.
+// ctxWithToken builds an incoming context carrying a freshly minted (task-scoped)
+// agent token — the default per-attempt credential.
 func ctxWithToken(t *testing.T, a *auth.JWTAuthenticator) context.Context {
 	t.Helper()
 	token, err := a.IssueAgentToken(testIdentity(), time.Hour)
 	if err != nil {
 		t.Fatalf("IssueAgentToken: %v", err)
+	}
+	md := metadata.Pairs("authorization", "Bearer "+token)
+	return metadata.NewIncomingContext(context.Background(), md)
+}
+
+// warmTokenIdentity is the warm-worker credential the assignment stream authorizes
+// (ADR 0058 D2): a control-channel-only token whose WorkerID is the registry key.
+// It reuses "ti-1" as the worker id so the warm-pool tests' registry assertions
+// (reg.registered("ti-1")) read the authenticated identity.
+func warmTokenIdentity() auth.AgentIdentity {
+	return auth.AgentIdentity{Scope: auth.ScopeWarmWorker, WorkerID: "ti-1", DagVersionID: "v1", TenantID: "acme"}
+}
+
+// ctxWithWarmToken builds an incoming context carrying a freshly minted
+// WARM-WORKER-scoped token — the bootstrap credential that authorizes only
+// Register + AwaitAssignment.
+func ctxWithWarmToken(t *testing.T, a *auth.JWTAuthenticator) context.Context {
+	t.Helper()
+	token, err := a.IssueAgentToken(warmTokenIdentity(), time.Hour)
+	if err != nil {
+		t.Fatalf("IssueAgentToken (warm): %v", err)
 	}
 	md := metadata.Pairs("authorization", "Bearer "+token)
 	return metadata.NewIncomingContext(context.Background(), md)

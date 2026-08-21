@@ -36,13 +36,19 @@ type TokenReviewer interface {
 	ReviewProjectedToken(ctx context.Context, token string) (ReviewedPod, error)
 }
 
-// PodTaskResolver maps a reviewed pod to the task-instance identity it runs, so
-// the minted JWT is scoped to the attempt (the identity Fix #1 filters on and
-// Fix #2 liveness-checks). It is an interface so it is mocked in unit tests. The
-// concrete resolver reads the identity the control plane itself stamped on the
-// pod object at dispatch, keyed on the apiserver-validated pod reference.
+// PodTaskResolver maps a reviewed pod to the agent identity it runs, so the
+// minted JWT is scoped correctly. It is an interface so it is mocked in unit
+// tests; the concrete resolver reads the pod the apiserver validated.
+//
+// ResolveAgent is the branch point the exchange uses (ADR 0058 D1): a pod carrying
+// the warm-worker LABEL resolves to a warm-worker identity (Scope ==
+// ScopeWarmWorker, naming its dag_version pool + worker id, no task claims); any
+// other pod resolves to the task-instance identity the control plane stamped on it
+// at dispatch — exactly what ResolveTaskInstance returns. ResolveTaskInstance is
+// kept for the pure task path and callers that only ever expect a task instance.
 type PodTaskResolver interface {
 	ResolveTaskInstance(ctx context.Context, pod ReviewedPod) (auth.AgentIdentity, error)
+	ResolveAgent(ctx context.Context, pod ReviewedPod) (auth.AgentIdentity, error)
 }
 
 // AgentTokenMinter issues a task-scoped agent JWT for a resolved identity. It is
@@ -97,21 +103,32 @@ func (s *Server) ExchangeToken(ctx context.Context, _ *agentv1.ExchangeTokenRequ
 		slog.Warn("rejecting agent token exchange: projected token review failed", "error", err)
 		return nil, status.Error(codes.Unauthenticated, "projected token is not valid")
 	}
-	id, err := s.podResolver.ResolveTaskInstance(ctx, pod)
+	// A warm-worker pod (by LABEL, DP1) resolves to a worker-scoped identity that
+	// authorizes ONLY the control channel; any other pod resolves to its task
+	// instance exactly as before. IssueAgentToken mints whichever flavor.
+	id, err := s.podResolver.ResolveAgent(ctx, pod)
 	if err != nil {
-		slog.Warn("agent token exchange: cannot resolve reviewed pod to a task instance",
+		slog.Warn("agent token exchange: cannot resolve reviewed pod to an agent identity",
 			"namespace", pod.Namespace, "pod", pod.PodName, "pod_uid", pod.PodUID, "error", err)
-		return nil, status.Errorf(codes.Internal, "resolving pod to task instance: %v", err)
+		return nil, status.Errorf(codes.Internal, "resolving pod to agent identity: %v", err)
 	}
 	minted, err := s.tokenMinter.IssueAgentToken(id, s.exchangeTTL)
 	if err != nil {
-		slog.Warn("agent token exchange: minting task-scoped token failed",
-			"ti", id.TaskInstanceID, "run", id.RunID, "task", id.TaskID, "try", id.TryNumber, "error", err)
-		return nil, status.Errorf(codes.Internal, "minting task-scoped token: %v", err)
+		slog.Warn("agent token exchange: minting agent token failed",
+			"scope", id.Scope, "ti", id.TaskInstanceID, "worker", id.WorkerID, "error", err)
+		return nil, status.Errorf(codes.Internal, "minting agent token: %v", err)
 	}
-	slog.Info("exchanged projected token for a task-scoped agent JWT",
-		"ti", id.TaskInstanceID, "tenant", id.TenantID, "dag", id.DagID,
-		"run", id.RunID, "task", id.TaskID, "try", id.TryNumber, "namespace", pod.Namespace, "pod", pod.PodName)
+	if id.Scope == auth.ScopeWarmWorker {
+		// Log the warm case distinctly (worker/dag_version, never the token): the
+		// credential authorizes only Register + AwaitAssignment, no secrets or task.
+		slog.Info("exchanged projected token for a WORKER-scoped agent JWT (control channel only: Register + AwaitAssignment)",
+			"worker", id.WorkerID, "dag_version", id.DagVersionID, "tenant", id.TenantID,
+			"namespace", pod.Namespace, "pod", pod.PodName)
+	} else {
+		slog.Info("exchanged projected token for a task-scoped agent JWT",
+			"ti", id.TaskInstanceID, "tenant", id.TenantID, "dag", id.DagID,
+			"run", id.RunID, "task", id.TaskID, "try", id.TryNumber, "namespace", pod.Namespace, "pod", pod.PodName)
+	}
 	return &agentv1.ExchangeTokenResponse{AgentToken: minted}, nil
 }
 

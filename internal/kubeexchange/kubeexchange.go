@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	authv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -124,33 +125,83 @@ func NewPodResolver(client kubernetes.Interface, namespace string) *PodResolver 
 	return &PodResolver{client: client, namespace: namespace}
 }
 
-// ResolveTaskInstance fetches the reviewed pod and reads the identity annotation
-// the executor wrote (the shared executor.AgentIdentityAnnotation contract), so
-// the minted JWT is scoped to the true attempt rather than a lossy label read. A
-// UID mismatch (a name reused by a newer pod) or a missing annotation fails
-// closed.
+// ResolveAgent fetches the reviewed pod once and resolves it to an agent identity,
+// branching on the warm-worker LABEL (ADR 0058 D1): a pod carrying
+// executor.WarmWorkerLabel resolves to a WORKER-scoped identity (its dag_version
+// pool + tenant from labels, its worker id from the pod name, no task claims); any
+// other pod resolves to the task instance the executor stamped on it, exactly as
+// ResolveTaskInstance does. A UID mismatch (a name reused by a newer pod) fails
+// closed for both flavors.
+func (r *PodResolver) ResolveAgent(ctx context.Context, pod agentrpc.ReviewedPod) (auth.AgentIdentity, error) {
+	ns, got, err := r.getReviewedPod(ctx, pod)
+	if err != nil {
+		return auth.AgentIdentity{}, err
+	}
+	if got.Labels[executor.WarmWorkerLabel] == executor.WarmWorkerLabelValue {
+		dagVersion := got.Labels[executor.WarmDagVersionLabel]
+		if dagVersion == "" {
+			return auth.AgentIdentity{}, fmt.Errorf("warm pod %s/%s has no %s label", ns, pod.PodName, executor.WarmDagVersionLabel)
+		}
+		workerID := pod.PodName
+		if workerID == "" {
+			workerID = pod.PodUID
+		}
+		return auth.AgentIdentity{
+			Scope:        auth.ScopeWarmWorker,
+			DagVersionID: dagVersion,
+			TenantID:     got.Labels[executor.WarmTenantLabel],
+			WorkerID:     workerID,
+		}, nil
+	}
+	return taskIdentityFromPod(ns, pod.PodName, got)
+}
+
+// ResolveTaskInstance resolves the reviewed pod to the task instance the executor
+// stamped on it (the shared executor.AgentIdentityAnnotation contract), so the
+// minted JWT is scoped to the true attempt rather than a lossy label read. It is
+// the pure task path — a warm pod has no task instance and is an error here; the
+// exchange takes the warm branch via ResolveAgent instead. A UID mismatch or a
+// missing annotation fails closed.
 func (r *PodResolver) ResolveTaskInstance(ctx context.Context, pod agentrpc.ReviewedPod) (auth.AgentIdentity, error) {
+	ns, got, err := r.getReviewedPod(ctx, pod)
+	if err != nil {
+		return auth.AgentIdentity{}, err
+	}
+	return taskIdentityFromPod(ns, pod.PodName, got)
+}
+
+// getReviewedPod fetches the reviewed pod from its namespace (falling back to the
+// resolver's configured task namespace) and guards against a stale pod whose name
+// was reused by a newer UID.
+func (r *PodResolver) getReviewedPod(ctx context.Context, pod agentrpc.ReviewedPod) (string, *corev1.Pod, error) {
 	ns := pod.Namespace
 	if ns == "" {
 		ns = r.namespace
 	}
 	got, err := r.client.CoreV1().Pods(ns).Get(ctx, pod.PodName, metav1.GetOptions{})
 	if err != nil {
-		return auth.AgentIdentity{}, fmt.Errorf("getting pod %s/%s: %w", ns, pod.PodName, err)
+		return ns, nil, fmt.Errorf("getting pod %s/%s: %w", ns, pod.PodName, err)
 	}
 	if pod.PodUID != "" && string(got.UID) != pod.PodUID {
-		return auth.AgentIdentity{}, fmt.Errorf("pod %s/%s uid mismatch: reviewed %q, current %q (stale pod)", ns, pod.PodName, pod.PodUID, got.UID)
+		return ns, nil, fmt.Errorf("pod %s/%s uid mismatch: reviewed %q, current %q (stale pod)", ns, pod.PodName, pod.PodUID, got.UID)
 	}
+	return ns, got, nil
+}
+
+// taskIdentityFromPod reads the executor-stamped identity annotation off a fetched
+// pod into a task-scoped AgentIdentity, failing closed on a missing/empty
+// annotation or a missing task instance id.
+func taskIdentityFromPod(ns, podName string, got *corev1.Pod) (auth.AgentIdentity, error) {
 	raw, ok := got.Annotations[executor.AgentIdentityAnnotation]
 	if !ok || raw == "" {
-		return auth.AgentIdentity{}, fmt.Errorf("pod %s/%s has no %s annotation", ns, pod.PodName, executor.AgentIdentityAnnotation)
+		return auth.AgentIdentity{}, fmt.Errorf("pod %s/%s has no %s annotation", ns, podName, executor.AgentIdentityAnnotation)
 	}
 	id, err := executor.ParseAgentIdentity(raw)
 	if err != nil {
 		return auth.AgentIdentity{}, err
 	}
 	if id.TaskInstanceID == "" {
-		return auth.AgentIdentity{}, fmt.Errorf("pod %s/%s identity annotation carries no task instance id", ns, pod.PodName)
+		return auth.AgentIdentity{}, fmt.Errorf("pod %s/%s identity annotation carries no task instance id", ns, podName)
 	}
 	return auth.AgentIdentity{
 		TaskInstanceID: id.TaskInstanceID,

@@ -124,7 +124,7 @@ func run() int {
 	// from the same path as single-shot. Anything else falls through to the
 	// byte-identical single-shot path below.
 	if os.Getenv("LEOFLOW_WARM_WORKER") == "1" {
-		return runWarm(ctx, client, addr, token, allowInsecure, caFile)
+		return runWarm(ctx, client, tokens, exchange, addr, token, allowInsecure, caFile)
 	}
 
 	// Exchange the projected bootstrap token for the task-scoped JWT before any
@@ -198,13 +198,19 @@ func run() int {
 }
 
 // runWarm serves the warm-worker loop (ADR 0058). streamClient carries the
-// worker's bootstrap identity (Register + AwaitAssignment). A SECOND dial gives
-// the WorkClient its own connection bound to an attempt-scoped TokenSource, which
-// the loop swaps to each assignment's attempt_token — so the per-attempt work RPCs
-// authenticate as the attempt while the stream keeps the bootstrap identity it was
-// opened with. The work dial is seeded with the bootstrap token only to satisfy
-// Dial's non-empty check; no work RPC fires before the first attempt_token swap.
-func runWarm(ctx context.Context, streamClient agentv1.AgentServiceClient, addr, seedToken string, allowInsecure bool, caFile string) int {
+// worker's bootstrap identity (Register + AwaitAssignment). streamTokens is that
+// stream's bearer source: under the exchange transport it seeds the projected
+// ServiceAccount token, which the warm loop swaps for a WORKER-scoped JWT (before
+// Register, on every connect) so the control channel authenticates as a warm
+// worker that authorizes ONLY Register + AwaitAssignment (never secrets/task).
+//
+// A SECOND dial gives the WorkClient its own connection bound to an attempt-scoped
+// TokenSource, which the loop swaps to each assignment's attempt_token — so the
+// per-attempt work RPCs authenticate as the attempt while the stream keeps the
+// worker identity it was opened with. The work dial is seeded with the bootstrap
+// token only to satisfy Dial's non-empty check; no work RPC fires before the first
+// attempt_token swap, and the per-attempt flow is unchanged by the exchange.
+func runWarm(ctx context.Context, streamClient agentv1.AgentServiceClient, streamTokens *agent.TokenSource, exchange bool, addr, seedToken string, allowInsecure bool, caFile string) int {
 	dagVersionID := os.Getenv("LEOFLOW_DAG_VERSION_ID")
 	if dagVersionID == "" {
 		slog.Error("warm worker requires LEOFLOW_DAG_VERSION_ID")
@@ -240,6 +246,10 @@ func runWarm(ctx context.Context, streamClient agentv1.AgentServiceClient, addr,
 		StreamClient:  streamClient,
 		WorkClient:    workClient,
 		AttemptTokens: attemptTokens,
+		// Under the exchange transport the stream bearer starts as the projected SA
+		// token; ExchangeBootstrap swaps a worker-scoped JWT into it before Register.
+		StreamTokens:      streamTokens,
+		ExchangeBootstrap: exchange,
 		// A fresh per-attempt log sink on the work client, so each attempt's logs
 		// ship under its own attempt_token.
 		NewSink: func(ctx context.Context) (agent.LogSink, error) {
@@ -258,15 +268,28 @@ func runWarm(ctx context.Context, streamClient agentv1.AgentServiceClient, addr,
 		HeartbeatInterval:  agent.DefaultHeartbeatInterval,
 		// Warm-pool Hole B: on a not-leader rejection, re-dial the STREAM connection
 		// so a fresh Service backend can reach the scheduler leader (a single gRPC
-		// connection sticks to one backend). Re-dials with the bootstrap token, like
-		// the initial stream dial; the work connection is untouched. The returned conn
-		// is closed by WarmRunner on the next reconnect / exit.
-		Redial: func() (agentv1.AgentServiceClient, io.Closer, error) {
-			c, conn, _, derr := agent.Dial(addr, seedToken, allowInsecure, caFile)
-			if derr != nil {
-				return nil, nil, derr
+		// connection sticks to one backend). The work connection is untouched. The
+		// returned conn is closed by WarmRunner on the next reconnect / exit, and the
+		// returned TokenSource becomes the new stream bearer — under the exchange
+		// transport WarmRunner re-runs the exchange into it before Register, so a
+		// reconnect gets a FRESH worker JWT (the initial one may have lapsed). The
+		// projected token is re-read from disk so a kubelet-rotated token is honored.
+		Redial: func() (agentv1.AgentServiceClient, *agent.TokenSource, io.Closer, error) {
+			seed := seedToken
+			if exchange {
+				if path := os.Getenv("LEOFLOW_AGENT_TOKEN_PATH"); path != "" {
+					if fresh, rerr := agent.ReadTokenFile(path); rerr == nil {
+						seed = fresh
+					} else {
+						slog.Warn("re-reading projected token on reconnect; falling back to the startup token", "error", rerr)
+					}
+				}
 			}
-			return c, conn, nil
+			c, conn, newTokens, derr := agent.Dial(addr, seed, allowInsecure, caFile)
+			if derr != nil {
+				return nil, nil, nil, derr
+			}
+			return c, newTokens, conn, nil
 		},
 		// Self-lifecycle caps, injected by BuildWarmPod from the operator's
 		// execution.* config (ADR 0058 N1d-d). Zero (unset/invalid) disables that

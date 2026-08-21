@@ -13,7 +13,19 @@ import (
 // user-facing API (see audienceUser).
 const audienceAgent = "leoflow-agent"
 
-// AgentIdentity is the task instance a verified agent token represents.
+// ScopeWarmWorker marks an agent token that authorizes ONLY the warm-worker
+// control channel — Register + AwaitAssignment — and NOTHING that resolves
+// secrets or a task (ADR 0058 D2). It is the value of AgentIdentity.Scope for a
+// warm worker's bootstrap credential; the empty scope is the default task
+// credential, which resolves secrets exactly as before. The control plane gates
+// every secret/task RPC on this value (see agentrpc.requireAttemptToken).
+const ScopeWarmWorker = "warm-worker"
+
+// AgentIdentity is the identity a verified agent token represents. By default
+// (Scope == "") it is a single task instance — the task-scoped credential that
+// resolves secrets. When Scope == ScopeWarmWorker it is instead a warm worker's
+// bootstrap credential, which names its dag_version pool (DagVersionID) and its
+// worker id (WorkerID, the token Subject) and carries NO task claims.
 type AgentIdentity struct {
 	TaskInstanceID string
 	TenantID       string
@@ -21,6 +33,17 @@ type AgentIdentity struct {
 	RunID          string
 	TaskID         string
 	TryNumber      int
+	// Scope is "" for a task credential (the default, byte-compatible with every
+	// token minted before this field existed) or ScopeWarmWorker for a warm
+	// worker's control-channel-only bootstrap credential.
+	Scope string
+	// DagVersionID names the warm pool a warm-worker credential serves. Empty on a
+	// task credential.
+	DagVersionID string
+	// WorkerID is the warm worker's stable identifier (its pod name), minted as the
+	// token Subject for a warm-worker credential. Empty on a task credential (whose
+	// Subject is TaskInstanceID instead).
+	WorkerID string
 }
 
 // agentClaims is the JWT payload of an agent identity token.
@@ -30,6 +53,12 @@ type agentClaims struct {
 	RunID     string `json:"run_id"`
 	TaskID    string `json:"task_id"`
 	TryNumber int    `json:"try_number"`
+	// Scope and DagVersionID describe a warm-worker credential (ADR 0058 D2). Both
+	// are omitempty so a task credential's payload is byte-identical to before these
+	// fields existed — an existing task token still verifies unchanged, and a freshly
+	// minted task token carries neither claim.
+	Scope        string `json:"scope,omitempty"`
+	DagVersionID string `json:"dag_version_id,omitempty"`
 	// OriginIssuedAt records when this attempt's credential was FIRST minted (at
 	// dispatch). Unlike iat, it is preserved verbatim across heartbeat renewals so
 	// the control plane can bound an attempt's total credential lifetime no matter
@@ -53,15 +82,25 @@ func (a *JWTAuthenticator) IssueAgentToken(id AgentIdentity, ttl time.Duration) 
 // renewal passes the incoming token's origin so it never advances.
 func (a *JWTAuthenticator) mintAgentToken(id AgentIdentity, ttl time.Duration, origin time.Time) (string, error) {
 	now := a.clock()
+	// The Subject is the worker id for a warm-worker credential and the task
+	// instance id for a task credential. A warm-worker identity carries no task
+	// claims (RunID/TaskID/TryNumber empty), so those fields serialize empty —
+	// the worker credential names only its pool (dag_version_id) and its scope.
+	subject := id.TaskInstanceID
+	if id.Scope == ScopeWarmWorker {
+		subject = id.WorkerID
+	}
 	c := agentClaims{
 		TenantID:       id.TenantID,
 		DagID:          id.DagID,
 		RunID:          id.RunID,
 		TaskID:         id.TaskID,
 		TryNumber:      id.TryNumber,
+		Scope:          id.Scope,
+		DagVersionID:   id.DagVersionID,
 		OriginIssuedAt: jwt.NewNumericDate(origin),
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   id.TaskInstanceID,
+			Subject:   subject,
 			Issuer:    tokenIssuer,
 			Audience:  jwt.ClaimStrings{audienceAgent},
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -111,15 +150,7 @@ func (a *JWTAuthenticator) RenewAgentToken(token string, ttl, maxLifetime time.D
 	if maxLifetime > 0 && !origin.IsZero() && a.clock().Sub(origin) > maxLifetime {
 		return "", false, nil // past the ceiling: let the credential lapse
 	}
-	id := AgentIdentity{
-		TaskInstanceID: c.Subject,
-		TenantID:       c.TenantID,
-		DagID:          c.DagID,
-		RunID:          c.RunID,
-		TaskID:         c.TaskID,
-		TryNumber:      c.TryNumber,
-	}
-	renewed, err = a.mintAgentToken(id, ttl, origin)
+	renewed, err = a.mintAgentToken(identityFromClaims(c), ttl, origin)
 	if err != nil {
 		return "", false, err
 	}
@@ -136,12 +167,29 @@ func (a *JWTAuthenticator) AuthenticateAgent(token string) (*AgentIdentity, erro
 	if err != nil || !parsed.Valid {
 		return nil, errors.Join(ErrInvalidToken, err)
 	}
-	return &AgentIdentity{
-		TaskInstanceID: c.Subject,
-		TenantID:       c.TenantID,
-		DagID:          c.DagID,
-		RunID:          c.RunID,
-		TaskID:         c.TaskID,
-		TryNumber:      c.TryNumber,
-	}, nil
+	id := identityFromClaims(c)
+	return &id, nil
+}
+
+// identityFromClaims reconstructs the AgentIdentity a verified token represents,
+// routing the Subject to WorkerID for a warm-worker credential and to
+// TaskInstanceID for a task credential. It is the single read side shared by
+// AuthenticateAgent and RenewAgentToken so a warm-worker token is never silently
+// downgraded to a task token on re-mint.
+func identityFromClaims(c agentClaims) AgentIdentity {
+	id := AgentIdentity{
+		TenantID:     c.TenantID,
+		DagID:        c.DagID,
+		RunID:        c.RunID,
+		TaskID:       c.TaskID,
+		TryNumber:    c.TryNumber,
+		Scope:        c.Scope,
+		DagVersionID: c.DagVersionID,
+	}
+	if c.Scope == ScopeWarmWorker {
+		id.WorkerID = c.Subject
+	} else {
+		id.TaskInstanceID = c.Subject
+	}
+	return id
 }

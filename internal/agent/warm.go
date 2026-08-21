@@ -42,6 +42,20 @@ type WarmRunner struct {
 	WorkClient    agentv1.AgentServiceClient
 	AttemptTokens *TokenSource
 
+	// StreamTokens is the bootstrap stream's own TokenSource (the source
+	// StreamClient's per-RPC credential reads). Under the exchange transport it is
+	// seeded with the projected ServiceAccount token; the exchange step below swaps
+	// the WORKER-scoped JWT into it before Register, so Register + AwaitAssignment
+	// carry the worker credential. Distinct from AttemptTokens (the WorkClient's
+	// per-attempt source). Unused under the env-var transport.
+	StreamTokens *TokenSource
+
+	// ExchangeBootstrap runs the projected-token → worker-JWT exchange (ADR 0058 D2)
+	// on StreamClient before Register, on the INITIAL connect and on every reconnect,
+	// swapping the minted worker JWT into StreamTokens. It is set under the exchange
+	// transport; false under the env-var default (Register uses the seed token as-is).
+	ExchangeBootstrap bool
+
 	// NewSink opens a fresh per-attempt log sink on the WorkClient, so each
 	// attempt's logs are shipped under its own attempt_token. Nil (or a returned
 	// error) falls back to NoopLogSink — logs are best-effort, never fatal.
@@ -106,11 +120,12 @@ type WarmRunner struct {
 	// reconnect. A FRESH dial is what lets the worker reach the leader: a single gRPC
 	// connection sticks to one Service backend, so retrying the same client would
 	// re-hit the same follower forever — only a new connection re-rotates. It returns
-	// the new stream client and a closer for the connection it opened (closed on the
-	// next reconnect / exit). Nil disables re-dial — the reconnect then retries the
-	// existing StreamClient (tests inject a fake that eventually serves); production
-	// wires a real re-dial via agent.Dial.
-	Redial func() (agentv1.AgentServiceClient, io.Closer, error)
+	// the new stream client, its TokenSource (so an exchange-transport worker
+	// re-exchanges into the fresh connection's bearer), and a closer for the
+	// connection it opened (closed on the next reconnect / exit). Nil disables
+	// re-dial — the reconnect then retries the existing StreamClient (tests inject a
+	// fake that eventually serves); production wires a real re-dial via agent.Dial.
+	Redial func() (agentv1.AgentServiceClient, *TokenSource, io.Closer, error)
 
 	// streamCloser holds the connection the most recent Redial opened, so it can be
 	// closed on the following reconnect (or on exit) rather than leaked.
@@ -188,25 +203,9 @@ func (w *WarmRunner) Run(ctx context.Context, dagVersionID string) error {
 // FailedPrecondition-coded error is the not-leader rejection Run reconnects on. A
 // failed TASK is a normal outcome and never ends the loop.
 func (w *WarmRunner) serve(ctx context.Context, dagVersionID string) error {
-	if _, err := w.StreamClient.Register(ctx, &agentv1.RegisterRequest{
-		AgentVersion: w.Version,
-		Hostname:     w.Hostname,
-	}); err != nil {
-		return fmt.Errorf("registering warm worker: %w", err)
-	}
-
-	stream, err := w.StreamClient.AwaitAssignment(ctx)
+	stream, err := w.connect(ctx, dagVersionID)
 	if err != nil {
-		return fmt.Errorf("opening assignment stream: %w", err)
-	}
-	// The mandatory first WorkerMessage names which pool (dag_version) this worker
-	// serves, so the control plane only dispatches matching assignments to it.
-	if serr := stream.Send(&agentv1.WorkerMessage{
-		Msg: &agentv1.WorkerMessage_Register{
-			Register: &agentv1.WorkerRegister{DagVersionId: dagVersionID, PodName: w.PodName},
-		},
-	}); serr != nil {
-		return fmt.Errorf("sending worker register: %w", serr)
+		return err
 	}
 
 	// D9/D10 accounting: bound the worker by attempts served and wall-clock age.
@@ -258,6 +257,43 @@ func (w *WarmRunner) serve(ctx context.Context, dagVersionID string) error {
 	}
 }
 
+// connect establishes one connection's control channel: it exchanges the bootstrap
+// token for a worker JWT (under the exchange transport), registers the worker, opens
+// the AwaitAssignment stream, and sends the mandatory first WorkerRegister naming the
+// pool. It runs on the initial connect and on every reconnect. A rejected exchange is
+// fatal (the worker has no valid control-channel credential); every error is wrapped
+// so serve()'s caller can tell a not-leader FailedPrecondition apart.
+func (w *WarmRunner) connect(ctx context.Context, dagVersionID string) (agentv1.AgentService_AwaitAssignmentClient, error) {
+	// Exchange the projected bootstrap token for a WORKER-scoped JWT before any RPC
+	// (ADR 0058 D2), swapping it into the stream's bearer so Register + AwaitAssignment
+	// authenticate as the warm worker.
+	if w.ExchangeBootstrap {
+		if err := ExchangeToken(ctx, w.StreamClient, w.StreamTokens); err != nil {
+			return nil, fmt.Errorf("exchanging warm bootstrap token for a worker JWT: %w", err)
+		}
+	}
+	if _, err := w.StreamClient.Register(ctx, &agentv1.RegisterRequest{
+		AgentVersion: w.Version,
+		Hostname:     w.Hostname,
+	}); err != nil {
+		return nil, fmt.Errorf("registering warm worker: %w", err)
+	}
+	stream, err := w.StreamClient.AwaitAssignment(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("opening assignment stream: %w", err)
+	}
+	// The mandatory first WorkerMessage names which pool (dag_version) this worker
+	// serves, so the control plane only dispatches matching assignments to it.
+	if serr := stream.Send(&agentv1.WorkerMessage{
+		Msg: &agentv1.WorkerMessage_Register{
+			Register: &agentv1.WorkerRegister{DagVersionId: dagVersionID, PodName: w.PodName},
+		},
+	}); serr != nil {
+		return nil, fmt.Errorf("sending worker register: %w", serr)
+	}
+	return stream, nil
+}
+
 // backoffSleep waits a jittered exponential backoff before reconnect n (1-based),
 // capped at maxBackoff, returning ctx.Err() if ctx is canceled first (so a SIGTERM
 // during backoff exits cleanly). The doubling loop stops once the cap is reached so
@@ -294,12 +330,17 @@ func (w *WarmRunner) redialStream() error {
 	if w.Redial == nil {
 		return nil
 	}
-	client, closer, err := w.Redial()
+	client, tokens, closer, err := w.Redial()
 	if err != nil {
 		return err
 	}
 	w.closeRedialConn()
 	w.StreamClient = client
+	// Adopt the fresh connection's bearer source so serve()'s exchange (under the
+	// exchange transport) swaps the new worker JWT into the source THIS client reads.
+	if tokens != nil {
+		w.StreamTokens = tokens
+	}
 	w.streamCloser = closer
 	return nil
 }

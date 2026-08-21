@@ -31,17 +31,34 @@ func (r *fakeReviewer) ReviewProjectedToken(_ context.Context, token string) (Re
 	return r.pod, nil
 }
 
-// fakeResolver maps a reviewed pod to the task-instance identity it runs.
+// fakeResolver maps a reviewed pod to an agent identity. warmID (when the pod
+// carries the warm-worker label) lets a test drive the warm branch of ResolveAgent
+// distinctly from the task branch (id).
 type fakeResolver struct {
-	id   auth.AgentIdentity
-	err  error
-	seen ReviewedPod
+	id     auth.AgentIdentity
+	warmID auth.AgentIdentity
+	err    error
+	seen   ReviewedPod
 }
 
 func (r *fakeResolver) ResolveTaskInstance(_ context.Context, pod ReviewedPod) (auth.AgentIdentity, error) {
 	r.seen = pod
 	if r.err != nil {
 		return auth.AgentIdentity{}, r.err
+	}
+	return r.id, nil
+}
+
+// ResolveAgent mirrors the concrete resolver's DP1 branch: a pod flagged warm (its
+// ServiceAccount carries the "warm" marker in this fake) resolves to the
+// warm-worker identity; anything else resolves to the task identity.
+func (r *fakeResolver) ResolveAgent(_ context.Context, pod ReviewedPod) (auth.AgentIdentity, error) {
+	r.seen = pod
+	if r.err != nil {
+		return auth.AgentIdentity{}, r.err
+	}
+	if pod.ServiceAccount == "warm" {
+		return r.warmID, nil
 	}
 	return r.id, nil
 }
@@ -155,5 +172,67 @@ func TestNormalRPCsNeverInvokeTokenReview(t *testing.T) {
 	}
 	if rev.calls != 0 {
 		t.Errorf("TokenReview was called %d times on the steady-state path, want 0", rev.calls)
+	}
+}
+
+// warmReviewedPod is a reviewed pod the fake resolver treats as a warm worker
+// (ServiceAccount == "warm"), so ExchangeToken takes the DP1 warm branch.
+func warmReviewedPod() ReviewedPod {
+	return ReviewedPod{Namespace: "leoflow", PodName: "leoflow-warm-dagver-9-abcd", PodUID: "uid-w", ServiceAccount: "warm"}
+}
+
+func warmWorkerID() auth.AgentIdentity {
+	return auth.AgentIdentity{Scope: auth.ScopeWarmWorker, DagVersionID: "dagver-9", TenantID: "acme", WorkerID: "leoflow-warm-dagver-9-abcd"}
+}
+
+// TestExchangeTokenMintsWorkerScopedJWT: a reviewed pod WITH the warm-worker label
+// is exchanged for a WORKER-scoped agent JWT (scope=warm-worker, dag_version set,
+// NO task claims), verifiable back to the same worker identity.
+func TestExchangeTokenMintsWorkerScopedJWT(t *testing.T) {
+	srv, a := newServer(&fakeStore{})
+	rev := &fakeReviewer{pod: warmReviewedPod()}
+	res := &fakeResolver{id: testIdentity(), warmID: warmWorkerID()}
+	srv.SetTokenExchange(rev, res, a, time.Hour, true)
+
+	resp, err := srv.ExchangeToken(ctxWithBootstrap("projected-sa-token"), &agentv1.ExchangeTokenRequest{})
+	if err != nil {
+		t.Fatalf("ExchangeToken: %v", err)
+	}
+	id, verr := a.AuthenticateAgent(resp.GetAgentToken())
+	if verr != nil {
+		t.Fatalf("minted worker token does not verify: %v", verr)
+	}
+	if id.Scope != auth.ScopeWarmWorker {
+		t.Errorf("scope = %q, want %q", id.Scope, auth.ScopeWarmWorker)
+	}
+	if id.DagVersionID != "dagver-9" {
+		t.Errorf("dag_version_id = %q, want dagver-9", id.DagVersionID)
+	}
+	if id.TaskInstanceID != "" || id.RunID != "" || id.TaskID != "" || id.TryNumber != 0 {
+		t.Errorf("worker token must carry no task claims, got %+v", *id)
+	}
+}
+
+// TestExchangeTokenWithoutWarmLabelMintsTaskToken: a pod WITHOUT the warm-worker
+// label is exchanged for the task-scoped token exactly as today (Scope empty).
+func TestExchangeTokenWithoutWarmLabelMintsTaskToken(t *testing.T) {
+	srv, a := newServer(&fakeStore{})
+	rev := &fakeReviewer{pod: reviewedPod()} // ServiceAccount != "warm"
+	res := &fakeResolver{id: testIdentity(), warmID: warmWorkerID()}
+	srv.SetTokenExchange(rev, res, a, time.Hour, true)
+
+	resp, err := srv.ExchangeToken(ctxWithBootstrap("projected-sa-token"), &agentv1.ExchangeTokenRequest{})
+	if err != nil {
+		t.Fatalf("ExchangeToken: %v", err)
+	}
+	id, verr := a.AuthenticateAgent(resp.GetAgentToken())
+	if verr != nil {
+		t.Fatalf("minted token does not verify: %v", verr)
+	}
+	if id.Scope != "" {
+		t.Errorf("task path scope = %q, want empty", id.Scope)
+	}
+	if *id != testIdentity() {
+		t.Errorf("minted identity = %+v, want %+v", *id, testIdentity())
 	}
 }

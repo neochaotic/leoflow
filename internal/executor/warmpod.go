@@ -34,6 +34,23 @@ const (
 	warmAnchorLabelVal = "true"
 )
 
+// Exported warm-worker label contract (ADR 0058 D1/D2). The token-exchange
+// resolver reads these off a reviewed pod to decide whether it is a warm worker
+// (and which pool/tenant it serves), so the SAME label BuildWarmPod stamps is the
+// one the resolver keys on — single-sourced, no drift. They alias the package's
+// stamping constants above.
+const (
+	// WarmWorkerLabel marks a pod as a warm worker; WarmWorkerLabelValue is its
+	// value. A reviewed pod carrying this label is resolved to a warm-worker
+	// (control-channel-only) identity rather than a task instance.
+	WarmWorkerLabel      = warmWorkerLabelKey
+	WarmWorkerLabelValue = warmWorkerLabelVal
+	// WarmDagVersionLabel names the dag_version pool a warm worker serves.
+	WarmDagVersionLabel = warmDagVersionLabelKey
+	// WarmTenantLabel names the tenant that owns a warm worker's dag_version.
+	WarmTenantLabel = warmTenantLabelKey
+)
+
 // WarmPodSpec is everything BuildWarmPod needs to build one long-lived warm-worker
 // pod: which dag_version pool it serves, the image (the DAG's image — a warm
 // worker runs the agent in warm mode and forks a child per attempt), the

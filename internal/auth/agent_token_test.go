@@ -77,3 +77,68 @@ func TestAgentTokenRejectsExpired(t *testing.T) {
 		t.Error("an expired agent token must be rejected")
 	}
 }
+
+// warmWorkerIdentity is the identity ExchangeToken resolves for a warm pod: a
+// worker credential that names its dag_version pool and its worker id, carries
+// its tenant, and has NO task claims (no task instance, run, task, or try).
+func warmWorkerIdentity() AgentIdentity {
+	return AgentIdentity{
+		Scope:        ScopeWarmWorker,
+		DagVersionID: "dagver-9",
+		TenantID:     "acme",
+		WorkerID:     "leoflow-warm-dagver-9-abcd",
+	}
+}
+
+// TestWarmWorkerTokenRoundTrip: a warm-worker identity is minted with the worker
+// id as Subject, a scope=warm-worker claim, and dag_version_id, then verifies back
+// to the SAME identity — Scope, DagVersionID, WorkerID preserved and NO task
+// claims (TaskInstanceID/RunID/TaskID/TryNumber empty).
+func TestWarmWorkerTokenRoundTrip(t *testing.T) {
+	a := NewJWTAuthenticator(nil, "secret", time.Hour)
+	token, err := a.IssueAgentToken(warmWorkerIdentity(), time.Hour)
+	if err != nil {
+		t.Fatalf("IssueAgentToken: %v", err)
+	}
+	got, err := a.AuthenticateAgent(token)
+	if err != nil {
+		t.Fatalf("AuthenticateAgent: %v", err)
+	}
+	want := warmWorkerIdentity()
+	if *got != want {
+		t.Errorf("warm identity = %+v, want %+v", *got, want)
+	}
+	if got.Scope != ScopeWarmWorker {
+		t.Errorf("scope = %q, want %q", got.Scope, ScopeWarmWorker)
+	}
+	// No task claims leaked onto the worker credential.
+	if got.TaskInstanceID != "" || got.RunID != "" || got.TaskID != "" || got.TryNumber != 0 {
+		t.Errorf("warm-worker token must carry no task claims, got %+v", *got)
+	}
+	if got.WorkerID != want.WorkerID {
+		t.Errorf("worker id = %q, want %q (the token Subject)", got.WorkerID, want.WorkerID)
+	}
+}
+
+// TestTaskTokenScopeIsEmpty: a task identity round-trips with Scope=="" exactly as
+// before this field existed — the byte-compatibility guard for existing tokens.
+func TestTaskTokenScopeIsEmpty(t *testing.T) {
+	a := NewJWTAuthenticator(nil, "secret", time.Hour)
+	token, err := a.IssueAgentToken(agentIdentity(), time.Hour)
+	if err != nil {
+		t.Fatalf("IssueAgentToken: %v", err)
+	}
+	got, err := a.AuthenticateAgent(token)
+	if err != nil {
+		t.Fatalf("AuthenticateAgent: %v", err)
+	}
+	if got.Scope != "" {
+		t.Errorf("task token scope = %q, want empty", got.Scope)
+	}
+	if got.WorkerID != "" || got.DagVersionID != "" {
+		t.Errorf("task token must not carry worker/dag-version fields, got %+v", *got)
+	}
+	if got.TaskInstanceID != "ti-1" {
+		t.Errorf("task instance id = %q, want ti-1 (the Subject)", got.TaskInstanceID)
+	}
+}

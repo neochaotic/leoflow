@@ -10,6 +10,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/neochaotic/leoflow/internal/agentrpc"
+	"github.com/neochaotic/leoflow/internal/auth"
 	"github.com/neochaotic/leoflow/internal/executor"
 )
 
@@ -104,5 +105,64 @@ func TestPodResolverRejectsMissingAnnotation(t *testing.T) {
 	r := NewPodResolver(cs, "leoflow")
 	if _, err := r.ResolveTaskInstance(context.Background(), agentrpc.ReviewedPod{PodName: "p", PodUID: "u"}); err == nil {
 		t.Error("a pod without the identity annotation must be an error")
+	}
+}
+
+// TestPodResolverResolvesWarmWorkerByLabel: a pod carrying the warm-worker label
+// resolves (via ResolveAgent, DP1) to a WORKER-scoped identity — its dag_version
+// pool + tenant from labels and its worker id from the pod name — with NO task
+// claims, even though it has no identity annotation.
+func TestPodResolverResolvesWarmWorkerByLabel(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:      "leoflow-warm-dagver-9-abcd",
+		Namespace: "leoflow",
+		UID:       "uid-w",
+		Labels: map[string]string{
+			executor.WarmWorkerLabel:     executor.WarmWorkerLabelValue,
+			executor.WarmDagVersionLabel: "dagver-9",
+			executor.WarmTenantLabel:     "acme",
+		},
+	}}
+	cs := fake.NewClientset(pod)
+	r := NewPodResolver(cs, "leoflow")
+
+	id, err := r.ResolveAgent(context.Background(), agentrpc.ReviewedPod{Namespace: "leoflow", PodName: "leoflow-warm-dagver-9-abcd", PodUID: "uid-w"})
+	if err != nil {
+		t.Fatalf("ResolveAgent (warm): %v", err)
+	}
+	if id.Scope != auth.ScopeWarmWorker {
+		t.Errorf("scope = %q, want %q", id.Scope, auth.ScopeWarmWorker)
+	}
+	if id.DagVersionID != "dagver-9" || id.TenantID != "acme" {
+		t.Errorf("warm identity dag_version/tenant = %q/%q", id.DagVersionID, id.TenantID)
+	}
+	if id.WorkerID != "leoflow-warm-dagver-9-abcd" {
+		t.Errorf("worker id = %q, want the pod name", id.WorkerID)
+	}
+	if id.TaskInstanceID != "" || id.RunID != "" || id.TaskID != "" || id.TryNumber != 0 {
+		t.Errorf("warm identity must carry no task claims, got %+v", id)
+	}
+}
+
+// TestPodResolverResolveAgentTaskPath: a non-warm pod resolves (via ResolveAgent)
+// to its task instance exactly as ResolveTaskInstance does — the DP1 default branch.
+func TestPodResolverResolveAgentTaskPath(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:      "leoflow-etl-extract-1-abcd",
+		Namespace: "leoflow",
+		UID:       "uid-123",
+		Annotations: map[string]string{
+			executor.AgentIdentityAnnotation: `{"ti":"ti-1","tenant":"acme","dag":"ETL","run":"run-1","task":"Extract","try":2}`,
+		},
+	}}
+	cs := fake.NewClientset(pod)
+	r := NewPodResolver(cs, "leoflow")
+
+	id, err := r.ResolveAgent(context.Background(), agentrpc.ReviewedPod{Namespace: "leoflow", PodName: "leoflow-etl-extract-1-abcd", PodUID: "uid-123"})
+	if err != nil {
+		t.Fatalf("ResolveAgent (task): %v", err)
+	}
+	if id.Scope != "" || id.TaskInstanceID != "ti-1" {
+		t.Errorf("task path identity = %+v, want scope empty + ti-1", id)
 	}
 }

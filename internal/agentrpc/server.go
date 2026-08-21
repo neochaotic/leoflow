@@ -172,6 +172,15 @@ type Server struct {
 	// AwaitAssignment is inert (returns FailedPrecondition) unless the operator
 	// enabled warm pools and the server wired a registry via SetWarmPools.
 	warmPools *WorkerRegistry
+	// leaderCheck gates AwaitAssignment to the scheduler LEADER (warm-pool Hole B).
+	// The warm-pool placer + reconciler run leader-only, but startAgentGRPC (and its
+	// in-memory WorkerRegistry) runs on every scheduler replica; behind one Service,
+	// a warm worker's stream can load-balance onto a FOLLOWER whose registry the
+	// leader's placer never consults — orphaning that worker. A follower therefore
+	// refuses the stream so the worker reconnects toward the leader. nil means
+	// "unchecked" (single-node / tests serve as before); production wires it to the
+	// scheduler's own leadership so exactly one replica — the leader — serves.
+	leaderCheck func() bool
 }
 
 // NewServer builds an AgentService server backed by the given authenticator,

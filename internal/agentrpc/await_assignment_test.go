@@ -105,6 +105,49 @@ func TestAwaitAssignmentInertWhenWarmPoolsOff(t *testing.T) {
 	}
 }
 
+// ─── leader gate (warm-pool Hole B) ─────────────────────────────────────────
+
+// TestAwaitAssignmentRefusedOnFollower is the server side of the warm-pool
+// leader-gate fix: with warm pools ON but this replica NOT the scheduler leader,
+// AwaitAssignment refuses with FailedPrecondition BEFORE the worker is registered,
+// so a warm worker never lands in a follower's in-memory registry that the
+// leader-only placer never consults.
+func TestAwaitAssignmentRefusedOnFollower(t *testing.T) {
+	srv, a, reg := newWarmServer(t, nil)
+	srv.SetLeaderCheck(func() bool { return false })
+	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	err := srv.AwaitAssignment(stream)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("follower AwaitAssignment: got %v, want FailedPrecondition", err)
+	}
+	if reg.registered("ti-1") {
+		t.Fatal("a follower must not register the worker in its own registry")
+	}
+}
+
+// TestAwaitAssignmentProceedsOnLeader: with leaderCheck true the handler proceeds
+// to registration exactly as an unchecked server does — the leader serves.
+func TestAwaitAssignmentProceedsOnLeader(t *testing.T) {
+	srv, a, reg := newWarmServer(t, nil)
+	srv.SetLeaderCheck(func() bool { return true })
+	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream.pushMsg(regMsg("dagver-1"))
+	go func() { _ = srv.AwaitAssignment(stream) }()
+	awaitEventually(t, func() bool { return reg.registered("ti-1") })
+	stream.pushErr(io.EOF) // clean shutdown
+}
+
+// TestAwaitAssignmentNilLeaderCheckUnchecked: a nil leaderCheck means "unchecked"
+// (single-node / tests without wiring), so the handler serves as before.
+func TestAwaitAssignmentNilLeaderCheckUnchecked(t *testing.T) {
+	srv, a, reg := newWarmServer(t, nil) // no SetLeaderCheck
+	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream.pushMsg(regMsg("dagver-1"))
+	go func() { _ = srv.AwaitAssignment(stream) }()
+	awaitEventually(t, func() bool { return reg.registered("ti-1") })
+	stream.pushErr(io.EOF) // clean shutdown
+}
+
 // ─── (b) non-register first message ─────────────────────────────────────────
 
 func TestAwaitAssignmentRequiresRegisterFirst(t *testing.T) {

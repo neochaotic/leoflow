@@ -405,7 +405,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 		})
 		logger.Warn("warm worker pools enabled (ADR 0058 N1b1-place); admitted tasks place on a free warm worker of their dag_version, else dispatch dedicated")
 	}
-	grpcSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, buildTokenExchange(cfg, logger), cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, logger)
+	grpcSrv, agentSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, buildTokenExchange(cfg, logger), cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -419,6 +419,15 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 		if serr != nil {
 			grpcSrv.GracefulStop()
 			return nil, false, nil, serr
+		}
+		// Warm-pool Hole B: gate the assignment stream to the scheduler LEADER. This
+		// replica gates on ITS OWN leadership (sched.IsLeading), so behind one Service
+		// exactly the leader — whose leader-only placer consults the SAME in-memory
+		// registry workers register into here — serves AwaitAssignment; a follower
+		// refuses so the worker reconnects toward the leader. Only with warm pools on;
+		// off, the handler already refuses before the gate and nothing changes.
+		if cfg.Execution.WarmPoolsEnabled {
+			agentSrv.SetLeaderCheck(sched.IsLeading)
 		}
 		// On shutdown, drain the buffered dispatch pool (if any) so in-flight
 		// dispatches settle (success or failed via the sink) instead of leaking
@@ -577,13 +586,13 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv,
 // shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
 // channel is plaintext (dev). The per-task bearer token in metadata authenticates
 // each call regardless.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger) (*grpc.Server, error) {
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger) (srv *grpc.Server, agentSrv *agentrpc.Server, err error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("listening for agent grpc on %s: %w", addr, err)
+		return nil, nil, fmt.Errorf("listening for agent grpc on %s: %w", addr, err)
 	}
-	agentSrv := agentrpc.NewServer(authn, store, xcomSvc)
+	agentSrv = agentrpc.NewServer(authn, store, xcomSvc)
 	agentSrv.SetLogSink(logSink)
 	agentSrv.SetLogPublisher(logTailer)
 	agentSrv.SetSecrets(secretsStore, allowInsecureSecrets)
@@ -651,11 +660,11 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 	if secure {
 		creds, cerr := credentials.NewServerTLSFromFile(tlsCert, tlsKey)
 		if cerr != nil {
-			return nil, fmt.Errorf("loading agent grpc TLS cert: %w", cerr)
+			return nil, nil, fmt.Errorf("loading agent grpc TLS cert: %w", cerr)
 		}
 		opts = append(opts, grpc.Creds(creds))
 	}
-	srv := grpc.NewServer(opts...)
+	srv = grpc.NewServer(opts...)
 	agentv1.RegisterAgentServiceServer(srv, agentSrv)
 	go func() {
 		if serr := srv.Serve(lis); serr != nil && !errors.Is(serr, grpc.ErrServerStopped) {
@@ -663,7 +672,7 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 		}
 	}()
 	logger.Info("agent grpc server started", "grpc_addr", addr, "tls", secure)
-	return srv, nil
+	return srv, agentSrv, nil
 }
 
 // tokenExchange bundles the Kubernetes-backed dependencies of the agent

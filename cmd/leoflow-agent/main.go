@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -255,6 +256,18 @@ func runWarm(ctx context.Context, streamClient agentv1.AgentServiceClient, addr,
 		ScratchDir:         scratchDir,
 		TerminationLogPath: os.Getenv("LEOFLOW_TERMINATION_LOG_PATH"),
 		HeartbeatInterval:  agent.DefaultHeartbeatInterval,
+		// Warm-pool Hole B: on a not-leader rejection, re-dial the STREAM connection
+		// so a fresh Service backend can reach the scheduler leader (a single gRPC
+		// connection sticks to one backend). Re-dials with the bootstrap token, like
+		// the initial stream dial; the work connection is untouched. The returned conn
+		// is closed by WarmRunner on the next reconnect / exit.
+		Redial: func() (agentv1.AgentServiceClient, io.Closer, error) {
+			c, conn, _, derr := agent.Dial(addr, seedToken, allowInsecure, caFile)
+			if derr != nil {
+				return nil, nil, derr
+			}
+			return c, conn, nil
+		},
 		// Self-lifecycle caps, injected by BuildWarmPod from the operator's
 		// execution.* config (ADR 0058 N1d-d). Zero (unset/invalid) disables that
 		// bound in WarmRunner, so an off-cluster run is unbounded exactly as before.

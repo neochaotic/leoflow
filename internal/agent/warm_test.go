@@ -485,6 +485,113 @@ func TestWarmWorkerWatchdogKillsWedgedAttempt(t *testing.T) {
 	}
 }
 
+// noopCloser is an io.Closer that does nothing — the test double for a redial's
+// connection closer.
+type noopCloser struct{}
+
+func (noopCloser) Close() error { return nil }
+
+// notLeaderFake models the Service fronting an HA scheduler (warm-pool Hole B):
+// AwaitAssignment is refused with FailedPrecondition on the first rejectN calls
+// (the worker landed on a follower, or the leader-gate refuses), then a working
+// stream is returned (a re-dial finally reached the leader). Register always
+// succeeds — it is a unary ack and is NOT leader-gated.
+type notLeaderFake struct {
+	*fakeClient
+	rejectN    int
+	awaitCalls int
+	stream     *fakeAssignmentStream
+}
+
+func (c *notLeaderFake) AwaitAssignment(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentv1.WorkerMessage, agentv1.WorkAssignment], error) {
+	c.awaitCalls++
+	if c.awaitCalls <= c.rejectN {
+		return nil, status.Error(codes.FailedPrecondition, "not the scheduler leader; reconnect to reach the leader")
+	}
+	return c.stream, nil
+}
+
+// TestWarmWorkerReconnectsTowardLeader is the client side of the warm-pool Hole B
+// fix: a not-leader rejection (FailedPrecondition) must make the worker RECONNECT
+// toward the leader with backoff — re-dialing, re-registering, re-opening the
+// stream — rather than returning the error and letting the pod die (which forces a
+// reconciler pod-recreate that may re-hit a follower: churn). After the follower
+// rejections stop, the leader serves and the worker exits cleanly on stream EOF.
+func TestWarmWorkerReconnectsTowardLeader(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	client := &notLeaderFake{
+		fakeClient: &fakeClient{},
+		rejectN:    3,
+		stream:     &fakeAssignmentStream{ctx: context.Background()}, // empty => EOF once served
+	}
+	redials := 0
+	w := &WarmRunner{
+		StreamClient:  client,
+		WorkClient:    client,
+		AttemptTokens: NewTokenSource("bootstrap"),
+		Cmd:           &scratchProbeCmd{scratchDir: scratch},
+		Hostname:      "warm-pod-1", Version: "test", ScratchDir: scratch,
+		// Tiny backoff so the test never really sleeps; a generous cap on reconnects.
+		ReconnectBackoff: time.Microsecond, ReconnectMaxBackoff: time.Millisecond, MaxReconnects: 10,
+		Redial: func() (agentv1.AgentServiceClient, io.Closer, error) {
+			redials++
+			return client, noopCloser{}, nil
+		},
+	}
+
+	if err := w.Run(context.Background(), "dagver-1"); err != nil {
+		t.Fatalf("WarmRunner.Run: %v, want nil (reconnect until the leader serves)", err)
+	}
+	if client.awaitCalls != 4 {
+		t.Fatalf("AwaitAssignment calls = %d, want 4 (3 follower rejections + 1 leader serve)", client.awaitCalls)
+	}
+	if redials != 3 {
+		t.Fatalf("redials = %d, want 3 (one re-dial per not-leader reconnect)", redials)
+	}
+	if !client.registered {
+		t.Error("worker must (re-)register when it finally reaches the leader")
+	}
+}
+
+// TestWarmWorkerReconnectGivesUpAfterCap bounds the reconnect: a genuinely
+// misconfigured deployment (persistent FailedPrecondition) must eventually exit
+// non-zero — letting the reconciler replace the pod — rather than spin forever.
+func TestWarmWorkerReconnectGivesUpAfterCap(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	client := &notLeaderFake{
+		fakeClient: &fakeClient{},
+		rejectN:    1 << 20, // always reject
+		stream:     &fakeAssignmentStream{ctx: context.Background()},
+	}
+	redials := 0
+	w := &WarmRunner{
+		StreamClient:  client,
+		WorkClient:    client,
+		AttemptTokens: NewTokenSource("bootstrap"),
+		Cmd:           &scratchProbeCmd{scratchDir: scratch},
+		Hostname:      "warm-pod-1", Version: "test", ScratchDir: scratch,
+		ReconnectBackoff: time.Microsecond, ReconnectMaxBackoff: time.Millisecond, MaxReconnects: 3,
+		Redial: func() (agentv1.AgentServiceClient, io.Closer, error) {
+			redials++
+			return client, noopCloser{}, nil
+		},
+	}
+
+	err := w.Run(context.Background(), "dagver-1")
+	if err == nil {
+		t.Fatal("persistent not-leader must give up with a non-nil error, not spin forever")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("give-up error should carry the not-leader code, got %v", err)
+	}
+	if client.awaitCalls != 4 {
+		t.Fatalf("AwaitAssignment calls = %d, want 4 (initial + 3 bounded reconnects)", client.awaitCalls)
+	}
+	if redials != 3 {
+		t.Fatalf("redials = %d, want 3 (bounded to MaxReconnects)", redials)
+	}
+}
+
 // TestRunnerRunIsRegisterThenOneAttempt locks the single-shot refactor: Run must
 // still be exactly "register, then run one attempt" — one GetTaskSpec, one
 // RUNNING→SUCCESS pair — with no warm-loop behavior leaking in.

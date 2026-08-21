@@ -156,7 +156,7 @@ spec:
             - name: LEOFLOW_SERVER_GRPC_TLS_KEY
               value: /etc/leoflow/grpc-tls/tls.key
             - name: LEOFLOW_EXECUTOR_AGENT_TLS_CA_CONFIGMAP
-              value: {{ .ctx.Values.agentTLS.caConfigMap | quote }}
+              value: {{ include "leoflow.agentTLS.caConfigMapName" .ctx | quote }}
             {{- end }}
             {{- if .ctx.Values.taskSecret.name }}
             # Mount a Kubernetes Secret read-only into every task pod so a task can
@@ -267,7 +267,11 @@ spec:
         {{- if .ctx.Values.agentTLS.enabled }}
         - name: grpc-tls
           secret:
-            secretName: {{ required "agentTLS.serverCertSecret is required when agentTLS.enabled" .ctx.Values.agentTLS.serverCertSecret }}
+            # BYO serverCertSecret, or the chart-generated "<fullname>-agent-tls"
+            # when auto-gen is active (#690). The helper resolves which; `required`
+            # only trips in the impossible-by-guard case of neither (deployment.yaml
+            # fails first with a clearer message).
+            secretName: {{ required "agentTLS: no server cert Secret resolved (set agentTLS.serverCertSecret, or keep agentTLS.autoGenerate=true)" (include "leoflow.agentTLS.serverCertSecretName" .ctx) }}
         {{- end }}
         {{- if .ctx.Values.database.caConfigMap }}
         - name: db-ca

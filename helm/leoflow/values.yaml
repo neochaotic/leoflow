@@ -244,18 +244,28 @@ migrations:
       drop: ["ALL"]
 
 # TLS for the agent <-> control plane gRPC channel (issue #58). Mandatory here,
-# not optional: this chart hardcodes LEOFLOW_UI_EDITION=pro (deployment.yaml)
-# and the Pro server refuses to boot without a gRPC cert/key, so there is no
-# plaintext deployment to opt into. The control plane serves gRPC over TLS using
-# serverCertSecret, and task pods mount caConfigMap so the agent verifies the
-# server cert. Typically both are produced by cert-manager (a Certificate Secret
-# + a trust-bundle/CA ConfigMap).
+# not optional: this chart hardcodes LEOFLOW_UI_EDITION=pro (deployment.yaml) and
+# the Pro server refuses to boot without a gRPC cert/key, so there is no plaintext
+# deployment to opt into. TLS stays ON — what is now optional is WHERE the cert
+# material comes from:
+#   - auto-generated (default): with autoGenerate=true and no serverCertSecret /
+#     caConfigMap supplied, the chart mints a STABLE self-signed CA + server cert
+#     itself (#690). A fresh cloud cluster (e.g. EKS Auto Mode) installs with TLS
+#     on and NO cert-manager and NO pre-created Secret. The material is generated
+#     once and reused across `helm upgrade` (via lookup), so the CA never rotates.
+#   - BYO / cert-manager (production): set BOTH serverCertSecret AND caConfigMap
+#     and the chart uses them verbatim, ignoring auto-gen. This is the recommended
+#     production path and the ONLY supported path for GitOps (ArgoCD/Flux): a
+#     cluster-less `helm template` render cannot `lookup` the existing Secret, so
+#     auto-gen would rotate the CA on every sync. Use cert-manager for GitOps.
 agentTLS:
   # -- Enable TLS on the agent ↔ control plane gRPC channel (#58). Keep this `true`: the chart marks every deployment as the production edition (`LEOFLOW_UI_EDITION=pro`), and that edition refuses to boot without a gRPC cert/key — setting this to `false` yields a crash-looping control plane ("the Pro edition requires TLS on the agent gRPC channel"), not a plaintext deployment. The same edition marker also rejects `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true`, so secrets cannot accidentally travel a plaintext channel. For a plaintext local loop use the Lite dev server, not this chart.
   enabled: true
-  # -- Name of a `kubernetes.io/tls` Secret (with `tls.crt`/`tls.key`) for the gRPC server. Typically produced by a cert-manager `Certificate`. Required when `enabled: true`.
+  # -- Auto-generate a stable self-signed CA + gRPC server cert when neither `serverCertSecret` nor `caConfigMap` is supplied (#690), so `helm install` needs no cert-manager and no pre-created Secret. The material is minted once and reused on every `helm upgrade` (via `lookup`) so the CA never rotates and running agents keep trusting it. Fine for quickstart / simple clusters. Set `false` (and supply nothing) to force the old fail-fast when no cert is provided. **Not for GitOps** (ArgoCD/Flux): a cluster-less render can't `lookup` the live Secret and would rotate the CA every sync — use BYO/cert-manager there. For production, prefer BYO below (rotation, real chain of trust).
+  autoGenerate: true
+  # -- Name of a `kubernetes.io/tls` Secret (with `tls.crt`/`tls.key`) for the gRPC server. Set this **and** `caConfigMap` to bring your own (BYO), typically a cert-manager `Certificate` — the chart then uses them verbatim and skips auto-generation. Leave empty to let `autoGenerate` mint one.
   serverCertSecret: ""
-  # -- Name of a ConfigMap with key `ca.crt`. Mounted into task pods so the agent verifies the server cert. Typically a cert-manager trust-bundle.
+  # -- Name of a ConfigMap with key `ca.crt`. Mounted into task pods so the agent verifies the server cert. Set this **and** `serverCertSecret` for BYO (typically a cert-manager trust-bundle). Leave empty to let `autoGenerate` mint one.
   caConfigMap: ""
 
 # Mount a Kubernetes Secret read-only into every task pod (cloud-agnostic), so a

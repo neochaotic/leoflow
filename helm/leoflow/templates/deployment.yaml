@@ -41,13 +41,16 @@ the TLS requirement AND of the insecure-secrets rejection. See #459, ADR 0014.
 {{- fail "agentTLS.enabled=false is not a supported configuration: this chart always deploys the Pro edition (LEOFLOW_UI_EDITION=pro) and the Pro control plane refuses to boot without a gRPC cert/key, so disabling TLS yields a CrashLoopBackOff (\"the Pro edition requires TLS on the agent gRPC channel\"), not a plaintext deployment. Provision a cert (cert-manager) and set agentTLS.serverCertSecret + agentTLS.caConfigMap. For a plaintext local loop use the Lite dev server (`leoflow dev lite`), not this chart." -}}
 {{- end -}}
 {{- /*
-agentTLS pairs a server cert with a CA the task pods trust. serverCertSecret is
-required inline where it mounts; validate caConfigMap here too, so an install with
-TLS "on" but no CA fails loudly instead of shipping a control plane whose task
-pods fail the cert chain (x509: unknown authority) and hang. See #280.
+agentTLS pairs a server cert with a CA the task pods trust. The chart supplies
+that material one of two ways: BYO (serverCertSecret + caConfigMap, typically
+cert-manager) or auto-gen (agent-tls-autogen.yaml mints a stable self-signed CA +
+server cert when autoGenerate is on — the #690 zero-prereq default). Only fail
+when TLS is on, auto-gen is OFF, and the operator supplied no CA: that is the sole
+combination with no CA at all, which would ship a control plane whose task pods
+fail the cert chain (x509: unknown authority) and hang. See #280, #690.
 */ -}}
-{{- if and .Values.agentTLS.enabled (not .Values.agentTLS.caConfigMap) -}}
-{{- fail "agentTLS.caConfigMap is required when agentTLS.enabled: task pods need the CA trust-bundle ConfigMap to verify the server cert (otherwise the agent's gRPC dial fails x509: certificate signed by unknown authority and tasks hang). Point it at cert-manager's trust bundle (the ConfigMap holding the CA that signed agentTLS.serverCertSecret). See #280." -}}
+{{- if and .Values.agentTLS.enabled (not .Values.agentTLS.autoGenerate) (not .Values.agentTLS.caConfigMap) -}}
+{{- fail "agentTLS has no CA source: task pods need a CA trust bundle to verify the gRPC server cert (otherwise the agent's dial fails x509: certificate signed by unknown authority and tasks hang). Either keep agentTLS.autoGenerate=true (default — the chart mints a stable self-signed CA + server cert, no cert-manager needed, #690), or set agentTLS.serverCertSecret + agentTLS.caConfigMap for BYO/cert-manager (production). See #280, #690." -}}
 {{- end -}}
 {{- /*
 A ReadWriteOnce logs PVC attaches to a single node, so more than one replica —

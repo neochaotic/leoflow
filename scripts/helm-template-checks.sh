@@ -99,6 +99,78 @@ for fixture in helm/leoflow/examples/*.yaml; do
   fi
 done
 
+# ---------------------------------------------------------------------------
+# Zero-prereq agent TLS (#690). With NO cert-manager and NO pre-created Secret,
+# `helm install` must still bring up TLS on the agent gRPC channel: the chart
+# auto-generates a stable self-signed CA + server cert by default
+# (agentTLS.autoGenerate=true). Render with ONLY the mandatory Pro datastore /
+# key values — deliberately NOT setting agentTLS.serverCertSecret or
+# agentTLS.caConfigMap — and assert the generated material renders and is wired.
+# The release name here is "leoflow-test", so the chart fullname (and thus the
+# generated resource names) are prefixed with it.
+AUTOGEN_RENDERED=$(helm template leoflow-test "$CHART" \
+  --set database.url='postgres://leoflow:p@db:5432/leoflow?sslmode=disable' \
+  --set redis.url='redis://r:6379/0' \
+  --set auth.jwtSecret='helm-template-check-jwt-fixture' \
+  --set secretKey='leoflow-tmpl-check-secret-key-32' 2>&1 || true)
+
+expect_in() { # haystack needle description
+  if ! grep -qF -- "$2" <<<"$1"; then
+    echo "FAIL: missing $3 ($2)" >&2
+    fail=1
+  else
+    echo "OK:   $3"
+  fi
+}
+refute_in() { # haystack needle description
+  if grep -qF -- "$2" <<<"$1"; then
+    echo "FAIL: unexpected $3 ($2)" >&2
+    fail=1
+  else
+    echo "OK:   $3"
+  fi
+}
+
+# The default render must NOT fail — that is the whole point of #690 (no
+# cert-manager, no pre-created Secret required). A `fail` would surface as
+# "Error:" in the captured stderr instead of a rendered Deployment.
+refute_in "$AUTOGEN_RENDERED" 'Error:'      "no render error on the zero-prereq default path (#690)"
+expect_in "$AUTOGEN_RENDERED" 'kind: Deployment' "the control-plane Deployment on the auto-gen default path"
+
+# The auto-generated server cert Secret (kubernetes.io/tls) + its keys.
+expect_in "$AUTOGEN_RENDERED" 'type: kubernetes.io/tls'      "auto-generated kubernetes.io/tls Secret"
+expect_in "$AUTOGEN_RENDERED" 'name: leoflow-test-agent-tls' "auto-gen server cert Secret named <fullname>-agent-tls"
+expect_in "$AUTOGEN_RENDERED" 'tls.crt:'                     "tls.crt in the auto-gen Secret"
+expect_in "$AUTOGEN_RENDERED" 'tls.key:'                     "tls.key in the auto-gen Secret"
+
+# The auto-generated CA ConfigMap task pods mount to verify the server cert.
+expect_in "$AUTOGEN_RENDERED" 'name: leoflow-test-agent-ca'  "auto-gen CA ConfigMap named <fullname>-agent-ca"
+expect_in "$AUTOGEN_RENDERED" 'ca.crt:'                      "ca.crt key in the auto-gen CA ConfigMap"
+
+# The Deployment must WIRE the generated material: mount the generated Secret as
+# the gRPC server cert volume and point the executor at the generated CA ConfigMap.
+expect_in "$AUTOGEN_RENDERED" 'secretName: leoflow-test-agent-tls' "Deployment mounts the auto-gen server cert Secret"
+expect_in "$AUTOGEN_RENDERED" 'value: "leoflow-test-agent-ca"'     "Deployment points the executor at the auto-gen CA ConfigMap"
+
+# The generated tls.crt must be a real, parseable X.509 cert (not an empty or
+# malformed PEM). Extract the single-line base64 Secret value, decode it, and
+# let openssl parse it — a non-cert value makes `openssl x509` exit non-zero.
+AUTOGEN_TLS_CRT=$(grep -E '^\s*tls\.crt:' <<<"$AUTOGEN_RENDERED" | head -1 | awk '{print $2}')
+if [ -n "$AUTOGEN_TLS_CRT" ] && printf '%s' "$AUTOGEN_TLS_CRT" | base64 -d 2>/dev/null | openssl x509 -noout -subject >/dev/null 2>&1; then
+  echo "OK:   auto-gen tls.crt is a valid, parseable X.509 certificate"
+else
+  echo "FAIL: auto-gen tls.crt is not a valid X.509 certificate (empty or malformed PEM)" >&2
+  fail=1
+fi
+
+# BYO precedence (#280): when the operator supplies BOTH serverCertSecret and
+# caConfigMap, the chart must use them verbatim and render NO auto-gen material.
+# $RENDERED above is exactly that BYO shape.
+refute_in "$RENDERED" 'type: kubernetes.io/tls'      "no auto-gen tls Secret rendered on the BYO path"
+refute_in "$RENDERED" 'leoflow-test-agent-tls'       "no auto-gen server cert Secret name on the BYO path"
+refute_in "$RENDERED" 'leoflow-test-agent-ca'        "no auto-gen CA ConfigMap name on the BYO path"
+expect_in "$RENDERED" 'secretName: leoflow-agent-tls-fixture' "BYO server cert Secret mounted verbatim"
+
 if [ "$fail" -ne 0 ]; then
   echo
   echo "helm-template-checks: one or more contracts unmet (see FAIL lines above)" >&2

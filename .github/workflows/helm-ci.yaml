@@ -160,27 +160,15 @@ jobs:
           kubectl -n leoflow exec deploy/postgres -- pg_isready -U leoflow -d leoflow -t 60
           kubectl -n leoflow exec deploy/redis -- redis-cli ping | grep -q PONG
 
-      # Self-signed agent-gRPC TLS fixture. The Pro edition refuses to boot
-      # without TLS on the agent channel (#281) — booting insecure would look
-      # healthy but every secrets RPC to a task pod would fail closed. So the
-      # kind smoke must exercise the REAL Pro path (agentTLS.enabled=true), not
-      # a mode we never ship. Mint a throwaway self-signed cert and hand it to
-      # the chart as the server cert Secret + CA ConfigMap. This is the CI side
-      # of #265's faithful TLS fixture. (Previously this step set
-      # agentTLS.enabled=false, which #281 now correctly rejects.)
-      - name: Self-signed agent TLS fixture (#281 / #265)
-        run: |
-          set -euo pipefail
-          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-            -keyout /tmp/agent-tls.key -out /tmp/agent-tls.crt \
-            -subj "/CN=leoflow.leoflow.svc.cluster.local" \
-            -addext "subjectAltName=DNS:leoflow,DNS:leoflow.leoflow.svc.cluster.local"
-          kubectl -n leoflow create secret tls leoflow-agent-tls \
-            --cert=/tmp/agent-tls.crt --key=/tmp/agent-tls.key
-          kubectl -n leoflow create configmap leoflow-agent-ca \
-            --from-file=ca.crt=/tmp/agent-tls.crt
-
-      - name: helm install
+      # Zero-prereq agent TLS (#690). This kind cluster has NO cert-manager and
+      # NO pre-created Secret — exactly the fresh-cloud-cluster case #690 is
+      # about. The Pro edition still refuses to boot without TLS on the agent
+      # channel (#281), so the chart's default (agentTLS.autoGenerate=true) must
+      # mint a stable self-signed CA + server cert itself and wire them. We do
+      # NOT set serverCertSecret / caConfigMap here on purpose — that is the BYO
+      # path, covered by the lint job's kubeconform render. This exercises the
+      # REAL default install path a new user hits.
+      - name: helm install (auto-gen agent TLS, no cert-manager)
         run: |
           helm install leoflow helm/leoflow -n leoflow \
             --set image.repository=leoflow-server --set image.tag=ci \
@@ -192,11 +180,21 @@ jobs:
             --set auth.jwtSecret=ci-jwt-secret \
             --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
             --set agentTLS.enabled=true \
-            --set agentTLS.serverCertSecret=leoflow-agent-tls \
-            --set agentTLS.caConfigMap=leoflow-agent-ca \
             --set bootstrap.password=ci-admin \
             --wait --timeout 240s
           kubectl -n leoflow rollout status deploy/leoflow --timeout=120s
+
+      # Snapshot the auto-generated CA before the upgrade. The upgrade step below
+      # re-renders the chart against the LIVE cluster, so `lookup` must find the
+      # generated Secret and reuse it — the post-upgrade step asserts this CA is
+      # byte-identical afterwards. Without lookup-reuse, `helm upgrade` mints a
+      # fresh CA and every running agent breaks with x509: unknown authority.
+      - name: Capture auto-gen CA (pre-upgrade)
+        run: |
+          set -euo pipefail
+          kubectl -n leoflow get configmap leoflow-agent-ca \
+            -o jsonpath='{.data.ca\.crt}' > /tmp/agent-ca-before.crt
+          test -s /tmp/agent-ca-before.crt
 
       - name: Smoke — readyz + RBAC for pod-per-task
         run: |
@@ -233,6 +231,24 @@ jobs:
             --set config.scheduler.loopIntervalMs=750 \
             --wait --timeout 240s
           kubectl -n leoflow rollout status deploy/leoflow --timeout=120s
+
+      # CA STABILITY (#690). The auto-generated CA must survive `helm upgrade`
+      # byte-for-byte: the template uses `lookup` to reuse the already-generated
+      # Secret instead of minting a new one. If this diff is non-empty the CA
+      # rotated and every already-running agent would fail its gRPC dial with
+      # x509: certificate signed by unknown authority — the exact regression the
+      # lookup-reuse logic exists to prevent.
+      - name: Assert auto-gen CA byte-identical across upgrade (lookup-reuse)
+        run: |
+          set -euo pipefail
+          kubectl -n leoflow get configmap leoflow-agent-ca \
+            -o jsonpath='{.data.ca\.crt}' > /tmp/agent-ca-after.crt
+          test -s /tmp/agent-ca-after.crt
+          if ! diff -u /tmp/agent-ca-before.crt /tmp/agent-ca-after.crt; then
+            echo "::error::agentTLS auto-gen CA rotated across helm upgrade — lookup-reuse is broken (#690). Running agents would fail x509: certificate signed by unknown authority." >&2
+            exit 1
+          fi
+          echo "auto-gen CA is byte-identical before and after helm upgrade — lookup-reuse holds."
 
       - name: Smoke — readyz after upgrade
         run: |

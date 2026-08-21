@@ -312,22 +312,25 @@ tests:
       - failedTemplate:
           errorMessage: "agentTLS.enabled=false is not a supported configuration: this chart always deploys the Pro edition (LEOFLOW_UI_EDITION=pro) and the Pro control plane refuses to boot without a gRPC cert/key, so disabling TLS yields a CrashLoopBackOff (\"the Pro edition requires TLS on the agent gRPC channel\"), not a plaintext deployment. Provision a cert (cert-manager) and set agentTLS.serverCertSecret + agentTLS.caConfigMap. For a plaintext local loop use the Lite dev server (`leoflow dev lite`), not this chart."
 
-  # #280: agentTLS.enabled with an empty caConfigMap silently ships a control
-  # plane whose task pods can't verify the server cert → x509 unknown-authority.
-  - it: fails when agentTLS.enabled but caConfigMap is empty (#280)
+  # #280/#690: with autoGenerate OFF and no CA supplied, agentTLS.enabled would
+  # silently ship a control plane whose task pods can't verify the server cert →
+  # x509 unknown-authority. That is the ONLY no-CA combination now: auto-gen
+  # (default) provides one otherwise. Fail loudly here.
+  - it: fails when agentTLS.enabled, autoGenerate off, and no CA supplied (#280/#690)
     template: deployment.yaml
     set:
       database.url: postgres://h/d
       redis.url: redis://h/0
       auth.jwtSecret: jwt
       agentTLS.enabled: true
-      agentTLS.serverCertSecret: leoflow-tls
+      agentTLS.autoGenerate: false
+      agentTLS.serverCertSecret: ""
       agentTLS.caConfigMap: ""
     asserts:
       - failedTemplate:
-          errorMessage: "agentTLS.caConfigMap is required when agentTLS.enabled: task pods need the CA trust-bundle ConfigMap to verify the server cert (otherwise the agent's gRPC dial fails x509: certificate signed by unknown authority and tasks hang). Point it at cert-manager's trust bundle (the ConfigMap holding the CA that signed agentTLS.serverCertSecret). See #280."
+          errorMessage: "agentTLS has no CA source: task pods need a CA trust bundle to verify the gRPC server cert (otherwise the agent's dial fails x509: certificate signed by unknown authority and tasks hang). Either keep agentTLS.autoGenerate=true (default — the chart mints a stable self-signed CA + server cert, no cert-manager needed, #690), or set agentTLS.serverCertSecret + agentTLS.caConfigMap for BYO/cert-manager (production). See #280, #690."
 
-  - it: renders when agentTLS.enabled with both serverCertSecret and caConfigMap (#280)
+  - it: renders when agentTLS.enabled with both serverCertSecret and caConfigMap (BYO, #280)
     template: deployment.yaml
     set:
       database.url: postgres://h/d
@@ -339,6 +342,40 @@ tests:
     asserts:
       - hasDocuments:
           count: 1
+      # BYO material is mounted verbatim.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: grpc-tls
+            secret:
+              secretName: leoflow-tls
+
+  # #690: the zero-prereq default. agentTLS.enabled with NEITHER a server cert
+  # Secret nor a CA ConfigMap must NOT fail — autoGenerate (default true) mints
+  # them, and the Deployment mounts the generated "<fullname>-agent-tls" Secret.
+  - it: auto-generates and wires the cert when agentTLS.enabled and nothing is supplied (#690)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      agentTLS.enabled: true
+      agentTLS.serverCertSecret: ""
+      agentTLS.caConfigMap: ""
+    asserts:
+      - hasDocuments:
+          count: 1
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: grpc-tls
+            secret:
+              secretName: leoflow-agent-tls
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_AGENT_TLS_CA_CONFIGMAP
+            value: leoflow-agent-ca
 
   # #282: replicaCount>1 with a ReadWriteOnce logs PVC → the second pod hangs on
   # a Multi-Attach error, silently.

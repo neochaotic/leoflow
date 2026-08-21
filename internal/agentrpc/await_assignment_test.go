@@ -59,6 +59,12 @@ func regMsg(dagVersion string) *agentv1.WorkerMessage {
 	}}
 }
 
+func regMsgPod(dagVersion, podName string) *agentv1.WorkerMessage {
+	return &agentv1.WorkerMessage{Msg: &agentv1.WorkerMessage_Register{
+		Register: &agentv1.WorkerRegister{DagVersionId: dagVersion, PodName: podName},
+	}}
+}
+
 func ackMsg(assignmentID string, started bool) *agentv1.WorkerMessage {
 	return &agentv1.WorkerMessage{Msg: &agentv1.WorkerMessage_Ack{
 		Ack: &agentv1.AssignmentAck{AssignmentId: assignmentID, Started: started},
@@ -160,13 +166,23 @@ func TestAckStartedWithinLeaseMarksBusyNoReclaim(t *testing.T) {
 	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour } // long lease
 
 	send := make(chan *agentv1.WorkAssignment, 1)
-	reg.Register("w1", "v1", send)
-	if !reg.Assign("v1", &agentv1.WorkAssignment{AssignmentId: "as-1"}) {
+	reg.Register("w1", "v1", "pod-1", send)
+	// The assignment carries the attempt identity (run/task/try); the lease must
+	// carry it through so a started ack can return it as the binding to persist.
+	if !reg.Assign("v1", &agentv1.WorkAssignment{
+		AssignmentId: "as-1", DagRunId: "run-1", TaskId: "extract", TryNumber: 2,
+	}) {
 		t.Fatal("Assign should succeed")
 	}
 	<-send // drain the delivered assignment
-	reg.Ack("as-1", true)
+	binding, ok := reg.Ack("as-1", true)
 
+	if !ok || binding == nil {
+		t.Fatalf("Ack(started=true) = (%+v, %v), want a non-nil binding + ok=true", binding, ok)
+	}
+	if binding.RunID != "run-1" || binding.TaskID != "extract" || binding.TryNumber != 2 || binding.PodName != "pod-1" {
+		t.Fatalf("binding = %+v, want run-1/extract/2/pod-1 (the attempt identity + the worker's pod name)", binding)
+	}
 	if !reg.busy("w1") {
 		t.Fatal("worker should be marked busy after ack started=true")
 	}
@@ -185,7 +201,7 @@ func TestLeaseExpiryReclaims(t *testing.T) {
 	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return 5 * time.Millisecond }
 
 	send := make(chan *agentv1.WorkAssignment, 1)
-	reg.Register("w1", "v1", send)
+	reg.Register("w1", "v1", "pod-1", send)
 	reg.Assign("v1", &agentv1.WorkAssignment{AssignmentId: "as-1", DagVersionId: "v1"})
 	<-send
 
@@ -207,11 +223,14 @@ func TestAckRefusedReclaims(t *testing.T) {
 	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour }
 
 	send := make(chan *agentv1.WorkAssignment, 1)
-	reg.Register("w1", "v1", send)
+	reg.Register("w1", "v1", "pod-1", send)
 	reg.Assign("v1", &agentv1.WorkAssignment{AssignmentId: "as-1", DagVersionId: "v1"})
 	<-send
-	reg.Ack("as-1", false)
+	binding, ok := reg.Ack("as-1", false)
 
+	if ok || binding != nil {
+		t.Fatalf("Ack(started=false) = (%+v, %v), want (nil, false) — a refusal binds nothing", binding, ok)
+	}
 	select {
 	case ev := <-reclaims:
 		if ev.AssignmentID != "as-1" || ev.Reason != ReclaimRefused {
@@ -262,4 +281,74 @@ func TestAwaitAssignmentReconnectSameIdentitySingleEntry(t *testing.T) {
 	if reg.size() != 1 {
 		t.Fatalf("reconnect same identity: registry size = %d, want 1", reg.size())
 	}
+}
+
+// ─── (j) started ack => handler persists the durable binding ────────────────
+
+// TestAwaitAssignmentPersistsBindingOnStartedAck is the handler seam: when a
+// worker acks an assignment as started, pumpWorkerMessages must call the store's
+// BindWarmAttempt with the assignment's (run, task, try) and the worker's pod
+// name (from WorkerRegister.pod_name), so the binding is durable for the reaper.
+func TestAwaitAssignmentPersistsBindingOnStartedAck(t *testing.T) {
+	store := &fakeStore{}
+	srv, a := newServer(store)
+	reg := NewWorkerRegistry(nil)
+	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour } // no reclaim mid-test
+	srv.SetWarmPools(reg)
+
+	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream.pushMsg(regMsgPod("dagver-1", "warm-pod-7"))
+	go func() { _ = srv.AwaitAssignment(stream) }()
+	awaitEventually(t, func() bool { return reg.registered("ti-1") })
+
+	if !reg.Assign("dagver-1", &agentv1.WorkAssignment{
+		AssignmentId: "as-9", DagRunId: "run-42", TaskId: "load", TryNumber: 3, LeaseSeconds: 3600,
+	}) {
+		t.Fatal("Assign should succeed against the registered worker")
+	}
+	<-stream.sent // handler delivered the assignment down the stream
+
+	stream.pushMsg(ackMsg("as-9", true))
+
+	awaitEventually(t, func() bool { return len(store.warmBindingCalls()) == 1 })
+	got := store.warmBindingCalls()[0]
+	if got.runID != "run-42" || got.taskID != "load" || got.tryNumber != 3 || got.workerPod != "warm-pod-7" {
+		t.Fatalf("BindWarmAttempt call = %+v, want run-42/load/3/warm-pod-7", got)
+	}
+	stream.pushErr(io.EOF)
+}
+
+// TestAwaitAssignmentDoesNotPersistOnRefusedAck: a started=false ack reclaims
+// and binds nothing — the store's BindWarmAttempt must not be called.
+func TestAwaitAssignmentDoesNotPersistOnRefusedAck(t *testing.T) {
+	store := &fakeStore{}
+	srv, a := newServer(store)
+	reclaims := make(chan ReclaimEvent, 1)
+	reg := NewWorkerRegistry(func(ev ReclaimEvent) { reclaims <- ev })
+	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour }
+	srv.SetWarmPools(reg)
+
+	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream.pushMsg(regMsgPod("dagver-1", "warm-pod-7"))
+	go func() { _ = srv.AwaitAssignment(stream) }()
+	awaitEventually(t, func() bool { return reg.registered("ti-1") })
+
+	if !reg.Assign("dagver-1", &agentv1.WorkAssignment{
+		AssignmentId: "as-9", DagRunId: "run-42", TaskId: "load", TryNumber: 3, LeaseSeconds: 3600,
+	}) {
+		t.Fatal("Assign should succeed")
+	}
+	<-stream.sent
+	stream.pushMsg(ackMsg("as-9", false))
+
+	// The refusal is observed as a reclaim; no binding is persisted.
+	select {
+	case <-reclaims:
+	case <-time.After(time.Second):
+		t.Fatal("expected a reclaim on refused ack")
+	}
+	if n := len(store.warmBindingCalls()); n != 0 {
+		t.Fatalf("BindWarmAttempt calls = %d, want 0 on a refused ack", n)
+	}
+	stream.pushErr(io.EOF)
 }

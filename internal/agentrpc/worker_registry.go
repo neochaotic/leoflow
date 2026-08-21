@@ -31,21 +31,43 @@ type ReclaimEvent struct {
 	Reason       ReclaimReason
 }
 
+// WarmBinding is the durable binding an ack (started=true) establishes: the warm
+// worker pod (PodName) now serving a specific attempt (RunID, TaskID, TryNumber).
+// The handler persists it (BindWarmAttempt) so a later failover reaper can match
+// bound attempts against the live warm-pod set (ADR 0058 N1d-a1). PodName is the
+// worker's own downward-API pod name it sent in WorkerRegister — the reaper's join
+// key against ListWarmPods — NOT the registry's authenticated identity.
+type WarmBinding struct {
+	RunID     string
+	TaskID    string
+	TryNumber int
+	PodName   string
+}
+
 // registeredWorker is one warm worker's registry entry. send is the handler's
 // outbound assignment channel; the handler owns Send()ing what lands on it.
 type registeredWorker struct {
 	identity   string
 	dagVersion string
-	send       chan *agentv1.WorkAssignment
+	// podName is the worker's OWN Kubernetes pod name (WorkerRegister.pod_name,
+	// sourced from the downward API). It is the durable key a started attempt is
+	// bound to; distinct from identity, which is the authenticated stream credential.
+	podName string
+	send    chan *agentv1.WorkAssignment
 	// busy is set once the worker acks an assignment as started; it is cleared
 	// when the worker signals SlotFree.
 	busy bool
 }
 
-// leaseState tracks one in-flight assignment awaiting an ack.
+// leaseState tracks one in-flight assignment awaiting an ack. It carries the
+// assignment's attempt identity (runID, taskID, tryNumber) so a started ack can
+// return the WarmBinding to persist without the handler re-deriving it.
 type leaseState struct {
 	worker     *registeredWorker
 	dagVersion string
+	runID      string
+	taskID     string
+	tryNumber  int
 	timer      *time.Timer
 }
 
@@ -85,10 +107,11 @@ func NewWorkerRegistry(onReclaim func(ReclaimEvent)) *WorkerRegistry {
 }
 
 // Register records a warm worker under its authenticated identity, ready to take
-// work for dagVersion. Idempotent: a reconnect with the same identity replaces
+// work for dagVersion. podName is the worker's own pod name, carried so a started
+// ack can bind the attempt to it. Idempotent: a reconnect with the same identity replaces
 // the prior entry (never adds a second), and the fresh entry starts free. It
 // returns the entry so the caller can Deregister exactly the entry it created.
-func (r *WorkerRegistry) Register(identity, dagVersion string, send chan *agentv1.WorkAssignment) *registeredWorker {
+func (r *WorkerRegistry) Register(identity, dagVersion, podName string, send chan *agentv1.WorkAssignment) *registeredWorker {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if old, ok := r.workers[identity]; ok {
@@ -96,7 +119,7 @@ func (r *WorkerRegistry) Register(identity, dagVersion string, send chan *agentv
 		// keeps its own timer and reclaims independently.
 		r.removeFreeLocked(old)
 	}
-	w := &registeredWorker{identity: identity, dagVersion: dagVersion, send: send}
+	w := &registeredWorker{identity: identity, dagVersion: dagVersion, podName: podName, send: send}
 	r.workers[identity] = w
 	r.addFreeLocked(w)
 	return w
@@ -155,33 +178,49 @@ func (r *WorkerRegistry) Assign(dagVersion string, a *agentv1.WorkAssignment) bo
 		return false
 	}
 	aid := a.GetAssignmentId()
-	ls := &leaseState{worker: w, dagVersion: dagVersion}
+	ls := &leaseState{
+		worker:     w,
+		dagVersion: dagVersion,
+		runID:      a.GetDagRunId(),
+		taskID:     a.GetTaskId(),
+		tryNumber:  int(a.GetTryNumber()),
+	}
 	ls.timer = time.AfterFunc(r.leaseFor(a), func() { r.onLeaseExpire(aid) })
 	r.leases[aid] = ls
 	r.mu.Unlock()
 	return true
 }
 
-// Ack settles the lease for assignmentID. started=true marks the worker busy and
-// cancels the lease (no reclaim). started=false reclaims the assignment. An ack
-// for an unknown assignment (already expired or already settled) is ignored.
-func (r *WorkerRegistry) Ack(assignmentID string, started bool) {
+// Ack settles the lease for assignmentID. started=true marks the worker busy,
+// cancels the lease (no reclaim), and returns the WarmBinding to persist — the
+// acked attempt's (run, task, try) plus the worker's pod name — with ok=true.
+// started=false reclaims the assignment and returns ok=false. An ack for an
+// unknown assignment (already expired or already settled) also returns ok=false.
+// Only ok=true carries a non-nil binding the handler should persist.
+func (r *WorkerRegistry) Ack(assignmentID string, started bool) (*WarmBinding, bool) {
 	r.mu.Lock()
 	ls, ok := r.leases[assignmentID]
 	if !ok {
 		r.mu.Unlock()
-		return
+		return nil, false
 	}
 	delete(r.leases, assignmentID)
 	ls.timer.Stop()
 	if started {
 		ls.worker.busy = true
+		binding := &WarmBinding{
+			RunID:     ls.runID,
+			TaskID:    ls.taskID,
+			TryNumber: ls.tryNumber,
+			PodName:   ls.worker.podName,
+		}
 		r.mu.Unlock()
-		return
+		return binding, true
 	}
 	dagVersion := ls.dagVersion
 	r.mu.Unlock()
 	r.emitReclaim(ReclaimEvent{AssignmentID: assignmentID, DagVersionID: dagVersion, Reason: ReclaimRefused})
+	return nil, false
 }
 
 // MarkFree records a worker's SlotFree signal: it clears busy and returns the

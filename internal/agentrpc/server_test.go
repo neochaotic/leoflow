@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,18 @@ type fakeStore struct {
 	rescheduleErr error
 	heartbeats    []auth.AgentIdentity
 	heartbeatErr  error
+	// warm bindings are recorded from the AwaitAssignment pump goroutine while the
+	// test asserts from its own goroutine, so this slice needs its own lock.
+	warmMu       sync.Mutex
+	warmBindings []warmBindingCall
+	bindWarmErr  error
+}
+
+type warmBindingCall struct {
+	runID     string
+	taskID    string
+	tryNumber int
+	workerPod string
 }
 
 type reportedState struct {
@@ -60,6 +73,21 @@ func (s *fakeStore) Reschedule(_ context.Context, id auth.AgentIdentity, at time
 func (s *fakeStore) RecordHeartbeat(_ context.Context, id auth.AgentIdentity) error {
 	s.heartbeats = append(s.heartbeats, id)
 	return s.heartbeatErr
+}
+
+func (s *fakeStore) BindWarmAttempt(_ context.Context, runID, taskID string, tryNumber int, workerPod string) error {
+	s.warmMu.Lock()
+	s.warmBindings = append(s.warmBindings, warmBindingCall{runID, taskID, tryNumber, workerPod})
+	s.warmMu.Unlock()
+	return s.bindWarmErr
+}
+
+// warmBindingCalls returns a snapshot of the recorded BindWarmAttempt calls,
+// taken under the lock so a polling assertion never races the pump goroutine.
+func (s *fakeStore) warmBindingCalls() []warmBindingCall {
+	s.warmMu.Lock()
+	defer s.warmMu.Unlock()
+	return append([]warmBindingCall(nil), s.warmBindings...)
 }
 
 func testIdentity() auth.AgentIdentity {

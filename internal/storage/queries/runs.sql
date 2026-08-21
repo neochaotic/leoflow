@@ -713,6 +713,26 @@ SELECT EXISTS (
       AND state IN ('queued', 'running')
 );
 
+-- name: BindWarmAttempt :execrows
+-- Records the durable warm-attempt binding (ADR 0058 N1d-a1): the warm worker
+-- pod ($4, its own downward-API pod name) that acked THIS attempt (dag_run_id,
+-- task_id, try_number) as started. A later failover reaper matches warm_worker_id
+-- against the live warm-pod set to find attempts a dead warm pod held.
+--
+-- Guarded on state IN ('queued', 'running') — the same active predicate the
+-- heartbeat and liveness queries use — so a settled attempt is never bound: an
+-- ack that races a reaper settling the row must not stamp a worker onto a
+-- terminal TI. Bounded by (dag_run_id, task_id, try_number) to match exactly the
+-- attempt the assignment named. Returns the affected row count; zero means the
+-- attempt already moved on (terminal or superseded), and the caller treats that
+-- as a benign no-op, never an error.
+UPDATE task_instances
+SET warm_worker_id = $4
+WHERE dag_run_id = $1
+  AND task_id = $2
+  AND try_number = $3
+  AND state IN ('queued', 'running');
+
 -- name: ListAgentLostCandidates :many
 -- Lists running TIs that have heartbeated at least once and whose latest
 -- heartbeat is non-null, alongside enough identity to log + observe.

@@ -17,6 +17,41 @@ func warmEnvMap(pod *corev1.Pod) map[string]string {
 	return m
 }
 
+// warmEnvVar returns the full EnvVar named name from the warm pod's container, so
+// a test can inspect ValueFrom (downward-API sources carry no literal Value).
+func warmEnvVar(pod *corev1.Pod, name string) (corev1.EnvVar, bool) {
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == name {
+			return e, true
+		}
+	}
+	return corev1.EnvVar{}, false
+}
+
+// TestBuildWarmPodInjectsPodNameViaDownwardAPI locks the durable-binding key
+// plumbing (ADR 0058 N1d-a1): the worker learns its OWN pod name through the
+// Kubernetes downward API as LEOFLOW_POD_NAME (fieldRef metadata.name), since the
+// name — carrying a random suffix — is unknown at build time. The agent forwards
+// it in WorkerRegister.pod_name so the control plane can bind a started attempt
+// to it as warm_worker_id.
+func TestBuildWarmPodInjectsPodNameViaDownwardAPI(t *testing.T) {
+	pod := BuildWarmPod(baseWarmSpec())
+
+	ev, ok := warmEnvVar(pod, "LEOFLOW_POD_NAME")
+	if !ok {
+		t.Fatal("warm pod must carry LEOFLOW_POD_NAME env for the durable binding key")
+	}
+	if ev.Value != "" {
+		t.Errorf("LEOFLOW_POD_NAME must be sourced from the downward API, not a literal value (got %q)", ev.Value)
+	}
+	if ev.ValueFrom == nil || ev.ValueFrom.FieldRef == nil {
+		t.Fatalf("LEOFLOW_POD_NAME must use valueFrom.fieldRef, got %+v", ev.ValueFrom)
+	}
+	if got := ev.ValueFrom.FieldRef.FieldPath; got != "metadata.name" {
+		t.Errorf("LEOFLOW_POD_NAME fieldRef.fieldPath = %q, want metadata.name", got)
+	}
+}
+
 // baseWarmSpec is a minimal env-var-transport warm spec used across the cases.
 func baseWarmSpec() WarmPodSpec {
 	return WarmPodSpec{

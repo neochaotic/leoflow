@@ -350,6 +350,7 @@ type TaskInstance struct {
 	NextDispatchAt    pgtype.Timestamptz `json:"next_dispatch_at"`
 	LastFailureKind   *string            `json:"last_failure_kind"`
 	InfraAttempts     int32              `json:"infra_attempts"`
+	WarmWorkerID      *string            `json:"warm_worker_id"`
 }
 
 type TaskInstanceHistory struct {

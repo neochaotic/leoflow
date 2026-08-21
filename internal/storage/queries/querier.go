@@ -13,6 +13,19 @@ import (
 type Querier interface {
 	AddFavorite(ctx context.Context, arg AddFavoriteParams) error
 	AssignUserRole(ctx context.Context, arg AssignUserRoleParams) error
+	// Records the durable warm-attempt binding (ADR 0058 N1d-a1): the warm worker
+	// pod ($4, its own downward-API pod name) that acked THIS attempt (dag_run_id,
+	// task_id, try_number) as started. A later failover reaper matches warm_worker_id
+	// against the live warm-pod set to find attempts a dead warm pod held.
+	//
+	// Guarded on state IN ('queued', 'running') — the same active predicate the
+	// heartbeat and liveness queries use — so a settled attempt is never bound: an
+	// ack that races a reaper settling the row must not stamp a worker onto a
+	// terminal TI. Bounded by (dag_run_id, task_id, try_number) to match exactly the
+	// attempt the assignment named. Returns the affected row count; zero means the
+	// attempt already moved on (terminal or superseded), and the caller treats that
+	// as a benign no-op, never an error.
+	BindWarmAttempt(ctx context.Context, arg BindWarmAttemptParams) (int64, error)
 	// Atomically claim one on-failure ATTEMPT for a run, returning the row iff this
 	// call won it. Replaces the old claim-then-send (#431), which set alerted_at
 	// before the send and so lost the page whenever the send failed.

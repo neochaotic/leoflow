@@ -1,6 +1,7 @@
 package agentrpc
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -102,9 +103,14 @@ func (s *Server) registerFromStream(stream agentv1.AgentService_AwaitAssignmentS
 	if dagVersion == "" {
 		return nil, status.Error(codes.InvalidArgument, "worker register missing dag_version_id")
 	}
+	// pod_name is the worker's own downward-API pod name, the durable key a started
+	// attempt is bound to (ADR 0058 N1d-a1). It is a locator, not a credential — the
+	// identity above still governs authorization — so an empty value only means the
+	// binding degrades to per-pod liveness for this worker, never a refusal.
+	podName := reg.GetPodName()
 	send := make(chan *agentv1.WorkAssignment, 1)
-	worker := s.warmPools.Register(identity, dagVersion, send)
-	slog.Info("warm worker registered", "identity", identity, "dag_version", dagVersion)
+	worker := s.warmPools.Register(identity, dagVersion, podName, send)
+	slog.Info("warm worker registered", "identity", identity, "dag_version", dagVersion, "pod_name", podName)
 	return worker, nil
 }
 
@@ -119,12 +125,28 @@ func (s *Server) pumpWorkerMessages(stream agentv1.AgentService_AwaitAssignmentS
 		}
 		switch m := msg.Msg.(type) {
 		case *agentv1.WorkerMessage_Ack:
-			s.warmPools.Ack(m.Ack.GetAssignmentId(), m.Ack.GetStarted())
+			if binding, ok := s.warmPools.Ack(m.Ack.GetAssignmentId(), m.Ack.GetStarted()); ok {
+				s.bindWarmAttempt(stream.Context(), binding)
+			}
 		case *agentv1.WorkerMessage_SlotFree:
 			s.warmPools.MarkFree(identity)
 		case *agentv1.WorkerMessage_Register:
 			// A re-registration on an established stream is redundant; the worker is
 			// already keyed by its authenticated identity. Ignore.
 		}
+	}
+}
+
+// bindWarmAttempt persists the durable warm-attempt binding a started ack
+// established (ADR 0058 N1d-a1): warm_worker_id on the running TI names the warm
+// pod now serving the attempt, so a later failover reaper can recover which
+// attempts a dead warm pod held. It is BEST-EFFORT — a persist failure is logged
+// and swallowed, never fatal to the live stream: a DB blip must not tear down a
+// worker that is already running the attempt. The reaper degrades gracefully to
+// per-pod liveness for an attempt whose binding did not land.
+func (s *Server) bindWarmAttempt(ctx context.Context, b *WarmBinding) {
+	if err := s.store.BindWarmAttempt(ctx, b.RunID, b.TaskID, b.TryNumber, b.PodName); err != nil {
+		slog.Warn("persisting warm attempt binding (best-effort; worker keeps serving)",
+			"run", b.RunID, "task", b.TaskID, "try", b.TryNumber, "pod_name", b.PodName, "error", err)
 	}
 }

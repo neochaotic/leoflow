@@ -221,6 +221,36 @@ func (s *ExecutionStore) RecordHeartbeat(ctx context.Context, id auth.AgentIdent
 	return nil
 }
 
+// BindWarmAttempt records the durable warm-attempt binding (ADR 0058 N1d-a1): the
+// warm worker pod (workerPod, its own downward-API pod name) that acked this
+// attempt as started, stamped onto warm_worker_id so a later failover reaper can
+// tell which running attempts a dead warm pod held. The UPDATE is guarded on
+// state IN ('queued', 'running'), so a settled attempt is never bound — an ack
+// that races a reaper settling the row is a benign no-op (zero rows), not an
+// error. It is written ONLY on a warm ack; a dedicated-pod attempt (and every
+// attempt while warm pools are off) leaves warm_worker_id NULL.
+//
+// N1d-a2 deferral: warm_worker_id is intentionally NOT cleared when the attempt
+// settles. The consuming reaper filters on state, so a lingering value on a
+// terminal TI is harmless; a settle-time clear is left to that increment.
+func (s *ExecutionStore) BindWarmAttempt(ctx context.Context, runID, taskID string, tryNumber int, workerPod string) error {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return err
+	}
+	pod := workerPod
+	_, err = s.q.BindWarmAttempt(ctx, queries.BindWarmAttemptParams{
+		DagRunID:     rid,
+		TaskID:       taskID,
+		TryNumber:    toInt32(tryNumber),
+		WarmWorkerID: &pod,
+	})
+	// Zero rows is the guard working, not a failure: the attempt already moved on
+	// (terminal or superseded), so there is nothing to bind. Only a real DB error
+	// propagates; the caller (best-effort) logs it and keeps the worker serving.
+	return err
+}
+
 // IsTaskInstanceLive reports whether the attempt (runID, taskID, tryNumber) is
 // still live — present and in an active (non-terminal) state — derived from the
 // same predicate RecordHeartbeat writes on, but as a pure read with no

@@ -2,9 +2,23 @@
 
 The Pro control plane delivers secrets (Connections, Variables) to task pods over
 gRPC. In Pro that channel **must be TLS** — the server refuses to boot without it
-(#281), and the chart refuses to install when `agentTLS.enabled` but the cert
-Secret or CA ConfigMap is missing (#280). The clean way to provision the cert is
-[cert-manager](https://cert-manager.io).
+(#281).
+
+!!! note "You don't need this for a default install"
+    The chart **auto-generates** a stable self-signed CA + server cert by
+    default (`agentTLS.autoGenerate: true`, reused across upgrades) — so
+    `helm install` needs **no cert-manager and no pre-created Secret**, and TLS
+    is still on. That default is live on `main` today and ships in the first
+    release cut after it; see the
+    [Quickstart](installation.md#quickstart-one-command-any-cloud).
+    This page is the **opt-in production path**: cert-manager-issued (or
+    externally-rooted) certs with automatic rotation. It is also the path you
+    **must** use under **GitOps** (ArgoCD/Flux), where cluster-less rendering
+    can't `lookup` the existing Secret and auto-gen is unsafe.
+
+Setting `agentTLS.serverCertSecret` **and** `agentTLS.caConfigMap` makes the
+chart use them verbatim and skip auto-generation. The clean way to provision
+that cert is [cert-manager](https://cert-manager.io).
 
 An operator-ready values file is at
 [`helm/leoflow/examples/values-pro-tls.yaml`](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/examples/values-pro-tls.yaml)
@@ -84,9 +98,14 @@ standard way, or copy the issuer's `ca.crt` into a ConfigMap keyed `ca.crt`. Set
 ## 5. Install
 
 ```console
-$ helm install leoflow leoflow/leoflow -n leoflow \
+$ helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
+    -n leoflow --create-namespace \
     -f values-pro-tls.yaml
 ```
+
+(Use the chart version for the [latest release](https://github.com/neochaotic/leoflow/releases) —
+the tag with the leading `v` stripped. From a source checkout, swap the OCI
+reference for `./helm/leoflow`.)
 
 ## Troubleshooting
 

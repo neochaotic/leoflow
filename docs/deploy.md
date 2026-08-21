@@ -268,9 +268,16 @@ into.
 
 Deploying the control plane itself (Helm chart, published `leoflow-server`/
 `leoflow-migrate` images, TLS on the agent channel, keyless cloud auth) is the
-**Pro** track. The chart is installable today and in validation against GKE —
-see the [Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md), the reproducible
-[GKE test setup](https://github.com/neochaotic/leoflow/blob/main/deploy/k8s/README.md), [Operating modes](operating-modes.md),
+**Pro** track. One command installs the chart with auto-generated TLS and no
+cert-manager — from source on `main` today
+(`helm install lf ./helm/leoflow …`), and from its OCI artifact
+(`helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION>`)
+from the first release cut after this change. See [Install Pro](installation.md#install-pro).
+The chart is installable today and in validation — see the
+[Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md), the reproducible
+[Kubernetes test setup](https://github.com/neochaotic/leoflow/blob/main/deploy/k8s/README.md)
+(the `deploy/k8s` recipe is cloud-portable — it runs unchanged on EKS / GKE / AKS),
+[Operating modes](operating-modes.md),
 and the [Roadmap](roadmap-to-release.md). The product proves itself in **Lite** first.
 
 See also: [DAG authoring](dag-authoring.md) · [Operating modes](operating-modes.md).

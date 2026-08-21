@@ -202,44 +202,53 @@ chart. Task pods are scheduled into the cluster by the same control plane —
 no host-side process supervisor, no managed Python sidecar. DAGs ship as
 **container images** built in CI ([CI/CD & deploy examples](deploy.md)).
 
-### What you need
+The chart is **cloud-portable** — the same commands install unchanged on
+**EKS, GKE, AKS**, or any conformant Kubernetes cluster.
 
-| Requirement | Why |
-|---|---|
-| A **Kubernetes cluster** (1.27+ recommended) | runs the control plane and task pods |
-| `kubectl` configured against that cluster | applies the chart and lets the chart's pre-install Job run migrations |
-| **Helm 3.12+** | installs the chart |
-| An **external Postgres** (PostgreSQL **13+**) | Pro datastore — the chart refuses to install without `database.url` (the embedded datastore is Lite-only) |
-| An **external Redis** (Redis **6.0+**) | XCom + advisory locks — the chart refuses to install without `redis.url` |
+### Quickstart (one command, any cloud)
 
-Managed services are first-class — RDS / Cloud SQL / Azure Database for
-Postgres on the SQL side; ElastiCache / Memorystore / Azure Cache for Redis.
-See the chart's [Datastore compatibility](helm-chart.md#datastore-compatibility)
-table for tested versions; managed providers that present a per-instance or
-provider-specific CA expose a `caConfigMap` knob (Postgres and Redis sides
-respectively) for verified TLS.
-
-!!! note "No managed datastore yet? There's a PoC path."
-    For a one-cluster evaluation (kind, minikube, k3d, scratch namespace), the
-    chart deliberately won't fall back to embedded datastores — that's Lite's
-    job. The supported PoC path is to install plain Postgres + Redis
-    manifests alongside the chart, then point Leoflow at the in-cluster
-    Services. Recipe: [`helm/leoflow/examples/README.md`](https://github.com/neochaotic/leoflow/tree/main/helm/leoflow/examples/README.md).
-    **Not for production.**
-
-### Install with Helm
-
-The chart is published per release (and built from `helm/leoflow` in the
-repo). One simple path is to install directly from the cloned repo at a
-checked-out tag (replace `v0.3.0` with the [latest release](https://github.com/neochaotic/leoflow/releases)):
+The chart is published as an **OCI artifact** next to the images, and it
+**auto-generates its own agent-TLS certificate** by default. So there is **no
+cert-manager to install and no TLS Secret to pre-create** — TLS on the agent
+gRPC channel stays **mandatory**, the chart just mints a stable self-signed CA
++ server cert for you and reuses it across upgrades. Point the chart at your
+external Postgres and Redis and go:
 
 ```bash
-git clone --depth 1 --branch v0.3.0 https://github.com/neochaotic/leoflow
+helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
+  -n leoflow --create-namespace \
+  --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
+  --set redis.url='rediss://HOST:6380/0' \
+  --set auth.jwtSecret="$(openssl rand -base64 64)" \
+  --set secretKey="$(openssl rand -hex 32)" \
+  --set bootstrap.password='change-me'
+```
+
+That's the whole install — **no cert-manager, no pre-created Secret**. The only
+values you must supply are your two datastore URLs and the three credentials.
+`--version` takes the chart version — the
+[latest release](https://github.com/neochaotic/leoflow/releases) tag with the
+leading `v` stripped (per SemVer2).
+
+!!! note "OCI chart availability"
+    The OCI chart and the auto-generated agent TLS ship in the **first release
+    cut after this change**; until that release is published, [install from
+    source](#install-from-source) (below) to use them on `main` today. Source
+    is also the path for the bleeding edge in general.
+
+### Install from source
+
+Installing the chart straight from a checkout of **`main`** is the
+**works-today** path for the OCI-chart and auto-generated-TLS features: both
+are live on `main` now, ahead of the release that first publishes the OCI
+chart. It is also the path for the bleeding edge in general. Same required
+values, from the `helm/leoflow` directory in the repo:
+
+```bash
+git clone --depth 1 https://github.com/neochaotic/leoflow   # current main
 cd leoflow
 
-kubectl create namespace leoflow
-
-helm install lf ./helm/leoflow -n leoflow \
+helm install lf ./helm/leoflow -n leoflow --create-namespace \
   --set image.tag=v0.3.0 \
   --set migrations.image.tag=v0.3.0 \
   --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
@@ -248,6 +257,14 @@ helm install lf ./helm/leoflow -n leoflow \
   --set secretKey="$(openssl rand -hex 32)" \
   --set bootstrap.password='change-me'
 ```
+
+The chart auto-generates the agent TLS cert regardless of image version, so
+this works on `main` today. Pin `--set image.tag` / `--set migrations.image.tag`
+to a published release tag (`v0.3.0` shown — see the
+[releases](https://github.com/neochaotic/leoflow/releases)); from a source
+checkout the image tags are not baked in, so set them explicitly. Add
+`--branch <TAG>` to the clone to install the chart at a specific tag instead of
+`main`.
 
 What this installs (one Deployment, one Service, RBAC for the pod-per-task
 executor, a pre-install/upgrade migrations Job; optional Ingress, PDB, HPA,
@@ -267,6 +284,47 @@ with a controller of your choice — see the chart's
 [ingress values](helm-chart.md) for the field shape. Log in as the bootstrap
 admin (`admin@leoflow.local` / the password you set above) and rotate it.
 
+### Prerequisites
+
+Two external datastores and one cluster capability — that's all a default
+install needs. **cert-manager is NOT required** (the chart auto-generates
+agent TLS, above).
+
+| Requirement | Why |
+|---|---|
+| A **Kubernetes cluster** (1.27+ recommended) | runs the control plane and task pods |
+| `kubectl` + **Helm 3.8+** | apply the chart; Helm 3.8+ is required to `helm install` an OCI chart |
+| An **external Postgres** (PostgreSQL **13+**) | Pro datastore — the chart refuses to install without `database.url` (the embedded datastore is Lite-only) |
+| An **external Redis** (Redis **6.0+**) | XCom + advisory locks — the chart refuses to install without `redis.url` |
+| A **default StorageClass** | the control-plane logs PVC (`logs.persistence.enabled: true`, on by default) binds to it |
+
+Managed services are first-class — RDS / Cloud SQL / Azure Database for
+Postgres on the SQL side; ElastiCache / Memorystore / Azure Cache for Redis.
+See the chart's [Datastore compatibility](helm-chart.md#datastore-compatibility)
+table for tested versions; managed providers that present a per-instance or
+provider-specific CA expose a `caConfigMap` knob (Postgres and Redis sides
+respectively) for verified TLS.
+
+!!! warning "A fresh cluster with no default StorageClass (e.g. EKS Auto Mode)"
+    The logs PVC binds to the cluster's **default StorageClass**. On a truly
+    fresh cluster that has **none** — notably **EKS Auto Mode**, which ships
+    without a default — the PVC hangs `Pending` and the control-plane pod never
+    starts. Two fixes:
+
+    - **Name a StorageClass:** `--set logs.persistence.storageClass=gp2` on EKS
+      (use e.g. `standard-rwo` on GKE, `managed-csi` on AKS), or mark one
+      StorageClass as the cluster default.
+    - **Ephemeral trial:** `--set logs.persistence.enabled=false` uses an
+      `emptyDir` instead — **logs are lost on every pod restart**; dev only.
+
+!!! note "No managed datastore yet? There's a PoC path."
+    For a one-cluster evaluation (kind, minikube, k3d, scratch namespace), the
+    chart deliberately won't fall back to embedded datastores — that's Lite's
+    job. The supported PoC path is to install plain Postgres + Redis
+    manifests alongside the chart, then point Leoflow at the in-cluster
+    Services. Recipe: [`helm/leoflow/examples/README.md`](https://github.com/neochaotic/leoflow/tree/main/helm/leoflow/examples/README.md).
+    **Not for production.**
+
 ### Bring-your-own Secrets
 
 Inline `--set` values bake credentials into the chart-managed Secret.
@@ -285,6 +343,43 @@ When **every** credential comes from an existing Secret, the chart creates
 no Secret of its own. The `checksum/secret` annotation on the pod template
 only sees the chart-managed Secret, so rotation of an
 `existingSecret` requires a manual `kubectl rollout restart deploy/lf-leoflow`.
+
+### Production hardening
+
+The quickstart is production-*shaped* but not production-*hardened*. For a real
+deploy, layer on:
+
+- **cert-manager / BYO TLS.** The default auto-generated cert is a stable
+  self-signed CA — fine for the in-cluster agent channel, but many orgs want
+  cert-manager-issued or externally-rooted certs with automatic rotation. Set
+  `agentTLS.serverCertSecret` + `agentTLS.caConfigMap` and the chart uses them
+  verbatim (skipping auto-gen). Full recipe: [Pro TLS with cert-manager](pro-tls.md).
+- **External Postgres / Redis** on managed services (see [Prerequisites](#prerequisites)),
+  with **verified** TLS via the `database.caConfigMap` / `redis.caConfigMap` knobs.
+- **StorageClass sizing.** The logs PVC defaults to `50Gi` (~1 GB/day per
+  ~1000 active task runs). For multi-replica HA use a **ReadWriteMany**
+  StorageClass (`--set logs.persistence.accessMode=ReadWriteMany` with NFS /
+  Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore) or ship logs to an
+  object store (`logs.sink`); a `ReadWriteOnce` PVC pins you to a single
+  replica.
+- **NetworkPolicy.** Set `networkPolicy.enabled=true` to restrict the control
+  plane and task pods to only the flows they need.
+
+!!! info "The agent channel is server TLS, not mutual mTLS"
+    The agent↔control-plane gRPC channel is **one-way (server) TLS**: the agent
+    verifies the control-plane's **server** certificate, but the agent does
+    **not** present a client certificate. The agent's *identity* is a **bearer
+    JWT**, not an mTLS client cert. So "provision the cert" only ever concerns
+    the server side — there are no per-agent client certs to mint or rotate.
+
+!!! warning "GitOps (ArgoCD / Flux): don't rely on auto-gen"
+    Auto-generation uses Helm's `lookup` to find and reuse the existing cert
+    Secret across upgrades. Cluster-less rendering — ArgoCD/Flux diffing or
+    templating **without** live cluster access — can't `lookup`, so it either
+    regenerates the CA on every sync (breaking every already-running agent's
+    trust) or renders an empty cert. Under GitOps, use **BYO / cert-manager**
+    (`agentTLS.serverCertSecret` + `agentTLS.caConfigMap`) rather than auto-gen.
+    See [Pro TLS](pro-tls.md).
 
 ### Upgrades
 

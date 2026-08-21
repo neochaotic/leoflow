@@ -102,7 +102,7 @@ func TestWarmPoolReconcileKeepsQueuedBoundWorkerIntegration(t *testing.T) {
 		{DagVersionID: dagVersion, Image: "img", EffectiveMinIdle: 0, MaxPoolSize: 8},
 	}}
 
-	r := executor.NewWarmPoolReconciler(targets, pods, sched, nil, nil)
+	r := executor.NewWarmPoolReconciler(targets, pods, sched, 0, nil, nil)
 	if err := r.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}

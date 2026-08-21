@@ -102,7 +102,9 @@ func reconcileWarm(t *testing.T, targets *fakeWarmTargets, pods *fakeWarmPods) {
 // reconcileWarmBusy runs a tick against a specific busy set.
 func reconcileWarmBusy(t *testing.T, targets *fakeWarmTargets, pods *fakeWarmPods, busy *fakeBusyWorkers) {
 	t.Helper()
-	r := NewWarmPoolReconciler(targets, pods, busy, nil, nil)
+	// cap 0 = no per-tenant cap, so these pre-M4 cases exercise the unchanged
+	// per-version reconcile behavior.
+	r := NewWarmPoolReconciler(targets, pods, busy, 0, nil, nil)
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -293,7 +295,7 @@ func TestWarmPoolReconcileCreateErrorIsolatedPerPod(t *testing.T) {
 func TestWarmPoolReconcileListErrorReturned(t *testing.T) {
 	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", EffectiveMinIdle: 1}}}
 	pods := &fakeWarmPods{listErr: errors.New("watch broke")}
-	r := NewWarmPoolReconciler(targets, pods, &fakeBusyWorkers{}, nil, nil)
+	r := NewWarmPoolReconciler(targets, pods, &fakeBusyWorkers{}, 0, nil, nil)
 	if err := r.Reconcile(context.Background()); err == nil {
 		t.Fatal("Reconcile = nil on list error, want the error surfaced")
 	}
@@ -306,7 +308,7 @@ func TestWarmPoolReconcileListErrorReturned(t *testing.T) {
 func TestWarmPoolReconcileTargetsErrorReturned(t *testing.T) {
 	targets := &fakeWarmTargets{err: errors.New("db down")}
 	pods := &fakeWarmPods{}
-	r := NewWarmPoolReconciler(targets, pods, &fakeBusyWorkers{}, nil, nil)
+	r := NewWarmPoolReconciler(targets, pods, &fakeBusyWorkers{}, 0, nil, nil)
 	if err := r.Reconcile(context.Background()); err == nil {
 		t.Fatal("Reconcile = nil on targets error, want the error surfaced")
 	}
@@ -447,7 +449,7 @@ func TestWarmPoolReconcileBusyListErrorAborts(t *testing.T) {
 	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", EffectiveMinIdle: 2, MaxPoolSize: 8}}}
 	pods := &fakeWarmPods{existing: warmPods("dv1", "p1", "p2", "p3")}
 	busy := &fakeBusyWorkers{err: errors.New("db down")}
-	r := NewWarmPoolReconciler(targets, pods, busy, nil, nil)
+	r := NewWarmPoolReconciler(targets, pods, busy, 0, nil, nil)
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile = %v, want nil (busy-list error is do-no-harm, not surfaced)", err)
 	}
@@ -461,11 +463,199 @@ func TestWarmPoolReconcileBusyListErrorAborts(t *testing.T) {
 func TestWarmPoolReconcileNoBusySourceAborts(t *testing.T) {
 	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", EffectiveMinIdle: 2, MaxPoolSize: 8}}}
 	pods := &fakeWarmPods{existing: warmPods("dv1", "p1", "p2", "p3")}
-	r := NewWarmPoolReconciler(targets, pods, nil, nil, nil)
+	r := NewWarmPoolReconciler(targets, pods, nil, 0, nil, nil)
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile = %v, want nil (nil busy source is do-no-harm)", err)
 	}
 	if len(pods.created) != 0 || len(pods.deleted) != 0 {
 		t.Errorf("created %v deleted %v, want NO action without a busy source", pods.created, pods.deleted)
+	}
+}
+
+// ---- M4: per-tenant aggregate warm-pod cap (execution.max_warm_pods_per_tenant).
+// A tenant's TOTAL warm pods across all its dag_versions are bounded on a shared
+// cluster so one tenant cannot pin unlimited idle pods and starve neighbors. The
+// cap is RESERVE-then-RATION and reliability-safe: it never starves a promised
+// idle floor, and it is enforced by refusing to CREATE, never by deleting a busy
+// worker. ----
+
+// warmPodsT builds live warm pods for a dag_version tagged with a tenant, as the
+// tenant label lands on WarmPodInfo.TenantID.
+func warmPodsT(dagVersionID, tenant string, names ...string) []WarmPodInfo {
+	out := make([]WarmPodInfo, 0, len(names))
+	for _, n := range names {
+		out = append(out, WarmPodInfo{Name: n, DagVersionID: dagVersionID, TenantID: tenant})
+	}
+	return out
+}
+
+// reconcileWarmCap runs a tick with a per-tenant cap and a capturing recorder so a
+// test can assert both the create/delete decisions and the metered decisions.
+func reconcileWarmCap(t *testing.T, targets *fakeWarmTargets, pods *fakeWarmPods, busy *fakeBusyWorkers, perTenantCap int) *capturingRecorder {
+	t.Helper()
+	rec := &capturingRecorder{}
+	r := NewWarmPoolReconciler(targets, pods, busy, perTenantCap, nil, rec)
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	return rec
+}
+
+// createdByVersion counts the reconciler's creates per dag_version.
+func createdByVersion(pods *fakeWarmPods) map[string]int {
+	m := map[string]int{}
+	for _, c := range pods.created {
+		m[c.DagVersionID]++
+	}
+	return m
+}
+
+// TestWarmPoolTenantCapFloorHonoredOverCap is the anti-starvation invariant: a
+// tenant whose promised idle floors SUM to more than the cap (3 versions ×
+// EffectiveMinIdle=5 = 15 vs cap 8) must still get EVERY floor — min_idle is
+// sacred, the cap never denies the operator's promised buffer. The reconciler
+// raises the effective budget to the floor sum, creates all 15, and meters
+// warm_pool_tenant_cap_below_min_idle_sum so the misconfiguration is visible.
+func TestWarmPoolTenantCapFloorHonoredOverCap(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{
+		{DagVersionID: "dv1", TenantID: "T", EffectiveMinIdle: 5, MaxPoolSize: 8},
+		{DagVersionID: "dv2", TenantID: "T", EffectiveMinIdle: 5, MaxPoolSize: 8},
+		{DagVersionID: "dv3", TenantID: "T", EffectiveMinIdle: 5, MaxPoolSize: 8},
+	}}
+	pods := &fakeWarmPods{} // zero live
+	rec := reconcileWarmCap(t, targets, pods, &fakeBusyWorkers{}, 8)
+
+	if len(pods.created) != 15 {
+		t.Errorf("created %d, want 15 (every version's floor of 5 honored despite cap 8)", len(pods.created))
+	}
+	byV := createdByVersion(pods)
+	for _, dv := range []string{"dv1", "dv2", "dv3"} {
+		if byV[dv] != 5 {
+			t.Errorf("version %s created %d, want 5 (its promised idle floor, never capped away)", dv, byV[dv])
+		}
+	}
+	if n := rec.count("warm_pool_tenant_cap_below_min_idle_sum"); n < 1 {
+		t.Errorf("warm_pool_tenant_cap_below_min_idle_sum metered %d times, want >= 1 (loud misconfiguration signal)", n)
+	}
+}
+
+// TestWarmPoolTenantCapHeadroomRationedFairly: two versions each with floor 2
+// (floors reserved), tenant cap 8, current live 4 (all busy, split 2/2). Both
+// versions are short of their idle floor; the 4 headroom (8−4) is rationed so BOTH
+// reach their floor — neither version is starved by the other.
+func TestWarmPoolTenantCapHeadroomRationedFairly(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{
+		{DagVersionID: "dv1", TenantID: "T", EffectiveMinIdle: 2, MaxPoolSize: 8},
+		{DagVersionID: "dv2", TenantID: "T", EffectiveMinIdle: 2, MaxPoolSize: 8},
+	}}
+	pods := &fakeWarmPods{existing: append(
+		warmPodsT("dv1", "T", "b1", "b2"),
+		warmPodsT("dv2", "T", "b3", "b4")...,
+	)}
+	reconcileWarmCap(t, targets, pods, busySet("b1", "b2", "b3", "b4"), 8)
+
+	byV := createdByVersion(pods)
+	if byV["dv1"] != 2 || byV["dv2"] != 2 {
+		t.Errorf("created dv1=%d dv2=%d, want 2 each (headroom rationed so both reach their idle floor)", byV["dv1"], byV["dv2"])
+	}
+	if len(pods.deleted) != 0 {
+		t.Errorf("deleted %v, want none (all live workers are busy)", pods.deleted)
+	}
+}
+
+// TestWarmPoolTenantCapAtCapNoCreateBusyUntouched: a tenant AT its cap because busy
+// pods fill the budget. A second version is short of its idle floor, but the tenant
+// has no headroom, so it creates 0 — and no busy worker is deleted to make room.
+// The cap binds at the TENANT level, not the per-version MaxPoolSize (dv2's own
+// pool has ample room).
+func TestWarmPoolTenantCapAtCapNoCreateBusyUntouched(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{
+		{DagVersionID: "dv1", TenantID: "T", EffectiveMinIdle: 2, MaxPoolSize: 8},
+		{DagVersionID: "dv2", TenantID: "T", EffectiveMinIdle: 2, MaxPoolSize: 8},
+	}}
+	// dv1 holds 4 busy pods (fills the cap of 4); dv2 has nothing and is short.
+	pods := &fakeWarmPods{existing: warmPodsT("dv1", "T", "b1", "b2", "b3", "b4")}
+	reconcileWarmCap(t, targets, pods, busySet("b1", "b2", "b3", "b4"), 4)
+
+	if len(pods.created) != 0 {
+		t.Errorf("created %v, want none (tenant is at its aggregate cap)", pods.created)
+	}
+	if len(pods.deleted) != 0 {
+		t.Errorf("deleted %v, want none (never delete a busy worker to satisfy the cap)", pods.deleted)
+	}
+}
+
+// TestWarmPoolTenantCapNeverDeletesBusyOnLoweredCap: the cap is lowered at runtime
+// below the tenant's current busy count. The reconciler must never delete a busy
+// worker to claw back to the cap — it deletes only IDLE excess (via the unchanged
+// per-version path) and leaves every busy worker running.
+func TestWarmPoolTenantCapNeverDeletesBusyOnLoweredCap(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{
+		{DagVersionID: "dv1", TenantID: "T", EffectiveMinIdle: 1, MaxPoolSize: 8},
+	}}
+	// 5 busy + 2 idle; cap 2 is far below the 5 busy. The 2 idle are over the floor
+	// of 1, so the excess-idle path trims exactly 1 idle; the 5 busy stay.
+	pods := &fakeWarmPods{existing: append(
+		warmPodsT("dv1", "T", "b1", "b2", "b3", "b4", "b5"),
+		warmPodsT("dv1", "T", "i1", "i2")...,
+	)}
+	reconcileWarmCap(t, targets, pods, busySet("b1", "b2", "b3", "b4", "b5"), 2)
+
+	if len(pods.created) != 0 {
+		t.Errorf("created %v, want none (tenant is well over the lowered cap)", pods.created)
+	}
+	del := deletedSet(pods)
+	for _, b := range []string{"b1", "b2", "b3", "b4", "b5"} {
+		if del[b] {
+			t.Errorf("deleted busy worker %s, must NEVER delete a busy worker to satisfy a lowered cap", b)
+		}
+	}
+	if len(pods.deleted) != 1 {
+		t.Errorf("deleted %v, want exactly 1 (only the idle excess over the floor)", pods.deleted)
+	}
+}
+
+// TestWarmPoolTenantCapMultiTenantIsolation: tenant A being at its cap must not
+// affect tenant B's creates. B has full headroom and reaches its floor normally.
+func TestWarmPoolTenantCapMultiTenantIsolation(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{
+		{DagVersionID: "dva", TenantID: "A", EffectiveMinIdle: 2, MaxPoolSize: 8},
+		{DagVersionID: "dvb", TenantID: "B", EffectiveMinIdle: 2, MaxPoolSize: 8},
+	}}
+	// A is saturated with 4 busy (cap 4); B has nothing.
+	pods := &fakeWarmPods{existing: warmPodsT("dva", "A", "a1", "a2", "a3", "a4")}
+	reconcileWarmCap(t, targets, pods, busySet("a1", "a2", "a3", "a4"), 4)
+
+	byV := createdByVersion(pods)
+	if byV["dva"] != 0 {
+		t.Errorf("tenant A created %d, want 0 (A is at its cap)", byV["dva"])
+	}
+	if byV["dvb"] != 2 {
+		t.Errorf("tenant B created %d, want 2 (B has its own budget; A being at cap must not affect it)", byV["dvb"])
+	}
+}
+
+// TestWarmPoolTenantCapUnattributablePodNotDeleted: a pre-label pod (no tenant
+// label, "" TenantID) is never deleted to honor the cap. Here the tenant is over
+// budget (busy pods), yet the unlabeled idle pod — within its version's floor —
+// survives, and warm_pool_untenanted_pod is metered.
+func TestWarmPoolTenantCapUnattributablePodNotDeleted(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{
+		{DagVersionID: "dv1", TenantID: "T", EffectiveMinIdle: 1, MaxPoolSize: 8},
+	}}
+	pods := &fakeWarmPods{existing: append(
+		warmPodsT("dv1", "T", "b1", "b2", "b3"),      // busy, labeled
+		WarmPodInfo{Name: "u1", DagVersionID: "dv1"}, // idle, NO tenant label
+	)}
+	rec := reconcileWarmCap(t, targets, pods, busySet("b1", "b2", "b3"), 2)
+
+	if deletedSet(pods)["u1"] {
+		t.Errorf("deleted %v, must NOT delete an unattributable (pre-label) pod for the cap", pods.deleted)
+	}
+	if len(pods.deleted) != 0 {
+		t.Errorf("deleted %v, want none (u1 is within the floor; the cap deletes nothing)", pods.deleted)
+	}
+	if n := rec.count("warm_pool_untenanted_pod"); n < 1 {
+		t.Errorf("warm_pool_untenanted_pod metered %d times, want >= 1", n)
 	}
 }

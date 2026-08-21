@@ -13,10 +13,10 @@ import (
 func TestWarmTargets(t *testing.T) {
 	exec := config.ExecutionSection{WarmPoolsEnabled: true, MinIdleWorkers: 1, MaxPoolSize: 8}
 	versions := []activeWarmVersion{
-		{dagVersionID: "dv1", image: "img1", dagMinIdle: 2},  // author 2 -> 2
-		{dagVersionID: "dv1", image: "img1", dagMinIdle: 2},  // dup of dv1, collapses
-		{dagVersionID: "dv2", image: "img2", dagMinIdle: 0},  // unset -> operator floor 1
-		{dagVersionID: "dv3", image: "img3", dagMinIdle: 20}, // over cap -> clamped 8
+		{dagVersionID: "dv1", image: "img1", dagMinIdle: 2, tenantID: "tA"},  // author 2 -> 2
+		{dagVersionID: "dv1", image: "img1", dagMinIdle: 2, tenantID: "tA"},  // dup of dv1, collapses
+		{dagVersionID: "dv2", image: "img2", dagMinIdle: 0, tenantID: "tB"},  // unset -> operator floor 1
+		{dagVersionID: "dv3", image: "img3", dagMinIdle: 20, tenantID: "tB"}, // over cap -> clamped 8
 	}
 	got := warmTargets(versions, exec)
 	if len(got) != 3 {
@@ -39,6 +39,14 @@ func TestWarmTargets(t *testing.T) {
 	for _, tgt := range got {
 		if tgt.MaxPoolSize != 8 {
 			t.Errorf("target %s MaxPoolSize = %d, want 8 (operator's execution.max_pool_size)", tgt.DagVersionID, tgt.MaxPoolSize)
+		}
+	}
+	// TenantID is threaded onto every target so the reconciler can enforce the
+	// per-tenant aggregate warm-pod cap (M4).
+	wantTenant := map[string]string{"dv1": "tA", "dv2": "tB", "dv3": "tB"}
+	for _, tgt := range got {
+		if w := wantTenant[tgt.DagVersionID]; tgt.TenantID != w {
+			t.Errorf("target %s TenantID = %q, want %q", tgt.DagVersionID, tgt.TenantID, w)
 		}
 	}
 }

@@ -191,6 +191,17 @@ type ExecutionSection struct {
 	// (registered workers + in-flight pods), which arrives with the worker
 	// lifecycle in N1b2/N1d. Today's placer is assign-if-free-else-dedicated.
 	MaxPoolSize int `mapstructure:"max_pool_size"`
+	// MaxWarmPodsPerTenant caps the TOTAL warm pods a single tenant may hold across
+	// ALL its dag_versions on a shared cluster (M4). Where MaxPoolSize bounds one
+	// dag_version's pool, this bounds a tenant's aggregate warm footprint so one
+	// tenant cannot pin unlimited idle pods and starve neighbors on a shared
+	// multi-team cluster. Default 100, operator-set. It is a RESERVE-then-RATION
+	// budget, never a starvation lever: a tenant's promised idle floors (the sum of
+	// its versions' EffectiveMinIdle) are honored even when they exceed this cap
+	// (the reconciler raises the effective budget to the floor sum and meters the
+	// misconfiguration), and the cap is enforced only by refusing to CREATE new
+	// warm pods — never by deleting a busy worker.
+	MaxWarmPodsPerTenant int `mapstructure:"max_warm_pods_per_tenant"`
 }
 
 // EffectiveMinIdle resolves the warm-worker target for one dag_version under
@@ -577,30 +588,31 @@ var serverDefaults = map[string]any{
 	// documented values so an operator who flips warm_pools_enabled on inherits sane
 	// bounds. Durations are written as strings and parsed by viper's decode hook,
 	// matching auth.max_attempt_credential_lifetime.
-	"execution.warm_pools_enabled":      false,
-	"execution.max_attempts_per_worker": 50,
-	"execution.max_worker_lifetime":     "1h",
-	"execution.min_idle_workers":        0,
-	"execution.worker_idle_ttl":         "5m",
-	"execution.max_pool_size":           8,
-	"logs.dir":                          "/var/log/leoflow",
-	"logs.backend":                      "disk",
-	"logs.sink.bucket":                  "",
-	"logs.sink.prefix":                  "",
-	"logs.sink.region":                  "",
-	"logs.sink.endpoint":                "",
-	"logs.sink.force_path_style":        false,
-	"logs.sink.access_key_id":           "",
-	"logs.sink.secret_access_key":       "",
-	"logs.sink.credentials_file":        "",
-	"observability.otel.enabled":        true,
-	"observability.otel.endpoint":       "localhost:4317",
-	"observability.log_level":           "info",
-	"observability.log_format":          "json",
-	"ui.instance_name":                  "Leoflow",
-	"ui.edition":                        "",
-	"ui.workspace":                      "",
-	"ui.monaco_dir":                     "",
+	"execution.warm_pools_enabled":       false,
+	"execution.max_attempts_per_worker":  50,
+	"execution.max_worker_lifetime":      "1h",
+	"execution.min_idle_workers":         0,
+	"execution.worker_idle_ttl":          "5m",
+	"execution.max_pool_size":            8,
+	"execution.max_warm_pods_per_tenant": 100,
+	"logs.dir":                           "/var/log/leoflow",
+	"logs.backend":                       "disk",
+	"logs.sink.bucket":                   "",
+	"logs.sink.prefix":                   "",
+	"logs.sink.region":                   "",
+	"logs.sink.endpoint":                 "",
+	"logs.sink.force_path_style":         false,
+	"logs.sink.access_key_id":            "",
+	"logs.sink.secret_access_key":        "",
+	"logs.sink.credentials_file":         "",
+	"observability.otel.enabled":         true,
+	"observability.otel.endpoint":        "localhost:4317",
+	"observability.log_level":            "info",
+	"observability.log_format":           "json",
+	"ui.instance_name":                   "Leoflow",
+	"ui.edition":                         "",
+	"ui.workspace":                       "",
+	"ui.monaco_dir":                      "",
 	// Must appear here even though the zero value is meaningful (the handler
 	// falls back to api.DefaultUIAutoRefreshIntervalSeconds when ≤ 0): viper's
 	// AutomaticEnv only binds env vars for keys it has seen via SetDefault or
@@ -809,6 +821,9 @@ func (c *ServerConfig) validateExecution() error {
 	}
 	if c.Execution.MaxPoolSize < 1 {
 		return fmt.Errorf("execution.max_pool_size must be >= 1 when execution.warm_pools_enabled (got %d): a zero cap would forbid every warm worker (ADR 0058)", c.Execution.MaxPoolSize)
+	}
+	if c.Execution.MaxWarmPodsPerTenant < 1 {
+		return fmt.Errorf("execution.max_warm_pods_per_tenant must be >= 1 when execution.warm_pools_enabled (got %d): a zero aggregate tenant cap would forbid every warm worker (M4)", c.Execution.MaxWarmPodsPerTenant)
 	}
 	return nil
 }

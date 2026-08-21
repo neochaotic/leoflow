@@ -997,8 +997,8 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace str
 // the busy set (busy) once per tick to classify workers. Like the pod reconciler
 // it mutates cluster state, so it runs on the leader alone via the gated ticker.
 // It is only called when warm pools are enabled.
-func startWarmPoolReconciler(ctx context.Context, targets executor.WarmTargetSource, pods executor.WarmPodClient, busy executor.BusyWarmWorkerSource, leading func() bool, rec executor.DecisionRecorder, logger *slog.Logger) {
-	rc := executor.NewWarmPoolReconciler(targets, pods, busy, logger, rec)
+func startWarmPoolReconciler(ctx context.Context, targets executor.WarmTargetSource, pods executor.WarmPodClient, busy executor.BusyWarmWorkerSource, maxWarmPodsPerTenant int, leading func() bool, rec executor.DecisionRecorder, logger *slog.Logger) {
+	rc := executor.NewWarmPoolReconciler(targets, pods, busy, maxWarmPodsPerTenant, logger, rec)
 	startGatedTicker(ctx, "warm-pool-reconcile", reconcileInterval, leading, logger, func() {
 		if err := rc.Reconcile(ctx); err != nil {
 			logger.Error("warm pool reconcile", "error", err)
@@ -1032,6 +1032,7 @@ func warmPodSpecFunc(cfg *config.ServerConfig, authn *auth.JWTAuthenticator, con
 		return executor.WarmPodSpec{
 			DagVersionID:        t.DagVersionID,
 			Image:               t.Image,
+			TenantID:            t.TenantID,
 			ControlPlaneAddr:    controlAddr,
 			AgentTLSCAConfigMap: cfg.Executor.AgentTLSCAConfigMap,
 			BootstrapToken:      token,
@@ -1407,7 +1408,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 		// The busy set (running attempts durably bound to a warm worker) makes the
 		// reconciler busy-aware (ADR 0058 N1d-b): it scales the IDLE buffer and never
 		// deletes a worker with an in-flight attempt. store implements it.
-		startWarmPoolReconciler(ctx, store, warmPods, store, sched.IsLeading, metrics, logger)
+		startWarmPoolReconciler(ctx, store, warmPods, store, cfg.Execution.MaxWarmPodsPerTenant, sched.IsLeading, metrics, logger)
 		logger.Warn("warm pool reconciler enabled (ADR 0058 N1b2b); maintaining min_idle warm workers per active dag_version", "namespace", cfg.Executor.TaskNamespace)
 	}
 	logger.Info("pod dispatch enabled", "namespace", cfg.Executor.TaskNamespace, "agent_control_plane_addr", controlAddr)

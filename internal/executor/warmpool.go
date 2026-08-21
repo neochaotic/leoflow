@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"log/slog"
+	"sort"
 )
 
 // WarmTarget is one active dag_version the warm-pool reconciler keeps warm workers
@@ -23,11 +24,16 @@ import (
 // practice; the reconciler still handles MaxPoolSize < EffectiveMinIdle defensively
 // by taking the effective ceiling as max(EffectiveMinIdle, MaxPoolSize) — the idle
 // buffer must always be creatable.
+// TenantID is the tenant that owns this dag_version, threaded through so the
+// per-tenant aggregate warm-pod cap (M4) can sum a tenant's promised idle floors
+// and ration its shared budget across versions. It comes from the active run's
+// tenant_id; the reconciler groups targets and live pods by it.
 type WarmTarget struct {
 	DagVersionID     string
 	Image            string
 	EffectiveMinIdle int
 	MaxPoolSize      int
+	TenantID         string
 }
 
 // WarmTargetSource yields the currently active dag_versions and their effective
@@ -62,10 +68,17 @@ type BusyWarmWorkerSource interface {
 // a crashed/drained/finished worker lingers as a terminal pod that can never
 // serve again. The reconciler must NOT count terminal pods toward the target
 // (or a dead worker never gets replaced) and always reaps them.
+// TenantID is the tenant that owns the dag_version this pod serves, read from the
+// pod's leoflow.io/tenant-id label (M4). The reconciler counts a tenant's live
+// pods by it — including pods of a draining/inactive version, which are absent
+// from the active targets — so the per-tenant cap sees the tenant's whole warm
+// footprint. A pre-label pod (rolling upgrade) carries "" here; the reconciler
+// attributes it via its version when resolvable and NEVER deletes it for the cap.
 type WarmPodInfo struct {
 	Name         string
 	DagVersionID string
 	Terminal     bool
+	TenantID     string
 }
 
 // WarmPodClient is the cluster side of warm-pool reconciliation: list the warm
@@ -115,6 +128,13 @@ type WarmPoolReconciler struct {
 	busy    BusyWarmWorkerSource
 	logger  *slog.Logger
 	rec     DecisionRecorder
+	// maxWarmPodsPerTenant is the operator's per-tenant aggregate cap (M4,
+	// execution.max_warm_pods_per_tenant): the total warm pods one tenant may hold
+	// across all its dag_versions. <= 0 means "no tenant cap" — the reconciler skips
+	// all tenant accounting and behaves byte-for-byte as the pre-M4 per-version
+	// reconciler (this is what the pre-M4 unit tests exercise). In production it is
+	// always >= 1 (boot validation), so the tenant budget always applies.
+	maxWarmPodsPerTenant int
 }
 
 // NewWarmPoolReconciler builds a reconciler over the given target source, pod
@@ -122,13 +142,15 @@ type WarmPoolReconciler struct {
 // busy or idle so scale-down never kills an in-flight attempt (ADR 0058 N1d-b M1);
 // without it every worker would look idle and a busy worker could be deleted, so a
 // nil busy source (or a busy-list error at tick time) makes the tick do nothing —
-// do-no-harm. logger and rec (metrics) are optional — a nil logger falls back to
-// the default and a nil rec skips metering.
-func NewWarmPoolReconciler(targets WarmTargetSource, pods WarmPodClient, busy BusyWarmWorkerSource, logger *slog.Logger, rec DecisionRecorder) *WarmPoolReconciler {
+// do-no-harm. maxWarmPodsPerTenant is the per-tenant aggregate cap (M4); <= 0
+// disables tenant accounting (pre-M4 per-version behavior). logger and rec
+// (metrics) are optional — a nil logger falls back to the default and a nil rec
+// skips metering.
+func NewWarmPoolReconciler(targets WarmTargetSource, pods WarmPodClient, busy BusyWarmWorkerSource, maxWarmPodsPerTenant int, logger *slog.Logger, rec DecisionRecorder) *WarmPoolReconciler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &WarmPoolReconciler{targets: targets, pods: pods, busy: busy, logger: logger, rec: rec}
+	return &WarmPoolReconciler{targets: targets, pods: pods, busy: busy, maxWarmPodsPerTenant: maxWarmPodsPerTenant, logger: logger, rec: rec}
 }
 
 // Reconcile brings the warm fleet in line with the active targets for one tick. It
@@ -170,20 +192,187 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context) error {
 		byVersion[p.DagVersionID] = append(byVersion[p.DagVersionID], p)
 	}
 
+	// Ration each active version's create allowance under the per-tenant aggregate
+	// cap (M4): reserve every version's promised idle floor, then ration the tenant's
+	// remaining budget across its versions. allow[dagVersionID] is the max NEW warm
+	// pods this version may create this tick under the tenant budget; nil means no
+	// tenant cap is configured (pre-M4 per-version behavior — every version gets its
+	// full idle shortfall). The cap is enforced by capping creates only; deletes
+	// (excess idle + terminal) are untouched, so a busy worker is never killed to
+	// honor the cap.
+	allow := r.createAllowances(ctx, targets, existing, busy)
+
 	// Reconcile every active version to its target, then drain any version that is
-	// present in the fleet but no longer active (its target is implicitly 0).
+	// present in the fleet but no longer active (its target is implicitly 0). A
+	// draining version has target 0, so it never creates — its allowance is moot; it
+	// still counts against its tenant's live budget (its pods carry the tenant label
+	// and were summed into tenant_live above).
 	active := make(map[string]bool, len(targets))
 	for _, t := range targets {
 		active[t.DagVersionID] = true
-		r.reconcileVersion(ctx, t, byVersion[t.DagVersionID], busy)
+		r.reconcileVersion(ctx, t, byVersion[t.DagVersionID], busy, allowanceFor(allow, t.DagVersionID))
 	}
 	for dagVersionID, have := range byVersion {
 		if active[dagVersionID] {
 			continue
 		}
-		r.reconcileVersion(ctx, WarmTarget{DagVersionID: dagVersionID, EffectiveMinIdle: 0}, have, busy)
+		r.reconcileVersion(ctx, WarmTarget{DagVersionID: dagVersionID, EffectiveMinIdle: 0}, have, busy, unlimitedAllowance)
 	}
 	return nil
+}
+
+// unlimitedAllowance is the sentinel create allowance meaning "no per-tenant cap
+// applies to this version" (either no cap is configured, or the version is
+// draining and cannot create anyway). reconcileVersion treats a negative allowance
+// as unbounded and falls back to the per-version floor/MaxPoolSize gate alone.
+const unlimitedAllowance = -1
+
+// allowanceFor reads a version's rationed create allowance. A nil map (no tenant
+// cap configured) yields unlimited, preserving the pre-M4 per-version behavior.
+func allowanceFor(allow map[string]int, dagVersionID string) int {
+	if allow == nil {
+		return unlimitedAllowance
+	}
+	return allow[dagVersionID]
+}
+
+// createAllowances computes, per active dag_version, the maximum number of NEW
+// warm pods it may create this tick under the per-tenant aggregate cap (M4). It
+// returns nil when no cap is configured (maxWarmPodsPerTenant <= 0), so the caller
+// falls back to the unbounded pre-M4 per-version behavior.
+//
+// The algorithm is RESERVE-then-RATION per tenant, tuned so the cap never starves
+// a legitimate tenant and never has to delete a busy worker:
+//
+//   - min_idle is SACRED. The tenant's effective budget is
+//     max(max_warm_pods_per_tenant, Σ EffectiveMinIdle over its ACTIVE versions).
+//     If the promised floors already exceed the cap it is a misconfiguration, not a
+//     reason to starve work: the budget is raised to the floor sum so every floor
+//     is still creatable, and warm_pool_tenant_cap_below_min_idle_sum is logged +
+//     metered loudly so an operator fixes the config.
+//   - tenant_live is the count of the tenant's LIVE (non-terminal) warm pods across
+//     the whole listed fleet, grouped by the tenant label — so it includes pods of a
+//     draining/inactive version (absent from the active targets). A pre-label pod
+//     ("" tenant) is attributed via its version→tenant mapping when resolvable
+//     (metered warm_pool_untenanted_pod) and otherwise left uncounted — it is never
+//     deleted for the cap.
+//   - headroom = budget − tenant_live. It is rationed across the tenant's active
+//     versions still short of their idle floor, in a STABLE order (by DagVersionID),
+//     each taking min(idle shortfall, its own MaxPoolSize headroom, remaining
+//     headroom). Because the budget already covers Σ floors, every floor is granted
+//     unless busy pods have legitimately consumed the budget — and in that case the
+//     cap holds by refusing to create, never by deleting the busy workers (they are
+//     reaped on a later tick once idle).
+func (r *WarmPoolReconciler) createAllowances(ctx context.Context, targets []WarmTarget, existing []WarmPodInfo, busy map[string]bool) map[string]int {
+	if r.maxWarmPodsPerTenant <= 0 {
+		return nil
+	}
+
+	// Active versions: their owning tenant, the per-tenant floor sum, and the set of
+	// versions to ration across.
+	versionTenant := make(map[string]string, len(targets))
+	tenantFloors := make(map[string]int)
+	tenantVersions := make(map[string][]WarmTarget)
+	for _, t := range targets {
+		versionTenant[t.DagVersionID] = t.TenantID
+		tenantFloors[t.TenantID] += t.EffectiveMinIdle
+		tenantVersions[t.TenantID] = append(tenantVersions[t.TenantID], t)
+	}
+
+	stat, tenantLive := r.countLiveByTenant(existing, busy, versionTenant)
+
+	// Reserve-then-ration per tenant: raise the budget to the promised floor sum,
+	// then ration the tenant's remaining headroom across its versions.
+	allow := make(map[string]int, len(targets))
+	for tenant, versions := range tenantVersions {
+		budget := r.tenantBudget(ctx, tenant, tenantFloors[tenant])
+		r.rationTenant(versions, stat, budget-tenantLive[tenant], allow)
+	}
+	return allow
+}
+
+// warmVerStat is one dag_version's live-pod accounting for one tick: idle is the
+// count of live non-busy workers, live is idle + busy (terminal pods excluded).
+type warmVerStat struct{ idle, live int }
+
+// countLiveByTenant classifies the listed fleet ONCE (no second query): per
+// dag_version it counts live idle/total workers, and per tenant it counts live
+// pods attributed by the tenant label. A pre-label pod ("" tenant) is attributed
+// via its version→tenant mapping when resolvable (metered warm_pool_untenanted_pod)
+// and otherwise left uncounted — it is never deleted for the cap either way.
+func (r *WarmPoolReconciler) countLiveByTenant(existing []WarmPodInfo, busy map[string]bool, versionTenant map[string]string) (stat map[string]warmVerStat, tenantLive map[string]int) {
+	stat = make(map[string]warmVerStat, len(versionTenant))
+	tenantLive = make(map[string]int)
+	for _, p := range existing {
+		if p.Terminal {
+			continue
+		}
+		s := stat[p.DagVersionID]
+		s.live++
+		if !busy[p.Name] {
+			s.idle++
+		}
+		stat[p.DagVersionID] = s
+
+		tenant := p.TenantID
+		if tenant == "" {
+			vt, ok := versionTenant[p.DagVersionID]
+			if !ok || vt == "" {
+				r.record("warm_pool_untenanted_pod")
+				continue // unmappable: never counted, never deleted for the cap
+			}
+			r.record("warm_pool_untenanted_pod")
+			tenant = vt
+		}
+		tenantLive[tenant]++
+	}
+	return stat, tenantLive
+}
+
+// tenantBudget is the tenant's effective aggregate budget: the operator's cap,
+// raised to the promised idle-floor sum when the floors exceed the cap so no
+// promised buffer is starved (a misconfiguration, logged + metered loudly).
+func (r *WarmPoolReconciler) tenantBudget(ctx context.Context, tenant string, floorSum int) int {
+	if floorSum <= r.maxWarmPodsPerTenant {
+		return r.maxWarmPodsPerTenant
+	}
+	r.logger.WarnContext(ctx, "warm-pool per-tenant cap is below the tenant's promised idle-floor sum; honoring the floors and raising the effective budget so no promised idle buffer is starved (fix execution.max_warm_pods_per_tenant or the DAGs' min_idle_workers)",
+		"tenant", tenant, "max_warm_pods_per_tenant", r.maxWarmPodsPerTenant, "min_idle_sum", floorSum)
+	r.record("warm_pool_tenant_cap_below_min_idle_sum")
+	return floorSum
+}
+
+// rationTenant distributes a tenant's create headroom across its versions in a
+// stable order (by DagVersionID), writing each version's create allowance into
+// allow. Each version takes min(idle shortfall to its floor, its own MaxPoolSize
+// headroom, remaining tenant headroom). Because the budget already covers the
+// floor sum, every floor is granted unless busy pods have legitimately consumed
+// the budget — in which case the cap holds by granting less, never by deleting.
+func (r *WarmPoolReconciler) rationTenant(versions []WarmTarget, stat map[string]warmVerStat, headroom int, allow map[string]int) {
+	if headroom < 0 {
+		headroom = 0
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i].DagVersionID < versions[j].DagVersionID })
+	for _, t := range versions {
+		s := stat[t.DagVersionID]
+		maxPool := t.MaxPoolSize
+		if maxPool < t.EffectiveMinIdle {
+			maxPool = t.EffectiveMinIdle
+		}
+		want := t.EffectiveMinIdle - s.idle // idle shortfall to the floor
+		if poolHeadroom := maxPool - s.live; poolHeadroom < want {
+			want = poolHeadroom
+		}
+		if want < 0 {
+			want = 0
+		}
+		grant := want
+		if headroom < grant {
+			grant = headroom
+		}
+		allow[t.DagVersionID] = grant
+		headroom -= grant
+	}
 }
 
 // reconcileVersion brings one dag_version's IDLE warm-worker buffer to its target
@@ -196,7 +385,14 @@ func (r *WarmPoolReconciler) Reconcile(ctx context.Context) error {
 // grows past min_idle under load (busy workers do not consume the idle buffer) and
 // never exceeds the ceiling, and scale-down/drain deletes only IDLE workers so an
 // in-flight attempt is never killed (M1).
-func (r *WarmPoolReconciler) reconcileVersion(ctx context.Context, t WarmTarget, have []WarmPodInfo, busy map[string]bool) {
+//
+// createAllowance is the per-tenant cap's gate on NEW pods this tick (M4): the
+// version creates min(idle shortfall, MaxPoolSize headroom, createAllowance). A
+// negative allowance (unlimitedAllowance) means no tenant cap applies, so the
+// create is bounded by the per-version floor/MaxPoolSize gate alone — the pre-M4
+// behavior. The allowance gates CREATES only; the terminal reap and the
+// excess-idle delete are unchanged, so the cap never deletes a busy worker.
+func (r *WarmPoolReconciler) reconcileVersion(ctx context.Context, t WarmTarget, have []WarmPodInfo, busy map[string]bool, createAllowance int) {
 	defer func() {
 		if p := recover(); p != nil {
 			r.logger.ErrorContext(ctx, "warm-pool reconcile panicked for a dag_version; other versions unaffected",
@@ -242,12 +438,16 @@ func (r *WarmPoolReconciler) reconcileVersion(ctx context.Context, t WarmTarget,
 	switch {
 	case len(idle) < t.EffectiveMinIdle && live < maxPool:
 		// Idle buffer is short AND the pool is below its total ceiling: create
-		// enough to restore the buffer, but never past the ceiling. create =
-		// min(idle shortfall, headroom to the ceiling). Each create is isolated so
-		// one apiserver rejection does not stop the rest of this version's workers.
+		// enough to restore the buffer, but never past the ceiling OR the tenant's
+		// rationed allowance. create = min(idle shortfall, headroom to the ceiling,
+		// tenant allowance). Each create is isolated so one apiserver rejection does
+		// not stop the rest of this version's workers.
 		create := t.EffectiveMinIdle - len(idle)
 		if headroom := maxPool - live; headroom < create {
 			create = headroom
+		}
+		if createAllowance >= 0 && create > createAllowance {
+			create = createAllowance
 		}
 		for i := 0; i < create; i++ {
 			if err := r.pods.CreateWarmPod(ctx, t); err != nil {

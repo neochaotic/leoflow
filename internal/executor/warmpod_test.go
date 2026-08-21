@@ -106,6 +106,12 @@ func TestBuildWarmPodWarmEnvAndLabels(t *testing.T) {
 		}
 	}
 
+	// No tenant label when the spec carries none: an absent tenant label means
+	// exactly "pre-label pod" to the reconciler (M4).
+	if _, ok := pod.Labels[warmTenantLabelKey]; ok {
+		t.Errorf("warm pod must not carry a blank tenant label when TenantID is unset (got %q)", pod.Labels[warmTenantLabelKey])
+	}
+
 	// A warm worker that exits on drain must be REPLACED by the reconciler, not
 	// restarted in place (a fresh pod re-registers cleanly); RestartPolicy Never.
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
@@ -114,6 +120,19 @@ func TestBuildWarmPodWarmEnvAndLabels(t *testing.T) {
 	// The agent authenticates over gRPC and never calls the Kubernetes API.
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
 		t.Error("AutomountServiceAccountToken must be explicitly false")
+	}
+}
+
+// TestBuildWarmPodStampsTenantLabel locks the M4 tenant attribution: when the spec
+// carries a TenantID, BuildWarmPod stamps it as the leoflow.io/tenant-id label so
+// the reconciler can attribute the pod to its tenant for the per-tenant aggregate
+// cap — even after the version stops being active (the label outlives the target).
+func TestBuildWarmPodStampsTenantLabel(t *testing.T) {
+	spec := baseWarmSpec()
+	spec.TenantID = "tenant-xyz"
+	pod := BuildWarmPod(spec)
+	if got := pod.Labels[warmTenantLabelKey]; got != "tenant-xyz" {
+		t.Errorf("label %s = %q, want tenant-xyz", warmTenantLabelKey, got)
 	}
 }
 

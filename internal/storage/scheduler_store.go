@@ -182,6 +182,10 @@ type activeWarmVersion struct {
 	dagVersionID string
 	image        string
 	dagMinIdle   int
+	// tenantID owns this dag_version; threaded onto the WarmTarget so the reconciler
+	// can enforce the per-tenant aggregate warm-pod cap (M4). Many active runs of a
+	// version share one tenant, so it dedupes with the version.
+	tenantID string
 }
 
 // warmTargets dedupes the active versions (many runs share one immutable
@@ -205,6 +209,9 @@ func warmTargets(versions []activeWarmVersion, exec config.ExecutionSection) []e
 			// dag_version (model A2, ADR 0058 N1d-b). The reconciler grows the pool
 			// past min_idle under load up to this cap and never beyond it.
 			MaxPoolSize: exec.MaxPoolSize,
+			// TenantID owns this dag_version; the reconciler sums a tenant's idle
+			// floors and rations its aggregate budget across versions (M4).
+			TenantID: v.tenantID,
 		})
 	}
 	return out
@@ -237,6 +244,7 @@ func (s *SchedulerStore) ActiveWarmTargets(ctx context.Context) ([]executor.Warm
 			dagVersionID: uuidToString(run.DagVersionID),
 			image:        spec.Image,
 			dagMinIdle:   spec.MinIdleWorkers,
+			tenantID:     uuidToString(run.TenantID),
 		})
 	}
 	return warmTargets(versions, s.warmExec), nil

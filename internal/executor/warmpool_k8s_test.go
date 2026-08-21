@@ -36,6 +36,37 @@ func TestKubernetesWarmPodsListSelectsWarmOnly(t *testing.T) {
 	}
 }
 
+// TestKubernetesWarmPodsListReadsTenant proves ListWarmPods reads the tenant label
+// into WarmPodInfo.TenantID (M4), and a pre-label pod (no tenant label) reads "" so
+// the reconciler treats it as unattributable.
+func TestKubernetesWarmPodsListReadsTenant(t *testing.T) {
+	cs := fake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "labeled", Namespace: "leoflow",
+			Labels: map[string]string{warmWorkerLabelKey: warmWorkerLabelVal, warmDagVersionLabelKey: "dv1", warmTenantLabelKey: "tenant-a"},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "prelabel", Namespace: "leoflow",
+			Labels: map[string]string{warmWorkerLabelKey: warmWorkerLabelVal, warmDagVersionLabelKey: "dv1"},
+		}},
+	)
+	k := NewKubernetesWarmPods(cs, "leoflow", nil)
+	got, err := k.ListWarmPods(context.Background())
+	if err != nil {
+		t.Fatalf("ListWarmPods: %v", err)
+	}
+	tenant := map[string]string{}
+	for _, p := range got {
+		tenant[p.Name] = p.TenantID
+	}
+	if tenant["labeled"] != "tenant-a" {
+		t.Errorf("labeled pod TenantID = %q, want tenant-a", tenant["labeled"])
+	}
+	if tenant["prelabel"] != "" {
+		t.Errorf("pre-label pod TenantID = %q, want \"\" (unattributable)", tenant["prelabel"])
+	}
+}
+
 // TestKubernetesWarmPodsListFlagsTerminal proves ListWarmPods marks Succeeded
 // and Failed warm pods Terminal (dead RestartPolicy:Never workers) while a
 // Running/Pending pod stays live, so the reconciler can replace and reap them.

@@ -2,14 +2,18 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // fakeAssignmentStream is a hand-rolled grpc.BidiStreamingClient double for the
@@ -233,6 +237,251 @@ func TestWarmWorkerRegisterCarriesPodName(t *testing.T) {
 	}
 	if reg.GetPodName() != "leoflow-warm-dv-abc-x7k2" {
 		t.Errorf("WorkerRegister.pod_name = %q, want leoflow-warm-dv-abc-x7k2", reg.GetPodName())
+	}
+}
+
+// warmSpecs returns n identical minimal specs (bash true, no execution_timeout) so
+// a warmFake can hand one out per served attempt without index-out-of-range.
+func warmSpecs(n int) []*agentv1.TaskSpec {
+	out := make([]*agentv1.TaskSpec, n)
+	for i := range out {
+		out[i] = &agentv1.TaskSpec{Operator: "bash", Entrypoint: "true"}
+	}
+	return out
+}
+
+// TestWarmWorkerDrainsAtMaxAttempts is D9/D10 (ADR 0058): a warm worker serves at
+// most MaxAttempts attempts, then DRAINS — Run returns nil (the process exits and
+// the reconciler replaces the pod). The stream offers more work than the cap, so
+// the only reason exactly two attempts run is the cap, and the drain is graceful
+// (checked after SlotFree, never mid-attempt).
+func TestWarmWorkerDrainsAtMaxAttempts(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	stream := &fakeAssignmentStream{
+		ctx: context.Background(),
+		assignments: []*agentv1.WorkAssignment{
+			{AssignmentId: "asg-1", AttemptToken: "tok-1"},
+			{AssignmentId: "asg-2", AttemptToken: "tok-2"},
+			{AssignmentId: "asg-3", AttemptToken: "tok-3"},
+		},
+	}
+	tokens := NewTokenSource("bootstrap")
+	client := &warmFake{fakeClient: &fakeClient{}, stream: stream, tokens: tokens, specs: warmSpecs(3)}
+	cmd := &scratchProbeCmd{scratchDir: scratch}
+
+	w := &WarmRunner{
+		StreamClient: client, WorkClient: client, AttemptTokens: tokens,
+		Cmd: cmd, Hostname: "warm-pod-1", Version: "test", ScratchDir: scratch,
+		MaxAttempts: 2,
+	}
+	if err := w.Run(context.Background(), "dagver-1"); err != nil {
+		t.Fatalf("WarmRunner.Run: %v", err)
+	}
+	if cmd.runs != 2 {
+		t.Fatalf("attempts run = %d, want exactly 2 (drained at MaxAttempts)", cmd.runs)
+	}
+	// The worker Recv'd only two assignments — it drained rather than pulling asg-3.
+	if stream.idx != 2 {
+		t.Errorf("assignments received = %d, want 2 (drain must stop awaiting new work)", stream.idx)
+	}
+}
+
+// TestWarmWorkerDrainsAtMaxLifetime is D9's wall-clock cap: with a 1ns lifetime the
+// after-SlotFree check trips on the very first attempt, so the worker serves one and
+// drains. Deterministic — any elapsed time since workerStart exceeds 1ns.
+func TestWarmWorkerDrainsAtMaxLifetime(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	stream := &fakeAssignmentStream{
+		ctx: context.Background(),
+		assignments: []*agentv1.WorkAssignment{
+			{AssignmentId: "asg-1", AttemptToken: "tok-1"},
+			{AssignmentId: "asg-2", AttemptToken: "tok-2"},
+		},
+	}
+	tokens := NewTokenSource("bootstrap")
+	client := &warmFake{fakeClient: &fakeClient{}, stream: stream, tokens: tokens, specs: warmSpecs(2)}
+	cmd := &scratchProbeCmd{scratchDir: scratch}
+
+	w := &WarmRunner{
+		StreamClient: client, WorkClient: client, AttemptTokens: tokens,
+		Cmd: cmd, Hostname: "warm-pod-1", Version: "test", ScratchDir: scratch,
+		MaxLifetime: time.Nanosecond,
+	}
+	if err := w.Run(context.Background(), "dagver-1"); err != nil {
+		t.Fatalf("WarmRunner.Run: %v", err)
+	}
+	if cmd.runs != 1 {
+		t.Fatalf("attempts run = %d, want exactly 1 (drained at MaxLifetime)", cmd.runs)
+	}
+	if stream.idx != 1 {
+		t.Errorf("assignments received = %d, want 1 (lifetime drain stops awaiting new work)", stream.idx)
+	}
+}
+
+// idleStream serves one assignment, then BLOCKS in Recv until its context is
+// canceled — modeling a real gRPC stream whose Recv only returns when the stream
+// closes. The idle-TTL path in Run must recycle the worker BEFORE this returns; the
+// blocked Recv goroutine then unblocks on the parent cancel and closes recvExited,
+// letting the test prove no goroutine is leaked.
+type idleStream struct {
+	ctx        context.Context
+	first      *agentv1.WorkAssignment
+	served     bool
+	sent       []*agentv1.WorkerMessage
+	recvExited chan struct{}
+}
+
+func (s *idleStream) Send(m *agentv1.WorkerMessage) error { s.sent = append(s.sent, m); return nil }
+
+func (s *idleStream) Recv() (*agentv1.WorkAssignment, error) {
+	if !s.served {
+		s.served = true
+		return s.first, nil
+	}
+	<-s.ctx.Done()
+	close(s.recvExited)
+	return nil, status.Error(codes.Canceled, "stream closed")
+}
+
+func (s *idleStream) Header() (metadata.MD, error) { return metadata.MD{}, nil }
+func (s *idleStream) Trailer() metadata.MD         { return nil }
+func (s *idleStream) CloseSend() error             { return nil }
+func (s *idleStream) Context() context.Context     { return s.ctx }
+func (s *idleStream) SendMsg(any) error            { return nil }
+func (s *idleStream) RecvMsg(any) error            { return nil }
+
+// idleFake overrides AwaitAssignment to hand back the blocking idleStream.
+type idleFake struct {
+	*fakeClient
+	stream *idleStream
+}
+
+func (c *idleFake) AwaitAssignment(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentv1.WorkerMessage, agentv1.WorkAssignment], error) {
+	return c.stream, nil
+}
+
+// TestWarmWorkerIdleRecycle is D6: while awaiting the next assignment, a worker that
+// sees no work within IdleTTL recycles itself (Run returns nil) for freshness /
+// scale-down. The recv goroutine must not leak — once the stream closes on teardown
+// its blocked Recv returns and the goroutine exits.
+func TestWarmWorkerIdleRecycle(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	stream := &idleStream{
+		ctx:        ctx,
+		first:      &agentv1.WorkAssignment{AssignmentId: "asg-1", AttemptToken: "tok-1"},
+		recvExited: make(chan struct{}),
+	}
+	tokens := NewTokenSource("bootstrap")
+	client := &idleFake{fakeClient: &fakeClient{spec: &agentv1.TaskSpec{Operator: "bash", Entrypoint: "true"}}}
+	client.stream = stream
+
+	w := &WarmRunner{
+		StreamClient: client, WorkClient: client, AttemptTokens: tokens,
+		Cmd: &scratchProbeCmd{scratchDir: scratch}, Hostname: "warm-pod-1", Version: "test",
+		ScratchDir: scratch,
+		IdleTTL:    20 * time.Millisecond,
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx, "dagver-1") }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WarmRunner.Run returned %v, want nil (idle recycle)", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not idle-recycle within 2s")
+	}
+
+	// No goroutine leak: after Run returns, tear down the stream (parent cancel) and
+	// prove the blocked Recv goroutine unblocks and exits.
+	cancel()
+	select {
+	case <-stream.recvExited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recv goroutine leaked: blocked Recv never returned after stream close")
+	}
+}
+
+// wedgeThenOKCmd wedges its first invocation until the ctx is canceled (recording
+// the cancel cause), then succeeds on every later invocation — modeling a task with
+// no execution_timeout that hangs, followed by a well-behaved one.
+type wedgeThenOKCmd struct {
+	runs         int
+	wedgedCtxErr error
+}
+
+func (c *wedgeThenOKCmd) Run(ctx context.Context, _, _ []string, _, _ io.Writer) (int, error) {
+	c.runs++
+	if c.runs == 1 {
+		<-ctx.Done()
+		c.wedgedCtxErr = ctx.Err()
+		return 137, ctx.Err()
+	}
+	return 0, nil
+}
+
+// TestWarmWorkerWatchdogKillsWedgedAttempt is H3: an always-on per-attempt watchdog,
+// INDEPENDENT of the task's execution_timeout (0 here), hard-bounds a wedged attempt.
+// The first attempt hangs and is killed at the watchdog — reported FAILED, SlotFree
+// still sent — and the worker keeps serving, running the second attempt to SUCCESS.
+func TestWarmWorkerWatchdogKillsWedgedAttempt(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	stream := &fakeAssignmentStream{
+		ctx: context.Background(),
+		assignments: []*agentv1.WorkAssignment{
+			{AssignmentId: "asg-1", AttemptToken: "tok-1"},
+			{AssignmentId: "asg-2", AttemptToken: "tok-2"},
+		},
+	}
+	tokens := NewTokenSource("bootstrap")
+	// execution_timeout=0 on both specs: the ONLY ceiling is the watchdog.
+	client := &warmFake{fakeClient: &fakeClient{}, stream: stream, tokens: tokens, specs: warmSpecs(2)}
+	cmd := &wedgeThenOKCmd{}
+
+	w := &WarmRunner{
+		StreamClient: client, WorkClient: client, AttemptTokens: tokens,
+		Cmd: cmd, Hostname: "warm-pod-1", Version: "test", ScratchDir: scratch,
+		AttemptWatchdog: 20 * time.Millisecond,
+	}
+	if err := w.Run(context.Background(), "dagver-1"); err != nil {
+		t.Fatalf("WarmRunner.Run: %v (a wedged attempt must not be loop-fatal)", err)
+	}
+
+	if cmd.runs != 2 {
+		t.Fatalf("attempts run = %d, want 2 (worker keeps serving after the watchdog kill)", cmd.runs)
+	}
+	// The wedge was cut by the watchdog deadline, not by execution_timeout (which was
+	// 0) — proving the watchdog is an independent ceiling.
+	if !errors.Is(cmd.wedgedCtxErr, context.DeadlineExceeded) {
+		t.Errorf("wedged attempt ctx err = %v, want context.DeadlineExceeded (watchdog)", cmd.wedgedCtxErr)
+	}
+	// Attempt 1 RUNNING→FAILED (killed), attempt 2 RUNNING→SUCCESS.
+	wantStates := []agentv1.TaskState{
+		agentv1.TaskState_TASK_STATE_RUNNING, agentv1.TaskState_TASK_STATE_FAILED,
+		agentv1.TaskState_TASK_STATE_RUNNING, agentv1.TaskState_TASK_STATE_SUCCESS,
+	}
+	if len(client.states) != len(wantStates) {
+		t.Fatalf("reported states = %v, want %v", client.states, wantStates)
+	}
+	for i, s := range wantStates {
+		if client.states[i] != s {
+			t.Fatalf("reported states = %v, want %v", client.states, wantStates)
+		}
+	}
+	// SlotFree still fires for BOTH attempts (register + 2×[ack, slotfree] = 5).
+	slotFrees := 0
+	for _, m := range stream.sent {
+		if m.GetSlotFree() != nil {
+			slotFrees++
+		}
+	}
+	if slotFrees != 2 {
+		t.Errorf("SlotFree count = %d, want 2 (slot must free even after a watchdog kill)", slotFrees)
 	}
 }
 

@@ -117,6 +117,31 @@ func TestBuildWarmPodWarmEnvAndLabels(t *testing.T) {
 	}
 }
 
+// TestBuildWarmPodCarriesSelfLifecycleCaps locks the four self-lifecycle caps the
+// warm agent enforces on itself (ADR 0058 D9/D10/D6/H3): the attempt count cap, the
+// wall-clock lifetime cap (seconds), the idle-TTL (seconds), and the per-attempt
+// watchdog (seconds). BuildWarmPod injects them as env so the worker can drain,
+// idle-recycle, and hard-bound a wedged attempt without any control-plane round trip.
+func TestBuildWarmPodCarriesSelfLifecycleCaps(t *testing.T) {
+	spec := baseWarmSpec()
+	spec.MaxAttemptsPerWorker = 50
+	spec.MaxWorkerLifetimeSeconds = 3600
+	spec.WorkerIdleTTLSeconds = 300
+	spec.AttemptWatchdogSeconds = 86400
+
+	env := warmEnvMap(BuildWarmPod(spec))
+	for _, tc := range []struct{ key, want string }{
+		{"LEOFLOW_MAX_ATTEMPTS_PER_WORKER", "50"},
+		{"LEOFLOW_MAX_WORKER_LIFETIME_SECONDS", "3600"},
+		{"LEOFLOW_WORKER_IDLE_TTL_SECONDS", "300"},
+		{"LEOFLOW_ATTEMPT_WATCHDOG_SECONDS", "86400"},
+	} {
+		if env[tc.key] != tc.want {
+			t.Errorf("%s = %q, want %q", tc.key, env[tc.key], tc.want)
+		}
+	}
+}
+
 // TestBuildWarmPodEnvVarTransport locks the default (env-var) bootstrap-token
 // transport: the minted worker JWT rides as the plaintext LEOFLOW_AGENT_TOKEN,
 // exactly how a task pod carries its token on the env-var path.

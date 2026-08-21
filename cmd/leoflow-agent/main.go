@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/neochaotic/leoflow/internal/agent"
 	"github.com/neochaotic/leoflow/internal/version"
@@ -50,6 +52,24 @@ func bootstrapToken() (token string, exchange bool, err error) {
 		}
 	}
 	return os.Getenv("LEOFLOW_AGENT_TOKEN"), false, nil
+}
+
+// envInt reads a non-negative integer env var, returning 0 when unset or
+// unparseable. The warm-worker caps treat 0 as "no bound", so a missing or
+// malformed value disables that cap rather than failing startup.
+func envInt(key string) int {
+	n, err := strconv.Atoi(os.Getenv(key))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// envSeconds reads an integer-seconds env var into a Duration, returning 0 (=
+// "no bound") when unset or unparseable, matching envInt's fail-open-to-disabled
+// convention for the warm-worker lifecycle caps (ADR 0058 N1d-d).
+func envSeconds(key string) time.Duration {
+	return time.Duration(envInt(key)) * time.Second
 }
 
 func run() int {
@@ -235,6 +255,13 @@ func runWarm(ctx context.Context, streamClient agentv1.AgentServiceClient, addr,
 		ScratchDir:         scratchDir,
 		TerminationLogPath: os.Getenv("LEOFLOW_TERMINATION_LOG_PATH"),
 		HeartbeatInterval:  agent.DefaultHeartbeatInterval,
+		// Self-lifecycle caps, injected by BuildWarmPod from the operator's
+		// execution.* config (ADR 0058 N1d-d). Zero (unset/invalid) disables that
+		// bound in WarmRunner, so an off-cluster run is unbounded exactly as before.
+		MaxAttempts:     envInt("LEOFLOW_MAX_ATTEMPTS_PER_WORKER"),
+		MaxLifetime:     envSeconds("LEOFLOW_MAX_WORKER_LIFETIME_SECONDS"),
+		IdleTTL:         envSeconds("LEOFLOW_WORKER_IDLE_TTL_SECONDS"),
+		AttemptWatchdog: envSeconds("LEOFLOW_ATTEMPT_WATCHDOG_SECONDS"),
 	}
 	if rerr := w.Run(ctx, dagVersionID); rerr != nil {
 		slog.Error("warm worker failed", "error", rerr)

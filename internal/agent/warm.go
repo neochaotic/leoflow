@@ -67,6 +67,23 @@ type WarmRunner struct {
 	// fields and are threaded into every per-attempt Runner.
 	TerminationLogPath string
 	HeartbeatInterval  time.Duration
+
+	// Self-lifecycle bounds (ADR 0058 D9/D10/D6/H3), populated from the warm-pod env
+	// in main.go. A warm worker that exits is replaced by the reconciler
+	// (RestartPolicy:Never + busy-aware create), so bounding its own life is how a
+	// pool stays fresh and scales down. Each bound is disabled when zero/unset — a
+	// defensive default; the operator config values are non-zero.
+	//
+	//   - MaxAttempts: drain after this many completed attempts (D9/D10).
+	//   - MaxLifetime: drain once the worker is this old (D9/D10).
+	//   - IdleTTL: idle-recycle after this long awaiting the next assignment (D6).
+	//   - AttemptWatchdog: hard per-attempt ceiling, INDEPENDENT of the task's
+	//     execution_timeout, so a task that declares no timeout and then wedges is
+	//     still killed and the slot freed (H3).
+	MaxAttempts     int
+	MaxLifetime     time.Duration
+	IdleTTL         time.Duration
+	AttemptWatchdog time.Duration
 }
 
 // Run registers the worker once, opens the assignment stream, and serves
@@ -97,13 +114,24 @@ func (w *WarmRunner) Run(ctx context.Context, dagVersionID string) error {
 		return fmt.Errorf("sending worker register: %w", serr)
 	}
 
+	// D9/D10 accounting: bound the worker by attempts served and wall-clock age.
+	// Both are checked only BETWEEN attempts (after SlotFree), so a recycle is always
+	// graceful — it never interrupts an in-flight attempt.
+	workerStart := time.Now()
+	attemptsServed := 0
+
 	for {
-		assignment, rerr := stream.Recv()
+		assignment, rerr := w.recvAssignment(ctx, stream)
 		if rerr != nil {
-			// A closed / drained stream (EOF), or a parent shutdown (SIGTERM,
-			// which gRPC surfaces on the stream as codes.Canceled), both mean
-			// "stop serving" — exit cleanly. Anything else is a real transport
+			// D6 idle-recycle: no assignment arrived within IdleTTL, so recycle this
+			// worker for freshness / scale-down. A closed / drained stream (EOF), or a
+			// parent shutdown (SIGTERM, surfaced on the stream as codes.Canceled), also
+			// mean "stop serving" — all exit cleanly. Anything else is a real transport
 			// failure worth surfacing.
+			if errors.Is(rerr, errIdleRecycle) {
+				slog.Info("warm worker idle-recycle: no assignment within idle TTL", "idle_ttl", w.IdleTTL)
+				return nil
+			}
 			if errors.Is(rerr, io.EOF) || status.Code(rerr) == codes.Canceled {
 				return nil
 			}
@@ -117,6 +145,58 @@ func (w *WarmRunner) Run(ctx context.Context, dagVersionID string) error {
 			}
 			return serr
 		}
+
+		// D9/D10 graceful drain: the attempt above is DONE and its SlotFree is sent, so
+		// stopping here awaits no more work and lets the process exit — the reconciler
+		// then replaces the pod (RestartPolicy:Never). Checked here, never mid-attempt.
+		attemptsServed++
+		if w.MaxAttempts > 0 && attemptsServed >= w.MaxAttempts {
+			slog.Info("warm worker draining: max attempts reached",
+				"attempts_served", attemptsServed, "max_attempts", w.MaxAttempts)
+			return nil
+		}
+		if w.MaxLifetime > 0 && time.Since(workerStart) >= w.MaxLifetime {
+			slog.Info("warm worker draining: max lifetime reached",
+				"age", time.Since(workerStart), "max_lifetime", w.MaxLifetime)
+			return nil
+		}
+	}
+}
+
+// errIdleRecycle is the sentinel recvAssignment returns when no assignment arrives
+// within IdleTTL, so Run can distinguish a D6 idle-recycle (clean exit) from a real
+// stream error.
+var errIdleRecycle = errors.New("warm worker idle-recycle")
+
+// recvAssignment receives the next assignment, enforcing the D6 idle-TTL. With a
+// non-positive IdleTTL it is a plain blocking Recv (the timeout disabled). Otherwise
+// it runs Recv in a goroutine feeding a buffered channel and races it against the
+// idle timer and ctx: if the timer wins it returns errIdleRecycle, and the Recv
+// goroutine does NOT leak — the channel is buffered (size 1) so the goroutine's send
+// never blocks even with no reader, and the blocked Recv unblocks with an error once
+// Run returns and the stream closes.
+func (w *WarmRunner) recvAssignment(ctx context.Context, stream agentv1.AgentService_AwaitAssignmentClient) (*agentv1.WorkAssignment, error) {
+	if w.IdleTTL <= 0 {
+		return stream.Recv()
+	}
+	type recvResult struct {
+		a   *agentv1.WorkAssignment
+		err error
+	}
+	recvCh := make(chan recvResult, 1) // buffered so the goroutine can always send and exit
+	go func() {
+		a, err := stream.Recv()
+		recvCh <- recvResult{a, err}
+	}()
+	timer := time.NewTimer(w.IdleTTL)
+	defer timer.Stop()
+	select {
+	case r := <-recvCh:
+		return r.a, r.err
+	case <-timer.C:
+		return nil, errIdleRecycle
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -160,12 +240,19 @@ func (w *WarmRunner) serveAssignment(ctx context.Context, stream agentv1.AgentSe
 	sink := w.openSink(ctx)
 	r := w.attemptRunner(sink)
 
-	// A wedged child is bounded by the task's execution_timeout (honored inside
-	// execute via a deadline context), so a normal long task cannot hang the worker
-	// forever. A hard per-attempt watchdog INDEPENDENT of execution_timeout — to
-	// bound a task that declares no timeout and then wedges — is ADR 0058 H3;
-	// TODO(N1d): add that watchdog here so a no-timeout wedge cannot pin the slot.
-	if aerr := r.runOneAttempt(ctx); aerr != nil {
+	// H3 per-attempt watchdog: a hard ceiling on this attempt, INDEPENDENT of the
+	// task's execution_timeout (which runOneAttempt still honors inside). A task that
+	// declares no execution_timeout and then wedges is killed here — the child exec
+	// runs on attemptCtx, so the deadline cancel kills it; the attempt then fails and
+	// is reported, SlotFree fires below, and the worker keeps serving. A non-positive
+	// watchdog disables the extra ceiling (fall back to just execution_timeout).
+	attemptCtx := ctx
+	if w.AttemptWatchdog > 0 {
+		var cancel context.CancelFunc
+		attemptCtx, cancel = context.WithTimeout(ctx, w.AttemptWatchdog)
+		defer cancel()
+	}
+	if aerr := r.runOneAttempt(attemptCtx); aerr != nil {
 		// A failed attempt is a normal, already-reported outcome. Keep serving.
 		slog.Warn("warm attempt finished with an error",
 			"assignment", a.GetAssignmentId(), "error", aerr)

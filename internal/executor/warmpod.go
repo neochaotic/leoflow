@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -50,6 +51,23 @@ type WarmPodSpec struct {
 	AgentTokenExpirationSeconds int64
 	AgentTokenSecretName        string
 	AgentTokenSecretKey         string
+
+	// Self-lifecycle caps the warm agent enforces on ITSELF (ADR 0058 D9/D10/D6/H3),
+	// carried in-band as env so a worker can drain, idle-recycle, and hard-bound a
+	// wedged attempt without any control-plane round trip. Each is zero when the
+	// operator disables that bound; the agent treats zero/unset as "no bound".
+	//
+	//   - MaxAttemptsPerWorker: drain after this many completed attempts (D9/D10).
+	//   - MaxWorkerLifetimeSeconds: drain past this wall-clock age (D9/D10).
+	//   - WorkerIdleTTLSeconds: idle-recycle after this long awaiting work (D6).
+	//   - AttemptWatchdogSeconds: hard per-attempt ceiling, independent of the task's
+	//     execution_timeout, so a no-timeout wedge cannot pin the slot (H3). main.go
+	//     sets it to auth.max_attempt_credential_lifetime — an attempt can never
+	//     validly outlive its credential ceiling.
+	MaxAttemptsPerWorker     int
+	MaxWorkerLifetimeSeconds int64
+	WorkerIdleTTLSeconds     int64
+	AttemptWatchdogSeconds   int64
 
 	// PodSecurity carries the same container/pod hardening choices as a task pod.
 	PodSecurity PodSecurity
@@ -144,7 +162,7 @@ func (spec WarmPodSpec) agentToken() agentToken {
 // selectors, and — when a CA is configured — the TLS env. It deliberately omits
 // every task-specific var.
 func warmPodEnv(spec WarmPodSpec) []corev1.EnvVar {
-	env := make([]corev1.EnvVar, 0, 6)
+	env := make([]corev1.EnvVar, 0, 12)
 	env = append(env, corev1.EnvVar{Name: "LEOFLOW_CONTROL_PLANE_ADDR", Value: spec.ControlPlaneAddr})
 	tok := spec.agentToken()
 	env = append(env, tok.env()...)
@@ -156,6 +174,11 @@ func warmPodEnv(spec WarmPodSpec) []corev1.EnvVar {
 	// match the attempt against the live warm-pod set. The pod name is not known at
 	// build time (it carries a random suffix), so it must come from the downward
 	// API's metadata.name rather than a literal value.
+	// Warm-mode selectors + the pod's own name via the downward API, then the
+	// self-lifecycle caps (ADR 0058 D9/D10/D6/H3): the worker reads these and bounds
+	// its own life — draining after N attempts or a lifetime, idle-recycling, and
+	// hard-killing a wedged attempt. The caps are emitted verbatim (zero means "no
+	// bound" to the agent), so the contract is explicit on every warm pod.
 	env = append(env,
 		corev1.EnvVar{Name: "LEOFLOW_WARM_WORKER", Value: "1"},
 		corev1.EnvVar{Name: "LEOFLOW_DAG_VERSION_ID", Value: spec.DagVersionID},
@@ -165,6 +188,10 @@ func warmPodEnv(spec WarmPodSpec) []corev1.EnvVar {
 				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
 			},
 		},
+		corev1.EnvVar{Name: "LEOFLOW_MAX_ATTEMPTS_PER_WORKER", Value: strconv.Itoa(spec.MaxAttemptsPerWorker)},
+		corev1.EnvVar{Name: "LEOFLOW_MAX_WORKER_LIFETIME_SECONDS", Value: strconv.FormatInt(spec.MaxWorkerLifetimeSeconds, 10)},
+		corev1.EnvVar{Name: "LEOFLOW_WORKER_IDLE_TTL_SECONDS", Value: strconv.FormatInt(spec.WorkerIdleTTLSeconds, 10)},
+		corev1.EnvVar{Name: "LEOFLOW_ATTEMPT_WATCHDOG_SECONDS", Value: strconv.FormatInt(spec.AttemptWatchdogSeconds, 10)},
 	)
 	if spec.AgentTLSCAConfigMap != "" {
 		env = append(env,

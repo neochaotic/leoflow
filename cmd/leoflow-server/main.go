@@ -1027,6 +1027,14 @@ func warmPodSpecFunc(cfg *config.ServerConfig, authn *auth.JWTAuthenticator, con
 			AgentTLSCAConfigMap: cfg.Executor.AgentTLSCAConfigMap,
 			BootstrapToken:      token,
 			PodSecurity:         defaults.PodSecurity,
+			// Self-lifecycle caps (ADR 0058 D9/D10/D6/H3). The attempt watchdog is
+			// anchored to the credential ceiling: an attempt can never validly outlive
+			// its per-attempt credential, so max_attempt_credential_lifetime is the
+			// natural hard upper bound and needs no separate operator knob.
+			MaxAttemptsPerWorker:     cfg.Execution.MaxAttemptsPerWorker,
+			MaxWorkerLifetimeSeconds: int64(cfg.Execution.MaxWorkerLifetime.Seconds()),
+			WorkerIdleTTLSeconds:     int64(cfg.Execution.WorkerIdleTTL.Seconds()),
+			AttemptWatchdogSeconds:   int64(cfg.Auth.MaxAttemptCredentialLifetime.Seconds()),
 		}, nil
 	}
 }

@@ -6,6 +6,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Warm-worker pod labels (ADR 0058 N1b2b). The warm-pool reconciler lists and
@@ -25,6 +26,12 @@ const (
 	// enforce the per-tenant aggregate cap (M4). It is stamped from
 	// WarmPodSpec.TenantID and read back into WarmPodInfo.TenantID by ListWarmPods.
 	warmTenantLabelKey = "leoflow.io/tenant-id"
+	// warmAnchorLabelKey marks a ConfigMap as a warm-pool GC anchor (ADR 0058 D11);
+	// its value is always "true". Together with warmDagVersionLabelKey it makes an
+	// anchor discoverable (which version it anchors), so an operator can see the
+	// GC-owner ConfigMaps the reconciler creates alongside the warm fleet.
+	warmAnchorLabelKey = "leoflow.io/warm-anchor"
+	warmAnchorLabelVal = "true"
 )
 
 // WarmPodSpec is everything BuildWarmPod needs to build one long-lived warm-worker
@@ -84,6 +91,15 @@ type WarmPodSpec struct {
 	// PodSecurity carries the same container/pod hardening choices as a task pod.
 	PodSecurity PodSecurity
 
+	// AnchorName / AnchorUID identify the per-dag-version GC-anchor ConfigMap this
+	// warm pod is owned by (ADR 0058 D11). When BOTH are set, BuildWarmPod stamps an
+	// ownerReference to the anchor, so on control-plane loss / namespace teardown the
+	// pod is cascade-GC'd with the anchor — the one orphan class the reconciler (as
+	// deleter) cannot cover. When either is empty (off-cluster/pre-anchor builds and
+	// tests) the pod is built bare, exactly as before D11.
+	AnchorName string
+	AnchorUID  types.UID
+
 	// Labels / Annotations are operator-declared metadata overlaid onto the pod;
 	// Leoflow's own warm-worker labels always win a collision (see mergeMetadata).
 	Labels      map[string]string
@@ -109,8 +125,9 @@ type WarmPodSpec struct {
 //     attempt caps and the idle-TTL recycle that drive drains are deferred to N1d.
 //
 // It is pure (modulo the random name suffix) and unit-tested independently of any
-// cluster. It bakes NO task token in; the GC-anchor ConfigMap (D11) is deferred to
-// N1d — a bare warm pod deleted by the reconciler is fine for now.
+// cluster. It bakes NO task token in. When the spec carries a GC anchor (D11) it
+// stamps an ownerReference to that anchor ConfigMap so the pod is cascade-GC'd on
+// external teardown; without an anchor it builds a bare pod, unchanged.
 func BuildWarmPod(spec WarmPodSpec) *corev1.Pod {
 	pullPolicy := corev1.PullIfNotPresent
 	if spec.ImagePullPolicy != "" {
@@ -118,9 +135,10 @@ func BuildWarmPod(spec WarmPodSpec) *corev1.Pod {
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        warmPodName(spec.DagVersionID),
-			Labels:      warmPodLabels(spec),
-			Annotations: map[string]string{},
+			Name:            warmPodName(spec.DagVersionID),
+			Labels:          warmPodLabels(spec),
+			Annotations:     map[string]string{},
+			OwnerReferences: warmAnchorOwnerRefs(spec),
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:   corev1.RestartPolicyNever,
@@ -163,6 +181,40 @@ func warmPodLabels(spec WarmPodSpec) map[string]string {
 		labels[warmTenantLabelKey] = sanitizeLabel(spec.TenantID)
 	}
 	return labels
+}
+
+// warmAnchorOwnerRefs builds the pod's ownerReference to its dag_version's GC
+// anchor (ADR 0058 D11) — but ONLY when the spec carries BOTH the anchor name and
+// UID. The controller/blockOwnerDeletion pair makes the anchor the pod's GC owner,
+// so deleting the anchor cascade-deletes the pod (the teardown backstop). When
+// either field is empty the pod is built bare (no ownerReference), exactly as
+// pre-D11: off-cluster/pre-anchor builds and unit tests that do not set an anchor
+// get today's ephemeral bare warm pod.
+func warmAnchorOwnerRefs(spec WarmPodSpec) []metav1.OwnerReference {
+	if spec.AnchorName == "" || spec.AnchorUID == "" {
+		return nil
+	}
+	return []metav1.OwnerReference{{
+		APIVersion:         "v1",
+		Kind:               "ConfigMap",
+		Name:               spec.AnchorName,
+		UID:                spec.AnchorUID,
+		Controller:         ptr(true),
+		BlockOwnerDeletion: ptr(true),
+	}}
+}
+
+// warmAnchorName is the DNS-safe name of a dag_version's GC-anchor ConfigMap
+// (ADR 0058 D11): leoflow-pool-<sanitized dag_version>, truncated to the 253-char
+// object-name limit. It is deterministic per version so EnsureWarmAnchor is
+// idempotent (a re-create hits AlreadyExists) and DeleteWarmAnchor can address the
+// anchor by version alone.
+func warmAnchorName(dagVersionID string) string {
+	name := "leoflow-pool-" + sanitizeLabel(dagVersionID)
+	if len(name) > 253 {
+		name = strings.TrimRight(name[:253], "-")
+	}
+	return name
 }
 
 // warmContainerName is the warm worker's single container.

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // warmEnvMap projects the warm pod's single container env into a name->value map,
@@ -210,6 +211,58 @@ func TestBuildWarmPodExchangeTransport(t *testing.T) {
 	}
 	if !found {
 		t.Error("exchange: projected agent-token volume must be mounted")
+	}
+}
+
+// TestBuildWarmPodStampsAnchorOwnerReference locks the D11 GC anchor: when the spec
+// carries BOTH an anchor name and UID, BuildWarmPod stamps a single controlling
+// ownerReference to the anchor ConfigMap (Controller + BlockOwnerDeletion true), so
+// deleting the anchor cascade-GCs the pod on external teardown.
+func TestBuildWarmPodStampsAnchorOwnerReference(t *testing.T) {
+	spec := baseWarmSpec()
+	spec.AnchorName = "leoflow-pool-dv-abc"
+	spec.AnchorUID = types.UID("anchor-uid-xyz")
+	pod := BuildWarmPod(spec)
+
+	if len(pod.OwnerReferences) != 1 {
+		t.Fatalf("ownerReferences = %d, want exactly 1 (the GC anchor)", len(pod.OwnerReferences))
+	}
+	o := pod.OwnerReferences[0]
+	if o.APIVersion != "v1" || o.Kind != "ConfigMap" {
+		t.Errorf("ownerReference APIVersion/Kind = %s/%s, want v1/ConfigMap", o.APIVersion, o.Kind)
+	}
+	if o.Name != "leoflow-pool-dv-abc" || o.UID != types.UID("anchor-uid-xyz") {
+		t.Errorf("ownerReference Name/UID = %s/%s, want leoflow-pool-dv-abc/anchor-uid-xyz", o.Name, o.UID)
+	}
+	if o.Controller == nil || !*o.Controller {
+		t.Error("ownerReference Controller must be true (the anchor is the pod's controlling owner)")
+	}
+	if o.BlockOwnerDeletion == nil || !*o.BlockOwnerDeletion {
+		t.Error("ownerReference BlockOwnerDeletion must be true")
+	}
+}
+
+// TestBuildWarmPodBarePodWhenAnchorUnset locks the do-no-harm default: with no
+// anchor (or only one of name/UID) BuildWarmPod produces a BARE pod with no
+// ownerReference — exactly today's ephemeral warm pod. This keeps off-cluster /
+// pre-anchor builds and tests that don't set an anchor unchanged.
+func TestBuildWarmPodBarePodWhenAnchorUnset(t *testing.T) {
+	// Neither set.
+	if refs := BuildWarmPod(baseWarmSpec()).OwnerReferences; len(refs) != 0 {
+		t.Errorf("bare spec produced %d ownerReferences, want 0 (unchanged bare pod)", len(refs))
+	}
+	// Only name set (no UID): still bare — a half-set anchor must not stamp a
+	// dangling owner with an empty UID.
+	nameOnly := baseWarmSpec()
+	nameOnly.AnchorName = "leoflow-pool-dv-abc"
+	if refs := BuildWarmPod(nameOnly).OwnerReferences; len(refs) != 0 {
+		t.Errorf("name-only spec produced %d ownerReferences, want 0", len(refs))
+	}
+	// Only UID set (no name): still bare.
+	uidOnly := baseWarmSpec()
+	uidOnly.AnchorUID = types.UID("anchor-uid-xyz")
+	if refs := BuildWarmPod(uidOnly).OwnerReferences; len(refs) != 0 {
+		t.Errorf("uid-only spec produced %d ownerReferences, want 0", len(refs))
 	}
 }
 

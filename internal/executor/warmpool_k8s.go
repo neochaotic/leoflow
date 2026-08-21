@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -68,7 +70,12 @@ func (k *KubernetesWarmPods) ListWarmPods(ctx context.Context) ([]WarmPodInfo, e
 }
 
 // CreateWarmPod mints the target's warm-pod spec, builds the pod, and creates it.
-func (k *KubernetesWarmPods) CreateWarmPod(ctx context.Context, t WarmTarget) error {
+// anchorName/anchorUID identify the version's GC-anchor ConfigMap (ADR 0058 D11);
+// when non-empty they are threaded onto the spec so BuildWarmPod stamps the pod's
+// ownerReference to the anchor. The reconciler ensures the anchor and reads its
+// UID before any create, so both are populated on the live path; a caller that
+// passes them empty gets a bare pod, unchanged.
+func (k *KubernetesWarmPods) CreateWarmPod(ctx context.Context, t WarmTarget, anchorName, anchorUID string) error {
 	if k.newSpec == nil {
 		return fmt.Errorf("warm pod creation requires a spec builder")
 	}
@@ -77,6 +84,8 @@ func (k *KubernetesWarmPods) CreateWarmPod(ctx context.Context, t WarmTarget) er
 		return fmt.Errorf("building warm pod spec for dag_version %s: %w", t.DagVersionID, err)
 	}
 	spec.Namespace = k.namespace
+	spec.AnchorName = anchorName
+	spec.AnchorUID = types.UID(anchorUID)
 	pod := BuildWarmPod(spec)
 	if _, err := k.clientset.CoreV1().Pods(k.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("creating warm pod for dag_version %s: %w", t.DagVersionID, err)
@@ -88,6 +97,53 @@ func (k *KubernetesWarmPods) CreateWarmPod(ctx context.Context, t WarmTarget) er
 func (k *KubernetesWarmPods) DeleteWarmPod(ctx context.Context, name string) error {
 	if err := k.clientset.CoreV1().Pods(k.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
 		return fmt.Errorf("deleting warm pod %s: %w", name, err)
+	}
+	return nil
+}
+
+// EnsureWarmAnchor ensures the per-dag-version GC-anchor ConfigMap exists and
+// returns its UID (ADR 0058 D11). The anchor owns the version's warm pods via an
+// ownerReference, so on control-plane loss / namespace teardown the pods are
+// cascade-GC'd — the orphan class the reconciler-as-deleter cannot cover. It is
+// create-then-read and idempotent: an AlreadyExists (a prior tick, or another
+// leader) is success, and the UID is read back with a GET so every pod created
+// this tick is stamped with the SAME owner UID. The anchor carries no data (empty
+// ConfigMap); the labels only make it discoverable.
+func (k *KubernetesWarmPods) EnsureWarmAnchor(ctx context.Context, dagVersionID string) (string, error) {
+	name := warmAnchorName(dagVersionID)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: k.namespace,
+			Labels: map[string]string{
+				warmAnchorLabelKey:     warmAnchorLabelVal,
+				warmDagVersionLabelKey: sanitizeLabel(dagVersionID),
+			},
+		},
+	}
+	created, err := k.clientset.CoreV1().ConfigMaps(k.namespace).Create(ctx, cm, metav1.CreateOptions{})
+	if err == nil {
+		return string(created.UID), nil
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		return "", fmt.Errorf("creating warm anchor for dag_version %s: %w", dagVersionID, err)
+	}
+	// Already exists (idempotent): read the live anchor to recover its UID.
+	got, gerr := k.clientset.CoreV1().ConfigMaps(k.namespace).Get(ctx, name, metav1.GetOptions{})
+	if gerr != nil {
+		return "", fmt.Errorf("reading existing warm anchor for dag_version %s: %w", dagVersionID, gerr)
+	}
+	return string(got.UID), nil
+}
+
+// DeleteWarmAnchor deletes the per-dag-version GC-anchor ConfigMap (ADR 0058 D11),
+// tolerating NotFound (already gone / never created). The reconciler calls this
+// ONLY for a fully-drained inactive version (zero live pods), so the cascade the
+// ownerReference sets up is a no-op — it can never kill a live warm attempt.
+func (k *KubernetesWarmPods) DeleteWarmAnchor(ctx context.Context, dagVersionID string) error {
+	name := warmAnchorName(dagVersionID)
+	if err := k.clientset.CoreV1().ConfigMaps(k.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("deleting warm anchor for dag_version %s: %w", dagVersionID, err)
 	}
 	return nil
 }

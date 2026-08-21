@@ -5,10 +5,12 @@ gRPC. In Pro that channel **must be TLS** — the server refuses to boot without
 (#281).
 
 !!! note "You don't need this for a default install"
-    Since v0.3.0 the chart **auto-generates** a stable self-signed CA + server
-    cert by default (`agentTLS.autoGenerate: true`, reused across upgrades) — so
+    The chart **auto-generates** a stable self-signed CA + server cert by
+    default (`agentTLS.autoGenerate: true`, reused across upgrades) — so
     `helm install` needs **no cert-manager and no pre-created Secret**, and TLS
-    is still on. See the [Quickstart](installation.md#quickstart-one-command-any-cloud).
+    is still on. That default is live on `main` today and ships in the first
+    release cut after it; see the
+    [Quickstart](installation.md#quickstart-one-command-any-cloud).
     This page is the **opt-in production path**: cert-manager-issued (or
     externally-rooted) certs with automatic rotation. It is also the path you
     **must** use under **GitOps** (ArgoCD/Flux), where cluster-less rendering
@@ -96,7 +98,7 @@ standard way, or copy the issuer's `ca.crt` into a ConfigMap keyed `ca.crt`. Set
 ## 5. Install
 
 ```console
-$ helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version 0.3.0 \
+$ helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
     -n leoflow --create-namespace \
     -f values-pro-tls.yaml
 ```

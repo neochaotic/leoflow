@@ -207,15 +207,15 @@ The chart is **cloud-portable** — the same commands install unchanged on
 
 ### Quickstart (one command, any cloud)
 
-Since **v0.3.0** the chart is published as an **OCI artifact** next to the
-images, and it **auto-generates its own agent-TLS certificate** by default. So
-there is **no cert-manager to install and no TLS Secret to pre-create** — TLS
-on the agent gRPC channel stays **mandatory**, the chart just mints a stable
-self-signed CA + server cert for you and reuses it across upgrades. Point the
-chart at your external Postgres and Redis and go:
+The chart is published as an **OCI artifact** next to the images, and it
+**auto-generates its own agent-TLS certificate** by default. So there is **no
+cert-manager to install and no TLS Secret to pre-create** — TLS on the agent
+gRPC channel stays **mandatory**, the chart just mints a stable self-signed CA
++ server cert for you and reuses it across upgrades. Point the chart at your
+external Postgres and Redis and go:
 
 ```bash
-helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version 0.3.0 \
+helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
   -n leoflow --create-namespace \
   --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
   --set redis.url='rediss://HOST:6380/0' \
@@ -226,24 +226,26 @@ helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version 0.3.0 \
 
 That's the whole install — **no cert-manager, no pre-created Secret**. The only
 values you must supply are your two datastore URLs and the three credentials.
-`--version` takes the chart version (the release tag with the leading `v`
-stripped, per SemVer2 — chart `0.3.0` for release `v0.3.0`); use the
-[latest release](https://github.com/neochaotic/leoflow/releases).
+`--version` takes the chart version — the
+[latest release](https://github.com/neochaotic/leoflow/releases) tag with the
+leading `v` stripped (per SemVer2).
 
 !!! note "OCI chart availability"
-    The OCI chart is published from the **v0.3.0** release onward (older tags
-    predate it). For the bleeding edge — current `main`, or a fresh commit a
-    tag hasn't republished the chart for yet — [install from
-    source](#install-from-source) instead.
+    The OCI chart and the auto-generated agent TLS ship in the **first release
+    cut after this change**; until that release is published, [install from
+    source](#install-from-source) (below) to use them on `main` today. Source
+    is also the path for the bleeding edge in general.
 
 ### Install from source
 
-Installing the chart straight from a checkout is the **works-today** path for
-the bleeding edge — current `main`, or any commit before a tag republishes the
-OCI chart. Same required values, from the `helm/leoflow` directory in the repo:
+Installing the chart straight from a checkout of **`main`** is the
+**works-today** path for the OCI-chart and auto-generated-TLS features: both
+are live on `main` now, ahead of the release that first publishes the OCI
+chart. It is also the path for the bleeding edge in general. Same required
+values, from the `helm/leoflow` directory in the repo:
 
 ```bash
-git clone --depth 1 --branch v0.3.0 https://github.com/neochaotic/leoflow
+git clone --depth 1 https://github.com/neochaotic/leoflow   # current main
 cd leoflow
 
 helm install lf ./helm/leoflow -n leoflow --create-namespace \
@@ -256,10 +258,13 @@ helm install lf ./helm/leoflow -n leoflow --create-namespace \
   --set bootstrap.password='change-me'
 ```
 
-Replace `v0.3.0` with the [latest release](https://github.com/neochaotic/leoflow/releases),
-or drop `--branch` to track `main`. From a source checkout the image tags are
-not baked in, so `--set image.tag` / `--set migrations.image.tag` pin which
-images the chart pulls.
+The chart auto-generates the agent TLS cert regardless of image version, so
+this works on `main` today. Pin `--set image.tag` / `--set migrations.image.tag`
+to a published release tag (`v0.3.0` shown — see the
+[releases](https://github.com/neochaotic/leoflow/releases)); from a source
+checkout the image tags are not baked in, so set them explicitly. Add
+`--branch <TAG>` to the clone to install the chart at a specific tag instead of
+`main`.
 
 What this installs (one Deployment, one Service, RBAC for the pod-per-task
 executor, a pre-install/upgrade migrations Job; optional Ingress, PDB, HPA,

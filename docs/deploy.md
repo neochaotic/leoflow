@@ -268,9 +268,11 @@ into.
 
 Deploying the control plane itself (Helm chart, published `leoflow-server`/
 `leoflow-migrate` images, TLS on the agent channel, keyless cloud auth) is the
-**Pro** track. One command installs the chart from its OCI artifact
-(`helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION>`,
-auto-generated TLS, no cert-manager) — see [Install Pro](installation.md#install-pro).
+**Pro** track. One command installs the chart with auto-generated TLS and no
+cert-manager — from source on `main` today
+(`helm install lf ./helm/leoflow …`), and from its OCI artifact
+(`helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION>`)
+from the first release cut after this change. See [Install Pro](installation.md#install-pro).
 The chart is installable today and in validation — see the
 [Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md), the reproducible
 [Kubernetes test setup](https://github.com/neochaotic/leoflow/blob/main/deploy/k8s/README.md)

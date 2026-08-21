@@ -742,6 +742,42 @@ func (q *Queries) ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostC
 	return items, nil
 }
 
+const listBusyWarmWorkerPods = `-- name: ListBusyWarmWorkerPods :many
+SELECT DISTINCT ti.warm_worker_id AS warm_worker_id
+FROM task_instances ti
+WHERE ti.state = 'running'
+  AND ti.warm_worker_id IS NOT NULL
+`
+
+// Lists the DISTINCT warm-worker pod names currently serving a `running` attempt
+// (ADR 0058 N1d-b): a warm worker is BUSY iff some `running` task_instance is
+// durably bound to it (warm_worker_id = the pod's own name — the binding landed
+// in N1d-a1/a2). The busy-aware warm-pool reconciler reads this once per tick to
+// classify each live warm pod as busy (serving an attempt) or idle, so
+// scale-down and drain delete only IDLE workers and never kill an in-flight
+// attempt (review findings M1/M2). With warm pools off no TI is ever bound, so
+// this is always empty and every worker classifies as idle — byte-for-byte
+// today's dedicated pod-per-task behavior.
+func (q *Queries) ListBusyWarmWorkerPods(ctx context.Context) ([]*string, error) {
+	rows, err := q.db.Query(ctx, listBusyWarmWorkerPods)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*string{}
+	for rows.Next() {
+		var warm_worker_id *string
+		if err := rows.Scan(&warm_worker_id); err != nil {
+			return nil, err
+		}
+		items = append(items, warm_worker_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDagRunsByDag = `-- name: ListDagRunsByDag :many
 SELECT id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at, alert_attempts, next_alert_attempt_at FROM dag_runs
 WHERE dag_id = $1

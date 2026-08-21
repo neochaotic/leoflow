@@ -938,12 +938,14 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace str
 }
 
 // startWarmPoolReconciler runs the leader-gated warm-pool reconciler (ADR 0058
-// N1b2b): each tick it reconciles the number of warm workers per active
-// dag_version to that version's effective min_idle. Like the pod reconciler it
-// mutates cluster state, so it runs on the leader alone via the gated ticker. It
-// is only called when warm pools are enabled.
-func startWarmPoolReconciler(ctx context.Context, targets executor.WarmTargetSource, pods executor.WarmPodClient, leading func() bool, rec executor.DecisionRecorder, logger *slog.Logger) {
-	rc := executor.NewWarmPoolReconciler(targets, pods, logger, rec)
+// N1b2b + N1d-b, model A2): each tick it keeps EffectiveMinIdle IDLE warm workers
+// ready per active dag_version, growing the pool past min_idle under load up to
+// MaxPoolSize and deleting only idle/terminal workers (never a busy one). It reads
+// the busy set (busy) once per tick to classify workers. Like the pod reconciler
+// it mutates cluster state, so it runs on the leader alone via the gated ticker.
+// It is only called when warm pools are enabled.
+func startWarmPoolReconciler(ctx context.Context, targets executor.WarmTargetSource, pods executor.WarmPodClient, busy executor.BusyWarmWorkerSource, leading func() bool, rec executor.DecisionRecorder, logger *slog.Logger) {
+	rc := executor.NewWarmPoolReconciler(targets, pods, busy, logger, rec)
 	startGatedTicker(ctx, "warm-pool-reconcile", reconcileInterval, leading, logger, func() {
 		if err := rc.Reconcile(ctx); err != nil {
 			logger.Error("warm pool reconcile", "error", err)
@@ -1341,7 +1343,10 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// stays byte-for-byte today's dedicated pod-per-task.
 	if cfg.Execution.WarmPoolsEnabled {
 		store.SetWarmExecution(cfg.Execution)
-		startWarmPoolReconciler(ctx, store, warmPods, sched.IsLeading, metrics, logger)
+		// The busy set (running attempts durably bound to a warm worker) makes the
+		// reconciler busy-aware (ADR 0058 N1d-b): it scales the IDLE buffer and never
+		// deletes a worker with an in-flight attempt. store implements it.
+		startWarmPoolReconciler(ctx, store, warmPods, store, sched.IsLeading, metrics, logger)
 		logger.Warn("warm pool reconciler enabled (ADR 0058 N1b2b); maintaining min_idle warm workers per active dag_version", "namespace", cfg.Executor.TaskNamespace)
 	}
 	logger.Info("pod dispatch enabled", "namespace", cfg.Executor.TaskNamespace, "agent_control_plane_addr", controlAddr)

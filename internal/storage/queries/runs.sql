@@ -762,6 +762,21 @@ WHERE ti.state = 'running'
 ORDER BY ti.started_at NULLS LAST
 LIMIT 100;
 
+-- name: ListBusyWarmWorkerPods :many
+-- Lists the DISTINCT warm-worker pod names currently serving a `running` attempt
+-- (ADR 0058 N1d-b): a warm worker is BUSY iff some `running` task_instance is
+-- durably bound to it (warm_worker_id = the pod's own name — the binding landed
+-- in N1d-a1/a2). The busy-aware warm-pool reconciler reads this once per tick to
+-- classify each live warm pod as busy (serving an attempt) or idle, so
+-- scale-down and drain delete only IDLE workers and never kill an in-flight
+-- attempt (review findings M1/M2). With warm pools off no TI is ever bound, so
+-- this is always empty and every worker classifies as idle — byte-for-byte
+-- today's dedicated pod-per-task behavior.
+SELECT DISTINCT ti.warm_worker_id AS warm_worker_id
+FROM task_instances ti
+WHERE ti.state = 'running'
+  AND ti.warm_worker_id IS NOT NULL;
+
 -- name: ListAgentLostCandidates :many
 -- Lists running TIs that have heartbeated at least once and whose latest
 -- heartbeat is non-null, alongside enough identity to log + observe.

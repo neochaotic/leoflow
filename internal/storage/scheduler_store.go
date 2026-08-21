@@ -201,6 +201,10 @@ func warmTargets(versions []activeWarmVersion, exec config.ExecutionSection) []e
 			DagVersionID:     v.dagVersionID,
 			Image:            v.image,
 			EffectiveMinIdle: exec.EffectiveMinIdle(v.dagMinIdle),
+			// MaxPoolSize is the operator's total ceiling of warm workers per
+			// dag_version (model A2, ADR 0058 N1d-b). The reconciler grows the pool
+			// past min_idle under load up to this cap and never beyond it.
+			MaxPoolSize: exec.MaxPoolSize,
 		})
 	}
 	return out
@@ -563,6 +567,7 @@ func applyDefaultRetries(spec *domain.DAGSpec) {
 
 var _ scheduler.Store = (*SchedulerStore)(nil)
 var _ executor.WarmTargetSource = (*SchedulerStore)(nil)
+var _ executor.BusyWarmWorkerSource = (*SchedulerStore)(nil)
 
 // RecordStagingVolume records a per-run staging volume as active, keyed by PVC
 // name (idempotent — called per task as the PVC is ensured). ADR 0022.
@@ -766,6 +771,29 @@ func (s *SchedulerStore) ListWarmBoundRunningTIs(ctx context.Context) ([]executo
 		})
 	}
 	return out, nil
+}
+
+// ListBusyWarmWorkerPods returns the set of warm-worker pod names currently
+// serving a `running` attempt (ADR 0058 N1d-b): a warm worker is BUSY iff some
+// `running` task_instance is durably bound to it (warm_worker_id = the pod's own
+// name). The busy-aware warm-pool reconciler reads this once per tick to classify
+// each live warm pod as busy or idle, so scale-down/drain deletes only IDLE
+// workers and never kills an in-flight attempt (review findings M1/M2). With warm
+// pools off no TI is ever bound, so the set is always empty and every worker
+// classifies as idle — byte-for-byte today. Implements
+// executor.BusyWarmWorkerSource without the executor importing storage.
+func (s *SchedulerStore) ListBusyWarmWorkerPods(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.q.ListBusyWarmWorkerPods(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing busy warm-worker pods: %w", err)
+	}
+	busy := make(map[string]bool, len(rows))
+	for _, name := range rows {
+		if name != nil {
+			busy[*name] = true
+		}
+	}
+	return busy, nil
 }
 
 // MarkTaskDispatchLost transitions one TI to `failed` with the dispatch_lost

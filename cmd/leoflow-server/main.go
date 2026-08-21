@@ -1011,31 +1011,32 @@ func startWarmPoolReconciler(ctx context.Context, targets executor.WarmTargetSou
 // (each worker registers as a distinct member of its dag_version pool) and stamps
 // the connection + hardening fields.
 //
-// The bootstrap token rides the ENV-VAR transport deliberately, regardless of
-// auth.agent_token_transport: it authorizes ONLY Register + AwaitAssignment and
-// resolves no secrets, so it needs neither the projected-token exchange nor the
-// liveness enforcement that guard the per-attempt credential. The warm agent
-// registers with it directly (it does not exchange a bootstrap token), so env-var
-// is the transport that actually works against the warm loop. The per-attempt
-// token — the one that resolves secrets — arrives in-band over AwaitAssignment and
-// is exchange/liveness-gated upstream (N1b1/N1b2a); the durable identity binding
-// (H2) is deferred to N1d.
+// The bootstrap credential authorizes ONLY Register + AwaitAssignment (the warm
+// control channel) and resolves NO secrets or task — a warm-worker-scoped token
+// (ADR 0058 D2). It reaches the pod by the operator's auth.agent_token_transport:
+//
+//   - exchange (the transport the N1a boot guard forces on when warm pools are
+//     enabled): the pod projects a ServiceAccount token and NO plaintext token; the
+//     warm agent exchanges it once per connect, and the control plane — recognizing
+//     the warm-worker LABEL — mints the worker-scoped JWT. This is the default and
+//     the whole point of this change: the bootstrap credential is never a plaintext
+//     env var on the pod.
+//   - env-var (dev / explicit fallback): a worker-scoped JWT is minted here and
+//     ridden in as a plaintext env var. Even this fallback is control-channel-only,
+//     so a leaked warm bootstrap token can never read the vault.
+//
+// The per-attempt token — the one that resolves secrets — arrives in-band over
+// AwaitAssignment and is exchange/liveness-gated upstream (N1b1/N1b2a).
 func warmPodSpecFunc(cfg *config.ServerConfig, authn *auth.JWTAuthenticator, controlAddr string) executor.WarmPodSpecFunc {
 	defaults := platformDefaults(cfg.Executor.Defaults)
+	useExchange := cfg.Auth.AgentTokenTransport == config.AgentTokenTransportExchange
 	return func(t executor.WarmTarget) (executor.WarmPodSpec, error) {
-		token, err := authn.IssueAgentToken(auth.AgentIdentity{
-			TaskInstanceID: "warm-" + t.DagVersionID + "-" + uuid.NewString(),
-		}, warmBootstrapTokenTTL(cfg))
-		if err != nil {
-			return executor.WarmPodSpec{}, fmt.Errorf("minting warm bootstrap token: %w", err)
-		}
-		return executor.WarmPodSpec{
+		spec := executor.WarmPodSpec{
 			DagVersionID:        t.DagVersionID,
 			Image:               t.Image,
 			TenantID:            t.TenantID,
 			ControlPlaneAddr:    controlAddr,
 			AgentTLSCAConfigMap: cfg.Executor.AgentTLSCAConfigMap,
-			BootstrapToken:      token,
 			PodSecurity:         defaults.PodSecurity,
 			// Self-lifecycle caps (ADR 0058 D9/D10/D6/H3). The attempt watchdog is
 			// anchored to the credential ceiling: an attempt can never validly outlive
@@ -1045,7 +1046,32 @@ func warmPodSpecFunc(cfg *config.ServerConfig, authn *auth.JWTAuthenticator, con
 			MaxWorkerLifetimeSeconds: int64(cfg.Execution.MaxWorkerLifetime.Seconds()),
 			WorkerIdleTTLSeconds:     int64(cfg.Execution.WorkerIdleTTL.Seconds()),
 			AttemptWatchdogSeconds:   int64(cfg.Auth.MaxAttemptCredentialLifetime.Seconds()),
-		}, nil
+		}
+		if useExchange {
+			// Exchange transport: project an SA token, no plaintext bootstrap token.
+			// BuildWarmPod (identity nil) projects the token and stamps the warm-worker
+			// LABEL the exchange resolver keys on; the control plane mints the
+			// worker-scoped JWT. Audience/expiration mirror the task-pod projected token
+			// (executor floors the expiration).
+			spec.AgentTokenTransport = config.AgentTokenTransportExchange
+			spec.AgentTokenAudience = executor.DefaultAgentTokenAudience
+			return spec, nil
+		}
+		// Env-var fallback: mint a WORKER-scoped (control-channel-only) bootstrap JWT
+		// and ride it in as a plaintext env var. The unique worker id is the token
+		// Subject; the scope claim makes AwaitAssignment accept it and every secret/
+		// task RPC reject it.
+		token, err := authn.IssueAgentToken(auth.AgentIdentity{
+			Scope:        auth.ScopeWarmWorker,
+			WorkerID:     "warm-" + t.DagVersionID + "-" + uuid.NewString(),
+			DagVersionID: t.DagVersionID,
+			TenantID:     t.TenantID,
+		}, warmBootstrapTokenTTL(cfg))
+		if err != nil {
+			return executor.WarmPodSpec{}, fmt.Errorf("minting warm bootstrap token: %w", err)
+		}
+		spec.BootstrapToken = token
+		return spec, nil
 	}
 }
 

@@ -226,6 +226,9 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 	if err != nil {
 		return nil, err
 	}
+	if aerr := s.requireAttemptToken(id); aerr != nil {
+		return nil, aerr
+	}
 	spec, err := s.store.TaskSpec(ctx, *id)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
@@ -261,6 +264,9 @@ func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateReques
 	id, err := s.identify(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if aerr := s.requireAttemptToken(id); aerr != nil {
+		return nil, aerr
 	}
 	// A reschedule-mode sensor reports up_for_reschedule + its next-poke time; route
 	// it to the dedicated store path that persists reschedule_at, instead of the
@@ -308,6 +314,9 @@ func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*a
 	id, err := s.identify(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if aerr := s.requireAttemptToken(id); aerr != nil {
+		return nil, aerr
 	}
 	if hbErr := s.store.RecordHeartbeat(ctx, *id); hbErr != nil {
 		// A stale heartbeat is the guard working, not a fault: the row moved on —
@@ -378,6 +387,9 @@ func (s *Server) PushXCom(ctx context.Context, req *agentv1.PushXComRequest) (*a
 	if err != nil {
 		return nil, err
 	}
+	if aerr := s.requireAttemptToken(id); aerr != nil {
+		return nil, aerr
+	}
 	spec, err := s.store.TaskSpec(ctx, *id)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
@@ -402,6 +414,9 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 	id, err := s.identify(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if aerr := s.requireAttemptToken(id); aerr != nil {
+		return nil, aerr
 	}
 	spec, err := s.store.TaskSpec(ctx, *id)
 	if err != nil {
@@ -436,6 +451,9 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 	id, ierr := s.identify(stream.Context())
 	if ierr != nil {
 		return ierr
+	}
+	if aerr := s.requireAttemptToken(id); aerr != nil {
+		return aerr
 	}
 	if s.logs == nil {
 		return status.Error(codes.Unimplemented, "log shipping is not configured")

@@ -218,6 +218,9 @@ func (s *Server) GetVariables(ctx context.Context, _ *agentv1.GetVariablesReques
 	if err != nil {
 		return nil, err
 	}
+	if aerr := s.requireAttemptToken(id); aerr != nil {
+		return nil, aerr
+	}
 	if gerr := s.guardSecretChannel(ctx); gerr != nil {
 		return nil, gerr
 	}
@@ -252,6 +255,9 @@ func (s *Server) GetConnections(ctx context.Context, _ *agentv1.GetConnectionsRe
 	id, err := s.identify(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if aerr := s.requireAttemptToken(id); aerr != nil {
+		return nil, aerr
 	}
 	if gerr := s.guardSecretChannel(ctx); gerr != nil {
 		return nil, gerr

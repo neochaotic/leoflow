@@ -98,7 +98,7 @@ func awaitEventually(t *testing.T, cond func() bool) {
 
 func TestAwaitAssignmentInertWhenWarmPoolsOff(t *testing.T) {
 	srv, a := newServer(&fakeStore{}) // no SetWarmPools => off
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	err := srv.AwaitAssignment(stream)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("warm pools off: got %v, want FailedPrecondition", err)
@@ -115,7 +115,7 @@ func TestAwaitAssignmentInertWhenWarmPoolsOff(t *testing.T) {
 func TestAwaitAssignmentRefusedOnFollower(t *testing.T) {
 	srv, a, reg := newWarmServer(t, nil)
 	srv.SetLeaderCheck(func() bool { return false })
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	err := srv.AwaitAssignment(stream)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("follower AwaitAssignment: got %v, want FailedPrecondition", err)
@@ -130,7 +130,7 @@ func TestAwaitAssignmentRefusedOnFollower(t *testing.T) {
 func TestAwaitAssignmentProceedsOnLeader(t *testing.T) {
 	srv, a, reg := newWarmServer(t, nil)
 	srv.SetLeaderCheck(func() bool { return true })
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	stream.pushMsg(regMsg("dagver-1"))
 	go func() { _ = srv.AwaitAssignment(stream) }()
 	awaitEventually(t, func() bool { return reg.registered("ti-1") })
@@ -141,7 +141,7 @@ func TestAwaitAssignmentProceedsOnLeader(t *testing.T) {
 // (single-node / tests without wiring), so the handler serves as before.
 func TestAwaitAssignmentNilLeaderCheckUnchecked(t *testing.T) {
 	srv, a, reg := newWarmServer(t, nil) // no SetLeaderCheck
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	stream.pushMsg(regMsg("dagver-1"))
 	go func() { _ = srv.AwaitAssignment(stream) }()
 	awaitEventually(t, func() bool { return reg.registered("ti-1") })
@@ -152,7 +152,7 @@ func TestAwaitAssignmentNilLeaderCheckUnchecked(t *testing.T) {
 
 func TestAwaitAssignmentRequiresRegisterFirst(t *testing.T) {
 	srv, a, _ := newWarmServer(t, nil)
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	stream.pushMsg(ackMsg("as-1", true)) // first message is an ack, not a register
 	err := srv.AwaitAssignment(stream)
 	if status.Code(err) != codes.FailedPrecondition {
@@ -164,7 +164,7 @@ func TestAwaitAssignmentRequiresRegisterFirst(t *testing.T) {
 
 func TestAwaitAssignmentRegistersWorker(t *testing.T) {
 	srv, a, reg := newWarmServer(t, nil)
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	stream.pushMsg(regMsg("dagver-1"))
 	go func() { _ = srv.AwaitAssignment(stream) }()
 
@@ -179,7 +179,7 @@ func TestAwaitAssignmentRegistersWorker(t *testing.T) {
 
 func TestAwaitAssignmentDeliversAssignment(t *testing.T) {
 	srv, a, reg := newWarmServer(t, nil)
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	stream.pushMsg(regMsg("dagver-1"))
 	go func() { _ = srv.AwaitAssignment(stream) }()
 	awaitEventually(t, func() bool { return reg.registered("ti-1") })
@@ -391,7 +391,7 @@ func TestReclaimRefusedCarriesAttemptIdentity(t *testing.T) {
 
 func TestAwaitAssignmentDeregistersOnStreamClose(t *testing.T) {
 	srv, a, reg := newWarmServer(t, nil)
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	stream.pushMsg(regMsg("dagver-1"))
 	done := make(chan error, 1)
 	go func() { done <- srv.AwaitAssignment(stream) }()
@@ -410,13 +410,13 @@ func TestAwaitAssignmentDeregistersOnStreamClose(t *testing.T) {
 func TestAwaitAssignmentReconnectSameIdentitySingleEntry(t *testing.T) {
 	srv, a, reg := newWarmServer(t, nil)
 
-	s1 := newFakeAwaitStream(ctxWithToken(t, a))
+	s1 := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	s1.pushMsg(regMsg("v1"))
 	go func() { _ = srv.AwaitAssignment(s1) }()
 	awaitEventually(t, func() bool { return reg.dagVersionOf("ti-1") == "v1" })
 
 	// A reconnect with the SAME authenticated identity but a new registration.
-	s2 := newFakeAwaitStream(ctxWithToken(t, a))
+	s2 := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	s2.pushMsg(regMsg("v2"))
 	go func() { _ = srv.AwaitAssignment(s2) }()
 	awaitEventually(t, func() bool { return reg.dagVersionOf("ti-1") == "v2" })
@@ -439,7 +439,7 @@ func TestAwaitAssignmentPersistsBindingOnStartedAck(t *testing.T) {
 	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour } // no reclaim mid-test
 	srv.SetWarmPools(reg)
 
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	stream.pushMsg(regMsgPod("dagver-1", "warm-pod-7"))
 	go func() { _ = srv.AwaitAssignment(stream) }()
 	awaitEventually(t, func() bool { return reg.registered("ti-1") })
@@ -471,7 +471,7 @@ func TestAwaitAssignmentDoesNotPersistOnRefusedAck(t *testing.T) {
 	reg.leaseFor = func(*agentv1.WorkAssignment) time.Duration { return time.Hour }
 	srv.SetWarmPools(reg)
 
-	stream := newFakeAwaitStream(ctxWithToken(t, a))
+	stream := newFakeAwaitStream(ctxWithWarmToken(t, a))
 	stream.pushMsg(regMsgPod("dagver-1", "warm-pod-7"))
 	go func() { _ = srv.AwaitAssignment(stream) }()
 	awaitEventually(t, func() bool { return reg.registered("ti-1") })

@@ -70,7 +70,17 @@ func (s *Server) AwaitAssignment(stream agentv1.AgentService_AwaitAssignmentServ
 	if err != nil {
 		return err
 	}
-	worker, err := s.registerFromStream(stream, id.TaskInstanceID)
+	// Scope gate (ADR 0058 D2): the assignment stream is the warm-worker control
+	// channel — only a warm-worker-scoped token may open it. A task ("attempt")
+	// token is PermissionDenied here, the mirror of requireAttemptToken on the
+	// secret/task RPCs.
+	if werr := s.requireWarmWorkerToken(id); werr != nil {
+		return werr
+	}
+	// The registry key is the worker's AUTHENTICATED identity — its WorkerID (the
+	// token Subject), not the register payload — so a worker cannot claim an
+	// arbitrary identity through the message.
+	worker, err := s.registerFromStream(stream, id.WorkerID)
 	if err != nil {
 		return err
 	}
@@ -79,7 +89,7 @@ func (s *Server) AwaitAssignment(stream agentv1.AgentService_AwaitAssignmentServ
 	// Receive loop: acks and slot-free signals feed the registry. It ends on EOF
 	// (clean close) or any transport error, reported once on recvErr.
 	recvErr := make(chan error, 1)
-	go s.pumpWorkerMessages(stream, id.TaskInstanceID, recvErr)
+	go s.pumpWorkerMessages(stream, id.WorkerID, recvErr)
 
 	for {
 		select {

@@ -533,9 +533,9 @@ func TestWarmWorkerReconnectsTowardLeader(t *testing.T) {
 		Hostname:      "warm-pod-1", Version: "test", ScratchDir: scratch,
 		// Tiny backoff so the test never really sleeps; a generous cap on reconnects.
 		ReconnectBackoff: time.Microsecond, ReconnectMaxBackoff: time.Millisecond, MaxReconnects: 10,
-		Redial: func() (agentv1.AgentServiceClient, io.Closer, error) {
+		Redial: func() (agentv1.AgentServiceClient, *TokenSource, io.Closer, error) {
 			redials++
-			return client, noopCloser{}, nil
+			return client, nil, noopCloser{}, nil
 		},
 	}
 
@@ -571,9 +571,9 @@ func TestWarmWorkerReconnectGivesUpAfterCap(t *testing.T) {
 		Cmd:           &scratchProbeCmd{scratchDir: scratch},
 		Hostname:      "warm-pod-1", Version: "test", ScratchDir: scratch,
 		ReconnectBackoff: time.Microsecond, ReconnectMaxBackoff: time.Millisecond, MaxReconnects: 3,
-		Redial: func() (agentv1.AgentServiceClient, io.Closer, error) {
+		Redial: func() (agentv1.AgentServiceClient, *TokenSource, io.Closer, error) {
 			redials++
-			return client, noopCloser{}, nil
+			return client, nil, noopCloser{}, nil
 		},
 	}
 
@@ -608,5 +608,80 @@ func TestRunnerRunIsRegisterThenOneAttempt(t *testing.T) {
 	wantStates := []agentv1.TaskState{agentv1.TaskState_TASK_STATE_RUNNING, agentv1.TaskState_TASK_STATE_SUCCESS}
 	if len(client.states) != 2 || client.states[0] != wantStates[0] || client.states[1] != wantStates[1] {
 		t.Errorf("states = %v, want exactly one attempt (running then success)", client.states)
+	}
+}
+
+// warmExchangeFake is the control-plane double for the warm bootstrap exchange: it
+// returns a worker JWT from ExchangeToken and records the bearer the stream carried
+// when Register ran, so a test can prove the exchange happens BEFORE Register and
+// that Register authenticates with the exchanged worker token.
+type warmExchangeFake struct {
+	*fakeClient
+	stream          *fakeAssignmentStream
+	streamTokens    *TokenSource
+	workerJWT       string
+	exchangeCalls   int
+	registerCalls   int
+	tokenAtRegister string
+	exchangedFirst  bool
+}
+
+func (c *warmExchangeFake) ExchangeToken(context.Context, *agentv1.ExchangeTokenRequest, ...grpc.CallOption) (*agentv1.ExchangeTokenResponse, error) {
+	c.exchangeCalls++
+	return &agentv1.ExchangeTokenResponse{AgentToken: c.workerJWT}, nil
+}
+
+func (c *warmExchangeFake) Register(context.Context, *agentv1.RegisterRequest, ...grpc.CallOption) (*agentv1.RegisterResponse, error) {
+	c.registerCalls++
+	c.tokenAtRegister = c.streamTokens.Token()
+	c.exchangedFirst = c.exchangeCalls > 0
+	return &agentv1.RegisterResponse{SessionId: "s1"}, nil
+}
+
+func (c *warmExchangeFake) AwaitAssignment(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentv1.WorkerMessage, agentv1.WorkAssignment], error) {
+	return c.stream, nil
+}
+
+// TestWarmWorkerExchangesBootstrapBeforeRegister: under the exchange transport the
+// warm worker swaps its projected bootstrap token for a WORKER-scoped JWT before
+// Register, and Register (and thus AwaitAssignment) then carry the worker JWT — the
+// per-attempt token flow (AttemptTokens) is untouched.
+func TestWarmWorkerExchangesBootstrapBeforeRegister(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	streamTokens := NewTokenSource("projected-bootstrap")
+	client := &warmExchangeFake{
+		fakeClient:   &fakeClient{},
+		stream:       &fakeAssignmentStream{ctx: context.Background()}, // empty => clean EOF
+		streamTokens: streamTokens,
+		workerJWT:    "worker-jwt",
+	}
+	w := &WarmRunner{
+		StreamClient:      client,
+		WorkClient:        client,
+		AttemptTokens:     NewTokenSource("attempt-seed"),
+		StreamTokens:      streamTokens,
+		ExchangeBootstrap: true,
+		Cmd:               &scratchProbeCmd{scratchDir: scratch},
+		Hostname:          "warm-pod-1", Version: "test", ScratchDir: scratch,
+	}
+
+	if err := w.Run(context.Background(), "dagver-1"); err != nil {
+		t.Fatalf("WarmRunner.Run: %v", err)
+	}
+	if client.exchangeCalls != 1 {
+		t.Errorf("ExchangeToken calls = %d, want exactly 1", client.exchangeCalls)
+	}
+	if !client.exchangedFirst {
+		t.Error("the exchange must run BEFORE Register")
+	}
+	if client.tokenAtRegister != "worker-jwt" {
+		t.Errorf("bearer at Register = %q, want the exchanged worker JWT", client.tokenAtRegister)
+	}
+	if got := streamTokens.Token(); got != "worker-jwt" {
+		t.Errorf("stream bearer after exchange = %q, want worker-jwt", got)
+	}
+	// The per-attempt source is untouched by the bootstrap exchange.
+	if got := w.AttemptTokens.Token(); got != "attempt-seed" {
+		t.Errorf("attempt token source = %q, want unchanged", got)
 	}
 }

@@ -1003,6 +1003,23 @@ jobs:
         run: bash scripts/check-dependabot-dirs.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # Stale deploy-path check. The old GKE deploy directory was renamed to
+  # `deploy/k8s` (#690, cloud-agnostic recipe). A leftover reference to the
+  # old path in a script comment, README, docs link, or .gitignore points at
+  # a directory that no longer exists — scripts `cd` into nothing, doc links
+  # 404 — and no build step resolves the string, so the rot is invisible
+  # without a gate. (The guard script owns the literal old-path string.)
+  # ─────────────────────────────────────────────────────────────────────
+  stale-deploy-path:
+    name: No stale legacy deploy path
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Check no stale legacy deploy path remains
+        run: bash scripts/check-no-stale-deploy-path.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # Python parser tests — matrix across every Python the host detector
   # claims to support (`internal/setup/detect.go` pythonCandidates). If a
   # new minor is added to that list, add it here too — otherwise the

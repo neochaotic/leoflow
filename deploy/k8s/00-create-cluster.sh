@@ -2,7 +2,7 @@
 #
 # 00-create-cluster.sh — Provision a GKE Standard cluster for testing Leoflow Pro.
 #
-# Design (see deploy/gke/README.md for the rationale):
+# Design (see deploy/k8s/README.md for the rationale):
 #   - GKE *Standard*, *zonal* (NOT Autopilot): we want a generic, vanilla-ish
 #     Kubernetes so the Helm chart is validated for "any K8s", and so the chart's
 #     resource requests/limits, PSA, NetworkPolicy, HPA and PDB are exercised

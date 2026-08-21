@@ -32,6 +32,9 @@ func TestExecutionDefaults(t *testing.T) {
 	if got := c.Execution.MaxPoolSize; got != 8 {
 		t.Errorf("execution.max_pool_size default = %d, want 8", got)
 	}
+	if got := c.Execution.MaxWarmPodsPerTenant; got != 100 {
+		t.Errorf("execution.max_warm_pods_per_tenant default = %d, want 100", got)
+	}
 }
 
 // TestExecutionEnvBinds proves each execution key binds from its LEOFLOW_* env var
@@ -43,6 +46,7 @@ func TestExecutionEnvBinds(t *testing.T) {
 	t.Setenv("LEOFLOW_EXECUTION_MIN_IDLE_WORKERS", "3")
 	t.Setenv("LEOFLOW_EXECUTION_WORKER_IDLE_TTL", "90s")
 	t.Setenv("LEOFLOW_EXECUTION_MAX_POOL_SIZE", "16")
+	t.Setenv("LEOFLOW_EXECUTION_MAX_WARM_PODS_PER_TENANT", "250")
 	c, err := LoadServer("", nil)
 	if err != nil {
 		t.Fatalf("LoadServer: %v", err)
@@ -65,6 +69,9 @@ func TestExecutionEnvBinds(t *testing.T) {
 	if got := c.Execution.MaxPoolSize; got != 16 {
 		t.Errorf("execution.max_pool_size = %d, want 16 (from env)", got)
 	}
+	if got := c.Execution.MaxWarmPodsPerTenant; got != 250 {
+		t.Errorf("execution.max_warm_pods_per_tenant = %d, want 250 (from env)", got)
+	}
 }
 
 // validWarmConfig returns a ServerConfig that passes the warm-pool boot gate: warm
@@ -83,6 +90,7 @@ func validWarmConfig() *ServerConfig {
 	c.Execution.MaxWorkerLifetime = time.Hour
 	c.Execution.WorkerIdleTTL = 5 * time.Minute
 	c.Execution.MaxPoolSize = 8
+	c.Execution.MaxWarmPodsPerTenant = 100
 	return c
 }
 
@@ -195,6 +203,8 @@ func TestValidateExecutionSanityCaps(t *testing.T) {
 		{"zero idle ttl", func(c *ServerConfig) { c.Execution.WorkerIdleTTL = 0 }, "worker_idle_ttl"},
 		{"zero pool size", func(c *ServerConfig) { c.Execution.MaxPoolSize = 0 }, "max_pool_size"},
 		{"negative pool size", func(c *ServerConfig) { c.Execution.MaxPoolSize = -1 }, "max_pool_size"},
+		{"zero per-tenant cap", func(c *ServerConfig) { c.Execution.MaxWarmPodsPerTenant = 0 }, "max_warm_pods_per_tenant"},
+		{"negative per-tenant cap", func(c *ServerConfig) { c.Execution.MaxWarmPodsPerTenant = -1 }, "max_warm_pods_per_tenant"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := validWarmConfig()

@@ -19,6 +19,12 @@ const (
 	// warmDagVersionLabelKey names the dag_version pool a warm worker serves, so
 	// the reconciler can group and reconcile counts per version.
 	warmDagVersionLabelKey = "leoflow.io/dag-version-id"
+	// warmTenantLabelKey names the tenant that owns a warm worker's dag_version, so
+	// the reconciler can count a tenant's whole warm footprint — including pods of a
+	// draining/inactive version that are absent from the active targets — and
+	// enforce the per-tenant aggregate cap (M4). It is stamped from
+	// WarmPodSpec.TenantID and read back into WarmPodInfo.TenantID by ListWarmPods.
+	warmTenantLabelKey = "leoflow.io/tenant-id"
 )
 
 // WarmPodSpec is everything BuildWarmPod needs to build one long-lived warm-worker
@@ -32,6 +38,12 @@ type WarmPodSpec struct {
 	Image           string
 	ImagePullPolicy string
 	Namespace       string
+
+	// TenantID is the tenant that owns this dag_version. It is stamped onto the pod
+	// as the leoflow.io/tenant-id label so the reconciler can attribute the pod to
+	// its tenant for the per-tenant aggregate warm-pod cap (M4), even after the
+	// version stops being active (the label outlives the active target).
+	TenantID string
 
 	// ControlPlaneAddr / AgentTLSCAConfigMap mirror the task-pod connection knobs:
 	// where the agent dials and (when set) the CA ConfigMap it verifies the server
@@ -106,11 +118,8 @@ func BuildWarmPod(spec WarmPodSpec) *corev1.Pod {
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: warmPodName(spec.DagVersionID),
-			Labels: map[string]string{
-				warmWorkerLabelKey:     warmWorkerLabelVal,
-				warmDagVersionLabelKey: sanitizeLabel(spec.DagVersionID),
-			},
+			Name:        warmPodName(spec.DagVersionID),
+			Labels:      warmPodLabels(spec),
 			Annotations: map[string]string{},
 		},
 		Spec: corev1.PodSpec{
@@ -137,6 +146,23 @@ func BuildWarmPod(spec WarmPodSpec) *corev1.Pod {
 	// identity annotation is stamped even under the exchange transport.
 	mountAgentToken(pod, spec.agentToken())
 	return pod
+}
+
+// warmPodLabels builds the warm worker's stable label set: the warm-worker marker
+// the reconciler lists by, the dag_version pool it serves, and — when the spec
+// carries one — the owning tenant, so the reconciler can attribute the pod to its
+// tenant for the per-tenant aggregate cap (M4) even once the version is inactive.
+// TenantID is omitted when empty rather than stamped blank, so an "absent" tenant
+// label means exactly "pre-label pod" to the reconciler.
+func warmPodLabels(spec WarmPodSpec) map[string]string {
+	labels := map[string]string{
+		warmWorkerLabelKey:     warmWorkerLabelVal,
+		warmDagVersionLabelKey: sanitizeLabel(spec.DagVersionID),
+	}
+	if spec.TenantID != "" {
+		labels[warmTenantLabelKey] = sanitizeLabel(spec.TenantID)
+	}
+	return labels
 }
 
 // warmContainerName is the warm worker's single container.

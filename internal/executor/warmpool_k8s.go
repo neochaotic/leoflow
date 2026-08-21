@@ -57,6 +57,11 @@ func (k *KubernetesWarmPods) ListWarmPods(ctx context.Context) ([]WarmPodInfo, e
 			Name:         p.Name,
 			DagVersionID: p.Labels[warmDagVersionLabelKey],
 			Terminal:     terminal,
+			// Tenant attribution for the per-tenant aggregate cap (M4). A pre-label
+			// pod (rolling upgrade) has no tenant label and reads "" here; the
+			// reconciler attributes it via its version when resolvable and never
+			// deletes it for the cap.
+			TenantID: p.Labels[warmTenantLabelKey],
 		})
 	}
 	return out, nil

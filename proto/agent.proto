@@ -256,6 +256,14 @@ message WorkerMessage {
 // payload — a worker must not be able to claim an arbitrary identity here.
 message WorkerRegister {
     string dag_version_id = 1;
+    // pod_name is the worker's OWN Kubernetes pod name, delivered to the
+    // container via the downward API (LEOFLOW_POD_NAME). It is the durable key
+    // the control plane binds a started attempt to (warm_worker_id on the running
+    // TI) so a later reaper can match bound attempts against the live warm-pod set
+    // ListWarmPods returns, even after a leader failover. Unlike an identity, it
+    // is a locator, not a credential: the worker's authenticated identity still
+    // comes from its bearer token on the stream context, never from this field.
+    string pod_name = 2;
 }
 
 // AssignmentAck answers a WorkAssignment. started=true means the worker began the

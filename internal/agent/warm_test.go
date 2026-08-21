@@ -201,6 +201,41 @@ func TestWarmWorkerServesTwoAttempts(t *testing.T) {
 	}
 }
 
+// TestWarmWorkerRegisterCarriesPodName locks the durable-binding key on the wire
+// (ADR 0058 N1d-a1): the worker's own pod name (from LEOFLOW_POD_NAME, threaded
+// in as WarmRunner.PodName) rides in WorkerRegister.pod_name so the control plane
+// can bind a started attempt to it. No assignments follow, so Run registers and
+// exits on the stream's EOF.
+func TestWarmWorkerRegisterCarriesPodName(t *testing.T) {
+	stream := &fakeAssignmentStream{ctx: context.Background()} // empty => immediate io.EOF
+	client := &warmFake{fakeClient: &fakeClient{}, stream: stream, tokens: NewTokenSource("bootstrap")}
+
+	w := &WarmRunner{
+		StreamClient:  client,
+		WorkClient:    client,
+		AttemptTokens: NewTokenSource("bootstrap"),
+		Cmd:           &scratchProbeCmd{scratchDir: filepath.Join(t.TempDir(), "scratch")},
+		Hostname:      "warm-pod-1",
+		Version:       "test",
+		PodName:       "leoflow-warm-dv-abc-x7k2",
+		ScratchDir:    filepath.Join(t.TempDir(), "scratch"),
+	}
+
+	if err := w.Run(context.Background(), "dagver-1"); err != nil {
+		t.Fatalf("WarmRunner.Run: %v", err)
+	}
+	if len(stream.sent) == 0 {
+		t.Fatal("worker sent no messages; expected a WorkerRegister")
+	}
+	reg := stream.sent[0].GetRegister()
+	if reg == nil {
+		t.Fatalf("first message must be a WorkerRegister, got %+v", stream.sent[0])
+	}
+	if reg.GetPodName() != "leoflow-warm-dv-abc-x7k2" {
+		t.Errorf("WorkerRegister.pod_name = %q, want leoflow-warm-dv-abc-x7k2", reg.GetPodName())
+	}
+}
+
 // TestRunnerRunIsRegisterThenOneAttempt locks the single-shot refactor: Run must
 // still be exactly "register, then run one attempt" — one GetTaskSpec, one
 // RUNNING→SUCCESS pair — with no warm-loop behavior leaking in.

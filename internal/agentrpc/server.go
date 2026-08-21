@@ -116,6 +116,13 @@ type Store interface {
 	// scheduler's heartbeat reaper (#128) can tell live tasks from agent-lost
 	// ones. The state guard inside the SQL skips already-terminal rows.
 	RecordHeartbeat(ctx context.Context, id auth.AgentIdentity) error
+	// BindWarmAttempt records the durable warm-attempt binding (ADR 0058 N1d-a1):
+	// the warm worker pod (workerPod) that acked this attempt (runID, taskID,
+	// tryNumber) as started. The write is guarded on active state, so a settled
+	// attempt is never bound (a benign no-op, not an error). Called only on a warm
+	// ack — with warm pools off no assignment is ever acked, so it is never called
+	// and warm_worker_id stays NULL.
+	BindWarmAttempt(ctx context.Context, runID, taskID string, tryNumber int, workerPod string) error
 }
 
 // XComService stores and retrieves XCom values for the agent.

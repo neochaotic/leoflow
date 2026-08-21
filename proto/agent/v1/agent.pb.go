@@ -1557,8 +1557,16 @@ func (*WorkerMessage_SlotFree) isWorkerMessage_Msg() {}
 // authenticated pod/bootstrap credential on the stream context, NOT from this
 // payload — a worker must not be able to claim an arbitrary identity here.
 type WorkerRegister struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DagVersionId  string                 `protobuf:"bytes,1,opt,name=dag_version_id,json=dagVersionId,proto3" json:"dag_version_id,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	DagVersionId string                 `protobuf:"bytes,1,opt,name=dag_version_id,json=dagVersionId,proto3" json:"dag_version_id,omitempty"`
+	// pod_name is the worker's OWN Kubernetes pod name, delivered to the
+	// container via the downward API (LEOFLOW_POD_NAME). It is the durable key
+	// the control plane binds a started attempt to (warm_worker_id on the running
+	// TI) so a later reaper can match bound attempts against the live warm-pod set
+	// ListWarmPods returns, even after a leader failover. Unlike an identity, it
+	// is a locator, not a credential: the worker's authenticated identity still
+	// comes from its bearer token on the stream context, never from this field.
+	PodName       string `protobuf:"bytes,2,opt,name=pod_name,json=podName,proto3" json:"pod_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1596,6 +1604,13 @@ func (*WorkerRegister) Descriptor() ([]byte, []int) {
 func (x *WorkerRegister) GetDagVersionId() string {
 	if x != nil {
 		return x.DagVersionId
+	}
+	return ""
+}
+
+func (x *WorkerRegister) GetPodName() string {
+	if x != nil {
+		return x.PodName
 	}
 	return ""
 }
@@ -1891,9 +1906,10 @@ const file_agent_proto_rawDesc = "" +
 	"\bregister\x18\x01 \x01(\v2 .leoflow.agent.v1.WorkerRegisterH\x00R\bregister\x123\n" +
 	"\x03ack\x18\x02 \x01(\v2\x1f.leoflow.agent.v1.AssignmentAckH\x00R\x03ack\x129\n" +
 	"\tslot_free\x18\x03 \x01(\v2\x1a.leoflow.agent.v1.SlotFreeH\x00R\bslotFreeB\x05\n" +
-	"\x03msg\"6\n" +
+	"\x03msg\"Q\n" +
 	"\x0eWorkerRegister\x12$\n" +
-	"\x0edag_version_id\x18\x01 \x01(\tR\fdagVersionId\"N\n" +
+	"\x0edag_version_id\x18\x01 \x01(\tR\fdagVersionId\x12\x19\n" +
+	"\bpod_name\x18\x02 \x01(\tR\apodName\"N\n" +
 	"\rAssignmentAck\x12#\n" +
 	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x18\n" +
 	"\astarted\x18\x02 \x01(\bR\astarted\"\n" +

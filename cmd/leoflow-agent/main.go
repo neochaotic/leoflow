@@ -224,10 +224,14 @@ func runWarm(ctx context.Context, streamClient agentv1.AgentServiceClient, addr,
 		NewSink: func(ctx context.Context) (agent.LogSink, error) {
 			return agent.OpenLogSink(ctx, workClient)
 		},
-		Cmd:                agent.NewExecRunner(),
-		Hostname:           hostname,
-		Version:            version.Get().Version,
-		Env:                os.Environ(),
+		Cmd:      agent.NewExecRunner(),
+		Hostname: hostname,
+		Version:  version.Get().Version,
+		Env:      os.Environ(),
+		// The pod's own name, injected by BuildWarmPod via the downward API. Sent
+		// up in WorkerRegister so the control plane binds a started attempt to it
+		// as the durable warm_worker_id (ADR 0058 N1d-a1). Empty off-cluster.
+		PodName:            os.Getenv("LEOFLOW_POD_NAME"),
 		ScratchDir:         scratchDir,
 		TerminationLogPath: os.Getenv("LEOFLOW_TERMINATION_LOG_PATH"),
 		HeartbeatInterval:  agent.DefaultHeartbeatInterval,

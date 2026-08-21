@@ -11,6 +11,47 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bindWarmAttempt = `-- name: BindWarmAttempt :execrows
+UPDATE task_instances
+SET warm_worker_id = $4
+WHERE dag_run_id = $1
+  AND task_id = $2
+  AND try_number = $3
+  AND state IN ('queued', 'running')
+`
+
+type BindWarmAttemptParams struct {
+	DagRunID     pgtype.UUID `json:"dag_run_id"`
+	TaskID       string      `json:"task_id"`
+	TryNumber    int32       `json:"try_number"`
+	WarmWorkerID *string     `json:"warm_worker_id"`
+}
+
+// Records the durable warm-attempt binding (ADR 0058 N1d-a1): the warm worker
+// pod ($4, its own downward-API pod name) that acked THIS attempt (dag_run_id,
+// task_id, try_number) as started. A later failover reaper matches warm_worker_id
+// against the live warm-pod set to find attempts a dead warm pod held.
+//
+// Guarded on state IN ('queued', 'running') — the same active predicate the
+// heartbeat and liveness queries use — so a settled attempt is never bound: an
+// ack that races a reaper settling the row must not stamp a worker onto a
+// terminal TI. Bounded by (dag_run_id, task_id, try_number) to match exactly the
+// attempt the assignment named. Returns the affected row count; zero means the
+// attempt already moved on (terminal or superseded), and the caller treats that
+// as a benign no-op, never an error.
+func (q *Queries) BindWarmAttempt(ctx context.Context, arg BindWarmAttemptParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bindWarmAttempt,
+		arg.DagRunID,
+		arg.TaskID,
+		arg.TryNumber,
+		arg.WarmWorkerID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimAlertAttempt = `-- name: ClaimAlertAttempt :one
 UPDATE dag_runs
 SET alert_attempts = alert_attempts + 1,
@@ -276,7 +317,7 @@ func (q *Queries) CreateScheduledRunByDagID(ctx context.Context, arg CreateSched
 const createTaskInstance = `-- name: CreateTaskInstance :one
 INSERT INTO task_instances (tenant_id, dag_run_id, task_id, operator, max_tries, state, pool, try_number)
 VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts, warm_worker_id
 `
 
 type CreateTaskInstanceParams struct {
@@ -333,6 +374,7 @@ func (q *Queries) CreateTaskInstance(ctx context.Context, arg CreateTaskInstance
 		&i.NextDispatchAt,
 		&i.LastFailureKind,
 		&i.InfraAttempts,
+		&i.WarmWorkerID,
 	)
 	return i, err
 }
@@ -1092,7 +1134,7 @@ func (q *Queries) ListTaskInstanceAttempts(ctx context.Context, arg ListTaskInst
 }
 
 const listTaskInstancesByRun = `-- name: ListTaskInstancesByRun :many
-SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts FROM task_instances
+SELECT id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts, warm_worker_id FROM task_instances
 WHERE dag_run_id = $1
 ORDER BY task_id
 `
@@ -1136,6 +1178,7 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 			&i.NextDispatchAt,
 			&i.LastFailureKind,
 			&i.InfraAttempts,
+			&i.WarmWorkerID,
 		); err != nil {
 			return nil, err
 		}
@@ -2011,7 +2054,7 @@ const updateTaskInstanceState = `-- name: UpdateTaskInstanceState :one
 UPDATE task_instances
 SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
-RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts
+RETURNING id, tenant_id, dag_run_id, task_id, map_index, try_number, max_tries, state, pool, operator, queued_at, started_at, ended_at, duration_seconds, pod_name, node_name, exit_code, error_message, log_url, hostname, note, scheduled_at, last_heartbeat_at, reschedule_at, first_reschedule_at, dispatch_attempts, next_dispatch_at, last_failure_kind, infra_attempts, warm_worker_id
 `
 
 type UpdateTaskInstanceStateParams struct {
@@ -2059,6 +2102,7 @@ func (q *Queries) UpdateTaskInstanceState(ctx context.Context, arg UpdateTaskIns
 		&i.NextDispatchAt,
 		&i.LastFailureKind,
 		&i.InfraAttempts,
+		&i.WarmWorkerID,
 	)
 	return i, err
 }

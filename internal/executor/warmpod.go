@@ -149,10 +149,22 @@ func warmPodEnv(spec WarmPodSpec) []corev1.EnvVar {
 	tok := spec.agentToken()
 	env = append(env, tok.env()...)
 	env = append(env, tok.pathEnv()...)
-	// Select the agent's warm-worker loop for this dag_version pool.
+	// Select the agent's warm-worker loop for this dag_version pool, and inject the
+	// worker's OWN pod name via the Kubernetes downward API (ADR 0058 N1d-a1). The
+	// agent forwards LEOFLOW_POD_NAME in WorkerRegister.pod_name; the control plane
+	// binds a started attempt to it (warm_worker_id) so a later failover reaper can
+	// match the attempt against the live warm-pod set. The pod name is not known at
+	// build time (it carries a random suffix), so it must come from the downward
+	// API's metadata.name rather than a literal value.
 	env = append(env,
 		corev1.EnvVar{Name: "LEOFLOW_WARM_WORKER", Value: "1"},
 		corev1.EnvVar{Name: "LEOFLOW_DAG_VERSION_ID", Value: spec.DagVersionID},
+		corev1.EnvVar{
+			Name: "LEOFLOW_POD_NAME",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+			},
+		},
 	)
 	if spec.AgentTLSCAConfigMap != "" {
 		env = append(env,

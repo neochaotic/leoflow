@@ -27,6 +27,9 @@ func (stubStore) ReportState(context.Context, auth.AgentIdentity, domain.TaskSta
 }
 func (stubStore) Reschedule(context.Context, auth.AgentIdentity, time.Time) error { return nil }
 func (stubStore) RecordHeartbeat(context.Context, auth.AgentIdentity) error       { return nil }
+func (stubStore) BindWarmAttempt(context.Context, string, string, int, string) error {
+	return nil
+}
 
 // recordingAuth wraps a real authenticator and records every raw bearer the
 // server was asked to verify, so a test can prove which token the agent sent on

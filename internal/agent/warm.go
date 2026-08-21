@@ -51,6 +51,13 @@ type WarmRunner struct {
 	Version  string
 	Env      []string // base process environment (typically os.Environ())
 
+	// PodName is the worker's OWN Kubernetes pod name, read from LEOFLOW_POD_NAME
+	// (injected via the downward API) in main.go. It is sent up in WorkerRegister
+	// so the control plane can bind a started attempt to it as the durable
+	// warm_worker_id (ADR 0058 N1d-a1). Empty outside Kubernetes (e.g. tests); the
+	// binding then simply degrades to per-pod liveness for this worker.
+	PodName string
+
 	// ScratchDir is the agent-owned per-attempt scratch root. It is wiped and
 	// recreated before every attempt (D4 isolation) and holds the return-value,
 	// extra-links, xcom-pushes, and reschedule files the runtime writes.
@@ -84,7 +91,7 @@ func (w *WarmRunner) Run(ctx context.Context, dagVersionID string) error {
 	// serves, so the control plane only dispatches matching assignments to it.
 	if serr := stream.Send(&agentv1.WorkerMessage{
 		Msg: &agentv1.WorkerMessage_Register{
-			Register: &agentv1.WorkerRegister{DagVersionId: dagVersionID},
+			Register: &agentv1.WorkerRegister{DagVersionId: dagVersionID, PodName: w.PodName},
 		},
 	}); serr != nil {
 		return fmt.Errorf("sending worker register: %w", serr)

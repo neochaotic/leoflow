@@ -61,13 +61,24 @@ func (f *fakeWarmPodsPG) ListWarmPods(context.Context) ([]executor.WarmPodInfo, 
 	return f.existing, nil
 }
 
-func (f *fakeWarmPodsPG) CreateWarmPod(_ context.Context, t executor.WarmTarget) error {
+func (f *fakeWarmPodsPG) CreateWarmPod(_ context.Context, t executor.WarmTarget, _, _ string) error {
 	f.created = append(f.created, t)
 	return nil
 }
 
 func (f *fakeWarmPodsPG) DeleteWarmPod(_ context.Context, name string) error {
 	f.deleted = append(f.deleted, name)
+	return nil
+}
+
+// EnsureWarmAnchor / DeleteWarmAnchor satisfy the D11 additions to
+// executor.WarmPodClient; this seam test asserts pod deletes, not anchors, so they
+// are recording no-ops (EnsureWarmAnchor returns a deterministic UID).
+func (f *fakeWarmPodsPG) EnsureWarmAnchor(_ context.Context, dagVersionID string) (string, error) {
+	return "uid-" + dagVersionID, nil
+}
+
+func (f *fakeWarmPodsPG) DeleteWarmAnchor(_ context.Context, _ string) error {
 	return nil
 }
 

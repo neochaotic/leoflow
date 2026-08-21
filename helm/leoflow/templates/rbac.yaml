@@ -31,6 +31,15 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["create", "delete"]
+  # The warm-pool GC anchor (ADR 0058 D11): a per-dag-version ConfigMap that owns
+  # the version's warm pods via an ownerReference, so on control-plane loss /
+  # namespace teardown the pods are cascade-GC'd — the one orphan class the
+  # reconciler-as-deleter cannot cover. EnsureWarmAnchor creates it (idempotent,
+  # tolerating AlreadyExists) and GETs it to read the UID stamped on the owned
+  # pods; the reconciler deletes it only once the version has fully drained.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

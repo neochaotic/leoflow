@@ -17,7 +17,9 @@ func (f *fakeWarmTargets) ActiveWarmTargets(context.Context) ([]WarmTarget, erro
 }
 
 // fakeWarmPods records the reconciler's create/delete calls against a canned
-// existing-pod set, so a test can assert exactly what the reconciler did.
+// existing-pod set, so a test can assert exactly what the reconciler did. It also
+// records the GC-anchor calls (ADR 0058 D11): which versions had EnsureWarmAnchor /
+// DeleteWarmAnchor called, and the anchor name+UID each create was stamped with.
 type fakeWarmPods struct {
 	existing  []WarmPodInfo
 	created   []WarmTarget
@@ -25,6 +27,15 @@ type fakeWarmPods struct {
 	listErr   error
 	createErr map[string]error // per dag_version create error (nil = ok)
 	panicOn   string           // dag_version whose create panics (isolation test)
+	deleteErr map[string]error // per pod-name delete error (nil = ok)
+
+	// Anchor recording (D11).
+	createdAnchorName []string          // anchorName passed to CreateWarmPod, parallel to created
+	createdAnchorUID  []string          // anchorUID passed to CreateWarmPod, parallel to created
+	ensured           []string          // dag_versions EnsureWarmAnchor was called for, in order
+	ensureErr         map[string]error  // per dag_version EnsureWarmAnchor error (nil = ok)
+	anchorUID         map[string]string // dag_version -> UID EnsureWarmAnchor returns (default: "uid-<dv>")
+	deletedAnchors    []string          // dag_versions DeleteWarmAnchor was called for, in order
 }
 
 func (f *fakeWarmPods) ListWarmPods(context.Context) ([]WarmPodInfo, error) {
@@ -34,7 +45,7 @@ func (f *fakeWarmPods) ListWarmPods(context.Context) ([]WarmPodInfo, error) {
 	return f.existing, nil
 }
 
-func (f *fakeWarmPods) CreateWarmPod(_ context.Context, t WarmTarget) error {
+func (f *fakeWarmPods) CreateWarmPod(_ context.Context, t WarmTarget, anchorName, anchorUID string) error {
 	if f.panicOn != "" && t.DagVersionID == f.panicOn {
 		panic("boom creating " + t.DagVersionID)
 	}
@@ -44,11 +55,38 @@ func (f *fakeWarmPods) CreateWarmPod(_ context.Context, t WarmTarget) error {
 		}
 	}
 	f.created = append(f.created, t)
+	f.createdAnchorName = append(f.createdAnchorName, anchorName)
+	f.createdAnchorUID = append(f.createdAnchorUID, anchorUID)
 	return nil
 }
 
 func (f *fakeWarmPods) DeleteWarmPod(_ context.Context, name string) error {
+	if f.deleteErr != nil {
+		if err := f.deleteErr[name]; err != nil {
+			return err
+		}
+	}
 	f.deleted = append(f.deleted, name)
+	return nil
+}
+
+func (f *fakeWarmPods) EnsureWarmAnchor(_ context.Context, dagVersionID string) (string, error) {
+	f.ensured = append(f.ensured, dagVersionID)
+	if f.ensureErr != nil {
+		if err := f.ensureErr[dagVersionID]; err != nil {
+			return "", err
+		}
+	}
+	if f.anchorUID != nil {
+		if uid, ok := f.anchorUID[dagVersionID]; ok {
+			return uid, nil
+		}
+	}
+	return "uid-" + dagVersionID, nil
+}
+
+func (f *fakeWarmPods) DeleteWarmAnchor(_ context.Context, dagVersionID string) error {
+	f.deletedAnchors = append(f.deletedAnchors, dagVersionID)
 	return nil
 }
 
@@ -657,5 +695,165 @@ func TestWarmPoolTenantCapUnattributablePodNotDeleted(t *testing.T) {
 	}
 	if n := rec.count("warm_pool_untenanted_pod"); n < 1 {
 		t.Errorf("warm_pool_untenanted_pod metered %d times, want >= 1", n)
+	}
+}
+
+// ---- ADR 0058 D11: per-dag-version GC-anchor ConfigMap. The reconciler ensures
+// the anchor before creating any pod (so every warm pod is cascade-GC-owned by it)
+// and — the load-bearing reliability guard — deletes the anchor ONLY for an
+// inactive version that has fully drained to ZERO pods, so the ownerReference
+// cascade can never kill a live (busy OR idle) attempt. ----
+
+// anchorDeleted reports whether DeleteWarmAnchor was called for a dag_version.
+func anchorDeleted(pods *fakeWarmPods, dagVersionID string) bool {
+	for _, dv := range pods.deletedAnchors {
+		if dv == dagVersionID {
+			return true
+		}
+	}
+	return false
+}
+
+// TestWarmPoolAnchorNotDeletedWhileInactiveVersionHasPod is the FOOTGUN guard: an
+// INACTIVE version ("gone", not in targets) that still holds a BUSY warm pod must
+// keep its anchor — deleting it would cascade-delete the pod and KILL the live
+// attempt. The busy pod is left to finish (M1) and the anchor is NOT deleted this
+// tick. DeleteWarmAnchor must never be called while any pod still references it.
+func TestWarmPoolAnchorNotDeletedWhileInactiveVersionHasPod(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", EffectiveMinIdle: 1, MaxPoolSize: 8}}}
+	pods := &fakeWarmPods{existing: append(
+		warmPods("dv1", "keep"),
+		warmPods("gone", "busy1")...,
+	)}
+	reconcileWarmBusy(t, targets, pods, busySet("busy1"))
+
+	if deletedSet(pods)["busy1"] {
+		t.Errorf("deleted %v, must LEAVE the inactive version's busy worker to finish (M1)", pods.deleted)
+	}
+	if anchorDeleted(pods, "gone") {
+		t.Errorf("DeleteWarmAnchor called for 'gone' while its busy pod still references the anchor — the cascade would kill a live attempt (FOOTGUN)")
+	}
+	if len(pods.deletedAnchors) != 0 {
+		t.Errorf("deletedAnchors = %v, want none while any pod still exists", pods.deletedAnchors)
+	}
+}
+
+// TestWarmPoolAnchorDeletedWhenInactiveVersionFullyDrained: an INACTIVE version
+// whose pods are ALL idle is drained to zero this tick — so after the drain zero
+// pods reference the anchor and it IS deleted (bookkeeping so the anchor does not
+// leak). At zero pods the cascade is a no-op. The active version's anchor is never
+// touched.
+func TestWarmPoolAnchorDeletedWhenInactiveVersionFullyDrained(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", EffectiveMinIdle: 1, MaxPoolSize: 8}}}
+	pods := &fakeWarmPods{existing: append(
+		warmPods("dv1", "keep"),
+		warmPods("gone", "idle1", "idle2")...,
+	)}
+	reconcileWarmBusy(t, targets, pods, busySet()) // none busy
+
+	del := deletedSet(pods)
+	if !del["idle1"] || !del["idle2"] {
+		t.Errorf("deleted %v, want both idle workers of the inactive version drained", pods.deleted)
+	}
+	if !anchorDeleted(pods, "gone") {
+		t.Errorf("deletedAnchors = %v, want 'gone' deleted (its version fully drained to zero pods)", pods.deletedAnchors)
+	}
+	if anchorDeleted(pods, "dv1") {
+		t.Errorf("deletedAnchors = %v, must NEVER delete an active version's anchor", pods.deletedAnchors)
+	}
+}
+
+// TestWarmPoolAnchorNotDeletedOnActiveScaleDown: an ACTIVE version scaling down
+// (idle excess trimmed) must keep its anchor — anchor deletion is never used to
+// scale down an active version, only as drain bookkeeping for an inactive one.
+func TestWarmPoolAnchorNotDeletedOnActiveScaleDown(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", EffectiveMinIdle: 1, MaxPoolSize: 8}}}
+	pods := &fakeWarmPods{existing: warmPods("dv1", "i1", "i2", "i3")}
+	reconcileWarmBusy(t, targets, pods, busySet())
+
+	if len(pods.deleted) != 2 {
+		t.Errorf("deleted %v, want exactly 2 excess idle trimmed", pods.deleted)
+	}
+	if len(pods.deletedAnchors) != 0 {
+		t.Errorf("deletedAnchors = %v, want none (an active version's anchor is never deleted on scale-down)", pods.deletedAnchors)
+	}
+}
+
+// TestWarmPoolAnchorNeverDeletedWhilePodsExist sweeps the invariant across a mixed
+// fleet: two inactive versions, one with a busy pod (must keep its anchor) and one
+// with a failed idle delete (pod still there — must keep its anchor). Neither
+// anchor may be deleted while a pod remains.
+func TestWarmPoolAnchorNeverDeletedWhilePodsExist(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "active", EffectiveMinIdle: 1, MaxPoolSize: 8}}}
+	pods := &fakeWarmPods{
+		existing: append(append(
+			warmPods("active", "a1"),
+			warmPods("busyver", "b1")...),
+			warmPods("stuckver", "s1")...,
+		),
+		// s1's delete fails, so stuckver still has a pod after the drain.
+		deleteErr: map[string]error{"s1": errors.New("apiserver 500")},
+	}
+	reconcileWarmBusy(t, targets, pods, busySet("b1"))
+
+	if anchorDeleted(pods, "busyver") {
+		t.Errorf("deletedAnchors = %v, must NOT delete busyver's anchor (busy pod still references it)", pods.deletedAnchors)
+	}
+	if anchorDeleted(pods, "stuckver") {
+		t.Errorf("deletedAnchors = %v, must NOT delete stuckver's anchor (its pod's delete failed, so it still exists)", pods.deletedAnchors)
+	}
+}
+
+// TestWarmPoolEnsuresAnchorBeforeCreate: creating warm workers for a version first
+// ensures its GC anchor and stamps every created pod with the anchor's owner UID
+// (so the cascade owner is set on birth).
+func TestWarmPoolEnsuresAnchorBeforeCreate(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", Image: "img", EffectiveMinIdle: 2, MaxPoolSize: 8}}}
+	pods := &fakeWarmPods{anchorUID: map[string]string{"dv1": "uid-dv1-abc"}}
+	reconcileWarmBusy(t, targets, pods, busySet())
+
+	var ensuredDV1 bool
+	for _, dv := range pods.ensured {
+		if dv == "dv1" {
+			ensuredDV1 = true
+		}
+	}
+	if !ensuredDV1 {
+		t.Fatalf("EnsureWarmAnchor was not called for dv1 before creating its pods (ensured=%v)", pods.ensured)
+	}
+	if len(pods.created) != 2 {
+		t.Fatalf("created %d pods, want 2", len(pods.created))
+	}
+	for i := range pods.created {
+		if pods.createdAnchorUID[i] != "uid-dv1-abc" {
+			t.Errorf("created pod %d anchorUID = %q, want uid-dv1-abc (the ensured anchor's UID)", i, pods.createdAnchorUID[i])
+		}
+		if pods.createdAnchorName[i] != "leoflow-pool-dv1" {
+			t.Errorf("created pod %d anchorName = %q, want leoflow-pool-dv1", i, pods.createdAnchorName[i])
+		}
+	}
+}
+
+// TestWarmPoolEnsureAnchorErrorSkipsCreatesForVersionOnly: if EnsureWarmAnchor fails
+// for one version, NO pod is created for it this tick (do-no-harm: better a missed
+// create than a warm pod with no GC owner), it is metered, and OTHER versions still
+// reconcile normally.
+func TestWarmPoolEnsureAnchorErrorSkipsCreatesForVersionOnly(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{
+		{DagVersionID: "bad", Image: "img", EffectiveMinIdle: 2, MaxPoolSize: 8},
+		{DagVersionID: "good", Image: "img", EffectiveMinIdle: 2, MaxPoolSize: 8},
+	}}
+	pods := &fakeWarmPods{ensureErr: map[string]error{"bad": errors.New("apiserver 500")}}
+	rec := reconcileWarmCap(t, targets, pods, &fakeBusyWorkers{}, 0)
+
+	byV := createdByVersion(pods)
+	if byV["bad"] != 0 {
+		t.Errorf("bad version created %d pods, want 0 (anchor ensure failed — never create an unowned warm pod)", byV["bad"])
+	}
+	if byV["good"] != 2 {
+		t.Errorf("good version created %d pods, want 2 (a sibling's anchor error must not block it)", byV["good"])
+	}
+	if n := rec.count("warm_pool_anchor_ensure_error"); n < 1 {
+		t.Errorf("warm_pool_anchor_ensure_error metered %d times, want >= 1", n)
 	}
 }

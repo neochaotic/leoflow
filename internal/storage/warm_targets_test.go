@@ -34,6 +34,13 @@ func TestWarmTargets(t *testing.T) {
 			t.Errorf("target %s carries no image", tgt.DagVersionID)
 		}
 	}
+	// MaxPoolSize (the operator's total ceiling) is threaded onto every target so
+	// the busy-aware reconciler can cap pool growth under load (ADR 0058 N1d-b).
+	for _, tgt := range got {
+		if tgt.MaxPoolSize != 8 {
+			t.Errorf("target %s MaxPoolSize = %d, want 8 (operator's execution.max_pool_size)", tgt.DagVersionID, tgt.MaxPoolSize)
+		}
+	}
 }
 
 // TestWarmTargetsWarmPoolsOff locks that with warm pools off every effective

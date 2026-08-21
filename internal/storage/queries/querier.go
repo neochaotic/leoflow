@@ -170,6 +170,16 @@ type Querier interface {
 	// outage; the rest are picked up on the next tick.
 	ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostCandidatesRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
+	// Lists the DISTINCT warm-worker pod names currently serving a `running` attempt
+	// (ADR 0058 N1d-b): a warm worker is BUSY iff some `running` task_instance is
+	// durably bound to it (warm_worker_id = the pod's own name — the binding landed
+	// in N1d-a1/a2). The busy-aware warm-pool reconciler reads this once per tick to
+	// classify each live warm pod as busy (serving an attempt) or idle, so
+	// scale-down and drain delete only IDLE workers and never kill an in-flight
+	// attempt (review findings M1/M2). With warm pools off no TI is ever bound, so
+	// this is always empty and every worker classifies as idle — byte-for-byte
+	// today's dedicated pod-per-task behavior.
+	ListBusyWarmWorkerPods(ctx context.Context) ([]*string, error)
 	// All of a tenant's connections WITH the encrypted password, for delivering
 	// credentials to task pods (ADR 0021). Never use this for UI/API responses,
 	// which must mask the password.

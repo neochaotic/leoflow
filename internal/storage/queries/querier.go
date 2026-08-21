@@ -170,15 +170,29 @@ type Querier interface {
 	// outage; the rest are picked up on the next tick.
 	ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostCandidatesRow, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]ListAuditLogsRow, error)
-	// Lists the DISTINCT warm-worker pod names currently serving a `running` attempt
-	// (ADR 0058 N1d-b): a warm worker is BUSY iff some `running` task_instance is
-	// durably bound to it (warm_worker_id = the pod's own name — the binding landed
-	// in N1d-a1/a2). The busy-aware warm-pool reconciler reads this once per tick to
-	// classify each live warm pod as busy (serving an attempt) or idle, so
-	// scale-down and drain delete only IDLE workers and never kill an in-flight
-	// attempt (review findings M1/M2). With warm pools off no TI is ever bound, so
-	// this is always empty and every worker classifies as idle — byte-for-byte
-	// today's dedicated pod-per-task behavior.
+	// Lists the DISTINCT warm-worker pod names currently serving an active attempt
+	// (ADR 0058 N1d-b): a warm worker is BUSY iff some task_instance in an active
+	// state (`queued` or `running`) is durably bound to it (warm_worker_id = the
+	// pod's own name — the binding landed in N1d-a1/a2). The busy-aware warm-pool
+	// reconciler reads this once per tick to classify each live warm pod as busy
+	// (serving an attempt) or idle, so scale-down and drain delete only IDLE workers
+	// and never kill an in-flight attempt (review findings M1/M2).
+	//
+	// The `queued` state MUST be in the busy set, not just `running`: BindWarmAttempt
+	// stamps warm_worker_id the instant a warm worker ACKs an assignment as started,
+	// while the TI is still `queued`, and the child only reports RUNNING
+	// (queued->running) a moment later. Between the ack and that report the worker is
+	// actively STARTING the attempt; counting only `running` would classify it IDLE
+	// in that window and let the excess-idle-tail delete remove a worker that is
+	// starting an attempt — an M1 violation that kills a just-started attempt. The
+	// BindWarmAttempt guard binds exactly the queued/running window, and every
+	// re-dispatch/reset that moves a bound row back out of that window clears
+	// warm_worker_id, so a queued+bound row here is always a live starting attempt,
+	// never a stale binding.
+	//
+	// With warm pools off no TI is ever bound, so this is always empty and every
+	// worker classifies as idle — byte-for-byte today's dedicated pod-per-task
+	// behavior.
 	ListBusyWarmWorkerPods(ctx context.Context) ([]*string, error)
 	// All of a tenant's connections WITH the encrypted password, for delivering
 	// credentials to task pods (ADR 0021). Never use this for UI/API responses,
@@ -404,6 +418,13 @@ type Querier interface {
 	// bump try_number or infra_attempts: the attempt never ran, this is a re-offer of
 	// the SAME attempt, and the existing dispatch_attempts/backoff on the re-dispatch
 	// bounds a reclaim loop.
+	//
+	// warm_worker_id is CLEARED: the reclaimed worker demonstrably will not run this
+	// attempt, so the SAME row must not carry its stale binding back into the next
+	// queued/running window — with the busy set now spanning queued+running
+	// (ListBusyWarmWorkerPods), a stale binding would falsely mark the OLD (gone)
+	// worker busy. This is a same-row re-dispatch (the try_number is preserved), so
+	// the clear must happen here; a fresh try lands on a new row that is already NULL.
 	RequeueForRedispatch(ctx context.Context, arg RequeueForRedispatchParams) (int64, error)
 	// A reschedule-mode sensor (mode='reschedule') poked not-ready: park the active TI
 	// in up_for_reschedule with its next-poke time ($3) so the scheduler re-dispatches

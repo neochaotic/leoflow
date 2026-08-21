@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
 	"time"
@@ -84,15 +85,109 @@ type WarmRunner struct {
 	MaxLifetime     time.Duration
 	IdleTTL         time.Duration
 	AttemptWatchdog time.Duration
+
+	// Reconnect-toward-the-leader bounds (warm-pool Hole B). On a not-leader
+	// rejection (FailedPrecondition — the leader-gate refusal, or warm-pools not
+	// serving on this endpoint) the worker RECONNECTS with jittered exponential
+	// backoff instead of exiting: a single pod finds the leader across the Service's
+	// rotation without the pod-create-die-recreate churn a fresh pod would cause. The
+	// reconnect is bounded so a genuinely misconfigured deployment eventually exits
+	// (non-zero) and lets the reconciler replace it, rather than spinning forever.
+	// Zero values fall back to production defaults; tests inject tiny ones.
+	//
+	//   - ReconnectBackoff: base backoff, doubled each consecutive reconnect.
+	//   - ReconnectMaxBackoff: ceiling on a single backoff sleep.
+	//   - MaxReconnects: consecutive not-leader reconnects before giving up.
+	ReconnectBackoff    time.Duration
+	ReconnectMaxBackoff time.Duration
+	MaxReconnects       int
+
+	// Redial re-establishes the StreamClient toward the control plane for the next
+	// reconnect. A FRESH dial is what lets the worker reach the leader: a single gRPC
+	// connection sticks to one Service backend, so retrying the same client would
+	// re-hit the same follower forever — only a new connection re-rotates. It returns
+	// the new stream client and a closer for the connection it opened (closed on the
+	// next reconnect / exit). Nil disables re-dial — the reconnect then retries the
+	// existing StreamClient (tests inject a fake that eventually serves); production
+	// wires a real re-dial via agent.Dial.
+	Redial func() (agentv1.AgentServiceClient, io.Closer, error)
+
+	// streamCloser holds the connection the most recent Redial opened, so it can be
+	// closed on the following reconnect (or on exit) rather than leaked.
+	streamCloser io.Closer
 }
 
-// Run registers the worker once, opens the assignment stream, and serves
-// assignments until the stream ends (server close / drain) or ctx is canceled —
-// returning nil in both those cases. It returns a non-nil error only on a
-// registration failure, a stream transport failure, or a failure to guarantee a
-// clean scratch (isolation is fail-closed). A failed TASK is a normal outcome and
-// never ends the loop.
+// Reconnect defaults (warm-pool Hole B) used when the corresponding WarmRunner
+// field is zero. The base/cap are deliberately short: a Service rotation resolves
+// in a few dials, and a persistent rejection should surface quickly.
+const (
+	reconnectBackoffBaseDefault = 500 * time.Millisecond
+	reconnectBackoffMaxDefault  = 5 * time.Second
+	maxReconnectsDefault        = 10
+)
+
+// Run serves the warm-worker lifecycle, reconnecting toward the scheduler leader
+// on a not-leader rejection (warm-pool Hole B). Each serve() registers, opens the
+// assignment stream, and serves assignments until the stream ends (server close /
+// drain), ctx is canceled, or a self-lifecycle bound trips — all clean exits
+// (nil). A FailedPrecondition from serve() is the not-leader rejection (the
+// leader-gate, or warm pools not serving on this endpoint): Run re-dials and
+// retries with jittered exponential backoff so one pod finds the leader across the
+// Service's rotation, bounded by MaxReconnects so a misconfigured deployment
+// eventually exits and lets the reconciler replace it. Any other error (a real
+// registration / stream transport failure, or a fail-closed scratch failure) is
+// returned as before. A failed TASK is a normal outcome and never ends serve().
 func (w *WarmRunner) Run(ctx context.Context, dagVersionID string) error {
+	base := w.ReconnectBackoff
+	if base <= 0 {
+		base = reconnectBackoffBaseDefault
+	}
+	maxBackoff := w.ReconnectMaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = reconnectBackoffMaxDefault
+	}
+	maxReconnects := w.MaxReconnects
+	if maxReconnects <= 0 {
+		maxReconnects = maxReconnectsDefault
+	}
+
+	defer w.closeRedialConn()
+
+	reconnects := 0
+	for {
+		err := w.serve(ctx, dagVersionID)
+		if err == nil {
+			return nil
+		}
+		// Only a not-leader rejection triggers reconnect; every other error (real
+		// transport failure, fail-closed scratch) surfaces as before.
+		if status.Code(err) != codes.FailedPrecondition {
+			return err
+		}
+		reconnects++
+		if reconnects > maxReconnects {
+			return fmt.Errorf("giving up after %d consecutive not-leader reconnects: %w", maxReconnects, err)
+		}
+		slog.Warn("warm worker not served by this endpoint (not the scheduler leader); reconnecting toward the leader",
+			"reconnect", reconnects, "max_reconnects", maxReconnects, "error", err)
+		if serr := w.backoffSleep(ctx, base, maxBackoff, reconnects); serr != nil {
+			// ctx canceled during backoff (SIGTERM / parent shutdown) => clean exit.
+			return nil
+		}
+		if rerr := w.redialStream(); rerr != nil {
+			return fmt.Errorf("redialing control plane after not-leader rejection: %w", rerr)
+		}
+	}
+}
+
+// serve runs one connection's worth of the warm lifecycle: register the worker,
+// open the assignment stream, and serve assignments until the stream ends (server
+// close / drain) or ctx is canceled — returning nil in both those cases. It
+// returns a non-nil error only on a registration failure, a stream transport
+// failure, or a failure to guarantee a clean scratch (isolation is fail-closed). A
+// FailedPrecondition-coded error is the not-leader rejection Run reconnects on. A
+// failed TASK is a normal outcome and never ends the loop.
+func (w *WarmRunner) serve(ctx context.Context, dagVersionID string) error {
 	if _, err := w.StreamClient.Register(ctx, &agentv1.RegisterRequest{
 		AgentVersion: w.Version,
 		Hostname:     w.Hostname,
@@ -160,6 +255,62 @@ func (w *WarmRunner) Run(ctx context.Context, dagVersionID string) error {
 				"age", time.Since(workerStart), "max_lifetime", w.MaxLifetime)
 			return nil
 		}
+	}
+}
+
+// backoffSleep waits a jittered exponential backoff before reconnect n (1-based),
+// capped at maxBackoff, returning ctx.Err() if ctx is canceled first (so a SIGTERM
+// during backoff exits cleanly). The doubling loop stops once the cap is reached so
+// a large n can never overflow the shift. Full jitter (a uniform draw in [d/2, d])
+// spreads a fleet's reconnects so they do not stampede the leader in lockstep;
+// math/rand is fine here — this is backoff jitter, nothing security-relevant.
+func (w *WarmRunner) backoffSleep(ctx context.Context, base, maxBackoff time.Duration, n int) error {
+	d := base
+	for i := 1; i < n && d < maxBackoff; i++ {
+		d *= 2
+	}
+	if d <= 0 || d > maxBackoff {
+		d = maxBackoff
+	}
+	if half := d / 2; half > 0 {
+		d = half + time.Duration(mathrand.Int64N(int64(half)+1)) //nolint:gosec // G404: backoff jitter, not security-relevant
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// redialStream re-establishes the StreamClient for the next reconnect via Redial (a
+// fresh dial => a fresh Service backend, so the worker can reach the leader across
+// the rotation). It closes the previous reconnect's connection first so reconnects
+// do not leak connections. With no Redial wired it is a no-op: the reconnect then
+// retries the existing StreamClient (tests / single-dial).
+func (w *WarmRunner) redialStream() error {
+	if w.Redial == nil {
+		return nil
+	}
+	client, closer, err := w.Redial()
+	if err != nil {
+		return err
+	}
+	w.closeRedialConn()
+	w.StreamClient = client
+	w.streamCloser = closer
+	return nil
+}
+
+// closeRedialConn best-effort closes the connection the most recent Redial opened.
+func (w *WarmRunner) closeRedialConn() {
+	if w.streamCloser != nil {
+		if cerr := w.streamCloser.Close(); cerr != nil {
+			slog.Warn("closing previous warm stream connection after reconnect", "error", cerr)
+		}
+		w.streamCloser = nil
 	}
 }
 

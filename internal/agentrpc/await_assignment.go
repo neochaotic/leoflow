@@ -18,6 +18,14 @@ import (
 // registry with a deterministic lease; callers wire it via EnableWarmPools.
 func (s *Server) SetWarmPools(reg *WorkerRegistry) { s.warmPools = reg }
 
+// SetLeaderCheck gates AwaitAssignment to the scheduler leader (warm-pool Hole B).
+// Each scheduler replica wires its OWN leadership predicate, so a follower refuses
+// the stream (FailedPrecondition) and only the leader — whose leader-only placer
+// consults the same in-memory registry the worker registers into — serves it. A
+// nil predicate (the default) leaves the handler unchecked, so a single-node or
+// unwired deployment serves exactly as before.
+func (s *Server) SetLeaderCheck(fn func() bool) { s.leaderCheck = fn }
+
 // EnableWarmPools turns on the warm-worker assignment transport with a
 // production registry (ADR 0058 N1b). onReclaim (may be nil) observes reclaim
 // events for the future placement layer to consume. Call only when
@@ -49,6 +57,13 @@ func (s *Server) EnableWarmPools(onReclaim func(ReclaimEvent)) {
 func (s *Server) AwaitAssignment(stream agentv1.AgentService_AwaitAssignmentServer) error {
 	if s.warmPools == nil {
 		return status.Error(codes.FailedPrecondition, "warm pools disabled")
+	}
+	// Leader gate (warm-pool Hole B): a follower's in-memory registry is never
+	// consulted by the leader-only placer, so a follower refuses the stream and the
+	// worker reconnects toward the leader. A nil predicate is unchecked (single-node
+	// / tests serve as before).
+	if s.leaderCheck != nil && !s.leaderCheck() {
+		return status.Error(codes.FailedPrecondition, "not the scheduler leader; reconnect to reach the leader")
 	}
 	ctx := stream.Context()
 	id, err := s.identify(ctx)

@@ -60,6 +60,17 @@ func warmPods(dagVersionID string, names ...string) []WarmPodInfo {
 	return out
 }
 
+// warmTerminalPods builds warm pods that have reached a terminal phase (a
+// crashed/drained/finished RestartPolicy:Never worker). The reconciler must not
+// count these toward the target and must always reap them.
+func warmTerminalPods(dagVersionID string, names ...string) []WarmPodInfo {
+	out := make([]WarmPodInfo, 0, len(names))
+	for _, n := range names {
+		out = append(out, WarmPodInfo{Name: n, DagVersionID: dagVersionID, Terminal: true})
+	}
+	return out
+}
+
 func reconcileWarm(t *testing.T, targets *fakeWarmTargets, pods *fakeWarmPods) {
 	t.Helper()
 	r := NewWarmPoolReconciler(targets, pods, nil, nil)
@@ -140,6 +151,68 @@ func TestWarmPoolReconcileTargetZeroCreatesNothing(t *testing.T) {
 	}
 	if len(pods.deleted) != 2 {
 		t.Errorf("deleted %v, want both pods drained for a zero target", pods.deleted)
+	}
+}
+
+// TestWarmPoolReconcileReplacesTerminalPods is the H1 regression: a fleet of 2
+// TERMINAL pods (crashed/drained workers) for a target of 2 must NOT read as
+// satisfied. The reconciler must CREATE 2 replacements (terminal pods do not
+// count toward the target) AND reap the 2 terminal pods (they can never serve
+// again). Before the fix this created 0 and deleted 0 — the pool silently died.
+func TestWarmPoolReconcileReplacesTerminalPods(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", Image: "img", EffectiveMinIdle: 2}}}
+	pods := &fakeWarmPods{existing: warmTerminalPods("dv1", "dead1", "dead2")}
+	reconcileWarm(t, targets, pods)
+	if len(pods.created) != 2 {
+		t.Errorf("created %d pods, want 2 (terminal pods must not count toward the target)", len(pods.created))
+	}
+	if len(pods.deleted) != 2 {
+		t.Errorf("deleted %v, want the 2 terminal pods reaped", pods.deleted)
+	}
+	gotDeleted := map[string]bool{}
+	for _, n := range pods.deleted {
+		gotDeleted[n] = true
+	}
+	if !gotDeleted["dead1"] || !gotDeleted["dead2"] {
+		t.Errorf("deleted %v, want both dead1 and dead2 reaped", pods.deleted)
+	}
+}
+
+// TestWarmPoolReconcileTerminalPlusLive: target 2 with 1 live + 1 terminal =>
+// create 1 (only the live pod counts), reap the terminal one, keep the live one.
+func TestWarmPoolReconcileTerminalPlusLive(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", Image: "img", EffectiveMinIdle: 2}}}
+	pods := &fakeWarmPods{existing: append(warmPods("dv1", "live1"), warmTerminalPods("dv1", "dead1")...)}
+	reconcileWarm(t, targets, pods)
+	if len(pods.created) != 1 {
+		t.Errorf("created %d pods, want 1 (1 live + 1 terminal, only live counts)", len(pods.created))
+	}
+	if len(pods.deleted) != 1 || pods.deleted[0] != "dead1" {
+		t.Errorf("deleted %v, want [dead1] (terminal reaped, live kept)", pods.deleted)
+	}
+}
+
+// TestWarmPoolReconcileDrainsTerminalOnInactiveVersion: an inactive version
+// (target 0) with a live + a terminal pod must drain BOTH.
+func TestWarmPoolReconcileDrainsTerminalOnInactiveVersion(t *testing.T) {
+	targets := &fakeWarmTargets{targets: []WarmTarget{{DagVersionID: "dv1", EffectiveMinIdle: 1}}}
+	pods := &fakeWarmPods{existing: append(
+		warmPods("dv1", "keep"),
+		append(warmPods("gone", "orphan-live"), warmTerminalPods("gone", "orphan-dead")...)...,
+	)}
+	reconcileWarm(t, targets, pods)
+	gotDeleted := map[string]bool{}
+	for _, n := range pods.deleted {
+		gotDeleted[n] = true
+	}
+	if !gotDeleted["orphan-live"] || !gotDeleted["orphan-dead"] {
+		t.Errorf("deleted %v, want both orphan-live and orphan-dead drained", pods.deleted)
+	}
+	if gotDeleted["keep"] {
+		t.Errorf("deleted %v, must not drain the active version's live pod", pods.deleted)
+	}
+	if len(pods.created) != 0 {
+		t.Errorf("created %v, want none (dv1 already at target)", pods.created)
 	}
 }
 

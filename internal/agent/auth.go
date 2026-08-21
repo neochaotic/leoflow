@@ -5,6 +5,14 @@ import (
 	"sync"
 )
 
+// tokenSetter is the swap side of the bearer credential the heartbeat loop uses
+// to adopt a renewed token. *TokenSource satisfies it; Runner.Token is typed as
+// this narrow interface so a test can inject a recorder that observes when the
+// heartbeat's Set runs (proving the goroutine is joined before the next attempt).
+type tokenSetter interface {
+	Set(token string)
+}
+
 // TokenSource holds the agent's current bearer token behind a lock so the
 // heartbeat loop can atomically swap it (token renewal, ADR 0055 Fix #4) while
 // the gRPC per-RPC credential reads it on every outbound call. Reads and swaps

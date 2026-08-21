@@ -27,9 +27,16 @@ type WarmTargetSource interface {
 
 // WarmPodInfo identifies one existing warm-worker pod and the dag_version it
 // serves (read from its labels). The reconciler counts these per version.
+//
+// Terminal marks a warm pod that has reached a terminal phase (Succeeded or
+// Failed). Warm pods are RestartPolicy:Never and the agent has no reconnect, so
+// a crashed/drained/finished worker lingers as a terminal pod that can never
+// serve again. The reconciler must NOT count terminal pods toward the target
+// (or a dead worker never gets replaced) and always reaps them.
 type WarmPodInfo struct {
 	Name         string
 	DagVersionID string
+	Terminal     bool
 }
 
 // WarmPodClient is the cluster side of warm-pool reconciliation: list the warm
@@ -127,11 +134,26 @@ func (r *WarmPoolReconciler) reconcileVersion(ctx context.Context, t WarmTarget,
 		}
 	}()
 
+	// Reap every terminal warm pod first and keep only the live ones. Warm pods
+	// are RestartPolicy:Never with no agent reconnect, so a Succeeded/Failed pod
+	// is a dead worker: it can never serve again, must not count toward the
+	// target (or a crashed/drained worker would never be replaced and the pool
+	// would silently die), and must not leak. This runs regardless of target, so
+	// the drain path (inactive version, target 0) reaps terminal pods too.
+	live := make([]WarmPodInfo, 0, len(have))
+	for _, p := range have {
+		if p.Terminal {
+			r.deleteWarmPod(ctx, t, p, "deleting terminal warm worker")
+			continue
+		}
+		live = append(live, p)
+	}
+
 	switch {
-	case len(have) < t.EffectiveMinIdle:
+	case len(live) < t.EffectiveMinIdle:
 		// Under target: create the shortfall. Each create is isolated so one
 		// apiserver rejection does not stop the rest of this version's workers.
-		for i := 0; i < t.EffectiveMinIdle-len(have); i++ {
+		for i := 0; i < t.EffectiveMinIdle-len(live); i++ {
 			if err := r.pods.CreateWarmPod(ctx, t); err != nil {
 				r.logger.ErrorContext(ctx, "creating warm worker",
 					"dag_version", t.DagVersionID, "image", t.Image, "error", err)
@@ -140,20 +162,26 @@ func (r *WarmPoolReconciler) reconcileVersion(ctx context.Context, t WarmTarget,
 			}
 			r.record("warm_pool_pod_created")
 		}
-	case len(have) > t.EffectiveMinIdle:
+	case len(live) > t.EffectiveMinIdle:
 		// Over target (or the version is no longer active, target 0): delete the
-		// excess. Deleting the tail is arbitrary but stable — every worker of a
-		// version is interchangeable.
-		for _, p := range have[t.EffectiveMinIdle:] {
-			if err := r.pods.DeleteWarmPod(ctx, p.Name); err != nil {
-				r.logger.ErrorContext(ctx, "deleting excess warm worker",
-					"dag_version", t.DagVersionID, "pod", p.Name, "error", err)
-				r.record("warm_pool_delete_error")
-				continue
-			}
-			r.record("warm_pool_pod_deleted")
+		// excess live workers. Deleting the tail is arbitrary but stable — every
+		// worker of a version is interchangeable.
+		for _, p := range live[t.EffectiveMinIdle:] {
+			r.deleteWarmPod(ctx, t, p, "deleting excess warm worker")
 		}
 	}
+}
+
+// deleteWarmPod deletes one warm worker by name, logging/metering a failure
+// without aborting the sweep. msg names why (terminal cleanup vs excess).
+func (r *WarmPoolReconciler) deleteWarmPod(ctx context.Context, t WarmTarget, p WarmPodInfo, msg string) {
+	if err := r.pods.DeleteWarmPod(ctx, p.Name); err != nil {
+		r.logger.ErrorContext(ctx, msg,
+			"dag_version", t.DagVersionID, "pod", p.Name, "error", err)
+		r.record("warm_pool_delete_error")
+		return
+	}
+	r.record("warm_pool_pod_deleted")
 }
 
 func (r *WarmPoolReconciler) record(decision string) {

@@ -24,6 +24,14 @@ type StaleQueuedCandidate struct {
 	// delete after the mark targets exactly that attempt's pod (#474).
 	TryNumber int
 	QueuedAt  time.Time
+	// WarmWorkerID is the warm pod durably bound to this attempt (ADR 0058
+	// N1d-a2), or "" for a dedicated task or a warm attempt not yet acked. When
+	// set AND the worker is in the live warm-pod set, the dispatch-lost reaper
+	// DEFERS: the warm worker holds this attempt and is merely slow to transition
+	// queued->running, so failing it would double-run the task (review finding
+	// H3). A warm attempt has no task pod, so the existing TaskPodActive gate
+	// cannot protect it — this warm check is what does.
+	WarmWorkerID string
 }
 
 // IsDispatchLost reports whether a queued TI has been waiting long enough to
@@ -73,6 +81,15 @@ type dispatchLostReaper struct {
 	// TaskPodActive read, so cache lag can only delay a reap, never cause a
 	// false-positive one (#461, the queued path). Nil keeps the live path.
 	cache PodPresenceCache
+	// warmPods is the live warm-pod seam (ADR 0058 N1d-a2), consulted ONLY to
+	// DEFER a reap of a warm-bound queued TI: a warm attempt has no task pod, so
+	// TaskPodActive cannot tell a slow queued->running transition from a lost
+	// dispatch. Before failing a candidate whose WarmWorkerID is set, the reaper
+	// checks whether that worker is still live; if so it defers (the worker holds
+	// the attempt — failing it would double-run, review finding H3). Nil (warm
+	// off / not wired) yields an empty live set, so the warm check never defers
+	// and the dedicated pod-liveness path is byte-for-byte unchanged.
+	warmPods WarmPodLister
 }
 
 func newDispatchLostReaper(store DispatchLostReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *dispatchLostReaper {
@@ -93,9 +110,25 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Live warm-pod set for the H3 defer, read ONCE per tick (Θ(pools)). A nil
+	// lister (warm off / not wired) yields an empty set, so the warm defer below
+	// never triggers and the dedicated path is unchanged.
+	liveWarm := liveWarmPodNames(ctx, r.warmPods, r.logger)
 	now := time.Now().UTC()
 	for _, c := range candidates {
 		if !IsDispatchLost(c, r.threshold, now) {
+			continue
+		}
+		// Warm-liveness gate (ADR 0058 N1d-a2, review finding H3): a warm attempt
+		// can sit in `queued` past the threshold while its serving warm worker is
+		// alive and merely slow to transition queued->running. A warm attempt has
+		// no task pod, so the TaskPodActive gate below cannot protect it; failing
+		// it would double-run the task once the live worker does transition it.
+		// If this candidate is bound to a warm worker that is still live, DEFER.
+		if c.WarmWorkerID != "" && liveWarm[c.WarmWorkerID] {
+			r.logger.Info("dispatch-lost: warm worker live; deferring",
+				"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "worker", c.WarmWorkerID)
+			r.record("dispatch_lost_warm_deferred")
 			continue
 		}
 		// K8s-aware liveness gate (#461): a TI can sit in `queued` past the

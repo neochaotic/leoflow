@@ -31,12 +31,19 @@ WHERE dag_id = $1 AND state IN ('queued', 'running');
 -- candidate so the SQL stays simple and the decision is purely in Go. The
 -- LIMIT bounds a tick's reap work after a long outage; the rest are picked
 -- up next tick (backstop, not sprint).
+-- warm_worker_id rides along (ADR 0058 N1d-a2, review finding H3): a queued warm
+-- attempt whose serving warm worker is still alive is just slow to transition
+-- queued->running, so the dispatch-lost reaper must DEFER it rather than fail it
+-- (the double-run bug). It is NULL for a dedicated attempt and for a warm attempt
+-- not yet acked, in which case the reaper falls back to its existing pod-liveness
+-- gate unchanged.
 SELECT ti.id AS task_instance_id,
        ti.dag_run_id,
        d.dag_id AS dag_id_text,
        ti.task_id,
        ti.try_number,
-       ti.queued_at
+       ti.queued_at,
+       ti.warm_worker_id
 FROM task_instances ti
 JOIN dag_runs dr ON dr.id = ti.dag_run_id
 JOIN dags d ON d.id = dr.dag_id
@@ -732,6 +739,28 @@ WHERE dag_run_id = $1
   AND task_id = $2
   AND try_number = $3
   AND state IN ('queued', 'running');
+
+-- name: ListWarmBoundRunningTIs :many
+-- Lists every `running` TI that is durably bound to a warm worker (ADR 0058
+-- N1d-a2): warm_worker_id names the warm pod that acked and is serving this
+-- attempt. The failover reaper matches that name against the live warm-pod set;
+-- a bound TI whose worker is no longer live has lost its serving pod and is
+-- routed to infra via MarkTaskPodLost (fan-out: every attempt a dead worker
+-- held is marked). Only `running` rows carry a live attempt, and the
+-- IS NOT NULL filter keeps dedicated (non-warm) tasks out of this reaper
+-- entirely — with warm pools off no TI is ever bound, so this returns empty and
+-- the reaper is inert. The LIMIT bounds a single tick's work after a large
+-- outage; the rest are picked up next tick.
+SELECT ti.id AS task_instance_id,
+       ti.dag_run_id AS dag_run_id,
+       ti.task_id AS task_id,
+       ti.try_number AS try_number,
+       ti.warm_worker_id AS warm_worker_id
+FROM task_instances ti
+WHERE ti.state = 'running'
+  AND ti.warm_worker_id IS NOT NULL
+ORDER BY ti.started_at NULLS LAST
+LIMIT 100;
 
 -- name: ListAgentLostCandidates :many
 -- Lists running TIs that have heartbeated at least once and whose latest

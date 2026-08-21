@@ -242,3 +242,61 @@ Lite is unchanged. A shared long-lived interpreter is out of scope for v1.
 - Three tested invariants gate PR-N1: warm reconciler never reads pod phase (D3),
   `should_terminate` drains rather than hard-kills (D10), and each attempt forks
   from a pristine template (D4).
+
+## Measurement & enable readiness (P2c)
+
+Turning warm pools on is a **reliability decision, stated in rates, not median
+latency**. Unit/integration tests use fakes — they prove the logic, not the
+timing, topology, and Kubernetes behavior. Before flipping
+`execution.warm_pools_enabled` on a shared production cluster, drive a warm
+workload on a REAL cluster (k3d/CI or staging) and gate on the signals below.
+
+### Reliability signals (mostly already emitted)
+
+The warm reaper/reclaim/placement decisions already surface on the metrics
+endpoint through the `SchedulerDecisions` counter (label = decision), scrapeable
+today — no new instrumentation needed for the safety bar:
+
+- reclaim by reason: `dispatch_lost_warm_deferred` (H3 double-run defer fired),
+  `warm_worker_lost` / `warm_worker_lost_noop` (failover fan-out), the reclaim
+  reasons via the N1d-c wiring;
+- reconciler health: `warm_pool_pod_created`, `warm_pool_*_error`,
+  `warm_pool_tenant_cap_below_min_idle_sum` (M4 misconfig), `warm_pool_anchor_*`.
+
+**Cold-start decomposition** (pod-schedule vs image-pull vs container-start→Register
+vs import/SDK-warmup) and **warm-hit vs dedicated end-to-end latency** are read
+from **pod events / timestamps on the cluster** during the run (not from an agent
+metric); add per-phase histograms only if the pod-event read proves too coarse.
+
+### Go / no-go bar (rates, not means)
+
+- **double-run count == 0** under induced worker death (hard requirement).
+- cold-start-failure and worker-register-failure rates below an agreed threshold.
+- `dispatch_lost_warm_deferred` non-zero but bounded (proves the H3 defer works
+  without over-deferring); lease-expiry reclaim rate low (else `warmLeaseSeconds`
+  is mistuned).
+- warm-hit rate high in steady state (the pool is actually being used, not
+  churning to dedicated).
+
+### Real-cluster scenarios that ONLY a cluster proves (enable gate)
+
+Prove each before enable — none is provable in fakes:
+
+1. HA topology (Hole B): workers reach the leader; a follower refuses + the agent
+   reconnects to the leader.
+2. Worker dies mid-attempt (SIGKILL / OOM / node loss): fan-out → infra budget
+   (not `try_number`), attempt re-runs, **double-run == 0**.
+3. Leader failover with in-flight warm attempts: busy workers survive, the new
+   leader's empty registry recovers via the durable binding + reaper.
+4. H3 defer under real slow-start timing (queued past the 3-min threshold).
+5. Node drain / eviction: busy workers finish; reconciler replaces.
+6. Image-pull storm: `min_idle=N` new version, all pull at once; no thundering
+   herd; dispatch-lost defers on slow pulls.
+7. Scale-to-zero and back.
+8. M4 under contention: a tenant at cap doesn't starve neighbors or its own floor.
+9. Reclaim re-placement (WorkerGone/Refused) vs reaper recovery — no double
+   dispatch.
+
+Enable is gated on these passing AND the D2 enforce flips
+(`agent_token_transport=exchange`, `secret_liveness_mode=enforce`), plus the
+bootstrap worker-scoped exchange (a pre-enable security item, tracked separately).

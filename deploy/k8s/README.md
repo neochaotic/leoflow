@@ -1,5 +1,11 @@
 # Leoflow Pro on GKE — reproducible test cluster
 
+> **Cloud-portable.** This setup is not GKE-specific — it runs unchanged on
+> **EKS / GKE / AKS** (and vanilla clusters): it needs only cert-manager, the
+> local Leoflow chart, and the official Postgres/Redis charts. The `gke` scripts
+> here are simply where it started; the directory is named `deploy/k8s` because
+> the recipe is cloud-agnostic.
+
 Scripted, parameterized provisioning of a **GKE cluster for testing & finalizing
 the Leoflow Pro Helm chart**. Everything is driven by environment variables and
 reads your active `gcloud` project, so **no environment-specific id, account, or
@@ -49,7 +55,7 @@ against that:
 ## Run it
 
 ```bash
-cd deploy/gke
+cd deploy/k8s
 
 # 1. Create the cluster (enables APIs, creates cluster + node pool, kubeconfig, namespace)
 ./00-create-cluster.sh

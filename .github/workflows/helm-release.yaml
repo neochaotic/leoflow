@@ -1,0 +1,95 @@
+name: Helm chart release
+
+# Publish the Leoflow Helm chart as an OCI artifact on every release tag AND
+# every release-candidate tag. ADR 0028: the chart ships as an OCI artifact in
+# the same registry as the images (`oci://ghcr.io/neochaotic/charts/leoflow`),
+# co-versioned with the release tag (chart `version` + `appVersion` move in
+# lockstep with the tag). RC tags publish the chart too so the team can pull it
+# via OCI while an RC bakes in staging.
+#
+# `v*` already matches RC tags (`v0.0.2-rc.1`), the same single filter the
+# Release workflow uses — GitHub fires the workflow once per push regardless of
+# how many patterns match, so one glob covers both stable and RC.
+on:
+  push:
+    tags: ["v*"]
+
+# Least-privilege default: read-only at the top level; the publish job opts into
+# the writes it needs, mirroring .github/workflows/release.yaml.
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  helm-chart:
+    name: Package, push, sign Helm chart (OCI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write   # Push the chart to GHCR (OCI).
+      id-token: write   # Cosign keyless signing via Sigstore OIDC.
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # ── Sigstore cosign for keyless signing (same pin as release.yaml) ──
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.4.3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive the chart version from the tag the same way the image tag is
+      # derived, then strip the leading `v`: a Helm chart `version` must be
+      # SemVer 2 (no `v` prefix), while GoReleaser's `type=semver` image tag
+      # strips it too — so chart `0.0.2-rc.1` lines up with image `0.0.2-rc.1`.
+      - name: Derive chart version from tag
+        id: ver
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Chart version + appVersion: ${version} (from tag ${GITHUB_REF_NAME})"
+
+      # Stamp version + appVersion at package time from the tag rather than
+      # hand-editing Chart.yaml (ADR 0028: both move in lockstep with the tag).
+      - name: helm package
+        run: |
+          set -euo pipefail
+          helm package helm/leoflow \
+            --version "${{ steps.ver.outputs.version }}" \
+            --app-version "${{ steps.ver.outputs.version }}"
+
+      # `helm push` authenticates via the docker credential store that the GHCR
+      # login above populated. It prints `Digest: sha256:…` on push; capture it
+      # so cosign can sign the chart by digest (immutable), the same shape the
+      # migrate/runtime image jobs sign in release.yaml.
+      - name: helm push (OCI)
+        id: push
+        run: |
+          set -euo pipefail
+          chart="leoflow-${{ steps.ver.outputs.version }}.tgz"
+          helm push "${chart}" "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts" 2>&1 | tee push.log
+          digest="$(awk '/Digest: /{print $2}' push.log)"
+          if [ -z "${digest}" ]; then
+            echo "::error::could not parse pushed chart digest from helm push output"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Pushed oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/leoflow @ ${digest}"
+
+      # Keyless cosign sign by digest — mirrors the migrate-image / runtime-image
+      # signing in release.yaml (ADR 0014/0028). `--yes` skips the OIDC prompt;
+      # CI answers the Sigstore challenge with the GH OIDC token (id-token: write).
+      - name: Sign chart with cosign (keyless)
+        run: |
+          set -euo pipefail
+          cosign sign --yes \
+            "${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/leoflow@${{ steps.push.outputs.digest }}"

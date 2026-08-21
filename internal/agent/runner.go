@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/taskoutcome"
@@ -75,11 +76,13 @@ type Runner struct {
 	// HeartbeatInterval is how often to ping the control plane while the task
 	// runs; zero disables heartbeats.
 	HeartbeatInterval time.Duration
-	// Token, when set, is the swappable bearer the gRPC per-RPC credential reads.
+	// Token, when set, is the swappable bearer backing the gRPC per-RPC credential.
 	// On a heartbeat carrying a renewed_token the loop atomically swaps it here so
 	// every subsequent RPC uses the new credential (ADR 0055 Fix #4). Nil disables
-	// bearer swapping (a heartbeat's renewed_token is then ignored).
-	Token *TokenSource
+	// bearer swapping (a heartbeat's renewed_token is then ignored). Typed as the
+	// narrow tokenSetter seam (satisfied by *TokenSource) so the heartbeat's Set
+	// can be observed in tests; production always wires a *TokenSource.
+	Token tokenSetter
 	// BeforeReport, if set, is invoked with the terminal state AFTER the durable
 	// outcome record is written and BEFORE the report is delivered. It is a
 	// fault-injection seam for the durable-outcome E2E (ADR 0052) — the agent
@@ -387,10 +390,21 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	stderr := &logWriter{sink: r.Sink, stream: "stderr", level: agentv1.LogLevel_LOG_LEVEL_ERROR}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// Join the heartbeat goroutine before this attempt returns. Its last
+	// Token.Set (adopting a renewed bearer) must complete before the caller
+	// swaps to the next attempt's token — in warm mode r.Token is the SHARED
+	// AttemptTokens and attempts are sequential, so a lingering heartbeat
+	// finishing a Set after attempt N+1 adopted its token would make N+1 run
+	// under N's superseded credential. cancel() signals the loop to stop, THEN
+	// Wait() blocks for its in-flight cycle to finish; the order matters (a
+	// single deferred func, not two defers). Single-shot is unaffected — the
+	// process exits after Run either way; the join just adds a bounded wait.
+	var hbWG sync.WaitGroup
 	if r.HeartbeatInterval > 0 {
-		go r.heartbeat(runCtx, cancel)
+		hbWG.Add(1)
+		go func() { defer hbWG.Done(); r.heartbeat(runCtx, cancel) }()
 	}
+	defer func() { cancel(); hbWG.Wait() }()
 
 	// `execution_timeout_seconds` enforcement (#194): wrap the runCtx in a
 	// deadline so a wedged user process is interrupted at the boundary the user

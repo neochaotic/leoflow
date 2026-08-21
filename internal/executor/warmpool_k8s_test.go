@@ -36,6 +36,41 @@ func TestKubernetesWarmPodsListSelectsWarmOnly(t *testing.T) {
 	}
 }
 
+// TestKubernetesWarmPodsListFlagsTerminal proves ListWarmPods marks Succeeded
+// and Failed warm pods Terminal (dead RestartPolicy:Never workers) while a
+// Running/Pending pod stays live, so the reconciler can replace and reap them.
+func TestKubernetesWarmPodsListFlagsTerminal(t *testing.T) {
+	warm := func(name string, phase corev1.PodPhase) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "leoflow",
+				Labels: map[string]string{warmWorkerLabelKey: warmWorkerLabelVal, warmDagVersionLabelKey: "dv1"},
+			},
+			Status: corev1.PodStatus{Phase: phase},
+		}
+	}
+	cs := fake.NewSimpleClientset(
+		warm("running", corev1.PodRunning),
+		warm("succeeded", corev1.PodSucceeded),
+		warm("failed", corev1.PodFailed),
+	)
+	k := NewKubernetesWarmPods(cs, "leoflow", nil)
+	got, err := k.ListWarmPods(context.Background())
+	if err != nil {
+		t.Fatalf("ListWarmPods: %v", err)
+	}
+	terminal := map[string]bool{}
+	for _, p := range got {
+		terminal[p.Name] = p.Terminal
+	}
+	if terminal["running"] {
+		t.Errorf("running pod flagged Terminal, want live")
+	}
+	if !terminal["succeeded"] || !terminal["failed"] {
+		t.Errorf("Succeeded/Failed pods not flagged Terminal: %+v", got)
+	}
+}
+
 // TestKubernetesWarmPodsCreateBuildsAndCreates proves CreateWarmPod runs the
 // injected spec builder, builds a warm pod, and Creates it in the namespace.
 func TestKubernetesWarmPodsCreateBuildsAndCreates(t *testing.T) {

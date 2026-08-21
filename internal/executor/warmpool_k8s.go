@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -48,7 +49,15 @@ func (k *KubernetesWarmPods) ListWarmPods(ctx context.Context) ([]WarmPodInfo, e
 	out := make([]WarmPodInfo, 0, len(list.Items))
 	for i := range list.Items {
 		p := &list.Items[i]
-		out = append(out, WarmPodInfo{Name: p.Name, DagVersionID: p.Labels[warmDagVersionLabelKey]})
+		// Warm pods are RestartPolicy:Never; a Succeeded/Failed pod is a dead
+		// worker that can never serve again. Flag it so the reconciler neither
+		// counts it toward the target nor leaves it to leak.
+		terminal := p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed
+		out = append(out, WarmPodInfo{
+			Name:         p.Name,
+			DagVersionID: p.Labels[warmDagVersionLabelKey],
+			Terminal:     terminal,
+		})
 	}
 	return out, nil
 }

@@ -968,7 +968,8 @@ SELECT ti.id AS task_instance_id,
        d.dag_id AS dag_id_text,
        ti.task_id,
        ti.try_number,
-       ti.queued_at
+       ti.queued_at,
+       ti.warm_worker_id
 FROM task_instances ti
 JOIN dag_runs dr ON dr.id = ti.dag_run_id
 JOIN dags d ON d.id = dr.dag_id
@@ -984,6 +985,7 @@ type ListStaleQueuedTaskInstancesRow struct {
 	TaskID         string             `json:"task_id"`
 	TryNumber      int32              `json:"try_number"`
 	QueuedAt       pgtype.Timestamptz `json:"queued_at"`
+	WarmWorkerID   *string            `json:"warm_worker_id"`
 }
 
 // Lists every TI currently in `queued` alongside its queued_at timestamp for
@@ -991,6 +993,12 @@ type ListStaleQueuedTaskInstancesRow struct {
 // candidate so the SQL stays simple and the decision is purely in Go. The
 // LIMIT bounds a tick's reap work after a long outage; the rest are picked
 // up next tick (backstop, not sprint).
+// warm_worker_id rides along (ADR 0058 N1d-a2, review finding H3): a queued warm
+// attempt whose serving warm worker is still alive is just slow to transition
+// queued->running, so the dispatch-lost reaper must DEFER it rather than fail it
+// (the double-run bug). It is NULL for a dedicated attempt and for a warm attempt
+// not yet acked, in which case the reaper falls back to its existing pod-liveness
+// gate unchanged.
 func (q *Queries) ListStaleQueuedTaskInstances(ctx context.Context) ([]ListStaleQueuedTaskInstancesRow, error) {
 	rows, err := q.db.Query(ctx, listStaleQueuedTaskInstances)
 	if err != nil {
@@ -1007,6 +1015,7 @@ func (q *Queries) ListStaleQueuedTaskInstances(ctx context.Context) ([]ListStale
 			&i.TaskID,
 			&i.TryNumber,
 			&i.QueuedAt,
+			&i.WarmWorkerID,
 		); err != nil {
 			return nil, err
 		}
@@ -1178,6 +1187,63 @@ func (q *Queries) ListTaskInstancesByRun(ctx context.Context, dagRunID pgtype.UU
 			&i.NextDispatchAt,
 			&i.LastFailureKind,
 			&i.InfraAttempts,
+			&i.WarmWorkerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWarmBoundRunningTIs = `-- name: ListWarmBoundRunningTIs :many
+SELECT ti.id AS task_instance_id,
+       ti.dag_run_id AS dag_run_id,
+       ti.task_id AS task_id,
+       ti.try_number AS try_number,
+       ti.warm_worker_id AS warm_worker_id
+FROM task_instances ti
+WHERE ti.state = 'running'
+  AND ti.warm_worker_id IS NOT NULL
+ORDER BY ti.started_at NULLS LAST
+LIMIT 100
+`
+
+type ListWarmBoundRunningTIsRow struct {
+	TaskInstanceID pgtype.UUID `json:"task_instance_id"`
+	DagRunID       pgtype.UUID `json:"dag_run_id"`
+	TaskID         string      `json:"task_id"`
+	TryNumber      int32       `json:"try_number"`
+	WarmWorkerID   *string     `json:"warm_worker_id"`
+}
+
+// Lists every `running` TI that is durably bound to a warm worker (ADR 0058
+// N1d-a2): warm_worker_id names the warm pod that acked and is serving this
+// attempt. The failover reaper matches that name against the live warm-pod set;
+// a bound TI whose worker is no longer live has lost its serving pod and is
+// routed to infra via MarkTaskPodLost (fan-out: every attempt a dead worker
+// held is marked). Only `running` rows carry a live attempt, and the
+// IS NOT NULL filter keeps dedicated (non-warm) tasks out of this reaper
+// entirely — with warm pools off no TI is ever bound, so this returns empty and
+// the reaper is inert. The LIMIT bounds a single tick's work after a large
+// outage; the rest are picked up next tick.
+func (q *Queries) ListWarmBoundRunningTIs(ctx context.Context) ([]ListWarmBoundRunningTIsRow, error) {
+	rows, err := q.db.Query(ctx, listWarmBoundRunningTIs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListWarmBoundRunningTIsRow{}
+	for rows.Next() {
+		var i ListWarmBoundRunningTIsRow
+		if err := rows.Scan(
+			&i.TaskInstanceID,
+			&i.DagRunID,
+			&i.TaskID,
+			&i.TryNumber,
 			&i.WarmWorkerID,
 		); err != nil {
 			return nil, err

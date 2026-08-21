@@ -942,8 +942,7 @@ func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace str
 // dag_version to that version's effective min_idle. Like the pod reconciler it
 // mutates cluster state, so it runs on the leader alone via the gated ticker. It
 // is only called when warm pools are enabled.
-func startWarmPoolReconciler(ctx context.Context, cfg *config.ServerConfig, cs kubernetes.Interface, targets executor.WarmTargetSource, authn *auth.JWTAuthenticator, controlAddr string, leading func() bool, rec executor.DecisionRecorder, logger *slog.Logger) {
-	pods := executor.NewKubernetesWarmPods(cs, cfg.Executor.TaskNamespace, warmPodSpecFunc(cfg, authn, controlAddr))
+func startWarmPoolReconciler(ctx context.Context, targets executor.WarmTargetSource, pods executor.WarmPodClient, leading func() bool, rec executor.DecisionRecorder, logger *slog.Logger) {
 	rc := executor.NewWarmPoolReconciler(targets, pods, logger, rec)
 	startGatedTicker(ctx, "warm-pool-reconcile", reconcileInterval, leading, logger, func() {
 		if err := rc.Reconcile(ctx); err != nil {
@@ -1316,11 +1315,23 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 		snapshotter = podInformer
 		cache = podInformer
 	}
+	// Warm failover seam (ADR 0058 N1d-a2): one warm-pod client, built ONLY when
+	// warm pools are enabled, is shared as the live-warm-pod lister for the reaper
+	// (the warm-worker-lost recovery + the dispatch-lost H3 defer) AND as the
+	// reconciler's create/delete/list client. With the flag off it stays a nil
+	// interface, so both warm reaper paths are inert and no warm pod is ever
+	// created — dispatch is byte-for-byte today's dedicated pod-per-task.
+	var warmLister executor.WarmPodLister
+	var warmPods *executor.KubernetesWarmPods
+	if cfg.Execution.WarmPoolsEnabled {
+		warmPods = executor.NewKubernetesWarmPods(cs, cfg.Executor.TaskNamespace, warmPodSpecFunc(cfg, authn, controlAddr))
+		warmLister = warmPods
+	}
 	// The execution reaper (#120/#128/#202/#527) fails stuck runs and TIs; it
 	// tears down a reaped task's pod and gates the dispatch-lost decision on real
 	// pod liveness (#474, #461), so it is wired only on the pod path. Lite/
 	// subprocess leaves the scheduler's reaper unset and does no reaping.
-	reaper := executor.NewReaper(store, podExec, cache, metrics, logger, executor.DefaultReaperConfig(), sched.SteppingDown)
+	reaper := executor.NewReaper(store, podExec, cache, warmLister, metrics, logger, executor.DefaultReaperConfig(), sched.SteppingDown)
 	sched.SetExecutionReaper(reaper)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)
@@ -1330,7 +1341,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// stays byte-for-byte today's dedicated pod-per-task.
 	if cfg.Execution.WarmPoolsEnabled {
 		store.SetWarmExecution(cfg.Execution)
-		startWarmPoolReconciler(ctx, cfg, cs, store, authn, controlAddr, sched.IsLeading, metrics, logger)
+		startWarmPoolReconciler(ctx, store, warmPods, sched.IsLeading, metrics, logger)
 		logger.Warn("warm pool reconciler enabled (ADR 0058 N1b2b); maintaining min_idle warm workers per active dag_version", "namespace", cfg.Executor.TaskNamespace)
 	}
 	logger.Info("pod dispatch enabled", "namespace", cfg.Executor.TaskNamespace, "agent_control_plane_addr", controlAddr)

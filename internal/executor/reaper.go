@@ -24,6 +24,7 @@ type ReaperStore interface {
 	HeartbeatReapStore
 	DispatchLostReapStore
 	PodLostReapStore
+	WarmWorkerLostReapStore
 }
 
 // Default reaper thresholds. These carry over verbatim from the values the
@@ -72,25 +73,33 @@ func DefaultReaperConfig() ReaperConfig {
 // per leader tick, so the scheduler depends on a single capability rather than
 // wiring each reaper itself.
 type Reaper struct {
-	orphan       *orphanReaper
-	agentLost    *agentLostReaper
-	dispatchLost *dispatchLostReaper
-	podLost      *podLostReaper
-	logger       *slog.Logger
-	rec          DecisionRecorder
+	orphan         *orphanReaper
+	agentLost      *agentLostReaper
+	dispatchLost   *dispatchLostReaper
+	podLost        *podLostReaper
+	warmWorkerLost *warmWorkerLostReaper
+	logger         *slog.Logger
+	rec            DecisionRecorder
 	// inStepDown reports whether the scheduler is in a graceful leader step-down,
 	// so an expected context-cancel fanout of the run-context logs at WARN, not
 	// ERROR (#311). Nil is tolerated (treated as "not stepping down").
 	inStepDown func() bool
 }
 
-// NewReaper constructs the four reapers and wires their pod-teardown / liveness
+// NewReaper constructs the reapers and wires their pod-teardown / liveness
 // capability (pods) and, for the two K8s-aware reapers, the presence cache. The
 // wiring mirrors exactly what the scheduler used to do inline: every reaper gets
 // pods; only the dispatch-lost and pod-lost reapers get the cache. Nil pods
 // (Lite/subprocess) keeps every reaper DB-only and makes the pod-lost reaper a
 // no-op, byte-for-byte as before.
-func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, rec DecisionRecorder, logger *slog.Logger, cfg ReaperConfig, inStepDown func() bool) *Reaper {
+//
+// warmPods is the live warm-pod seam (ADR 0058 N1d-a2), threaded to the two warm
+// consumers exactly the way pods/cache are threaded: the warm-worker-lost reaper
+// (which recovers a dead worker's attempts) and the dispatch-lost reaper's H3
+// defer. Nil (warm pools off / not wired) makes the warm reaper a no-op and the
+// dispatch-lost warm defer inert — with the flag off no TI ever carries a
+// warm_worker_id either, so both warm paths are doubly inert, byte-for-byte today.
+func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmPods WarmPodLister, rec DecisionRecorder, logger *slog.Logger, cfg ReaperConfig, inStepDown func() bool) *Reaper {
 	orphan := newOrphanReaper(store, logger, cfg.OrphanThreshold, rec)
 	orphan.pods = pods
 
@@ -100,19 +109,24 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, rec D
 	dispatchLost := newDispatchLostReaper(store, logger, cfg.DispatchLostThreshold, rec)
 	dispatchLost.pods = pods
 	dispatchLost.cache = cache
+	dispatchLost.warmPods = warmPods
 
 	podLost := newPodLostReaper(store, logger, cfg.PodLostGrace, rec)
 	podLost.pods = pods
 	podLost.cache = cache
 
+	warmWorkerLost := newWarmWorkerLostReaper(store, logger, rec)
+	warmWorkerLost.warmPods = warmPods
+
 	return &Reaper{
-		orphan:       orphan,
-		agentLost:    agentLost,
-		dispatchLost: dispatchLost,
-		podLost:      podLost,
-		logger:       logger,
-		rec:          rec,
-		inStepDown:   inStepDown,
+		orphan:         orphan,
+		agentLost:      agentLost,
+		dispatchLost:   dispatchLost,
+		podLost:        podLost,
+		warmWorkerLost: warmWorkerLost,
+		logger:         logger,
+		rec:            rec,
+		inStepDown:     inStepDown,
 	}
 }
 
@@ -144,6 +158,10 @@ func (r *Reaper) ReapOnce(ctx context.Context) error {
 	if err := r.podLost.run(ctx); err != nil {
 		r.logError("pod-lost reaper", err)
 		r.record("pod_lost_list_error")
+	}
+	if err := r.warmWorkerLost.run(ctx); err != nil {
+		r.logError("warm-worker-lost reaper", err)
+		r.record("warm_worker_lost_list_error")
 	}
 	return nil
 }

@@ -45,6 +45,7 @@ type fakeReaperStore struct {
 	queuedMarked []string
 	runningCands []PodLostCandidate
 	podMarked    []string
+	warmBound    []WarmBoundTI
 }
 
 func (f *fakeReaperStore) ListReapCandidates(context.Context) ([]ReapCandidate, error) {
@@ -75,6 +76,9 @@ func (f *fakeReaperStore) MarkTaskPodLost(_ context.Context, tiID string) (bool,
 	f.podMarked = append(f.podMarked, tiID)
 	return true, nil
 }
+func (f *fakeReaperStore) ListWarmBoundRunningTIs(context.Context) ([]WarmBoundTI, error) {
+	return f.warmBound, nil
+}
 
 // TestReaperReapOnceDrivesReapers is the aggregate-seam contract, the executor
 // side of what used to be TestStepReapsOrphanRunsOnLeader /
@@ -90,7 +94,7 @@ func TestReaperReapOnceDrivesReapers(t *testing.T) {
 		queuedCands: []StaleQueuedCandidate{{TaskInstanceID: "stuck-ti", QueuedAt: past}},
 	}
 	rec := &capturingRecorder{}
-	r := NewReaper(store, nil, nil, rec, reapTestLogger(), DefaultReaperConfig(), nil)
+	r := NewReaper(store, nil, nil, nil, rec, reapTestLogger(), DefaultReaperConfig(), nil)
 
 	if err := r.ReapOnce(context.Background()); err != nil {
 		t.Fatalf("ReapOnce: %v", err)
@@ -116,7 +120,7 @@ func TestReaperThreadsPresenceCacheToDispatchLost(t *testing.T) {
 	}
 	pods := &fakePodManager{active: map[string]bool{}}
 	cache := &fakePresenceCache{active: map[string]bool{"run-a/work": true}}
-	r := NewReaper(store, pods, cache, nil, reapTestLogger(), DefaultReaperConfig(), nil)
+	r := NewReaper(store, pods, cache, nil, nil, reapTestLogger(), DefaultReaperConfig(), nil)
 
 	if err := r.ReapOnce(context.Background()); err != nil {
 		t.Fatalf("ReapOnce: %v", err)

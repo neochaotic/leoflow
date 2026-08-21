@@ -740,6 +740,29 @@ func (s *SchedulerStore) ListStaleQueuedCandidates(ctx context.Context) ([]execu
 			TaskID:         r.TaskID,
 			TryNumber:      int(r.TryNumber),
 			QueuedAt:       qed,
+			WarmWorkerID:   strOrEmpty(r.WarmWorkerID),
+		})
+	}
+	return out, nil
+}
+
+// ListWarmBoundRunningTIs returns every `running` TI durably bound to a warm
+// worker (warm_worker_id IS NOT NULL), for the warm-worker-lost reaper (ADR 0058
+// N1d-a2). With warm pools off no TI is ever bound, so this is always empty and
+// the reaper is inert.
+func (s *SchedulerStore) ListWarmBoundRunningTIs(ctx context.Context) ([]executor.WarmBoundTI, error) {
+	rows, err := s.q.ListWarmBoundRunningTIs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing warm-bound running TIs: %w", err)
+	}
+	out := make([]executor.WarmBoundTI, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, executor.WarmBoundTI{
+			TaskInstanceID: uuidToString(r.TaskInstanceID),
+			DagRunID:       uuidToString(r.DagRunID),
+			TaskID:         r.TaskID,
+			TryNumber:      int(r.TryNumber),
+			WarmWorkerID:   strOrEmpty(r.WarmWorkerID),
 		})
 	}
 	return out, nil

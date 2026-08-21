@@ -69,7 +69,7 @@ func TestChaosMidTickCrashRecoveryIntegration(t *testing.T) {
 	// enough for a fast test but well above the ~ms in-process Step() latency.
 	// AgentLostThreshold is a minute — irrelevant here, kept high so it can't fire
 	// on unrelated rows; PodLostGrace is a no-op with nil pods.
-	s.SetExecutionReaper(executor.NewReaper(sched, nil, nil, nil, logger, executor.ReaperConfig{
+	s.SetExecutionReaper(executor.NewReaper(sched, nil, nil, nil, nil, logger, executor.ReaperConfig{
 		OrphanThreshold:       400 * time.Millisecond,
 		AgentLostThreshold:    time.Minute,
 		DispatchLostThreshold: 200 * time.Millisecond,

@@ -113,3 +113,79 @@ func TestReapDispatchLost_PerTIErrorIsolated(t *testing.T) {
 		t.Errorf("run err = %v, want nil (per-TI errors isolated)", err)
 	}
 }
+
+// TestReapDispatchLost_H3_WarmLiveDefers is the double-run regression (ADR 0058
+// N1d-a2, review finding H3). A warm attempt can sit in `queued` past the
+// dispatch threshold while its serving warm worker is alive and merely slow to
+// transition queued->running. A warm attempt has NO task pod, so the existing
+// TaskPodActive gate cannot protect it — the pure time threshold would fail it,
+// and once the live worker DOES transition the attempt, the task runs twice.
+//
+// The fix: if the candidate's WarmWorkerID is in the live warm-pod set, DEFER.
+// This test pins that. Remove the defer (the pre-fix behavior) and the reaper
+// marks the TI dispatch-lost → the double-run.
+func TestReapDispatchLost_H3_WarmLiveDefers(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeStaleQueuedStore{candidates: []StaleQueuedCandidate{
+		{TaskInstanceID: "warm-slow", DagRunID: "run-1", TaskID: "load", QueuedAt: now.Add(-10 * time.Minute), WarmWorkerID: "pod-live"},
+	}}
+	lister := &fakeWarmLister{pods: []WarmPodInfo{{Name: "pod-live", Terminal: false}}}
+	rec := &capturingRecorder{}
+	r := newDispatchLostReaper(store, reapTestLogger(), 3*time.Minute, rec)
+	r.warmPods = lister
+
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(store.failed) != 0 {
+		t.Fatalf("a warm attempt whose worker is LIVE must be deferred, not failed — the double-run bug; got %v", store.failed)
+	}
+	if got := rec.count("dispatch_lost_warm_deferred"); got != 1 {
+		t.Errorf("dispatch_lost_warm_deferred meter = %d, want 1", got)
+	}
+}
+
+// TestReapDispatchLost_H3_WarmGoneReaped: the other side of the guard — a warm
+// attempt whose bound worker is NOT in the live set (the worker really died)
+// still gets reaped. The defer protects only LIVE workers; it must not turn the
+// reaper into a no-op for genuinely lost warm dispatches.
+func TestReapDispatchLost_H3_WarmGoneReaped(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeStaleQueuedStore{candidates: []StaleQueuedCandidate{
+		{TaskInstanceID: "warm-gone", DagRunID: "run-1", TaskID: "load", QueuedAt: now.Add(-10 * time.Minute), WarmWorkerID: "pod-dead"},
+	}}
+	lister := &fakeWarmLister{pods: []WarmPodInfo{{Name: "pod-other", Terminal: false}}}
+	r := newDispatchLostReaper(store, reapTestLogger(), 3*time.Minute, nil)
+	r.warmPods = lister
+
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(store.failed) != 1 || store.failed[0] != "warm-gone" {
+		t.Fatalf("a warm attempt whose worker is GONE must still be reaped, got %v", store.failed)
+	}
+}
+
+// TestReapDispatchLost_H3_DedicatedUnchanged: an attempt with empty WarmWorkerID
+// (a dedicated, non-warm task) is untouched by the warm defer — it flows through
+// the existing pod-liveness path. With no pods wired it falls back to the pure
+// time threshold and is reaped, exactly as before N1d-a2. This proves warm-off /
+// dedicated behavior is byte-for-byte unchanged.
+func TestReapDispatchLost_H3_DedicatedUnchanged(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeStaleQueuedStore{candidates: []StaleQueuedCandidate{
+		{TaskInstanceID: "dedicated", DagRunID: "run-1", TaskID: "load", QueuedAt: now.Add(-10 * time.Minute), WarmWorkerID: ""},
+	}}
+	// A live warm fleet is present, but this candidate is not warm-bound, so the
+	// warm defer must not fire regardless.
+	lister := &fakeWarmLister{pods: []WarmPodInfo{{Name: "pod-live"}}}
+	r := newDispatchLostReaper(store, reapTestLogger(), 3*time.Minute, nil)
+	r.warmPods = lister
+
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(store.failed) != 1 || store.failed[0] != "dedicated" {
+		t.Fatalf("a dedicated (unbound) TI must be reaped by the existing path, got %v", store.failed)
+	}
+}

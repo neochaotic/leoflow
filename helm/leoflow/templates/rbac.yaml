@@ -63,4 +63,63 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "leoflow.roleServiceAccountName" (dict "ctx" . "role" (ternary "scheduler" "all" .Values.split.enabled)) }}
     namespace: {{ .Release.Namespace }}
+{{- if eq .Values.auth.agentTokenTransport "exchange" }}
+---
+{{/*
+The exchange transport (ADR 0055) replaces the plaintext bearer on the task Pod
+object with a projected ServiceAccount token: the agent presents that token, and
+the control plane asks the apiserver — via TokenReview — which pod it belongs to
+before minting the task-scoped JWT. TokenReview is a CLUSTER-SCOPED API, so the
+namespaced Role above cannot carry it; without this ClusterRole the review is
+refused ("tokenreviews.authentication.k8s.io is forbidden ... at the cluster
+scope") and every task pod dies on an invalid projected token. Note the blast
+radius: the transport is a SERVER-WIDE setting, so that failure hits the ordinary
+dedicated pod-per-task path too, not only warm pools — even though warm pools
+(ADR 0058 D2) are what force the transport on.
+
+Rendered only on the exchange transport, deliberately. `create` on tokenreviews
+is an authentication oracle — the holder can ask the apiserver to validate any
+token it gets hold of and learn the identity behind it — and an install on the
+default env-var transport never issues the call. Granting it unconditionally
+would hand every Leoflow install a cluster-scoped permission that the vast
+majority never use, which is the kind of standing over-grant a cluster admin has
+to justify at review time. Gating it on the value that makes the call means the
+permission and its only consumer are turned on by the same flip, in the same
+upgrade: `--set auth.agentTokenTransport=exchange` is sufficient on its own.
+The one failure mode this leaves — the transport switched outside the chart, so
+the grant never renders — is exactly what the transport value exists to remove.
+
+One rule, one verb: the exchange makes exactly one apiserver call.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "leoflow.tokenReviewName" . }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "leoflow.tokenReviewName" . }}
+  labels:
+    {{- include "leoflow.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "leoflow.tokenReviewName" . }}
+{{- /*
+ADR 0049: the agent gRPC endpoint — and with it the token exchange — runs in the
+scheduler process, so in split mode the grant follows the scheduler SA and the
+restricted api SA stays unbound, exactly as for the executor Role above.
+*/}}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "leoflow.roleServiceAccountName" (dict "ctx" . "role" (ternary "scheduler" "all" .Values.split.enabled)) }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end -}}

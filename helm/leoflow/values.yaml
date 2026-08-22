@@ -62,7 +62,7 @@ serviceAccount:
   annotations: {}
 
 rbac:
-  # -- Create the Role + RoleBinding the pod-per-task executor needs in `taskNamespace`: create/get/list/watch/delete on pods, get on pods/log, and create/delete on persistentvolumeclaims for the per-run staging volume (ADR 0022). The grant is checked against the executor's actual API calls by `scripts/rbac-covers-executor.sh` in CI, so this list cannot silently fall behind the code again. Set `false` only if you bring your own Role — and then that check does not protect you.
+  # -- Create the Role + RoleBinding the pod-per-task executor needs in `taskNamespace`: create/get/list/watch/delete on pods, get on pods/log, create/delete on persistentvolumeclaims for the per-run staging volume (ADR 0022), and create/get/delete on configmaps for the warm-pool GC anchor (ADR 0058 D11). Additionally, when `auth.agentTokenTransport` is `exchange`, a ClusterRole + ClusterRoleBinding granting `create` on `authentication.k8s.io/tokenreviews` — cluster-scoped because the TokenReview API is, and the only cluster-scoped objects this chart creates. The grant is checked against the code's actual API calls by `scripts/rbac-covers-executor.sh` in CI, so this list cannot silently fall behind the code again. Set `false` only if you bring your own Role — and then that check does not protect you.
   create: true
 
 # Hardening applied to the pods that run task code. Task images come from DAG
@@ -179,6 +179,57 @@ auth:
   existingSecret: ""
   # -- API + agent JWT lifetime in seconds. Default 1h; raise for longer agent sessions.
   tokenTtlSeconds: 3600
+  # How the in-pod agent obtains its control-plane credential, and whether secret
+  # delivery is bound to task-instance liveness (ADR 0055). Both ship on the value
+  # that is byte-for-byte today's behavior, and both are stamped into the pod env
+  # even at their defaults: they are the security posture a warm pool's safety
+  # depends on (ADR 0058 D2), so the chart — not an out-of-band `kubectl set env`
+  # that a `helm upgrade` would never notice — is their source of truth.
+  # -- Agent credential transport: `envvar` (default) puts the task-scoped bearer in a plaintext `LEOFLOW_AGENT_TOKEN` env var on the Pod object; `exchange` mounts a projected ServiceAccount token that the agent trades once — via a control-plane TokenReview — for the task-scoped JWT, so no bearer sits in plaintext on the pod spec. `exchange` needs the cluster-scoped TokenReview grant the chart renders with it (`rbac.create`), and is a hard prerequisite of `execution.warmPoolsEnabled` (ADR 0058 D2). Server-wide: switching it changes how EVERY task pod authenticates, warm or dedicated.
+  agentTokenTransport: envvar
+  # -- Secret-delivery liveness gate: `observe` (default) logs and audits a would-have-denied when the calling task instance is no longer live but still delivers the secrets; `enforce` denies. Required at `enforce` by `execution.warmPoolsEnabled` (ADR 0058 D2) — a reused pod's superseded attempt would otherwise still resolve secrets. Run `observe` first and read the audit trail before flipping.
+  secretLivenessMode: observe
+
+# Warm worker pools (ADR 0058) — reuse one task pod across many attempts of the
+# SAME dag_version, instead of one pod per attempt. OFF by default: every attempt
+# gets its own dedicated pod, byte-for-byte today's behavior, and none of the
+# tuning below is even sent to the server.
+#
+# Turning them on is a SECURITY decision before it is a performance one. A reused
+# pod holds one live credential across attempts, so per-attempt identity is the
+# only thing keeping a superseded attempt from still resolving secrets — hence the
+# ADR 0058 D2 coupling: `warmPoolsEnabled` requires `auth.agentTokenTransport=
+# exchange` AND `auth.secretLivenessMode=enforce`. The chart refuses to render
+# without both (the server refuses to boot on the same coupling).
+#
+# The knobs below are operator-scoped on purpose — a DAG author cannot set them —
+# and their defaults are exactly the server's, so enabling the flag alone inherits
+# the documented bounds rather than an accidental configuration.
+execution:
+  # -- Reuse one warm pod across many attempts of a dag_version (ADR 0058). OFF = dedicated pod-per-task. Requires `auth.agentTokenTransport: exchange` AND `auth.secretLivenessMode: enforce`; the chart fails the render otherwise. Read ADR 0058's "Measurement & enable readiness" before enabling on a shared cluster — the go/no-go bar is stated in rates on a real cluster, not in unit tests.
+  warmPoolsEnabled: false
+  # -- Warm workers kept ready per dag_version when a DAG declares no warmth of its own (ADR 0058 D6). `0` (default) is scale-to-zero: nothing idles until a DAG asks for it. Ignored while `warmPoolsEnabled` is false.
+  minIdleWorkers: 0
+  # -- Cap on the warm workers a single dag_version may hold (ADR 0058 D6). Also the ceiling a DAG author's own warmth request is clamped to. Ignored while `warmPoolsEnabled` is false.
+  maxPoolSize: 8
+  # -- Attempts a warm worker serves before it drains and recycles (ADR 0058 D9). Bounds credential-leak and stale-image exposure by forcing a fresh pod periodically. Ignored while `warmPoolsEnabled` is false.
+  maxAttemptsPerWorker: 50
+  # -- Wall-clock lifetime of a warm worker before it drains and recycles, independent of the attempt count (ADR 0058 D9). A Go duration string (`1h`, `30m`). Recycle is a graceful drain, never a mid-attempt kill. Ignored while `warmPoolsEnabled` is false.
+  maxWorkerLifetime: 1h
+  # -- How long an idle warm worker is kept before it is recycled (ADR 0058 D6). A Go duration string (`5m`, `90s`). This is also what drains the pool of a superseded dag_version after a deploy. Ignored while `warmPoolsEnabled` is false.
+  workerIdleTtl: 5m
+  # -- Cap on the TOTAL warm pods one tenant may hold across ALL its dag_versions (ADR 0058 M4). Where `maxPoolSize` bounds one version, this bounds a tenant's aggregate footprint so one team cannot pin idle pods and starve neighbours on a shared cluster. Enforced by refusing to create new warm pods, never by deleting a busy worker. Ignored while `warmPoolsEnabled` is false.
+  maxWarmPodsPerTenant: 100
+
+# -- Extra environment variables appended to the control-plane container, for
+# server settings this chart does not model as a first-class value (see
+# `docs/configuration.md` for the full `LEOFLOW_*` surface). Standard K8s `env`
+# entries, so `valueFrom` works, and a `value` is always rendered as a string
+# (Kubernetes rejects a numeric one). Appended AFTER the chart-managed entries; do
+# not use it to redefine one — the chart refuses to render an entry that shadows a
+# variable whose value it guards (the warm-pool / agent-credential coupling).
+# Example: `[{name: LEOFLOW_SCHEDULER_DISPATCH_WORKERS, value: "4"}]`.
+extraEnv: []
 
 # secretKey (LEOFLOW_SECRET_KEY) is the 32-byte key the control plane uses to
 # encrypt connection passwords + Extra blobs at rest (ADR 0019). Without it,

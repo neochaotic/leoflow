@@ -48,6 +48,13 @@ expect_substring 'name: LEOFLOW_AUTH_JWT_SECRET' "JWT secret env entry in deploy
 expect_substring 'name: LEOFLOW_SECRET_KEY'    "Connection encryption key env entry in deployment (ADR 0019)"
 expect_substring 'jwtSecret:'                  "jwtSecret key in chart-managed Secret"
 expect_substring 'secretKey:'                  "secretKey in chart-managed Secret (ADR 0019)"
+# The warm-pool flag and the two agent-credential knobs it is coupled to (ADR
+# 0058 D2) are stamped on EVERY render, defaults included, so a `helm upgrade`
+# reasserts them over an out-of-band `kubectl set env`. Reaching the feature
+# through the chart at all is what these three make possible.
+expect_substring 'name: LEOFLOW_EXECUTION_WARM_POOLS_ENABLED'  "warm-pool flag env entry in deployment (ADR 0058)"
+expect_substring 'name: LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT'    "agent token transport env entry in deployment (ADR 0055)"
+expect_substring 'name: LEOFLOW_AUTH_SECRET_LIVENESS_MODE'     "secret liveness mode env entry in deployment (ADR 0055)"
 
 # Migration Job must be hardened the same way as the Deployment (#174):
 # restricted-PSA clusters require runAsNonRoot+numeric runAsUser on EVERY

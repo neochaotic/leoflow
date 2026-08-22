@@ -16,6 +16,7 @@ production-like install — distinct from the host-run `test/e2e/e2e.sh` smoke.
 | Deployment | `leoflow-server` (HTTP `8080`, metrics `9090`, agent gRPC `9091`) |
 | Service | ClusterIP exposing http / metrics / grpc |
 | ServiceAccount + Role/RoleBinding | lets the control plane create/watch/delete **task pods** and read their logs in `taskNamespace` |
+| ClusterRole + ClusterRoleBinding | **only** when `auth.agentTokenTransport: exchange` — `create` on `tokenreviews` (cluster-scoped API). See [Agent credential transport](#agent-credential-transport-and-warm-worker-pools) |
 | Secret | holds inline DB/Redis/JWT/bootstrap credentials (skipped when you bring your own) |
 | Job (hook) | runs `golang-migrate` before install/upgrade |
 | Ingress | optional |
@@ -162,6 +163,85 @@ The chart then:
 
 Leave `caConfigMap` empty for plaintext `redis://` or for managed
 TLS that uses a public CA (rare).
+
+## Agent credential transport, and warm worker pools
+
+Two independent settings, coupled in one direction. Both are operator-scoped: a
+DAG author cannot reach either.
+
+### `auth.agentTokenTransport`
+
+How the agent inside a task pod obtains its control-plane credential:
+
+| Value | What the task pod carries | RBAC |
+|---|---|---|
+| `envvar` *(default)* | the task-scoped JWT, in a plaintext `LEOFLOW_AGENT_TOKEN` env var on the Pod object | the namespaced executor Role only |
+| `exchange` | a projected ServiceAccount token, traded once — via a control-plane TokenReview — for the task-scoped JWT, so no bearer sits in plaintext on the pod spec | **plus** a ClusterRole granting `create` on `authentication.k8s.io/tokenreviews` |
+
+TokenReview is a **cluster-scoped** API, so the namespaced Role cannot carry it.
+The chart renders the ClusterRole + ClusterRoleBinding **only** on
+`exchange` — `create` on `tokenreviews` lets its holder ask the apiserver to
+validate any token it can get hold of, which is not a standing permission every
+install should carry. Setting the transport through the chart is therefore
+sufficient on its own:
+
+```bash
+--set auth.agentTokenTransport=exchange
+```
+
+> **Do not flip this outside the chart.** The transport is **server-wide**: with
+> `exchange` selected but no TokenReview grant, the control plane logs
+> `tokenreviews.authentication.k8s.io is forbidden ... at the cluster scope` and
+> **every** task pod fails on an invalid projected token — the ordinary dedicated
+> pod-per-task path included, not just warm pools.
+
+The cluster-scoped objects are named `<fullname>-<namespace>-tokenreview` so two
+Leoflow releases in one cluster never collide on them.
+
+### `execution.warmPoolsEnabled`
+
+Warm worker pools ([ADR 0058](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0058-warm-worker-pools.md))
+reuse one pod across many attempts of the **same DAG version**, instead of one pod
+per attempt. Off by default: every attempt gets a dedicated pod, which is today's
+behavior.
+
+Enabling is a security decision first. A reused pod holds one live credential
+across attempts, so per-attempt identity is the only thing stopping a superseded
+attempt from still resolving secrets — hence ADR 0058 D2:
+
+```bash
+--set execution.warmPoolsEnabled=true \
+--set auth.agentTokenTransport=exchange \
+--set auth.secretLivenessMode=enforce
+```
+
+The chart **refuses to render** if the flag is on without both prerequisites; the
+server enforces the same coupling at boot, so the alternative would be a
+`CrashLoopBackOff` explained only in container logs.
+
+The remaining knobs (`minIdleWorkers`, `maxPoolSize`, `maxAttemptsPerWorker`,
+`maxWorkerLifetime`, `workerIdleTtl`, `maxWarmPodsPerTenant`) default to exactly
+the server's own defaults and are sent only while the flag is on — see the values
+table below. Before enabling on a shared production cluster, read ADR 0058's
+*Measurement & enable readiness*: the go/no-go bar is stated in rates measured on
+a real cluster, and unit tests do not clear it.
+
+## Settings the chart does not model
+
+`extraEnv` appends raw env entries to the control-plane container, for any
+`LEOFLOW_*` setting without a first-class value (the full surface is in
+[`docs/configuration.md`](https://github.com/neochaotic/leoflow/blob/main/docs/configuration.md)):
+
+```yaml
+extraEnv:
+  - name: LEOFLOW_SCHEDULER_DISPATCH_WORKERS
+    value: "4"
+```
+
+It is an escape hatch, not an override: an entry redefining
+`LEOFLOW_EXECUTION_WARM_POOLS_ENABLED`, `LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT` or
+`LEOFLOW_AUTH_SECRET_LIVENESS_MODE` fails the render, because those three are the
+values the guard above validates against each other.
 
 ## Evaluating without a managed Postgres + Redis
 

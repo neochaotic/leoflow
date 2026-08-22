@@ -175,6 +175,38 @@ spec:
               value: {{ .ctx.Values.taskPodSecurity.runAsNonRoot | quote }}
             - name: LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM
               value: {{ .ctx.Values.taskPodSecurity.readOnlyRootFilesystem | quote }}
+            # Agent-credential posture (ADR 0055) and warm worker pools (ADR 0058).
+            # These three are always stamped, at their defaults too, for the same
+            # reason as the task-pod hardening above: they are the security
+            # coupling ADR 0058 D2 rests on, so leaving a default implicit would
+            # let a hand-applied `kubectl set env` survive a `helm upgrade`
+            # unnoticed. Stamping them makes the chart the single source of truth
+            # and lets an upgrade reassert the safe value.
+            - name: LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT
+              value: {{ .ctx.Values.auth.agentTokenTransport | quote }}
+            - name: LEOFLOW_AUTH_SECRET_LIVENESS_MODE
+              value: {{ .ctx.Values.auth.secretLivenessMode | quote }}
+            - name: LEOFLOW_EXECUTION_WARM_POOLS_ENABLED
+              value: {{ .ctx.Values.execution.warmPoolsEnabled | quote }}
+            {{- if .ctx.Values.execution.warmPoolsEnabled }}
+            # The D6/D9/M4 pool bounds. Stamped only with the flag on: the server
+            # reads none of them while warm pools are off (its boot validation
+            # returns before they are looked at), so an OFF install keeps exactly
+            # the env it has today. Durations travel as strings — viper parses
+            # them, the same way it does the auth credential ceiling.
+            - name: LEOFLOW_EXECUTION_MIN_IDLE_WORKERS
+              value: {{ .ctx.Values.execution.minIdleWorkers | quote }}
+            - name: LEOFLOW_EXECUTION_MAX_POOL_SIZE
+              value: {{ .ctx.Values.execution.maxPoolSize | quote }}
+            - name: LEOFLOW_EXECUTION_MAX_ATTEMPTS_PER_WORKER
+              value: {{ .ctx.Values.execution.maxAttemptsPerWorker | quote }}
+            - name: LEOFLOW_EXECUTION_MAX_WORKER_LIFETIME
+              value: {{ .ctx.Values.execution.maxWorkerLifetime | quote }}
+            - name: LEOFLOW_EXECUTION_WORKER_IDLE_TTL
+              value: {{ .ctx.Values.execution.workerIdleTtl | quote }}
+            - name: LEOFLOW_EXECUTION_MAX_WARM_PODS_PER_TENANT
+              value: {{ .ctx.Values.execution.maxWarmPodsPerTenant | quote }}
+            {{- end }}
             - name: LEOFLOW_DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -216,6 +248,29 @@ spec:
                 secretKeyRef:
                   name: {{ .ctx.Values.bootstrap.existingSecret | default (include "leoflow.secretName" .ctx) }}
                   key: bootstrapPassword
+            {{- end }}
+            {{- if .ctx.Values.extraEnv }}
+            # Operator escape hatch for LEOFLOW_* settings the chart does not
+            # model as a value. Appended last, and never a way around a guard:
+            # deployment.yaml refuses to render an entry that shadows one of the
+            # variables whose values the chart validates against each other.
+            #
+            # Rendered field by field rather than dumped with toYaml so `value` is
+            # always quoted: a Kubernetes env value is a string, and a YAML number
+            # or bool (which is what `--set extraEnv[0].value=4` produces) is
+            # rejected by the apiserver on apply — long after the render looked
+            # fine. name/value/valueFrom is the whole of an EnvVar, so nothing is
+            # dropped by being explicit.
+            {{- range .ctx.Values.extraEnv }}
+            - name: {{ .name | quote }}
+              {{- if hasKey . "value" }}
+              value: {{ .value | quote }}
+              {{- end }}
+              {{- if hasKey . "valueFrom" }}
+              valueFrom:
+                {{- toYaml .valueFrom | nindent 16 }}
+              {{- end }}
+            {{- end }}
             {{- end }}
           {{- $probePort := "http" }}
           {{- if eq .role "scheduler" }}{{ $probePort = "metrics" }}{{ end }}

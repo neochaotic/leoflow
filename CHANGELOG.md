@@ -83,6 +83,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   successfully got `401 missing bearer token`. They now share the same
   `--token` → `LEOFLOW_TOKEN` → config-file precedence that `push`, `deploy` and
   the `admin` subcommands already applied. (#697)
+- **The control plane now fails closed at boot when the `exchange` agent-token
+  transport has no Kubernetes client (#700).** It previously logged a warning and
+  left the exchange unwired, so with `auth.agent_token_transport=exchange` every
+  task pod's bootstrap failed `Unimplemented` while `/readyz` stayed green. It now
+  refuses to start with a clear error naming the missing in-cluster/kubeconfig
+  client, so the misconfiguration is visible at boot instead of silently failing
+  every task.
+- **`leoflow dev` no longer panics on a nil context while probing the companion
+  binary version (#699).** The probe received `cmd.Context()`, which is nil when
+  the command was not run through cobra's `Execute()`, and `context.WithTimeout`
+  panicked `cannot create context from nil parent`. It now routes through the
+  package's nil-guarding context helper and falls back to a background context —
+  a best-effort probe must never crash the CLI.
 
 ### Changed
 

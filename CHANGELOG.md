@@ -38,6 +38,44 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   best-effort and diagnostic only: it is null when nothing observed a cause, it
   is bounded in length, and it does not change retry accounting or any state
   transition.
+- **Warm worker pools are reachable from the Helm chart (#695).** The server has
+  supported them since ADR 0058, but the chart exposed none of the knobs and had
+  no escape hatch, so the only way to enable the feature on a Helm-installed
+  release was `kubectl set env` behind Helm's back — an operator following the
+  docs could not reach it at all. New values: `execution.warmPoolsEnabled`,
+  `execution.minIdleWorkers`, `execution.maxPoolSize`,
+  `execution.maxAttemptsPerWorker`, `execution.maxWorkerLifetime`,
+  `execution.workerIdleTtl`, `execution.maxWarmPodsPerTenant`,
+  `auth.agentTokenTransport` and `auth.secretLivenessMode`, plus a general
+  `extraEnv` list for `LEOFLOW_*` settings the chart does not model. Every
+  default equals the server's, so an unchanged `helm upgrade` keeps today's
+  behavior: warm pools off, `envvar` transport, liveness in `observe`. The chart
+  now **refuses to render** when warm pools are enabled without their ADR 0058 D2
+  security prerequisites (`agentTokenTransport=exchange` **and**
+  `secretLivenessMode=enforce`), mirroring the server's fail-closed boot check —
+  a clear render error instead of a `CrashLoopBackOff` explained only in
+  container logs.
+
+### Fixed
+
+- **Chart RBAC now grants the `tokenreviews` permission the token-exchange
+  transport requires (#696).** With `auth.agentTokenTransport=exchange` the
+  control plane validates a task pod's projected ServiceAccount token via the
+  Kubernetes TokenReview API, but the chart granted only a namespaced Role —
+  and TokenReview is cluster-scoped, so no Role could ever carry it. The review
+  was refused (`tokenreviews.authentication.k8s.io is forbidden ... at the
+  cluster scope`) and every task pod died on `projected token is not valid`.
+  Because the transport is server-wide, this broke the ordinary dedicated
+  pod-per-task path too, not only warm pools — which made it a hard blocker for
+  warm pools, whose D2 prerequisites force the transport on. The chart now
+  renders a ClusterRole + ClusterRoleBinding granting `create` on
+  `authentication.k8s.io/tokenreviews`, named `<fullname>-<namespace>-tokenreview`
+  so multiple releases in one cluster cannot collide, bound to the same
+  ServiceAccount as the executor Role (the scheduler SA in split mode). It is
+  rendered **only** on the `exchange` transport: `create` on `tokenreviews` is an
+  authentication oracle, and an install on the default transport never issues the
+  call. `scripts/rbac-covers-executor.sh` now checks this grant against the code
+  the same way it checks the executor's, so the two cannot drift apart again.
 
 ### Changed
 

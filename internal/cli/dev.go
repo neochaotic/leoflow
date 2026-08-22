@@ -608,7 +608,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if herr != nil {
 		return herr
 	}
-	serverBin, berr := resolveAndReport(cmd.Context(), cmd, o.serverBin, "leoflow-server")
+	serverBin, berr := resolveAndReport(cmdContext(cmd), cmd, o.serverBin, "leoflow-server")
 	if berr != nil {
 		return berr
 	}
@@ -1276,7 +1276,17 @@ func reportCompanionBinary(ctx context.Context, cmd *cobra.Command, kind, path s
 
 // companionVersion asks a binary for its version, returning "" when it cannot
 // be determined. Bounded so a wedged binary cannot hang startup.
+//
+// The version check is best-effort and must never take the CLI down with it: a
+// nil parent context — which context.WithTimeout would panic on ("cannot create
+// context from nil parent") — is treated as no context rather than a fatal
+// error.
+//
+//nolint:contextcheck // the nil-ctx fallback below has no parent to inherit; a fresh root is the only safe choice, and the CLI must not panic over a best-effort version probe.
 func companionVersion(ctx context.Context, path string) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, path, "version").Output() //nolint:gosec // path resolved by resolveBinary, not user input

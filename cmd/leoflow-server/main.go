@@ -405,7 +405,16 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 		})
 		logger.Warn("warm worker pools enabled (ADR 0058 N1b1-place); admitted tasks place on a free warm worker of their dag_version, else dispatch dedicated")
 	}
-	grpcSrv, agentSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, buildTokenExchange(cfg, logger), cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, logger)
+	// Fail closed (#700): when the operator selected the exchange transport, the
+	// Kubernetes client is a hard prerequisite. buildTokenExchange returns an
+	// error here rather than leaving the exchange unwired, so the server refuses
+	// to boot instead of advertising itself healthy while every task pod's
+	// ExchangeToken bootstrap fails Unimplemented.
+	xchg, xerr := buildTokenExchange(cfg, buildK8sClient)
+	if xerr != nil {
+		return nil, false, nil, xerr
+	}
+	grpcSrv, agentSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, xchg, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -685,24 +694,31 @@ type tokenExchange struct {
 }
 
 // buildTokenExchange constructs the exchange dependencies when the operator
-// selected the exchange transport on a Kubernetes executor; it returns nil
-// otherwise (env-var default, or the subprocess executor, which has no pod/SA/
-// TokenReview). A Kubernetes client that cannot be built leaves the exchange
-// unwired with a warning — matching pod dispatch's warn-and-disable posture —
-// rather than failing boot, since the transport flip is a deliberate opt-in.
-func buildTokenExchange(cfg *config.ServerConfig, logger *slog.Logger) *tokenExchange {
+// selected the exchange transport on a Kubernetes executor; it returns (nil,
+// nil) otherwise (env-var default, or the subprocess executor, which has no
+// pod/SA/TokenReview and needs no client). newK8sClient is the seam that
+// supplies the Kubernetes client (buildK8sClient in production); it is consulted
+// only when the exchange transport is actually selected.
+//
+// When the exchange transport IS selected on a Kubernetes executor and no client
+// can be built, this FAILS CLOSED and returns an error so the server refuses to
+// boot. An unwired exchange makes ExchangeToken report Unimplemented, so every
+// task pod fails at bootstrap while the control plane reports itself healthy —
+// a fail-open on a security-critical transport the operator explicitly opted
+// into. The transport flip is a deliberate opt-in, which is an argument for
+// honoring it strictly, not for silently ignoring it.
+func buildTokenExchange(cfg *config.ServerConfig, newK8sClient func() (kubernetes.Interface, error)) (*tokenExchange, error) {
 	if cfg.Auth.AgentTokenTransport != config.AgentTokenTransportExchange || cfg.Executor.Type != "kubernetes" {
-		return nil
+		return nil, nil //nolint:nilnil // env-var transport or non-Kubernetes executor needs no exchange; a nil exchange is the correct wiring, not an error
 	}
-	cs, err := buildK8sClient()
+	cs, err := newK8sClient()
 	if err != nil {
-		logger.Warn("agent token exchange selected but no Kubernetes client is available; exchange disabled (agents on the exchange transport will fail to start)", "error", err)
-		return nil
+		return nil, fmt.Errorf("agent token transport %q requires a Kubernetes client, but none is available (no in-cluster config or kubeconfig): %w", config.AgentTokenTransportExchange, err)
 	}
 	return &tokenExchange{
 		reviewer: kubeexchange.NewTokenReviewer(cs, executor.DefaultAgentTokenAudience),
 		resolver: kubeexchange.NewPodResolver(cs, cfg.Executor.TaskNamespace),
-	}
+	}, nil
 }
 
 // buildPodExecutor constructs a Kubernetes executor from the in-cluster config

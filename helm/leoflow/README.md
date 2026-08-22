@@ -16,6 +16,7 @@ production-like install — distinct from the host-run `test/e2e/e2e.sh` smoke.
 | Deployment | `leoflow-server` (HTTP `8080`, metrics `9090`, agent gRPC `9091`) |
 | Service | ClusterIP exposing http / metrics / grpc |
 | ServiceAccount + Role/RoleBinding | lets the control plane create/watch/delete **task pods** and read their logs in `taskNamespace` |
+| ClusterRole + ClusterRoleBinding | **only** when `auth.agentTokenTransport: exchange` — `create` on `tokenreviews` (cluster-scoped API). See [Agent credential transport](#agent-credential-transport-and-warm-worker-pools) |
 | Secret | holds inline DB/Redis/JWT/bootstrap credentials (skipped when you bring your own) |
 | Job (hook) | runs `golang-migrate` before install/upgrade |
 | Ingress | optional |
@@ -163,6 +164,85 @@ The chart then:
 Leave `caConfigMap` empty for plaintext `redis://` or for managed
 TLS that uses a public CA (rare).
 
+## Agent credential transport, and warm worker pools
+
+Two independent settings, coupled in one direction. Both are operator-scoped: a
+DAG author cannot reach either.
+
+### `auth.agentTokenTransport`
+
+How the agent inside a task pod obtains its control-plane credential:
+
+| Value | What the task pod carries | RBAC |
+|---|---|---|
+| `envvar` *(default)* | the task-scoped JWT, in a plaintext `LEOFLOW_AGENT_TOKEN` env var on the Pod object | the namespaced executor Role only |
+| `exchange` | a projected ServiceAccount token, traded once — via a control-plane TokenReview — for the task-scoped JWT, so no bearer sits in plaintext on the pod spec | **plus** a ClusterRole granting `create` on `authentication.k8s.io/tokenreviews` |
+
+TokenReview is a **cluster-scoped** API, so the namespaced Role cannot carry it.
+The chart renders the ClusterRole + ClusterRoleBinding **only** on
+`exchange` — `create` on `tokenreviews` lets its holder ask the apiserver to
+validate any token it can get hold of, which is not a standing permission every
+install should carry. Setting the transport through the chart is therefore
+sufficient on its own:
+
+```bash
+--set auth.agentTokenTransport=exchange
+```
+
+> **Do not flip this outside the chart.** The transport is **server-wide**: with
+> `exchange` selected but no TokenReview grant, the control plane logs
+> `tokenreviews.authentication.k8s.io is forbidden ... at the cluster scope` and
+> **every** task pod fails on an invalid projected token — the ordinary dedicated
+> pod-per-task path included, not just warm pools.
+
+The cluster-scoped objects are named `<fullname>-<namespace>-tokenreview` so two
+Leoflow releases in one cluster never collide on them.
+
+### `execution.warmPoolsEnabled`
+
+Warm worker pools ([ADR 0058](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0058-warm-worker-pools.md))
+reuse one pod across many attempts of the **same DAG version**, instead of one pod
+per attempt. Off by default: every attempt gets a dedicated pod, which is today's
+behavior.
+
+Enabling is a security decision first. A reused pod holds one live credential
+across attempts, so per-attempt identity is the only thing stopping a superseded
+attempt from still resolving secrets — hence ADR 0058 D2:
+
+```bash
+--set execution.warmPoolsEnabled=true \
+--set auth.agentTokenTransport=exchange \
+--set auth.secretLivenessMode=enforce
+```
+
+The chart **refuses to render** if the flag is on without both prerequisites; the
+server enforces the same coupling at boot, so the alternative would be a
+`CrashLoopBackOff` explained only in container logs.
+
+The remaining knobs (`minIdleWorkers`, `maxPoolSize`, `maxAttemptsPerWorker`,
+`maxWorkerLifetime`, `workerIdleTtl`, `maxWarmPodsPerTenant`) default to exactly
+the server's own defaults and are sent only while the flag is on — see the values
+table below. Before enabling on a shared production cluster, read ADR 0058's
+*Measurement & enable readiness*: the go/no-go bar is stated in rates measured on
+a real cluster, and unit tests do not clear it.
+
+## Settings the chart does not model
+
+`extraEnv` appends raw env entries to the control-plane container, for any
+`LEOFLOW_*` setting without a first-class value (the full surface is in
+[`docs/configuration.md`](https://github.com/neochaotic/leoflow/blob/main/docs/configuration.md)):
+
+```yaml
+extraEnv:
+  - name: LEOFLOW_SCHEDULER_DISPATCH_WORKERS
+    value: "4"
+```
+
+It is an escape hatch, not an override: an entry redefining
+`LEOFLOW_EXECUTION_WARM_POOLS_ENABLED`, `LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT` or
+`LEOFLOW_AUTH_SECRET_LIVENESS_MODE` fails the render, because those three are the
+values the guard above validates against each other.
+
 ## Evaluating without a managed Postgres + Redis
 
 For a one-cluster evaluation (kind, minikube, k3d, scratch namespace), the
@@ -213,8 +293,10 @@ differ from what's committed.
 | agentTLS.caConfigMap | string | `""` | Name of a ConfigMap with key `ca.crt`. Mounted into task pods so the agent verifies the server cert. Set this **and** `serverCertSecret` for BYO (typically a cert-manager trust-bundle). Leave empty to let `autoGenerate` mint one. |
 | agentTLS.enabled | bool | `true` | Enable TLS on the agent ↔ control plane gRPC channel (#58). Keep this `true`: the chart marks every deployment as the production edition (`LEOFLOW_UI_EDITION=pro`), and that edition refuses to boot without a gRPC cert/key — setting this to `false` yields a crash-looping control plane ("the Pro edition requires TLS on the agent gRPC channel"), not a plaintext deployment. The same edition marker also rejects `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true`, so secrets cannot accidentally travel a plaintext channel. For a plaintext local loop use the Lite dev server, not this chart. |
 | agentTLS.serverCertSecret | string | `""` | Name of a `kubernetes.io/tls` Secret (with `tls.crt`/`tls.key`) for the gRPC server. Set this **and** `caConfigMap` to bring your own (BYO), typically a cert-manager `Certificate` — the chart then uses them verbatim and skips auto-generation. Leave empty to let `autoGenerate` mint one. |
+| auth.agentTokenTransport | string | `"envvar"` | Agent credential transport: `envvar` (default) puts the task-scoped bearer in a plaintext `LEOFLOW_AGENT_TOKEN` env var on the Pod object; `exchange` mounts a projected ServiceAccount token that the agent trades once — via a control-plane TokenReview — for the task-scoped JWT, so no bearer sits in plaintext on the pod spec. `exchange` needs the cluster-scoped TokenReview grant the chart renders with it (`rbac.create`), and is a hard prerequisite of `execution.warmPoolsEnabled` (ADR 0058 D2). Server-wide: switching it changes how EVERY task pod authenticates, warm or dedicated. |
 | auth.existingSecret | string | `""` | Name of a Secret with key `jwtSecret` (takes precedence over `jwtSecret`). |
 | auth.jwtSecret | string | `""` | HMAC secret signing API + agent JWTs. Set inline OR reference an existing Secret via `existingSecret`. Generate with `openssl rand -base64 64`. |
+| auth.secretLivenessMode | string | `"observe"` | Secret-delivery liveness gate: `observe` (default) logs and audits a would-have-denied when the calling task instance is no longer live but still delivers the secrets; `enforce` denies. Required at `enforce` by `execution.warmPoolsEnabled` (ADR 0058 D2) — a reused pod's superseded attempt would otherwise still resolve secrets. Run `observe` first and read the audit trail before flipping. |
 | auth.tokenTtlSeconds | int | `3600` | API + agent JWT lifetime in seconds. Default 1h; raise for longer agent sessions. |
 | autoscaling.behavior | object | `{}` | HPA scaling behavior (scale-up/scale-down policies). See K8s docs for autoscaling/v2 `behavior` schema. |
 | autoscaling.enabled | bool | `false` | Enable HPA for the leoflow-server Deployment. Requires metrics-server. |
@@ -234,6 +316,14 @@ differ from what's committed.
 | database.maxIdleConns | int | `5` | Max idle DB connections kept in the pool. Should be ≤ `maxOpenConns`. |
 | database.maxOpenConns | int | `20` | Max concurrent open DB connections (Postgres-side load gate). Increase for high-throughput Pro deployments. |
 | database.url | string | `""` | External Postgres DSN. Required for Pro (the embedded datastore is Lite-only); the chart `fail`s the install if neither this nor `existingSecret` is set. Example: `postgres://user:pass@host:5432/leoflow?sslmode=disable`. |
+| execution.maxAttemptsPerWorker | int | `50` | Attempts a warm worker serves before it drains and recycles (ADR 0058 D9). Bounds credential-leak and stale-image exposure by forcing a fresh pod periodically. Ignored while `warmPoolsEnabled` is false. |
+| execution.maxPoolSize | int | `8` | Cap on the warm workers a single dag_version may hold (ADR 0058 D6). Also the ceiling a DAG author's own warmth request is clamped to. Ignored while `warmPoolsEnabled` is false. |
+| execution.maxWarmPodsPerTenant | int | `100` | Cap on the TOTAL warm pods one tenant may hold across ALL its dag_versions (ADR 0058 M4). Where `maxPoolSize` bounds one version, this bounds a tenant's aggregate footprint so one team cannot pin idle pods and starve neighbours on a shared cluster. Enforced by refusing to create new warm pods, never by deleting a busy worker. Ignored while `warmPoolsEnabled` is false. |
+| execution.maxWorkerLifetime | string | `"1h"` | Wall-clock lifetime of a warm worker before it drains and recycles, independent of the attempt count (ADR 0058 D9). A Go duration string (`1h`, `30m`). Recycle is a graceful drain, never a mid-attempt kill. Ignored while `warmPoolsEnabled` is false. |
+| execution.minIdleWorkers | int | `0` | Warm workers kept ready per dag_version when a DAG declares no warmth of its own (ADR 0058 D6). `0` (default) is scale-to-zero: nothing idles until a DAG asks for it. Ignored while `warmPoolsEnabled` is false. |
+| execution.warmPoolsEnabled | bool | `false` | Reuse one warm pod across many attempts of a dag_version (ADR 0058). OFF = dedicated pod-per-task. Requires `auth.agentTokenTransport: exchange` AND `auth.secretLivenessMode: enforce`; the chart fails the render otherwise. Read ADR 0058's "Measurement & enable readiness" before enabling on a shared cluster — the go/no-go bar is stated in rates on a real cluster, not in unit tests. |
+| execution.workerIdleTtl | string | `"5m"` | How long an idle warm worker is kept before it is recycled (ADR 0058 D6). A Go duration string (`5m`, `90s`). This is also what drains the pool of a superseded dag_version after a deploy. Ignored while `warmPoolsEnabled` is false. |
+| extraEnv | list | `[]` | Extra environment variables appended to the control-plane container, for server settings this chart does not model as a first-class value (see `docs/configuration.md` for the full `LEOFLOW_*` surface). Standard K8s `env` entries, so `valueFrom` works, and a `value` is always rendered as a string (Kubernetes rejects a numeric one). Appended AFTER the chart-managed entries; do not use it to redefine one — the chart refuses to render an entry that shadows a variable whose value it guards (the warm-pool / agent-credential coupling). Example: `[{name: LEOFLOW_SCHEDULER_DISPATCH_WORKERS, value: "4"}]`. |
 | image.pullPolicy | string | `"IfNotPresent"` |  |
 | image.repository | string | `"ghcr.io/neochaotic/leoflow-server"` | Control-plane image. Published by GoReleaser on every tag, signed with cosign. |
 | image.tag | string | `""` | Image tag. Defaults to `.Chart.appVersion` when empty; pre-alpha installs should pin `--set image.tag=v0.0.1-prealpha.N` (the `v`-prefix and no-`v` forms are both published and resolve to the same digest, so either works). |
@@ -293,7 +383,7 @@ differ from what's committed.
 | podSecurityContext.runAsUser | int | `65532` |  |
 | podSecurityContext.seccompProfile.type | string | `"RuntimeDefault"` |  |
 | ports | object | `{"grpc":9091,"http":8080,"metrics":9090}` | Ports the leoflow-server listens on. http: API + UI, metrics: Prometheus /metrics, grpc: agent ↔ control plane channel (task pods dial back here). |
-| rbac.create | bool | `true` | Create the Role + RoleBinding the pod-per-task executor needs in `taskNamespace`: create/get/list/watch/delete on pods, get on pods/log, and create/delete on persistentvolumeclaims for the per-run staging volume (ADR 0022). The grant is checked against the executor's actual API calls by `scripts/rbac-covers-executor.sh` in CI, so this list cannot silently fall behind the code again. Set `false` only if you bring your own Role — and then that check does not protect you. |
+| rbac.create | bool | `true` | Create the Role + RoleBinding the pod-per-task executor needs in `taskNamespace`: create/get/list/watch/delete on pods, get on pods/log, create/delete on persistentvolumeclaims for the per-run staging volume (ADR 0022), and create/get/delete on configmaps for the warm-pool GC anchor (ADR 0058 D11). Additionally, when `auth.agentTokenTransport` is `exchange`, a ClusterRole + ClusterRoleBinding granting `create` on `authentication.k8s.io/tokenreviews` — cluster-scoped because the TokenReview API is, and the only cluster-scoped objects this chart creates. The grant is checked against the code's actual API calls by `scripts/rbac-covers-executor.sh` in CI, so this list cannot silently fall behind the code again. Set `false` only if you bring your own Role — and then that check does not protect you. |
 | redis.caConfigMap | string | `""` | Name of a ConfigMap with a `ca.crt` key containing the PEM CA bundle the client trusts when negotiating TLS to a `rediss://` URL (#312). Required when the managed-Redis server cert is signed by a provider / per-instance CA that is not in the system roots — Memorystore SERVER_AUTHENTICATION, ElastiCache in-transit encryption, Azure Cache for Redis. Mounted read-only at `/etc/leoflow/redis-ca` and exposed to the server via `LEOFLOW_REDIS_CA_FILE`. Leave empty when Redis uses a public CA or no TLS. |
 | redis.existingSecret | string | `""` | Name of a Secret with key `redisUrl` (takes precedence over `url`). |
 | redis.url | string | `""` | External Redis URI. Required for Pro (the embedded XCom is Lite-only). Example: `redis://host:6379/0`, or `rediss://host:6380/0` for TLS. |

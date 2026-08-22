@@ -99,6 +99,37 @@ while read -r method verb; do
 	fi
 done <<<"$calls"
 
+# The token-exchange transport's single apiserver call lives outside
+# internal/executor and outside CoreV1: the control plane submits a TokenReview to
+# authenticate a task pod's projected ServiceAccount token. TokenReview is
+# cluster-scoped, so it needs a ClusterRole the namespaced Role above can never
+# carry — and the chart shipped without one, which forbade the review and killed
+# every task pod on the exchange transport, warm pools or not. Same closed loop,
+# same direction: a call with no permission is an error.
+#
+# The grant is rendered only when the exchange transport is selected (it is an
+# authentication oracle; an env-var install never calls it), so the check renders
+# the chart a second time with the transport on.
+if grep -rqE 'AuthenticationV1\(\)\.TokenReviews\(\)\.Create\(' internal --include='*.go' \
+	--exclude='*_test.go'; then
+	exchange_rbac="$(helm template rbac-check "$CHART" \
+		--set database.url=postgres://h/d \
+		--set redis.url=redis://h/0 \
+		--set auth.jwtSecret=j \
+		--set agentTLS.serverCertSecret=cert \
+		--set agentTLS.caConfigMap=ca \
+		--set auth.agentTokenTransport=exchange \
+		--show-only templates/rbac.yaml 2>/dev/null)"
+	if echo "$exchange_rbac" | grep -q '"tokenreviews"' &&
+		echo "$exchange_rbac" | grep -q 'kind: ClusterRole'; then
+		echo "OK:   tokenreviews/create granted by a ClusterRole on the exchange transport"
+	else
+		echo "FAIL: the control plane submits a TokenReview but the chart grants no cluster-scoped tokenreviews/create" >&2
+		echo "      -> TokenReview is cluster-scoped: a namespaced Role cannot grant it. Add a ClusterRole + ClusterRoleBinding to $CHART/templates/rbac.yaml" >&2
+		fail=1
+	fi
+fi
+
 if [ "$fail" -ne 0 ]; then
 	echo >&2
 	echo "rbac-covers-executor: the chart's Role does not cover the executor's calls." >&2

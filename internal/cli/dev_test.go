@@ -207,17 +207,22 @@ func TestDevPrintHelpers(t *testing.T) {
 
 func TestRunDevValidatesProject(t *testing.T) {
 	cmd := devTestCmd()
-	// Missing leoflow.yaml.
-	if err := runDev(cmd, t.TempDir(), devOptions{}); err == nil {
-		t.Error("expected error for a project without leoflow.yaml")
-	}
-	// Present but invalid (missing dag_id).
+	// A discoverable project (it has a dag.py) whose leoflow.yaml is invalid: an
+	// unknown alert type the schema rejects. runDev validates every project up
+	// front — prepareWorkspace is its first step — so it must refuse before it
+	// touches any infrastructure. This stays at the validation gate on purpose:
+	// letting runDev proceed would start Postgres and a companion server and hang
+	// the test, exactly the host-dependent boot that hid behind the #699 panic.
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte("description: x\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "dag.py"), []byte("# dag\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	invalid := "dag_id: sales\nalerts:\n  on_failure:\n    - type: carrier-pigeon\n      conn: x\n"
+	if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte(invalid), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := runDev(cmd, dir, devOptions{}); err == nil {
-		t.Error("expected validation error for missing dag_id")
+		t.Error("expected runDev to refuse a project with an invalid leoflow.yaml")
 	}
 }
 
@@ -677,6 +682,20 @@ func TestResolveBinaryIgnoresDirectories(t *testing.T) {
 	}
 	if _, err := resolveBinary("", name); err == nil {
 		t.Error("a directory with the binary's name must not resolve as the binary")
+	}
+}
+
+// TestCompanionVersionNilContextDoesNotPanic locks the #699 regression: the
+// best-effort companion version check must never panic the CLI. A nil parent
+// reaching context.WithTimeout aborts ("cannot create context from nil parent")
+// and takes the whole internal/cli test binary down with it, hiding every other
+// test in the package. companionVersion is documented best-effort, so an
+// unresolvable binary simply yields "" — never a panic.
+func TestCompanionVersionNilContextDoesNotPanic(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "leoflow-server")
+	//nolint:staticcheck // SA1012: passing a nil context is exactly the guarded case under test.
+	if got := companionVersion(nil, missing); got != "" {
+		t.Errorf("companionVersion with a nil context: got %q, want \"\"", got)
 	}
 }
 

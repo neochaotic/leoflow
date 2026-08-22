@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/taskoutcome"
 )
 
 // synthID derives a stable synthetic identifier from composite key parts, for UI
@@ -182,6 +183,12 @@ type taskInstanceDTO struct {
 	Trigger          *string         `json:"trigger"`
 	TriggererJob     *string         `json:"triggerer_job"`
 	DagVersion       *dagVersionDTO  `json:"dag_version"`
+	// FailureReason is a Leoflow EXTENSION, not an Airflow field: a short,
+	// human-readable cause for a terminal failure. It is additive — the Airflow
+	// SPA ignores fields it does not know — and exists because an attempt whose
+	// agent died before it ever registered streams no logs, leaving "failed" with
+	// no cause anywhere reachable from the API. Null when no cause was observed.
+	FailureReason *string `json:"failure_reason"`
 }
 
 type taskInstanceCollectionDTO struct {
@@ -236,7 +243,25 @@ func toTaskInstanceDTO(ti domain.TaskInstance) taskInstanceDTO {
 		Note:           strPtrOrNil(ti.Note),
 		ScheduledWhen:  ti.ScheduledAt,
 		QueuedWhen:     ti.QueuedAt,
+		FailureReason:  failureReasonPtr(ti.FailureReason),
 	}
+}
+
+// maxFailureReasonLen bounds the reason served to clients. The stored cause can
+// originate from a task's own reported error message, which is unbounded text
+// from inside the pod; a run listing serves up to a thousand instances at once,
+// so an unbounded field would let one pathological task bloat every response.
+const maxFailureReasonLen = 1024
+
+// failureReasonPtr renders the failure reason for the wire: nil when no cause was
+// observed (never an empty string masquerading as an answer), truncated on a rune
+// boundary otherwise so the response stays bounded and valid UTF-8.
+func failureReasonPtr(reason string) *string {
+	if reason == "" {
+		return nil
+	}
+	bounded := taskoutcome.TruncateReason(reason, maxFailureReasonLen)
+	return &bounded
 }
 
 // renderedMapIndex returns nil for an unmapped task (-1), else the index string.

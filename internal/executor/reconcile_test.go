@@ -284,3 +284,94 @@ func TestReconcileGarbageCollectsOldTerminalPods(t *testing.T) {
 		t.Errorf("recent and running pods must be kept, remaining: %v", remaining)
 	}
 }
+
+// podTerminated builds a pod whose task container terminated with the given
+// reason/exit code, the shape Kubernetes reports for an OOM kill, a non-zero
+// exit, or a container the kubelet could not keep alive.
+func podTerminated(reason string, exitCode int32, podReason string) *corev1.Pod {
+	return &corev1.Pod{Status: corev1.PodStatus{
+		Phase:  corev1.PodFailed,
+		Reason: podReason,
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name: taskContainerName,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				Reason: reason, ExitCode: exitCode,
+			}},
+		}},
+	}}
+}
+
+// TestClassifyPodSurfacesAgentBootstrapReason is the heart of the
+// operator-blindness fix: when the agent died before registering but managed to
+// classify why, that classification — not a generic "pod failed" — is what the
+// task instance is failed with.
+func TestClassifyPodSurfacesAgentBootstrapReason(t *testing.T) {
+	const reason = "the control plane rejected this pod's projected ServiceAccount token; check RBAC."
+	enc, err := taskoutcome.FailedBecause(reason).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodFailed,
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name:  taskContainerName,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: enc, ExitCode: 1}},
+		}},
+	}}
+	got := classifyPod(pod)
+	if got.settle != settleFailed {
+		t.Fatalf("settle = %v, want settleFailed", got.settle)
+	}
+	if got.reason != reason {
+		t.Errorf("reason = %q, want the agent's classification %q", got.reason, reason)
+	}
+}
+
+// TestPodFailureReasonNamesTheKubernetesCause covers the failures the agent can
+// never report because it never ran: the reason must name what Kubernetes saw
+// instead of collapsing to "pod failed".
+func TestPodFailureReasonNamesTheKubernetesCause(t *testing.T) {
+	cases := []struct {
+		name string
+		pod  *corev1.Pod
+		want string
+	}{
+		{"oom killed", podTerminated("OOMKilled", 137, ""), "OOMKilled"},
+		{"non-zero exit", podTerminated("Error", 43, ""), "exit 43"},
+		{"evicted", podPhase(corev1.PodFailed), "pod failed"},
+		{"pod level reason", &corev1.Pod{Status: corev1.PodStatus{
+			Phase: corev1.PodFailed, Reason: "Evicted",
+		}}, "Evicted"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := podFailureReason(c.pod); !strings.Contains(got, c.want) {
+				t.Errorf("podFailureReason = %q, want it to mention %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestPodFailureReasonIsBounded keeps a hostile or runaway kubelet message from
+// becoming an unbounded string on an end-user-visible field.
+func TestPodFailureReasonIsBounded(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		Phase:  corev1.PodFailed,
+		Reason: strings.Repeat("x", 5000),
+	}}
+	if got := podFailureReason(pod); len(got) > taskoutcome.MaxReasonLen {
+		t.Errorf("podFailureReason is %d bytes, over the %d cap", len(got), taskoutcome.MaxReasonLen)
+	}
+}
+
+// TestPodWaitingReasonExplainsItself keeps the unrecoverable-waiting reasons from
+// reaching the operator as a bare Kubernetes enum with no guidance.
+func TestPodWaitingReasonExplainsItself(t *testing.T) {
+	got := classifyPod(podWaiting("ImagePullBackOff"))
+	if !strings.Contains(got.reason, "ImagePullBackOff") {
+		t.Errorf("reason = %q, want it to name the waiting reason", got.reason)
+	}
+	if !strings.Contains(got.reason, "image") {
+		t.Errorf("reason = %q, want operator-facing context about the image", got.reason)
+	}
+}

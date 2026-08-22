@@ -279,3 +279,103 @@ func TestLogsReadBadTryNumber(t *testing.T) {
 		t.Errorf("non-integer try_number = %d, want 400", rec.Code)
 	}
 }
+
+// logsServerWithTasks builds a logs-serving engine over a task repository, so the
+// no-logs path can consult the attempt's recorded failure reason.
+func logsServerWithTasks(reader LogReader, tasks TaskInstanceRepository) *gin.Engine {
+	return NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		Tasks:         tasks,
+		Logs:          reader,
+	})
+}
+
+// TestNoLogsSurfacesTheFailureReason is the operator-facing half of the fix: an
+// attempt whose agent died before it streamed anything used to render a bare
+// "No logs available for this attempt." — a dead end that sent operators to
+// `kubectl logs`. When the control plane recorded WHY, the log view says so.
+func TestNoLogsSurfacesTheFailureReason(t *testing.T) {
+	const reason = "the control plane rejected this pod's projected ServiceAccount token."
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{{
+		TaskID: "extract", TryNumber: 1, State: domain.TaskStateFailed, FailureReason: reason,
+	}}}
+	rec := authGet(logsServerWithTasks(&fakeLogReader{err: domain.ErrNotFound}, tasks), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/logs/1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("no-logs = %d, want graceful 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), reason) {
+		t.Errorf("no-logs body must carry the recorded cause, got %q", rec.Body.String())
+	}
+}
+
+// TestNoLogsStructuredSurfacesTheFailureReason covers the format the SPA actually
+// requests: the reason must arrive as an error-level event, not only plain text.
+func TestNoLogsStructuredSurfacesTheFailureReason(t *testing.T) {
+	const reason = "the task container was OOMKilled (exit 137); raise the task's memory limit."
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{{
+		TaskID: "extract", TryNumber: 2, State: domain.TaskStateFailed, FailureReason: reason,
+	}}}
+	srv := logsServerWithTasks(&fakeLogReader{err: domain.ErrNotFound}, tasks)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/logs/2", http.NoBody)
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	var got struct {
+		Content []struct {
+			Event string `json:"event"`
+			Level string `json:"level"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, e := range got.Content {
+		if strings.Contains(e.Event, reason) {
+			found = true
+			if e.Level != "error" {
+				t.Errorf("the failure reason event level = %q, want %q", e.Level, "error")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("structured no-logs response must carry the cause, got %+v", got.Content)
+	}
+}
+
+// TestNoLogsForOtherAttemptDoesNotBorrowAReason keeps the reason pinned to its
+// own attempt: try 1's empty log view must not display try 2's failure.
+func TestNoLogsForOtherAttemptDoesNotBorrowAReason(t *testing.T) {
+	const reason = "the task container was OOMKilled (exit 137)."
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{{
+		TaskID: "extract", TryNumber: 2, State: domain.TaskStateFailed, FailureReason: reason,
+	}}}
+	rec := authGet(logsServerWithTasks(&fakeLogReader{err: domain.ErrNotFound}, tasks), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/logs/1", "")
+	if strings.Contains(rec.Body.String(), reason) {
+		t.Errorf("attempt 1 borrowed attempt 2's failure reason: %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "No logs available") {
+		t.Errorf("expected the plain no-logs message, got %q", rec.Body.String())
+	}
+}
+
+// TestNoLogsWithoutAReasonKeepsTheOriginalMessage: when nothing was observed, the
+// view stays exactly as it was rather than inventing a cause.
+func TestNoLogsWithoutAReasonKeepsTheOriginalMessage(t *testing.T) {
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{{
+		TaskID: "extract", TryNumber: 1, State: domain.TaskStateSuccess,
+	}}}
+	rec := authGet(logsServerWithTasks(&fakeLogReader{err: domain.ErrNotFound}, tasks), http.MethodGet,
+		"/api/v2/dags/etl/dagRuns/run-1/taskInstances/extract/logs/1", "")
+	if !strings.Contains(rec.Body.String(), "No logs available") {
+		t.Errorf("expected the plain no-logs message, got %q", rec.Body.String())
+	}
+}

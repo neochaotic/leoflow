@@ -98,15 +98,25 @@ func run() int {
 	// which the agent exchanges once for a task-scoped JWT after dialing. The
 	// default env-var transport leaves the path unset and uses LEOFLOW_AGENT_TOKEN
 	// directly (byte-identical to before).
+
+	// Every exit below happens BEFORE the agent registers with the control plane,
+	// so nothing it logs here is ever shipped and the task streams no logs at all.
+	// The container termination message is the only channel left: a classified
+	// reason written there reaches the reconciler, which records it against the
+	// attempt. Without it the operator sees "failed" with no cause anywhere.
+	terminationLog := os.Getenv("LEOFLOW_TERMINATION_LOG_PATH")
+
 	token, exchange, berr := bootstrapToken()
 	if berr != nil {
 		slog.Error("reading projected bootstrap token", "error", berr)
+		agent.ReportBootstrapFailure(terminationLog, agent.StageToken, berr)
 		return 1
 	}
 
 	client, conn, tokens, err := agent.Dial(addr, token, allowInsecure, caFile)
 	if err != nil {
 		slog.Error("connecting to control plane", "error", err)
+		agent.ReportBootstrapFailure(terminationLog, agent.StageDial, err)
 		return 1
 	}
 	defer func() {
@@ -133,6 +143,7 @@ func run() int {
 	if exchange {
 		if xerr := agent.ExchangeToken(ctx, client, tokens); xerr != nil {
 			slog.Error("exchanging bootstrap token for a task-scoped credential", "error", xerr)
+			agent.ReportBootstrapFailure(terminationLog, agent.StageExchange, xerr)
 			return 1
 		}
 	}

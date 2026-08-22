@@ -717,7 +717,7 @@ func taskInstanceActionHandler(tasks TaskInstanceRepository, logs LogReader, xco
 				AbortProblem(c, http.StatusBadRequest, "bad request", "try_number must be an integer")
 				return
 			}
-			serveLogs(c, logs, try)
+			serveLogs(c, logs, tasks, try)
 			return
 		}
 		if xcoms != nil {

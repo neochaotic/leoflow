@@ -6,6 +6,39 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A failed task now says why, even when it produced no logs (#698).** When a
+  task pod died before its agent ever registered with the control plane — bad
+  RBAC, a TLS trust failure, a network policy, image-pull auth, or an OOM at
+  startup — the API reported `"state": "failed"`, `"hostname": "unknown"` and no
+  cause of any kind, and the UI showed `No logs available for this attempt.`
+  (correct, since nothing ever streamed). Diagnosing it required `kubectl logs`
+  against the cluster, so an operator without cluster access could not diagnose
+  it at all. Three changes close that blind spot:
+  - Task instances now expose a **`failure_reason`** field (a Leoflow extension;
+    the `/api/v2/` Airflow surface is unchanged and purely additive). The cause
+    was already recorded in `task_instances.error_message` by the reapers and the
+    reconciler, but was dropped before it reached the domain model or the API.
+  - The agent now classifies a failure it hits **before registering** and leaves
+    it on the container termination message, which the reconciler already reads —
+    so a refused bootstrap token exchange, an unreachable control plane, or an
+    unreadable projected token becomes a reason on the attempt instead of a
+    silently discarded server-side log line. The reason is drawn from a closed
+    set of operator-facing classifications; a raw internal error or a credential
+    is never echoed into this end-user-visible field.
+  - Failures only Kubernetes can see are described precisely rather than as a
+    bare `pod failed`: the task container's terminated reason and exit code
+    (including `OOMKilled`), the pod-level reason (e.g. `Evicted`), and the
+    unrecoverable waiting reasons (`ImagePullBackOff`, `CreateContainerError`, …)
+    now carry the context that makes them actionable.
+
+  The reason is also appended to the otherwise-empty log view as an error-level
+  event, so the cause appears where an operator is already looking. It is
+  best-effort and diagnostic only: it is null when nothing observed a cause, it
+  is bounded in length, and it does not change retry accounting or any state
+  transition.
+
 ### Changed
 
 - **Task pods now run as non-root by default (behavior change; breaking for root

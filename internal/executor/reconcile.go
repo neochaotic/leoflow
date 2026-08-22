@@ -84,7 +84,7 @@ func classifyPod(pod *corev1.Pod) verdict {
 	case corev1.PodPending, corev1.PodRunning, corev1.PodUnknown:
 		for _, cs := range pod.Status.ContainerStatuses {
 			if w := cs.State.Waiting; w != nil && unrecoverableWaiting[w.Reason] {
-				return verdict{terminal: true, settle: settleFailed, reason: w.Reason}
+				return verdict{terminal: true, settle: settleFailed, reason: waitingFailureReason(w.Reason)}
 			}
 		}
 		return verdict{terminal: false}
@@ -108,20 +108,81 @@ func outcomeRecord(pod *corev1.Pod) (taskoutcome.Record, bool) {
 	return taskoutcome.Record{}, false
 }
 
-// recordFailureReason renders a failure reason from an outcome record, naming the
-// exit code when the record carries one.
+// recordFailureReason renders a failure reason from an outcome record. A record
+// carrying an explicit classification (a failure the agent diagnosed before it
+// could report anything, e.g. a refused bootstrap) wins: it is the only
+// description of a cause the control plane cannot otherwise observe. Otherwise
+// the reason names the exit code, as before.
 func recordFailureReason(rec taskoutcome.Record) string {
+	if rec.Reason != "" {
+		return rec.Reason
+	}
 	if rec.ExitCode != nil {
 		return fmt.Sprintf("task failed (exit %d)", *rec.ExitCode)
 	}
 	return "task failed"
 }
 
+// podFailureReason describes a failed pod from what Kubernetes observed, for the
+// failures no agent can ever report because it never ran — an image that would
+// not pull, an OOM kill at startup, an evicted or node-lost pod. Without this the
+// operator sees a task that failed with no cause anywhere: the pod is gone, and
+// there are no logs because nothing ever streamed.
+//
+// It prefers the most specific signal available: the task container's terminated
+// reason and exit code, then the pod-level reason, then a plain fallback. Every
+// result is bounded — the strings are copied from kubelet-supplied fields, which
+// are an untrusted, unbounded source for a value that ends up end-user visible.
 func podFailureReason(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != taskContainerName {
+			continue
+		}
+		t := cs.State.Terminated
+		if t == nil {
+			continue
+		}
+		switch {
+		case t.Reason == "OOMKilled":
+			return boundReason(fmt.Sprintf(
+				"the task container was OOMKilled (exit %d); raise the task's memory limit.", t.ExitCode))
+		case t.Reason != "" && t.Reason != "Error":
+			return boundReason(fmt.Sprintf("the task container terminated: %s (exit %d).", t.Reason, t.ExitCode))
+		case t.ExitCode != 0:
+			return boundReason(fmt.Sprintf("the task container exited with exit %d.", t.ExitCode))
+		}
+	}
 	if pod.Status.Reason != "" {
-		return pod.Status.Reason
+		return boundReason(fmt.Sprintf("the task pod failed: %s.", pod.Status.Reason))
 	}
 	return "pod failed"
+}
+
+// waitingFailureReason explains a container stuck in an unrecoverable waiting
+// state. It names the Kubernetes reason (what an operator greps for and what
+// `kubectl describe` shows) and adds the context that makes it actionable, since
+// the bare enum alone is what left operators reaching for kubectl.
+func waitingFailureReason(reason string) string {
+	switch reason {
+	case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
+		return boundReason(fmt.Sprintf(
+			"%s: the task image could not be pulled; check the image reference and the pull secret.", reason))
+	case "CreateContainerError":
+		return boundReason(fmt.Sprintf(
+			"%s: the task container could not be created; check the pod spec, mounts, and image entrypoint.", reason))
+	case "CrashLoopBackOff":
+		return boundReason(fmt.Sprintf(
+			"%s: the task container keeps exiting at startup; inspect the task image entrypoint.", reason))
+	default:
+		return boundReason(reason)
+	}
+}
+
+// boundReason clamps a reason to the outcome record's cap. The cap applies here
+// too because these reasons land in the same end-user-visible field as the
+// agent's own classifications, and they are copied from kubelet-supplied fields.
+func boundReason(reason string) string {
+	return taskoutcome.TruncateReason(reason, taskoutcome.MaxReasonLen)
 }
 
 // tryNumberOf reads the attempt the pod ran, from the leoflow.io/try-number label

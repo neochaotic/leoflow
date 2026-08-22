@@ -7,10 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/neochaotic/leoflow/internal/logs"
+	"github.com/neochaotic/leoflow/internal/taskoutcome"
 )
 
 // LogReader streams a task attempt's stored logs and, for running tasks, tails
@@ -23,7 +25,10 @@ type LogReader interface {
 // serveLogs streams the stored logs for a task attempt and, when follow=true,
 // tails live lines. The caller has already parsed the try number (the route is a
 // catch-all shared with the single task-instance endpoint).
-func serveLogs(c *gin.Context, reader LogReader, try int) {
+//
+// tasks is consulted only on the no-logs path, to explain an empty log view; it
+// may be nil, which keeps that view exactly as it was.
+func serveLogs(c *gin.Context, reader LogReader, tasks TaskInstanceRepository, try int) {
 	if reader == nil {
 		AbortProblem(c, http.StatusNotFound, "not found", "logs are not available")
 		return
@@ -34,7 +39,7 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 		// No stored logs for this attempt (e.g. it never ran, or the logs aged
 		// out / predate a backend change). Serve a graceful "no logs" rather than
 		// a 404 the UI renders as a broken page.
-		serveNoLogs(c)
+		serveNoLogs(c, tasks, try)
 		return
 	}
 	if err != nil {
@@ -78,23 +83,62 @@ func serveLogs(c *gin.Context, reader LogReader, try int) {
 
 // serveNoLogs renders an empty-but-valid log response (200) when no logs exist
 // for an attempt, so the UI shows "no logs" instead of erroring.
-func serveNoLogs(c *gin.Context) {
+//
+// An empty log view is the operator's dead end for the worst failure class: an
+// agent that died before it registered streams nothing, so "No logs available"
+// is literally true and completely unhelpful. Where the control plane observed a
+// cause, it is appended here as an error-level event — the log view is the one
+// place in the stock Airflow UI an operator is already looking when an attempt
+// failed with nothing to show.
+func serveNoLogs(c *gin.Context, tasks TaskInstanceRepository, try int) {
 	const msg = "No logs available for this attempt."
-	event := structuredLogEvent{Event: msg, Level: "info"}
+	events := []structuredLogEvent{{Event: msg, Level: "info"}}
+	if reason := attemptFailureReason(c, tasks, try); reason != "" {
+		events = append(events, structuredLogEvent{Event: reason, Level: "error"})
+	}
 	switch negotiateLogFormat(c) {
 	case logFormatNDJSON:
 		c.Header("Content-Type", "application/x-ndjson")
 		c.Status(http.StatusOK)
-		writeNdjson(c, []structuredLogEvent{event})
+		writeNdjson(c, events)
 		return
 	case logFormatJSON:
-		c.JSON(http.StatusOK, structuredLogResponse{Content: []structuredLogEvent{event}, ContinuationToken: nil})
+		c.JSON(http.StatusOK, structuredLogResponse{Content: events, ContinuationToken: nil})
 		return
 	case logFormatPlain:
 		// fall through to the plain-text message below.
 	}
 	c.Header("Content-Type", "text/plain; charset=utf-8")
-	c.String(http.StatusOK, msg+"\n")
+	var body strings.Builder
+	for _, e := range events {
+		body.WriteString(e.Event)
+		body.WriteByte('\n')
+	}
+	c.String(http.StatusOK, body.String())
+}
+
+// attemptFailureReason returns the recorded cause for exactly this attempt, or ""
+// when there is none, the repository is absent, or the lookup fails. It is purely
+// explanatory, so every uncertain path degrades to the plain no-logs view.
+//
+// It matches on try_number rather than taking the task's current reason: a task
+// that failed on try 2 must not make try 1's empty log view claim a cause that
+// belongs to a different attempt.
+func attemptFailureReason(c *gin.Context, tasks TaskInstanceRepository, try int) string {
+	if tasks == nil {
+		return ""
+	}
+	attempts, err := tasks.ListTaskInstanceAttempts(c.Request.Context(), tenantOf(c),
+		c.Param("dag_id"), c.Param("dag_run_id"), c.Param("task_id"))
+	if err != nil {
+		return ""
+	}
+	for _, a := range attempts {
+		if a.TryNumber == try && a.FailureReason != "" {
+			return taskoutcome.TruncateReason(a.FailureReason, maxFailureReasonLen)
+		}
+	}
+	return ""
 }
 
 // tailLogs streams live log lines to the client until the task stops producing

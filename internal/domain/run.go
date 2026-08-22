@@ -65,4 +65,16 @@ type TaskInstance struct {
 	// Note is operational context shown in the UI's task panel — e.g. why a task
 	// is queued but not running (no executor available).
 	Note string
+	// FailureReason is a short, human-readable cause for a terminal failure,
+	// recorded by whichever component observed it: the agent's own report, the
+	// reconciler reading the pod (image pull, OOM, exit code), a reaper declaring
+	// the pod or agent lost, or the agent's pre-registration classification. It is
+	// the answer to "why did this fail?" for an attempt that streamed no logs
+	// because its agent never started — the case where the only remaining source
+	// of truth used to be `kubectl logs` against the cluster.
+	//
+	// It is best-effort and often empty: a healthy instance has none, and a cause
+	// nobody observed cannot be invented. It carries a classification, never a
+	// credential or a raw internal error.
+	FailureReason string
 }

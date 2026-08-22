@@ -480,6 +480,10 @@ func (r *Repository) ListTaskInstanceAttempts(ctx context.Context, tenant, dagID
 			Duration:    row.DurationSeconds,
 			Hostname:    strOrEmpty(row.Hostname),
 			Note:        strOrEmpty(row.Note),
+			// The attempts view is where an operator opens a specific failed try, so
+			// it must carry the same cause the run-level list does. The UNION already
+			// selects error_message from both history and the live row.
+			FailureReason: strOrEmpty(row.ErrorMessage),
 		})
 	}
 	return out, nil

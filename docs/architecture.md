@@ -9,10 +9,18 @@ flowchart LR
   subgraph CP["Control plane (Go)"]
     API[HTTP API /api/v2, /ui] --- SCH[Scheduler<br/>state machine]
     SCH --- EXR[Executor router]
+    SCH --- REC[Warm-pool reconciler<br/>+ slot index]
   end
-  EXR -->|client-go| K8S[(Kubernetes<br/>pod-per-task)]
+  EXR -->|"client-go · pod-per-task"| K8S[(Kubernetes)]
   EXR -->|dev| SUB[Subprocess]
   K8S --> POD[Worker pod<br/>agent ⇄ gRPC ⇄ user code]
+  REC -. "Pro · warm pools ON" .-> WP
+  subgraph WP["Warm pool · per dag_version"]
+    W1[Warm worker pod]
+    W2[Warm worker pod]
+  end
+  W1 <-->|"AwaitAssignment (bidi gRPC)<br/>lease · ack · reclaim"| SCH
+  POD -. "token transport<br/>envvar | exchange" .- API
   CP --- PG[(Postgres<br/>metadata + Lite XCom/locks)]
   CP -. Pro only .- RD[(Redis<br/>XCom + locks)]
 ```
@@ -35,6 +43,32 @@ On **Pro**, Redis stores XCom (≤256 KB) and the multi-node locks.
 **Stack:** Go 1.26 · Gin · sqlc/pgx · golang-migrate · client-go · gRPC ·
 log/slog · Prometheus · OpenTelemetry · Cobra · Viper. Python only in the DAG
 parser sidecar and inside user task containers.
+
+## Execution: dedicated pods, warm pools, and the token transport
+
+By default each task attempt runs in its **own** pod ([ADR 0002](adr/0002-pod-per-task.md)) —
+maximal isolation, at the cost of re-paying cold start every attempt. Two Pro
+features change how the executor and the agent credential behave, both **off by
+default** so a stock deployment is byte-for-byte the historical path:
+
+- **Warm worker pools** ([ADR 0058](adr/0058-warm-worker-pools.md), behind
+  `execution.warm_pools_enabled`) reuse **one pod across many attempts of the same
+  DAG version** to amortize the infrastructure cold start. A **warm-pool reconciler**
+  behind the execution seam keeps a target number of warm pods ready per DAG version
+  and owns an in-memory slot index over Postgres truth; each warm pod holds a
+  long-lived bidirectional gRPC stream (`AwaitAssignment`) over which the scheduler
+  **leases** a slot, the worker **acks** (writing a durable binding), and lost or
+  capped workers are **reclaimed**. There is no new controller — the existing
+  single-leader scheduler owns it. See [Warm worker pools](warm-pools.md).
+- **The agent credential transport** ([ADR 0055](adr/0055-secret-scoping-and-token-liveness.md),
+  behind `auth.agent_token_transport`) selects how the in-pod agent obtains its
+  bearer credential: `envvar` (a plaintext token on the pod spec — today's default)
+  or `exchange` (a projected ServiceAccount token the control plane validates once
+  via a Kubernetes `TokenReview`, then swaps for a task-scoped JWT — nothing secret
+  on the pod object). The exchange transport carries a **per-attempt** identity,
+  which is what makes pod reuse safe; warm pools therefore **require** it (plus
+  liveness enforcement), validated at boot. See
+  [Agent credential transport](agent-credential-transport.md).
 
 ## Map-reduce (fan-in) data flow
 

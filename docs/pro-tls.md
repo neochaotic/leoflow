@@ -16,6 +16,42 @@ gRPC. In Pro that channel **must be TLS** — the server refuses to boot without
     **must** use under **GitOps** (ArgoCD/Flux), where cluster-less rendering
     can't `lookup` the existing Secret and auto-gen is unsafe.
 
+## How the trust flows
+
+The channel is **one-way (server) TLS**, not mutual mTLS: the **agent verifies the
+server**, and the agent's own identity is its **bearer token**
+([agent credential transport](agent-credential-transport.md)), never a client cert.
+So provisioning a cert is only ever about the *server* side of the handshake.
+
+```mermaid
+flowchart LR
+  subgraph CHART["Helm chart (agentTLS.autoGenerate: true)"]
+    CA["Self-signed CA<br/>(generated once,<br/>reused across upgrades via lookup)"]
+    CA -->|signs| LEAF["Server cert<br/>(Service DNS SANs)"]
+  end
+  LEAF --> SEC[("Server cert Secret<br/>tls.crt / tls.key")]
+  CA --> CM[("CA ConfigMap<br/>ca.crt")]
+  SEC -->|mounted| CP["Control plane<br/>(gRPC server, TLS on)"]
+  CM -->|mounted| POD["Task pod"]
+  POD --> AG["Agent"]
+  AG -->|"verifies server cert<br/>against ca.crt (one-way TLS)"| CP
+```
+
+On a default install the chart **auto-generates** the CA and server cert itself:
+the CA signs the server leaf (carrying the control-plane Service DNS as SANs), the
+leaf lands in the server cert Secret the control plane mounts, and the CA's
+`ca.crt` lands in a ConfigMap every task pod mounts so the agent can verify the
+server. The material is generated **once and reused on every `helm upgrade`** (the
+chart reads the existing objects via Helm `lookup`), so the CA never rotates and
+running agents keep trusting it. That is why a fresh cluster installs with TLS on
+and **no cert-manager and no pre-created Secret** — see the
+[Quickstart](installation.md#quickstart-one-command-any-cloud).
+
+The rest of this page is the **opt-in production path** — cert-manager-issued (or
+externally-rooted) certs with automatic rotation — and the **required** path under
+GitOps, where a cluster-less `helm template` render cannot `lookup` the live Secret
+and auto-gen would rotate the CA on every sync.
+
 Setting `agentTLS.serverCertSecret` **and** `agentTLS.caConfigMap` makes the
 chart use them verbatim and skip auto-generation. The clean way to provision
 that cert is [cert-manager](https://cert-manager.io).

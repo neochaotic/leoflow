@@ -108,6 +108,8 @@ nav:
       - Upgrades: upgrades.md
       - Backup & restore: backup-restore.md
       - Scheduler resilience: scheduler-resilience.md
+      - Warm worker pools: warm-pools.md
+      - Agent credential transport: agent-credential-transport.md
       - Concepts & glossary: concepts.md
       - Architecture: architecture.md
   - Authoring & deploy:

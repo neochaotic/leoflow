@@ -278,19 +278,24 @@ type HealthInfo struct {
 
 // TaskInstance defines model for TaskInstance.
 type TaskInstance struct {
-	DagId     *string            `json:"dag_id,omitempty"`
-	DagRunId  *string            `json:"dag_run_id,omitempty"`
-	Duration  *float32           `json:"duration,omitempty"`
-	EndDate   *time.Time         `json:"end_date,omitempty"`
-	Hostname  *string            `json:"hostname,omitempty"`
-	MapIndex  *int               `json:"map_index,omitempty"`
-	MaxTries  *int               `json:"max_tries,omitempty"`
-	Operator  *string            `json:"operator,omitempty"`
-	Pool      *string            `json:"pool,omitempty"`
-	StartDate *time.Time         `json:"start_date,omitempty"`
-	State     *TaskInstanceState `json:"state,omitempty"`
-	TaskId    *string            `json:"task_id,omitempty"`
-	TryNumber *int               `json:"try_number,omitempty"`
+	DagId    *string    `json:"dag_id,omitempty"`
+	DagRunId *string    `json:"dag_run_id,omitempty"`
+	Duration *float32   `json:"duration,omitempty"`
+	EndDate  *time.Time `json:"end_date,omitempty"`
+
+	// FailureReason Leoflow extension (not part of the Airflow API). A short, human-readable cause for a terminal failure, recorded by whichever component observed it: the task's own report, the reconciler reading the pod (image pull, OOM, exit code), a reaper declaring the pod or agent lost, or the agent's classification of a failure that happened before it could register. It answers "why did this fail?" for an attempt that streamed no logs because its agent never started. Null when no cause was observed. Best-effort and diagnostic: it carries a classification, never a credential or a raw internal error.
+	//
+	// Example: the control plane rejected this pod's projected ServiceAccount token; check the control plane's RBAC for tokenreviews and the configured token audience.
+	FailureReason *string            `json:"failure_reason,omitempty"`
+	Hostname      *string            `json:"hostname,omitempty"`
+	MapIndex      *int               `json:"map_index,omitempty"`
+	MaxTries      *int               `json:"max_tries,omitempty"`
+	Operator      *string            `json:"operator,omitempty"`
+	Pool          *string            `json:"pool,omitempty"`
+	StartDate     *time.Time         `json:"start_date,omitempty"`
+	State         *TaskInstanceState `json:"state,omitempty"`
+	TaskId        *string            `json:"task_id,omitempty"`
+	TryNumber     *int               `json:"try_number,omitempty"`
 }
 
 // TaskInstanceState defines model for TaskInstance.State.

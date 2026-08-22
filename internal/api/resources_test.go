@@ -746,3 +746,66 @@ func TestListDagsLinkHeader(t *testing.T) {
 		t.Errorf("Link = %q, want a next relation", link)
 	}
 }
+
+// TestTaskInstanceDTOCarriesFailureReason locks the new, ADDITIVE field: a failed
+// attempt whose agent never streamed a line must still tell an operator why,
+// without them needing cluster access.
+func TestTaskInstanceDTOCarriesFailureReason(t *testing.T) {
+	const reason = "the control plane rejected this pod's projected ServiceAccount token."
+	dto := toTaskInstanceDTO(domain.TaskInstance{
+		TaskID: "extract", DagID: "etl", RunID: "r1", MapIndex: -1,
+		State: domain.TaskStateFailed, FailureReason: reason,
+	})
+	if dto.FailureReason == nil {
+		t.Fatal("a failed instance with a recorded cause must expose failure_reason")
+	}
+	if *dto.FailureReason != reason {
+		t.Errorf("failure_reason = %q, want %q", *dto.FailureReason, reason)
+	}
+}
+
+// TestTaskInstanceDTOFailureReasonNullWhenUnknown keeps the field honest: a
+// healthy instance, or a failure nobody observed, must serialize null rather
+// than an invented cause.
+func TestTaskInstanceDTOFailureReasonNullWhenUnknown(t *testing.T) {
+	dto := toTaskInstanceDTO(domain.TaskInstance{
+		TaskID: "extract", State: domain.TaskStateSuccess,
+	})
+	if dto.FailureReason != nil {
+		t.Errorf("failure_reason = %q, want null for an instance with no recorded cause", *dto.FailureReason)
+	}
+}
+
+// TestTaskInstanceResponseStaysAirflowCompatible is the contract tripwire: the
+// new field must be purely additive. Every field the Airflow 3.2.x
+// TaskInstanceResponse requires has to remain present with its existing name, or
+// the SPA breaks on a data contract it cannot negotiate.
+func TestTaskInstanceResponseStaysAirflowCompatible(t *testing.T) {
+	dto := toTaskInstanceDTO(domain.TaskInstance{
+		TaskID: "extract", DagID: "etl", RunID: "r1", MapIndex: -1,
+		State: domain.TaskStateFailed, FailureReason: "boom",
+	})
+	raw, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"id", "task_id", "dag_id", "dag_run_id", "map_index", "logical_date",
+		"start_date", "end_date", "duration", "state", "try_number", "max_tries",
+		"task_display_name", "dag_display_name", "hostname", "unixname", "pool",
+		"pool_slots", "queue", "priority_weight", "operator", "queued_when",
+		"pid", "executor", "executor_config", "note", "rendered_fields",
+		"rendered_map_index", "trigger", "triggerer_job", "dag_version",
+	} {
+		if _, ok := got[required]; !ok {
+			t.Errorf("Airflow-required field %q disappeared from the task instance response", required)
+		}
+	}
+	if _, ok := got["failure_reason"]; !ok {
+		t.Error("failure_reason must be present on the response")
+	}
+}

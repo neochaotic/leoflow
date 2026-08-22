@@ -119,6 +119,10 @@ func mapTaskInstance(ti queries.TaskInstance, dagID, runID string) domain.TaskIn
 		Duration:    ti.DurationSeconds,
 		Hostname:    strOrEmpty(ti.Hostname),
 		Note:        strOrEmpty(ti.Note),
+		// error_message is where every failure path already records its cause; it
+		// was written but never read back, which is what left a failed attempt with
+		// no visible reason anywhere outside the control plane's own logs.
+		FailureReason: strOrEmpty(ti.ErrorMessage),
 	}
 }
 

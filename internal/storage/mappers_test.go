@@ -133,3 +133,28 @@ func TestParseTimestamptz(t *testing.T) {
 		}
 	}
 }
+
+// TestMapTaskInstanceCarriesFailureReason closes the gap that left operators
+// blind: the reapers and the reconciler already write a cause to
+// task_instances.error_message, but the mapper dropped it on the floor, so it
+// never reached the domain model, the API, or the UI.
+func TestMapTaskInstanceCarriesFailureReason(t *testing.T) {
+	reason := "the control plane rejected this pod's projected ServiceAccount token."
+	ti := mapTaskInstance(queries.TaskInstance{
+		TaskID: "extract", State: queries.TaskStateFailed, ErrorMessage: &reason,
+	}, "etl", "r1")
+	if ti.FailureReason != reason {
+		t.Errorf("FailureReason = %q, want %q", ti.FailureReason, reason)
+	}
+}
+
+// TestMapTaskInstanceNoFailureReasonIsEmpty keeps a healthy instance clean: a
+// NULL error_message must map to the empty string, never a spurious reason.
+func TestMapTaskInstanceNoFailureReasonIsEmpty(t *testing.T) {
+	ti := mapTaskInstance(queries.TaskInstance{
+		TaskID: "extract", State: queries.TaskStateSuccess,
+	}, "etl", "r1")
+	if ti.FailureReason != "" {
+		t.Errorf("FailureReason = %q, want empty for a successful instance", ti.FailureReason)
+	}
+}

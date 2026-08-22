@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,9 @@ func TestPodFailureReasonSurfacesCause(t *testing.T) {
 	withReason := func(r string) *corev1.Pod {
 		return &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: r}}
 	}
+	// The reason must NAME the Kubernetes cause — the token an operator greps for
+	// and sees in `kubectl describe`. It may carry additional operator-facing
+	// guidance around that token, so the assertion is containment, not equality.
 	cases := map[string]struct {
 		pod  *corev1.Pod
 		want string
@@ -32,8 +36,8 @@ func TestPodFailureReasonSurfacesCause(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := classifyPod(c.pod).reason; got != c.want {
-				t.Errorf("reason = %q, want %q", got, c.want)
+			if got := classifyPod(c.pod).reason; !strings.Contains(got, c.want) {
+				t.Errorf("reason = %q, want it to name %q", got, c.want)
 			}
 		})
 	}

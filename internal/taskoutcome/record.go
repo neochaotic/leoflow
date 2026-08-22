@@ -14,6 +14,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Version is the record schema version. The reader rejects any other version so
@@ -38,13 +39,30 @@ const (
 	Reschedule Outcome = "reschedule"
 )
 
+// MaxReasonLen bounds a Reason so an unexpectedly long classification can never
+// push a record past the termination-message cap. A classification is a short
+// sentence; this ceiling is far above any real one and well under the cap.
+const MaxReasonLen = 240
+
 // Record is the durable outcome document. Only the fields relevant to an outcome
-// are populated: ExitCode for Failed, RescheduleAt for Reschedule.
+// are populated: ExitCode for Failed, RescheduleAt for Reschedule, Reason for a
+// failure the agent classified itself.
 type Record struct {
 	V            int     `json:"v"`
 	Outcome      Outcome `json:"outcome"`
 	ExitCode     *int32  `json:"exit_code,omitempty"`
 	RescheduleAt string  `json:"reschedule_at,omitempty"`
+	// Reason is a short, human-readable classification of a failure the agent
+	// observed before it could report anything — the pre-registration blind spot
+	// where the control plane sees only a dead pod. It is optional and additive:
+	// a reader that does not know the field still decodes the record as a plain
+	// failure, and a writer that never sets it produces today's bytes exactly.
+	//
+	// It carries a CLASSIFICATION, never a raw error: the agent maps the failure
+	// to one of a closed set of operator-facing strings, so nothing derived from
+	// a credential or an internal error path can reach this durable, end-user
+	// visible field.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Succeeded returns a success record.
@@ -53,6 +71,34 @@ func Succeeded() Record { return Record{V: Version, Outcome: Success} }
 // FailedWith returns a failure record carrying the user process exit code.
 func FailedWith(exitCode int32) Record {
 	return Record{V: Version, Outcome: Failed, ExitCode: &exitCode}
+}
+
+// FailedBecause returns a failure record carrying a classified reason, for a
+// failure the agent detected before any state could be reported. The reason is
+// truncated to MaxReasonLen so an over-long classification degrades to a shorter
+// message rather than losing the whole record to the size cap.
+func FailedBecause(reason string) Record {
+	return Record{V: Version, Outcome: Failed, Reason: TruncateReason(reason, MaxReasonLen)}
+}
+
+// TruncateReason clamps a failure reason to limit bytes, cutting on a rune boundary
+// so a truncated multi-byte character never produces invalid UTF-8.
+//
+// It is exported because every layer that carries a reason has to bound it, and
+// they must all bound it the same way: the reason's sources include kubelet
+// fields and a task's own reported error text, which are unbounded input for a
+// value that is persisted and served to end users. The cap differs per layer
+// (the termination message is far tighter than an HTTP response), so the limit is
+// the caller's; only the cutting rule is shared.
+func TruncateReason(reason string, limit int) string {
+	if len(reason) <= limit {
+		return reason
+	}
+	cut := reason[:limit]
+	for cut != "" && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }
 
 // RescheduledAt returns a reschedule record carrying the next-poke time. The time

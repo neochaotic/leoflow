@@ -102,3 +102,49 @@ func TestEncodeStaysUnderCap(t *testing.T) {
 		t.Errorf("encoded record must carry the version tag: %q", enc)
 	}
 }
+
+// TestFailedBecauseCarriesReason locks the additive reason field: a pre-registration
+// failure the agent observed itself (it never reached the control plane, so no
+// report will ever arrive) travels to the reconciler on the termination message.
+func TestFailedBecauseCarriesReason(t *testing.T) {
+	const reason = "agent failed to authenticate to the control plane (projected token rejected)"
+	enc, err := FailedBecause(reason).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := Decode(enc)
+	if !ok {
+		t.Fatalf("a reason-carrying failure record must decode, got %q", enc)
+	}
+	if got.Outcome != Failed {
+		t.Errorf("outcome = %q, want %q", got.Outcome, Failed)
+	}
+	if got.Reason != reason {
+		t.Errorf("reason = %q, want %q", got.Reason, reason)
+	}
+}
+
+// TestReasonIsBounded keeps an oversized reason from pushing the record past the
+// termination-message cap: the reason is truncated at construction, so a record
+// always encodes rather than being silently lost.
+func TestReasonIsBounded(t *testing.T) {
+	rec := FailedBecause(strings.Repeat("x", 4000))
+	enc, err := rec.Encode()
+	if err != nil {
+		t.Fatalf("an oversized reason must be truncated, not rejected: %v", err)
+	}
+	if len(rec.Reason) > MaxReasonLen {
+		t.Errorf("reason length = %d, want <= %d", len(rec.Reason), MaxReasonLen)
+	}
+	if _, ok := Decode(enc); !ok {
+		t.Error("a truncated-reason record must still decode")
+	}
+}
+
+// TestDecodeIgnoresReasonOnNonFailure keeps the field's meaning narrow: only a
+// failure record carries a reason, so a success record never surfaces one.
+func TestDecodeIgnoresReasonOnNonFailure(t *testing.T) {
+	if got := Succeeded(); got.Reason != "" {
+		t.Errorf("a success record must carry no reason, got %q", got.Reason)
+	}
+}

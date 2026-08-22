@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/neochaotic/leoflow/internal/config"
 )
 
 // newRunsCommand groups the commands that trigger and inspect DAG runs.
@@ -33,12 +31,12 @@ func newRunsTriggerCommand() *cobra.Command {
 		Short: "Trigger a new run of a DAG.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			base, err := resolveServerURL(cmd, serverURL)
+			base, bearer, err := resolveServerToken(cmd, serverURL, token)
 			if err != nil {
 				return err
 			}
 			url := strings.TrimRight(base, "/") + "/api/v2/dags/" + args[0] + "/dagRuns"
-			status, raw, err := apiRequest(cmdContext(cmd), http.MethodPost, url, token, []byte("{}"))
+			status, raw, err := apiRequest(cmdContext(cmd), http.MethodPost, url, bearer, []byte("{}"))
 			if err != nil {
 				return err
 			}
@@ -67,11 +65,11 @@ func newRunsStatusCommand() *cobra.Command {
 		Short: "Show the state of a DAG run (the latest by default).",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			base, err := resolveServerURL(cmd, serverURL)
+			base, bearer, err := resolveServerToken(cmd, serverURL, token)
 			if err != nil {
 				return err
 			}
-			state, id, err := fetchRunState(cmdContext(cmd), base, token, args[0], runID)
+			state, id, err := fetchRunState(cmdContext(cmd), base, bearer, args[0], runID)
 			if err != nil {
 				return err
 			}
@@ -131,21 +129,12 @@ func decodeRun(ctx context.Context, url, token string) (state, id string, err er
 	return r.State, r.DagRunID, nil
 }
 
+// addRunsFlags registers the --server/--token flags shared by the runs
+// subcommands. The token default carries LEOFLOW_TOKEN so that resolveServerToken
+// falls back to the persisted session only when neither flag nor env supplies one.
 func addRunsFlags(cmd *cobra.Command, serverURL, token *string) {
 	cmd.Flags().StringVar(serverURL, "server", "", "control plane base URL (default: config server_url)")
-	cmd.Flags().StringVar(token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token")
-}
-
-// resolveServerURL returns the explicit --server value or the configured one.
-func resolveServerURL(cmd *cobra.Command, explicit string) (string, error) {
-	if explicit != "" {
-		return explicit, nil
-	}
-	cfg, err := config.Load(configFilePath(cmd), cmd.Flags())
-	if err != nil {
-		return "", err
-	}
-	return cfg.ServerURL, nil
+	cmd.Flags().StringVar(token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token (default: config token)")
 }
 
 // apiRequest performs a JSON HTTP request to the control plane and returns the

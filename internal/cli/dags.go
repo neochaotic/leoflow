@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/neochaotic/leoflow/internal/config"
 )
 
 // newDagsCommand groups DAG-management subcommands.
@@ -42,14 +40,11 @@ func newDagsDeleteCommand() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dagID := args[0]
-			if serverURL == "" {
-				cfg, cerr := config.Load(configFilePath(cmd), cmd.Flags())
-				if cerr != nil {
-					return cerr
-				}
-				serverURL = cfg.ServerURL
+			base, bearer, err := resolveServerToken(cmd, serverURL, token)
+			if err != nil {
+				return err
 			}
-			status, body, err := deleteDag(cmdContext(cmd), serverURL, token, dagID, deregister)
+			status, body, err := deleteDag(cmdContext(cmd), base, bearer, dagID, deregister)
 			if err != nil {
 				return err
 			}
@@ -70,7 +65,7 @@ func newDagsDeleteCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&serverURL, "server", "", "control plane base URL (default: config server_url)")
-	cmd.Flags().StringVar(&token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token")
+	cmd.Flags().StringVar(&token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token (default: config token)")
 	cmd.Flags().BoolVar(&deregister, "deregister", false, "remove the DAG artifact entirely, not just its run history")
 	return cmd
 }

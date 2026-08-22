@@ -75,6 +75,39 @@ never satisfy that. Treat the mounter count as api replicas + 1 (the scheduler).
 {{- end -}}
 
 {{- /*
+Warm worker pools reuse ONE pod — holding ONE live credential — across many
+attempts, so per-attempt identity is the only thing that stops a superseded
+attempt from still resolving secrets. That identity exists only when the agent
+trades a projected ServiceAccount token for a per-attempt JWT (exchange
+transport) AND the liveness gate actually denies rather than just logging
+(enforce). ADR 0058 D2 therefore makes both a hard prerequisite, and the server
+validates the same coupling fail-closed at boot. Rendering the mismatch would
+not produce a less-safe deployment — it would produce a CrashLoopBackOff whose
+cause is visible only in container logs. Refuse here instead, in the chart's
+vocabulary, so the operator sees which values to change.
+*/ -}}
+{{- if .Values.execution.warmPoolsEnabled -}}
+{{- if or (ne .Values.auth.agentTokenTransport "exchange") (ne .Values.auth.secretLivenessMode "enforce") -}}
+{{- fail "execution.warmPoolsEnabled requires auth.agentTokenTransport=exchange AND auth.secretLivenessMode=enforce: a warm pod reuses one pod across many attempts, and only a per-attempt token that dies with its attempt keeps a superseded attempt from still resolving secrets (ADR 0058 D2). The server enforces the same coupling at boot, so this install would CrashLoopBackOff instead of running warm pools." -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+extraEnv is an escape hatch for settings the chart does not model — not a way
+around the guard above. These three variables are the ones the chart validates
+against each other, so an extraEnv entry redefining any of them could enable
+warm pools while the render guard looked at the (still safe) values. Refuse it.
+Deliberately only these three: a blanket "no shadowing any chart-managed name"
+check would need a list that drifts out of date, and shadowing a non-coupled
+variable is an operator's own business.
+*/ -}}
+{{- $guarded := list "LEOFLOW_EXECUTION_WARM_POOLS_ENABLED" "LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT" "LEOFLOW_AUTH_SECRET_LIVENESS_MODE" -}}
+{{- range .Values.extraEnv -}}
+{{- if has .name $guarded -}}
+{{- fail (printf "extraEnv must not set %s: warm pools and the agent-credential posture they depend on are coupled by a render-time guard (ADR 0058 D2), and setting them through the escape hatch would skip it. Use execution.warmPoolsEnabled, auth.agentTokenTransport and auth.secretLivenessMode instead." .name) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 Render one "all" Deployment (default, byte-identical to the pre-0049 monolith) or,
 when split.enabled, separate api and scheduler Deployments — ADR 0049. The
 scheduler is always a single leader (ADR 0009), so its replica count is pinned to 1

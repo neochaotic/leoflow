@@ -100,6 +100,18 @@ operator using create=false must pre-provision (IRSA / Workload Identity). */ -}
 {{- end -}}
 {{- end -}}
 
+{{/*
+Name of the cluster-scoped TokenReview ClusterRole + ClusterRoleBinding. Cluster
+scope means one global namespace for these names, so the name carries BOTH the
+release name and the namespace it was installed into: two Leoflow releases in one
+cluster must not fight over a single object (and a `helm uninstall` of one must
+not revoke the other's permission). Kubernetes allows a 253-char DNS-subdomain
+name here, so neither half needs truncating.
+*/}}
+{{- define "leoflow.tokenReviewName" -}}
+{{- printf "%s-%s-tokenreview" (include "leoflow.fullname" .) .Release.Namespace -}}
+{{- end -}}
+
 {{/* Name of the Secret holding generated/inline credentials. */}}
 {{- define "leoflow.secretName" -}}
 {{- printf "%s-secrets" (include "leoflow.fullname" .) -}}

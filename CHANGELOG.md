@@ -6,6 +6,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`leoflow runs trigger`, `leoflow runs status` and `leoflow dags delete` now
+  use the token saved by `leoflow auth login`.** These commands read the server
+  URL from `~/.leoflow/config.yaml` but resolved the bearer token only from an
+  explicit `--token` or `LEOFLOW_TOKEN`, so a user who had just logged in
+  successfully got `401 missing bearer token`. They now share the same
+  `--token` → `LEOFLOW_TOKEN` → config-file precedence that `push`, `deploy` and
+  the `admin` subcommands already applied. (#697)
+
 ### Changed
 
 - **Task pods now run as non-root by default (behavior change; breaking for root

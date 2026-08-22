@@ -47,3 +47,42 @@ func TestDeleteDag(t *testing.T) {
 		})
 	}
 }
+
+// TestDagsDeleteUsesConfigToken pins the same contract as the runs commands:
+// after `leoflow auth login` the persisted JWT must be sent, so deleting a DAG
+// does not fail with "missing bearer token".
+func TestDagsDeleteUsesConfigToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	cfgPath := seedSessionConfig(t, srv.URL, "jwt-from-config")
+	if _, _, err := run(t, "dags", "delete", "etl", "--config", cfgPath); err != nil {
+		t.Fatalf("dags delete with a logged-in session: %v", err)
+	}
+	if gotAuth != "Bearer jwt-from-config" {
+		t.Errorf("auth = %q, want the token persisted by login (Bearer jwt-from-config)", gotAuth)
+	}
+}
+
+// TestDagsDeleteFlagTokenBeatsConfig pins the top of the precedence chain for
+// `dags delete`: an explicit --token overrides the persisted session.
+func TestDagsDeleteFlagTokenBeatsConfig(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	cfgPath := seedSessionConfig(t, srv.URL, "jwt-from-config")
+	if _, _, err := run(t, "dags", "delete", "etl", "--config", cfgPath, "--token", "flag-token"); err != nil {
+		t.Fatalf("dags delete --token: %v", err)
+	}
+	if gotAuth != "Bearer flag-token" {
+		t.Errorf("auth = %q, want the explicit flag to win (Bearer flag-token)", gotAuth)
+	}
+}

@@ -153,7 +153,7 @@ reference for `./helm/leoflow`.)
   install. This chart only deploys the Pro edition, and that edition cannot boot
   without a cert, so turning TLS off buys a `CrashLoopBackOff`, not a plaintext
   deployment. Provision the cert as above; for a plaintext local loop use the Lite
-  dev server (`leoflow dev lite`), not this chart (#459).
+  dev server (`leoflow lite`), not this chart (#459).
 - **`agentTLS.caConfigMap is required when agentTLS.enabled`** — helm refused the
   install because the CA ConfigMap is missing. Without it task pods fail the cert
   chain (`x509: certificate signed by unknown authority`) and hang (#280). Do step 4.

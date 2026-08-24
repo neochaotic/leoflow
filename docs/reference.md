@@ -1,7 +1,9 @@
 # Reference
 
-Complete, generated-from-source references for every Leoflow surface. Each is
-regenerated on every push, so it never drifts from the code.
+References for every Leoflow surface. The HTTP API, CLI, Go, and Python
+references below are generated from source on every push, so they never drift
+from the code. The [Configuration](configuration.md) page is hand-maintained
+against `internal/config` — treat the server source as the final authority.
 
 <div class="grid cards" markdown>
 
@@ -43,7 +45,8 @@ regenerated on every push, so it never drifts from the code.
 
     ---
 
-    Every environment variable and config key for the server, agent, and CLI.
+    The `LEOFLOW_*` environment variables and config keys for the server,
+    hand-maintained against `internal/config`.
 
     [:octicons-arrow-right-24: Configuration](configuration.md)
 

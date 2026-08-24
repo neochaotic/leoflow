@@ -78,10 +78,31 @@ jobs:
       - name: Generate Python runtime API (pdoc)
         run: ./website/scripts/gen-python.sh
 
+      # TEMP DIAGNOSTIC — capture the environment Hugo hands to the PostCSS
+      # subprocess, to pin down where `--permission` is injected. Removed once the
+      # root cause is confirmed.
+      - name: Diagnose Node env (temp)
+        working-directory: website
+        run: |
+          echo "NODE_OPTIONS=[${NODE_OPTIONS:-<unset>}]"
+          echo "--- env (node/permission) ---"
+          env | grep -iE 'node|permission' || echo "(no node/permission env)"
+          echo "--- node ---"
+          which node; node --version
+          echo "--- postcss bin shebang ---"
+          head -1 node_modules/.bin/postcss || true
+          head -1 node_modules/postcss-cli/index.js || true
+
       # No `hugo mod get -u` — that would upgrade past the pinned Docsy version in
       # go.mod. `hugo --gc` auto-downloads modules at exactly the pinned versions.
       - name: Build (no deploy)
         working-directory: website
+        # The GitHub runner injects NODE_OPTIONS=--permission (a Node 24 flag) when it
+        # forces the Node 20-targeted actions onto Node 24. Hugo's PostCSS subprocess
+        # runs on the setup-node-pinned Node 20.20.2, which rejects --permission. Clear
+        # NODE_OPTIONS for the build so the postcss child starts clean.
+        env:
+          NODE_OPTIONS: ""
         run: hugo --gc --minify --logLevel info
 
       - name: Upload built site (artifact only — NOT a deploy)

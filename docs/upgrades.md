@@ -1,12 +1,12 @@
 # Upgrading Leoflow
 
-This page is the canonical answer to "I'm on pre-alpha .N and want to install
-.N+1 (or the next alpha) — what happens to my state?"
+This page is the canonical answer to "I'm on `v0.x.y` and want to install a
+newer tag — what happens to my state?"
 
-!!! warning "Pre-alpha"
-    Leoflow is **pre-alpha**. The upgrade contract below is honored by the Lite
-    edition; we test it on every release. We will not knowingly ship a release
-    that breaks it without a clear migration note. We have not yet promised
+!!! note "Upgrade contract"
+    The upgrade contract below is honored by the Lite edition; we test it on
+    every release. We will not knowingly ship a release that breaks it without a
+    clear migration note. On the `v0.x` line we do not yet promise
     forward/backward compatibility across major versions — that is a v1
     concern.
 
@@ -62,7 +62,7 @@ datastore and workspace so a future reinstall picks up where you left off
 
 ## How to test an upgrade safely (recommended)
 
-Before installing a new pre-alpha tag on a Lite install you depend on:
+Before installing a newer tag on a Lite install you depend on:
 
 1. **Back up first.** See [Backup and restore](backup-restore.md):
    ```sh
@@ -72,12 +72,31 @@ Before installing a new pre-alpha tag on a Lite install you depend on:
    downgrade case.
 3. If anything looks off, restore from the tarball.
 
-## Pro — upgrade path (in development)
+## Pro — upgrade path
 
-The Helm chart's upgrade story is being built alongside the chart hardening
-(PR #96). The shape will be the standard Helm `upgrade --install` with the
-migration Job ensuring schema parity, but the doc is not final yet — track
-issue #141.
+The Pro control plane upgrades with the standard Helm flow: re-run
+`helm upgrade` against the same release, pointing the pinned image tag at the
+newer version.
+
+```sh
+# OCI chart (the primary install path — see Installation):
+helm upgrade leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
+  -n leoflow --reuse-values
+
+# Or pin the image tags explicitly:
+helm upgrade leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
+  -n leoflow --reuse-values \
+  --set image.tag=<VERSION> \
+  --set migrations.image.tag=<VERSION>
+```
+
+The chart runs a **pre-upgrade migrations Job** (`golang-migrate` against
+`database.url`) before the new `leoflow-server` rolls out, so the schema is
+brought to parity before any new binary serves traffic. The same startup
+**drift detector** described above protects a Pro control plane from being run
+against a database a newer binary already migrated. Use `--version <VERSION>`
+with the chart version — the [latest release](https://github.com/neochaotic/leoflow/releases)
+tag with the leading `v` stripped.
 
 ## Related issues
 

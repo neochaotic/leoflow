@@ -23,8 +23,8 @@ flowchart LR
       today with `leoflow deploy`. Everything here runs as-is.
     - **[The complete path](#the-complete-path-your-own-dag-yaml-driven)** — author
       your own DAG with **no Dockerfile** (the build is synthesized from
-      `leoflow.yaml`) and real `connectors:`. That richer flow lands with the
-      connectors release; it is shown at the end so you can see where this is going.
+      `leoflow.yaml`) and real `connectors:`. That richer flow is still landing;
+      it is shown at the end so you can see where this is going.
 
 ## Prerequisites
 
@@ -159,10 +159,10 @@ leoflow deploy --skip-build # promote an already-built image without rebuilding
 
 ## The complete path — your own DAG, yaml-driven
 
-!!! warning "Lands with the connectors release (v0.1.0)"
+!!! warning "Not yet the default path"
     The flow below is the **complete, Dockerfile-free** authoring experience. The
-    yaml-driven build (synthesizing the image from `leoflow.yaml`) ships with the
-    connectors release. On the current release, keep the `Dockerfile` from Step 1.
+    yaml-driven build (synthesizing the image from `leoflow.yaml`) is still
+    landing. On the current release, keep the `Dockerfile` from Step 1.
     This section shows where the happy path is going.
 
 When the yaml-driven build lands, the project is **two files** — no Dockerfile, no

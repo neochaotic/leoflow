@@ -136,7 +136,7 @@ runner's Python has no idea where the parser lives).
 The snippets below all show `leoflow setup` as the step after the install,
 before `leoflow compile`. The follow-up to make this implicit (auto-bootstrap
 on first compile, or embed the parser execution inside the Go binary) is
-tracked separately; for the alpha cut, calling it explicitly is the
+tracked separately; for now, calling it explicitly is the
 recommended path because it's the operation that decides whether managed
 CPython is downloaded, and that's a step CI operators should consciously opt
 into.
@@ -269,10 +269,10 @@ into.
 Deploying the control plane itself (Helm chart, published `leoflow-server`/
 `leoflow-migrate` images, TLS on the agent channel, keyless cloud auth) is the
 **Pro** track. One command installs the chart with auto-generated TLS and no
-cert-manager — from source on `main` today
-(`helm install lf ./helm/leoflow …`), and from its OCI artifact
-(`helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION>`)
-from the first release cut after this change. See [Install Pro](installation.md#install-pro).
+cert-manager — from its published OCI artifact
+(`helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION>`),
+or from source on `main` for the bleeding edge
+(`helm install lf ./helm/leoflow …`). See [Install Pro](installation.md#install-pro).
 The chart is installable today and in validation — see the
 [Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md), the reproducible
 [Kubernetes test setup](https://github.com/neochaotic/leoflow/blob/main/deploy/k8s/README.md)

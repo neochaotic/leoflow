@@ -3,9 +3,9 @@
 Lite ships two commands that snapshot and re-load the whole install in one
 portable file: `leoflow lite backup` and `leoflow lite restore`. Use them to
 migrate to another machine, survive an OS reinstall, or roll back a botched
-pre-alpha upgrade.
+upgrade.
 
-!!! warning "Pre-alpha"
+!!! note "Archive format"
     The archive format is documented as `manifest_version: 1`. We will not
     silently break it, but we may add fields. A future binary will refuse an
     older archive only if `manifest_version` changes — a pure-version mismatch
@@ -44,7 +44,7 @@ user committed locally but did not push.
 leoflow lite backup
 
 # Custom output path:
-leoflow lite backup --output ~/snapshots/before-alpha-upgrade.tar.gz
+leoflow lite backup --output ~/snapshots/before-upgrade.tar.gz
 ```
 
 `backup` requires Lite to be running (it talks to the managed Postgres via
@@ -55,10 +55,10 @@ terminal first.
 
 ```sh
 # Refuses to overwrite an existing ~/.leoflow install:
-leoflow lite restore --input ~/snapshots/before-alpha-upgrade.tar.gz
+leoflow lite restore --input ~/snapshots/before-upgrade.tar.gz
 
 # Use --force to overwrite explicitly (e.g. after `leoflow uninstall`):
-leoflow lite restore --input ~/snapshots/before-alpha-upgrade.tar.gz --force
+leoflow lite restore --input ~/snapshots/before-upgrade.tar.gz --force
 ```
 
 The restore command refuses, with a clear error, when:
@@ -88,7 +88,7 @@ leoflow lite restore --input ~/snap.tar.gz
 leoflow lite            # boots with the restored datastore + workspace
 ```
 
-## Worked example: roll back a botched pre-alpha upgrade
+## Worked example: roll back a botched upgrade
 
 ```sh
 # Before upgrading: take a snapshot.

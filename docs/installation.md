@@ -156,7 +156,7 @@ $ leoflow-mcp --version      # MCP server (see the MCP guide)
 
 | Variable | Effect |
 |---|---|
-| `LEOFLOW_VERSION=v0.3.0` | install a specific release (default: newest, including pre-releases). See [Releases](https://github.com/neochaotic/leoflow/releases) for the current tag. |
+| `LEOFLOW_VERSION=v0.4.0-rc.2` | install a specific release (default: newest, including pre-releases). See [Releases](https://github.com/neochaotic/leoflow/releases) for the current tag. |
 | `LEOFLOW_NO_SETUP=1` | install binaries only; run `leoflow setup` yourself later |
 | `LEOFLOW_INSTALL_DIR=~/.leoflow/bin` | where to put the binaries |
 
@@ -230,27 +230,28 @@ values you must supply are your two datastore URLs and the three credentials.
 [latest release](https://github.com/neochaotic/leoflow/releases) tag with the
 leading `v` stripped (per SemVer2).
 
-!!! note "OCI chart availability"
-    The OCI chart and the auto-generated agent TLS ship in the **first release
-    cut after this change**; until that release is published, [install from
-    source](#install-from-source) (below) to use them on `main` today. Source
-    is also the path for the bleeding edge in general.
+!!! note "OCI chart is the primary path"
+    The OCI chart above is **published** and is the recommended way to install
+    Pro — it carries the auto-generated agent TLS by default. [Installing from
+    source](#install-from-source) (below) is the alternative, for the bleeding
+    edge on `main` ahead of the next release.
 
 ### Install from source
 
 Installing the chart straight from a checkout of **`main`** is the
-**works-today** path for the OCI-chart and auto-generated-TLS features: both
-are live on `main` now, ahead of the release that first publishes the OCI
-chart. It is also the path for the bleeding edge in general. Same required
-values, from the `helm/leoflow` directory in the repo:
+**bleeding-edge** alternative to the published OCI chart — use it to pick up
+changes that have merged to `main` but not yet been cut into a release. The
+OCI-chart and auto-generated-TLS features are live in released charts too, so
+this is only needed when you want `main`. Same required values, from the
+`helm/leoflow` directory in the repo:
 
 ```bash
 git clone --depth 1 https://github.com/neochaotic/leoflow   # current main
 cd leoflow
 
 helm install lf ./helm/leoflow -n leoflow --create-namespace \
-  --set image.tag=v0.3.0 \
-  --set migrations.image.tag=v0.3.0 \
+  --set image.tag=v0.4.0-rc.2 \
+  --set migrations.image.tag=v0.4.0-rc.2 \
   --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full' \
   --set redis.url='rediss://HOST:6380/0' \
   --set auth.jwtSecret="$(openssl rand -base64 64)" \
@@ -260,7 +261,7 @@ helm install lf ./helm/leoflow -n leoflow --create-namespace \
 
 The chart auto-generates the agent TLS cert regardless of image version, so
 this works on `main` today. Pin `--set image.tag` / `--set migrations.image.tag`
-to a published release tag (`v0.3.0` shown — see the
+to a published release tag (`v0.4.0-rc.2` shown — see the
 [releases](https://github.com/neochaotic/leoflow/releases)); from a source
 checkout the image tags are not baked in, so set them explicitly. Add
 `--branch <TAG>` to the clone to install the chart at a specific tag instead of
@@ -395,7 +396,7 @@ plus `leoflow` and `leoflow-agent` binaries) are published by
 
 ```bash
 # Verify the server image at a release tag.
-cosign verify ghcr.io/neochaotic/leoflow-server:v0.3.0 \
+cosign verify ghcr.io/neochaotic/leoflow-server:v0.4.0-rc.2 \
   --certificate-identity-regexp 'https://github.com/neochaotic/leoflow' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

@@ -11,7 +11,7 @@ Makefile target.
   against a real `leoflow lite` boot.
 - Reproducing a runtime bug a user reported, without round-tripping
   through the release machinery.
-- Smoke-testing a fix BEFORE cutting a tag — keeps prealpha tags clean.
+- Smoke-testing a fix BEFORE cutting a tag — keeps release tags clean.
 
 This is **not** an install path. Real users still install via
 `install.sh` from a published release (see `docs/installation.md`).
@@ -89,9 +89,9 @@ this by rebuilding and swapping all three on every invocation.
 The local loop is the **inner ring** — it catches "does my change boot
 at all" in seconds, before you push. The release smoke jobs are
 designed for stable releases; they retract a published tag to a draft
-on any failure. Using the local loop first keeps prealpha tags clean
+on any failure. Using the local loop first keeps release tags clean
 and avoids the retract / re-cut churn.
 
-If you find yourself cutting a prealpha purely to test a Lite change,
+If you find yourself cutting a release tag purely to test a Lite change,
 that is a smell — `make lite-redeploy` will give you the same
 validation in seconds without burning a tag number.

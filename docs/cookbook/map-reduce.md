@@ -196,7 +196,7 @@ return value.
 
 - Dynamic mapping (the parser auto-detects `[f(x) for x in <runtime-list>]`)
   and lifts the fan-in degree from "compile-time literal" to "discovered at
-  run-time." Coming after the alpha cut.
+  run-time." On the roadmap.
 
 ## Reference DAGs
 

@@ -30,7 +30,7 @@ The embedded SPA (ADR 0017) hits two surface areas:
 ## Phase 0 baseline — server latency is NOT the bottleneck
 
 Measured median over 10 GETs on local Mac (managed PG on Unix socket,
-prealpha.27 build, idle workspace = 1 DAG):
+an early development build, idle workspace = 1 DAG):
 
 ```
     518 μs  /ui/dags                     (DAGs list)
@@ -74,8 +74,8 @@ payload + push channel**, not query optimisation. ADR-0017 compatible.
 ## View → routes matrix (provisional)
 
 Filled from /tmp/leoflow-lite.log captures and code inspection. Latency
-column is local Mac (managed-PG, prealpha.27 build) and will be re-measured
-in Phase 0.
+column is local Mac (managed-PG, an early development build) and will be
+re-measured in Phase 0.
 
 | View | Routes hit | Latency (local) | Known bugs |
 |---|---|---|---|

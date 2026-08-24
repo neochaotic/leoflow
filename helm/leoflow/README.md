@@ -1,6 +1,6 @@
 # leoflow
 
-![Version: 0.3.0](https://img.shields.io/badge/Version-0.3.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 0.3.0](https://img.shields.io/badge/AppVersion-0.3.0-informational?style=flat-square)
+![Version: 0.4.0-rc.2](https://img.shields.io/badge/Version-0.4.0--rc.2-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 0.4.0-rc.2](https://img.shields.io/badge/AppVersion-0.4.0--rc.2-informational?style=flat-square)
 
 Leoflow control plane — a GitOps-first, container-native workflow orchestrator (Airflow 3.2.x UI/API compatible).
 
@@ -326,7 +326,7 @@ differ from what's committed.
 | extraEnv | list | `[]` | Extra environment variables appended to the control-plane container, for server settings this chart does not model as a first-class value (see `docs/configuration.md` for the full `LEOFLOW_*` surface). Standard K8s `env` entries, so `valueFrom` works, and a `value` is always rendered as a string (Kubernetes rejects a numeric one). Appended AFTER the chart-managed entries; do not use it to redefine one — the chart refuses to render an entry that shadows a variable whose value it guards (the warm-pool / agent-credential coupling). Example: `[{name: LEOFLOW_SCHEDULER_DISPATCH_WORKERS, value: "4"}]`. |
 | image.pullPolicy | string | `"IfNotPresent"` |  |
 | image.repository | string | `"ghcr.io/neochaotic/leoflow-server"` | Control-plane image. Published by GoReleaser on every tag, signed with cosign. |
-| image.tag | string | `""` | Image tag. Defaults to `.Chart.appVersion` when empty; pre-alpha installs should pin `--set image.tag=v0.0.1-prealpha.N` (the `v`-prefix and no-`v` forms are both published and resolve to the same digest, so either works). |
+| image.tag | string | `""` | Image tag. Defaults to `.Chart.appVersion` when empty; to pin a specific release set `--set image.tag=v0.4.0-rc.2` (the `v`-prefix and no-`v` forms are both published and resolve to the same digest, so either works). |
 | imagePullSecrets | list | `[]` |  |
 | ingress.annotations | object | `{}` | Ingress annotations (controller-specific: rewrites, TLS, auth, etc.). |
 | ingress.className | string | `""` | Ingress class name (e.g. `nginx`). Leave empty to use the cluster default. |
@@ -352,7 +352,7 @@ differ from what's committed.
 | migrations.enabled | bool | `true` |  |
 | migrations.image.pullPolicy | string | `"IfNotPresent"` |  |
 | migrations.image.repository | string | `"ghcr.io/neochaotic/leoflow-migrate"` | leoflow-migrate image bundling Leoflow SQL migrations on top of `migrate/migrate`. Published per release by `release.yaml`, signed with cosign, multi-arch (amd64 + arm64). |
-| migrations.image.tag | string | `""` | Migration image tag. Defaults to `.Chart.appVersion` when empty. Pin to the same tag as `image.tag` (both server and migrate publish both `v`-prefix and no-`v` forms — use whichever convention you prefer, they resolve to the same digest): `--set migrations.image.tag=v0.0.1-prealpha.N`. |
+| migrations.image.tag | string | `""` | Migration image tag. Defaults to `.Chart.appVersion` when empty. Pin to the same tag as `image.tag` (both server and migrate publish both `v`-prefix and no-`v` forms — use whichever convention you prefer, they resolve to the same digest): `--set migrations.image.tag=v0.4.0-rc.2`. |
 | migrations.path | string | `"/migrations"` | Path inside the migrate image where the SQL files live. Must match the COPY destination in `deploy/Dockerfile.migrate`. |
 | migrations.podSecurityContext.fsGroup | int | `65532` |  |
 | migrations.podSecurityContext.runAsGroup | int | `65532` |  |

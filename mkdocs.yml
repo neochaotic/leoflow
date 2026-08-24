@@ -228,3 +228,4 @@ nav:
       - Background:
           - MVP reverse analysis: reverse-analysis-mvp.md
           - UI walk report: ui-walk-report.md
+          - Frontend assessment: frontend-assessment.md

@@ -61,6 +61,40 @@ Pending Pro work (tracked separately): TLS on the agent channel
 (#58), keyless cloud auth via workload identity (#56), least-privilege
 secret scoping (#59).
 
+## Deployment topology (role split)
+
+Pro can run the control plane as **one process** or **split into two
+deployments** by `server.role` ([ADR 0049](adr/0049-split-api-and-scheduler-roles.md)).
+Lite is always `role=all`. Splitting lets the internet-facing API run under
+least-privilege RBAC while only the scheduler holds pod-create and agent-facing
+rights; the two halves share nothing but Postgres.
+
+```mermaid
+flowchart TB
+  subgraph LITE["Lite · role=all — one process"]
+    ALL["leoflow-server<br/>API + UI + scheduler<br/>+ dispatch + agent gRPC"]
+  end
+
+  subgraph PRO["Pro · role=api + role=scheduler — two deployments"]
+    direction LR
+    subgraph D1["Deployment: role=api (restricted)"]
+      APIP["API + UI<br/>internet-facing"]
+      RB1["ServiceAccount<br/>least-privilege RBAC<br/>(no pod create,<br/>no agent gRPC)"]
+    end
+    subgraph D2["Deployment: role=scheduler (privileged)"]
+      SCHP["scheduler + dispatch<br/>reconciler + agent gRPC"]
+      RB2["ServiceAccount<br/>pod create/delete<br/>+ TokenReview"]
+    end
+    APIP --- PGP[("Postgres<br/>shared state")]
+    SCHP --- PGP
+  end
+```
+
+`role=all` collapses every component into a single process (Lite's only mode,
+and the default for a simple Pro install); `role=api` and `role=scheduler` are the
+two halves you deploy separately when you want the RBAC boundary. See the
+[architecture overview](architecture.md) for how the roles sit in the whole system.
+
 ## Demo *(contributor reference)*
 
 The familiar, production-like environment **for contributors** to validate

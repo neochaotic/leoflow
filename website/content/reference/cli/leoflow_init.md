@@ -1,0 +1,30 @@
+---
+title: "leoflow init"
+linkTitle: "init"
+weight: 29
+---
+
+Scaffold a new DAG project (leoflow.yaml + dag.py).
+
+```
+leoflow init <path> [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for init
+```
+
+### Options inherited from parent commands
+
+```
+      --config string       config file path (default ~/.leoflow/config.yaml)
+      --log-level string    log level: debug, info, warn, error
+      --server-url string   control plane API base URL
+```
+
+### SEE ALSO
+
+* [leoflow](/reference/cli/leoflow/)	 - Leoflow is a GitOps-first, container-native workflow orchestrator.
+

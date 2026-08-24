@@ -5,3 +5,13 @@
 
 # Node (PostCSS/autoprefixer toolchain) — package-lock.json IS committed
 /node_modules/
+
+# pdoc venv for scripts/gen-python.sh (the RENDERED output in static/python-api/
+# IS committed; only the throwaway build venv is ignored)
+/.pdoc-venv/
+
+# NOTE: the GENERATED reference trees are intentionally NOT ignored — they are
+# committed so the parallel-track preview builds from a fresh clone without the
+# Go/pdoc toolchains. CI (website-build.yml) reruns the generators before `hugo`
+# so the committed pages can never drift from source. See contribute/build-docs.
+

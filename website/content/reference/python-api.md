@@ -10,15 +10,21 @@ bridges its return value to XCom. It is installed in the DAG image (and the dev
 venv); your `dag.py` uses the **Apache Airflow Task SDK** (`from airflow.sdk import
 DAG, task`), and the agent invokes `leoflow_runtime` to execute the callable.
 
-{{% alert title="Generated content — later phase" color="info" %}}
-The rendered docstring reference for `leoflow_runtime.runner` and
-`leoflow_runtime.xcom` is produced by a Python docstring generator (the MkDocs site
-used `mkdocstrings`). Wiring an equivalent generator into the Hugo build — the
-Python API "sidecar" — is a **later migration phase**; this page is the section stub
-that reserves the URL and structure.
+{{% alert title="Open the rendered reference" color="primary" %}}
+The full docstring reference (every module, class, and function) is rendered from
+source by [`pdoc`](https://pdoc.dev/) and published as a self-contained subsite:
+
+**[→ Open the Python runtime API reference](/python-api/)**
 {{% /alert %}}
 
-Modules that will be documented here:
+It is a **sidecar**: pdoc's output does not share this site's Docsy theming, so it
+is served verbatim under `/python-api/` and linked (not embedded) from here. The
+generator is `website/scripts/gen-python.sh`, run on every build so the reference
+never drifts from the package.
 
+Modules documented there:
+
+- `leoflow_runtime` — the package entry points (`run`, `xcom_pull`).
 - `leoflow_runtime.runner` — executes the task callable and captures its result.
 - `leoflow_runtime.xcom` — reads and writes XCom from inside the task container.
+- `leoflow_runtime.dbt` — the dbt adapter bridge.

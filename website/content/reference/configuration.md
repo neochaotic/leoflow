@@ -8,6 +8,12 @@ Two surfaces: **`leoflow.yaml`** (per-DAG, authoring) and **server environment**
 (`LEOFLOW_*`, the control plane). The canonical `leoflow.yaml` schema is
 [`docs/api/leoflow-yaml-schema.json`](https://github.com/neochaotic/leoflow/blob/main/docs/api/leoflow-yaml-schema.json).
 
+{{% alert title="Deploying Pro on Kubernetes?" color="info" %}}
+These `LEOFLOW_*` variables are what the Helm chart sets under the hood. For the
+chart's own values (image, replicas, ingress, Postgres/Redis wiring), see the
+[Helm chart](/operate/helm-chart/) page and its full values reference.
+{{% /alert %}}
+
 ## leoflow.yaml
 
 | Key | Type | Notes |

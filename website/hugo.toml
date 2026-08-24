@@ -75,8 +75,11 @@ enableGitInfo = true
     enable = true
 
   [params.ui]
-    # Enterprise/CNCF read: sidebar tree fully expanded, breadcrumbs, dark-mode toggle.
-    sidebar_menu_compact = false
+    # Compact sidebar: collapse the long ADR/connection leaf rails and expand only
+    # the active section, so the tree stays scannable instead of showing every leaf
+    # at once (the fully-expanded rail read as heavy). Breadcrumbs + dark-mode toggle
+    # stay on.
+    sidebar_menu_compact = true
     sidebar_search_disable = false
     breadcrumb_disable = false
     navbar_logo = false

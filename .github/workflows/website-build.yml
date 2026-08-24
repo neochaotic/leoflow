@@ -46,6 +46,11 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Setup Python (for pdoc + generator post-processing)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install Hugo Extended
         run: |
           set -euo pipefail
@@ -57,6 +62,21 @@ jobs:
       - name: Install PostCSS toolchain
         working-directory: website
         run: npm ci
+
+      # Regenerate the reference trees BEFORE hugo (parity with the live MkDocs
+      # docs.yml pipeline: CLI from Cobra, Go from gomarkdoc, the OpenAPI spec for
+      # Scalar, and the Python runtime API from pdoc). The generated trees ARE
+      # committed (so a fresh clone / preview builds without these toolchains);
+      # rerunning them here guarantees the committed pages can never drift from
+      # source. Run from the repo root — each script cd's to the root itself.
+      - name: Generate CLI reference (Cobra)
+        run: ./website/scripts/gen-cli.sh
+      - name: Generate Go reference (gomarkdoc)
+        run: ./website/scripts/gen-go.sh
+      - name: Refresh OpenAPI spec (Scalar)
+        run: ./website/scripts/gen-openapi.sh
+      - name: Generate Python runtime API (pdoc)
+        run: ./website/scripts/gen-python.sh
 
       # No `hugo mod get -u` — that would upgrade past the pinned Docsy version in
       # go.mod. `hugo --gc` auto-downloads modules at exactly the pinned versions.

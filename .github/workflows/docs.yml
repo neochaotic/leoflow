@@ -1,12 +1,22 @@
 name: Docs
 
-# Build the MkDocs site and publish it to GitHub Pages.
-# Enable once: Settings → Pages → Build and deployment → Source: GitHub Actions.
+# Build the MkDocs site and publish it with mike, which commits the built site
+# into the `gh-pages` branch (one directory per version). GitHub Pages then
+# serves that branch.
 #
-# Build runs on PRs too (#155) so an ADR added without regenerating
-# docs/adrs.md, or a broken mkdocs link, fails the PR before merge instead
-# of breaking the published site post-merge. The deploy job only runs on
-# pushes to main — PR runs build + check, never publish.
+# One-time setup (repo owner, AFTER the first push-to-main run creates gh-pages):
+#   Settings → Pages → Build and deployment → Source: "Deploy from a branch"
+#   → Branch: gh-pages → /(root).
+#
+# Push to main publishes the `dev` version (the moving tip of the docs) and,
+# pre-GA, keeps `dev` as the site default. Tagged releases are handled by
+# docs-release.yaml (a `paths:` filter here would drop tag builds, so releases
+# live in their own workflow).
+#
+# The build runs on PRs too (#155): an ADR added without regenerating
+# docs/adrs.md, or a broken mkdocs link, fails the PR before merge instead of
+# breaking the published site. PR runs build + validate only — never mike,
+# never a deploy (the mike/publish steps are gated to `push`).
 on:
   push:
     branches: [main]
@@ -16,20 +26,28 @@ on:
     paths: ["docs/**", "mkdocs.yml", ".github/workflows/docs.yml", "internal/cli/**", "parser/**", "runtime/python/**", "helm/leoflow/README.md", "helm/leoflow/values.yaml", "helm/leoflow/README.md.gotmpl"]
   workflow_dispatch:
 
-# Least-privilege default: read-only at the top level. Only the deploy job
-# (push-to-main) needs to write to Pages; the build job (which runs on PRs too)
-# stays read-only so a PR cannot accidentally publish.
+# Least-privilege default: read-only at the top level.
 permissions:
   contents: read
 
+# Serialize every writer of the gh-pages branch so concurrent deploys never
+# race into a non-fast-forward push. The group name is shared with
+# docs-release.yaml so a main deploy and a tag release also serialize against
+# each other. cancel-in-progress is false: each version publish must finish
+# rather than be killed mid-push, which could leave gh-pages half-written.
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: docs-gh-pages
+  cancel-in-progress: false
 
 jobs:
-  build:
+  docs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # mike pushes the built site to gh-pages, so the job can write contents.
+    # The publish steps below are gated to `push`, so PR runs never deploy;
+    # fork-PR tokens are downgraded to read-only by GitHub regardless.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -45,11 +63,25 @@ jobs:
             ./internal/domain ./internal/scheduler ./internal/executor ./internal/dispatch \
             ./internal/agent ./internal/agentrpc ./internal/storage ./internal/auth \
             ./internal/config ./internal/cli ./internal/api ./pkg/client
+      # The Go reference used to be one page at go/reference.html; it is now split
+      # per package. Write a static redirect stub (into the git-ignored, generated
+      # docs/go/ dir) BEFORE the build so mkdocs copies it into every published
+      # version — including the ones mike builds — instead of a post-build patch
+      # of site/ that mike's own build would drop.
+      - run: |
+          cat > docs/go/reference.html <<'HTML'
+          <!doctype html><html lang="en"><head><meta charset="utf-8">
+          <title>Redirecting…</title>
+          <meta http-equiv="refresh" content="0; url=../go-api.html">
+          <link rel="canonical" href="../go-api.html">
+          </head><body>The Go reference moved. Redirecting to
+          <a href="../go-api.html">Go packages</a>…</body></html>
+          HTML
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with: { python-version: "3.12" }
       # Imaging libs for the Material social-cards plugin.
       - run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y libcairo2-dev libfreetype6-dev libffi-dev libjpeg-dev libpng-dev libz-dev
-      - run: pip install "mkdocs-material[imaging]" "mkdocstrings[python]"
+      - run: pip install "mkdocs-material[imaging]" "mkdocstrings[python]" mike
       # Python docstrings (the task runtime) for the Python API page.
       - run: pip install -e ./runtime/python
       # Scalar reads the spec from the site root.
@@ -62,34 +94,34 @@ jobs:
       - run: cp helm/leoflow/README.md docs/helm-chart.md
       # The ADR index (docs/adrs.md) is generated from the ADR files; fail if stale.
       - run: scripts/gen-adr-index.sh --check
+      # Validation gate — runs on every event (PR included). --strict turns
+      # broken links / stale nav into failures. mike's own build is not strict,
+      # so this is where doc breakage is caught before it can publish.
       - run: mkdocs build --strict   # CI=true enables the social plugin
-      # The Go reference used to be one page at go/reference.html; it is now split
-      # per package. Write a static redirect stub so old links don't 404 (no plugin
-      # dependency needed).
-      - run: |
-          cat > site/go/reference.html <<'HTML'
-          <!doctype html><html lang="en"><head><meta charset="utf-8">
-          <title>Redirecting…</title>
-          <meta http-equiv="refresh" content="0; url=../go-api.html">
-          <link rel="canonical" href="../go-api.html">
-          </head><body>The Go reference moved. Redirecting to
-          <a href="../go-api.html">Go packages</a>…</body></html>
-          HTML
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with: { path: site }
-  deploy:
-    needs: build
-    # Only publish on a real push to main, never on a PR run (#155). PR runs
-    # exist to gate the build; the published site is updated by main.
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      pages: write      # Publish the built site to GitHub Pages.
-      id-token: write   # OIDC token for the Pages deployment.
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+      # ---- Publish (push to main only; skipped on PRs and workflow_dispatch) ----
+      - name: Configure git identity for mike
+        if: github.event_name == 'push'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      # Publish the moving tip of the docs as the `dev` version. mike rebuilds
+      # the site and commits it into gh-pages; that commit IS the publish.
+      - name: Publish dev docs with mike
+        if: github.event_name == 'push'
+        run: mike deploy --push --update-aliases dev
+      # Pre-GA there is no stable release, so `dev` is the site default (what a
+      # bare / URL redirects to). Guarded: mike stores the default as a root
+      # index.html redirect on gh-pages, so only (re)set it when it isn't
+      # already `dev`. This is a no-op on every run after the first.
+      # NOTE: at GA this default should flip to `latest` (see docs-release.yaml).
+      - name: Ensure dev is the default version
+        if: github.event_name == 'push'
+        run: |
+          current="$(git show gh-pages:index.html 2>/dev/null | sed -n 's/.*url=\([^"/]*\).*/\1/p' | head -n1 || true)"
+          if [ "$current" != "dev" ]; then
+            echo "Default is '${current:-<unset>}'; setting it to 'dev'."
+            mike set-default --push dev
+          else
+            echo "Default is already 'dev'; nothing to do."
+          fi

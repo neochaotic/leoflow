@@ -73,6 +73,14 @@ exclude_docs: |
   agent-templates/
   reference/airflow-real/
 
+# Version selector (rendered by mkdocs-material) backed by mike. mike publishes
+# each version into the gh-pages branch; the selector switches between them.
+# See .github/workflows/docs.yml (dev, on push to main) and docs-release.yaml
+# (tagged releases: latest for stable, unaliased for RCs).
+extra:
+  version:
+    provider: mike
+
 extra_css:
   - assets/extra.css
 

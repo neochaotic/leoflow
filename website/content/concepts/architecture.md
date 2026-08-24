@@ -8,6 +8,11 @@ weight: 30
 description: "The Go control plane, the split API/scheduler roles, and the execution data flow."
 ---
 
+Leoflow is a **Go control plane** that compiles each DAG to an immutable artifact and
+runs it **pod-per-task**. The diagram below traces one DAG from `leoflow compile` in
+dev, through the split API/scheduler roles of the control plane, to the executor that
+launches task pods — the sections that follow walk each stage in turn.
+
 ```mermaid
 flowchart LR
   subgraph Dev["Dev / CI"]

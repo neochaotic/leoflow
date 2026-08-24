@@ -64,7 +64,7 @@ enableGitInfo = true
 # ```mermaid blocks. Registering a code-block render hook name lets Docsy's
 # render-codeblock-mermaid.html hook fire and swap in the Mermaid runtime.
 [params]
-  copyright = "The Leoflow Authors"
+  copyright = "@neoChaotic"
   # Full-text search parity with the live Material site (which ships MkDocs'
   # `search` plugin). Docsy's Lunr-based OFFLINE search builds a client-side index
   # (assets/json/offline-search-index.json) at build time and needs no external
@@ -91,7 +91,7 @@ enableGitInfo = true
     sidebar_menu_compact = true
     sidebar_search_disable = false
     breadcrumb_disable = false
-    navbar_logo = false
+    navbar_logo = true
     footer_about_enable = true
     [params.ui.feedback]
       enable = false

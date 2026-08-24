@@ -13,20 +13,64 @@ Everything about writing DAGs for Leoflow. A DAG is a `dag.py` on the Airflow Ta
 SDK plus a `leoflow.yaml` for packaging and bindings, compiled to one immutable
 artifact.
 
-- **[DAG authoring](/author-dags/dag-authoring/)** — the project layout, the two
-  files, and the compile model.
-- **[Operators & sensors](/author-dags/operators-sensors/)** — use Airflow
-  operators and sensors from your tasks.
-- **[dbt projects as DAGs](/author-dags/dbt/)** — render a dbt project into
-  model-level tasks.
-- **[Variables & Connections](/author-dags/variables-connections/)** — expose
-  Variables and Connections to your task pods.
-- **[On-failure alerting](/author-dags/alerting/)** — notify on run failure from
-  `leoflow.yaml`, no extra task.
-- **[Map-reduce for ML](/author-dags/map-reduce/)** — fan-out + reduce as a Python
-  list comprehension.
-- **[Examples](/author-dags/examples/)** — runnable example DAGs.
-- **[ETL case study](/author-dags/etl-case-study/)** — a worked 1 GB ETL on the
-  staging volume.
-- **[The Lite web editor](/author-dags/lite-web-editor/)** — edit and run DAGs from
-  the browser.
+New to authoring? Start with **[DAG authoring](/author-dags/dag-authoring/)** for
+the project layout and compile model, then reach for the guide that matches your
+task below.
+
+<div class="lf-cards">
+  <a class="lf-card lf-card--hero" href="/author-dags/dbt/">
+    <span class="lf-card__badge">Highlight</span>
+    <span class="lf-card__icon"><i class="fa-solid fa-cubes-stacked"></i></span>
+    <span class="lf-card__title">dbt projects as DAGs</span>
+    <span class="lf-card__desc">Render a dbt project into native model-level tasks — pod-per-task, no Airflow and no Cosmos at runtime.</span>
+    <span class="lf-card__more">Run dbt as a DAG →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/dag-authoring/">
+    <span class="lf-card__icon"><i class="fa-solid fa-pen-ruler"></i></span>
+    <span class="lf-card__title">DAG authoring</span>
+    <span class="lf-card__desc">The project layout, the two files (<code>dag.py</code> + <code>leoflow.yaml</code>), and the compile model.</span>
+    <span class="lf-card__more">Learn the model →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/map-reduce/">
+    <span class="lf-card__icon"><i class="fa-solid fa-diagram-project"></i></span>
+    <span class="lf-card__title">Map-reduce for ML</span>
+    <span class="lf-card__desc">Fan-out + reduce expressed as a Python list comprehension — native, no extra operators.</span>
+    <span class="lf-card__more">Fan out & reduce →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/operators-sensors/">
+    <span class="lf-card__icon"><i class="fa-solid fa-plug-circle-bolt"></i></span>
+    <span class="lf-card__title">Operators &amp; sensors</span>
+    <span class="lf-card__desc">Use Airflow operators and sensors from your tasks.</span>
+    <span class="lf-card__more">Use operators →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/variables-connections/">
+    <span class="lf-card__icon"><i class="fa-solid fa-key"></i></span>
+    <span class="lf-card__title">Variables &amp; Connections</span>
+    <span class="lf-card__desc">Expose Variables and Connections to your task pods, delivered by the control plane.</span>
+    <span class="lf-card__more">Wire secrets in →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/alerting/">
+    <span class="lf-card__icon"><i class="fa-solid fa-bell"></i></span>
+    <span class="lf-card__title">On-failure alerting</span>
+    <span class="lf-card__desc">Notify on run failure straight from <code>leoflow.yaml</code> — no extra task.</span>
+    <span class="lf-card__more">Set up alerts →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/lite-web-editor/">
+    <span class="lf-card__icon"><i class="fa-solid fa-window-maximize"></i></span>
+    <span class="lf-card__title">The Lite web editor</span>
+    <span class="lf-card__desc">Edit and run DAGs from the browser — the fastest inner loop for local dev.</span>
+    <span class="lf-card__more">Edit in the browser →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/examples/">
+    <span class="lf-card__icon"><i class="fa-solid fa-flask"></i></span>
+    <span class="lf-card__title">Examples</span>
+    <span class="lf-card__desc">Runnable example DAGs you can copy and adapt.</span>
+    <span class="lf-card__more">Browse examples →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/etl-case-study/">
+    <span class="lf-card__icon"><i class="fa-solid fa-database"></i></span>
+    <span class="lf-card__title">ETL case study</span>
+    <span class="lf-card__desc">A worked 1&nbsp;GB ETL on the ephemeral per-run staging volume.</span>
+    <span class="lf-card__more">Read the case study →</span>
+  </a>
+</div>

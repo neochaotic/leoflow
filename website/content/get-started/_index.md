@@ -9,15 +9,33 @@ menu:
     weight: 10
 ---
 
-The fastest path from zero to a running DAG.
+Zero to a running DAG in minutes. Leoflow **Lite** runs the whole control plane on
+one machine, so you can author, compile, and trigger a real DAG before you ever
+touch Kubernetes. Pick your starting point below.
 
-- **[Quickstart](/get-started/quickstart/)** — get Leoflow **Lite** running locally
-  in two commands. Start here.
-- **[Build your first DAG](/get-started/build-your-first-dag/)** — a guided walk
-  through authoring, compiling, and running a DAG.
-- **[Installation](/get-started/installation/)** — install the `leoflow` CLI and
-  provision the managed Python runtime.
+<div class="lf-cards">
+  <a class="lf-card lf-card--hero" href="/get-started/quickstart/">
+    <span class="lf-card__badge">Start here</span>
+    <span class="lf-card__icon"><i class="fa-solid fa-bolt"></i></span>
+    <span class="lf-card__title">Quickstart</span>
+    <span class="lf-card__desc">Get Leoflow Lite running locally in two commands, then trigger your first run from the browser.</span>
+    <span class="lf-card__more">Run it in 2 commands →</span>
+  </a>
+  <a class="lf-card" href="/get-started/build-your-first-dag/">
+    <span class="lf-card__icon"><i class="fa-solid fa-diagram-project"></i></span>
+    <span class="lf-card__title">Build your first DAG</span>
+    <span class="lf-card__desc">A guided walk through authoring a <code>dag.py</code>, compiling it to an immutable image, and watching it run.</span>
+    <span class="lf-card__more">Follow the walkthrough →</span>
+  </a>
+  <a class="lf-card" href="/get-started/installation/">
+    <span class="lf-card__icon"><i class="fa-solid fa-download"></i></span>
+    <span class="lf-card__title">Installation</span>
+    <span class="lf-card__desc">Install the <code>leoflow</code> CLI and provision the managed Python runtime — the one-command setup.</span>
+    <span class="lf-card__more">Install the CLI →</span>
+  </a>
+</div>
 
-Stuck on install or first run? The
-[Troubleshooting & observability](/operate/troubleshooting/) guide covers the
+{{% alert title="Stuck on install or first run?" color="info" %}}
+The [Troubleshooting & observability](/operate/troubleshooting/) guide covers the
 common failure modes and where the logs live.
+{{% /alert %}}

@@ -1,5 +1,14 @@
 # Roadmap to first release
 
+!!! info "Historical — the first release shipped"
+    This page captured the plan **before v0.1**. The `v0.x` line has since
+    shipped (v0.1 through v0.4 and beyond) and ADR 0037 removed the
+    Alpha/Beta phase framing. It is kept for context; the Alpha/Beta/GA
+    phases and the "must-do before release" list below are **superseded**.
+    For what actually shipped and what is current, see the
+    [GitHub Releases](https://github.com/neochaotic/leoflow/releases) and the
+    [ADRs](adrs.md).
+
 **Goal:** a stable MVP — a clean Airflow-3.2-compatible orchestrator that runs a
 real DAG end to end, with no fancy features — before v0.1.
 
@@ -42,7 +51,8 @@ Run real workloads on a real cluster, deployed via CI.
 - OpenSSF best-practices badge; supply-chain (ADR 0014) green.
 - **Exit:** production-ready, documented, supported.
 
-> Today we are in **Alpha** — no production testing until it earns its way to Beta.
+> *(Historical note: at the time of writing this was the Alpha phase. The
+> phase framing was later removed by ADR 0037 and the `v0.x` line shipped.)*
 
 ## ✅ Done (this cycle) — the MVP happy path works
 
@@ -59,7 +69,11 @@ log levels · #45 Admin Variables+Connections (ADR 0019) · #46 undispatchable
 visibility · #47 executor status / Cluster Activity=Home · #49 Code=Python · #50
 no eternal-running · #51 TaskFlow value passing · #52 graceful logs.
 
-## 🔴 Pre-release must-do (small, stability)
+## 🔴 Pre-release must-do (small, stability) — historical, superseded
+
+*The items below were the pre-v0.1 stability checklist. They have since been
+resolved or superseded as the `v0.x` line shipped; see the release notes for
+the current state.*
 
 1. **Test DB isolation** — integration tests run against the *demo* Postgres,
    polluting the live demo (ghost dags → wrong home stats). Point

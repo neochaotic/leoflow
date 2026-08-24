@@ -211,19 +211,22 @@ The unsupported set, with the things Airflow users most often expect to
 - **Branching** (`BranchPythonOperator`, `@task.branch`) and
   **short-circuit** (`@task.short_circuit`, `ShortCircuitOperator`) —
   refused for now: the current scheduler does not model
-  skipped-vs-executed downstream paths. On the post-alpha backlog if
+  skipped-vs-executed downstream paths. On the backlog if
   user demand justifies the scheduler change.
 - **Virtualenv operators** (`PythonVirtualenvOperator`,
   `@task.virtualenv`) — refused because each DAG already ships as its
   own image with its own dependencies; spinning up a venv at runtime
   is the problem Leoflow's one-image-per-DAG model already solved.
-- **Dynamic task mapping** (`.expand` / `.partial`) — refused;
-  map-reduce fan-out is on the post-alpha roadmap, tracked separately.
+- **Dynamic task mapping** (`.expand` / `.partial`) — refused. Static
+  fan-**in** (collecting a list of task calls into a downstream task) works
+  today; what does **not** work is *dynamic* fan-**out** — expanding one task
+  into N parallel instances at runtime from an upstream result. That is
+  tracked separately.
 - **KubernetesPodOperator** — refused; the pod is the *runtime
   substrate* for every Leoflow task already, so wrapping a user task
   in another pod is redundant and adds an isolation hole.
 - **Datasets / Assets triggers** — not implemented yet; the asset
-  graph is a 3.x Airflow feature on the post-alpha backlog.
+  graph is a 3.x Airflow feature on the backlog.
 - **Per-task `default_args` in `dag.py`** are ignored at the parser
   level — use `leoflow.yaml`'s `tasks.<id>:` override block instead,
   which is checked at compile time.

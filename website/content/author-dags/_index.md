@@ -31,6 +31,12 @@ task below.
     <span class="lf-card__desc">The project layout, the two files (<code>dag.py</code> + <code>leoflow.yaml</code>), and the compile model.</span>
     <span class="lf-card__more">Learn the model →</span>
   </a>
+  <a class="lf-card" href="/author-dags/airflow-compatibility/">
+    <span class="lf-card__icon"><i class="fa-brands fa-python"></i></span>
+    <span class="lf-card__title">Airflow compatibility</span>
+    <span class="lf-card__desc">You write standard Airflow Task SDK code; Leoflow adds a thin runtime and <code>leoflow.yaml</code> — it never re-implements Airflow's Python API.</span>
+    <span class="lf-card__more">See the model →</span>
+  </a>
   <a class="lf-card" href="/author-dags/map-reduce/">
     <span class="lf-card__icon"><i class="fa-solid fa-diagram-project"></i></span>
     <span class="lf-card__title">Map-reduce for ML</span>

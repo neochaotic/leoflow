@@ -81,16 +81,23 @@ jobs:
           TAG: ${{ github.ref_name }}   # e.g. v1.2.3 or v1.2.3-rc.1
         run: |
           ver="${TAG#v}"                # strip leading v -> 1.2.3 / 1.2.3-rc.1
+          # Build mike's args by release kind; any semver pre-release suffix
+          # (e.g. -rc.1) publishes the version WITHOUT moving the `latest` alias.
           case "$ver" in
             *-*)
-              # Any semver pre-release suffix (e.g. -rc.1) publishes the version
-              # without moving the `latest` alias.
               echo "Pre-release '$ver' — publishing without moving 'latest'."
-              mike deploy --push "$ver"
-              ;;
+              args="deploy --push $ver" ;;
             *)
-              # Stable release: publish and move `latest` to it.
               echo "Stable '$ver' — publishing and updating 'latest' alias."
-              mike deploy --push --update-aliases "$ver" latest
-              ;;
+              args="deploy --push --update-aliases $ver latest" ;;
           esac
+          # The checkout omits gh-pages, so mike's local branch would diverge from
+          # origin and its push be rejected non-fast-forward. Sync local gh-pages
+          # to origin before each attempt, and retry to absorb a concurrent writer.
+          for attempt in 1 2 3; do
+            git fetch origin gh-pages 2>/dev/null && git branch -f gh-pages origin/gh-pages 2>/dev/null || true
+            if mike $args; then exit 0; fi
+            echo "mike deploy rejected (attempt $attempt); refetching gh-pages and retrying"
+            sleep $((attempt * 3))
+          done
+          echo "mike deploy failed after 3 attempts"; exit 1

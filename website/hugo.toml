@@ -12,6 +12,17 @@
 baseURL = "https://neochaotic.github.io/leoflow/"
 title = "Leoflow"
 
+# GitHub Pages serves this project site under the /leoflow/ SUBPATH. Every internal
+# URL — page links, images, static assets (the Scalar page, screenshots), the
+# hand-written hero buttons, and Docsy shortcode `url=` params — must carry that
+# prefix. canonifyURLs rewrites every root-relative ("/…") href/src in the rendered
+# output to sit under baseURL, uniformly and post-render, so all URL shapes behave
+# the same. It pairs with disabling Goldmark's default link/image render hooks
+# (see [markup.goldmark.renderHooks] below): with the hooks OFF, markdown links stay
+# root-relative and canonify is the single, consistent thing that prefixes them —
+# turning the hooks ON would double-prefix (/leoflow/leoflow/…).
+canonifyURLs = true
+
 # Single language today: content lives directly under content/ and the default
 # language is NOT pushed into a /en/ subdir, so URLs are clean Hugo-natural paths
 # (/docs/architecture/, not /en/docs/architecture/). When locales are added, give
@@ -31,6 +42,17 @@ enableGitInfo = true
 [markup]
   [markup.goldmark.renderer]
     unsafe = true
+  # Turn OFF Goldmark's default link/image render hooks. Those hooks resolve
+  # page-to-page markdown links to their RelPermalink (already /leoflow/-prefixed)
+  # but leave static-asset links, raw-HTML hrefs and shortcode url= params
+  # un-prefixed — an inconsistent split that breaks images and buttons under the
+  # subpath. With the hooks off, EVERY internal URL stays root-relative and
+  # canonifyURLs (above) prefixes all of them uniformly.
+  [markup.goldmark.renderHooks]
+    [markup.goldmark.renderHooks.link]
+      useEmbedded = "never"
+    [markup.goldmark.renderHooks.image]
+      useEmbedded = "never"
   [markup.highlight]
     style = "tango"
     noClasses = false
@@ -106,15 +128,13 @@ enableGitInfo = true
     [languages.en.params]
       description = "GitOps-first, container-native workflow orchestrator with an Airflow-compatible UI and REST API — a Go control plane instead of Python's."
 
-# Main navbar entries (Docsy reads [[menu.main]]).
+# Main navbar entries. The nine IA sections register themselves as navbar items
+# from their own _index.md front matter (menu.main + weight), so the only entry
+# hard-wired here is the external GitHub link.
 [menu]
   [[menu.main]]
-    name = "Docs"
-    weight = 20
-    url = "/docs/"
-  [[menu.main]]
     name = "GitHub"
-    weight = 50
+    weight = 100
     url = "https://github.com/neochaotic/leoflow"
     pre = "<i class='fab fa-github'></i>"
 

@@ -1,0 +1,754 @@
+openapi: 3.0.3
+info:
+  title: Leoflow Public API
+  description: |
+    Airflow-3.2.x-compatible subset of the public API.
+    This is the surface consumed by the Airflow UI when configured to talk to a Leoflow Control Plane.
+  version: "1.0.0"
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/token:
+    post:
+      summary: Issue a JWT for username/password credentials
+      operationId: issueToken
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v2/users:
+    get:
+      summary: List users
+      description: |
+        Lists the tenant's control-plane accounts, newest first. Each entry
+        carries the full set of roles the user holds; the password and its hash
+        are write-only and never returned. Requires the read:user permission.
+      operationId: listUsers
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of users
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserCollection" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      summary: Create a user
+      description: |
+        Admin-only. Creates a control-plane account with the given email and
+        password and grants the requested roles. The password is write-only and
+        is never returned. Requires the write:user permission.
+      operationId: createUser
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Invalid input (missing fields or unknown role)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: A user with this email already exists in the tenant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/v2/dags:
+    get:
+      summary: List DAGs
+      operationId: listDags
+      tags: [DAGs]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: tags
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+        - name: only_active
+          in: query
+          schema: { type: boolean, default: true }
+        - name: paused
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: A page of DAGs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DAGCollection"
+
+  /api/v2/dags/{dag_id}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: Get a DAG
+      operationId: getDag
+      tags: [DAGs]
+      responses:
+        "200":
+          description: DAG detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DAG"
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Update DAG (typically pause/unpause)
+      operationId: updateDag
+      tags: [DAGs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DAGUpdate"
+      responses:
+        "200":
+          description: Updated DAG
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DAG" }
+
+  /api/v2/dags/{dag_id}/dagVersions:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: List a DAG's registered versions
+      operationId: listDagVersions
+      tags: [DAGs]
+      responses:
+        "200":
+          description: A page of DAG versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DagVersionCollection"
+
+  /api/v2/dags/{dag_id}/dagVersions/{version_number}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - name: version_number
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      summary: Get a specific registered DAG version
+      operationId: getDagVersion
+      tags: [DAGs]
+      responses:
+        "200":
+          description: DAG version detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DagVersion" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v2/dags/{dag_id}/dagRuns:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: List DAG runs
+      operationId: listDagRuns
+      tags: [DAG Runs]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: state
+          in: query
+          schema:
+            type: array
+            items: { type: string, enum: [queued, running, success, failed] }
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: A page of DAG runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DAGRunCollection"
+    post:
+      summary: Trigger a DAG run
+      operationId: triggerDagRun
+      tags: [DAG Runs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DAGRunCreate"
+      responses:
+        "200":
+          description: Created DAG run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DAGRun" }
+
+  /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+    get:
+      summary: Get a DAG run
+      operationId: getDagRun
+      tags: [DAG Runs]
+      responses:
+        "200":
+          description: DAG run detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DAGRun" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+    get:
+      summary: List task instances of a DAG run
+      operationId: listTaskInstances
+      tags: [Task Instances]
+      responses:
+        "200":
+          description: A page of task instances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskInstanceCollection"
+
+  /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+      - $ref: "#/components/parameters/TaskID"
+    get:
+      summary: Get a task instance
+      operationId: getTaskInstance
+      tags: [Task Instances]
+      responses:
+        "200":
+          description: Task instance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskInstance" }
+
+  /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/logs/{try_number}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+      - $ref: "#/components/parameters/TaskID"
+      - name: try_number
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      summary: Get task logs
+      operationId: getTaskLogs
+      tags: [Task Instances]
+      responses:
+        "200":
+          description: Log content
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /api/v2/dags/{dag_id}/clearTaskInstances:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    post:
+      summary: Clear task instances (queue them for re-run)
+      operationId: clearTaskInstances
+      tags: [Task Instances]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClearTaskInstancesRequest"
+      responses:
+        "200":
+          description: List of cleared task instances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskInstanceCollection"
+
+  /api/v2/xcoms/{dag_id}/{dag_run_id}/{task_id}/{key}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+      - $ref: "#/components/parameters/DagRunID"
+      - $ref: "#/components/parameters/TaskID"
+      - name: key
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Read XCom value (read-only proxy for the Redis backend)
+      operationId: getXcomEntry
+      tags: [XCom]
+      responses:
+        "200":
+          description: XCom value
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/XComEntry" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v2/dagSources/{dag_id}:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: Get a DAG's source (the dag.py text)
+      operationId: getDagSource
+      tags: [DAGs]
+      responses:
+        "200":
+          description: DAG source
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DagSource" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v2/dags/{dag_id}/spec:
+    parameters:
+      - $ref: "#/components/parameters/DagID"
+    get:
+      summary: Get a DAG's compiled spec (the dag.json artifact)
+      operationId: getDagSpec
+      tags: [DAGs]
+      responses:
+        "200":
+          description: The compiled dag.json (the structured graph the scheduler runs)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                description: The compiled dag.json artifact (DAGSpec shape).
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v2/monitor/health:
+    get:
+      summary: Control-plane health (Airflow HealthInfoResponse shape)
+      operationId: getMonitorHealth
+      tags: [Monitor]
+      responses:
+        "200":
+          description: Component health
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthInfo" }
+
+  /api/v2/monitor/executor:
+    get:
+      summary: Executor capability and configuration
+      operationId: getMonitorExecutor
+      tags: [Monitor]
+      responses:
+        "200":
+          description: Executor info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExecutorInfo" }
+
+  /api/v2/version:
+    get:
+      summary: Control-plane version (Airflow VersionInfo shape)
+      operationId: getVersion
+      tags: [Monitor]
+      responses:
+        "200":
+          description: Version info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionInfo" }
+
+  /healthz:
+    get:
+      summary: Liveness probe
+      operationId: getHealthz
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: OK
+          content: { text/plain: { schema: { type: string } } }
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      operationId: getReadyz
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: OK
+        "503":
+          description: Not ready
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    DagID:
+      name: dag_id
+      in: path
+      required: true
+      schema: { type: string }
+    DagRunID:
+      name: dag_run_id
+      in: path
+      required: true
+      schema: { type: string }
+    TaskID:
+      name: task_id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        detail: { type: string }
+        status: { type: integer }
+        instance: { type: string }
+
+    TokenRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string }
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, example: "bearer" }
+        expires_in: { type: integer, example: 3600 }
+
+    CreateUserRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          description: >-
+            Login email. Normalized to lowercase, so it is unique
+            case-insensitively within the tenant.
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 8
+          description: >-
+            Plaintext password (write-only; never returned). Must be at least 8
+            characters — the server rejects anything shorter with 400.
+        roles:
+          type: array
+          items: { type: string }
+          description: >-
+            Names of existing roles to grant; omit or empty to grant none.
+
+    User:
+      type: object
+      required: [id, email, roles, is_active, created_at]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    UserListItem:
+      type: object
+      required: [id, email, roles, is_active, created_at]
+      description: >-
+        One account in the user list. Leoflow accounts are email-keyed and carry
+        a set of RBAC roles, so this diverges from the Airflow FAB users API
+        (username-keyed with first_name/last_name).
+      properties:
+        id: { type: string }
+        email: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    UserCollection:
+      type: object
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/UserListItem" }
+        total_entries: { type: integer }
+
+    DAG:
+      type: object
+      properties:
+        dag_id: { type: string }
+        dag_display_name: { type: string }
+        description: { type: string }
+        is_paused: { type: boolean }
+        is_active: { type: boolean }
+        owners: { type: array, items: { type: string } }
+        tags:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+        schedule_interval:
+          type: object
+          nullable: true
+        timetable_description: { type: string }
+        next_dagrun: { type: string, format: date-time, nullable: true }
+        last_parsed_time: { type: string, format: date-time, nullable: true }
+        max_active_runs: { type: integer }
+        catchup: { type: boolean }
+        has_task_concurrency_limits: { type: boolean }
+
+    DAGCollection:
+      type: object
+      properties:
+        dags:
+          type: array
+          items: { $ref: "#/components/schemas/DAG" }
+        total_entries: { type: integer }
+
+    DagVersion:
+      type: object
+      properties:
+        id: { type: string }
+        version_number: { type: integer }
+        dag_id: { type: string }
+        dag_display_name: { type: string }
+        bundle_name: { type: string }
+        bundle_version: { type: string, nullable: true }
+        bundle_url: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    DagVersionCollection:
+      type: object
+      properties:
+        dag_versions:
+          type: array
+          items: { $ref: "#/components/schemas/DagVersion" }
+        total_entries: { type: integer }
+
+    DagSource:
+      type: object
+      properties:
+        content: { type: string, description: "The dag.py source text (compiled-spec JSON fallback for pre-source-capture versions)." }
+        dag_id: { type: string }
+        version_number: { type: integer }
+        dag_display_name: { type: string }
+
+    ComponentHealth:
+      type: object
+      properties:
+        status: { type: string }
+        latest_scheduler_heartbeat: { type: string, nullable: true }
+        latest_triggerer_heartbeat: { type: string, nullable: true }
+        latest_dag_processor_heartbeat: { type: string, nullable: true }
+
+    HealthInfo:
+      type: object
+      properties:
+        metadatabase: { $ref: "#/components/schemas/ComponentHealth" }
+        scheduler: { $ref: "#/components/schemas/ComponentHealth" }
+        triggerer: { $ref: "#/components/schemas/ComponentHealth" }
+        dag_processor: { $ref: "#/components/schemas/ComponentHealth" }
+
+    ExecutorInfo:
+      type: object
+      properties:
+        pod_dispatch_enabled: { type: boolean }
+        task_namespace: { type: string }
+        agent_control_plane_addr: { type: string }
+        execution_modes: { type: array, items: { type: string } }
+
+    VersionInfo:
+      type: object
+      properties:
+        version: { type: string }
+        git_version: { type: string }
+
+    DAGUpdate:
+      type: object
+      properties:
+        is_paused: { type: boolean }
+
+    DAGRun:
+      type: object
+      properties:
+        dag_id: { type: string }
+        dag_run_id: { type: string }
+        logical_date: { type: string, format: date-time }
+        data_interval_start: { type: string, format: date-time, nullable: true }
+        data_interval_end: { type: string, format: date-time, nullable: true }
+        queued_at: { type: string, format: date-time }
+        start_date: { type: string, format: date-time, nullable: true }
+        end_date: { type: string, format: date-time, nullable: true }
+        state:
+          type: string
+          enum: [queued, running, success, failed]
+        run_type:
+          type: string
+          enum: [scheduled, manual, backfill, dataset_triggered]
+        conf: { type: object, additionalProperties: true }
+        note: { type: string, nullable: true }
+
+    DAGRunCollection:
+      type: object
+      properties:
+        dag_runs:
+          type: array
+          items: { $ref: "#/components/schemas/DAGRun" }
+        total_entries: { type: integer }
+
+    DAGRunCreate:
+      type: object
+      properties:
+        dag_run_id: { type: string }
+        logical_date: { type: string, format: date-time }
+        conf: { type: object, additionalProperties: true }
+        note: { type: string }
+
+    TaskInstance:
+      type: object
+      properties:
+        dag_id: { type: string }
+        dag_run_id: { type: string }
+        task_id: { type: string }
+        map_index: { type: integer, default: -1 }
+        try_number: { type: integer }
+        state:
+          type: string
+          nullable: true
+          enum: [scheduled, queued, running, success, failed, skipped, upstream_failed, up_for_retry, none]
+        operator: { type: string }
+        start_date: { type: string, format: date-time, nullable: true }
+        end_date: { type: string, format: date-time, nullable: true }
+        duration: { type: number, nullable: true }
+        hostname: { type: string }
+        pool: { type: string }
+        max_tries: { type: integer }
+        failure_reason:
+          type: string
+          nullable: true
+          description: >-
+            Leoflow extension (not part of the Airflow API). A short,
+            human-readable cause for a terminal failure, recorded by whichever
+            component observed it: the task's own report, the reconciler reading
+            the pod (image pull, OOM, exit code), a reaper declaring the pod or
+            agent lost, or the agent's classification of a failure that happened
+            before it could register. It answers "why did this fail?" for an
+            attempt that streamed no logs because its agent never started. Null
+            when no cause was observed. Best-effort and diagnostic: it carries a
+            classification, never a credential or a raw internal error.
+          example: >-
+            the control plane rejected this pod's projected ServiceAccount
+            token; check the control plane's RBAC for tokenreviews and the
+            configured token audience.
+
+    TaskInstanceCollection:
+      type: object
+      properties:
+        task_instances:
+          type: array
+          items: { $ref: "#/components/schemas/TaskInstance" }
+        total_entries: { type: integer }
+
+    ClearTaskInstancesRequest:
+      type: object
+      properties:
+        task_ids:
+          type: array
+          items: { type: string }
+        dag_run_id: { type: string }
+        only_failed: { type: boolean, default: false }
+        only_running: { type: boolean, default: false }
+        reset_dag_runs: { type: boolean, default: true }
+
+    XComEntry:
+      type: object
+      properties:
+        key: { type: string }
+        value: {}
+        timestamp: { type: string, format: date-time }
+        dag_id: { type: string }
+        task_id: { type: string }
+        dag_run_id: { type: string }

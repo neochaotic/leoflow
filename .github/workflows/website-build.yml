@@ -44,7 +44,14 @@ jobs:
       - name: Setup Node (for Docsy PostCSS/autoprefixer)
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Node 22 LTS (NOT 20): Hugo Extended sandboxes the PostCSS/autoprefixer
+          # subprocess with Node's Permission Model — it invokes node with
+          # `--permission --allow-fs-read=<computed allowlist> --import=<resolver>`.
+          # The `--permission` flag only exists on Node >= 22.13 / 24; on Node 20.x
+          # node aborts with `bad option: --permission`, which fails the SCSS->CSS
+          # transform of main.css and thus the whole production build (`hugo --gc
+          # --minify`). Local builds passed only because dev machines run newer Node.
+          node-version: "22"
 
       - name: Setup Python (for pdoc + generator post-processing)
         uses: actions/setup-python@v5
@@ -78,32 +85,11 @@ jobs:
       - name: Generate Python runtime API (pdoc)
         run: ./website/scripts/gen-python.sh
 
-      # TEMP DIAGNOSTIC — capture the environment Hugo hands to the PostCSS
-      # subprocess, to pin down where `--permission` is injected. Removed once the
-      # root cause is confirmed.
-      - name: Diagnose Node env (temp)
-        working-directory: website
-        run: |
-          echo "NODE_OPTIONS=[${NODE_OPTIONS:-<unset>}]"
-          echo "--- env (node/permission) ---"
-          env | grep -iE 'node|permission' || echo "(no node/permission env)"
-          echo "--- node ---"
-          which node; node --version
-          echo "--- postcss bin shebang ---"
-          head -1 node_modules/.bin/postcss || true
-          head -1 node_modules/postcss-cli/index.js || true
-
       # No `hugo mod get -u` — that would upgrade past the pinned Docsy version in
       # go.mod. `hugo --gc` auto-downloads modules at exactly the pinned versions.
       - name: Build (no deploy)
         working-directory: website
-        # TEMP: prepend a node shim to PATH so we can see exactly how/why node is
-        # invoked with --permission, plus Hugo debug logging.
-        run: |
-          export PATH="$PWD/.ci-nodeshim:$PATH"
-          hugo --gc --minify --logLevel debug 2>&1 | grep -iE 'NODESHIM|argv|argc|PPID|postcss|permission|exec:|main.css' | head -60 || true
-          echo "--- now the real build (fail if broken) ---"
-          hugo --gc --minify --logLevel info
+        run: hugo --gc --minify --logLevel info
 
       - name: Upload built site (artifact only — NOT a deploy)
         uses: actions/upload-artifact@v4

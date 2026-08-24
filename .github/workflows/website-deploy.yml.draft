@@ -57,12 +57,19 @@
 #      supersedes it: it both builds and deploys), or kept as a PR-only check by
 #      dropping its main-push trigger — either is fine; do not leave it deploying.
 #
-#   4. Promote website/ to the sole docs tree and archive the old one:
-#        git rm -r docs/ mkdocs.yml overrides/ mkdocs_templates/   # live MkDocs
-#      (or `git mv docs/ docs-archive/` if the source history is wanted on-tree;
-#      the generated docs/cli, docs/go, docs/openapi.yaml are git-ignored and
-#      vanish on their own). The `edit_uri`/github_subdir already points Docsy at
-#      website/, so "Edit this page" keeps working.
+#   4. Promote website/ to the sole docs tree and archive the old MkDocs content.
+#      DO NOT blanket-remove docs/ — docs/api/ is NOT docs-site content: it holds
+#      the source-of-truth openapi.yaml + JSON schemas consumed by the Go codegen
+#      (`make pkg-client` / oapi-codegen), internal/api/docs_test.go, the CI
+#      redocly + pkg/client-sync gates, AND this workflow's own gen-openapi.sh.
+#      Deleting or moving it breaks the build, a unit test, CI, and the next docs
+#      deploy. Remove only the migrated MkDocs tree and KEEP docs/api/ in place:
+#        # remove every tracked file under docs/ EXCEPT docs/api/ (shared source)
+#        git ls-files docs/ | grep -v '^docs/api/' | xargs git rm
+#        git rm mkdocs.yml overrides/ mkdocs_templates/ -r            # live MkDocs
+#      (the generated docs/cli, docs/go, docs/openapi.yaml — the root copy — are
+#      git-ignored and vanish on their own). The `edit_uri`/github_subdir already
+#      points Docsy at website/, so "Edit this page" keeps working.
 #
 #   5. Merge to main. This workflow runs, builds, and publishes website/public to
 #      Pages at https://neochaotic.github.io/leoflow/ (same origin as today).

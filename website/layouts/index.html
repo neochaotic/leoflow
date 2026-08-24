@@ -1,0 +1,9 @@
+{{/*
+  Project home template. Docsy v0.15.0 no longer ships a root `index.html` home
+  layout (it lives in Docsy's example site, not the theme module), so without this
+  the landing page's <main> renders empty. This renders the block shortcodes
+  (blocks/lead, blocks/section, blocks/feature) authored in content/en/_index.md.
+*/ -}}
+{{ define "main" }}
+{{ .Content }}
+{{ end }}

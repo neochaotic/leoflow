@@ -1,0 +1,156 @@
+####################################################################################
+# Leoflow documentation site — Hugo + Docsy (CNCF/enterprise-grade toolchain).
+#
+# This is the PHASE 0 scaffold of the MkDocs-Material -> Hugo+Docsy migration. It is
+# a PARALLEL track: the live Material+mike site under ../docs, ../mkdocs.yml and the
+# docs*.yml workflows keeps shipping untouched until we reach full parity and cut over.
+#
+# Docsy is pulled in as a Hugo Module (see the [[module.imports]] block and go.mod);
+# fetch it with `hugo mod get github.com/google/docsy` before the first build.
+####################################################################################
+
+baseURL = "https://neochaotic.github.io/leoflow/"
+title = "Leoflow"
+
+# GitHub Pages serves this project site under the /leoflow/ SUBPATH. Every internal
+# URL — page links, images, static assets (the Scalar page, screenshots), the
+# hand-written hero buttons, and Docsy shortcode `url=` params — must carry that
+# prefix. canonifyURLs rewrites every root-relative ("/…") href/src in the rendered
+# output to sit under baseURL, uniformly and post-render, so all URL shapes behave
+# the same. It pairs with disabling Goldmark's default link/image render hooks
+# (see [markup.goldmark.renderHooks] below): with the hooks OFF, markdown links stay
+# root-relative and canonify is the single, consistent thing that prefixes them —
+# turning the hooks ON would double-prefix (/leoflow/leoflow/…).
+canonifyURLs = true
+
+# Single language today: content lives directly under content/ and the default
+# language is NOT pushed into a /en/ subdir, so URLs are clean Hugo-natural paths
+# (/docs/architecture/, not /en/docs/architecture/). When locales are added, give
+# each language its own `contentDir` (e.g. content/en, content/pt) under a
+# [languages.*] block — that is the drop-in point, not a rename of this folder.
+defaultContentLanguage = "en"
+defaultContentLanguageInSubdir = false
+
+# Hugo-natural URLs (LOCKED decision): a page at content/en/docs/architecture.md
+# serves at /docs/architecture/. We do NOT try to preserve the old Material flat
+# URLs here; a redirect map from old -> new paths lands in a later phase (F4).
+enableRobotsTXT = true
+enableGitInfo = true
+
+# Docsy renders GitHub-flavored callouts and needs raw HTML passthrough for the
+# hand-written HTML fragments that survive the conversion (hero blocks, etc.).
+[markup]
+  [markup.goldmark.renderer]
+    unsafe = true
+  # Turn OFF Goldmark's default link/image render hooks. Those hooks resolve
+  # page-to-page markdown links to their RelPermalink (already /leoflow/-prefixed)
+  # but leave static-asset links, raw-HTML hrefs and shortcode url= params
+  # un-prefixed — an inconsistent split that breaks images and buttons under the
+  # subpath. With the hooks off, EVERY internal URL stays root-relative and
+  # canonifyURLs (above) prefixes all of them uniformly.
+  [markup.goldmark.renderHooks]
+    [markup.goldmark.renderHooks.link]
+      useEmbedded = "never"
+    [markup.goldmark.renderHooks.image]
+      useEmbedded = "never"
+  [markup.highlight]
+    style = "tango"
+    noClasses = false
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 3
+
+# Mermaid diagrams: Docsy ships a `mermaid` shortcode, but our source uses fenced
+# ```mermaid blocks. Registering a code-block render hook name lets Docsy's
+# render-codeblock-mermaid.html hook fire and swap in the Mermaid runtime.
+[params]
+  copyright = "The Leoflow Authors"
+  # Full-text search parity with the live Material site (which ships MkDocs'
+  # `search` plugin). Docsy's Lunr-based OFFLINE search builds a client-side index
+  # (assets/json/offline-search-index.json) at build time and needs no external
+  # service — it works on GitHub Pages under the /leoflow/ subpath. Setting this
+  # renders the navbar search box (partials/search-input.html gates on it) and
+  # publishes the index resource. `sidebar_search_disable=false` (below) keeps the
+  # sidebar box on too.
+  offlineSearch = true
+  offlineSearchMaxResults = 25
+  github_repo = "https://github.com/neochaotic/leoflow"
+  github_branch = "main"
+  # "Edit this page" + "Create child page" + "View page source" links. The docs
+  # live under docs/ on the live site today; the Hugo content root is website/content.
+  github_subdir = "website"
+  # Mermaid on: the Docsy partial injects the Mermaid ESM bundle on pages that use it.
+  [params.mermaid]
+    enable = true
+
+  [params.ui]
+    # Compact sidebar: collapse the long ADR/connection leaf rails and expand only
+    # the active section, so the tree stays scannable instead of showing every leaf
+    # at once (the fully-expanded rail read as heavy). Breadcrumbs + dark-mode toggle
+    # stay on.
+    sidebar_menu_compact = true
+    sidebar_search_disable = false
+    breadcrumb_disable = false
+    navbar_logo = false
+    footer_about_enable = true
+    [params.ui.feedback]
+      enable = false
+
+  # Version selector (LOCKED: replicate the dev/latest scheme mike gave us).
+  # Docsy renders these into the navbar dropdown. "dev" is the live tip today; the
+  # "latest" (GA) entry is wired now but points at the same base until we cut a tag.
+  version = "dev"
+  version_menu = "Releases"
+  version_menu_pagelinks = false
+  archived_version = false
+  [[params.versions]]
+    version = "dev"
+    url = "https://neochaotic.github.io/leoflow/"
+  [[params.versions]]
+    version = "latest"
+    url = "https://neochaotic.github.io/leoflow/"
+
+  [params.links]
+    [[params.links.user]]
+      name = "GitHub"
+      url = "https://github.com/neochaotic/leoflow"
+      icon = "fab fa-github"
+      desc = "Source, issues, and discussions"
+    [[params.links.developer]]
+      name = "GitHub"
+      url = "https://github.com/neochaotic/leoflow"
+      icon = "fab fa-github"
+      desc = "Development happens here"
+
+# Docsy + its bundled dependencies (Bootstrap, Font Awesome) as Hugo Modules.
+[module]
+  proxy = "direct"
+  [module.hugoVersion]
+    extended = true
+    min = "0.110.0"
+  [[module.imports]]
+    path = "github.com/google/docsy"
+    disable = false
+
+[languages]
+  [languages.en]
+    label = "English"
+    weight = 1
+    title = "Leoflow"
+    [languages.en.params]
+      description = "GitOps-first, container-native workflow orchestrator with an Airflow-compatible UI and REST API — a Go control plane instead of Python's."
+
+# Main navbar entries. The nine IA sections register themselves as navbar items
+# from their own _index.md front matter (menu.main + weight), so the only entry
+# hard-wired here is the external GitHub link.
+[menu]
+  [[menu.main]]
+    name = "GitHub"
+    weight = 100
+    url = "https://github.com/neochaotic/leoflow"
+    pre = "<i class='fab fa-github'></i>"
+
+[outputs]
+  home = ["HTML"]
+  page = ["HTML"]
+  section = ["HTML"]

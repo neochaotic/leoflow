@@ -1,0 +1,72 @@
+---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adrs.html
+# --- end AUTO redirect aliases ---
+title: Architecture Decision Records
+linkTitle: ADRs
+weight: 10
+description: The why behind Leoflow design decisions — one record per decision, immutable once accepted.
+cascade: { type: docs }
+---
+
+The *why* behind Leoflow's design. ADRs are immutable once accepted.
+
+- [ADR 0001: Why Leoflow and Not Apache Airflow's KubernetesExecutor](/project/adrs/0001-why-leoflow/)
+- [ADR 0002: Pod-per-Task Execution Model](/project/adrs/0002-pod-per-task/)
+- [ADR 0003: DAG-as-Image with `leoflow.yaml` Abstraction Layer](/project/adrs/0003-dag-as-image/)
+- [ADR 0004: Thin Static Go Agent in the Worker Container](/project/adrs/0004-thin-agent/)
+- [ADR 0005: Hybrid DAG Authoring with Compile-Time Parsing](/project/adrs/0005-hybrid-dag-authoring/)
+- [ADR 0006: XCom with Redis Backend](/project/adrs/0006-xcom-redis/)
+- [ADR 0007: Airflow UI Compatibility for the MVP](/project/adrs/0007-airflow-ui-compatibility/)
+- [ADR 0008: JWT Authentication with OIDC-Ready Interface](/project/adrs/0008-jwt-auth/)
+- [ADR 0009: Leader Election via Postgres Advisory Locks](/project/adrs/0009-leader-election/)
+- [ADR 0010: Observability Stack from Day One](/project/adrs/0010-observability/)
+- [ADR 0011: Test-Driven Development (Strict)](/project/adrs/0011-tdd-strict/)
+- [ADR 0012: Code Quality Standards (Go Report Card A+ as Floor)](/project/adrs/0012-code-quality-standards/)
+- [ADR 0013: API Documentation via Scalar, Embedded in the Server Binary](/project/adrs/0013-scalar-api-docs/)
+- [ADR 0014: Supply Chain Security Stack](/project/adrs/0014-supply-chain-security/)
+- [ADR 0015: Kubernetes as the Sole Container Execution Path (No Docker SDK)](/project/adrs/0015-kubernetes-only-execution/)
+- [ADR 0016: Deferrable Tasks (Deferred to v0.3)](/project/adrs/0016-deferrable-tasks/)
+- [ADR 0017: UI Static Asset Serving Strategy](/project/adrs/0017-ui-asset-serving/)
+- [ADR 0018: UI Custom as Strategic North Star](/project/adrs/0018-ui-custom-north-star/)
+- [ADR 0019: Secret Encryption at Rest (Connections)](/project/adrs/0019-secret-encryption-at-rest/)
+- [ADR 0020: "Delete DAG" Clears History; Deregister Is Separate](/project/adrs/0020-delete-vs-clear-dag/)
+- [ADR 0021: Exposing Variables and Connections to Task Pods](/project/adrs/0021-exposing-variables-connections-to-pods/)
+- [ADR 0022: Ephemeral Per-DAG-Run Staging Volume](/project/adrs/0022-ephemeral-per-run-staging-volume/)
+- [ADR 0023: DAG Authoring — Config Binding and Override Layers](/project/adrs/0023-dag-authoring-config-binding/)
+- [ADR 0024: DAG Parsing via a Structural Shim (No Airflow SDK Dependency)](/project/adrs/0024-dag-parsing-structural-shim/)
+- [ADR 0025: Embedded Monaco Web Editor for Leoflow Lite](/project/adrs/0025-lite-embedded-web-editor/)
+- [ADR 0026: Lite Datastore — XCom on Postgres, No Redis](/project/adrs/0026-lite-datastore-no-redis/)
+- [ADR 0027: Product Editions — Executors and Delivery](/project/adrs/0027-product-editions-executors-delivery/)
+- [ADR 0028: Release & Versioning for the Two Editions (One Tag, Two Co-Versioned Artifacts)](/project/adrs/0028-release-versioning-two-editions/)
+- [ADR 0029: Lite Datastore Default — Docker Postgres (Managed PG is the Opt-In)](/project/adrs/0029-lite-datastore-default-docker/)
+- [ADR 0030: Lite Datastore Auto-Selects — Docker Postgres, or a Managed PG When Docker Is Absent](/project/adrs/0030-lite-datastore-auto-select/)
+- [ADR 0031: Scheduler Architecture — Reconciliation Loop, Two-Phase Dispatch, Two-Layer Reaping](/project/adrs/0031-scheduler-architecture/)
+- [ADR 0032: Task Return Values Are Not Logged — Only Their Metadata Is](/project/adrs/0032-return-values-not-logged/)
+- [ADR 0033: Release Flow — RC Tags, E2E Gates, and Immutable Versions](/project/adrs/0033-release-flow-rc-tags-and-e2e-gates/)
+- [ADR 0034: Fan-in / map-reduce — list-of-upstream parameter binding](/project/adrs/0034-fan-in-map-reduce-binding/)
+- [ADR 0035: Cloud connector auth — keyless-first; Leoflow is not a key manager](/project/adrs/0035-cloud-connector-auth-keyless-first/)
+- [ADR 0036: Airflow 3.X runtime compatibility shim — one model, one policy seam](/project/adrs/0036-airflow-runtime-compat-shim/)
+- [ADR 0037: Release version scheme — skip alpha/beta, RC discipline from `v0.0.1`](/project/adrs/0037-release-version-scheme/)
+- [ADR 0038: Connector dependency ergonomics — `connectors:` sugar + `dependencies:` escape hatch](/project/adrs/0038-connector-dependency-ergonomics/)
+- [ADR 0039: Generated connector catalog with full form fidelity](/project/adrs/0039-generated-connector-catalog/)
+- [ADR 0040: Airflow operator + sensor execution — native fast path + generic executor](/project/adrs/0040-airflow-operator-support/)
+- [ADR 0041: `leoflow deploy` — pipeline-less promotion from Lite to Pro](/project/adrs/0041-leoflow-deploy-pipelineless/)
+- [ADR 0042: dbt support via native-Go manifest rendering](/project/adrs/0042-dbt-support-native-rendering/)
+- [ADR 0043: TaskGroup as a first-class construct with split/fused execution](/project/adrs/0043-taskgroup-split-fused-execution/)
+- [ADR 0044: dbt multi-project — one project per business domain](/project/adrs/0044-dbt-multi-project-by-domain/)
+- [ADR 0045: Secrets reach a task because it declared them](/project/adrs/0045-declared-secret-delivery/)
+- [ADR 0046: Coverage — one rule, per package, counting the tests we already wrote](/project/adrs/0046-coverage-policy/)
+- [ADR 0047: Deprecate the native inline http_api; run HTTP through the generic pod executor](/project/adrs/0047-deprecate-native-inline-http/)
+- [ADR 0048: The control plane executes no user-influenced code or network requests](/project/adrs/0048-no-user-code-in-control-plane/)
+- [ADR 0049: Split the API/UI and scheduler into separate roles of one binary](/project/adrs/0049-split-api-and-scheduler-roles/)
+- [ADR 0050: Model Context Protocol (MCP) server](/project/adrs/0050-mcp-server/)
+- [ADR 0051: Separate the orchestration and execution state machines](/project/adrs/0051-separate-orchestration-and-execution-state-machines/)
+- [ADR 0052: Durable task outcome — decouple the task result from report delivery](/project/adrs/0052-durable-task-outcome/)
+- [ADR 0053: Admission + placement — one scheduler-side layer for task concurrency and pod assignment](/project/adrs/0053-admission-and-placement/)
+- [ADR 0054: Coexistence in a shared, multi-team Kubernetes cluster](/project/adrs/0054-shared-cluster-coexistence/)
+- [ADR 0055: Secret scoping and token liveness — scope by declaration, exchange the token, bind it to task liveness](/project/adrs/0055-secret-scoping-and-token-liveness/)
+- [ADR 0056: Task-log object sink — native dual-SDK (S3 + GCS), keyless-first](/project/adrs/0056-task-log-object-sink/)
+- [ADR 0057: OIDC/SSO authentication with fail-closed tenant pinning](/project/adrs/0057-oidc-sso/)
+- [ADR 0058: Warm worker pools — pod-reuse semantics (N:1)](/project/adrs/0058-warm-worker-pools/)

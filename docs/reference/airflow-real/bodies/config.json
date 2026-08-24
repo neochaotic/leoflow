@@ -1,1 +1,0 @@
-{"fallback_page_limit":50,"auto_refresh_interval":3,"hide_paused_dags_by_default":false,"instance_name":"Airflow","enable_swagger_ui":true,"require_confirmation_dag_change":false,"default_wrap":false,"test_connection":"Disabled","dashboard_alert":[],"show_external_log_redirect":false,"external_log_name":null,"theme":null,"multi_team":false}

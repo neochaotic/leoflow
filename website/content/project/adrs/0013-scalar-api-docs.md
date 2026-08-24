@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0013-scalar-api-docs.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0013: API Documentation via Scalar, Embedded in the Server Binary"
 linkTitle: "0013 · API Documentation via Scalar, Embedded in the Server Binary"
 weight: 130

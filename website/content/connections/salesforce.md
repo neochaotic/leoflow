@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/salesforce.html
+# --- end AUTO redirect aliases ---
 title: Salesforce connection
 linkTitle: Salesforce
 weight: 430

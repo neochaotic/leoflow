@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_completion_zsh.html
+# --- end AUTO redirect aliases ---
 title: "leoflow completion zsh"
 linkTitle: "completion zsh"
 weight: 21

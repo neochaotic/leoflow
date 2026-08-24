@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/databricks.html
+# --- end AUTO redirect aliases ---
 title: Databricks connection
 linkTitle: Databricks
 weight: 50

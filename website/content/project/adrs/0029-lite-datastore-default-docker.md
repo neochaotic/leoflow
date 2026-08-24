@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0029-lite-datastore-default-docker.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0029: Lite Datastore Default — Docker Postgres (Managed PG is the Opt-In)"
 linkTitle: 0029 · Lite Datastore Default — Docker Postgres (Managed PG is the Opt-In)
 weight: 290

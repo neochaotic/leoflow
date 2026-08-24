@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/postgres.html
+# --- end AUTO redirect aliases ---
 title: Postgres connection
 linkTitle: Postgres
 weight: 380

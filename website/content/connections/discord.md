@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/discord.html
+# --- end AUTO redirect aliases ---
 title: Discord connection
 linkTitle: Discord
 weight: 80

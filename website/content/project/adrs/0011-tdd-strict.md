@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0011-tdd-strict.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0011: Test-Driven Development (Strict)"
 linkTitle: 0011 · Test-Driven Development (Strict)
 weight: 110

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/trino.html
+# --- end AUTO redirect aliases ---
 title: Trino connection
 linkTitle: Trino
 weight: 520

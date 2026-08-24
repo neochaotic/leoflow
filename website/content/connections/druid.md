@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/druid.html
+# --- end AUTO redirect aliases ---
 title: Druid connection
 linkTitle: Druid
 weight: 100

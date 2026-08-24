@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0027-product-editions-executors-delivery.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0027: Product Editions — Executors and Delivery"
 linkTitle: 0027 · Product Editions — Executors and Delivery
 weight: 270

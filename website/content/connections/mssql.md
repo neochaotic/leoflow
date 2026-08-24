@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/mssql.html
+# --- end AUTO redirect aliases ---
 title: Microsoft SQL Server connection
 linkTitle: Microsoft SQL Server
 weight: 310

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /ui-compatibility.html
+# --- end AUTO redirect aliases ---
 title: UI compatibility
 weight: 40
 description: "What the Airflow-compatible UI supports, and where it intentionally differs."

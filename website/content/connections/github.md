@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/github.html
+# --- end AUTO redirect aliases ---
 title: GitHub connection
 linkTitle: GitHub
 weight: 180

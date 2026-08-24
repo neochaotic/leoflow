@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /agent-credential-transport.html
+# --- end AUTO redirect aliases ---
 title: Agent credential transport
 weight: 90
 description: "How declared secrets reach the in-container agent, and the trust boundary."

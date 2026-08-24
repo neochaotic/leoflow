@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0007-airflow-ui-compatibility.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0007: Airflow UI Compatibility for the MVP"
 linkTitle: 0007 · Airflow UI Compatibility for the MVP
 weight: 70

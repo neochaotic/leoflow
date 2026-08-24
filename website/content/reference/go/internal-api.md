@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /go/internal/api.html
+# --- end AUTO redirect aliases ---
 title: "internal/api"
 linkTitle: "internal/api"
 weight: 11

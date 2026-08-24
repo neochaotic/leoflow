@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/dbt_cloud.html
+# --- end AUTO redirect aliases ---
 title: dbt Cloud connection
 linkTitle: dbt Cloud
 weight: 70

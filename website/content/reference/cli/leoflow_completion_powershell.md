@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_completion_powershell.html
+# --- end AUTO redirect aliases ---
 title: "leoflow completion powershell"
 linkTitle: "completion powershell"
 weight: 20

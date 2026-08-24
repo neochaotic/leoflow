@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0047-deprecate-native-inline-http.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0047: Deprecate the native inline http_api; run HTTP through the generic pod executor"
 linkTitle: 0047 · Deprecate the native inline http_api; run HTTP through the generic pod executor
 weight: 470

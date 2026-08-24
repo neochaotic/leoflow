@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0028-release-versioning-two-editions.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0028: Release & Versioning for the Two Editions (One Tag, Two Co-Versioned Artifacts)"
 linkTitle: "0028 · Release & Versioning for the Two Editions (One Tag, Two Co-Versioned Artifacts)"
 weight: 280

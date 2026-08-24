@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0056-task-log-object-sink.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0056: Task-log object sink — native dual-SDK (S3 + GCS), keyless-first"
 linkTitle: "0056 · Task-log object sink — native dual-SDK (S3 + GCS), keyless-first"
 weight: 560

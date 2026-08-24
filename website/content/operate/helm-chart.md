@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /helm-chart.html
+# --- end AUTO redirect aliases ---
 title: Helm chart
 linkTitle: Helm chart
 weight: 30

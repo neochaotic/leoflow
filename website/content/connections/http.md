@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/http.html
+# --- end AUTO redirect aliases ---
 title: HTTP connection
 linkTitle: HTTP
 weight: 230

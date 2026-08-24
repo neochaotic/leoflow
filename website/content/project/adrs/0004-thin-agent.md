@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0004-thin-agent.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0004: Thin Static Go Agent in the Worker Container"
 linkTitle: 0004 · Thin Static Go Agent in the Worker Container
 weight: 40

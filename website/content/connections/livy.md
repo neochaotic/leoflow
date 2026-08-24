@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/livy.html
+# --- end AUTO redirect aliases ---
 title: Apache Livy connection
 linkTitle: Apache Livy
 weight: 280

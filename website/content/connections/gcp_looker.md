@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/gcp_looker.html
+# --- end AUTO redirect aliases ---
 title: Google Looker connection
 linkTitle: Google Looker
 weight: 140

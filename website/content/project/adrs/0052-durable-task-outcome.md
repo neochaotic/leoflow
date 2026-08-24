@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0052-durable-task-outcome.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0052: Durable task outcome — decouple the task result from report delivery"
 linkTitle: 0052 · Durable task outcome — decouple the task result from report delivery
 weight: 520

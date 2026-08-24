@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0033-release-flow-rc-tags-and-e2e-gates.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0033: Release Flow — RC Tags, E2E Gates, and Immutable Versions"
 linkTitle: "0033 · Release Flow — RC Tags, E2E Gates, and Immutable Versions"
 weight: 330

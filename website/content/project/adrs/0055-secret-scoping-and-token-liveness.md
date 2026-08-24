@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0055-secret-scoping-and-token-liveness.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0055: Secret scoping and token liveness — scope by declaration, exchange the token, bind it to task liveness"
 linkTitle: "0055 · Secret scoping and token liveness — scope by declaration, exchange the token, bind it to task liveness"
 weight: 550

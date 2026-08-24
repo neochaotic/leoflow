@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /alerting.html
+# --- end AUTO redirect aliases ---
 title: On-failure alerting
 linkTitle: Alerting
 weight: 50

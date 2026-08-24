@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0041-leoflow-deploy-pipelineless.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0041: `leoflow deploy` — pipeline-less promotion from Lite to Pro"
 linkTitle: "0041 · `leoflow deploy` — pipeline-less promotion from Lite to Pro"
 weight: 410

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /warm-pools.html
+# --- end AUTO redirect aliases ---
 title: Warm worker pools
 linkTitle: Warm pools
 weight: 80

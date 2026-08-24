@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0036-airflow-runtime-compat-shim.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0036: Airflow 3.X runtime compatibility shim — one model, one policy seam"
 linkTitle: "0036 · Airflow 3.X runtime compatibility shim — one model, one policy seam"
 weight: 360

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/file-transfer.html
+# --- end AUTO redirect aliases ---
 title: File transfer connections (SSH / SFTP / FTP)
 weight: 130
 description: File transfer connections (SSH / SFTP / FTP)

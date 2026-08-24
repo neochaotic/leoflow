@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_lite_forget.html
+# --- end AUTO redirect aliases ---
 title: "leoflow lite forget"
 linkTitle: "lite forget"
 weight: 32

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0009-leader-election.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0009: Leader Election via Postgres Advisory Locks"
 linkTitle: 0009 · Leader Election via Postgres Advisory Locks
 weight: 90

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0054-shared-cluster-coexistence.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0054: Coexistence in a shared, multi-team Kubernetes cluster"
 linkTitle: "0054 · Coexistence in a shared, multi-team Kubernetes cluster"
 weight: 540

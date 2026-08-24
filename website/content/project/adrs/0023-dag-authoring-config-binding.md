@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0023-dag-authoring-config-binding.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0023: DAG Authoring — Config Binding and Override Layers"
 linkTitle: 0023 · DAG Authoring — Config Binding and Override Layers
 weight: 230

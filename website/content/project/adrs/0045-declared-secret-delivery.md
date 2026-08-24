@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0045-declared-secret-delivery.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0045: Secrets reach a task because it declared them"
 linkTitle: 0045 · Secrets reach a task because it declared them
 weight: 450

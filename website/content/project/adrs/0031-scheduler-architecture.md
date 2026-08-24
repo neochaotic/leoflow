@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0031-scheduler-architecture.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0031: Scheduler Architecture — Reconciliation Loop, Two-Phase Dispatch, Two-Layer Reaping"
 linkTitle: "0031 · Scheduler Architecture — Reconciliation Loop, Two-Phase Dispatch, Two-Layer Reaping"
 weight: 310

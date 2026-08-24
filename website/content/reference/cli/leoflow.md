@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow.html
+# --- end AUTO redirect aliases ---
 title: "leoflow"
 linkTitle: "leoflow"
 weight: 1

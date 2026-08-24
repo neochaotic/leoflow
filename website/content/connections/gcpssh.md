@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/gcpssh.html
+# --- end AUTO redirect aliases ---
 title: GCP SSH connection
 linkTitle: GCP SSH
 weight: 170

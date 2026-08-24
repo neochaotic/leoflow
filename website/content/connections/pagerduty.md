@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/pagerduty.html
+# --- end AUTO redirect aliases ---
 title: PagerDuty connection
 linkTitle: PagerDuty
 weight: 360

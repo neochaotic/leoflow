@@ -109,6 +109,35 @@ it in sync when you move or rename pages.
 - **`.github/workflows/website-build.yml`** — CI: installs the toolchains, runs the
   four generators, then `hugo --gc --minify`. It only builds an artifact; it never
   deploys (the live MkDocs site still ships until cutover).
+- **`.github/workflows/website-deploy.yml.draft`** — the staged cutover deploy
+  workflow. It is a `.draft` file, so Actions ignores it; activating it (renaming
+  to `.yml`) is a deliberate maintainer step, documented in its header.
+
+## Redirects (old URLs keep working)
+
+The old MkDocs site serves flat `.html` URLs (`use_directory_urls: false`), and the
+Hugo IA moves most pages into sections. To keep bookmarks and external links alive,
+each moved page carries a **Hugo `aliases:`** block in its front matter — Hugo
+renders a redirecting stub at the old path, no server config needed (works on GitHub
+Pages under the `/leoflow/` subpath).
+
+That block is generated, not hand-maintained:
+
+```bash
+cd website
+python3 scripts/migration/build_redirects.py   # idempotent; ~211 aliases
+python3 scripts/migration/check_links.py        # 0 broken internal links
+```
+
+`build_redirects.py` reads `scripts/migration/link-map.csv` plus the generated
+CLI/Go trees; the marked `AUTO redirect aliases` block it writes is safe to
+regenerate. When you move or rename a page, update `link-map.csv` and rerun it.
+
+The **cutover runbook** — the exact steps to switch the published site from
+MkDocs+mike to this one — is documented in the header of
+`.github/workflows/website-deploy.yml.draft` (the committed source of truth), and
+mirrored as a longer local note at `website/spec/CUTOVER.md` (`spec/` is a
+local-only scratch dir, so that copy is not committed).
 
 {{% alert title="Parallel track" color="info" %}}
 This Hugo + Docsy site is migrated **in parallel** with the live MkDocs-Material

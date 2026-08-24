@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/google_cloud_platform.html
+# --- end AUTO redirect aliases ---
 title: "`google_cloud_platform` — Google Cloud connection"
 linkTitle: "`google_cloud_platform` — Google Cloud"
 weight: 200

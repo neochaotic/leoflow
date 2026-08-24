@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /go/internal/domain.html
+# --- end AUTO redirect aliases ---
 title: "internal/domain"
 linkTitle: "internal/domain"
 weight: 1

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/hive_cli.html
+# --- end AUTO redirect aliases ---
 title: Hive CLI connection
 linkTitle: Hive CLI
 weight: 210

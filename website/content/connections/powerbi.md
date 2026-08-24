@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/powerbi.html
+# --- end AUTO redirect aliases ---
 title: Power BI connection
 linkTitle: Power BI
 weight: 390

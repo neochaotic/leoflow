@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /go/pkg/client.html
+# --- end AUTO redirect aliases ---
 title: "pkg/client"
 linkTitle: "pkg/client"
 weight: 12

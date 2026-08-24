@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/telegram.html
+# --- end AUTO redirect aliases ---
 title: Telegram connection
 linkTitle: Telegram
 weight: 510

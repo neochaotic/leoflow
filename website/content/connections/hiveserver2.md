@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/hiveserver2.html
+# --- end AUTO redirect aliases ---
 title: HiveServer2 connection
 linkTitle: HiveServer2
 weight: 220

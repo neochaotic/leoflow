@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/gcpcloudsql.html
+# --- end AUTO redirect aliases ---
 title: Google Cloud SQL connection
 linkTitle: Google Cloud SQL
 weight: 160

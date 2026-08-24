@@ -1,4 +1,9 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /editions.html
+  - /operating-modes.html
+# --- end AUTO redirect aliases ---
 title: Editions & operating modes
 linkTitle: Editions & modes
 weight: 10

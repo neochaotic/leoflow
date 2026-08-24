@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/jdbc.html
+# --- end AUTO redirect aliases ---
 title: JDBC connection
 linkTitle: JDBC
 weight: 260

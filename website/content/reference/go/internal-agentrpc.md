@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /go/internal/agentrpc.html
+# --- end AUTO redirect aliases ---
 title: "internal/agentrpc"
 linkTitle: "internal/agentrpc"
 weight: 6

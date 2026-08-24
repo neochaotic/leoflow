@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /go/internal/scheduler.html
+# --- end AUTO redirect aliases ---
 title: "internal/scheduler"
 linkTitle: "internal/scheduler"
 weight: 2

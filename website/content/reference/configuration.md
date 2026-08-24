@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /configuration.html
+# --- end AUTO redirect aliases ---
 title: Configuration
 weight: 60
 description: "The LEOFLOW_* environment variables and config keys for the server."

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_dags_delete.html
+# --- end AUTO redirect aliases ---
 title: "leoflow dags delete"
 linkTitle: "dags delete"
 weight: 23

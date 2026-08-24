@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/google_ads.html
+# --- end AUTO redirect aliases ---
 title: Google Ads connection
 linkTitle: Google Ads
 weight: 190

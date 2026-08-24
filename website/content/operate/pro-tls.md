@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /pro-tls.html
+# --- end AUTO redirect aliases ---
 title: Pro TLS (cert-manager)
 linkTitle: Pro TLS
 weight: 100

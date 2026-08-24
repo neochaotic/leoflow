@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/azure.html
+# --- end AUTO redirect aliases ---
 title: Azure connection
 linkTitle: Azure
 weight: 30

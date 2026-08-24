@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0024-dag-parsing-structural-shim.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0024: DAG Parsing via a Structural Shim (No Airflow SDK Dependency)"
 linkTitle: 0024 · DAG Parsing via a Structural Shim (No Airflow SDK Dependency)
 weight: 240

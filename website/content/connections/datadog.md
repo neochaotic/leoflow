@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/datadog.html
+# --- end AUTO redirect aliases ---
 title: Datadog connection
 linkTitle: Datadog
 weight: 60

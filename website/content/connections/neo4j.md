@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/neo4j.html
+# --- end AUTO redirect aliases ---
 title: Neo4j connection
 linkTitle: Neo4j
 weight: 330

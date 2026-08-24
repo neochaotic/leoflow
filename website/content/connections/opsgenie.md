@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/opsgenie.html
+# --- end AUTO redirect aliases ---
 title: Opsgenie connection
 linkTitle: Opsgenie
 weight: 340

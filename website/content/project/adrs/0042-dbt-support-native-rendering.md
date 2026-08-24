@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0042-dbt-support-native-rendering.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0042: dbt support via native-Go manifest rendering"
 linkTitle: 0042 · dbt support via native-Go manifest rendering
 weight: 420

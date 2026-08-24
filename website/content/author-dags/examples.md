@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /examples.html
+# --- end AUTO redirect aliases ---
 title: Examples
 weight: 70
 description: Runnable example DAGs covering the common authoring patterns.

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0006-xcom-redis.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0006: XCom with Redis Backend"
 linkTitle: 0006 · XCom with Redis Backend
 weight: 60

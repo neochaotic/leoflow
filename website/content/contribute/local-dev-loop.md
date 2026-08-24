@@ -1,4 +1,9 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /dev-workflow.html
+  - /local-deploy.html
+# --- end AUTO redirect aliases ---
 title: The local dev loop
 linkTitle: Local dev loop
 weight: 20

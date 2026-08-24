@@ -65,6 +65,15 @@ enableGitInfo = true
 # render-codeblock-mermaid.html hook fire and swap in the Mermaid runtime.
 [params]
   copyright = "The Leoflow Authors"
+  # Full-text search parity with the live Material site (which ships MkDocs'
+  # `search` plugin). Docsy's Lunr-based OFFLINE search builds a client-side index
+  # (assets/json/offline-search-index.json) at build time and needs no external
+  # service — it works on GitHub Pages under the /leoflow/ subpath. Setting this
+  # renders the navbar search box (partials/search-input.html gates on it) and
+  # publishes the index resource. `sidebar_search_disable=false` (below) keeps the
+  # sidebar box on too.
+  offlineSearch = true
+  offlineSearchMaxResults = 25
   github_repo = "https://github.com/neochaotic/leoflow"
   github_branch = "main"
   # "Edit this page" + "Create child page" + "View page source" links. The docs

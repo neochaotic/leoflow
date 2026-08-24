@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0014-supply-chain-security.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0014: Supply Chain Security Stack"
 linkTitle: 0014 · Supply Chain Security Stack
 weight: 140

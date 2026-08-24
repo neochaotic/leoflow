@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /installation.html
+# --- end AUTO redirect aliases ---
 title: Installation
 weight: 30
 description: Install the leoflow CLI and provision the managed Python runtime.

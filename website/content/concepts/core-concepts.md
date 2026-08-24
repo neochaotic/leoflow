@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /concepts.html
+# --- end AUTO redirect aliases ---
 title: Core concepts
 linkTitle: Core concepts
 weight: 20

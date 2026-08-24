@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /go/internal/executor.html
+# --- end AUTO redirect aliases ---
 title: "internal/executor"
 linkTitle: "internal/executor"
 weight: 3

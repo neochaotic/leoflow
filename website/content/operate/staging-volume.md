@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /staging-volume.html
+# --- end AUTO redirect aliases ---
 title: Staging volume
 weight: 110
 description: The ephemeral per-run volume that shares large data between tasks.

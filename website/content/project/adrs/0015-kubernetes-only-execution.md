@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0015-kubernetes-only-execution.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0015: Kubernetes as the Sole Container Execution Path (No Docker SDK)"
 linkTitle: 0015 · Kubernetes as the Sole Container Execution Path (No Docker SDK)
 weight: 150

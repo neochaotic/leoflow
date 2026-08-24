@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_lite_reset-password.html
+# --- end AUTO redirect aliases ---
 title: "leoflow lite reset-password"
 linkTitle: "lite reset-password"
 weight: 34

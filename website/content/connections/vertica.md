@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/vertica.html
+# --- end AUTO redirect aliases ---
 title: Vertica connection
 linkTitle: Vertica
 weight: 530

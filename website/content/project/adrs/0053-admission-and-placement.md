@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0053-admission-and-placement.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0053: Admission + placement — one scheduler-side layer for task concurrency and pod assignment"
 linkTitle: 0053 · Admission + placement — one scheduler-side layer for task concurrency and pod assignment
 weight: 530

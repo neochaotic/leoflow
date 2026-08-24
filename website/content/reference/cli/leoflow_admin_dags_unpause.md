@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_admin_dags_unpause.html
+# --- end AUTO redirect aliases ---
 title: "leoflow admin dags unpause"
 linkTitle: "admin dags unpause"
 weight: 5

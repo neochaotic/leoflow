@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0035-cloud-connector-auth-keyless-first.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0035: Cloud connector auth — keyless-first; Leoflow is not a key manager"
 linkTitle: 0035 · Cloud connector auth — keyless-first; Leoflow is not a key manager
 weight: 350

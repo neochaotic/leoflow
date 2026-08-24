@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/aws.html
+# --- end AUTO redirect aliases ---
 title: Amazon Web Services connection
 linkTitle: Amazon Web Services
 weight: 20

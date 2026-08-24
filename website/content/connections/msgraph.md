@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/msgraph.html
+# --- end AUTO redirect aliases ---
 title: Microsoft Graph connection
 linkTitle: Microsoft Graph
 weight: 300

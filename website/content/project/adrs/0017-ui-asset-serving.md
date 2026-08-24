@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0017-ui-asset-serving.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0017: UI Static Asset Serving Strategy"
 linkTitle: 0017 · UI Static Asset Serving Strategy
 weight: 170

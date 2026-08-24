@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0012-code-quality-standards.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0012: Code Quality Standards (Go Report Card A+ as Floor)"
 linkTitle: 0012 · Code Quality Standards (Go Report Card A+ as Floor)
 weight: 120

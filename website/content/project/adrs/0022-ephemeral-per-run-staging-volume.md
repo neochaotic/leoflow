@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0022-ephemeral-per-run-staging-volume.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0022: Ephemeral Per-DAG-Run Staging Volume"
 linkTitle: 0022 · Ephemeral Per-DAG-Run Staging Volume
 weight: 220

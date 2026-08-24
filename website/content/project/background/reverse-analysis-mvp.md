@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /reverse-analysis-mvp.html
+# --- end AUTO redirect aliases ---
 title: MVP reverse analysis
 weight: 10
 description: "Background: reverse analysis of the MVP."

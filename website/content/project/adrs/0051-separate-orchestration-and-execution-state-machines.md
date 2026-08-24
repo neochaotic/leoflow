@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0051-separate-orchestration-and-execution-state-machines.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0051: Separate the orchestration and execution state machines"
 linkTitle: 0051 · Separate the orchestration and execution state machines
 weight: 510

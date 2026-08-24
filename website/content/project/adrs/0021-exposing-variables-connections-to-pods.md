@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0021-exposing-variables-connections-to-pods.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0021: Exposing Variables and Connections to Task Pods"
 linkTitle: 0021 · Exposing Variables and Connections to Task Pods
 weight: 210

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /why-leoflow.html
+# --- end AUTO redirect aliases ---
 title: Why Leoflow
 weight: 5
 description: "The five wounds Airflow won't heal, and how Leoflow heals them."

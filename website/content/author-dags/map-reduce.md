@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cookbook/map-reduce.html
+# --- end AUTO redirect aliases ---
 title: Map-reduce for ML
 linkTitle: Map-reduce
 weight: 60

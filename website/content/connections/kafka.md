@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/kafka.html
+# --- end AUTO redirect aliases ---
 title: Apache Kafka connection
 linkTitle: Apache Kafka
 weight: 270

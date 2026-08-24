@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0050-mcp-server.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0050: Model Context Protocol (MCP) server"
 linkTitle: 0050 · Model Context Protocol (MCP) server
 weight: 500

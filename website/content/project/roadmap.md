@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /roadmap-to-release.html
+# --- end AUTO redirect aliases ---
 title: Roadmap
 weight: 20
 description: The historical road to release — where Leoflow has been heading.

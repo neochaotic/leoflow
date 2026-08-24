@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /go-api.html
+# --- end AUTO redirect aliases ---
 title: Go packages (GoDocs)
 linkTitle: Go packages
 weight: 30

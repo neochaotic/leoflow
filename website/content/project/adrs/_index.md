@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adrs.html
+# --- end AUTO redirect aliases ---
 title: Architecture Decision Records
 linkTitle: ADRs
 weight: 10

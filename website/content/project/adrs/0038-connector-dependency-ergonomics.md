@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0038-connector-dependency-ergonomics.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0038: Connector dependency ergonomics — `connectors:` sugar + `dependencies:` escape hatch"
 linkTitle: "0038 · Connector dependency ergonomics — `connectors:` sugar + `dependencies:` escape hatch"
 weight: 380

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/cassandra.html
+# --- end AUTO redirect aliases ---
 title: Cassandra connection
 linkTitle: Cassandra
 weight: 40

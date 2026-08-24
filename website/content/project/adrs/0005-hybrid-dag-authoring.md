@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0005-hybrid-dag-authoring.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0005: Hybrid DAG Authoring with Compile-Time Parsing"
 linkTitle: 0005 · Hybrid DAG Authoring with Compile-Time Parsing
 weight: 50

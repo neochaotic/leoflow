@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/spark.html
+# --- end AUTO redirect aliases ---
 title: Spark connection
 linkTitle: Spark
 weight: 480

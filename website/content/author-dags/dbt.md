@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /dbt.html
+# --- end AUTO redirect aliases ---
 title: dbt projects as DAGs
 linkTitle: dbt
 weight: 30

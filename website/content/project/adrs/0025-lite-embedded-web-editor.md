@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0025-lite-embedded-web-editor.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0025: Embedded Monaco Web Editor for Leoflow Lite"
 linkTitle: 0025 · Embedded Monaco Web Editor for Leoflow Lite
 weight: 250

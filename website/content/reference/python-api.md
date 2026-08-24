@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /python-api.html
+# --- end AUTO redirect aliases ---
 title: Python runtime API
 linkTitle: Python runtime
 weight: 40

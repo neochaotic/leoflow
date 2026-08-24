@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_uninstall.html
+# --- end AUTO redirect aliases ---
 title: "leoflow uninstall"
 linkTitle: "uninstall"
 weight: 42

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0003-dag-as-image.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0003: DAG-as-Image with `leoflow.yaml` Abstraction Layer"
 linkTitle: "0003 · DAG-as-Image with `leoflow.yaml` Abstraction Layer"
 weight: 30

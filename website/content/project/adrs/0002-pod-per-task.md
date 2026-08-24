@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0002-pod-per-task.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0002: Pod-per-Task Execution Model"
 linkTitle: 0002 · Pod-per-Task Execution Model
 weight: 20

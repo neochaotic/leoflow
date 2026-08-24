@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0019-secret-encryption-at-rest.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0019: Secret Encryption at Rest (Connections)"
 linkTitle: 0019 · Secret Encryption at Rest (Connections)
 weight: 190

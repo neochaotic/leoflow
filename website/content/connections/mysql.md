@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/mysql.html
+# --- end AUTO redirect aliases ---
 title: MySQL / MariaDB connection
 linkTitle: MySQL / MariaDB
 weight: 320

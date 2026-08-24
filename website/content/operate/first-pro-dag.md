@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /first-pro-dag.html
+# --- end AUTO redirect aliases ---
 title: Deploy your first Pro DAG
 weight: 10
 description: Take a DAG from Lite to a Kubernetes control plane — your first Pro deployment.

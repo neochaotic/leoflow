@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0026-lite-datastore-no-redis.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0026: Lite Datastore — XCom on Postgres, No Redis"
 linkTitle: "0026 · Lite Datastore — XCom on Postgres, No Redis"
 weight: 260

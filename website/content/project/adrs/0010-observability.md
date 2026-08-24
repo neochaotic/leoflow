@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0010-observability.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0010: Observability Stack from Day One"
 linkTitle: 0010 · Observability Stack from Day One
 weight: 100

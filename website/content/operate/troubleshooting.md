@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /troubleshooting.html
+# --- end AUTO redirect aliases ---
 title: "Troubleshooting & observability"
 linkTitle: Troubleshooting
 weight: 60

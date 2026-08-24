@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0008-jwt-auth.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0008: JWT Authentication with OIDC-Ready Interface"
 linkTitle: 0008 · JWT Authentication with OIDC-Ready Interface
 weight: 80

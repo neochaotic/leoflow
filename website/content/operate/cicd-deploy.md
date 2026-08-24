@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /deploy.html
+# --- end AUTO redirect aliases ---
 title: "CI/CD & deploy examples"
 linkTitle: "CI/CD & deploy"
 weight: 20

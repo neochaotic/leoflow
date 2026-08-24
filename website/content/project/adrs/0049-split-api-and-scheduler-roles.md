@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0049-split-api-and-scheduler-roles.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0049: Split the API/UI and scheduler into separate roles of one binary"
 linkTitle: 0049 · Split the API/UI and scheduler into separate roles of one binary
 weight: 490

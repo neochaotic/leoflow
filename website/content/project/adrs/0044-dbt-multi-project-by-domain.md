@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0044-dbt-multi-project-by-domain.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0044: dbt multi-project — one project per business domain"
 linkTitle: 0044 · dbt multi-project — one project per business domain
 weight: 440

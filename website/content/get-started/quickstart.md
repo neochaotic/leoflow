@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /quickstart.html
+# --- end AUTO redirect aliases ---
 title: Quickstart
 weight: 10
 description: Get Leoflow Lite running locally in two commands — the fastest path to a running DAG.

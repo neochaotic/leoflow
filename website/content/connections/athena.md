@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/athena.html
+# --- end AUTO redirect aliases ---
 title: Amazon Athena connection
 linkTitle: Amazon Athena
 weight: 10

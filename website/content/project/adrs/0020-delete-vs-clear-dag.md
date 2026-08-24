@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0020-delete-vs-clear-dag.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0020: \"Delete DAG\" Clears History; Deregister Is Separate"
 linkTitle: "0020 · \"Delete DAG\" Clears History; Deregister Is Separate"
 weight: 200

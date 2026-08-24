@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/sqlite.html
+# --- end AUTO redirect aliases ---
 title: SQLite connection
 linkTitle: SQLite
 weight: 490

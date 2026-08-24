@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0058-warm-worker-pools.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0058: Warm worker pools — pod-reuse semantics (N:1)"
 linkTitle: "0058 · Warm worker pools — pod-reuse semantics (N:1)"
 weight: 580

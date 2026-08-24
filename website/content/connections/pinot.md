@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/pinot.html
+# --- end AUTO redirect aliases ---
 title: Pinot connection
 linkTitle: Pinot
 weight: 370

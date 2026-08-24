@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0037-release-version-scheme.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0037: Release version scheme — skip alpha/beta, RC discipline from `v0.0.1`"
 linkTitle: "0037 · Release version scheme — skip alpha/beta, RC discipline from `v0.0.1`"
 weight: 370

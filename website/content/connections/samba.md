@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/samba.html
+# --- end AUTO redirect aliases ---
 title: Samba connection
 linkTitle: Samba
 weight: 440

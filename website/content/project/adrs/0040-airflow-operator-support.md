@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0040-airflow-operator-support.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0040: Airflow operator + sensor execution — native fast path + generic executor"
 linkTitle: 0040 · Airflow operator + sensor execution — native fast path + generic executor
 weight: 400

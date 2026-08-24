@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0016-deferrable-tasks.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0016: Deferrable Tasks (Deferred to v0.3)"
 linkTitle: 0016 · Deferrable Tasks (Deferred to v0.3)
 weight: 160

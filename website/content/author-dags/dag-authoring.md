@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /dag-authoring.html
+# --- end AUTO redirect aliases ---
 title: DAG authoring
 weight: 10
 description: "Author a DAG: leoflow.yaml plus dag.py compiled to one immutable artifact."

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /mcp.html
+# --- end AUTO redirect aliases ---
 title: MCP server
 weight: 80
 description: The Leoflow MCP server — resources and tools for agents.

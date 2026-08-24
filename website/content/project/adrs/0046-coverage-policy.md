@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0046-coverage-policy.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0046: Coverage — one rule, per package, counting the tests we already wrote"
 linkTitle: "0046 · Coverage — one rule, per package, counting the tests we already wrote"
 weight: 460

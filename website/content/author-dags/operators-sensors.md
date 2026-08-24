@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /airflow-operators.html
+# --- end AUTO redirect aliases ---
 title: "Airflow operators & sensors"
 linkTitle: "Operators & sensors"
 weight: 20

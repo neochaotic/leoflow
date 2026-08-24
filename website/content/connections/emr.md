@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/emr.html
+# --- end AUTO redirect aliases ---
 title: Amazon EMR connection
 linkTitle: Amazon EMR
 weight: 120

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/oracle.html
+# --- end AUTO redirect aliases ---
 title: Oracle connection
 linkTitle: Oracle
 weight: 350

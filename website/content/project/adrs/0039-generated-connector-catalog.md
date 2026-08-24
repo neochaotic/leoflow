@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0039-generated-connector-catalog.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0039: Generated connector catalog with full form fidelity"
 linkTitle: 0039 · Generated connector catalog with full form fidelity
 weight: 390

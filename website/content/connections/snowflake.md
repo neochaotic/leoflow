@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/snowflake.html
+# --- end AUTO redirect aliases ---
 title: Snowflake connection
 linkTitle: Snowflake
 weight: 470

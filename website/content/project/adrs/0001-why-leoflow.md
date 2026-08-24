@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0001-why-leoflow.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0001: Why Leoflow and Not Apache Airflow's KubernetesExecutor"
 linkTitle: 0001 · Why Leoflow and Not Apache Airflow's KubernetesExecutor
 weight: 10

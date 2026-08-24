@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0048-no-user-code-in-control-plane.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0048: The control plane executes no user-influenced code or network requests"
 linkTitle: 0048 · The control plane executes no user-influenced code or network requests
 weight: 480

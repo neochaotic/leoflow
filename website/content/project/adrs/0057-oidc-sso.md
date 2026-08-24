@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0057-oidc-sso.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0057: OIDC/SSO authentication with fail-closed tenant pinning"
 linkTitle: 0057 · OIDC/SSO authentication with fail-closed tenant pinning
 weight: 570

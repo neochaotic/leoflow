@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/tableau.html
+# --- end AUTO redirect aliases ---
 title: Tableau connection
 linkTitle: Tableau
 weight: 500

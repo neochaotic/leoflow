@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/slack.html
+# --- end AUTO redirect aliases ---
 title: Slack connection
 linkTitle: Slack
 weight: 450

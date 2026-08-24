@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /go/internal/auth.html
+# --- end AUTO redirect aliases ---
 title: "internal/auth"
 linkTitle: "internal/auth"
 weight: 8

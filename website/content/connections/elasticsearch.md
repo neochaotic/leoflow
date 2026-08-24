@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/elasticsearch.html
+# --- end AUTO redirect aliases ---
 title: Elasticsearch connection
 linkTitle: Elasticsearch
 weight: 110

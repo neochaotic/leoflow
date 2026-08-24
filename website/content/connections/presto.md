@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/presto.html
+# --- end AUTO redirect aliases ---
 title: Presto connection
 linkTitle: Presto
 weight: 400

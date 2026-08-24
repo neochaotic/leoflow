@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_db_reset.html
+# --- end AUTO redirect aliases ---
 title: "leoflow db reset"
 linkTitle: "db reset"
 weight: 26

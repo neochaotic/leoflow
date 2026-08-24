@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /upgrades.html
+# --- end AUTO redirect aliases ---
 title: Upgrades
 weight: 40
 description: "Upgrade a Leoflow control plane safely, edition by edition."

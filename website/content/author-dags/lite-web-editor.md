@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /lite-web-editor.html
+# --- end AUTO redirect aliases ---
 title: The Lite web editor
 linkTitle: Lite web editor
 weight: 90

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /frontend-assessment.html
+# --- end AUTO redirect aliases ---
 title: Frontend assessment
 weight: 30
 description: "Background: assessment of the frontend."

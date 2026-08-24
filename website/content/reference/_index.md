@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /reference.html
+# --- end AUTO redirect aliases ---
 title: Reference
 linkTitle: Reference
 weight: 60

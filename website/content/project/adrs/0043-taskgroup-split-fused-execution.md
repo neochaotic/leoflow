@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0043-taskgroup-split-fused-execution.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0043: TaskGroup as a first-class construct with split/fused execution"
 linkTitle: 0043 · TaskGroup as a first-class construct with split/fused execution
 weight: 430

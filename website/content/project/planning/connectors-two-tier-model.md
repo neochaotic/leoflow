@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /planning/connectors-two-tier-model.html
+# --- end AUTO redirect aliases ---
 title: Connectors — two-tier model (ADR 0035 + shim)
 linkTitle: Two-tier connectors
 weight: 20

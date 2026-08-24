@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /ui-walk-report.html
+# --- end AUTO redirect aliases ---
 title: UI walk report
 weight: 20
 description: "Background: a walkthrough report of the UI."

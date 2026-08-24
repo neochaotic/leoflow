@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0032-return-values-not-logged.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0032: Task Return Values Are Not Logged — Only Their Metadata Is"
 linkTitle: 0032 · Task Return Values Are Not Logged — Only Their Metadata Is
 weight: 320

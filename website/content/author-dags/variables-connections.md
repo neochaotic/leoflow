@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /variables-connections.html
+# --- end AUTO redirect aliases ---
 title: "Variables & Connections"
 weight: 40
 description: Expose Variables and Connections to your task pods.

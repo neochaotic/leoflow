@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /contributing.html
+# --- end AUTO redirect aliases ---
 title: Contributing
 weight: 10
 description: "How to contribute to Leoflow — workflow, standards, and the TDD gate."

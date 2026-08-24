@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /adr/0018-ui-custom-north-star.html
+# --- end AUTO redirect aliases ---
 title: "ADR 0018: UI Custom as Strategic North Star"
 linkTitle: 0018 · UI Custom as Strategic North Star
 weight: 180

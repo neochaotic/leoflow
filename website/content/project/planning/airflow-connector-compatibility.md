@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /planning/airflow-connector-compatibility.html
+# --- end AUTO redirect aliases ---
 title: Airflow 3.X connector compatibility
 linkTitle: Connector compatibility
 weight: 10

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /connections/zendesk.html
+# --- end AUTO redirect aliases ---
 title: Zendesk connection
 linkTitle: Zendesk
 weight: 540

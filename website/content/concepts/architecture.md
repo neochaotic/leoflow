@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /architecture.html
+# --- end AUTO redirect aliases ---
 title: Architecture
 weight: 30
 description: "The Go control plane, the split API/scheduler roles, and the execution data flow."

@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /cli/leoflow_db_migrate.html
+# --- end AUTO redirect aliases ---
 title: "leoflow db migrate"
 linkTitle: "db migrate"
 weight: 25

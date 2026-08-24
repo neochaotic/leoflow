@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /scheduler-resilience.html
+# --- end AUTO redirect aliases ---
 title: Scheduler resilience
 weight: 70
 description: "How the scheduler survives restarts, leader loss and partial failure."

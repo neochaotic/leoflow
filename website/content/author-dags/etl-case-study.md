@@ -1,4 +1,8 @@
 ---
+# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
+aliases:
+  - /etl-staging-case-study.html
+# --- end AUTO redirect aliases ---
 title: "Case study: 1 GB ETL on staging"
 linkTitle: ETL case study
 weight: 80

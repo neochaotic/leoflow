@@ -109,7 +109,20 @@ jobs:
       # the site and commits it into gh-pages; that commit IS the publish.
       - name: Publish dev docs with mike
         if: github.event_name == 'push'
-        run: mike deploy --push --update-aliases dev
+        # The checkout does not include gh-pages, so mike's local branch starts
+        # empty/stale and its push is rejected non-fast-forward ("fetch first").
+        # Sync the local gh-pages branch to origin before each attempt so mike
+        # commits on top of the current remote tip, and retry to absorb a
+        # concurrent writer. First-run (no origin gh-pages) falls through the
+        # guard and mike creates the branch.
+        run: |
+          for attempt in 1 2 3; do
+            git fetch origin gh-pages 2>/dev/null && git branch -f gh-pages origin/gh-pages 2>/dev/null || true
+            if mike deploy --push --update-aliases dev; then exit 0; fi
+            echo "mike deploy rejected (attempt $attempt); refetching gh-pages and retrying"
+            sleep $((attempt * 3))
+          done
+          echo "mike deploy failed after 3 attempts"; exit 1
       # Pre-GA there is no stable release, so `dev` is the site default (what a
       # bare / URL redirects to). Guarded: mike stores the default as a root
       # index.html redirect on gh-pages, so only (re)set it when it isn't

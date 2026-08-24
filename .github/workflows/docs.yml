@@ -131,10 +131,19 @@ jobs:
       - name: Ensure dev is the default version
         if: github.event_name == 'push'
         run: |
-          current="$(git show gh-pages:index.html 2>/dev/null | sed -n 's/.*url=\([^"/]*\).*/\1/p' | head -n1 || true)"
-          if [ "$current" != "dev" ]; then
-            echo "Default is '${current:-<unset>}'; setting it to 'dev'."
-            mike set-default --push dev
+          git fetch origin gh-pages 2>/dev/null && git branch -f gh-pages origin/gh-pages 2>/dev/null || true
+          # Only claim `dev` as the site default PRE-GA. Once a stable release has
+          # created the `latest` alias, the default is `latest` (set by
+          # docs-release.yaml) and main must NOT override it — otherwise every push
+          # would yank the public default back to the unreleased `dev` docs.
+          if git show gh-pages:versions.json 2>/dev/null | grep -q '"latest"'; then
+            echo "A 'latest' alias exists; the default is release-managed — leaving it."
           else
-            echo "Default is already 'dev'; nothing to do."
+            current="$(git show gh-pages:index.html 2>/dev/null | sed -n 's/.*url=\([^"/]*\).*/\1/p' | head -n1 || true)"
+            if [ "$current" != "dev" ]; then
+              echo "Pre-GA: setting default to 'dev' (was '${current:-<unset>}')."
+              mike set-default --push dev
+            else
+              echo "Default is already 'dev'; nothing to do."
+            fi
           fi

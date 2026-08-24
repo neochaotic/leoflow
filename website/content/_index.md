@@ -1,6 +1,7 @@
 ---
 title: Leoflow
 linkTitle: Home
+description: A Go control plane with an Airflow-compatible UI and REST API — container-native orchestration with native map-reduce, and none of the Python pain.
 ---
 
 {{% blocks/cover title="Leoflow" subtitle="The orchestrator that ate Airflow's lunch" image_anchor="top" height="med" color="primary" %}}

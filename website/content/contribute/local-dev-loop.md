@@ -8,67 +8,14 @@ description: Two inner loops for working on Leoflow from source — the leoflow 
 Working on Leoflow from source has **two inner loops**, and you pick by what you
 changed:
 
-- **Iterating on a DAG** (Python/YAML) — use the [[100;97m╭──────────────────────────────────────────────╮[0m
-[100;97m│ LEOFLOW LITE — local — http://localhost:8088 │[0m
-[100;97m╰──────────────────────────────────────────────╯[0m
-▸ Docker detected — using the Docker Postgres (postgres:16). Pass --postgres managed for a Docker-free Postgres.
-▸ Postgres (Docker) on localhost:5432  [project leoflow-a9ff5a787798]
-▸ starting dependencies (docker compose) …
-▸ migrating leoflow_dev (embedded) … hot-reload
-  loop](#the-leoflow-lite-hot-reload-loop): save a file, the watcher recompiles and
-  registers a new version in seconds.
+- **Iterating on a DAG** (Python/YAML) — use the
+  [`leoflow lite` hot-reload loop](#the-leoflow-lite-hot-reload-loop): save a file,
+  the watcher recompiles and registers a new version in seconds.
 - **Iterating on the control plane, agent, or CLI** (Go) — use
-  [](#redeploying-go-changes-make-lite-redeploy): it rebuilds all
-  three binaries, swaps them in lockstep, and reboots [100;97m╭──────────────────────────────────────────────╮[0m
-[100;97m│ LEOFLOW LITE — local — http://localhost:8088 │[0m
-[100;97m╰──────────────────────────────────────────────╯[0m
-▸ Docker detected — using the Docker Postgres (postgres:16). Pass --postgres managed for a Docker-free Postgres.
-▸ Postgres (Docker) on localhost:5432  [project leoflow-a9ff5a787798]
-▸ starting dependencies (docker compose) …
-▸ migrating leoflow_dev (embedded) ….
+  [`make lite-redeploy`](#redeploying-go-changes-make-lite-redeploy): it rebuilds all
+  three binaries, swaps them in lockstep, and reboots `leoflow lite`.
 
-Neither loop goes near v0.0.1
-v0.0.1-prealpha.10
-v0.0.1-prealpha.11
-v0.0.1-prealpha.12
-v0.0.1-prealpha.13
-v0.0.1-prealpha.14
-v0.0.1-prealpha.15
-v0.0.1-prealpha.16
-v0.0.1-prealpha.17
-v0.0.1-prealpha.18
-v0.0.1-prealpha.19
-v0.0.1-prealpha.20
-v0.0.1-prealpha.21
-v0.0.1-prealpha.22
-v0.0.1-prealpha.23
-v0.0.1-prealpha.25
-v0.0.1-prealpha.26
-v0.0.1-prealpha.27
-v0.0.1-prealpha.28
-v0.0.1-prealpha.9
-v0.0.2
-v0.0.2-rc.1
-v0.0.2-rc.2
-v0.1.0
-v0.1.0-rc.1
-v0.1.0-rc.2
-v0.1.0-rc.3
-v0.1.0-rc.4
-v0.1.1
-v0.1.1-rc.1
-v0.1.2
-v0.1.2-rc.1
-v0.1.2-rc.2
-v0.2.0
-v0.2.0-rc.1
-v0.3.0
-v0.3.0-rc.1
-v0.3.0-rc.2
-v0.3.0-rc.3
-v0.3.0-rc.4
-v0.4.0-rc.1
-v0.4.0-rc.2 or the release pipeline — that keeps release tags
+Neither loop goes near `git tag` or the release pipeline — that keeps release tags
 clean.
 
 ## The `leoflow lite` hot-reload loop

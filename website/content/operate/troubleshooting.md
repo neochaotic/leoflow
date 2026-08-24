@@ -6,7 +6,9 @@ description: "Diagnose DAG, scheduler and executor problems; where the logs and 
 ---
 
 Symptoms grouped by where they surface. Start with the diagnostics — most
-issues are one `leoflow doctor` away from a clear cause.
+issues are one `leoflow doctor` away from a clear cause. New here? The
+[Quickstart](/get-started/quickstart/) and [Installation](/get-started/installation/)
+guides cover a clean first run; this page is where you land when one goes wrong.
 
 ## First things to run
 

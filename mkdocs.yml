@@ -1,0 +1,231 @@
+site_name: Leoflow
+site_description: GitOps-first, container-native workflow orchestrator (Airflow-compatible UI)
+site_url: https://neochaotic.github.io/leoflow/
+repo_url: https://github.com/neochaotic/leoflow
+repo_name: neochaotic/leoflow
+edit_uri: edit/main/docs/
+docs_dir: docs
+copyright: Apache-2.0 · Leoflow
+# Flat URLs keep relative asset paths (the Scalar spec) predictable under Pages.
+use_directory_urls: false
+
+theme:
+  name: material
+  custom_dir: overrides
+  logo: assets/icon-256.png
+  favicon: assets/icon-256.png
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle: { icon: material/weather-sunny, name: Light mode }
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.tracking
+    - navigation.instant
+    - navigation.instant.progress
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+
+plugins:
+  - search
+  # Social preview cards (Open Graph). Needs imaging deps (cairo); enabled only in
+  # CI where the workflow installs them, so local builds work without cairo.
+  - social:
+      enabled: !ENV [CI, false]
+  # Render Python docstrings (the task runtime) into the API reference.
+  - mkdocstrings:
+      # Override the source block so "Source code in <path>" links to GitHub
+      # (parity with the Go reference, which links every symbol to its source).
+      custom_templates: mkdocs_templates
+      handlers:
+        python:
+          paths: [runtime/python]
+          options:
+            show_root_heading: true
+            show_source: true
+            heading_level: 2
+
+validation:
+  nav: { omitted_files: ignore }
+  links: { absolute_links: ignore }
+
+# Repo-only material that lives under docs/ but is not part of the published site
+# (the agent context template; reverse-engineering reference fixtures). Keeping
+# them here stops them from being built as orphan, unlinked HTML pages.
+exclude_docs: |
+  agent-templates/
+  reference/airflow-real/
+
+# Version selector (rendered by mkdocs-material) backed by mike. mike publishes
+# each version into the gh-pages branch; the selector switches between them.
+# See .github/workflows/docs.yml (dev, on push to main) and docs-release.yaml
+# (tagged releases: latest for stable, unaliased for RCs).
+extra:
+  version:
+    provider: mike
+
+extra_css:
+  - assets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - toc: { permalink: true }
+  - pymdownx.highlight: { anchor_linenums: true }
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.tabbed: { alternate_style: true }
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Why Leoflow: why-leoflow.md
+  - Get started:
+      - Quickstart (start here): quickstart.md
+      - Installation: installation.md
+      - Editions: editions.md
+      - Operating modes: operating-modes.md
+      - Concepts & glossary: concepts.md
+  - Operations:
+      - Upgrades: upgrades.md
+      - Backup & restore: backup-restore.md
+      - Scheduler resilience: scheduler-resilience.md
+      - Warm worker pools: warm-pools.md
+      - Agent credential transport: agent-credential-transport.md
+  - Authoring & deploy:
+      - DAG authoring: dag-authoring.md
+      - First Pro DAG (next step): first-pro-dag.md
+      - Airflow operators & sensors: airflow-operators.md
+      - dbt projects as DAGs: dbt.md
+      - On-failure alerting: alerting.md
+      - CI/CD & deploy examples: deploy.md
+  - Reference:
+      - reference.md
+      - Architecture: architecture.md
+      - CLI reference: cli/leoflow.md
+      - Helm chart: helm-chart.md
+      - Pro TLS (cert-manager): pro-tls.md
+      - Go packages (GoDocs):
+          - Overview: go-api.md
+          - pkg/client: go/pkg/client.md
+          - internal/domain: go/internal/domain.md
+          - internal/scheduler: go/internal/scheduler.md
+          - internal/executor: go/internal/executor.md
+          - internal/dispatch: go/internal/dispatch.md
+          - internal/agent: go/internal/agent.md
+          - internal/agentrpc: go/internal/agentrpc.md
+          - internal/storage: go/internal/storage.md
+          - internal/auth: go/internal/auth.md
+          - internal/config: go/internal/config.md
+          - internal/cli: go/internal/cli.md
+          - internal/api: go/internal/api.md
+      - Python runtime API: python-api.md
+      - HTTP API (Scalar): api-reference.html
+      - MCP server: mcp.md
+      - Configuration: configuration.md
+  - Guides:
+      - The leoflow lite workflow: dev-workflow.md
+      - Local deploy (Lite inner loop): local-deploy.md
+      - The Lite web editor: lite-web-editor.md
+      - Examples: examples.md
+      - "Map-reduce for ML": cookbook/map-reduce.md
+      - "Case study: 1 GB ETL on staging": etl-staging-case-study.md
+      - Variables & Connections: variables-connections.md
+      - Connections cookbook:
+          - Overview: connections/index.md
+          - Postgres: connections/postgres.md
+          - MySQL / MariaDB: connections/mysql.md
+          - Microsoft SQL Server: connections/mssql.md
+          - SQLite: connections/sqlite.md
+          - Redis: connections/redis.md
+          - HTTP / HTTPS: connections/http.md
+          - Google Cloud: connections/google_cloud_platform.md
+          - Snowflake: connections/snowflake.md
+          - Amazon Web Services: connections/aws.md
+          - Slack: connections/slack.md
+          - Databricks: connections/databricks.md
+          - Azure: connections/azure.md
+          - Apache Spark: connections/spark.md
+          - Apache Kafka: connections/kafka.md
+          - Oracle: connections/oracle.md
+          - MongoDB: connections/mongo.md
+          - "File transfer (SSH/SFTP/FTP)": connections/file-transfer.md
+          - "AWS: Redshift": connections/redshift.md
+          - "AWS: Athena": connections/athena.md
+          - "AWS: EMR": connections/emr.md
+          - "GCP: BigQuery": connections/gcpbigquery.md
+          - "GCP: Cloud SQL": connections/gcpcloudsql.md
+          - "GCP: Google Ads": connections/google_ads.md
+          - Cassandra: connections/cassandra.md
+          - Neo4j: connections/neo4j.md
+          - Vertica: connections/vertica.md
+          - InfluxDB: connections/influxdb.md
+          - Druid: connections/druid.md
+          - Pinot: connections/pinot.md
+          - Elasticsearch: connections/elasticsearch.md
+          - Trino: connections/trino.md
+          - Presto: connections/presto.md
+          - JDBC: connections/jdbc.md
+          - Docker registry: connections/docker.md
+          - Salesforce: connections/salesforce.md
+          - Telegram: connections/telegram.md
+          - Discord: connections/discord.md
+          - PagerDuty: connections/pagerduty.md
+          - Datadog: connections/datadog.md
+          - Tableau: connections/tableau.md
+          - GitHub: connections/github.md
+          - dbt Cloud: connections/dbt_cloud.md
+          - HiveServer2: connections/hiveserver2.md
+          - Hive CLI: connections/hive_cli.md
+          - Power BI: connections/powerbi.md
+          - Microsoft Graph: connections/msgraph.md
+          - Apache Livy: connections/livy.md
+          - Google Looker: connections/gcp_looker.md
+          - SMTP: connections/smtp.md
+          - IMAP: connections/imap.md
+          - Opsgenie: connections/opsgenie.md
+          - Zendesk: connections/zendesk.md
+          - Samba: connections/samba.md
+          - "GCP: SSH (Compute)": connections/gcpssh.md
+      - Troubleshooting & observability: troubleshooting.md
+      - UI compatibility: ui-compatibility.md
+      - Staging volume: staging-volume.md
+  - Project:
+      - Roadmap: roadmap-to-release.md
+      - Contributing: contributing.md
+      - Architecture decisions (ADRs): adrs.md
+      - Planning:
+          - "Airflow 3.X connector compatibility": planning/airflow-connector-compatibility.md
+          - "Connectors — two-tier model (ADR 0035 + shim)": planning/connectors-two-tier-model.md
+      - Background:
+          - MVP reverse analysis: reverse-analysis-mvp.md
+          - UI walk report: ui-walk-report.md
+          - Frontend assessment: frontend-assessment.md

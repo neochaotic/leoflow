@@ -29,7 +29,7 @@ journalctl -u leoflow-server -f         # Pro / systemd hosts
 | Symptom | Cause / fix |
 |---|---|
 | `command not found: leoflow` | The binary is not on `PATH` — re-run `curl … \| sh`, or open a fresh shell to pick up the install-script's PATH line. Building from source? `go install .../cmd/leoflow@latest` and add `$(go env GOPATH)/bin` to `PATH`. |
-| `leoflow setup` says "python: none on PATH" but you have `python3.12` | Older Leoflow versions only matched literal `python3.11`. Update to the latest pre-alpha — `setup` now accepts any `python3.11`+ that's on `PATH`. |
+| `leoflow setup` says "python: none on PATH" but you have `python3.12` | Older Leoflow versions only matched literal `python3.11`. Update to the latest release — `setup` now accepts any `python3.11`+ that's on `PATH`. |
 | Install on Alpine / musl fails fetching CPython | The musl-libc relocatable CPython build can be missing system libs. `leoflow lite --postgres docker` falls back to the Docker Postgres path instead of the embedded managed one. |
 
 ## `leoflow lite` boot
@@ -40,13 +40,13 @@ journalctl -u leoflow-server -f         # Pro / systemd hosts
 | `provision incomplete: dev database` | The managed Postgres did not start. End-users run `leoflow setup` to bootstrap the managed runtime. Contributors on a source checkout use `leoflow lite provision`. If Docker is the chosen backend, confirm the daemon is up. |
 | Pro refuses to boot with `LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true` set | The Pro edition rejects this flag at boot (it would expose plaintext secrets). Unset it for Pro deployments; it stays valid for Lite where the agent talks loopback gRPC without TLS by design. |
 | `jwt_secret is empty; falling back to the dev-only constant` | First boot before `leoflow setup` has run, or `LEOFLOW_SECRET_KEY` not set. Run `leoflow setup` — it provisions a per-install secret. Not fatal on Lite (the constant works), but rotate before sharing the install. |
-| Permission denied on `/tmp/leoflow-*` | Older Lite versions shared `/tmp/leoflow*` paths across users on multi-user hosts. Update to the latest pre-alpha — paths are now per-user. |
+| Permission denied on `/tmp/leoflow-*` | Older Lite versions shared `/tmp/leoflow*` paths across users on multi-user hosts. Update to the latest release — paths are now per-user. |
 
 ## Running a DAG
 
 | Symptom | Cause / fix |
 |---|---|
-| `leoflow compile` dumps a Python traceback with internal parser paths first | Recent builds lead the failure with the user-facing line (e.g. `SyntaxError: ...`) and put the parser paths in the bounded tail. If you still see the internal-first dump, you are on an older pre-alpha — update. |
+| `leoflow compile` dumps a Python traceback with internal parser paths first | Recent builds lead the failure with the user-facing line (e.g. `SyntaxError: ...`) and put the parser paths in the bounded tail. If you still see the internal-first dump, you are on an older release — update. |
 | `leoflow compile` rejects a sensor / Jinja template / branching operator | This is **intentional** — Leoflow accepts a closed set of task types (`python`, `bash`, `airflow_operator`). See [DAG authoring → Not supported](dag-authoring.md#not-supported-leoflow-compile-rejects-these) for the full list and workarounds (`@task` + poll loop for sensors; build values from `airflow.sdk` context for Jinja). |
 | `Compiled .../dag.py -> dag.json (image , version dev)` (dangling comma) | Older build — update. Recent versions render `(no image, version dev)` when `--image` is unset. |
 | Task pod `ErrImagePull` (cluster mode) | The DAG's image is not in the cluster — rebuild + import. Cluster-mode rebuilds on save; for a manual push, `leoflow compile --build --push`. |
@@ -58,11 +58,11 @@ journalctl -u leoflow-server -f         # Pro / systemd hosts
 | Symptom | Cause / fix |
 |---|---|
 | `Invalid credentials` on the login page even with the right password | Disable autofill or type the password manually — some browsers append a trailing space. Usernames are trimmed, passwords are not (per security best practice). |
-| Login rate-limits you out after a few typos | Older builds counted *every* attempt against a 5/min cap; the fix splits successful and failed attempts so a typo does not block recovery. Update to the latest pre-alpha. |
+| Login rate-limits you out after a few typos | Older builds counted *every* attempt against a 5/min cap; the fix splits successful and failed attempts so a typo does not block recovery. Update to the latest release. |
 | No **Lite** badge on `http://localhost:8088` | You are likely on the **Demo** (production-shaped reference, port `8080`) — Lite runs on `8088` with a silver `Leoflow Lite` badge. See [operating modes](operating-modes.md). |
 | Copy-logs button silently fails over `http://<lan-ip>:8088` | The Clipboard API requires a secure context, so plain HTTP origins (LAN access from another machine) used to break copy. Recent builds inject a polyfill (`document.execCommand('copy')` fallback) — update. |
 | Task state badge does not refresh after "Mark as failed/success" | Known upstream Airflow bug — see [apache/airflow#67883](https://github.com/apache/airflow/issues/67883). The server-side mutation persists correctly; the SPA cache update is the gap. Hard-refresh the page (Cmd+Shift+R) to see the new state. |
-| Browser tab title shows "Airflow" not "Leoflow Lite" | Old build; the SPA shell rewrites the `<title>` to the configured instance name at request time. Update to the latest pre-alpha. |
+| Browser tab title shows "Airflow" not "Leoflow Lite" | Old build; the SPA shell rewrites the `<title>` to the configured instance name at request time. Update to the latest release. |
 
 ## Reset paths (when in doubt)
 

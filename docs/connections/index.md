@@ -8,9 +8,9 @@ encrypts at rest (ADR 0019) and delivers to a running task as
 This page is the index. Each linked entry below is a focused recipe with the
 URI shape, an example DAG, and how to test it.
 
-!!! warning "Pre-alpha"
+!!! note "Coverage"
     Only a subset of Airflow's standard connection types are documented +
-    tested at this stage. The list below grows as we land them.
+    tested so far. The list below grows as we land them.
 
 ## Installing a connector's provider
 

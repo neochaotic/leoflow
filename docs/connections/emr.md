@@ -7,7 +7,10 @@ Connection. EMR carries no host and no password — only the AWS region lives in
 ## Declare the provider
 
 ```yaml
-connectors: [emr]
+# leoflow.yaml
+dag_id: emr_demo
+connectors:
+  - emr
 ```
 
 ## URI shape
@@ -40,32 +43,31 @@ The provider import goes **inside** the `@task` body — a top-level provider
 import fails the compile.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def emr_demo():
-    @task
-    def list_clusters() -> int:
-        from airflow.providers.amazon.aws.hooks.emr import EmrHook
+@task
+def list_clusters() -> int:
+    from airflow.providers.amazon.aws.hooks.emr import EmrHook
 
-        hook = EmrHook(aws_conn_id="emr_batch")
-        client = hook.get_conn()
-        resp = client.list_clusters(ClusterStates=["WAITING", "RUNNING"])
-        return len(resp.get("Clusters", []))
+    hook = EmrHook(aws_conn_id="emr_batch")
+    client = hook.get_conn()
+    resp = client.list_clusters(ClusterStates=["WAITING", "RUNNING"])
+    return len(resp.get("Clusters", []))
 
+
+with DAG("emr_demo", schedule=None, catchup=False, tags=["example"]):
     list_clusters()
-
-
-emr_demo()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: emr_demo
-python: "3.12"
-connectors: [emr]
+python_version: "3.12"
+connectors:
+  - emr
 ```
 
 ## Security notes

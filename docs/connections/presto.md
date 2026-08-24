@@ -1,13 +1,18 @@
----
-connectors: [presto]
----
-
 # Presto connection
 
 Connect a task to a [Presto](https://prestodb.io/) coordinator to run
 distributed SQL over a managed Leoflow Connection. Presto is the upstream
 project Trino forked from; the Connection shape is identical, only the
 scheme and hook differ.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: presto_query
+connectors:
+  - presto
+```
 
 ## URI shape
 
@@ -35,34 +40,32 @@ percent-escaped; `PrestoHook` un-escapes them on the way out.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["presto"])
-def presto_query():
-    @task
-    def count_rows():
-        from airflow.providers.presto.hooks.presto import PrestoHook
+@task
+def count_rows():
+    from airflow.providers.presto.hooks.presto import PrestoHook
 
-        hook = PrestoHook(presto_conn_id="presto_default")
-        rows = hook.get_records("SELECT count(*) FROM hive.default.events")
-        print("event count:", rows[0][0])
+    hook = PrestoHook(presto_conn_id="presto_default")
+    rows = hook.get_records("SELECT count(*) FROM hive.default.events")
+    print("event count:", rows[0][0])
 
+
+with DAG("presto_query", schedule=None, catchup=False, tags=["example"]):
     count_rows()
-
-
-presto_query()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: presto_query
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-presto
+python_version: "3.12"
+connectors:
+  - presto
 connections:
-  - conn_id: presto_default
-    conn_type: presto
+  - presto_default
 ```
 
 ## Security notes

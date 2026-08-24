@@ -4,8 +4,13 @@ Run commands on a Google Compute Engine VM over SSH from a task, via a managed
 Leoflow Connection. The host, port, and credentials are encrypted at rest and
 delivered to the task as `AIRFLOW_CONN_<CONN_ID>`.
 
+## Declare the provider
+
 ```yaml
-connectors: [gcpssh]
+# leoflow.yaml
+dag_id: gcpssh_run
+connectors:
+  - gcpssh
 ```
 
 ## URI shape
@@ -34,32 +39,33 @@ parses `AIRFLOW_CONN_<ID>`) un-escapes it back.
 The hook is imported inside the task body so DAG parsing stays import-light.
 
 ```python
-from airflow.decorators import dag, task
-from pendulum import datetime
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2026, 1, 1), catchup=False)
-def gcpssh_run():
-    @task
-    def remote():
-        from airflow.providers.google.cloud.hooks.compute_ssh import (
-            ComputeEngineSSHHook,
-        )
+@task
+def remote():
+    from airflow.providers.google.cloud.hooks.compute_ssh import (
+        ComputeEngineSSHHook,
+    )
 
-        hook = ComputeEngineSSHHook(gcp_conn_id="gcpssh_default")
-        client = hook.get_conn()
-        _, stdout, _ = client.exec_command("uname -a")
-        return stdout.read().decode()
+    hook = ComputeEngineSSHHook(gcp_conn_id="gcpssh_default")
+    client = hook.get_conn()
+    _, stdout, _ = client.exec_command("uname -a")
+    return stdout.read().decode()
 
+
+with DAG("gcpssh_run", schedule=None, catchup=False, tags=["example"]):
     remote()
-
-
-gcpssh_run()
 ```
 
 ```yaml
 # leoflow.yaml
-connectors: [gcpssh]
+schema_version: "1.0"
+dag_id: gcpssh_run
+python_version: "3.11"
+connectors:
+  - gcpssh
 ```
 
 ## Security notes

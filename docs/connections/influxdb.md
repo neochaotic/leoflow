@@ -4,6 +4,15 @@ Connect a task to an InfluxDB time-series database (the `InfluxDBHook`) over a
 managed Leoflow Connection. InfluxDB 2.x authenticates with an **org + token**
 carried in Extra — not login/password.
 
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: influxdb_smoke
+connectors:
+  - influxdb
+```
+
 ## URI shape
 
 ```
@@ -38,35 +47,30 @@ The provider import must live **inside** the task body — a top-level
 provider import fails compilation in the parser sidecar.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def influxdb_smoke():
-    @task
-    def query():
-        from airflow.providers.influxdb.hooks.influxdb import InfluxDBHook
+@task
+def query():
+    from airflow.providers.influxdb.hooks.influxdb import InfluxDBHook
 
-        hook = InfluxDBHook(conn_id="influxdb_target")
-        client = hook.get_conn()
-        print("influxdb up:", client.ping())
+    hook = InfluxDBHook(conn_id="influxdb_target")
+    client = hook.get_conn()
+    print("influxdb up:", client.ping())
 
+
+with DAG("influxdb_smoke", schedule=None, catchup=False, tags=["example"]):
     query()
-
-
-influxdb_smoke()
 ```
 
 ```yaml
 # leoflow.yaml
-name: influxdb_smoke
-schedule: null
-image:
-  python: "3.11"
-  requirements:
-    - apache-airflow-providers-influxdb
-connectors: [influxdb]
+schema_version: "1.0"
+dag_id: influxdb_smoke
+python_version: "3.11"
+connectors:
+  - influxdb
 ```
 
 ## Security notes

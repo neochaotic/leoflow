@@ -4,8 +4,13 @@ Send alerts to Opsgenie from a task over a managed Leoflow Connection. The
 host and API key are encrypted at rest and delivered to the task as
 `AIRFLOW_CONN_<CONN_ID>`.
 
+## Declare the provider
+
 ```yaml
-connectors: [opsgenie]
+# leoflow.yaml
+dag_id: opsgenie_alert
+connectors:
+  - opsgenie
 ```
 
 ## URI shape
@@ -35,28 +40,29 @@ port.
 The hook is imported inside the task body so DAG parsing stays import-light.
 
 ```python
-from airflow.decorators import dag, task
-from pendulum import datetime
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2026, 1, 1), catchup=False)
-def opsgenie_alert():
-    @task
-    def page():
-        from airflow.providers.opsgenie.hooks.opsgenie import OpsgenieAlertHook
+@task
+def page():
+    from airflow.providers.opsgenie.hooks.opsgenie import OpsgenieAlertHook
 
-        hook = OpsgenieAlertHook(opsgenie_conn_id="opsgenie_default")
-        hook.create_alert(payload={"message": "Leoflow pipeline failed"})
+    hook = OpsgenieAlertHook(opsgenie_conn_id="opsgenie_default")
+    hook.create_alert(payload={"message": "Leoflow pipeline failed"})
 
+
+with DAG("opsgenie_alert", schedule=None, catchup=False, tags=["example"]):
     page()
-
-
-opsgenie_alert()
 ```
 
 ```yaml
 # leoflow.yaml
-connectors: [opsgenie]
+schema_version: "1.0"
+dag_id: opsgenie_alert
+python_version: "3.11"
+connectors:
+  - opsgenie
 ```
 
 ## Security notes

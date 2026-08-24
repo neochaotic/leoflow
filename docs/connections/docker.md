@@ -1,12 +1,17 @@
----
-connectors: [docker]
----
-
 # Docker registry connection
 
 Connect a task to a Docker registry (Docker Hub, GHCR, ECR, a private
 Harbor/Nexus) over a managed Leoflow Connection. `DockerHook` authenticates
 to the registry so the `DockerOperator` can pull/run images.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: docker_login
+connectors:
+  - docker
+```
 
 ## URI shape
 
@@ -33,34 +38,32 @@ options ride in `Extra` under `__extra__`.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["docker"])
-def docker_login():
-    @task
-    def whoami():
-        from airflow.providers.docker.hooks.docker import DockerHook
+@task
+def whoami():
+    from airflow.providers.docker.hooks.docker import DockerHook
 
-        hook = DockerHook(docker_conn_id="docker_registry")
-        client = hook.get_conn()
-        print("api version:", client.version()["ApiVersion"])
+    hook = DockerHook(docker_conn_id="docker_registry")
+    client = hook.get_conn()
+    print("api version:", client.version()["ApiVersion"])
 
+
+with DAG("docker_login", schedule=None, catchup=False, tags=["example"]):
     whoami()
-
-
-docker_login()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: docker_login
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-docker
+python_version: "3.12"
+connectors:
+  - docker
 connections:
-  - conn_id: docker_registry
-    conn_type: docker
+  - docker_registry
 ```
 
 ## Security notes

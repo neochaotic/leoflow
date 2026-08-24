@@ -1,11 +1,16 @@
----
-connectors: [telegram]
----
-
 # Telegram connection
 
 Send messages to a Telegram chat or channel from a task over a managed
 Leoflow Connection. `TelegramHook` posts to the Bot API using a bot token.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: telegram_notify
+connectors:
+  - telegram
+```
 
 ## URI shape
 
@@ -30,33 +35,31 @@ message by the operator, or carried in `Extra`.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["telegram"])
-def telegram_notify():
-    @task
-    def send():
-        from airflow.providers.telegram.hooks.telegram import TelegramHook
+@task
+def send():
+    from airflow.providers.telegram.hooks.telegram import TelegramHook
 
-        hook = TelegramHook(telegram_conn_id="telegram_default")
-        hook.send_message({"chat_id": "-1001234567890", "text": "DAG finished"})
+    hook = TelegramHook(telegram_conn_id="telegram_default")
+    hook.send_message({"chat_id": "-1001234567890", "text": "DAG finished"})
 
+
+with DAG("telegram_notify", schedule=None, catchup=False, tags=["example"]):
     send()
-
-
-telegram_notify()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: telegram_notify
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-telegram
+python_version: "3.12"
+connectors:
+  - telegram
 connections:
-  - conn_id: telegram_default
-    conn_type: telegram
+  - telegram_default
 ```
 
 ## Security notes

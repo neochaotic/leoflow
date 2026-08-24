@@ -4,8 +4,13 @@ Connect a task to an IMAP mailbox over a managed Leoflow Connection — to poll
 for incoming files or messages. The host, port, and credentials are encrypted
 at rest and delivered to the task as `AIRFLOW_CONN_<CONN_ID>`.
 
+## Declare the provider
+
 ```yaml
-connectors: [imap]
+# leoflow.yaml
+dag_id: imap_poll
+connectors:
+  - imap
 ```
 
 ## URI shape
@@ -34,28 +39,29 @@ The control plane percent-escapes the password; `ImapHook` (which parses
 The hook is imported inside the task body so DAG parsing stays import-light.
 
 ```python
-from airflow.decorators import dag, task
-from pendulum import datetime
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2026, 1, 1), catchup=False)
-def imap_poll():
-    @task
-    def check():
-        from airflow.providers.imap.hooks.imap import ImapHook
+@task
+def check():
+    from airflow.providers.imap.hooks.imap import ImapHook
 
-        with ImapHook(imap_conn_id="imap_default") as hook:
-            return hook.has_mail_attachment("report-*.csv")
+    with ImapHook(imap_conn_id="imap_default") as hook:
+        return hook.has_mail_attachment("report-*.csv")
 
+
+with DAG("imap_poll", schedule=None, catchup=False, tags=["example"]):
     check()
-
-
-imap_poll()
 ```
 
 ```yaml
 # leoflow.yaml
-connectors: [imap]
+schema_version: "1.0"
+dag_id: imap_poll
+python_version: "3.11"
+connectors:
+  - imap
 ```
 
 ## Security notes

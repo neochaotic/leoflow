@@ -4,8 +4,13 @@ Connect a task to an SMB/CIFS file share over a managed Leoflow Connection.
 The host, port, credentials, and an Extra blob (`share_type`) are encrypted at
 rest and delivered to the task as `AIRFLOW_CONN_<CONN_ID>`.
 
+## Declare the provider
+
 ```yaml
-connectors: [samba]
+# leoflow.yaml
+dag_id: samba_pull
+connectors:
+  - samba
 ```
 
 ## URI shape
@@ -34,28 +39,29 @@ The control plane percent-escapes the password; `SambaHook` (which parses
 The hook is imported inside the task body so DAG parsing stays import-light.
 
 ```python
-from airflow.decorators import dag, task
-from pendulum import datetime
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2026, 1, 1), catchup=False)
-def samba_pull():
-    @task
-    def download():
-        from airflow.providers.samba.hooks.samba import SambaHook
+@task
+def download():
+    from airflow.providers.samba.hooks.samba import SambaHook
 
-        hook = SambaHook(samba_conn_id="samba_default")
-        hook.get_file("/incoming/report.csv", "/tmp/report.csv")
+    hook = SambaHook(samba_conn_id="samba_default")
+    hook.get_file("/incoming/report.csv", "/tmp/report.csv")
 
+
+with DAG("samba_pull", schedule=None, catchup=False, tags=["example"]):
     download()
-
-
-samba_pull()
 ```
 
 ```yaml
 # leoflow.yaml
-connectors: [samba]
+schema_version: "1.0"
+dag_id: samba_pull
+python_version: "3.11"
+connectors:
+  - samba
 ```
 
 ## Security notes

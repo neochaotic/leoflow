@@ -3,6 +3,15 @@
 Connect a task to a Neo4j graph database (the `Neo4jHook`) over a managed
 Leoflow Connection. The database name lives in the Schema field.
 
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: neo4j_smoke
+connectors:
+  - neo4j
+```
+
 ## URI shape
 
 ```
@@ -34,35 +43,30 @@ The provider import must live **inside** the task body — a top-level
 provider import fails compilation in the parser sidecar.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def neo4j_smoke():
-    @task
-    def query():
-        from airflow.providers.neo4j.hooks.neo4j import Neo4jHook
+@task
+def query():
+    from airflow.providers.neo4j.hooks.neo4j import Neo4jHook
 
-        hook = Neo4jHook(conn_id="neo4j_target")
-        rows = hook.run("RETURN 1 AS ok")
-        print("neo4j up:", rows)
+    hook = Neo4jHook(conn_id="neo4j_target")
+    rows = hook.run("RETURN 1 AS ok")
+    print("neo4j up:", rows)
 
+
+with DAG("neo4j_smoke", schedule=None, catchup=False, tags=["example"]):
     query()
-
-
-neo4j_smoke()
 ```
 
 ```yaml
 # leoflow.yaml
-name: neo4j_smoke
-schedule: null
-image:
-  python: "3.11"
-  requirements:
-    - apache-airflow-providers-neo4j
-connectors: [neo4j]
+schema_version: "1.0"
+dag_id: neo4j_smoke
+python_version: "3.11"
+connectors:
+  - neo4j
 ```
 
 ## Security notes

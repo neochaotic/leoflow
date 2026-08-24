@@ -1,12 +1,17 @@
----
-connectors: [trino]
----
-
 # Trino connection
 
 Connect a task to a [Trino](https://trino.io/) coordinator to run
 federated SQL across Hive, Iceberg, PostgreSQL, and other catalogs over a
 managed Leoflow Connection.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: trino_query
+connectors:
+  - trino
+```
 
 ## URI shape
 
@@ -37,34 +42,32 @@ The hook is imported **inside** the task body so the DAG file parses even
 where the provider isn't installed.
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["trino"])
-def trino_query():
-    @task
-    def count_rows():
-        from airflow.providers.trino.hooks.trino import TrinoHook
+@task
+def count_rows():
+    from airflow.providers.trino.hooks.trino import TrinoHook
 
-        hook = TrinoHook(trino_conn_id="trino_default")
-        rows = hook.get_records("SELECT count(*) FROM hive.default.events")
-        print("event count:", rows[0][0])
+    hook = TrinoHook(trino_conn_id="trino_default")
+    rows = hook.get_records("SELECT count(*) FROM hive.default.events")
+    print("event count:", rows[0][0])
 
+
+with DAG("trino_query", schedule=None, catchup=False, tags=["example"]):
     count_rows()
-
-
-trino_query()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: trino_query
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-trino
+python_version: "3.12"
+connectors:
+  - trino
 connections:
-  - conn_id: trino_default
-    conn_type: trino
+  - trino_default
 ```
 
 ## Security notes

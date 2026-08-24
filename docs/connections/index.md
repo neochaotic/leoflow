@@ -115,61 +115,79 @@ When you press **Test** on a connection of a known type, the result line also
 reminds you to declare the provider (`connectors: [<type>]`) — a Connection in the
 UI carries credentials, but the DAG still has to install the hook to use them.
 
-## Locally-testable (Docker / Lima)
+## Connector matrix
 
-| Type | Doc | Example DAG | Status |
-|---|---|---|---|
-| `postgres` | [postgres.md](postgres.md) | [examples/postgres_load](https://github.com/neochaotic/leoflow/tree/main/examples/postgres_load) | ✅ documented + automated test (#138) |
-| `mysql` / `mariadb` | [mysql.md](mysql.md) | [examples/mysql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mysql_load) | ✅ documented + automated test (#69, table-driven via #138) |
-| `mssql` | [mssql.md](mssql.md) | [examples/mssql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mssql_load) | ✅ documented + automated test (#71, table-driven via #138) |
-| `sqlite` | [sqlite.md](sqlite.md) | [examples/sqlite_load](https://github.com/neochaotic/leoflow/tree/main/examples/sqlite_load) | ✅ documented + automated test (#70, dedicated test for file-path shape; Tier 1 — no service needed) |
-| `redis` | [redis.md](redis.md) | [examples/redis_load](https://github.com/neochaotic/leoflow/tree/main/examples/redis_load) | ✅ documented + automated test (#73, table-driven via #138; Tier 1 — redis already in CI services) |
-| `http` / `https` | [http.md](http.md) | [examples/http_load](https://github.com/neochaotic/leoflow/tree/main/examples/http_load) | ✅ documented + automated test (#75, dedicated test for `__extra__` round-trip; Tier 1 — no service needed) |
-| `oracle` | [oracle.md](oracle.md) | doc-only | ✅ documented + delivery test (table-driven, oracle row); service-name in Schema |
-| `mongo` | [mongo.md](mongo.md) | doc-only | ✅ documented + delivery test (table-driven, mongo row); db in Schema, `srv` for Atlas |
-| `ssh` / `sftp` / `ftp` | [file-transfer.md](file-transfer.md) | doc-only | ✅ documented + delivery test (`TestFileTransferConnectionURIShapeIntegration`); key auth in Extra |
+Every documented connector, its `conn_type`, the provider package the
+`connectors:` sugar expands to (ADR 0038), the **auth shape** (where the
+credential lives), the **local-testable tier**, and a runnable example. Each ships
+a chain-of-custody delivery test; the tier-1 rows also ship an automated example
+test (see [the contract below](#contract-every-entry-honours)). Cloud families
+share a provider package (e.g. `redshift`/`athena`/`emr` →
+`apache-airflow-providers-amazon`; `gcpbigquery`/`gcpcloudsql`/`gcp_looker` →
+`…-google`); the boundary is curated, not a mechanical join of the hook path.
 
-## Cloud (documented)
+| Connector | `conn_type` | Provider package | Auth shape | Local tier | Example |
+|---|---|---|---|---|---|
+| [postgres](postgres.md) | `postgres` | `apache-airflow-providers-postgres` | host + login/password | local (Docker) | [postgres_load](https://github.com/neochaotic/leoflow/tree/main/examples/postgres_load) |
+| [mysql](mysql.md) | `mysql` / `mariadb` | `apache-airflow-providers-mysql` | host + login/password | local (Docker) | [mysql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mysql_load) |
+| [mssql](mssql.md) | `mssql` | `apache-airflow-providers-microsoft-mssql` | host + login/password | local (Docker) | [mssql_load](https://github.com/neochaotic/leoflow/tree/main/examples/mssql_load) |
+| [sqlite](sqlite.md) | `sqlite` | `apache-airflow-providers-sqlite` | file path | local (tier 1) | [sqlite_load](https://github.com/neochaotic/leoflow/tree/main/examples/sqlite_load) |
+| [redis](redis.md) | `redis` | `apache-airflow-providers-redis` | host + password | local (tier 1) | [redis_load](https://github.com/neochaotic/leoflow/tree/main/examples/redis_load) |
+| [http](http.md) | `http` / `https` | `apache-airflow-providers-http` | base URL + Extra | local (tier 1) | [http_load](https://github.com/neochaotic/leoflow/tree/main/examples/http_load) |
+| [oracle](oracle.md) | `oracle` | `apache-airflow-providers-oracle` | host + login/password (service in Schema) | doc-only | recipe |
+| [mongo](mongo.md) | `mongo` | `apache-airflow-providers-mongo` | host + login/password (db in Schema) | doc-only | recipe |
+| [file-transfer](file-transfer.md) | `ssh` / `sftp` / `ftp` | `apache-airflow-providers-ssh` / `-sftp` / `-ftp` | host + login/password (key in Extra) | doc-only | recipe |
+| [google_cloud_platform](google_cloud_platform.md) | `google_cloud_platform` | `apache-airflow-providers-google` | keyless (Workload Identity / ADC) or key in Extra | doc-only | [gcp_gcs_load](https://github.com/neochaotic/leoflow/tree/main/examples/gcp_gcs_load) |
+| [snowflake](snowflake.md) | `snowflake` | `apache-airflow-providers-snowflake` | login/password + account in Extra (or key-pair) | doc-only | recipe |
+| [aws](aws.md) | `aws` | `apache-airflow-providers-amazon` | keyless (IAM role) or access key | doc-only | recipe |
+| [slack](slack.md) | `slack` / `slackwebhook` | `apache-airflow-providers-slack` | token in password | doc-only | recipe |
+| [databricks](databricks.md) | `databricks` | `apache-airflow-providers-databricks` | host + PAT (or OAuth M2M) | doc-only | recipe |
+| [azure](azure.md) | `wasb` / `adls` / `azure_*` | `apache-airflow-providers-microsoft-azure` | keyless (managed identity) or key | doc-only | recipe |
+| [spark](spark.md) | `spark` / `spark_sql` / `spark_connect` / `spark_jdbc` | `apache-airflow-providers-apache-spark` | host:port + tuning Extra | doc-only | recipe |
+| [kafka](kafka.md) | `kafka` | `apache-airflow-providers-apache-kafka` | all-Extra client config (SASL) | doc-only | recipe |
+| [redshift](redshift.md) | `redshift` | `apache-airflow-providers-amazon` | host + login/password (or keyless IAM) | doc-only | recipe |
+| [athena](athena.md) | `athena` | `apache-airflow-providers-amazon` | keyless IAM (region in Extra) | doc-only | recipe |
+| [emr](emr.md) | `emr` | `apache-airflow-providers-amazon` | keyless IAM (region in Extra) | doc-only | recipe |
+| [gcpbigquery](gcpbigquery.md) | `gcpbigquery` | `apache-airflow-providers-google` | keyless (WI / ADC), project in Extra | doc-only | recipe |
+| [gcpcloudsql](gcpcloudsql.md) | `gcpcloudsql` | `apache-airflow-providers-google` | keyless (WI / ADC), instance in Extra | doc-only | recipe |
+| [google_ads](google_ads.md) | `google_ads` | `apache-airflow-providers-google` | OAuth material in Extra | doc-only | recipe |
+| [gcp_looker](gcp_looker.md) | `gcp_looker` | `apache-airflow-providers-google` | API3 client_id/secret in Extra | doc-only | recipe |
+| [gcpssh](gcpssh.md) | `gcpssh` | `apache-airflow-providers-google` | host + login/password | doc-only | recipe |
+| [cassandra](cassandra.md) | `cassandra` | `apache-airflow-providers-apache-cassandra` | host + login/password (keyspace in Schema) | doc-only | recipe |
+| [neo4j](neo4j.md) | `neo4j` | `apache-airflow-providers-neo4j` | host + login/password (db in Schema) | doc-only | recipe |
+| [vertica](vertica.md) | `vertica` | `apache-airflow-providers-vertica` | host + login/password | doc-only | recipe |
+| [influxdb](influxdb.md) | `influxdb` | `apache-airflow-providers-influxdb` | org + token in Extra | doc-only | recipe |
+| [druid](druid.md) | `druid` | `apache-airflow-providers-apache-druid` | host + login/password | doc-only | recipe |
+| [pinot](pinot.md) | `pinot` | `apache-airflow-providers-apache-pinot` | host + login/password (optional) | doc-only | recipe |
+| [trino](trino.md) | `trino` | `apache-airflow-providers-trino` | host + login/password (optional) | doc-only | recipe |
+| [presto](presto.md) | `presto` | `apache-airflow-providers-presto` | host + login/password (optional) | doc-only | recipe |
+| [jdbc](jdbc.md) | `jdbc` | `apache-airflow-providers-jdbc` | host + login/password + driver in Extra | doc-only | recipe |
+| [docker](docker.md) | `docker` | `apache-airflow-providers-docker` | host + login/password | doc-only | recipe |
+| [salesforce](salesforce.md) | `salesforce` | `apache-airflow-providers-salesforce` | login/password + token in Extra | doc-only | recipe |
+| [telegram](telegram.md) | `telegram` | `apache-airflow-providers-telegram` | token in password | doc-only | recipe |
+| [discord](discord.md) | `discord` | `apache-airflow-providers-discord` | token in password + endpoint in Extra | doc-only | recipe |
+| [pagerduty](pagerduty.md) | `pagerduty` | `apache-airflow-providers-pagerduty` | token in password + routing key in Extra | doc-only | recipe |
+| [datadog](datadog.md) | `datadog` | `apache-airflow-providers-datadog` | API + app keys in Extra | doc-only | recipe |
+| [tableau](tableau.md) | `tableau` | `apache-airflow-providers-tableau` | host + login/password (or PAT) | doc-only | recipe |
+| [github](github.md) | `github` | `apache-airflow-providers-github` | PAT in password | doc-only | recipe |
+| [elasticsearch](elasticsearch.md) | `elasticsearch` | `apache-airflow-providers-elasticsearch` | host + login/password | doc-only | recipe |
+| [smtp](smtp.md) | `smtp` | `apache-airflow-providers-smtp` | host + login/password | doc-only | recipe |
+| [imap](imap.md) | `imap` | `apache-airflow-providers-imap` | host + login/password | doc-only | recipe |
+| [opsgenie](opsgenie.md) | `opsgenie` | `apache-airflow-providers-opsgenie` | API key in password | doc-only | recipe |
+| [zendesk](zendesk.md) | `zendesk` | `apache-airflow-providers-zendesk` | agent email + API token | doc-only | recipe |
+| [samba](samba.md) | `samba` | `apache-airflow-providers-samba` | host + login/password | doc-only | recipe |
+| [dbt_cloud](dbt_cloud.md) | `dbt_cloud` | `apache-airflow-providers-dbt-cloud` | account id (login) + API token | doc-only | recipe |
+| [hiveserver2](hiveserver2.md) | `hiveserver2` | `apache-airflow-providers-apache-hive` | host + login/password (db in Schema) | doc-only | recipe |
+| [hive_cli](hive_cli.md) | `hive_cli` | `apache-airflow-providers-apache-hive` | host + login/password + beeline/kerberos in Extra | doc-only | recipe |
+| [powerbi](powerbi.md) | `powerbi` | `apache-airflow-providers-microsoft-azure` | client id/secret + tenant in Extra | doc-only | recipe |
+| [msgraph](msgraph.md) | `msgraph` | `apache-airflow-providers-microsoft-azure` | client id/secret + tenant in Extra | doc-only | recipe |
+| [livy](livy.md) | `livy` | `apache-airflow-providers-apache-livy` | host + login/password | doc-only | recipe |
 
-| Type | Doc | Example DAG | Status |
-|---|---|---|---|
-| `google_cloud_platform` | [google_cloud_platform.md](google_cloud_platform.md) | [examples/gcp_gcs_load](https://github.com/neochaotic/leoflow/tree/main/examples/gcp_gcs_load) | ✅ documented — **key + keyless (Workload Identity)** (#77, #56); delivery test with a synthetic key; real-cloud e2e is manual |
-| `snowflake` | [snowflake.md](snowflake.md) | doc-only (needs a Snowflake account) | ✅ documented + delivery test (`TestSnowflakeConnectionURIShapeIntegration`); account/warehouse/role round-trip via `__extra__`; real-cloud e2e is manual |
-| `aws` | [aws.md](aws.md) | doc-only (needs an AWS account) | ✅ documented — **keyless (IAM role) + key-based** (ADR 0035); delivery test (`TestAWSConnectionURIShapeIntegration`); real-cloud e2e is manual |
-| `slack` / `slackwebhook` | [slack.md](slack.md) | doc-only (needs a Slack workspace) | ✅ documented + delivery test (`TestSlackConnectionURIShapeIntegration`); bot-token round-trip; real-workspace e2e is manual |
-| `databricks` | [databricks.md](databricks.md) | doc-only (needs a Databricks workspace) | ✅ documented + delivery test (`TestDatabricksConnectionURIShapeIntegration`); host + PAT + http_path round-trip; real e2e is manual |
-| `wasb` / `adls` / `azure_*` | [azure.md](azure.md) | doc-only (needs an Azure account) | ✅ documented — **managed identity + key** (ADR 0035); delivery test (`TestWasbConnectionURIShapeIntegration`); real e2e is manual |
-| `spark` / `spark_sql` / … | [spark.md](spark.md) | doc-only (needs a Spark cluster) | ✅ documented + delivery test (`TestSparkConnectionURIShapeIntegration`); host:port + tuning Extra round-trip |
-| `kafka` | [kafka.md](kafka.md) | doc-only (needs a Kafka cluster) | ✅ documented + delivery test (`TestKafkaConnectionURIShapeIntegration`); full client config (incl. SASL) Extra round-trip |
-
-## More connectors (documented + delivery test)
-
-Each ships with a chain-of-custody delivery test and a cookbook recipe; all are
-doc-only (a real run needs the external account/service). Cloud families share a
-provider package (e.g. redshift/athena/emr → `apache-airflow-providers-amazon`;
-bigquery/cloudsql/ads → `…-google`).
-
-| Type | Doc | Type | Doc |
-|---|---|---|---|
-| `redshift` | [redshift.md](redshift.md) | `trino` | [trino.md](trino.md) |
-| `athena` | [athena.md](athena.md) | `presto` | [presto.md](presto.md) |
-| `emr` | [emr.md](emr.md) | `jdbc` | [jdbc.md](jdbc.md) |
-| `gcpbigquery` | [gcpbigquery.md](gcpbigquery.md) | `docker` | [docker.md](docker.md) |
-| `gcpcloudsql` | [gcpcloudsql.md](gcpcloudsql.md) | `salesforce` | [salesforce.md](salesforce.md) |
-| `google_ads` | [google_ads.md](google_ads.md) | `telegram` | [telegram.md](telegram.md) |
-| `cassandra` | [cassandra.md](cassandra.md) | `discord` | [discord.md](discord.md) |
-| `neo4j` | [neo4j.md](neo4j.md) | `pagerduty` | [pagerduty.md](pagerduty.md) |
-| `vertica` | [vertica.md](vertica.md) | `datadog` | [datadog.md](datadog.md) |
-| `influxdb` | [influxdb.md](influxdb.md) | `tableau` | [tableau.md](tableau.md) |
-| `druid` | [druid.md](druid.md) | `github` | [github.md](github.md) |
-| `pinot` | [pinot.md](pinot.md) | `elasticsearch` | [elasticsearch.md](elasticsearch.md) |
-| `dbt_cloud` | [dbt_cloud.md](dbt_cloud.md) | `smtp` | [smtp.md](smtp.md) |
-| `hiveserver2` | [hiveserver2.md](hiveserver2.md) | `imap` | [imap.md](imap.md) |
-| `hive_cli` | [hive_cli.md](hive_cli.md) | `opsgenie` | [opsgenie.md](opsgenie.md) |
-| `powerbi` | [powerbi.md](powerbi.md) | `zendesk` | [zendesk.md](zendesk.md) |
-| `msgraph` | [msgraph.md](msgraph.md) | `samba` | [samba.md](samba.md) |
-| `livy` | [livy.md](livy.md) | `gcpssh` | [gcpssh.md](gcpssh.md) |
-| `gcp_looker` | [gcp_looker.md](gcp_looker.md) | | |
+**Local tier** — *local (Docker)*: spin the service up with Docker/Lima and run the
+example end-to-end; *local (tier 1)*: no external service needed (or already in CI);
+*doc-only*: a real run needs the external account/service, so the page is a recipe with
+a delivery test rather than a runnable example. **Example** — *recipe* links back to the
+connector's own page (the copy-paste DAG lives there).
 
 ## The long tail
 

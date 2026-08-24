@@ -1,12 +1,17 @@
----
-connectors: [tableau]
----
-
 # Tableau connection
 
 Connect a task to Tableau Server or Tableau Cloud to refresh extracts,
 publish workbooks, or query metadata over a managed Leoflow Connection.
 `TableauHook` signs in to the REST API.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: tableau_signin
+connectors:
+  - tableau
+```
 
 ## URI shape
 
@@ -33,34 +38,32 @@ is percent-escaped.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["tableau"])
-def tableau_signin():
-    @task
-    def list_workbooks():
-        from airflow.providers.tableau.hooks.tableau import TableauHook
+@task
+def list_workbooks():
+    from airflow.providers.tableau.hooks.tableau import TableauHook
 
-        with TableauHook(tableau_conn_id="tableau_default") as hook:
-            workbooks = hook.get_all(resource_name="workbooks")
-            print("workbook count:", len(list(workbooks)))
+    with TableauHook(tableau_conn_id="tableau_default") as hook:
+        workbooks = hook.get_all(resource_name="workbooks")
+        print("workbook count:", len(list(workbooks)))
 
+
+with DAG("tableau_signin", schedule=None, catchup=False, tags=["example"]):
     list_workbooks()
-
-
-tableau_signin()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: tableau_signin
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-tableau
+python_version: "3.12"
+connectors:
+  - tableau
 connections:
-  - conn_id: tableau_default
-    conn_type: tableau
+  - tableau_default
 ```
 
 ## Security notes

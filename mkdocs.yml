@@ -109,26 +109,27 @@ nav:
   - Home: index.md
   - Why Leoflow: why-leoflow.md
   - Get started:
-      - Editions: editions.md
+      - Quickstart (start here): quickstart.md
       - Installation: installation.md
-      - Quickstart: quickstart.md
+      - Editions: editions.md
       - Operating modes: operating-modes.md
+      - Concepts & glossary: concepts.md
+  - Operations:
       - Upgrades: upgrades.md
       - Backup & restore: backup-restore.md
       - Scheduler resilience: scheduler-resilience.md
       - Warm worker pools: warm-pools.md
       - Agent credential transport: agent-credential-transport.md
-      - Concepts & glossary: concepts.md
-      - Architecture: architecture.md
   - Authoring & deploy:
       - DAG authoring: dag-authoring.md
-      - First Pro DAG (walkthrough): first-pro-dag.md
+      - First Pro DAG (next step): first-pro-dag.md
       - Airflow operators & sensors: airflow-operators.md
       - dbt projects as DAGs: dbt.md
       - On-failure alerting: alerting.md
       - CI/CD & deploy examples: deploy.md
   - Reference:
       - reference.md
+      - Architecture: architecture.md
       - CLI reference: cli/leoflow.md
       - Helm chart: helm-chart.md
       - Pro TLS (cert-manager): pro-tls.md
@@ -152,7 +153,7 @@ nav:
       - Configuration: configuration.md
   - Guides:
       - The leoflow lite workflow: dev-workflow.md
-      - Local deploy (the Lite loop): local-deploy.md
+      - Local deploy (Lite inner loop): local-deploy.md
       - The Lite web editor: lite-web-editor.md
       - Examples: examples.md
       - "Map-reduce for ML": cookbook/map-reduce.md

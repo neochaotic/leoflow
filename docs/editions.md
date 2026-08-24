@@ -2,13 +2,7 @@
 
 !!! info "Both editions are supported"
     **Lite** is the local single-host edition; **Pro** is the Helm/Kubernetes
-    deployment. Both are supported today, and the README says the same.
-
-    This page previously warned that Leoflow was pre-alpha and that Pro was
-    "not cleared for official use until the v0.1.0-alpha cut". That milestone
-    does not exist — ADR 0037 removed alpha and beta from the version scheme
-    entirely, and `v0.1.0` stable shipped on 2026-06-28. The warning outlived
-    the plan it referenced and contradicted the README for weeks.
+    deployment. Both are supported today.
 
     Pro is pre-1.0, which under SemVer means breaking changes ship between
     minor versions with a migration note (ADR 0037). Read the release notes
@@ -30,7 +24,7 @@ DAG once and it runs on either.
 | Executors | a local **k3d** mini-cluster (real pods, **requires Docker** to host the cluster) or **subprocess** (dev-only, unsandboxed, no Docker) | **Kubernetes only**, at scale |
 | Deploy | edit + hot-reload | GitOps: `leoflow compile` in CI → immutable image + `dag.json` |
 | Intended use | local, small, or **light production** projects on a **trusted/internal network** | teams and production workloads at scale |
-| Datastores | **Postgres, auto-selected**: the Docker `postgres:16` when Docker is present, else an **embedded managed** Postgres (downloaded under `~/.leoflow`, no Docker); **no Redis** | **external** managed Postgres + Redis (see [chart docs](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md#datastore-compatibility) for versions) |
+| Datastores | **Postgres, auto-selected** (Docker `postgres:16` or embedded managed); **no Redis** — see [below](#datastore-auto-selected-no-redis) | **external** managed Postgres + Redis ([versions](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md#datastore-compatibility)) |
 
 ## Leoflow Lite
 

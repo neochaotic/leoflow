@@ -18,7 +18,7 @@ token) lives entirely in **Extra**; there is no host or password field.
 connectors: [google_ads]
 ```
 
-## URI shape (intended, post-fix)
+## URI shape
 
 Google Ads is an **Extra-only** connection. Once the scheme is normalized it is
 delivered as `AIRFLOW_CONN_<ID>` with the canonical hyphenated scheme:

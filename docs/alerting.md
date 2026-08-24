@@ -25,18 +25,12 @@ Slack message and the PagerDuty webhook fire.
 
 ## How it works
 
-```
-leoflow.yaml ──► compile ──► dag.json ──► scheduler sees the run fail
-   alerts:      (validate    (Alerts        │
-               + overlay)    baked in)      ▼
-                                     fire off the tick, in a goroutine
-                                            │
-                                            ▼
-                         for each rule: resolve the connection → endpoint URL,
-                         render the message, POST it
-                                            │
-                                            ▼
-                                 Slack / PagerDuty / Opsgenie / Teams …
+```mermaid
+flowchart TB
+  A["leoflow.yaml<br/>alerts:"] -->|"compile<br/>(validate + overlay)"| B["dag.json<br/>(alerts baked in)"]
+  B --> C["scheduler sees the run reach <code>failed</code>"]
+  C -->|"off the tick, in a goroutine"| D["for each rule:<br/>resolve connection → endpoint URL,<br/>render the message, POST it"]
+  D --> E["Slack / PagerDuty / Opsgenie / Teams …"]
 ```
 
 Three guarantees hold by design:

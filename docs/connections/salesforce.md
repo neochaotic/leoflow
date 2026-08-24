@@ -1,13 +1,18 @@
----
-connectors: [salesforce]
----
-
 # Salesforce connection
 
 Connect a task to a Salesforce org to run SOQL queries and read/write
 objects over a managed Leoflow Connection. `SalesforceHook` (built on
 `simple-salesforce`) authenticates with username + password + security
 token, or with a connected-app flow configured in `Extra`.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: salesforce_query
+connectors:
+  - salesforce
+```
 
 ## URI shape
 
@@ -33,34 +38,32 @@ ride in `Extra` under `__extra__`.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["salesforce"])
-def salesforce_query():
-    @task
-    def count_accounts():
-        from airflow.providers.salesforce.hooks.salesforce import SalesforceHook
+@task
+def count_accounts():
+    from airflow.providers.salesforce.hooks.salesforce import SalesforceHook
 
-        hook = SalesforceHook(salesforce_conn_id="salesforce_default")
-        result = hook.make_query("SELECT count() FROM Account")
-        print("account count:", result["totalSize"])
+    hook = SalesforceHook(salesforce_conn_id="salesforce_default")
+    result = hook.make_query("SELECT count() FROM Account")
+    print("account count:", result["totalSize"])
 
+
+with DAG("salesforce_query", schedule=None, catchup=False, tags=["example"]):
     count_accounts()
-
-
-salesforce_query()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: salesforce_query
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-salesforce
+python_version: "3.12"
+connectors:
+  - salesforce
 connections:
-  - conn_id: salesforce_default
-    conn_type: salesforce
+  - salesforce_default
 ```
 
 ## Security notes

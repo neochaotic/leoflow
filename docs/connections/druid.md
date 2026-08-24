@@ -3,6 +3,15 @@
 Connect a task to an Apache Druid cluster (the `DruidDbApiHook`) over a
 managed Leoflow Connection. The query path goes through the Druid broker.
 
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: druid_smoke
+connectors:
+  - druid
+```
+
 ## URI shape
 
 ```
@@ -34,35 +43,30 @@ The provider import must live **inside** the task body — a top-level
 provider import fails compilation in the parser sidecar.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def druid_smoke():
-    @task
-    def query():
-        from airflow.providers.apache.druid.hooks.druid import DruidDbApiHook
+@task
+def query():
+    from airflow.providers.apache.druid.hooks.druid import DruidDbApiHook
 
-        hook = DruidDbApiHook(druid_broker_conn_id="druid_target")
-        rows = hook.get_records("SELECT 1")
-        print("druid up:", rows)
+    hook = DruidDbApiHook(druid_broker_conn_id="druid_target")
+    rows = hook.get_records("SELECT 1")
+    print("druid up:", rows)
 
+
+with DAG("druid_smoke", schedule=None, catchup=False, tags=["example"]):
     query()
-
-
-druid_smoke()
 ```
 
 ```yaml
 # leoflow.yaml
-name: druid_smoke
-schedule: null
-image:
-  python: "3.11"
-  requirements:
-    - apache-airflow-providers-apache-druid
-connectors: [druid]
+schema_version: "1.0"
+dag_id: druid_smoke
+python_version: "3.11"
+connectors:
+  - druid
 ```
 
 ## Security notes

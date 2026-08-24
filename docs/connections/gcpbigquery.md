@@ -7,7 +7,10 @@ location live in **Extra**, and auth is keyless (Workload Identity / ADC).
 ## Declare the provider
 
 ```yaml
-connectors: [gcpbigquery]
+# leoflow.yaml
+dag_id: bigquery_demo
+connectors:
+  - gcpbigquery
 ```
 
 ## URI shape
@@ -39,31 +42,30 @@ The provider import goes **inside** the `@task` body — a top-level provider
 import fails the compile.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def bigquery_demo():
-    @task
-    def count_rows() -> int:
-        from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
+@task
+def count_rows() -> int:
+    from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
 
-        hook = BigQueryHook(gcp_conn_id="bq_warehouse")
-        rows = hook.get_records("SELECT count(*) FROM `my-proj.analytics.events`")
-        return int(rows[0][0])
+    hook = BigQueryHook(gcp_conn_id="bq_warehouse")
+    rows = hook.get_records("SELECT count(*) FROM `my-proj.analytics.events`")
+    return int(rows[0][0])
 
+
+with DAG("bigquery_demo", schedule=None, catchup=False, tags=["example"]):
     count_rows()
-
-
-bigquery_demo()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: bigquery_demo
-python: "3.12"
-connectors: [gcpbigquery]
+python_version: "3.12"
+connectors:
+  - gcpbigquery
 ```
 
 ## Security notes

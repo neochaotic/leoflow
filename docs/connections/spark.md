@@ -81,6 +81,19 @@ connectors:
     task image. Add it via `system_packages:` or a custom base image. The
     Connection only carries where to submit, not the binary.
 
+## Security notes
+
+- **Keytab / principal stay in Extra**: for Kerberos-secured clusters keep
+  `principal` and `keytab` in **Extra** (encrypted at rest, ADR 0019) — never
+  inline them in the DAG source.
+- **Authenticated submit endpoint**: submit to a master/Connect endpoint that
+  enforces auth and TLS where the cluster supports it; the Connection only
+  carries where to submit, not the transport policy.
+- **Secrets in logs**: never `print()` the URI — it may carry credentials. Log
+  the host + port only.
+- **gRPC channel (agent ↔ control plane)**: secrets are served only over an
+  authenticated channel (ADR 0021); Pro must run with TLS.
+
 ## Related
 
 - `docs/connections/index.md` — *Installing a connector's provider*.

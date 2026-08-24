@@ -3,6 +3,15 @@
 Connect a task to an Apache Pinot real-time OLAP store (the `PinotDbApiHook`)
 over a managed Leoflow Connection. Queries go through the Pinot broker.
 
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: pinot_smoke
+connectors:
+  - pinot
+```
+
 ## URI shape
 
 ```
@@ -34,35 +43,30 @@ The provider import must live **inside** the task body — a top-level
 provider import fails compilation in the parser sidecar.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def pinot_smoke():
-    @task
-    def query():
-        from airflow.providers.apache.pinot.hooks.pinot import PinotDbApiHook
+@task
+def query():
+    from airflow.providers.apache.pinot.hooks.pinot import PinotDbApiHook
 
-        hook = PinotDbApiHook(pinot_broker_conn_id="pinot_target")
-        rows = hook.get_records("SELECT 1")
-        print("pinot up:", rows)
+    hook = PinotDbApiHook(pinot_broker_conn_id="pinot_target")
+    rows = hook.get_records("SELECT 1")
+    print("pinot up:", rows)
 
+
+with DAG("pinot_smoke", schedule=None, catchup=False, tags=["example"]):
     query()
-
-
-pinot_smoke()
 ```
 
 ```yaml
 # leoflow.yaml
-name: pinot_smoke
-schedule: null
-image:
-  python: "3.11"
-  requirements:
-    - apache-airflow-providers-apache-pinot
-connectors: [pinot]
+schema_version: "1.0"
+dag_id: pinot_smoke
+python_version: "3.11"
+connectors:
+  - pinot
 ```
 
 ## Security notes

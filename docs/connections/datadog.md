@@ -1,12 +1,17 @@
----
-connectors: [datadog]
----
-
 # Datadog connection
 
 Submit metrics, events, and query monitors from a task over a managed
 Leoflow Connection. `DatadogHook` authenticates with an API key + app key
 against the Datadog site (US, EU, …).
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: datadog_metric
+connectors:
+  - datadog
+```
 
 ## URI shape
 
@@ -40,37 +45,35 @@ extra-only shape.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["datadog"])
-def datadog_metric():
-    @task
-    def send():
-        from airflow.providers.datadog.hooks.datadog import DatadogHook
+@task
+def send():
+    from airflow.providers.datadog.hooks.datadog import DatadogHook
 
-        hook = DatadogHook(datadog_conn_id="datadog_default")
-        hook.send_metric(
-            metric_name="leoflow.dag.runs",
-            datapoint=1,
-            tags=["dag:datadog_metric"],
-        )
+    hook = DatadogHook(datadog_conn_id="datadog_default")
+    hook.send_metric(
+        metric_name="leoflow.dag.runs",
+        datapoint=1,
+        tags=["dag:datadog_metric"],
+    )
 
+
+with DAG("datadog_metric", schedule=None, catchup=False, tags=["example"]):
     send()
-
-
-datadog_metric()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: datadog_metric
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-datadog
+python_version: "3.12"
+connectors:
+  - datadog
 connections:
-  - conn_id: datadog_default
-    conn_type: datadog
+  - datadog_default
 ```
 
 ## Security notes

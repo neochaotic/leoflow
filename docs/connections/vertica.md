@@ -3,6 +3,15 @@
 Connect a task to a Vertica analytics database (the `VerticaHook`) over a
 managed Leoflow Connection. The database lives in the Schema field.
 
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: vertica_smoke
+connectors:
+  - vertica
+```
+
 ## URI shape
 
 ```
@@ -34,35 +43,30 @@ The provider import must live **inside** the task body — a top-level
 provider import fails compilation in the parser sidecar.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def vertica_smoke():
-    @task
-    def query():
-        from airflow.providers.vertica.hooks.vertica import VerticaHook
+@task
+def query():
+    from airflow.providers.vertica.hooks.vertica import VerticaHook
 
-        hook = VerticaHook(vertica_conn_id="vertica_target")
-        rows = hook.get_records("SELECT version()")
-        print("vertica up:", rows)
+    hook = VerticaHook(vertica_conn_id="vertica_target")
+    rows = hook.get_records("SELECT version()")
+    print("vertica up:", rows)
 
+
+with DAG("vertica_smoke", schedule=None, catchup=False, tags=["example"]):
     query()
-
-
-vertica_smoke()
 ```
 
 ```yaml
 # leoflow.yaml
-name: vertica_smoke
-schedule: null
-image:
-  python: "3.11"
-  requirements:
-    - apache-airflow-providers-vertica
-connectors: [vertica]
+schema_version: "1.0"
+dag_id: vertica_smoke
+python_version: "3.11"
+connectors:
+  - vertica
 ```
 
 ## Security notes

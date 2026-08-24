@@ -10,7 +10,10 @@ Each DAG image bundles only the providers it declares. Add Redshift in
 `leoflow.yaml`:
 
 ```yaml
-connectors: [redshift]
+# leoflow.yaml
+dag_id: redshift_demo
+connectors:
+  - redshift
 ```
 
 ## URI shape
@@ -50,31 +53,30 @@ import runs at parse time and fails the compile (the parser image doesn't carry
 provider deps).
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def redshift_demo():
-    @task
-    def count_rows() -> int:
-        from airflow.providers.amazon.aws.hooks.redshift_sql import RedshiftSQLHook
+@task
+def count_rows() -> int:
+    from airflow.providers.amazon.aws.hooks.redshift_sql import RedshiftSQLHook
 
-        hook = RedshiftSQLHook(redshift_conn_id="redshift_dw")
-        rows = hook.get_records("SELECT count(*) FROM analytics.events")
-        return int(rows[0][0])
+    hook = RedshiftSQLHook(redshift_conn_id="redshift_dw")
+    rows = hook.get_records("SELECT count(*) FROM analytics.events")
+    return int(rows[0][0])
 
+
+with DAG("redshift_demo", schedule=None, catchup=False, tags=["example"]):
     count_rows()
-
-
-redshift_demo()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: redshift_demo
-python: "3.12"
-connectors: [redshift]
+python_version: "3.12"
+connectors:
+  - redshift
 ```
 
 ## Security notes

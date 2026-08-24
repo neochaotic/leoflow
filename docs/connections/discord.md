@@ -1,11 +1,16 @@
----
-connectors: [discord]
----
-
 # Discord connection
 
 Post messages to a Discord channel from a task over a managed Leoflow
 Connection. `DiscordWebhookHook` sends to a channel webhook.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: discord_notify
+connectors:
+  - discord
+```
 
 ## URI shape
 
@@ -31,38 +36,36 @@ endpoint to post.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["discord"])
-def discord_notify():
-    @task
-    def send():
-        from airflow.providers.discord.hooks.discord_webhook import (
-            DiscordWebhookHook,
-        )
+@task
+def send():
+    from airflow.providers.discord.hooks.discord_webhook import (
+        DiscordWebhookHook,
+    )
 
-        hook = DiscordWebhookHook(
-            http_conn_id="discord_default",
-            message="DAG finished",
-        )
-        hook.execute()
+    hook = DiscordWebhookHook(
+        http_conn_id="discord_default",
+        message="DAG finished",
+    )
+    hook.execute()
 
+
+with DAG("discord_notify", schedule=None, catchup=False, tags=["example"]):
     send()
-
-
-discord_notify()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: discord_notify
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-discord
+python_version: "3.12"
+connectors:
+  - discord
 connections:
-  - conn_id: discord_default
-    conn_type: discord
+  - discord_default
 ```
 
 ## Security notes

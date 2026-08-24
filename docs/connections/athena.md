@@ -7,7 +7,10 @@ group live in **Extra**.
 ## Declare the provider
 
 ```yaml
-connectors: [athena]
+# leoflow.yaml
+dag_id: athena_demo
+connectors:
+  - athena
 ```
 
 ## URI shape
@@ -43,31 +46,30 @@ The provider import goes **inside** the `@task` body — a top-level provider
 import fails the compile.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def athena_demo():
-    @task
-    def query() -> str:
-        from airflow.providers.amazon.aws.hooks.athena_sql import AthenaSQLHook
+@task
+def query() -> str:
+    from airflow.providers.amazon.aws.hooks.athena_sql import AthenaSQLHook
 
-        hook = AthenaSQLHook(athena_conn_id="athena_lake")
-        rows = hook.get_records("SELECT count(*) FROM events")
-        return str(rows[0][0])
+    hook = AthenaSQLHook(athena_conn_id="athena_lake")
+    rows = hook.get_records("SELECT count(*) FROM events")
+    return str(rows[0][0])
 
+
+with DAG("athena_demo", schedule=None, catchup=False, tags=["example"]):
     query()
-
-
-athena_demo()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: athena_demo
-python: "3.12"
-connectors: [athena]
+python_version: "3.12"
+connectors:
+  - athena
 ```
 
 ## Security notes

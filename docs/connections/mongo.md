@@ -71,6 +71,17 @@ For MongoDB Atlas set `Extra: {"srv": true}` and use the cluster host
 (`cluster0.xxxx.mongodb.net`) without a port — `MongoHook` builds the
 `mongodb+srv://` URI.
 
+## Security notes
+
+- **TLS in transit**: set TLS options in **Extra** (`{"tls": true}`), or use the
+  `mongodb+srv://` form (`{"srv": true}`, Atlas) which negotiates TLS by default.
+- **Least privilege**: scope the Mongo user to the target database and set
+  `authSource` in **Extra** — avoid a cluster-wide admin user.
+- **Secrets in logs**: never `print()` the URI — it carries the password. Log
+  the host + database + login only.
+- **gRPC channel (agent ↔ control plane)**: secrets are served only over an
+  authenticated channel (ADR 0021); Pro must run with TLS.
+
 ## Related
 
 - `docs/connections/index.md` — *Installing a connector's provider*.

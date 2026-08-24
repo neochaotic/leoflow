@@ -4,8 +4,13 @@ Connect a task to an SMTP mail relay over a managed Leoflow Connection. The
 host, port, credentials, and an Extra blob (`from_email`, `timeout`) are
 encrypted at rest and delivered to the task as `AIRFLOW_CONN_<CONN_ID>`.
 
+## Declare the provider
+
 ```yaml
-connectors: [smtp]
+# leoflow.yaml
+dag_id: smtp_notify
+connectors:
+  - smtp
 ```
 
 ## URI shape
@@ -35,32 +40,33 @@ The control plane percent-escapes the password; `SmtpHook` (which parses
 The hook is imported inside the task body so DAG parsing stays import-light.
 
 ```python
-from airflow.decorators import dag, task
-from pendulum import datetime
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2026, 1, 1), catchup=False)
-def smtp_notify():
-    @task
-    def send():
-        from airflow.providers.smtp.hooks.smtp import SmtpHook
+@task
+def send():
+    from airflow.providers.smtp.hooks.smtp import SmtpHook
 
-        with SmtpHook(smtp_conn_id="smtp_default") as hook:
-            hook.send_email_smtp(
-                to="ops@example.com",
-                subject="Leoflow run complete",
-                html_content="<p>The pipeline finished.</p>",
-            )
+    with SmtpHook(smtp_conn_id="smtp_default") as hook:
+        hook.send_email_smtp(
+            to="ops@example.com",
+            subject="Leoflow run complete",
+            html_content="<p>The pipeline finished.</p>",
+        )
 
+
+with DAG("smtp_notify", schedule=None, catchup=False, tags=["example"]):
     send()
-
-
-smtp_notify()
 ```
 
 ```yaml
 # leoflow.yaml
-connectors: [smtp]
+schema_version: "1.0"
+dag_id: smtp_notify
+python_version: "3.11"
+connectors:
+  - smtp
 ```
 
 ## Security notes

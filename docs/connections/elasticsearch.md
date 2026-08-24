@@ -3,6 +3,15 @@
 Connect a task to an Elasticsearch cluster's SQL endpoint (the
 `ElasticsearchSQLHook`) over a managed Leoflow Connection.
 
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: elasticsearch_smoke
+connectors:
+  - elasticsearch
+```
+
 ## URI shape
 
 ```
@@ -34,35 +43,30 @@ The provider import must live **inside** the task body — a top-level
 provider import fails compilation in the parser sidecar.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def elasticsearch_smoke():
-    @task
-    def query():
-        from airflow.providers.elasticsearch.hooks.elasticsearch import ElasticsearchSQLHook
+@task
+def query():
+    from airflow.providers.elasticsearch.hooks.elasticsearch import ElasticsearchSQLHook
 
-        hook = ElasticsearchSQLHook(elasticsearch_conn_id="es_target")
-        rows = hook.get_records("SELECT 1")
-        print("elasticsearch up:", rows)
+    hook = ElasticsearchSQLHook(elasticsearch_conn_id="es_target")
+    rows = hook.get_records("SELECT 1")
+    print("elasticsearch up:", rows)
 
+
+with DAG("elasticsearch_smoke", schedule=None, catchup=False, tags=["example"]):
     query()
-
-
-elasticsearch_smoke()
 ```
 
 ```yaml
 # leoflow.yaml
-name: elasticsearch_smoke
-schedule: null
-image:
-  python: "3.11"
-  requirements:
-    - apache-airflow-providers-elasticsearch
-connectors: [elasticsearch]
+schema_version: "1.0"
+dag_id: elasticsearch_smoke
+python_version: "3.11"
+connectors:
+  - elasticsearch
 ```
 
 ## Security notes

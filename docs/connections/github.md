@@ -1,12 +1,17 @@
----
-connectors: [github]
----
-
 # GitHub connection
 
 Connect a task to the GitHub API to read repos, manage issues/PRs, or
 trigger workflows over a managed Leoflow Connection. `GithubHook`
 authenticates with a personal access token (PAT).
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: github_repo
+connectors:
+  - github
+```
 
 ## URI shape
 
@@ -31,35 +36,33 @@ via `Extra`.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["github"])
-def github_repo():
-    @task
-    def stars():
-        from airflow.providers.github.hooks.github import GithubHook
+@task
+def stars():
+    from airflow.providers.github.hooks.github import GithubHook
 
-        hook = GithubHook(github_conn_id="github_default")
-        client = hook.get_conn()
-        repo = client.get_repo("apache/airflow")
-        print("stars:", repo.stargazers_count)
+    hook = GithubHook(github_conn_id="github_default")
+    client = hook.get_conn()
+    repo = client.get_repo("apache/airflow")
+    print("stars:", repo.stargazers_count)
 
+
+with DAG("github_repo", schedule=None, catchup=False, tags=["example"]):
     stars()
-
-
-github_repo()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: github_repo
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-github
+python_version: "3.12"
+connectors:
+  - github
 connections:
-  - conn_id: github_default
-    conn_type: github
+  - github_default
 ```
 
 ## Security notes

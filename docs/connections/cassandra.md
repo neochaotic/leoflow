@@ -3,6 +3,15 @@
 Connect a task to an Apache Cassandra cluster (the `CassandraHook`) over a
 managed Leoflow Connection. The keyspace lives in the Schema field.
 
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: cassandra_smoke
+connectors:
+  - cassandra
+```
+
 ## URI shape
 
 ```
@@ -34,36 +43,31 @@ The provider import must live **inside** the task body — a top-level
 provider import fails compilation in the parser sidecar.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def cassandra_smoke():
-    @task
-    def query():
-        from airflow.providers.apache.cassandra.hooks.cassandra import CassandraHook
+@task
+def query():
+    from airflow.providers.apache.cassandra.hooks.cassandra import CassandraHook
 
-        hook = CassandraHook(cassandra_conn_id="cassandra_target")
-        session = hook.get_conn()
-        row = session.execute("SELECT release_version FROM system.local").one()
-        print("cassandra up:", row.release_version)
+    hook = CassandraHook(cassandra_conn_id="cassandra_target")
+    session = hook.get_conn()
+    row = session.execute("SELECT release_version FROM system.local").one()
+    print("cassandra up:", row.release_version)
 
+
+with DAG("cassandra_smoke", schedule=None, catchup=False, tags=["example"]):
     query()
-
-
-cassandra_smoke()
 ```
 
 ```yaml
 # leoflow.yaml
-name: cassandra_smoke
-schedule: null
-image:
-  python: "3.11"
-  requirements:
-    - apache-airflow-providers-apache-cassandra
-connectors: [cassandra]
+schema_version: "1.0"
+dag_id: cassandra_smoke
+python_version: "3.11"
+connectors:
+  - cassandra
 ```
 
 ## Security notes

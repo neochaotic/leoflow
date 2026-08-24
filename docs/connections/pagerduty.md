@@ -1,12 +1,17 @@
----
-connectors: [pagerduty]
----
-
 # PagerDuty connection
 
 Trigger PagerDuty incidents and alerts from a task over a managed Leoflow
 Connection. `PagerdutyHook` uses a REST API token for the REST API and an
 Events-API routing key (integration key) for Events v2 alerts.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: pagerduty_alert
+connectors:
+  - pagerduty
+```
 
 ## URI shape
 
@@ -30,39 +35,37 @@ and the Events-API routing key rides in `Extra` under `__extra__`.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["pagerduty"])
-def pagerduty_alert():
-    @task
-    def trigger():
-        from airflow.providers.pagerduty.hooks.pagerduty_events import (
-            PagerdutyEventsHook,
-        )
+@task
+def trigger():
+    from airflow.providers.pagerduty.hooks.pagerduty_events import (
+        PagerdutyEventsHook,
+    )
 
-        hook = PagerdutyEventsHook(pagerduty_events_conn_id="pagerduty_default")
-        hook.create_event(
-            summary="DAG failed",
-            severity="critical",
-            source="leoflow",
-        )
+    hook = PagerdutyEventsHook(pagerduty_events_conn_id="pagerduty_default")
+    hook.create_event(
+        summary="DAG failed",
+        severity="critical",
+        source="leoflow",
+    )
 
+
+with DAG("pagerduty_alert", schedule=None, catchup=False, tags=["example"]):
     trigger()
-
-
-pagerduty_alert()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: pagerduty_alert
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-pagerduty
+python_version: "3.12"
+connectors:
+  - pagerduty
 connections:
-  - conn_id: pagerduty_default
-    conn_type: pagerduty
+  - pagerduty_default
 ```
 
 ## Security notes

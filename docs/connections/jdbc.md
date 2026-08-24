@@ -1,12 +1,17 @@
----
-connectors: [jdbc]
----
-
 # JDBC connection
 
 Connect a task to any database that ships a JDBC driver (DB2, Oracle,
 SAP HANA, Vertica, …) over a managed Leoflow Connection. `JdbcHook` runs
 queries through a JVM driver loaded via JayDeBeApi.
+
+## Declare the provider
+
+```yaml
+# leoflow.yaml
+dag_id: jdbc_query
+connectors:
+  - jdbc
+```
 
 ## URI shape
 
@@ -48,35 +53,34 @@ the password are percent-escaped; `JdbcHook` un-escapes them.
 ## Example DAG
 
 ```python
-from airflow.sdk import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, catchup=False, tags=["jdbc"])
-def jdbc_query():
-    @task
-    def fetch_one():
-        from airflow.providers.jdbc.hooks.jdbc import JdbcHook
+@task
+def fetch_one():
+    from airflow.providers.jdbc.hooks.jdbc import JdbcHook
 
-        hook = JdbcHook(jdbc_conn_id="jdbc_default")
-        rows = hook.get_records("SELECT 1")
-        print("result:", rows[0][0])
+    hook = JdbcHook(jdbc_conn_id="jdbc_default")
+    rows = hook.get_records("SELECT 1")
+    print("result:", rows[0][0])
 
+
+with DAG("jdbc_query", schedule=None, catchup=False, tags=["example"]):
     fetch_one()
-
-
-jdbc_query()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: jdbc_query
-runtime: python3.12
-requirements:
-  - apache-airflow-providers-jdbc
+python_version: "3.12"
+connectors:
+  - jdbc
+dependencies:
   - JPype1
 connections:
-  - conn_id: jdbc_default
-    conn_type: jdbc
+  - jdbc_default
 ```
 
 The runtime image must also bundle a JRE/JDK and the driver `.jar`

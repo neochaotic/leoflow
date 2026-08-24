@@ -4,8 +4,13 @@ Connect a task to the Zendesk Support API over a managed Leoflow Connection.
 The subdomain host, agent email, API token, and an Extra blob are encrypted at
 rest and delivered to the task as `AIRFLOW_CONN_<CONN_ID>`.
 
+## Declare the provider
+
 ```yaml
-connectors: [zendesk]
+# leoflow.yaml
+dag_id: zendesk_export
+connectors:
+  - zendesk
 ```
 
 ## URI shape
@@ -34,28 +39,29 @@ Extra blob (`token`, `use_token`) rides in `__extra__`.
 The hook is imported inside the task body so DAG parsing stays import-light.
 
 ```python
-from airflow.decorators import dag, task
-from pendulum import datetime
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2026, 1, 1), catchup=False)
-def zendesk_export():
-    @task
-    def fetch():
-        from airflow.providers.zendesk.hooks.zendesk import ZendeskHook
+@task
+def fetch():
+    from airflow.providers.zendesk.hooks.zendesk import ZendeskHook
 
-        hook = ZendeskHook(zendesk_conn_id="zendesk_default")
-        return hook.get_ticket(ticket_id=1)
+    hook = ZendeskHook(zendesk_conn_id="zendesk_default")
+    return hook.get_ticket(ticket_id=1)
 
+
+with DAG("zendesk_export", schedule=None, catchup=False, tags=["example"]):
     fetch()
-
-
-zendesk_export()
 ```
 
 ```yaml
 # leoflow.yaml
-connectors: [zendesk]
+schema_version: "1.0"
+dag_id: zendesk_export
+python_version: "3.11"
+connectors:
+  - zendesk
 ```
 
 ## Security notes

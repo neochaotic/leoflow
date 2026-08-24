@@ -8,7 +8,10 @@ runtime identity (ADC).
 ## Declare the provider
 
 ```yaml
-connectors: [gcpcloudsql]
+# leoflow.yaml
+dag_id: cloudsql_demo
+connectors:
+  - gcpcloudsql
 ```
 
 ## URI shape
@@ -41,31 +44,30 @@ The provider import goes **inside** the `@task` body — a top-level provider
 import fails the compile.
 
 ```python
-from datetime import datetime
-from airflow.decorators import dag, task
+# dag.py
+from airflow.sdk import DAG, task
 
 
-@dag(schedule=None, start_date=datetime(2024, 1, 1), catchup=False)
-def cloudsql_demo():
-    @task
-    def ping() -> str:
-        from airflow.providers.google.cloud.hooks.cloud_sql import CloudSQLHook
+@task
+def ping() -> str:
+    from airflow.providers.google.cloud.hooks.cloud_sql import CloudSQLHook
 
-        hook = CloudSQLHook(gcp_cloudsql_conn_id="cloudsql_app", api_version="v1beta4")
-        instance = hook.get_instance(instance="my-inst")
-        return instance["state"]
+    hook = CloudSQLHook(gcp_cloudsql_conn_id="cloudsql_app", api_version="v1beta4")
+    instance = hook.get_instance(instance="my-inst")
+    return instance["state"]
 
+
+with DAG("cloudsql_demo", schedule=None, catchup=False, tags=["example"]):
     ping()
-
-
-cloudsql_demo()
 ```
 
 ```yaml
 # leoflow.yaml
+schema_version: "1.0"
 dag_id: cloudsql_demo
-python: "3.12"
-connectors: [gcpcloudsql]
+python_version: "3.12"
+connectors:
+  - gcpcloudsql
 ```
 
 ## Security notes

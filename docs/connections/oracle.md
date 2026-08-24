@@ -69,6 +69,18 @@ connectors:
     features need the Oracle Instant Client in the image (`system_packages:` or a
     custom base).
 
+## Security notes
+
+- **TLS in transit**: Oracle supports encrypted transport (TCPS / native
+  network encryption). Configure it in the service descriptor or **Extra**;
+  never run credentials over an unencrypted listener.
+- **Least privilege**: connect as a dedicated schema user scoped to the objects
+  the DAG needs — never `SYS`/`SYSTEM`.
+- **Secrets in logs**: never `print()` the URI — it carries the password. Log
+  the host + service name + login only.
+- **gRPC channel (agent ↔ control plane)**: secrets are served only over an
+  authenticated channel (ADR 0021); Pro must run with TLS.
+
 ## Related
 
 - `docs/connections/index.md` — *Installing a connector's provider*.

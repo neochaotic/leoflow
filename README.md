@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/icon-256.png" alt="Leoflow" width="140">
+  <img src="website/static/assets/icon-256.png" alt="Leoflow" width="140">
 </p>
 
 <h1 align="center">Leoflow</h1>
@@ -46,7 +46,7 @@
 
 <p align="center">
   <a href="https://neochaotic.github.io/leoflow/">
-    <img src="docs/assets/screenshots/dev-grid-tasks.png" alt="Leoflow running the Apache Airflow 3.2 UI — a DAG's grid view, task list, and run-duration overview" width="860">
+    <img src="website/static/assets/screenshots/dev-grid-tasks.png" alt="Leoflow running the Apache Airflow 3.2 UI — a DAG's grid view, task list, and run-duration overview" width="860">
   </a>
 </p>
 

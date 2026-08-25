@@ -549,7 +549,7 @@ jobs:
           fetch-depth: 0
       # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
       # keep reporting this required check. Computes the base..head diff and runs
-      # the heavy steps only when a non-docs/spec/load-test/markdown file changed.
+      # the heavy steps only when a non-docs/spec/load-test/website/markdown file changed.
       - name: Gate heavy E2E on code changes
         id: gate
         run: |
@@ -562,7 +562,7 @@ jobs:
           git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|.*\.md$)'; then
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "docs/tooling-only change — skipping heavy k3d E2E."
           else
@@ -636,7 +636,7 @@ jobs:
           fetch-depth: 0
       # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
       # keep reporting this required check. Computes the base..head diff and runs
-      # the heavy steps only when a non-docs/spec/load-test/markdown file changed.
+      # the heavy steps only when a non-docs/spec/load-test/website/markdown file changed.
       - name: Gate heavy E2E on code changes
         id: gate
         run: |
@@ -649,7 +649,7 @@ jobs:
           git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|.*\.md$)'; then
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "docs/tooling-only change — skipping heavy k3d E2E."
           else
@@ -720,7 +720,7 @@ jobs:
           fetch-depth: 0
       # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
       # keep reporting this required check. Computes the base..head diff and runs
-      # the heavy steps only when a non-docs/spec/load-test/markdown file changed.
+      # the heavy steps only when a non-docs/spec/load-test/website/markdown file changed.
       - name: Gate heavy E2E on code changes
         id: gate
         run: |
@@ -733,7 +733,7 @@ jobs:
           git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|.*\.md$)'; then
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "docs/tooling-only change — skipping heavy k3d E2E."
           else
@@ -838,7 +838,7 @@ jobs:
           fetch-depth: 0
       # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
       # keep reporting this required check. Computes the base..head diff and runs
-      # the heavy steps only when a non-docs/spec/load-test/markdown file changed.
+      # the heavy steps only when a non-docs/spec/load-test/website/markdown file changed.
       - name: Gate heavy E2E on code changes
         id: gate
         run: |
@@ -851,7 +851,7 @@ jobs:
           git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|.*\.md$)'; then
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "docs/tooling-only change — skipping heavy k3d E2E."
           else

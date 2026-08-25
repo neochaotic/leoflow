@@ -244,16 +244,20 @@ ci-local: ## Run every CI gate locally — pre-push tripwire so a PR does not ar
 	@command -v python3 >/dev/null && (cd parser && python3 -m pytest -q) || echo "skip pytest (no python3)"
 	@echo "▸ ADR index check"
 	@bash scripts/gen-adr-index.sh --check
-	@echo "▸ mkdocs build --strict"
-	@(command -v mkdocs >/dev/null && mkdocs build --strict --quiet) \
-		|| (command -v python3 >/dev/null && python3 -c "import mkdocs" 2>/dev/null && python3 -m mkdocs build --strict --quiet) \
-		|| echo "skip mkdocs (not installed: pip install mkdocs-material mkdocs-mermaid2-plugin)"
+	@echo "▸ hugo --gc --minify (website/)"
+	@if ! command -v hugo >/dev/null; then \
+		echo "skip hugo (not installed: https://gohugo.io/installation/ — needs the extended build)"; \
+	elif [ ! -x website/node_modules/.bin/postcss ]; then \
+		echo "skip hugo (Docsy PostCSS toolchain missing: run 'npm --prefix website ci')"; \
+	else \
+		(cd website && hugo --gc --minify --quiet); \
+	fi
 	@echo "✅ ci-local clean — push when ready"
 
 .PHONY: install-pre-push-hook
 install-pre-push-hook: ## Install a pre-push hook that runs `make ci-local` automatically
 	@mkdir -p .git/hooks
-	@printf '#!/usr/bin/env bash\n# Auto-installed by `make install-pre-push-hook`.\n# Runs every CI gate locally so a PR never lands red on infra-class checks\n# (govulncheck advisories, helm tests, mkdocs --strict) the per-commit hook\n# does not cover. Skip with: git push --no-verify.\nset -euo pipefail\nexec make ci-local\n' > .git/hooks/pre-push
+	@printf '#!/usr/bin/env bash\n# Auto-installed by `make install-pre-push-hook`.\n# Runs every CI gate locally so a PR never lands red on infra-class checks\n# (govulncheck advisories, helm tests, hugo build) the per-commit hook\n# does not cover. Skip with: git push --no-verify.\nset -euo pipefail\nexec make ci-local\n' > .git/hooks/pre-push
 	@chmod +x .git/hooks/pre-push
 	@echo "▸ installed .git/hooks/pre-push → runs 'make ci-local' on every push"
 

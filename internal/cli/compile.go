@@ -627,7 +627,7 @@ func parserErrorSummary(stderr string) string {
 // Per-task overrides are bound by task_id; an entry naming a task absent from the
 // DAG is a hard error (no silent drop). No-op when nothing is configured.
 func overlayProject(dagJSONPath string, cfg *domain.LeoflowConfig) error {
-	if cfg.Staging == nil && cfg.Alerts == nil && len(cfg.Tasks) == 0 {
+	if cfg.Staging == nil && cfg.Alerts == nil && len(cfg.Tasks) == 0 && !hasDAGDefaults(cfg.Defaults) {
 		return nil
 	}
 	data, err := os.ReadFile(dagJSONPath) //nolint:gosec // G304: output path is operator-supplied on the CLI.
@@ -651,6 +651,11 @@ func overlayProject(dagJSONPath string, cfg *domain.LeoflowConfig) error {
 		if override := cfg.Tasks[spec.Tasks[i].TaskID]; override != nil {
 			applyTaskOverride(&spec.Tasks[i], override)
 		}
+		// DAG-wide defaults are a fallback, applied after the per-task override so
+		// the most-specific value always wins (task > defaults). Baking them here
+		// lands them in dag.json and flows them through dispatch→BuildPod exactly
+		// like the per-task values already do.
+		applyDAGDefaults(&spec.Tasks[i], cfg.Defaults)
 	}
 	out, err := json.MarshalIndent(&spec, "", "  ")
 	if err != nil {
@@ -718,6 +723,41 @@ func applyTaskOverride(task *domain.TaskSpec, o *domain.TaskConfig) {
 		for k, v := range o.Env {
 			task.Env[k] = v
 		}
+	}
+}
+
+// hasDAGDefaults reports whether the leoflow.yaml defaults block carries a
+// DAG-wide value the overlay must bake onto tasks (resources or node_selector).
+// Retries/retry_delay/timeout are handled upstream by the parser's default_args,
+// so they don't count here.
+func hasDAGDefaults(d *domain.ConfigDefaults) bool {
+	return d != nil && (d.Resources.AsResources() != nil || len(d.NodeSelector) > 0)
+}
+
+// applyDAGDefaults fills a task's resources and node_selector from the DAG-wide
+// leoflow.yaml defaults when the task declares none of its own. Per-task values
+// (set by applyTaskOverride or compiled from the DAG) always win; the default
+// never partially merges into an explicit block. Closes the accepted-but-ignored
+// footgun where defaults.resources / defaults.node_selector reached neither
+// dag.json nor the task pod (EKS validation aresta #6).
+func applyDAGDefaults(task *domain.TaskSpec, d *domain.ConfigDefaults) {
+	if d == nil {
+		return
+	}
+	if task.Resources == nil {
+		if r := d.Resources.AsResources(); r != nil {
+			task.Resources = r
+		}
+	}
+	if len(d.NodeSelector) > 0 && (task.Execution == nil || len(task.Execution.NodeSelector) == 0) {
+		if task.Execution == nil {
+			task.Execution = &domain.Execution{}
+		}
+		sel := make(map[string]string, len(d.NodeSelector))
+		for k, v := range d.NodeSelector {
+			sel[k] = v
+		}
+		task.Execution.NodeSelector = sel
 	}
 }
 

@@ -122,18 +122,27 @@
 
     "defaults": {
       "type": "object",
+      "description": "DAG-wide task defaults. A task that declares its own value always wins; these only fill the gaps (ADR 0023). resources and node_selector are baked onto every task at compile time; retries/retry_delay/timeout flow through the parser's Airflow default_args.",
       "properties": {
         "retries": { "type": "integer", "minimum": 0 },
         "retry_delay_seconds": { "type": "integer", "minimum": 0 },
         "execution_timeout_seconds": { "type": "integer", "minimum": 1 },
         "resources": {
           "type": "object",
+          "description": "Default CPU/memory for tasks that declare none; expanded to requests == limits so the task reaches Guaranteed QoS (#725).",
           "properties": {
             "cpu": { "type": "string" },
             "memory": { "type": "string" }
-          }
+          },
+          "additionalProperties": false
+        },
+        "node_selector": {
+          "type": "object",
+          "description": "Default pod placement for tasks that declare no execution.node_selector of their own.",
+          "additionalProperties": { "type": "string" }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "staging": {
       "type": "object",

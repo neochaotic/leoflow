@@ -135,6 +135,7 @@ func BuildPod(req Request) *corev1.Pod {
 	}
 	mergeMetadata(pod.Labels, req.Execution.Labels)
 	mergeMetadata(pod.Annotations, req.Execution.Annotations)
+	mountWritableTmp(pod, req.PodSecurity)
 	mountStagingVolume(pod, req)
 	mountAgentTLSCA(pod, req)
 	mountTaskSecret(pod, req)
@@ -365,6 +366,39 @@ func mountAgentTLSCA(pod *corev1.Pod, req Request) {
 	})
 	c := &pod.Spec.Containers[0]
 	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: agentCAVolumeName, MountPath: agentCADir, ReadOnly: true})
+}
+
+// writableTmpVolumeName / writableTmpMountPath give a read-only-rootfs pod a
+// writable scratch directory at /tmp (issue #741). Pod Security Admission's
+// `restricted` profile is happy with a read-only root filesystem, but nothing on
+// that filesystem is writable — so an ordinary task (pip cache, matplotlib
+// config, temp files) and, worse, the warm agent itself (os.MkdirTemp under /tmp,
+// before it can even register) have nowhere to write. The idiomatic pairing is a
+// read-only rootfs plus a writable emptyDir mounted at /tmp; emptyDir usage
+// counts against the container's ephemeral-storage limit, so a task that sets one
+// bounds this too.
+const (
+	writableTmpVolumeName = "leoflow-tmp"
+	writableTmpMountPath  = "/tmp"
+)
+
+// mountWritableTmp gives a read-only-rootfs pod somewhere writable at /tmp by
+// mounting an emptyDir there. It is a no-op unless ReadOnlyRootFilesystem is set:
+// a pod with a writable rootfs already has a writable /tmp, so mounting an
+// emptyDir would only change the spec for no reason. This makes
+// read_only_task_root_filesystem usable on both task and warm pods.
+func mountWritableTmp(pod *corev1.Pod, ps PodSecurity) {
+	if !ps.ReadOnlyRootFilesystem {
+		return
+	}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name:         writableTmpVolumeName,
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	})
+	c := &pod.Spec.Containers[0]
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+		Name: writableTmpVolumeName, MountPath: writableTmpMountPath,
+	})
 }
 
 // stagingVolumeName is the pod volume name for the per-run staging PVC.

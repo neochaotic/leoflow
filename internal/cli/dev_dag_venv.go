@@ -141,8 +141,11 @@ func ensureDagVenv(ctx context.Context, cmd *cobra.Command, home, dagID, runtime
 
 	if _, err := os.Stat(py); err != nil {
 		devPrintf(cmd.OutOrStdout(), "▸ creating isolated dev venv for %q …\n", dagID)
-		base := devBasePython(home)
-		mk := exec.CommandContext(ctx, base, "-m", "venv", dir) //nolint:gosec // base is the managed CPython or a resolved python3
+		base, berr := devBasePython(ctx, home)
+		if berr != nil {
+			return "", berr
+		}
+		mk := exec.CommandContext(ctx, base, "-m", "venv", dir) //nolint:gosec // base is the managed CPython or a resolved python3 >= 3.11
 		mk.Stdout, mk.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 		if e := mk.Run(); e != nil {
 			return "", fmt.Errorf("creating dev venv for %q with %s (the managed CPython bundles venv; a system python3 may need its python3-venv package): %w", dagID, base, e)

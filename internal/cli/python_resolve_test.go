@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +14,9 @@ import (
 // `leoflow setup` hint instead of being returned; and no interpreter at all is
 // reported as ("", nil) so callers can decide whether that is fatal.
 func TestResolvePython3(t *testing.T) {
+	ctx := context.Background()
 	notFound := func(string) (string, error) { return "", os.ErrNotExist }
-	neverRun := func(string) (int, int, error) {
+	neverRun := func(context.Context, string) (int, int, error) {
 		t.Helper()
 		t.Error("runVersion called for a trusted/absent interpreter")
 		return 0, 0, nil
@@ -25,7 +27,7 @@ func TestResolvePython3(t *testing.T) {
 		if err := os.WriteFile(managed, []byte("#!/fake"), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		got, err := resolvePython3(managed,
+		got, err := resolvePython3(ctx, managed,
 			func(string) (string, error) { return "/usr/bin/python3.11", nil },
 			neverRun)
 		if err != nil {
@@ -43,8 +45,8 @@ func TestResolvePython3(t *testing.T) {
 			}
 			return "", os.ErrNotExist
 		}
-		got, err := resolvePython3("", lookPath,
-			func(string) (int, int, error) { return 3, 9, nil })
+		got, err := resolvePython3(ctx, "", lookPath,
+			func(context.Context, string) (int, int, error) { return 3, 9, nil })
 		if err == nil {
 			t.Fatal("err = nil, want an unsupported-interpreter rejection")
 		}
@@ -63,8 +65,8 @@ func TestResolvePython3(t *testing.T) {
 			}
 			return "", os.ErrNotExist
 		}
-		got, err := resolvePython3("", lookPath,
-			func(string) (int, int, error) { return 3, 11, nil })
+		got, err := resolvePython3(ctx, "", lookPath,
+			func(context.Context, string) (int, int, error) { return 3, 11, nil })
 		if err != nil {
 			t.Fatalf("err = %v, want nil", err)
 		}
@@ -80,15 +82,15 @@ func TestResolvePython3(t *testing.T) {
 			}
 			return "", os.ErrNotExist
 		}
-		got, err := resolvePython3("", lookPath,
-			func(string) (int, int, error) { return 3, 12, nil })
+		got, err := resolvePython3(ctx, "", lookPath,
+			func(context.Context, string) (int, int, error) { return 3, 12, nil })
 		if err != nil || got != "/usr/bin/python3" {
 			t.Fatalf("got (%q, %v), want the host python3", got, err)
 		}
 	})
 
 	t.Run("no interpreter at all is reported as empty, no error", func(t *testing.T) {
-		got, err := resolvePython3("", notFound, neverRun)
+		got, err := resolvePython3(ctx, "", notFound, neverRun)
 		if err != nil {
 			t.Fatalf("err = %v, want nil when nothing is found", err)
 		}
@@ -101,9 +103,9 @@ func TestResolvePython3(t *testing.T) {
 // TestParsePythonVersion covers extraction of major/minor from `--version` output.
 func TestParsePythonVersion(t *testing.T) {
 	cases := []struct {
-		in                string
-		major, minor      int
-		wantErr           bool
+		in           string
+		major, minor int
+		wantErr      bool
 	}{
 		{"Python 3.11.15\n", 3, 11, false},
 		{"Python 3.9.18", 3, 9, false},
@@ -112,15 +114,15 @@ func TestParsePythonVersion(t *testing.T) {
 		{"", 0, 0, true},
 	}
 	for _, tc := range cases {
-		maj, min, err := parsePythonVersion(tc.in)
+		maj, mnr, err := parsePythonVersion(tc.in)
 		if tc.wantErr {
 			if err == nil {
 				t.Errorf("parsePythonVersion(%q): err = nil, want error", tc.in)
 			}
 			continue
 		}
-		if err != nil || maj != tc.major || min != tc.minor {
-			t.Errorf("parsePythonVersion(%q) = (%d,%d,%v), want (%d,%d,nil)", tc.in, maj, min, err, tc.major, tc.minor)
+		if err != nil || maj != tc.major || mnr != tc.minor {
+			t.Errorf("parsePythonVersion(%q) = (%d,%d,%v), want (%d,%d,nil)", tc.in, maj, mnr, err, tc.major, tc.minor)
 		}
 	}
 }

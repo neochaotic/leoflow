@@ -959,7 +959,13 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 		CreatedBy:      pgtype.UUID{},
 	})
 	if err != nil {
-		return false, fmt.Errorf("inserting version: %w", err)
+		// A collision on dag_versions_unique (dag_id, version) means the same
+		// version string was pushed with different content — the hash dedup above
+		// only short-circuits identical re-pushes. Versions are immutable, so this
+		// is a genuine conflict, not an overwrite: map it to domain.ErrConflict
+		// (API 409) instead of leaking the raw pg 23505 through a 500 (#746). Bump
+		// --dag-version to push new content.
+		return false, fmt.Errorf("inserting version: %w", mapConflict(err))
 	}
 	if err := r.q.SetCurrentDagVersion(ctx, queries.SetCurrentDagVersionParams{ID: dag.ID, CurrentVersionID: version.ID}); err != nil {
 		return false, fmt.Errorf("setting current version: %w", err)

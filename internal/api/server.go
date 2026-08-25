@@ -42,6 +42,15 @@ type Dependencies struct {
 	// CIDR so per-client rate-limiting and audit see the real client.
 	TrustedProxies []string
 	TokenTTLSecs   int
+	// TokenRenewer re-mints a still-valid user bearer with a fresh short TTL so a
+	// long CLI/dev session need not re-login every TokenTTLSecs (aresta #5). Nil
+	// leaves the renew route unregistered (renewal simply unavailable). In practice
+	// it is the same *auth.JWTAuthenticator as Authenticator.
+	TokenRenewer TokenRenewer
+	// TokenMaxLifetimeSecs is the hard ceiling on a renewed session's total age
+	// since first login; past it, renewal is refused and the user must
+	// re-authenticate. Non-positive disables the ceiling.
+	TokenMaxLifetimeSecs int
 	// InstanceName is shown in the UI navbar (Airflow's instance_name). Empty
 	// falls back to "Leoflow"; `leoflow dev` sets it to mark the DEV environment.
 	InstanceName string
@@ -167,6 +176,13 @@ func NewServer(deps Dependencies) *gin.Engine {
 	// the allowlist is empty, newBreakGlass returns nil, and the path is unchanged.
 	bg := newBreakGlass(deps.OIDCSettings.BreakGlassEmails, deps.AuthAudit)
 	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs, bg))
+	// Transparent renewal (aresta #5): a still-valid bearer is re-minted with a
+	// fresh short TTL, bounded by max_lifetime. Under the public /api/v2/auth/
+	// prefix like login, it is self-gating — only a valid signed bearer can be
+	// renewed. Registered only when a renewer is wired.
+	if deps.TokenRenewer != nil {
+		r.POST("/api/v2/auth/token/renew", renewTokenHandler(deps.TokenRenewer, deps.TokenTTLSecs, deps.TokenMaxLifetimeSecs))
+	}
 	// The Airflow UI redirects unauthenticated users to GET /api/v2/auth/login.
 	r.GET("/api/v2/auth/login", loginPageHandler())
 	r.GET("/api/v2/auth/logout", logoutHandler())

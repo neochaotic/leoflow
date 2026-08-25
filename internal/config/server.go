@@ -402,6 +402,16 @@ type AuthSection struct {
 type JWTSection struct {
 	Secret          string `mapstructure:"secret"`
 	TokenTTLSeconds int    `mapstructure:"token_ttl_seconds"`
+	// MaxLifetimeSeconds is the hard ceiling on how long a user session may be kept
+	// alive by transparent token renewal (aresta #5), measured since first login
+	// (the token's oiat claim). Past it, POST /api/v2/auth/token/renew is refused
+	// and the user must `leoflow auth login` again. The short TokenTTLSeconds still
+	// bounds a stolen token independently; this only caps the total renewed
+	// lifetime, mirroring auth.max_attempt_credential_lifetime for agent tokens.
+	// Generous by default (24h) so a normal dev day never re-logs in mid-session; a
+	// non-positive value disables the ceiling (renewal never expires the session).
+	// Bind via LEOFLOW_AUTH_JWT_MAX_LIFETIME_SECONDS.
+	MaxLifetimeSeconds int `mapstructure:"max_lifetime_seconds"`
 }
 
 // OIDCSection configures the OIDC/SSO login flow (Authorization Code + PKCE).
@@ -535,10 +545,16 @@ var serverDefaults = map[string]any{
 	// Registered so AutomaticEnv binds LEOFLOW_REDIS_CA_FILE (the Helm chart sets
 	// it when redis.caConfigMap is configured); without it, verified TLS to a
 	// managed rediss:// endpoint silently falls back to system roots only (#725).
-	"redis.ca_file":                    "",
-	"auth.provider":                    "jwt",
-	"auth.jwt.secret":                  "",
-	"auth.jwt.token_ttl_seconds":       3600,
+	"redis.ca_file":              "",
+	"auth.provider":              "jwt",
+	"auth.jwt.secret":            "",
+	"auth.jwt.token_ttl_seconds": 3600,
+	// Ceiling on a transparently-renewed user session's total lifetime (aresta #5).
+	// 24h mirrors auth.max_attempt_credential_lifetime: a normal dev day renews
+	// silently, and a session must re-authenticate at most once per day. The short
+	// token_ttl_seconds is what bounds a stolen token; this only caps total renewed
+	// age. A non-positive value disables the ceiling.
+	"auth.jwt.max_lifetime_seconds":    86400,
 	"auth.login_rate_limit_per_minute": 5,
 	// Secret scope-by-declaration and token-liveness policies (ADR 0055). Both
 	// ship SAFE by default: permissive delivers the whole tenant vault (today's

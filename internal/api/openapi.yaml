@@ -39,6 +39,28 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v2/auth/token/renew:
+    post:
+      summary: Renew a still-valid JWT into a fresh short-lived token
+      description: >-
+        Transparent renewal: given a still-valid user bearer, re-mints the same
+        identity with a fresh short TTL, bounded by a server-side max_lifetime
+        measured from first login. Lets a long CLI/dev session avoid re-logging in
+        every token TTL while keeping the access token short-lived. Returns 401
+        when the presented token is invalid, expired, or past max_lifetime, in
+        which case the client must log in again.
+      operationId: renewToken
+      tags: [Auth]
+      responses:
+        "200":
+          description: Token renewed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v2/users:
     get:
       summary: List users

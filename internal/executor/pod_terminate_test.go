@@ -129,7 +129,7 @@ func TestTaskPodActive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cs := fake.NewSimpleClientset(taskPod("p", "run-a", "extract", 1, tc.phase))
 			e := NewKubernetesExecutor(cs, "leoflow")
-			active, err := e.TaskPodActive(context.Background(), "run-a", "extract")
+			active, err := e.TaskPodActive(context.Background(), "run-a", "extract", 1)
 			if err != nil {
 				t.Fatalf("TaskPodActive: %v", err)
 			}
@@ -140,12 +140,37 @@ func TestTaskPodActive(t *testing.T) {
 	}
 }
 
+// TestTaskPodActive_PinsTryNumber is the #723 selector lock: a try-1 pod lingers
+// Pending, but a liveness query for try 2 must NOT match it. Asking whether the
+// attempt the reaper is about to fail (try 2) is live must return false, so the
+// reaper does not false-defer on a stale older attempt's pod.
+func TestTaskPodActive_PinsTryNumber(t *testing.T) {
+	cs := fake.NewSimpleClientset(taskPod("try1", "run-a", "extract", 1, corev1.PodPending))
+	e := NewKubernetesExecutor(cs, "leoflow")
+
+	active, err := e.TaskPodActive(context.Background(), "run-a", "extract", 2)
+	if err != nil {
+		t.Fatalf("TaskPodActive: %v", err)
+	}
+	if active {
+		t.Errorf("#723: a try-2 liveness query matched a lingering try-1 pod; try-number must be pinned")
+	}
+	// Sanity: the same query for the attempt that DOES have a Pending pod is active.
+	active, err = e.TaskPodActive(context.Background(), "run-a", "extract", 1)
+	if err != nil {
+		t.Fatalf("TaskPodActive(try1): %v", err)
+	}
+	if !active {
+		t.Errorf("try-1's own Pending pod must read as active")
+	}
+}
+
 // TestTaskPodActive_AbsentIsNotActive: no pod at all means the dispatch never
 // landed — not active, so the reaper proceeds.
 func TestTaskPodActive_AbsentIsNotActive(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	e := NewKubernetesExecutor(cs, "leoflow")
-	active, err := e.TaskPodActive(context.Background(), "run-a", "extract")
+	active, err := e.TaskPodActive(context.Background(), "run-a", "extract", 1)
 	if err != nil {
 		t.Fatalf("TaskPodActive: %v", err)
 	}

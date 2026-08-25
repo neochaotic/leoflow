@@ -68,18 +68,23 @@ func (e *KubernetesExecutor) deletePodsBySelector(ctx context.Context, selector 
 	return errors.Join(errs...)
 }
 
-// TaskPodActive reports whether a pod for the given (run, task) exists and is
-// still Pending or Running. The dispatch-lost reaper consults this before
-// failing a `queued` TI: a live pod means the dispatch actually landed and the
-// node is merely slow to pull the image (#461), so the reaper must DEFER. No
-// pod, or only terminal (Failed/Succeeded/Unknown) pods, means the dispatch is
-// genuinely lost and the reaper may proceed. Try-number is deliberately NOT
-// pinned here: a `queued` TI has not been retried, so run-id+task-id already
-// identifies its single pod, and matching any live pod for the task is the
-// safer (more deferring) choice.
-func (e *KubernetesExecutor) TaskPodActive(ctx context.Context, runID, taskID string) (bool, error) {
-	selector := fmt.Sprintf("leoflow.io/run-id=%s,leoflow.io/task-id=%s",
-		sanitizeLabel(runID), sanitizeLabel(taskID))
+// TaskPodActive reports whether a pod for exactly the (run, task, try) attempt
+// exists and is still Pending or Running. The dispatch-lost and pod-lost reapers
+// consult this before failing a TI: a live pod means the dispatch actually landed
+// and the node is merely slow to pull the image (#461), so the reaper must DEFER.
+// No pod, or only terminal (Failed/Succeeded/Unknown) pods, means the attempt is
+// genuinely lost and the reaper may proceed.
+//
+// Try-number is pinned — the same invariant guard as DeleteTaskPod above. The
+// retry rail resets up_for_retry -> none with try_number+1 and the planner
+// re-queues the TI (storage/queries/runs.sql), so a `queued`/`running` TI can be
+// on try 2 while try 1's pod still lingers Pending after a failed best-effort
+// delete. Selecting on (run, task) alone would match that stale older pod and
+// false-defer the reap of the current attempt forever (#723). Asking about the
+// attempt the reaper is about to fail is the correct liveness question.
+func (e *KubernetesExecutor) TaskPodActive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error) {
+	selector := fmt.Sprintf("leoflow.io/run-id=%s,leoflow.io/task-id=%s,leoflow.io/try-number=%s",
+		sanitizeLabel(runID), sanitizeLabel(taskID), strconv.Itoa(tryNumber))
 	pods, err := e.clientset.CoreV1().Pods(e.namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return false, fmt.Errorf("listing pods for liveness (%s): %w", selector, err)

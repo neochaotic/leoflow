@@ -86,7 +86,7 @@ func TestPodLostReaper(t *testing.T) {
 		store := &fakePodLostStore{candidates: []PodLostCandidate{
 			{TaskInstanceID: "live", DagRunID: "run-a", TaskID: "work", TryNumber: 1, RunningSince: past},
 		}}
-		pods := &fakePodManager{active: map[string]bool{"run-a/work": true}}
+		pods := &fakePodManager{active: map[string]bool{"run-a/work/1": true}}
 		if err := newReaper(store, pods).run(context.Background()); err != nil {
 			t.Fatalf("run: %v", err)
 		}

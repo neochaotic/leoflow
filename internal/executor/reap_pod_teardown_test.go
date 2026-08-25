@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -13,7 +14,9 @@ import (
 type fakePodManager struct {
 	deletedTasks []deletedTask
 	deletedRuns  []string
-	// active maps "runID/taskID" -> whether a live pod exists; absent key is false.
+	// active maps "runID/taskID/try" -> whether a live pod exists for exactly
+	// that attempt; absent key is false. Keying by try mirrors the real
+	// executor's try-pinned selector (#723).
 	active map[string]bool
 	// activeCalls counts TaskPodActive invocations, so a test can assert the live
 	// (quorum) read was skipped when the presence cache already deferred.
@@ -45,12 +48,12 @@ func (f *fakePodManager) DeleteRunPods(_ context.Context, runID string) error {
 	return nil
 }
 
-func (f *fakePodManager) TaskPodActive(_ context.Context, runID, taskID string) (bool, error) {
+func (f *fakePodManager) TaskPodActive(_ context.Context, runID, taskID string, try int) (bool, error) {
 	f.activeCalls++
 	if f.activeErr != nil {
 		return false, f.activeErr
 	}
-	return f.active[runID+"/"+taskID], nil
+	return f.active[fmt.Sprintf("%s/%s/%d", runID, taskID, try)], nil
 }
 
 // --- Dispatch-lost reaper: K8s-aware deferral (part C) ---------------------
@@ -65,7 +68,7 @@ func TestDispatchLostReaper_DefersWhenPodLive(t *testing.T) {
 	store := &fakeStaleQueuedStore{candidates: []StaleQueuedCandidate{
 		{TaskInstanceID: "slow-pull", DagRunID: "run-a", TaskID: "extract", TryNumber: 1, QueuedAt: now.Add(-10 * time.Minute)},
 	}}
-	pods := &fakePodManager{active: map[string]bool{"run-a/extract": true}}
+	pods := &fakePodManager{active: map[string]bool{"run-a/extract/1": true}}
 	r := newDispatchLostReaper(store, reapTestLogger(), 3*time.Minute, nil)
 	r.pods = pods
 

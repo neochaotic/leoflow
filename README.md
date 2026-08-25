@@ -15,14 +15,14 @@
 </p>
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Code quality: golangci-lint A+](https://img.shields.io/badge/golangci--lint-A%2B-00ADD8?logo=go&logoColor=white)](docs/adr/0012-code-quality-standards.md)
+[![Code quality: golangci-lint A+](https://img.shields.io/badge/golangci--lint-A%2B-00ADD8?logo=go&logoColor=white)](https://neochaotic.github.io/leoflow/project/adrs/0012-code-quality-standards/)
 [![CI](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/ci.yaml)
 [![Security](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml/badge.svg)](https://github.com/neochaotic/leoflow/actions/workflows/security.yaml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/neochaotic/leoflow/badge)](https://securityscorecards.dev/viewer/?uri=github.com/neochaotic/leoflow)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13068/badge)](https://www.bestpractices.dev/projects/13068)
 
-[![Edition: Lite](https://img.shields.io/badge/edition-Lite-1F6FEB?labelColor=4a4a4a)](docs/editions.md#leoflow-lite)
-[![Edition: Pro](https://img.shields.io/badge/edition-Pro-8957E5?labelColor=4a4a4a)](docs/editions.md#leoflow-pro-chart-installable)
+[![Edition: Lite](https://img.shields.io/badge/edition-Lite-1F6FEB?labelColor=4a4a4a)](https://neochaotic.github.io/leoflow/concepts/editions/#leoflow-lite)
+[![Edition: Pro](https://img.shields.io/badge/edition-Pro-8957E5?labelColor=4a4a4a)](https://neochaotic.github.io/leoflow/concepts/editions/#leoflow-pro-chart-installable)
 
 ---
 
@@ -32,15 +32,15 @@
 
 | | |
 |---|---|
-| [Quickstart](docs/quickstart.md) · [Installation](docs/installation.md) | get Leoflow running locally |
-| [Operating modes](docs/operating-modes.md) · [Editions](docs/editions.md) | Lite · Pro · Demo — the runtime split and the packaging split |
-| [DAG authoring](docs/dag-authoring.md) · [Variables & Connections](docs/variables-connections.md) | write a DAG; the Lite → deploy lifecycle |
-| [**Map-reduce for ML**](docs/cookbook/map-reduce.md) | fan-out + reduce as a Python list comprehension |
-| [CI/CD & deploy examples](docs/deploy.md) | GitHub Actions · GitLab · Cloud Build/Run · generic |
+| [Quickstart](https://neochaotic.github.io/leoflow/get-started/quickstart/) · [Installation](https://neochaotic.github.io/leoflow/get-started/installation/) | get Leoflow running locally |
+| [Operating modes](https://neochaotic.github.io/leoflow/concepts/editions/) · [Editions](https://neochaotic.github.io/leoflow/concepts/editions/) | Lite · Pro · Demo — the runtime split and the packaging split |
+| [DAG authoring](https://neochaotic.github.io/leoflow/author-dags/dag-authoring/) · [Variables & Connections](https://neochaotic.github.io/leoflow/author-dags/variables-connections/) | write a DAG; the Lite → deploy lifecycle |
+| [**Map-reduce for ML**](https://neochaotic.github.io/leoflow/author-dags/map-reduce/) | fan-out + reduce as a Python list comprehension |
+| [CI/CD & deploy examples](https://neochaotic.github.io/leoflow/operate/cicd-deploy/) | GitHub Actions · GitLab · Cloud Build/Run · generic |
 | [Helm chart](helm/leoflow/README.md) | Pro install: values reference, hardening, PoC recipe |
-| [HTTP API (Scalar)](https://neochaotic.github.io/leoflow/api-reference.html) · [Go packages](docs/go-api.md) · [MCP server](docs/mcp.md) | API references & the LLM-agent surface |
-| [Concepts & glossary](docs/concepts.md) · [Architecture](docs/architecture.md) · [ADRs](docs/adr/) | the model, the *why*, and every major decision |
-| [Troubleshooting](docs/troubleshooting.md) · [Security policy](SECURITY.md) | when things break; how to report a vulnerability |
+| [HTTP API (Scalar)](https://neochaotic.github.io/leoflow/api-reference.html) · [Go packages](https://neochaotic.github.io/leoflow/reference/go/) · [MCP server](https://neochaotic.github.io/leoflow/reference/mcp/) | API references & the LLM-agent surface |
+| [Concepts & glossary](https://neochaotic.github.io/leoflow/concepts/core-concepts/) · [Architecture](https://neochaotic.github.io/leoflow/concepts/architecture/) · [ADRs](https://neochaotic.github.io/leoflow/project/adrs/) | the model, the *why*, and every major decision |
+| [Troubleshooting](https://neochaotic.github.io/leoflow/operate/troubleshooting/) · [Security policy](SECURITY.md) | when things break; how to report a vulnerability |
 
 ---
 
@@ -104,7 +104,7 @@ embedded datastores are Lite-only). Managed datastores work out of the box
 `caConfigMap` knobs for verified TLS. See the
 **[chart docs](helm/leoflow/README.md)**.
 
-Full guide for both tracks → **[Installation](docs/installation.md)**.
+Full guide for both tracks → **[Installation](https://neochaotic.github.io/leoflow/get-started/installation/)**.
 
 ---
 
@@ -225,7 +225,7 @@ retry, deterministic ordering, and a 256 KB cap per upstream — and a
 | Monte Carlo | one task per worker | average / sum results |
 
 Runnable example: `examples/ml_hparam_search/`. Full reference:
-**[Map-reduce for ML](docs/cookbook/map-reduce.md)** — guarantees, limits, what
+**[Map-reduce for ML](https://neochaotic.github.io/leoflow/author-dags/map-reduce/)** — guarantees, limits, what
 activates fan-in vs what does not, and the on-disk `dag.json` shape.
 
 ## Architecture
@@ -266,7 +266,7 @@ flowchart LR
 
 Every task runs pod-per-task; an `HttpOperator` is a provider operator that runs
 in its own pod like any other (ADR 0040). Read
-[the ADRs](docs/adr/) for the reasoning behind every decision.
+[the ADRs](https://neochaotic.github.io/leoflow/project/adrs/) for the reasoning behind every decision.
 
 ## Status
 
@@ -275,10 +275,10 @@ values may change between minor versions until **v1.0.0** locks them. **Lite**
 (single host) is the recommended way to run Leoflow today. **Pro** (Kubernetes)
 is Helm-installable and in **active validation** — tested against GKE, not yet
 certified for production; pin to a specific tag, read the
-[upgrades guide](docs/upgrades.md) before bumping, and exercise
-[backup/restore](docs/backup-restore.md) before you need to.
+[upgrades guide](https://neochaotic.github.io/leoflow/operate/upgrades/) before bumping, and exercise
+[backup/restore](https://neochaotic.github.io/leoflow/operate/backup-restore/) before you need to.
 
-Versioning follows [ADR 0037](docs/adr/0037-release-version-scheme.md):
+Versioning follows [ADR 0037](https://neochaotic.github.io/leoflow/project/adrs/0037-release-version-scheme/):
 `vX.Y.Z-rc.N → vX.Y.Z`, no separate alpha/beta.
 
 **Implemented today:**
@@ -288,7 +288,7 @@ Versioning follows [ADR 0037](docs/adr/0037-release-version-scheme.md):
 - **Execution** — real pod-per-task execution via the `leoflow-agent` over gRPC (Kubernetes, ADR 0015); orphaned-pod reconciliation and completed-pod garbage collection.
 - **Data flow** — XCom on Redis (256 KB limit, TTL, optional schema validation) passed between tasks; log shipping to disk **or an opt-in S3/GCS object-store sink** (S3-compatible, keyless-first per ADR 0035) with a read API and live tailing over Redis pub/sub.
 - **dbt** — a dbt project runs as a DAG (pod-per-model or fused groups); managed warehouse connections generate `profiles.yml` in-pod, with modern service-account auth (Snowflake key-pair, BigQuery keyless / Workload Identity, Databricks OAuth M2M).
-- **MCP + typed client** — an experimental [`leoflow-mcp`](docs/adr/0050-mcp-server.md) Model Context Protocol server (read tools + resources over stdio / Streamable HTTP) and a generated, typed Go client for `/api/v2` (`pkg/client`).
+- **MCP + typed client** — an experimental [`leoflow-mcp`](https://neochaotic.github.io/leoflow/project/adrs/0050-mcp-server/) Model Context Protocol server (read tools + resources over stdio / Streamable HTTP) and a generated, typed Go client for `/api/v2` (`pkg/client`).
 
 **Not yet implemented:** load tests. Tracked refinements live in the [issue tracker](https://github.com/neochaotic/leoflow/issues).
 
@@ -317,7 +317,7 @@ Versioning follows [ADR 0037](docs/adr/0037-release-version-scheme.md):
 - OIDC authentication (Google, Azure AD, Keycloak, Okta)
 - Mark success/failed manually
 - Custom UI (replacing the Airflow UI)
-- Deferrable tasks (efficient dispatch + long-poll pattern, native Go implementation without a separate Triggerer process — see [ADR 0016](docs/adr/0016-deferrable-tasks.md))
+- Deferrable tasks (efficient dispatch + long-poll pattern, native Go implementation without a separate Triggerer process — see [ADR 0016](https://neochaotic.github.io/leoflow/project/adrs/0016-deferrable-tasks/))
 
 ## Getting Started
 
@@ -337,7 +337,7 @@ admin password any time with `leoflow lite reset-password`.
 > Lite is the primary local path. The legacy Docker-Compose demo profile
 > (`docker compose --profile demo up --build`, login `admin@leoflow.local` /
 > `admin`) still works for CI / containerized-only environments — see
-> [docs/local-deploy.md](docs/local-deploy.md). The pinned Airflow 3.2.x UI is a
+> [docs/local-deploy.md](https://neochaotic.github.io/leoflow/contribute/local-dev-loop/). The pinned Airflow 3.2.x UI is a
 > tactical MVP choice; a purpose-built Leoflow UI is the long-term direction
 > (ADR 0018).
 
@@ -388,12 +388,12 @@ We borrow from Argo Workflows (container-native), from Prefect (modern developer
 
 Leoflow holds itself to a higher bar than most open source projects, because workflow orchestrators must be boring and reliable to be useful:
 
-- **Strict TDD** — every line of production code is preceded by a failing test ([ADR 0011](docs/adr/0011-tdd-strict.md))
-- **golangci-lint A+ stack** — the goreportcard checks (gofmt, govet, gocyclo ≤ 15, golint, ineffassign, misspell) enforced in CI from the first commit ([ADR 0012](docs/adr/0012-code-quality-standards.md))
+- **Strict TDD** — every line of production code is preceded by a failing test ([ADR 0011](https://neochaotic.github.io/leoflow/project/adrs/0011-tdd-strict/))
+- **golangci-lint A+ stack** — the goreportcard checks (gofmt, govet, gocyclo ≤ 15, golint, ineffassign, misspell) enforced in CI from the first commit ([ADR 0012](https://neochaotic.github.io/leoflow/project/adrs/0012-code-quality-standards/))
 - **GoDocs on every exported identifier** — no exceptions
-- **Supply chain security from day one** — govulncheck, gosec, Trivy, CodeQL, Scorecard, signed releases ([ADR 0014](docs/adr/0014-supply-chain-security.md))
+- **Supply chain security from day one** — govulncheck, gosec, Trivy, CodeQL, Scorecard, signed releases ([ADR 0014](https://neochaotic.github.io/leoflow/project/adrs/0014-supply-chain-security/))
 - **Per-phase coverage floors** — rising from 70% to 85% across the MVP phases
-- **Native observability** — Prometheus, OpenTelemetry, structured logs from commit one ([ADR 0010](docs/adr/0010-observability.md))
+- **Native observability** — Prometheus, OpenTelemetry, structured logs from commit one ([ADR 0010](https://neochaotic.github.io/leoflow/project/adrs/0010-observability/))
 
 If you contribute, read the [CONTRIBUTING guide](CONTRIBUTING.md) first.
 

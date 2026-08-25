@@ -159,7 +159,7 @@ flowchart TB
     AWAIT --> IDLE{"Idle,<br/>registered"}
     IDLE -->|attempt arrives| LEASE["Lease a slot<br/>(control plane assigns TI)"]
     LEASE --> ACK["Worker acks<br/>(durable binding written)"]
-    ACK --> FORK["Fork a fresh child<br/>from a pristine template<br/>(scrubbed env, fresh /tmp,<br/>fresh per-attempt JWT)"]
+    ACK --> FORK["Fork a fresh child<br/>from a pristine template<br/>(scrubbed env, fresh TMPDIR,<br/>fresh per-attempt JWT)"]
     FORK --> RUN["Run the attempt"]
     RUN --> OUT["Report outcome<br/>in-band, durably<br/>(write-then-ack)"]
     OUT --> FREE["Slot freed"]
@@ -205,16 +205,33 @@ template — never from a sibling attempt.** Before each attempt the worker:
 - **rebuilds the environment from scratch** — only that attempt's `AIRFLOW_VAR_*` /
   `AIRFLOW_CONN_*` + `LEOFLOW_*`, with no residue from a prior attempt, and the
   agent-only variable strip re-runs per attempt;
-- **resets `/tmp`** and the per-attempt scratch space;
+- **resets the agent scratch and redirects `TMPDIR` into it** — the child's
+  `TMPDIR` points at a per-attempt subdirectory of the agent scratch that is wiped
+  before every attempt, so a token cache, a dbt profile, or `~/.aws`-style
+  credentials written to `$TMPDIR` do not survive into the next attempt;
 - **drops the prior attempt's task JWT** before minting the next one.
 
 The invariant, tested rather than best-effort: *each attempt's child forks from a
 pristine template, never from a sibling attempt; no attempt observes another
-attempt's secrets, environment, or writable filesystem state.* A long-lived shared
-interpreter (state persisting across attempts) is explicitly rejected. Phrasing the
-invariant as "fork from pristine" keeps a future forkserver optimization open
-without reopening the guarantee — library code carries no tenant data, and secrets
-re-enter per child.
+attempt's secrets, environment, or the writable filesystem state under the agent's
+control — the agent scratch and the `TMPDIR` redirected into it.* A long-lived
+shared interpreter (state persisting across attempts) is explicitly rejected.
+Phrasing the invariant as "fork from pristine" keeps a future forkserver
+optimization open without reopening the guarantee — library code carries no tenant
+data, and secrets re-enter per child.
+
+{{% alert title="Image-level paths persist for the worker's lifetime" color="warning" %}}
+The per-attempt scrub covers what the agent owns: the scratch space and the
+`TMPDIR` redirected into it. It does **not** reset paths outside the agent's
+control on a writable root filesystem — most notably **`$HOME`** (which keeps its
+image-baked `~/.config` and anything a task writes there, e.g. `~/.aws/credentials`
+or a `~/.dbt/profiles.yml`), the container image layers, and mounted volumes. These
+persist for the whole worker's lifetime and are shared by every attempt the worker
+serves (same tenant + DAG version). Tasks that write secrets to `$HOME` rather than
+`$TMPDIR` should run warm pods with a **read-only task root filesystem**
+(`read_only_task_root_filesystem`) so those writes fail closed instead of leaking to
+the next attempt.
+{{% /alert %}}
 
 Because a fresh scrubbed child and a fresh per-attempt token are mandatory, there is
 **no per-pod secret cache** to leak across attempts: each attempt does exactly one

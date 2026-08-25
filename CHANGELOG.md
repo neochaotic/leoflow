@@ -8,6 +8,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Transparent CLI token renewal — no more hourly re-login (#755).** The CLI now
+  silently refreshes a file-persisted session token once it passes the halfway
+  point of its life (rewriting `~/.leoflow/config.yaml`), so long sessions no
+  longer hit `401 missing bearer token` every hour. Backed by a new
+  `POST /api/v2/auth/token/renew` that re-mints the same identity with a fresh
+  short TTL, bounded by `auth.jwt.max_lifetime_seconds` (default 24h). The
+  access-token TTL is unchanged and revocation is still enforced per request, so a
+  renewed token dies the moment its user is deactivated.
+- **`leoflow runs list` (#747).** The common `runs` verb now lists DAG runs
+  (`--state`/`--dag`/`--older-than`) alongside `trigger` and `status`, reusing the
+  same lister as `leoflow admin runs list`.
 - **A failed task now says why, even when it produced no logs (#698).** When a
   task pod died before its agent ever registered with the control plane — bad
   RBAC, a TLS trust failure, a network policy, image-pull auth, or an OOM at
@@ -58,6 +69,47 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Duplicate `dag_version` push returns 409, not a raw 500 (#746).** Pushing a
+  version that already exists with different content (the common
+  `tag_strategy: version`→`dev` dev loop) collided on the unique constraint and
+  surfaced `500 internal error` leaking the Postgres SQLSTATE/constraint name. It
+  now returns **409 Conflict** with no internal details; an identical re-push is
+  still an idempotent no-op.
+- **`leoflow.yaml` `defaults.resources` and `defaults.node_selector` now apply to
+  tasks.** Both were accepted by the schema but silently dropped, so DAG-wide
+  resource/placement defaults never reached the pod (and a DAG relying on
+  `defaults.resources` for Guaranteed QoS silently got BestEffort). They are now
+  applied as a per-task fallback at compile time (a task's own settings still
+  win), and unknown keys in the `defaults` block now fail loudly at compile
+  instead of being ignored.
+- **`read_only_task_root_filesystem` no longer prevents a pod from starting
+  (#741).** The hardening flag left no writable `/tmp`, so a read-only-rootfs task
+  — and especially a warm worker, which died before registering — could not run. A
+  writable `emptyDir` is now mounted at `/tmp` on task and warm pods whenever the
+  flag is set (default pods are unchanged), making the mitigation the warm-pool
+  docs recommend actually usable.
+- **Managed CPython is version-checked and never silently falls back to an
+  unsupported interpreter (#742).** `leoflow` re-installs the managed interpreter
+  when its pinned version changes (via a `.py-version` sentinel, like managed
+  Postgres), prefers the checksum-verified build over a host `python3.11`, and
+  rejects an unsupported interpreter with a "run `leoflow setup`" hint instead of
+  proceeding on system `python3`. Archive extraction is hardened against
+  interrupted and cross-version upgrades.
+- **`executor.defaults.staging_size` and `executor.defaults.staging_storage_class`
+  are now reachable in a Helm install (#743).** Like the earlier
+  `trusted_proxies`/resource-defaults fix, these keys were absent from the config
+  defaults so their `LEOFLOW_*` env vars never bound; they are now registered and
+  exposed as chart values.
+- **The chart version is gated against the release tag, and the chart is published
+  to OCI (#748).** A pre-tag check fails the release when `Chart.yaml`
+  `version`/`appVersion` lags the tag (which made a default `helm install` pull the
+  previous release's images); the OCI chart publish
+  (`oci://ghcr.io/neochaotic/charts/leoflow`) is now gated behind that check and
+  documented.
+- **Docs tooling cleaned up after the Hugo migration (#744).** The `ci-local`
+  docs gate now runs `hugo --gc --minify` instead of the removed MkDocs build,
+  `CONTRIBUTING` points at a template that exists again, and the CI path filters
+  account for `website/`.
 - **Secret-scope audit events are now recorded (#722).** `RecordSecretScopeWarning`
   and `RecordSecretLivenessDenial` resolved the tenant argument by name, but the
   agent RPC path calls them with the tenant **UUID** carried by the agent token —

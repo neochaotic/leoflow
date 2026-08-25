@@ -204,6 +204,13 @@ func extractSymlink(hdr *tar.Header, destDir, target, name string) error {
 	if mkErr := os.MkdirAll(filepath.Dir(target), 0o750); mkErr != nil {
 		return fmt.Errorf("creating parent of %q: %w", target, mkErr)
 	}
+	// os.Symlink fails EEXIST if target is already present, which breaks a
+	// re-extract over an existing install (the regular-file branch overwrites via
+	// O_TRUNC). Remove any prior entry first to match that idempotent behavior;
+	// target is already sanitized by the containment checks above.
+	if rmErr := os.Remove(target); rmErr != nil && !os.IsNotExist(rmErr) {
+		return fmt.Errorf("removing existing %q before symlink: %w", target, rmErr)
+	}
 	return os.Symlink(hdr.Linkname, target) //nolint:gosec // target sanitized; link resolved within destDir
 }
 

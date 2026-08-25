@@ -58,6 +58,21 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`server.trusted_proxies` and `executor.defaults.resources_*` are now
+  reachable from a Helm install (#725).** These keys were absent from
+  `serverDefaults`, and viper's `AutomaticEnv` only binds an env var for a key it
+  has seen via `SetDefault` — so `LEOFLOW_SERVER_TRUSTED_PROXIES` and
+  `LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU`/`_MEMORY` were silently dropped. The
+  chart ships no server config file, so env is the only override path, which left
+  two production defaults unconfigurable: with trusted proxies unset the login
+  rate-limiter keyed every request on the ingress IP, so a handful of bad logins
+  locked out the whole deployment; and with the resource defaults unset a task
+  that relied on them ran BestEffort (first evicted under node pressure). The
+  keys are now registered (`redis.ca_file` was missing from the same map and is
+  fixed too), `trusted_proxies` binds from a comma-separated env var (viper
+  splits it into a list), and the L0 resource default now sets **both** requests
+  and limits so such tasks reach Guaranteed QoS. The chart exposes
+  `config.trustedProxies` and `executor.defaults.resources`.
 - **Chart RBAC now grants the `tokenreviews` permission the token-exchange
   transport requires (#696).** With `auth.agentTokenTransport=exchange` the
   control plane validates a task pod's projected ServiceAccount token via the

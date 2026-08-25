@@ -5,7 +5,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // seedSessionConfig writes the config file `leoflow auth login` produces — a
@@ -36,6 +38,43 @@ func authRecorder(t *testing.T, body string) (srv *httptest.Server, got *string)
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &auth
+}
+
+// TestRunsListRegistered pins the ergonomics fix that `leoflow runs list`
+// exists: users reach for it before discovering the operator alias
+// `leoflow admin runs list`. It must resolve to a `list` subcommand under
+// `runs`, not fall back to the `runs` group itself.
+func TestRunsListRegistered(t *testing.T) {
+	root := NewRootCommand()
+	cmd, _, err := root.Find([]string{"runs", "list"})
+	if err != nil {
+		t.Fatalf("finding `runs list`: %v", err)
+	}
+	if cmd.Name() != "list" {
+		t.Fatalf("`runs list` resolved to %q, want a registered `list` subcommand", cmd.Name())
+	}
+}
+
+// TestRunsListInvokesLister proves `runs list` drives the same lister as
+// `admin runs list`: the same server-side --state filter, the same --older-than
+// age filter, and the same tabular output. It reuses runsServer, the mock
+// control plane shared with the admin runs tests.
+func TestRunsListInvokesLister(t *testing.T) {
+	now := time.Now()
+	srv := runsServer(t, now)
+	defer srv.Close()
+
+	out, _, err := run(t, "runs", "list", "--state", "running", "--older-than", "2h",
+		"--server", srv.URL, "--token", "x")
+	if err != nil {
+		t.Fatalf("runs list: %v", err)
+	}
+	if !strings.Contains(out, "run-old") {
+		t.Errorf("output = %q, want it to include run-old", out)
+	}
+	if strings.Contains(out, "run-new") || strings.Contains(out, "run-done") {
+		t.Errorf("output = %q, should have filtered out run-new and run-done", out)
+	}
 }
 
 // TestRunsTriggerUsesConfigToken pins the contract that a user who just ran

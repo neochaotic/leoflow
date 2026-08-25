@@ -1,0 +1,68 @@
+suite: control-plane env for trusted proxies + executor resource defaults (#725)
+templates:
+  - deployment.yaml
+  - secret.yaml
+release:
+  name: leoflow
+# The chart always deploys the Pro edition and refuses to render without agent
+# TLS (#459), so every case needs a cert pair.
+set:
+  agentTLS.enabled: true
+  agentTLS.serverCertSecret: leoflow-tls
+  agentTLS.caConfigMap: leoflow-ca
+  database.url: postgres://h/d
+  redis.url: redis://h/0
+  auth.jwtSecret: jwt
+tests:
+  - it: no LEOFLOW_SERVER_TRUSTED_PROXIES env when config.trustedProxies is unset (default trust-none)
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SERVER_TRUSTED_PROXIES
+          any: true
+
+  - it: config.trustedProxies renders a comma-joined LEOFLOW_SERVER_TRUSTED_PROXIES env (viper splits it into a list)
+    template: deployment.yaml
+    set:
+      config.trustedProxies:
+        - 10.0.0.0/8
+        - 192.168.1.1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SERVER_TRUSTED_PROXIES
+            value: 10.0.0.0/8,192.168.1.1
+
+  - it: no executor resource-default env when executor.defaults.resources is unset
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_MEMORY
+          any: true
+
+  - it: executor.defaults.resources renders CPU + memory default env vars
+    template: deployment.yaml
+    set:
+      executor.defaults.resources.cpu: 250m
+      executor.defaults.resources.memory: 256Mi
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU
+            value: 250m
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_MEMORY
+            value: 256Mi

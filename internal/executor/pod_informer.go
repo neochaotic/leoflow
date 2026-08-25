@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -19,8 +20,9 @@ import (
 // reusing the same transform is load-bearing: a lookup built from a different key
 // would silently miss every pod and quietly return the storm PR-10 removes.
 const (
-	podLabelRunID  = "leoflow.io/run-id"
-	podLabelTaskID = "leoflow.io/task-id"
+	podLabelRunID     = "leoflow.io/run-id"
+	podLabelTaskID    = "leoflow.io/task-id"
+	podLabelTryNumber = "leoflow.io/try-number"
 )
 
 // errCacheNotSynced is returned by SnapshotTaskPods before the informer's initial
@@ -107,19 +109,21 @@ func (p *PodInformer) Shutdown() {
 	p.factory.Shutdown()
 }
 
-// CachedPodActive reports whether the cache holds a pod for (run, task) that is
-// Pending or Running — the exact predicate TaskPodActive uses. It is the safe
+// CachedPodActive reports whether the cache holds a pod for exactly the
+// (run, task, try) attempt that is Pending or Running — the exact predicate
+// TaskPodActive uses, pinned to the same attempt (#723). It is the safe
 // direction of the asymmetric-trust contract: a true return may DEFER a reap; a
 // false return is NEVER authoritative and the caller must fall through to the live
 // read. Before the cache has synced it returns false, so a cold cache degrades to
 // the live path rather than misreporting absence.
-func (p *PodInformer) CachedPodActive(runID, taskID string) bool {
+func (p *PodInformer) CachedPodActive(runID, taskID string, tryNumber int) bool {
 	if !p.informer.HasSynced() {
 		return false
 	}
 	selector := labels.SelectorFromSet(labels.Set{
-		podLabelRunID:  sanitizeLabel(runID),
-		podLabelTaskID: sanitizeLabel(taskID),
+		podLabelRunID:     sanitizeLabel(runID),
+		podLabelTaskID:    sanitizeLabel(taskID),
+		podLabelTryNumber: strconv.Itoa(tryNumber),
 	})
 	pods, err := p.lister.Pods(p.namespace).List(selector)
 	if err != nil {

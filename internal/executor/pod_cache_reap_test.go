@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -11,11 +12,11 @@ import (
 // reading is never authoritative and the reaper must fall through to the live
 // TaskPodActive read.
 type fakePresenceCache struct {
-	active map[string]bool // "runID/taskID" -> cached Pending/Running
+	active map[string]bool // "runID/taskID/try" -> cached Pending/Running
 }
 
-func (c *fakePresenceCache) CachedPodActive(runID, taskID string) bool {
-	return c.active[runID+"/"+taskID]
+func (c *fakePresenceCache) CachedPodActive(runID, taskID string, try int) bool {
+	return c.active[fmt.Sprintf("%s/%s/%d", runID, taskID, try)]
 }
 
 // --- pod-lost reaper -------------------------------------------------------
@@ -31,7 +32,7 @@ func TestPodLostReaper_CacheAbsentButLiveRunning_DoesNotReap(t *testing.T) {
 	store := &fakePodLostStore{candidates: []PodLostCandidate{
 		{TaskInstanceID: "live", DagRunID: "run-a", TaskID: "work", TryNumber: 1, RunningSince: past},
 	}}
-	pods := &fakePodManager{active: map[string]bool{"run-a/work": true}} // live says Running
+	pods := &fakePodManager{active: map[string]bool{"run-a/work/1": true}} // live says Running
 	r := newPodLostReaper(store, reapTestLogger(), 60*time.Second, nil)
 	r.pods = pods
 	r.cache = &fakePresenceCache{active: map[string]bool{}} // cache says absent (lag)
@@ -61,7 +62,7 @@ func TestPodLostReaper_CacheActive_SkipsLiveList(t *testing.T) {
 	pods := &fakePodManager{active: map[string]bool{}}
 	r := newPodLostReaper(store, reapTestLogger(), 60*time.Second, nil)
 	r.pods = pods
-	r.cache = &fakePresenceCache{active: map[string]bool{"run-a/work": true}}
+	r.cache = &fakePresenceCache{active: map[string]bool{"run-a/work/1": true}}
 
 	if err := r.run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
@@ -136,7 +137,7 @@ func TestDispatchLostReaper_CacheAbsentButLiveActive_DoesNotReap(t *testing.T) {
 	store := &fakeStaleQueuedStore{candidates: []StaleQueuedCandidate{
 		{TaskInstanceID: "slow", DagRunID: "run-a", TaskID: "work", TryNumber: 1, QueuedAt: past},
 	}}
-	pods := &fakePodManager{active: map[string]bool{"run-a/work": true}}
+	pods := &fakePodManager{active: map[string]bool{"run-a/work/1": true}}
 	r := newDispatchLostReaper(store, reapTestLogger(), 3*time.Minute, nil)
 	r.pods = pods
 	r.cache = &fakePresenceCache{active: map[string]bool{}} // cache absent
@@ -162,7 +163,7 @@ func TestDispatchLostReaper_CacheActive_SkipsLiveList(t *testing.T) {
 	pods := &fakePodManager{active: map[string]bool{}}
 	r := newDispatchLostReaper(store, reapTestLogger(), 3*time.Minute, nil)
 	r.pods = pods
-	r.cache = &fakePresenceCache{active: map[string]bool{"run-a/work": true}}
+	r.cache = &fakePresenceCache{active: map[string]bool{"run-a/work/1": true}}
 
 	if err := r.run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)

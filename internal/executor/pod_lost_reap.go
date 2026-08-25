@@ -110,7 +110,7 @@ func (r *podLostReaper) run(ctx context.Context) error {
 		// Cache fast-path (PR-10), safe direction only: a cached Pending/Running
 		// pod defers the reap without an apiserver read. A cache MISS is NOT
 		// trusted — fall through to the live read below, preserving the #461 fix.
-		if r.cache != nil && r.cache.CachedPodActive(c.DagRunID, c.TaskID) {
+		if r.cache != nil && r.cache.CachedPodActive(c.DagRunID, c.TaskID, c.TryNumber) {
 			r.record("pod_lost_cache_active")
 			continue
 		}
@@ -119,7 +119,7 @@ func (r *podLostReaper) run(ctx context.Context) error {
 		//   * pod Pending/Running -> a pod exists; not lost. Silence, if any, is
 		//                            the agent-lost reaper's job.
 		//   * no live pod       -> the pod is genuinely gone; fail as pod_lost.
-		active, perr := r.pods.TaskPodActive(ctx, c.DagRunID, c.TaskID)
+		active, perr := r.pods.TaskPodActive(ctx, c.DagRunID, c.TaskID, c.TryNumber)
 		if perr != nil {
 			r.logger.Warn("pod-lost: pod liveness unknown; deferring",
 				"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "error", perr)

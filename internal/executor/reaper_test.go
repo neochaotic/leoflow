@@ -119,7 +119,7 @@ func TestReaperThreadsPresenceCacheToDispatchLost(t *testing.T) {
 		},
 	}
 	pods := &fakePodManager{active: map[string]bool{}}
-	cache := &fakePresenceCache{active: map[string]bool{"run-a/work": true}}
+	cache := &fakePresenceCache{active: map[string]bool{"run-a/work/0": true}}
 	r := NewReaper(store, pods, cache, nil, nil, reapTestLogger(), DefaultReaperConfig(), nil)
 
 	if err := r.ReapOnce(context.Background()); err != nil {

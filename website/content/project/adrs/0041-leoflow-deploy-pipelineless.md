@@ -118,7 +118,8 @@ is what keeps that option open.
 - **Confirmation** when interactive and the server is non-loopback (a real Pro):
   `Deploy <dag> → <server>? [y/N]`. `--yes` skips it (CI/automation).
 - **Rebuilds** the image by default (simple, deterministic); `--skip-build`
-  re-uses an already-built image (promote without rebuild).
+  reuses an already-built image (skips docker build/push) but still recompiles
+  `dag.json` from `leoflow.yaml`/`dag.py` — the spec is always refreshed.
 - **Pins by digest:** the push captures the image digest and writes
   `registry/img@sha256:…` into `dag.json` — Pro pulls **exactly** the bytes that
   were built; there is no `:latest` lookup. The first deploy *registers* the

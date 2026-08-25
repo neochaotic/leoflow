@@ -20,7 +20,11 @@ func newRunsCommand() *cobra.Command {
 		Use:   "runs",
 		Short: "Trigger and inspect DAG runs.",
 	}
-	cmd.AddCommand(newRunsTriggerCommand(), newRunsStatusCommand())
+	// `runs list` is where users instinctively look; it reuses the exact
+	// command the operator alias `admin runs list` is built from, so the two
+	// share one lister, one set of flags (--state/--dag/--older-than), and one
+	// output format — no duplicated API calls.
+	cmd.AddCommand(newRunsTriggerCommand(), newRunsStatusCommand(), newAdminRunsListCommand())
 	return cmd
 }
 

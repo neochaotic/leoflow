@@ -27,6 +27,7 @@ Trigger and inspect DAG runs.
 ### SEE ALSO
 
 * [leoflow](/reference/cli/leoflow/)	 - Leoflow is a GitOps-first, container-native workflow orchestrator.
+* [leoflow runs list](/reference/cli/leoflow_runs_list/)	 - List DAG runs, filtered by --state, --older-than, and/or --dag.
 * [leoflow runs status](/reference/cli/leoflow_runs_status/)	 - Show the state of a DAG run (the latest by default).
 * [leoflow runs trigger](/reference/cli/leoflow_runs_trigger/)	 - Trigger a new run of a DAG.
 

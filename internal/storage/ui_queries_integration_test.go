@@ -445,12 +445,26 @@ func TestListAuditLogsIntegration(t *testing.T) {
 // (ADR 0045, ADR 0055): a task that received the full vault while declaring a
 // narrower set records a secret.scope_warning row against the DAG, carrying the
 // kind and the declared/total counts in metadata — and no secret names.
+//
+// The tenant argument is the tenant UUID the agent token carries (the value
+// recordSecretScope passes from AgentIdentity.TenantID), NOT the tenant name.
+// Feeding the name here is the wrong contract that let #722 slip through: a name
+// resolved by a UUID-keyed lookup silently dropped every audit row.
 func TestRecordSecretScopeWarningIntegration(t *testing.T) {
 	repo, _, ctx := openRepo(t)
 	dagID := fmt.Sprintf("uiq_scopewarn_%d", time.Now().UnixNano())
 	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}})
 
-	if err := repo.RecordSecretScopeWarning(ctx, "default", dagID, "run-1", "t", "connections", 1, 3); err != nil {
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	// The tenant NAME must NOT resolve (it is not a UUID) — guards the #722 bug.
+	if err := repo.RecordSecretScopeWarning(ctx, "default", dagID, "run-1", "t", "connections", 1, 3); err == nil {
+		t.Error("RecordSecretScopeWarning should require a tenant UUID, not the name")
+	}
+
+	if err := repo.RecordSecretScopeWarning(ctx, tenantUUID, dagID, "run-1", "t", "connections", 1, 3); err != nil {
 		t.Fatalf("RecordSecretScopeWarning: %v", err)
 	}
 
@@ -492,6 +506,82 @@ func TestRecordSecretScopeWarningIntegration(t *testing.T) {
 	}
 	if meta["total"] != float64(3) {
 		t.Errorf("total = %v, want 3", meta["total"])
+	}
+}
+
+// TestRecordSecretLivenessDenialIntegration checks the secret-path liveness
+// audit event (ADR 0055): a not-live task instance records a liveness row
+// against the DAG, with distinct actions per gate mode — secret.liveness_denied
+// in enforce mode, secret.liveness_would_deny in observe mode — and the kind,
+// run/task/attempt, and mode in metadata (never secret names or values).
+//
+// As with the scope-warning event, the tenant argument is the tenant UUID the
+// agent token carries (recordLiveness passes AgentIdentity.TenantID), NOT the
+// name. #722's sibling bug resolved it by name, so an ENFORCE-mode security
+// denial wrote no audit record at all.
+func TestRecordSecretLivenessDenialIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	dagID := fmt.Sprintf("uiq_livedeny_%d", time.Now().UnixNano())
+	registerSpec(t, repo, ctx, dagID, []domain.TaskSpec{{TaskID: "t", Type: domain.TaskTypePython}})
+
+	tenantUUID, err := repo.TenantUUID(ctx, "default")
+	if err != nil {
+		t.Fatalf("TenantUUID: %v", err)
+	}
+	// The tenant NAME must NOT resolve (it is not a UUID) — guards the #722 bug.
+	if err := repo.RecordSecretLivenessDenial(ctx, "default", dagID, "run-1", "t", 2, "variables", "enforce"); err == nil {
+		t.Error("RecordSecretLivenessDenial should require a tenant UUID, not the name")
+	}
+
+	if err := repo.RecordSecretLivenessDenial(ctx, tenantUUID, dagID, "run-1", "t", 2, "variables", "enforce"); err != nil {
+		t.Fatalf("RecordSecretLivenessDenial(enforce): %v", err)
+	}
+	if err := repo.RecordSecretLivenessDenial(ctx, tenantUUID, dagID, "run-1", "t", 3, "connections", "observe"); err != nil {
+		t.Fatalf("RecordSecretLivenessDenial(observe): %v", err)
+	}
+
+	entries, _, err := repo.ListAuditLogs(ctx, "default", dagID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListAuditLogs: %v", err)
+	}
+	var denied, wouldDeny *domain.AuditLogEntry
+	for i := range entries {
+		switch entries[i].Action {
+		case "secret.liveness_denied":
+			denied = &entries[i]
+		case "secret.liveness_would_deny":
+			wouldDeny = &entries[i]
+		}
+	}
+	if denied == nil {
+		t.Fatalf("secret.liveness_denied entry not found for %s: %+v", dagID, entries)
+	}
+	if wouldDeny == nil {
+		t.Fatalf("secret.liveness_would_deny entry not found for %s: %+v", dagID, entries)
+	}
+	if denied.ResourceType != "dag" || denied.ResourceID != dagID {
+		t.Errorf("resource = %s/%s, want dag/%s", denied.ResourceType, denied.ResourceID, dagID)
+	}
+	// Enforce-mode metadata: parse JSON (jsonb normalizes spacing; numbers decode
+	// to float64).
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(denied.Extra), &meta); err != nil {
+		t.Fatalf("metadata is not valid JSON: %v (%q)", err, denied.Extra)
+	}
+	if meta["kind"] != "variables" {
+		t.Errorf("kind = %v, want variables", meta["kind"])
+	}
+	if meta["mode"] != "enforce" {
+		t.Errorf("mode = %v, want enforce", meta["mode"])
+	}
+	if meta["run_id"] != "run-1" {
+		t.Errorf("run_id = %v, want run-1", meta["run_id"])
+	}
+	if meta["task_id"] != "t" {
+		t.Errorf("task_id = %v, want t", meta["task_id"])
+	}
+	if meta["try_number"] != float64(2) {
+		t.Errorf("try_number = %v, want 2", meta["try_number"])
 	}
 }
 

@@ -68,6 +68,14 @@ type Runner struct {
 	// ReschedulePath is the file a reschedule-mode sensor writes its next-poke time
 	// to before exiting with rescheduleExitCode; empty disables reschedule (#380).
 	ReschedulePath string
+	// TmpDir, when set, is exported to the task as TMPDIR so the child's temp files
+	// land in a per-attempt directory the caller wipes between attempts, instead of
+	// the pod's real /tmp. The warm worker points this at a subdir of its scratch
+	// (reset before every attempt) so no attempt observes another attempt's temp
+	// files — a token cache, a dbt profile, ~/.aws-style credentials (#728). Empty
+	// leaves TMPDIR untouched: a single-shot pod is already destroyed per task, so
+	// its /tmp needs no in-process reset.
+	TmpDir string
 	// TerminationLogPath is where the agent writes its durable outcome record just
 	// before delivering the report, so a pod killed mid-report still leaves the
 	// task's true result behind for the reconciler to recover (ADR 0052). Empty
@@ -194,6 +202,32 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		return nil, err
 	}
 	env = append(env, byTaskEnv...)
+	if callArgs := spec.GetCallArgsJson(); callArgs != "" {
+		// TaskFlow literal call args (#115). The runtime decodes this and merges
+		// values into the user function's kwargs. XCom upstreams take precedence
+		// at runtime for any same-name parameter. The env var name keeps
+		// Airflow's DAG-run `params` term free for a future feature (#148).
+		env = append(env, "LEOFLOW_CALL_ARGS_JSON="+callArgs)
+	}
+	if opArgs := spec.GetOperatorArgsJson(); opArgs != "" {
+		// Operator constructor kwargs (ADR 0040). The runtime's --operator mode
+		// decodes this and instantiates the captured provider operator with it.
+		env = append(env, "LEOFLOW_OPERATOR_ARGS="+opArgs)
+	}
+	env = append(env, r.secretsEnv(ctx)...)
+	pathEnv, err := r.outputPathEnv()
+	if err != nil {
+		return nil, err
+	}
+	return append(env, pathEnv...), nil
+}
+
+// outputPathEnv renders the env vars that point the runtime at the agent-owned
+// per-task output files, plus the TMPDIR redirect. Each is set only when its path
+// field is configured (single-shot leaves some unset). TMPDIR is created and comes
+// last so it overrides any TMPDIR inherited from the pod environment.
+func (r *Runner) outputPathEnv() ([]string, error) {
+	var env []string
 	if r.ReturnPath != "" {
 		// Tell the runtime to write the return value to the agent's per-task path,
 		// not the shared global default — so concurrent tasks and other users never
@@ -214,19 +248,19 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		// rescheduleExitCode; the agent then reports up_for_reschedule (#380).
 		env = append(env, "LEOFLOW_RESCHEDULE_PATH="+r.ReschedulePath)
 	}
-	if callArgs := spec.GetCallArgsJson(); callArgs != "" {
-		// TaskFlow literal call args (#115). The runtime decodes this and merges
-		// values into the user function's kwargs. XCom upstreams take precedence
-		// at runtime for any same-name parameter. The env var name keeps
-		// Airflow's DAG-run `params` term free for a future feature (#148).
-		env = append(env, "LEOFLOW_CALL_ARGS_JSON="+callArgs)
+	if r.TmpDir != "" {
+		// Redirect TMPDIR into the per-attempt scratch dir (wiped by resetScratch
+		// between attempts) so anything the child writes to $TMPDIR — a token cache,
+		// a dbt profile, ~/.aws-style credentials — is gone before the next attempt
+		// runs on this warm worker (#728). Appended last so it overrides any TMPDIR
+		// inherited from the pod's environment; tools treat TMPDIR as ephemeral, so
+		// redirecting it is safe.
+		if err := os.MkdirAll(r.TmpDir, 0o700); err != nil {
+			return nil, fmt.Errorf("creating per-attempt TMPDIR %q: %w", r.TmpDir, err)
+		}
+		env = append(env, "TMPDIR="+r.TmpDir)
 	}
-	if opArgs := spec.GetOperatorArgsJson(); opArgs != "" {
-		// Operator constructor kwargs (ADR 0040). The runtime's --operator mode
-		// decodes this and instantiates the captured provider operator with it.
-		env = append(env, "LEOFLOW_OPERATOR_ARGS="+opArgs)
-	}
-	return append(env, r.secretsEnv(ctx)...), nil
+	return env, nil
 }
 
 // upstreamXComEnv is the env var carrying the upstream task_id -> return_value map the

@@ -147,6 +147,72 @@ tests:
             value: leoflow-scheduler.NAMESPACE.svc.cluster.local:9091
           # helm-unittest renders release namespace as "NAMESPACE" in tests.
 
+  # --- #726: the gRPC TLS private key belongs only to the role that runs the
+  # agent gRPC server (scheduler). The api role never builds a gRPC server
+  # (startAgentGRPC is reached only from the scheduler side), so handing its
+  # internet-facing pod tls.key widens the blast radius ADR 0049 set out to
+  # shrink. The env vars must STAY on both roles though — the Pro boot guard
+  # (guardTLSForEdition) only checks both strings are non-empty and never reads
+  # the files, so scoping the env would CrashLoopBackOff the api pod. Scope only
+  # the volume + volumeMount.
+  - it: the api Deployment keeps both gRPC TLS env vars but never mounts the private key (#726)
+    template: deployment.yaml
+    documentIndex: 0
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - equal:
+          path: metadata.name
+          value: leoflow-api
+      # The boot guard must still pass: both env vars present so the Pro edition
+      # boots (guardTLSForEdition only asserts the strings are non-empty).
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SERVER_GRPC_TLS_CERT
+            value: /etc/leoflow/grpc-tls/tls.crt
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_SERVER_GRPC_TLS_KEY
+            value: /etc/leoflow/grpc-tls/tls.key
+      # …but the private key never reaches this pod: no grpc-tls volume or mount.
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          any: true
+          content:
+            name: grpc-tls
+      - notContains:
+          path: spec.template.spec.volumes
+          any: true
+          content:
+            name: grpc-tls
+
+  - it: the scheduler Deployment still mounts the gRPC TLS key it actually serves (#726)
+    template: deployment.yaml
+    documentIndex: 1
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - equal:
+          path: metadata.name
+          value: leoflow-scheduler
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: grpc-tls
+            mountPath: /etc/leoflow/grpc-tls
+            readOnly: true
+      # The scheduler mounts the whole cert Secret (tls.crt + tls.key) — it runs
+      # the agent gRPC server and needs the private key.
+      - contains:
+          path: spec.template.spec.volumes
+          any: true
+          content:
+            name: grpc-tls
+
   # --- Split with the default ReadWriteOnce logs PVC must fail loudly: the
   # scheduler writes logs and the api replicas read them from the SAME PVC, so
   # >=2 pods mount it at once and RWO can never satisfy that (#282 generalized).

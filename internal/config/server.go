@@ -519,13 +519,23 @@ var serverDefaults = map[string]any{
 	"server.grpc_tls_cert":        "",
 	"server.grpc_tls_key":         "",
 	"server.cors.allowed_origins": []string{"http://localhost:8080"},
-	"database.url":                "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
-	"database.max_open_conns":     25,
-	"database.max_idle_conns":     5,
+	// Registered so viper's AutomaticEnv binds LEOFLOW_SERVER_TRUSTED_PROXIES. It
+	// is a []string, but viper's default decode hook splits a single
+	// comma-separated env var into a list, so the env-only Helm override path
+	// works without a config file — this is what the chart renders (#725). Empty
+	// (the default) trusts no proxy.
+	"server.trusted_proxies":  []string{},
+	"database.url":            "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
+	"database.max_open_conns": 25,
+	"database.max_idle_conns": 5,
 	// Empty by default: no Redis configured selects the embedded edition (Lite —
 	// XCom on Postgres, in-process log tailer, ADR 0026). Production sets this
 	// explicitly via the Helm chart (external Redis).
-	"redis.url":                        "",
+	"redis.url": "",
+	// Registered so AutomaticEnv binds LEOFLOW_REDIS_CA_FILE (the Helm chart sets
+	// it when redis.caConfigMap is configured); without it, verified TLS to a
+	// managed rediss:// endpoint silently falls back to system roots only (#725).
+	"redis.ca_file":                    "",
 	"auth.provider":                    "jwt",
 	"auth.jwt.secret":                  "",
 	"auth.jwt.token_ttl_seconds":       3600,
@@ -569,18 +579,24 @@ var serverDefaults = map[string]any{
 	// Default: synchronous dispatch (BufferSize=0). Safe and zero-overhead for
 	// Lite. Pro deployments should set buffer_size>=1 + workers>=1 in their
 	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).
-	"scheduler.dispatch.buffer_size":                   0,
-	"scheduler.dispatch.workers":                       0,
-	"executor.http.user_agent":                         "leoflow/0.1",
-	"executor.task_namespace":                          "leoflow",
-	"executor.type":                                    "kubernetes",
-	"executor.agent_path":                              "leoflow-agent",
-	"executor.subprocess_workdir":                      "",
-	"executor.agent_control_plane_addr":                "",
-	"executor.agent_tls_ca_configmap":                  "",
-	"executor.task_secret_name":                        "",
-	"executor.task_secret_mount_path":                  "/etc/leoflow/secrets",
-	"executor.defaults.staging_access_mode":            "ReadWriteMany",
+	"scheduler.dispatch.buffer_size":        0,
+	"scheduler.dispatch.workers":            0,
+	"executor.http.user_agent":              "leoflow/0.1",
+	"executor.task_namespace":               "leoflow",
+	"executor.type":                         "kubernetes",
+	"executor.agent_path":                   "leoflow-agent",
+	"executor.subprocess_workdir":           "",
+	"executor.agent_control_plane_addr":     "",
+	"executor.agent_tls_ca_configmap":       "",
+	"executor.task_secret_name":             "",
+	"executor.task_secret_mount_path":       "/etc/leoflow/secrets",
+	"executor.defaults.staging_access_mode": "ReadWriteMany",
+	// Registered so AutomaticEnv binds LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU /
+	// _MEMORY (the env-only Helm override path, #725). Empty leaves the L0 default
+	// unset, so a task inherits no platform resource default unless the operator
+	// configures one. Scalars (Kubernetes quantities, e.g. "250m"/"256Mi").
+	"executor.defaults.resources_cpu":                  "",
+	"executor.defaults.resources_memory":               "",
 	"executor.defaults.run_tasks_as_non_root":          true,
 	"executor.defaults.read_only_task_root_filesystem": false,
 	// Warm worker pools (ADR 0058). Ships a byte-for-byte no-op: warm pools OFF =

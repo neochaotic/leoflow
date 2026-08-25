@@ -114,7 +114,7 @@ func TestEnsurePythonBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("managed python is reused when present", func(t *testing.T) {
+	t.Run("managed python at the pinned version is reused when present", func(t *testing.T) {
 		home := t.TempDir()
 		managed := filepath.Join(home, "python", "bin", "python3.11")
 		if err := os.MkdirAll(filepath.Dir(managed), 0o750); err != nil {
@@ -123,18 +123,55 @@ func TestEnsurePythonBranches(t *testing.T) {
 		if err := os.WriteFile(managed, []byte("#!/fake"), 0o700); err != nil {
 			t.Fatal(err)
 		}
+		// A COMPLETE managed install records the pinned version in its sentinel;
+		// only then may EnsurePython short-circuit (symmetric with Postgres).
+		if err := os.WriteFile(filepath.Join(home, "python", pyVersionFile), []byte(pyVersion), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		got, err := EnsurePython(context.Background(), EnsureOpts{
 			Home:     home,
 			GOOS:     "linux",
 			GOARCH:   "amd64",
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
 			Stat:     os.Stat,
+			Client:   &http.Client{Transport: errRoundTripper{t}},
 		})
 		if err != nil {
 			t.Fatalf("err = %v, want nil", err)
 		}
 		if got != managed {
 			t.Errorf("path = %q, want managed %q", got, managed)
+		}
+	})
+
+	t.Run("managed pinned build wins over a host python3.11", func(t *testing.T) {
+		// Regression for #742: the pre-fix EnsurePython did LookPath("python3.11")
+		// BEFORE checking the managed tree, so a host interpreter outranked the
+		// pinned, checksum-verified managed build. The managed build must win.
+		home := t.TempDir()
+		managed := filepath.Join(home, "python", "bin", "python3.11")
+		if err := os.MkdirAll(filepath.Dir(managed), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(managed, []byte("#!/fake"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, "python", pyVersionFile), []byte(pyVersion), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := EnsurePython(context.Background(), EnsureOpts{
+			Home:     home,
+			GOOS:     "linux",
+			GOARCH:   "amd64",
+			LookPath: func(string) (string, error) { return "/usr/bin/python3.11", nil },
+			Stat:     os.Stat,
+			Client:   &http.Client{Transport: errRoundTripper{t}},
+		})
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if got != managed {
+			t.Errorf("path = %q, want the managed build %q to outrank the host python3.11", got, managed)
 		}
 	})
 
@@ -192,6 +229,129 @@ func TestExtractTarGzDirAndSymlink(t *testing.T) {
 	if err != nil || link != "python3.11" {
 		t.Errorf("symlink = %q err = %v, want -> python3.11", link, err)
 	}
+}
+
+// TestEnsurePythonReextractsOnVersionMismatch proves the presence guard is
+// version-aware (#742): when the managed CPython on disk records a DIFFERENT
+// version than the pinned one, EnsurePython re-installs (reaches the download)
+// instead of silently keeping the stale interpreter. Without a sentinel it would
+// short-circuit forever, so a half-upgraded install would keep running an
+// unsupported interpreter and fail later at an unrelated component.
+func TestEnsurePythonReextractsOnVersionMismatch(t *testing.T) {
+	home := t.TempDir()
+	managed := filepath.Join(home, "python", "bin", "python3.11")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/fake"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Sentinel records an OLDER managed version than the pinned pyVersion.
+	if err := os.WriteFile(filepath.Join(home, "python", pyVersionFile), []byte("3.10.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingRoundTripper{}
+	_, err := EnsurePython(context.Background(), EnsureOpts{
+		Home: home, GOOS: "linux", GOARCH: "amd64",
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+		Stat:     os.Stat,
+		Client:   &http.Client{Transport: rt},
+	})
+	if err == nil {
+		t.Fatal("err = nil, want a download attempt on version change")
+	}
+	if !rt.called {
+		t.Error("expected a re-download when the on-disk CPython version differs from the pinned one")
+	}
+}
+
+// TestEnsurePythonReextractsWhenVersionUnknown proves a managed install with no
+// version sentinel (a pre-#742 install, or an interrupted extract) is treated as
+// needing re-installation rather than trusted blindly.
+func TestEnsurePythonReextractsWhenVersionUnknown(t *testing.T) {
+	home := t.TempDir()
+	managed := filepath.Join(home, "python", "bin", "python3.11")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/fake"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingRoundTripper{}
+	_, err := EnsurePython(context.Background(), EnsureOpts{
+		Home: home, GOOS: "linux", GOARCH: "amd64",
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+		Stat:     os.Stat,
+		Client:   &http.Client{Transport: rt},
+	})
+	if err == nil {
+		t.Fatal("err = nil, want a download attempt when no version is recorded")
+	}
+	if !rt.called {
+		t.Error("expected a re-download when no version sentinel is present")
+	}
+}
+
+// TestExtractEntryHandlesTypeChange proves a re-extract whose archive changed an
+// entry's TYPE is idempotent (#729 follow-up): a TypeReg landing where a prior
+// extract left a directory must not fail EISDIR, and a TypeSymlink landing where
+// a non-empty directory exists must not fail with a non-IsNotExist os.Remove.
+func TestExtractEntryHandlesTypeChange(t *testing.T) {
+	t.Run("regular file over an existing directory", func(t *testing.T) {
+		dest := t.TempDir()
+		// First layout: python/foo is a directory (holds a child file).
+		first, _ := makeTarGz(t, map[string]string{"python/foo/child": "x"})
+		if err := extractTarGz(first, dest); err != nil {
+			t.Fatalf("first extract: %v", err)
+		}
+		// Second layout: python/foo is now a regular file — a type change.
+		second, _ := makeTarGz(t, map[string]string{"python/foo": "iam a file now"})
+		if err := extractTarGz(second, dest); err != nil {
+			t.Fatalf("re-extract over a directory must not fail EISDIR: %v", err)
+		}
+		got, rerr := os.ReadFile(filepath.Join(dest, "python", "foo"))
+		if rerr != nil || string(got) != "iam a file now" {
+			t.Errorf("python/foo = %q (err %v), want the new file content", got, rerr)
+		}
+	})
+
+	t.Run("symlink over an existing non-empty directory", func(t *testing.T) {
+		dest := t.TempDir()
+		// Pre-existing non-empty directory where a symlink will later belong.
+		linkDir := filepath.Join(dest, "python", "link")
+		if err := os.MkdirAll(linkDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(linkDir, "leftover"), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Archive turns python/link into a symlink to a sibling file.
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		if err := tw.WriteHeader(&tar.Header{Name: "python/target", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte("ok")); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: "python/link", Typeflag: tar.TypeSymlink, Linkname: "target"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := extractTarGz(buf.Bytes(), dest); err != nil {
+			t.Fatalf("symlink over a non-empty directory must not fail: %v", err)
+		}
+		link, rerr := os.Readlink(filepath.Join(dest, "python", "link"))
+		if rerr != nil || link != "target" {
+			t.Errorf("symlink = %q err = %v, want -> target", link, rerr)
+		}
+	})
 }
 
 func TestDownloadVerifyExtractErrors(t *testing.T) {

@@ -98,15 +98,21 @@ func TestDevBasePythonPrefersManaged(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(managed), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	// Before the managed CPython exists, it falls back to a PATH python.
-	if got := devBasePython(home); got == managed {
+	// Before the managed CPython exists, it must not return the managed path
+	// (it resolves a host python3 or reports none — never the absent managed one).
+	if got, _ := devBasePython(home); got == managed {
 		t.Errorf("should not return the managed path before it exists")
 	}
-	// Once present, the managed interpreter (which bundles venv) is preferred.
+	// Once present, the managed interpreter (which bundles venv) is preferred and
+	// trusted at the pinned version without re-executing it.
 	if err := os.WriteFile(managed, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // test fixture
 		t.Fatal(err)
 	}
-	if got := devBasePython(home); got != managed {
+	got, err := devBasePython(home)
+	if err != nil {
+		t.Fatalf("devBasePython err = %v, want nil", err)
+	}
+	if got != managed {
 		t.Errorf("devBasePython = %q, want the managed %q", got, managed)
 	}
 }

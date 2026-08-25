@@ -122,6 +122,24 @@ numbers justify it.
 cost* and *import cost* separately, before the D9 caps and any forkserver decision
 are locked.
 
+> **Correction note (2026-08-25, re: #728 / #741).** Two claims above overstate
+> what the worker resets, and are corrected here rather than by rewriting the
+> accepted text:
+>
+> - The D4 reset described as "resets `/tmp`" is more precisely **resets `TMPDIR`
+>   (redirected into the per-attempt scratch), not `/tmp` itself**. The #728 fix
+>   points each child's `TMPDIR` at a subdir of the agent-owned scratch that
+>   `resetScratch` wipes between attempts; the container's `/tmp` is never reset by
+>   the worker. (With a read-only rootfs, `/tmp` is a shared writable `emptyDir` —
+>   see #741 — and is likewise not per-attempt reset.)
+> - The isolation invariant ("no attempt observes another attempt's secrets, env,
+>   or writable filesystem state") holds only for **writable filesystem state
+>   under the agent's control** — the per-attempt scratch and the `TMPDIR`
+>   redirected into it. State an attempt writes outside that control (a raw path
+>   under `/tmp`, or elsewhere on the image) is **not** wiped between attempts and
+>   can be observed by a later attempt on the same worker. The qualifier belongs
+>   on the invariant as stated.
+
 ### D5 — Staging: exclude staging-dependent DAGs from warm pools in v1
 
 Dynamic per-attempt staging remount is **infeasible** — a pod's volumes/mounts are

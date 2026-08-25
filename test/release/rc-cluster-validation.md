@@ -52,6 +52,24 @@ install page <https://neochaotic.github.io/leoflow/get-started/installation/>.
 
 ## §1 Install (Helm / Pro)
 
+> **Before the tag is cut (maintainer preflight).** The chart `version` and
+> `appVersion` in `helm/leoflow/Chart.yaml` must equal the release tag (minus the
+> leading `v`) **before** you `git tag` — ADR 0028 keeps them in lockstep, and the
+> image tags default to `.Chart.AppVersion`, so a stale Chart.yaml makes a default
+> `helm install ./helm/leoflow` pull the **previous** release's images (this bit
+> `v0.4.0-rc.3`, which shipped with Chart.yaml still on `rc.2` — arestas #3).
+> Bump both keys, then verify with:
+>
+> ```bash
+> scripts/check-chart-version-matches-tag.sh vX.Y.Z   # or $GITHUB_REF_NAME in CI
+> ```
+>
+> The same gate runs automatically on every `v*` tag in
+> `.github/workflows/helm-release.yaml`, so a cut with a stale chart fails the
+> Helm chart release job rather than shipping wrong image defaults. Once tagged,
+> install the **published OCI chart** (`--version` = tag without the `v`) rather
+> than a source checkout — see the [chart README](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md#quick-start).
+
 Confirmed chart value keys used below (defaults in parens) — see the chart README
 for the datastore/secret keys this runbook intentionally does not spell out:
 

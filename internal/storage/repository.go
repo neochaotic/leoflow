@@ -720,8 +720,13 @@ func (r *Repository) RecordAuthEvent(ctx context.Context, tenant, actorUserID, a
 // the DAG resource so the event surfaces on the DAG's Audit Log tab, with the
 // kind ("variables" or "connections"), the run and task, and the declared/total
 // counts in metadata. It records counts only — never secret names or values.
-func (r *Repository) RecordSecretScopeWarning(ctx context.Context, tenant, dagID, runID, taskID, kind string, declared, total int) error {
-	tid, err := r.tenantID(ctx, tenant)
+//
+// tenantID is the tenant UUID the agent token carries (not the tenant name): the
+// caller is the agent RPC path, which passes AgentIdentity.TenantID. Resolving it
+// by name silently dropped every row (#722), so mirror the secret-delivery path
+// and parse it as a UUID.
+func (r *Repository) RecordSecretScopeWarning(ctx context.Context, tenantID, dagID, runID, taskID, kind string, declared, total int) error {
+	tid, err := parseUUID(tenantID)
 	if err != nil {
 		return err
 	}
@@ -748,8 +753,13 @@ func (r *Repository) RecordSecretScopeWarning(ctx context.Context, tenant, dagID
 // kind ("variables" or "connections"), the run, task, attempt, and the gate mode
 // in metadata. It records identity + kind + mode only — never secret names or
 // values.
-func (r *Repository) RecordSecretLivenessDenial(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int, kind, mode string) error {
-	tid, err := r.tenantID(ctx, tenant)
+//
+// tenantID is the tenant UUID the agent token carries (not the tenant name): the
+// caller is the agent RPC path, which passes AgentIdentity.TenantID. Resolving it
+// by name silently dropped every row (#722) — including enforce-mode security
+// denials — so mirror the secret-delivery path and parse it as a UUID.
+func (r *Repository) RecordSecretLivenessDenial(ctx context.Context, tenantID, dagID, runID, taskID string, tryNumber int, kind, mode string) error {
+	tid, err := parseUUID(tenantID)
 	if err != nil {
 		return err
 	}

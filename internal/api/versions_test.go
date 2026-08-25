@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -16,10 +17,14 @@ import (
 type fakeVersionRepo struct {
 	created bool
 	seen    []string
+	err     error
 }
 
 func (f *fakeVersionRepo) RegisterDagVersion(_ context.Context, _ string, _ domain.DAGSpec, hash string) (bool, error) {
 	f.seen = append(f.seen, hash)
+	if f.err != nil {
+		return false, f.err
+	}
 	return f.created, nil
 }
 
@@ -73,6 +78,22 @@ func TestRegisterVersionRejectsRemovedHTTPAPIType(t *testing.T) {
 	rec := authGet(versionServer(&fakeVersionRepo{}), http.MethodPost, "/api/v2/dags/etl/versions", spec)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("removed http_api type = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// A spec that declares a connection (or variable) the tenant has not defined is
+// rejected by the repository as domain.ErrValidation (ADR 0055 D6). That is a
+// client-fixable input error — the author must run `leoflow connections set` or
+// drop the declaration — so the handler must surface it as 400, not 500. Before
+// the handleRepoError ErrValidation branch it fell through to 500, which sent
+// users to server logs instead of to their own DAG (#724).
+func TestRegisterVersionUnknownConnectionReturns400(t *testing.T) {
+	repo := &fakeVersionRepo{err: fmt.Errorf(
+		"dag %q declares unknown connection(s) %s; define them (leoflow connections set) or remove them from the DAG's connections: declaration: %w",
+		"etl", "warehouse", domain.ErrValidation)}
+	rec := authGet(versionServer(repo), http.MethodPost, "/api/v2/dags/etl/versions", validSpecJSON)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown connection = %d, want 400 (%s)", rec.Code, rec.Body.String())
 	}
 }
 

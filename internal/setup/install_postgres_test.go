@@ -99,6 +99,38 @@ func (e errRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("no network")
 }
 
+// recordingRoundTripper records that a request was made (without failing the
+// test) and returns an error, so a test can assert a code path DID reach out.
+type recordingRoundTripper struct{ called bool }
+
+func (r *recordingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	r.called = true
+	return nil, errors.New("network blocked")
+}
+
+// TestExtractSymlinkIsIdempotent proves a re-extract over an existing install
+// does not fail on a pre-existing symlink entry (#729: os.Symlink returns EEXIST
+// when the target already exists, unlike the O_TRUNC regular-file branch).
+func TestExtractSymlinkIsIdempotent(t *testing.T) {
+	data := tarGz(t,
+		[]*tar.Header{
+			{Name: "pg/lib/libpq.so.5", Typeflag: tar.TypeReg, Mode: 0o755},
+			{Name: "pg/lib/libpq.so", Linkname: "libpq.so.5", Typeflag: tar.TypeSymlink, Mode: 0o777},
+		},
+		[]string{"SO", ""})
+	dest := t.TempDir()
+	if err := extractTarGzStrip(data, dest, 1); err != nil {
+		t.Fatalf("first extract: %v", err)
+	}
+	if err := extractTarGzStrip(data, dest, 1); err != nil {
+		t.Fatalf("second extract over existing install: %v", err)
+	}
+	link, err := os.Readlink(filepath.Join(dest, "lib", "libpq.so"))
+	if err != nil || link != "libpq.so.5" {
+		t.Errorf("symlink = %q err = %v, want -> libpq.so.5", link, err)
+	}
+}
+
 func TestEnsurePostgresReturnsExistingManaged(t *testing.T) {
 	home := t.TempDir()
 	binDir := filepath.Join(home, "postgres", "bin")
@@ -108,7 +140,11 @@ func TestEnsurePostgresReturnsExistingManaged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(binDir, "postgres"), []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A managed Postgres already present must short-circuit before any download.
+	// A managed Postgres already present AT THE BUNDLED VERSION must short-circuit
+	// before any download.
+	if err := os.WriteFile(filepath.Join(home, "postgres", pgVersionFile), []byte(pgVersion), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	got, err := EnsurePostgres(context.Background(), EnsureOpts{
 		Home: home, GOOS: "linux", GOARCH: "arm64",
 		Client: &http.Client{Transport: errRoundTripper{t}},
@@ -118,6 +154,62 @@ func TestEnsurePostgresReturnsExistingManaged(t *testing.T) {
 	}
 	if got != binDir {
 		t.Errorf("bin dir = %q, want %q", got, binDir)
+	}
+}
+
+// TestEnsurePostgresReextractsOnVersionChange proves the presence guard is
+// version-aware: when the managed Postgres on disk records a DIFFERENT version
+// than the bundled one, EnsurePostgres re-installs (reaches the download) instead
+// of silently keeping the stale release. Without a version sentinel it would
+// short-circuit forever, so a clean upgrade would never re-extract.
+func TestEnsurePostgresReextractsOnVersionChange(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, "postgres", "bin")
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "postgres"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Sentinel records an OLDER managed version than the bundled pgVersion.
+	if err := os.WriteFile(filepath.Join(home, "postgres", pgVersionFile), []byte("15.0.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingRoundTripper{}
+	_, err := EnsurePostgres(context.Background(), EnsureOpts{
+		Home: home, GOOS: "linux", GOARCH: "arm64",
+		Client: &http.Client{Transport: rt},
+	})
+	if err == nil {
+		t.Fatal("EnsurePostgres: err = nil, want a download attempt on version change")
+	}
+	if !rt.called {
+		t.Error("expected a re-download when the on-disk PG version differs from the bundled one")
+	}
+}
+
+// TestEnsurePostgresReextractsWhenVersionUnknown proves a managed install with no
+// version sentinel (a pre-#729 install, or an interrupted extract) is treated as
+// needing re-installation rather than trusted blindly.
+func TestEnsurePostgresReextractsWhenVersionUnknown(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, "postgres", "bin")
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "postgres"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingRoundTripper{}
+	_, err := EnsurePostgres(context.Background(), EnsureOpts{
+		Home: home, GOOS: "linux", GOARCH: "arm64",
+		Client: &http.Client{Transport: rt},
+	})
+	if err == nil {
+		t.Fatal("EnsurePostgres: err = nil, want a download attempt when no version is recorded")
+	}
+	if !rt.called {
+		t.Error("expected a re-download when no version sentinel is present")
 	}
 }
 

@@ -17,6 +17,12 @@ import (
 // archive is ~11 MB; the bound guards against a runaway/hostile response.
 const maxPostgresArchiveBytes = 150 << 20 // 150 MiB
 
+// pgVersionFile names the sentinel, written under Home/postgres after a
+// successful extraction, that records which managed PostgreSQL version is on
+// disk. The presence guard keys on it so an upgrade re-extracts instead of
+// silently keeping the prior release's binaries.
+const pgVersionFile = ".pg-version"
+
 // EnsurePostgres returns the bin directory of a managed relocatable PostgreSQL
 // (Home/postgres/bin), downloading + verifying + extracting the pinned build if
 // it is not already present. Unlike Python there is NO system fallback: Lite

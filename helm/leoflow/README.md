@@ -1,6 +1,6 @@
 # leoflow
 
-![Version: 0.4.0-rc.2](https://img.shields.io/badge/Version-0.4.0--rc.2-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 0.4.0-rc.2](https://img.shields.io/badge/AppVersion-0.4.0--rc.2-informational?style=flat-square)
+![Version: 0.4.0-rc.4](https://img.shields.io/badge/Version-0.4.0--rc.4-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 0.4.0-rc.4](https://img.shields.io/badge/AppVersion-0.4.0--rc.4-informational?style=flat-square)
 
 Leoflow control plane — a GitOps-first, container-native workflow orchestrator (Airflow 3.2.x UI/API compatible).
 
@@ -347,6 +347,9 @@ differ from what's committed.
 | executor.defaults.resources | object | `{"cpu":"","memory":""}` | Default CPU/memory for a task that declares none of its own. When set, the control plane applies the value as BOTH the request and the limit, so the task lands in Guaranteed QoS (least likely to be throttled/evicted under node pressure). Empty (default) leaves tasks with no platform resource floor, i.e. BestEffort QoS unless the DAG sets its own (#725). Kubernetes quantities. |
 | executor.defaults.resources.cpu | string | `""` | Default CPU request+limit (e.g. `250m`, `1`). Empty = unset. |
 | executor.defaults.resources.memory | string | `""` | Default memory request+limit (e.g. `256Mi`, `1Gi`). Empty = unset. |
+| executor.defaults.staging | object | `{"size":"","storageClass":""}` | Default size + StorageClass for the per-run staging volume when the DAG enabled staging without pinning them (#743). Env-only override path: the chart mounts no server config file, so these render as LEOFLOW_* env. Empty leaves the PVC on the cluster's default StorageClass and an unset size. |
+| executor.defaults.staging.size | string | `""` | Default staging PVC size (e.g. `10Gi`). Empty = unset. |
+| executor.defaults.staging.storageClass | string | `""` | Default staging PVC StorageClass (e.g. the cluster's RWX class). Empty = cluster default. |
 | extraEnv | list | `[]` | Extra environment variables appended to the control-plane container, for server settings this chart does not model as a first-class value (see `docs/configuration.md` for the full `LEOFLOW_*` surface). Standard K8s `env` entries, so `valueFrom` works, and a `value` is always rendered as a string (Kubernetes rejects a numeric one). Appended AFTER the chart-managed entries; do not use it to redefine one — the chart refuses to render an entry that shadows a variable whose value it guards (the warm-pool / agent-credential coupling). Example: `[{name: LEOFLOW_SCHEDULER_DISPATCH_WORKERS, value: "4"}]`. |
 | image.pullPolicy | string | `"IfNotPresent"` |  |
 | image.repository | string | `"ghcr.io/neochaotic/leoflow-server"` | Control-plane image. Published by GoReleaser on every tag, signed with cosign. |

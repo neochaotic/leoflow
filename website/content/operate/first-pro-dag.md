@@ -165,7 +165,7 @@ shows state and logs. That is the whole Pro lifecycle, in one verb.
 ```bash
 leoflow deploy <dag_id>     # a specific DAG in a multi-DAG workspace
 leoflow deploy --all        # every DAG in the workspace (best-effort; non-zero exit if any fail)
-leoflow deploy --skip-build # promote an already-built image without rebuilding
+leoflow deploy --skip-build # reuse the existing image (skip docker build/push); dag.json is still recompiled from leoflow.yaml/dag.py
 ```
 
 ## The complete path — your own DAG, yaml-driven

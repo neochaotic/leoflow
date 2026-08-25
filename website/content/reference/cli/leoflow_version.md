@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow version"
 linkTitle: "version"
-weight: 44
+weight: 45
 ---
 
 Print the version, git commit, and build date.

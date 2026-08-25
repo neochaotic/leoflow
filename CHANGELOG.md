@@ -58,6 +58,34 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Secret-scope audit events are now recorded (#722).** `RecordSecretScopeWarning`
+  and `RecordSecretLivenessDenial` resolved the tenant argument by name, but the
+  agent RPC path calls them with the tenant **UUID** carried by the agent token —
+  so every ADR 0055 audit row failed silently with `resource not found`, including
+  the enforce-mode `secret.liveness_denied` security record. Both now resolve by
+  id, so the observe-mode readiness trail and the enforce-mode denials are
+  actually persisted rather than existing only as log lines.
+- **A retried task instance no longer wedges in `queued`/`running` (#723).** The
+  reaper liveness check (`TaskPodActive` and its cache fast-path `CachedPodActive`)
+  matched a pod by `(run, task)` only, so a lingering earlier-attempt pod made the
+  dispatch-lost and pod-lost reapers defer forever once a retry bumped
+  `try_number`. Both checks now pin `leoflow.io/try-number`, asking liveness about
+  the attempt being failed rather than any pod for the task.
+- **`server.trusted_proxies` and `executor.defaults.resources_*` are now
+  reachable from a Helm install (#725).** These keys were absent from
+  `serverDefaults`, and viper's `AutomaticEnv` only binds an env var for a key it
+  has seen via `SetDefault` — so `LEOFLOW_SERVER_TRUSTED_PROXIES` and
+  `LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU`/`_MEMORY` were silently dropped. The
+  chart ships no server config file, so env is the only override path, which left
+  two production defaults unconfigurable: with trusted proxies unset the login
+  rate-limiter keyed every request on the ingress IP, so a handful of bad logins
+  locked out the whole deployment; and with the resource defaults unset a task
+  that relied on them ran BestEffort (first evicted under node pressure). The
+  keys are now registered (`redis.ca_file` was missing from the same map and is
+  fixed too), `trusted_proxies` binds from a comma-separated env var (viper
+  splits it into a list), and the L0 resource default now sets **both** requests
+  and limits so such tasks reach Guaranteed QoS. The chart exposes
+  `config.trustedProxies` and `executor.defaults.resources`.
 - **Chart RBAC now grants the `tokenreviews` permission the token-exchange
   transport requires (#696).** With `auth.agentTokenTransport=exchange` the
   control plane validates a task pod's projected ServiceAccount token via the

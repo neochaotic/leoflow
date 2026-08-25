@@ -312,7 +312,15 @@ spec:
           volumeMounts:
             - name: logs
               mountPath: {{ .ctx.Values.config.logsDir }}
-            {{- if .ctx.Values.agentTLS.enabled }}
+            {{- if and .ctx.Values.agentTLS.enabled (ne .role "api") }}
+            # #726 — the private key is mounted only into the role that runs the
+            # agent gRPC server. The api role never builds a gRPC server
+            # (startAgentGRPC is reached only from the scheduler side), so mounting
+            # tls.key into its internet-facing pod only widens the blast radius
+            # ADR 0049 set out to shrink. The env vars above stay on every role:
+            # the Pro boot guard (guardTLSForEdition) checks only that both strings
+            # are non-empty, never reading the files, so the dangling path is
+            # harmless on api while scoping the env would CrashLoopBackOff it.
             - name: grpc-tls
               mountPath: /etc/leoflow/grpc-tls
               readOnly: true
@@ -340,7 +348,9 @@ spec:
           # `logs.persistence.enabled` for durable storage (#227).
           emptyDir: {}
           {{- end }}
-        {{- if .ctx.Values.agentTLS.enabled }}
+        {{- if and .ctx.Values.agentTLS.enabled (ne .role "api") }}
+        # #726 — see the matching volumeMount guard above: the api role omits the
+        # gRPC cert Secret volume entirely so tls.key never reaches its pod.
         - name: grpc-tls
           secret:
             # BYO serverCertSecret, or the chart-generated "<fullname>-agent-tls"

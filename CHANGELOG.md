@@ -86,6 +86,36 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   splits it into a list), and the L0 resource default now sets **both** requests
   and limits so such tasks reach Guaranteed QoS. The chart exposes
   `config.trustedProxies` and `executor.defaults.resources`.
+- **The api role no longer receives the gRPC TLS private key in split mode
+  (#726).** The `grpc-tls` volume was gated only on `agentTLS.enabled`, so the
+  internet-facing api Deployment mounted the whole cert Secret — including
+  `tls.key` — although only the scheduler serves the agent gRPC listener. The
+  volume and mount are now scoped to the scheduler role (the TLS env vars stay on
+  both roles so the Pro boot guard still passes), keeping the private key off the
+  api pod (ADR 0049).
+- **Warm-pool attempts now get a fresh `TMPDIR` (#728).** A warm worker reused one
+  pod across attempts but never redirected `TMPDIR`, so anything a task wrote under
+  `/tmp` (a dbt profile, a cached credential) persisted to the next attempt on the
+  same worker — a filesystem channel around the per-task secret scoping. Each
+  attempt now gets a `TMPDIR` inside the per-attempt scratch that is wiped between
+  runs; the warm-pools doc is corrected to state the actual isolation guarantee
+  (image-level paths and `$HOME` still persist — use `read_only_task_root_filesystem`).
+- **Repository validation errors now return 400, not 500 (#724).** A DAG version
+  declaring an unknown variable or connection produced `500 internal error`
+  (reading as a server fault) because `handleRepoError` had no
+  `domain.ErrValidation` branch. It now maps validation errors to `400 invalid
+  request`, so the actionable message points the user at `leoflow connections set`
+  instead of the server logs.
+- **The migration Job no longer mounts an unused ServiceAccount token (#727).** The
+  Job talks only to Postgres but received the namespace default SA's projected
+  token; it now sets `automountServiceAccountToken: false`, matching the task-pod
+  path.
+- **`leoflow lite --postgres managed` is now idempotent across upgrades (#729).**
+  Re-extracting the managed Postgres bundle failed with `file exists` because
+  symlink extraction was not idempotent; it now removes an existing target before
+  creating the link. The managed-Postgres guard is also version-aware (keyed on the
+  bundled Postgres version), so a newer bundle is re-installed on upgrade instead
+  of silently keeping the old one.
 - **Chart RBAC now grants the `tokenreviews` permission the token-exchange
   transport requires (#696).** With `auth.agentTokenTransport=exchange` the
   control plane validates a task pod's projected ServiceAccount token via the

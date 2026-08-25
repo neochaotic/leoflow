@@ -58,6 +58,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Secret-scope audit events are now recorded (#722).** `RecordSecretScopeWarning`
+  and `RecordSecretLivenessDenial` resolved the tenant argument by name, but the
+  agent RPC path calls them with the tenant **UUID** carried by the agent token —
+  so every ADR 0055 audit row failed silently with `resource not found`, including
+  the enforce-mode `secret.liveness_denied` security record. Both now resolve by
+  id, so the observe-mode readiness trail and the enforce-mode denials are
+  actually persisted rather than existing only as log lines.
+- **A retried task instance no longer wedges in `queued`/`running` (#723).** The
+  reaper liveness check (`TaskPodActive` and its cache fast-path `CachedPodActive`)
+  matched a pod by `(run, task)` only, so a lingering earlier-attempt pod made the
+  dispatch-lost and pod-lost reapers defer forever once a retry bumped
+  `try_number`. Both checks now pin `leoflow.io/try-number`, asking liveness about
+  the attempt being failed rather than any pod for the task.
 - **`server.trusted_proxies` and `executor.defaults.resources_*` are now
   reachable from a Helm install (#725).** These keys were absent from
   `serverDefaults`, and viper's `AutomaticEnv` only binds an env var for a key it

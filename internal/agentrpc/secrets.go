@@ -49,7 +49,9 @@ const (
 // best-effort: a nil auditor or a write error only skips the audit row; it never
 // changes what is delivered.
 type SecretScopeAuditor interface {
-	RecordSecretScopeWarning(ctx context.Context, tenant, dagID, runID, taskID, kind string, declared, total int) error
+	// tenantID is the tenant UUID the agent token carries (AgentIdentity.TenantID),
+	// not the tenant name.
+	RecordSecretScopeWarning(ctx context.Context, tenantID, dagID, runID, taskID, kind string, declared, total int) error
 }
 
 // Secret-path liveness gate modes (ADR 0055 E2). The gate consults the
@@ -81,7 +83,9 @@ type TaskLivenessChecker interface {
 // names or values. Optional and best-effort: a nil auditor or a write error only
 // skips the row; it never changes the gate's decision.
 type SecretLivenessAuditor interface {
-	RecordSecretLivenessDenial(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int, kind, mode string) error
+	// tenantID is the tenant UUID the agent token carries (AgentIdentity.TenantID),
+	// not the tenant name.
+	RecordSecretLivenessDenial(ctx context.Context, tenantID, dagID, runID, taskID string, tryNumber int, kind, mode string) error
 }
 
 // SetSecrets attaches the secrets store. allowInsecure permits serving secrets

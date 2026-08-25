@@ -290,3 +290,68 @@ func TestBuildWarmPodMountsCA(t *testing.T) {
 		t.Error("CA ConfigMap volume must be mounted")
 	}
 }
+
+// TestBuildWarmPodMountsWritableTmpForReadOnlyRoot locks the fix for issue #741:
+// a warm worker built with a read-only root filesystem must still have a writable
+// /tmp, or the warm agent dies at os.MkdirTemp before it can register (RestartPolicy
+// Never turns that into a replacement loop that takes the whole pool down). The
+// restricted-profile pattern is ro rootfs + a writable emptyDir at /tmp, and the
+// agent's scratch (TMPDIR) must resolve onto that emptyDir.
+func TestBuildWarmPodMountsWritableTmpForReadOnlyRoot(t *testing.T) {
+	spec := baseWarmSpec()
+	spec.PodSecurity.ReadOnlyRootFilesystem = true
+	pod := BuildWarmPod(spec)
+
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == writableTmpVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatalf("a writable /tmp emptyDir volume must be mounted for a read-only rootfs warm worker: %+v", pod.Spec.Volumes)
+	}
+	if vol.EmptyDir == nil {
+		t.Errorf("the /tmp volume must be an emptyDir, got %+v", vol.VolumeSource)
+	}
+
+	c := pod.Spec.Containers[0]
+	var mount *corev1.VolumeMount
+	for i := range c.VolumeMounts {
+		if c.VolumeMounts[i].Name == writableTmpVolumeName {
+			mount = &c.VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatalf("the /tmp emptyDir must be mounted into the container: %+v", c.VolumeMounts)
+	}
+	if mount.MountPath != writableTmpMountPath {
+		t.Errorf("/tmp mount path = %q, want %q", mount.MountPath, writableTmpMountPath)
+	}
+	if mount.ReadOnly {
+		t.Error("the /tmp mount must be writable, not read-only")
+	}
+
+	// The warm agent's scratch is created with os.MkdirTemp(""), which honors TMPDIR
+	// (falling back to /tmp). Point TMPDIR at the writable emptyDir so the scratch
+	// resolves onto it rather than onto the read-only rootfs.
+	if got := warmEnvMap(pod)["TMPDIR"]; got != writableTmpMountPath {
+		t.Errorf("TMPDIR = %q, want %q so the warm scratch resolves onto the writable emptyDir", got, writableTmpMountPath)
+	}
+}
+
+// TestBuildWarmPodNoWritableTmpWhenRootWritable keeps the default (writable
+// rootfs) warm pod byte-identical: the /tmp emptyDir and TMPDIR are the ro-rootfs
+// escape hatch only, so a default warm pod must not sprout either.
+func TestBuildWarmPodNoWritableTmpWhenRootWritable(t *testing.T) {
+	pod := BuildWarmPod(baseWarmSpec())
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == writableTmpVolumeName {
+			t.Errorf("no /tmp emptyDir must be mounted when the rootfs is writable: %+v", pod.Spec.Volumes)
+		}
+	}
+	if _, ok := warmEnvVar(pod, "TMPDIR"); ok {
+		t.Error("TMPDIR must not be set when the rootfs is writable")
+	}
+}

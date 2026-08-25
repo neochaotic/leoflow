@@ -132,3 +132,55 @@ func TestBuildPodHonorsReadOnlyRootFilesystemOptIn(t *testing.T) {
 		t.Error("ReadOnlyRootFilesystem opt-in was not honored")
 	}
 }
+
+// TestBuildPodMountsWritableTmpForReadOnlyRoot locks the task-pod half of the
+// issue #741 fix: a read-only root filesystem leaves an ordinary task with nowhere
+// writable at /tmp (pip cache, matplotlib config, scratch files), so the knob was
+// unusable. The restricted-profile pattern pairs the ro rootfs with a writable
+// emptyDir at /tmp.
+func TestBuildPodMountsWritableTmpForReadOnlyRoot(t *testing.T) {
+	req := sampleReq()
+	req.PodSecurity.ReadOnlyRootFilesystem = true
+	pod := BuildPod(req)
+
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == writableTmpVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatalf("a writable /tmp emptyDir volume must be mounted for a read-only rootfs task: %+v", pod.Spec.Volumes)
+	}
+	if vol.EmptyDir == nil {
+		t.Errorf("the /tmp volume must be an emptyDir, got %+v", vol.VolumeSource)
+	}
+
+	c := pod.Spec.Containers[0]
+	var mount *corev1.VolumeMount
+	for i := range c.VolumeMounts {
+		if c.VolumeMounts[i].Name == writableTmpVolumeName {
+			mount = &c.VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatalf("the /tmp emptyDir must be mounted into the task container: %+v", c.VolumeMounts)
+	}
+	if mount.MountPath != writableTmpMountPath {
+		t.Errorf("/tmp mount path = %q, want %q", mount.MountPath, writableTmpMountPath)
+	}
+	if mount.ReadOnly {
+		t.Error("the /tmp mount must be writable, not read-only")
+	}
+}
+
+// TestBuildPodNoWritableTmpWhenRootWritable keeps the default (writable rootfs)
+// task pod byte-identical: the /tmp emptyDir is the ro-rootfs escape hatch only.
+func TestBuildPodNoWritableTmpWhenRootWritable(t *testing.T) {
+	pod := BuildPod(sampleReq())
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == writableTmpVolumeName {
+			t.Errorf("no /tmp emptyDir must be mounted when the rootfs is writable: %+v", pod.Spec.Volumes)
+		}
+	}
+}

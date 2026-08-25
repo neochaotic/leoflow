@@ -66,3 +66,34 @@ tests:
           content:
             name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_MEMORY
             value: 256Mi
+
+  - it: no executor staging-default env when executor.defaults.staging is unset
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_STAGING_SIZE
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_STAGING_STORAGE_CLASS
+          any: true
+
+  - it: executor.defaults.staging renders size + storageClass default env vars (#743)
+    template: deployment.yaml
+    set:
+      executor.defaults.staging.size: 10Gi
+      executor.defaults.staging.storageClass: efs-rwx
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_STAGING_SIZE
+            value: 10Gi
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_EXECUTOR_DEFAULTS_STAGING_STORAGE_CLASS
+            value: efs-rwx

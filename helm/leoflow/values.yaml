@@ -93,6 +93,15 @@ executor:
       cpu: ""
       # -- Default memory request+limit (e.g. `256Mi`, `1Gi`). Empty = unset.
       memory: ""
+    # -- Default size + StorageClass for the per-run staging volume when the DAG
+    # enabled staging without pinning them (#743). Env-only override path: the
+    # chart mounts no server config file, so these render as LEOFLOW_* env. Empty
+    # leaves the PVC on the cluster's default StorageClass and an unset size.
+    staging:
+      # -- Default staging PVC size (e.g. `10Gi`). Empty = unset.
+      size: ""
+      # -- Default staging PVC StorageClass (e.g. the cluster's RWX class). Empty = cluster default.
+      storageClass: ""
 
 # -- Ports the leoflow-server listens on. http: API + UI, metrics: Prometheus
 # /metrics, grpc: agent ↔ control plane channel (task pods dial back here).

@@ -607,6 +607,12 @@ var serverDefaults = map[string]any{
 	"executor.task_secret_name":             "",
 	"executor.task_secret_mount_path":       "/etc/leoflow/secrets",
 	"executor.defaults.staging_access_mode": "ReadWriteMany",
+	// Registered so AutomaticEnv binds LEOFLOW_EXECUTOR_DEFAULTS_STAGING_SIZE /
+	// _STORAGE_CLASS (the env-only Helm override path, #743, same class as #725).
+	// Empty leaves the L0 default unset, so a staging PVC inherits the cluster's
+	// default StorageClass and no pinned size unless the operator configures one.
+	"executor.defaults.staging_size":          "",
+	"executor.defaults.staging_storage_class": "",
 	// Registered so AutomaticEnv binds LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU /
 	// _MEMORY (the env-only Helm override path, #725). Empty leaves the L0 default
 	// unset, so a task inherits no platform resource default unless the operator

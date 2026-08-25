@@ -112,6 +112,17 @@ spec:
             - name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_MEMORY
               value: {{ .ctx.Values.executor.defaults.resources.memory | quote }}
             {{- end }}
+            {{- if .ctx.Values.executor.defaults.staging.size }}
+            # L0 per-cluster staging-volume size default (ADR 0023). Env is the only
+            # override path since the chart ships no server config file (#743).
+            - name: LEOFLOW_EXECUTOR_DEFAULTS_STAGING_SIZE
+              value: {{ .ctx.Values.executor.defaults.staging.size | quote }}
+            {{- end }}
+            {{- if .ctx.Values.executor.defaults.staging.storageClass }}
+            # L0 per-cluster staging-volume StorageClass default (ADR 0023, #743).
+            - name: LEOFLOW_EXECUTOR_DEFAULTS_STAGING_STORAGE_CLASS
+              value: {{ .ctx.Values.executor.defaults.staging.storageClass | quote }}
+            {{- end }}
             - name: LEOFLOW_LOGS_DIR
               value: {{ .ctx.Values.config.logsDir | quote }}
             {{- if ne .ctx.Values.logs.sink.provider "disk" }}

@@ -125,6 +125,27 @@ func TestLoadServerBindsExecutorDefaultResources(t *testing.T) {
 	}
 }
 
+// TestLoadServerBindsExecutorDefaultStaging proves the L0 staging-volume defaults
+// bind from env. Consequence when unbound (#743, same class as #725): a Helm
+// install has no reachable route to set them — the chart mounts no server config
+// file, so the documented "config file / Helm values" path does not exist and the
+// env var was never registered — leaving the per-run staging PVC to fall back to
+// the cluster's default StorageClass and an unset size.
+func TestLoadServerBindsExecutorDefaultStaging(t *testing.T) {
+	t.Setenv("LEOFLOW_EXECUTOR_DEFAULTS_STAGING_SIZE", "10Gi")
+	t.Setenv("LEOFLOW_EXECUTOR_DEFAULTS_STAGING_STORAGE_CLASS", "efs-rwx")
+	c, err := LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if c.Executor.Defaults.StagingSize != "10Gi" {
+		t.Errorf("StagingSize = %q, want %q", c.Executor.Defaults.StagingSize, "10Gi")
+	}
+	if c.Executor.Defaults.StagingStorageClass != "efs-rwx" {
+		t.Errorf("StagingStorageClass = %q, want %q", c.Executor.Defaults.StagingStorageClass, "efs-rwx")
+	}
+}
+
 // TestLoadServerBindsRedisCAFile guards the same class for managed-Redis TLS:
 // the chart sets LEOFLOW_REDIS_CA_FILE when redis.caConfigMap is configured, so
 // it must bind or verified TLS to Memorystore/ElastiCache silently falls back to

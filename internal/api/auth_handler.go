@@ -4,11 +4,20 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/neochaotic/leoflow/internal/auth"
 )
+
+// TokenRenewer re-mints a still-valid user bearer with a fresh short TTL, bounded
+// by max_lifetime since first login. *auth.JWTAuthenticator implements it via
+// RenewUserToken; the handler depends on this narrow interface so the renew route
+// can be tested without a real signing key.
+type TokenRenewer interface {
+	RenewUserToken(token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error)
+}
 
 // breakGlass gates the credential path when the provider is OIDC (D8): only the
 // designated local admin email(s) may log in with a password; every other
@@ -108,6 +117,42 @@ func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSe
 			recordBreakGlass(c, bg, tenant, username, "success")
 		}
 		c.JSON(http.StatusOK, tokenResponse{AccessToken: token, TokenType: "bearer", ExpiresIn: ttlSeconds})
+	}
+}
+
+// renewTokenHandler re-mints the caller's still-valid user bearer into a fresh
+// access token, so a long CLI/dev session never has to `leoflow auth login` again
+// on the hour (EKS validation aresta #5). It is the server half of transparent
+// renewal: the short access-token TTL is unchanged (a stolen token still lapses
+// quickly), while max_lifetime bounds how long a session may keep renewing before
+// the user must re-authenticate.
+//
+// The route sits under the public /api/v2/auth/ prefix (like login/logout), so the
+// handler is self-gating: it re-mints ONLY from a cryptographically valid,
+// unexpired, correct-audience bearer (the renewer enforces all of that), and
+// answers 401 both when the token is invalid/expired and when it is past
+// max_lifetime, so the CLI falls back to login in either case. You cannot renew
+// without already holding a valid token. The response mirrors /auth/token so the
+// same client decoder handles both.
+func renewTokenHandler(renewer TokenRenewer, ttlSeconds, maxLifetimeSeconds int) gin.HandlerFunc {
+	ttl := time.Duration(ttlSeconds) * time.Second
+	maxLifetime := time.Duration(maxLifetimeSeconds) * time.Second
+	return func(c *gin.Context) {
+		token := bearerToken(c.GetHeader("Authorization"))
+		if token == "" {
+			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "missing bearer token")
+			return
+		}
+		renewed, ok, err := renewer.RenewUserToken(token, ttl, maxLifetime)
+		if err != nil {
+			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "token cannot be renewed; log in again")
+			return
+		}
+		if !ok {
+			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "session lifetime exceeded; log in again")
+			return
+		}
+		c.JSON(http.StatusOK, tokenResponse{AccessToken: renewed, TokenType: "bearer", ExpiresIn: ttlSeconds})
 	}
 }
 

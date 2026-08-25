@@ -49,7 +49,7 @@ described in [Operating modes](/concepts/editions/).
 ## 2. Set up for development
 
 ```bash
-cp docs/agent-templates/CLAUDE.md.template ./CLAUDE.md  # optional (Claude Code; gitignored)
+cp .github/CLAUDE.md.template ./CLAUDE.md  # optional (Claude Code; gitignored)
 
 make setup        # Go tools, Python parser/runtime, and the pre-commit hook
 make build        # bin/leoflow, bin/leoflow-server, bin/leoflow-agent

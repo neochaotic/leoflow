@@ -96,7 +96,7 @@ docker compose --profile demo up --build
 
 ```bash
 # Optional, for Claude Code users (the file is gitignored):
-cp docs/agent-templates/CLAUDE.md.template ./CLAUDE.md
+cp .github/CLAUDE.md.template ./CLAUDE.md
 
 make setup        # Go tools, Python parser/runtime, pre-commit hook
 make build        # build bin/leoflow, bin/leoflow-server, bin/leoflow-agent

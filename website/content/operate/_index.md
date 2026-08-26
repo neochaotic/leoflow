@@ -14,6 +14,8 @@ the day-2 operations that keep a control plane healthy.
 
 - **[Deploy your first Pro DAG](/operate/first-pro-dag/)** — take a DAG from Lite to
   a Kubernetes control plane.
+- **[Deploy prerequisites & why shortcuts fail](/operate/deploy-prerequisites/)** —
+  every gate a Pro deploy enforces, its exact error, and the fix.
 - **[CI/CD & deploy](/operate/cicd-deploy/)** — build, push, and register DAGs from
   CI (GitHub Actions, GitLab, Cloud Build).
 - **[Helm chart](/operate/helm-chart/)** — install and configure the Pro control

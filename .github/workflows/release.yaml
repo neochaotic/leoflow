@@ -136,7 +136,8 @@ jobs:
       # Mirror the supply-chain posture of leoflow-server: keyless cosign sign
       # every published tag by digest (ADR 0014). Without `--yes` cosign would
       # prompt for OIDC confirmation; CI passes the Sigstore challenge via the
-      # GH OIDC token from id-token: write.
+      # GH OIDC token from id-token: write. Signing goes through the retry
+      # wrapper so a transient OIDC blip (issue #773) retries instead of failing.
       - name: Sign image with cosign (keyless)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -144,7 +145,7 @@ jobs:
         run: |
           set -euo pipefail
           for tag in $TAGS; do
-            cosign sign --yes "${tag}@${DIGEST}"
+            ./scripts/cosign-retry.sh sign --yes "${tag}@${DIGEST}"
           done
 
   # ── Build + push the Leoflow task base image (runtime/Dockerfile)
@@ -223,7 +224,7 @@ jobs:
         run: |
           set -euo pipefail
           for tag in $TAGS; do
-            cosign sign --yes "${tag}@${DIGEST}"
+            ./scripts/cosign-retry.sh sign --yes "${tag}@${DIGEST}"
           done
 
   # ── Faithful install smoke: run the REAL `curl | sh` of the just-published
@@ -365,6 +366,48 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: sh test/release/upgrade-smoke.sh
 
+  # ── Verify the control-plane server image is cosign-signed (#772). GoReleaser
+  # signs it keyless in the `release` job via docker_signs; this job proves the
+  # signature is actually there and verifiable, so an unsigned image — or one
+  # whose signing silently flaked past the retry wrapper — cannot ship. The
+  # `gate` job below retracts the release to a draft if this fails.
+  #
+  # Keyless verification pins BOTH the OIDC issuer (GitHub's token provider) and
+  # the certificate identity (the exact workflow file + tag ref that signed),
+  # otherwise `cosign verify` would accept a signature from any Sigstore identity.
+  # Verifying the `:v<tag>` manifest is sufficient: it and the un-prefixed
+  # `:<version>` manifest resolve to the same digest, and both were signed.
+  verify-server-signature:
+    name: Verify leoflow-server image signature
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.4.3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cosign verify leoflow-server
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/leoflow-server:${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github\.com/${REPO}/\.github/workflows/release\.yaml@refs/tags/" \
+            "${IMAGE}"
+
   # ── Release gate: if any of the smoke jobs OR the migrate-image build
   # failed, retract the pre-release to a draft so `curl | sh` (which resolves
   # the newest public release) and the Helm chart (which references the
@@ -372,8 +415,8 @@ jobs:
   # it can act on any failure; on success it leaves the published pre-release
   # untouched.
   gate:
-    name: Gate release on install + lite-cold-start + upgrade + migrate + runtime image
-    needs: [release, install-smoke, lite-cold-start-smoke, upgrade-smoke, migrate-image, runtime-image]
+    name: Gate release on install + lite-cold-start + upgrade + migrate + runtime image + server signature
+    needs: [release, install-smoke, lite-cold-start-smoke, upgrade-smoke, migrate-image, runtime-image, verify-server-signature]
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -381,14 +424,14 @@ jobs:
       contents: write   # Edit the published release back to a draft on failure.
     steps:
       - name: Retract release to draft on smoke or image failure
-        if: needs.install-smoke.result != 'success' || needs.lite-cold-start-smoke.result != 'success' || needs.upgrade-smoke.result != 'success' || needs.migrate-image.result != 'success' || needs.runtime-image.result != 'success'
+        if: needs.install-smoke.result != 'success' || needs.lite-cold-start-smoke.result != 'success' || needs.upgrade-smoke.result != 'success' || needs.migrate-image.result != 'success' || needs.runtime-image.result != 'success' || needs.verify-server-signature.result != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} upgrade-smoke=${{ needs.upgrade-smoke.result }} migrate-image=${{ needs.migrate-image.result }} runtime-image=${{ needs.runtime-image.result }}; retracting ${GITHUB_REF_NAME} to a draft."
+          echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} upgrade-smoke=${{ needs.upgrade-smoke.result }} migrate-image=${{ needs.migrate-image.result }} runtime-image=${{ needs.runtime-image.result }} verify-server-signature=${{ needs.verify-server-signature.result }}; retracting ${GITHUB_REF_NAME} to a draft."
           gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft
           exit 1
       - name: Confirm release passed all gates
-        if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.upgrade-smoke.result == 'success' && needs.migrate-image.result == 'success' && needs.runtime-image.result == 'success'
-        run: echo "install smoke + lite cold-start + upgrade smoke + migrate-image + runtime-image passed; ${GITHUB_REF_NAME} stays published."
+        if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.upgrade-smoke.result == 'success' && needs.migrate-image.result == 'success' && needs.runtime-image.result == 'success' && needs.verify-server-signature.result == 'success'
+        run: echo "install smoke + lite cold-start + upgrade smoke + migrate-image + runtime-image + server-signature passed; ${GITHUB_REF_NAME} stays published."

@@ -6,6 +6,34 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`leoflow runs logs <dag> <run> <task> [--try N] [-f]` (#768).** Read a task
+  attempt's logs from the CLI — it streams the existing task-instance logs endpoint
+  (the same logs the UI shows), so a failed task's output is reachable without the
+  UI. `--try` defaults to the latest attempt; `-f` follows a running task.
+
+### Fixed
+
+- **`leoflow deploy --build` now works for a pure-dbt DAG (#769).** The synthesized
+  Dockerfile assumed a `dag.py` and failed the build (`COPY dag.py`) for a dbt-only
+  project; it now copies the dbt project (and its baked manifest) instead. A DAG
+  shipping its own Dockerfile is unaffected.
+- **A task refused for running as root now says so (#766).** A `CreateContainerConfigError`
+  from the non-root admission (`runAsNonRoot`) previously left the task polling and
+  its `failure_reason` generic; it now settles `failed` and names the cause + the
+  fix (end the image with a numeric `USER 65532`, or set `taskPodSecurity.runAsNonRoot=false`).
+
+### Security
+
+- **The `leoflow-server` control-plane image is now cosign-signed (#772),** closing
+  the one published image that was unsigned (migrate + runtime already were). A
+  release-gate step verifies the server signature and drafts the release if it is
+  missing.
+- **Release image signing retries transient OIDC flakes (#773).** Every `cosign sign`
+  now retries with backoff, so a momentary Sigstore/OIDC blip no longer drafts an
+  otherwise-good release.
+
 ## [0.4.0] - 2026-08-26
 
 > Leoflow's biggest release to date. The headline work: **warm worker pools**

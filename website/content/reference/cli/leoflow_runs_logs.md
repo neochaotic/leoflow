@@ -1,25 +1,27 @@
 ---
 # --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
 aliases:
-  - /cli/leoflow_runs_trigger.html
+  - /cli/leoflow_runs_logs.html
 # --- end AUTO redirect aliases ---
-title: "leoflow runs trigger"
-linkTitle: "runs trigger"
-weight: 41
+title: "leoflow runs logs"
+linkTitle: "runs logs"
+weight: 39
 ---
 
-Trigger a new run of a DAG.
+Stream a task attempt's logs (the latest attempt by default).
 
 ```
-leoflow runs trigger <dag_id> [flags]
+leoflow runs logs <dag_id> <run_id> <task_id> [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help            help for trigger
+  -f, --follow          keep streaming new log lines while the task is still running
+  -h, --help            help for logs
       --server string   control plane base URL (default: config server_url)
       --token string    JWT bearer token (default: config token)
+      --try int         attempt number to read (default: the task's latest attempt)
 ```
 
 ### Options inherited from parent commands

@@ -9,7 +9,17 @@ weight: 410
 description: "ADR 0041: `leoflow deploy` — pipeline-less promotion from Lite to Pro"
 ---
 
-**Status:** Accepted — implementation in progress (branch `feat/deploy`, PR #367); target **v0.0.2-rc.2**, independent of the held v0.1.0 connectors epic
+**Status:** Accepted — **shipped**. `leoflow deploy`/`push` is implemented
+(`internal/cli/deploy.go`), end-to-end tested (`test/e2e/deploy-e2e.sh`), and
+was the registration path used in the v0.4.0-rc.4 EKS validation. The registry
+requirement, digest-pinning, `--platform` cross-build default, and the
+[Cluster wiring](#cluster-wiring-helm--required-for-the-deploy-path-to-actually-pull)
+Helm changes below are all live. The rc.2-era markers left in the sections
+below ("target v0.0.2-rc.2", the `feat/deploy` branch-sync note) are the
+historical record of the branch this shipped on, not open work; whether the
+**Tier 2** (Dockerfile-free, yaml-driven build) happy path described under
+"Two-tier happy path" is the current default is tracked in the DAG-authoring
+docs, not restated here.
 **Date:** 2026-06-04
 **Companions:** ADR 0003 (DAG as immutable artifact), ADR 0019 (secret encryption), ADR 0021 (AIRFLOW_CONN delivery), the editions split (Lite/Pro)
 
@@ -118,7 +128,8 @@ is what keeps that option open.
 - **Confirmation** when interactive and the server is non-loopback (a real Pro):
   `Deploy <dag> → <server>? [y/N]`. `--yes` skips it (CI/automation).
 - **Rebuilds** the image by default (simple, deterministic); `--skip-build`
-  re-uses an already-built image (promote without rebuild).
+  reuses an already-built image (skips docker build/push) but still recompiles
+  `dag.json` from `leoflow.yaml`/`dag.py` — the spec is always refreshed.
 - **Pins by digest:** the push captures the image digest and writes
   `registry/img@sha256:…` into `dag.json` — Pro pulls **exactly** the bytes that
   were built; there is no `:latest` lookup. The first deploy *registers* the

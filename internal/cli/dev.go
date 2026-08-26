@@ -1034,23 +1034,117 @@ func venvPython(home string) string {
 	return filepath.Join(home, "venv", "bin", "python")
 }
 
+// minPythonMinor is the lowest Python 3.x the task runtime + Airflow SDK
+// support; the managed relocatable CPython is pinned to this minor.
+const minPythonMinor = 11
+
 // devBasePython returns the interpreter used to CREATE a dev venv: the managed
 // relocatable CPython 3.11 (installed by `leoflow setup` under ~/.leoflow/python)
 // when present, since it bundles venv + ensurepip. It falls back to a python3.11
-// / python3 on PATH. Using the managed interpreter avoids needing the system
-// python3-venv package, which Debian/Ubuntu split out (the common first-run
-// failure: "ensurepip is not available").
-func devBasePython(home string) string {
+// / python3 on PATH that reports >= 3.11. Using the managed interpreter avoids
+// needing the system python3-venv package, which Debian/Ubuntu split out (the
+// common first-run failure: "ensurepip is not available").
+//
+// It errors when an interpreter IS present but reports an unsupported version,
+// or when none is found at all — a venv cannot be built without a base — rather
+// than returning a bare "python3" that fails opaquely later (#742).
+func devBasePython(ctx context.Context, home string) (string, error) {
 	managed := filepath.Join(filepath.Dir(home), "python", "bin", "python3.11")
-	if _, err := os.Stat(managed); err == nil {
-		return managed
+	p, err := resolvePython3(ctx, managed, exec.LookPath, pythonVersion)
+	if err != nil {
+		return "", err
 	}
-	for _, name := range []string{"python3.11", "python3"} {
-		if p, lerr := exec.LookPath(name); lerr == nil {
-			return p
+	if p == "" {
+		return "", fmt.Errorf("no Python interpreter found; run `leoflow setup` to provision a managed CPython 3.%d", minPythonMinor)
+	}
+	return p, nil
+}
+
+// leoflowManagedPython returns the path to the managed relocatable CPython that
+// `leoflow setup` installs under ~/.leoflow/python, or "" if the home directory
+// cannot be resolved.
+func leoflowManagedPython() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(h, ".leoflow", "python", "bin", "python3.11")
+}
+
+// resolvePython3 returns a usable Python >= 3.11 with a single, unified
+// precedence shared by `leoflow dev` and `leoflow validate` (#742):
+//
+//   - the managed pinned build (when present) wins — it is the checksum-verified
+//     CPython `leoflow setup` provisioned at exactly the pinned version, so it is
+//     trusted without being re-executed;
+//   - otherwise the first host python3.11/python3 that reports >= 3.11 is used;
+//   - a host interpreter that IS present but reports an unsupported version is
+//     rejected with an actionable `leoflow setup` hint, so a half-provisioned
+//     host never silently runs an unsupported interpreter that fails later at an
+//     unrelated component;
+//   - when no interpreter exists at all, it returns ("", nil) and lets the
+//     caller decide whether that is fatal.
+//
+// managed is the managed interpreter path (may be ""); lookPath and runVersion
+// are injectable for tests.
+func resolvePython3(ctx context.Context, managed string, lookPath func(string) (string, error), runVersion func(context.Context, string) (int, int, error)) (string, error) {
+	if managed != "" {
+		if _, err := os.Stat(managed); err == nil {
+			return managed, nil
 		}
 	}
-	return "python3"
+	sawUnsupported := false
+	for _, name := range []string{"python3.11", "python3"} {
+		p, err := lookPath(name)
+		if err != nil {
+			continue
+		}
+		major, minor, verr := runVersion(ctx, p)
+		if verr != nil {
+			continue // cannot determine version; try the next candidate
+		}
+		if major > 3 || (major == 3 && minor >= minPythonMinor) {
+			return p, nil
+		}
+		sawUnsupported = true
+	}
+	if sawUnsupported {
+		return "", fmt.Errorf("found a Python interpreter but it is older than 3.%d; run `leoflow setup` to provision a managed CPython", minPythonMinor)
+	}
+	return "", nil
+}
+
+// pythonVersion runs `<py> --version` and returns the reported major.minor.
+func pythonVersion(ctx context.Context, py string) (major, minor int, err error) {
+	out, err := exec.CommandContext(ctx, py, "--version").CombinedOutput() //nolint:gosec // py is a resolved interpreter path (managed or LookPath result)
+	if err != nil {
+		return 0, 0, fmt.Errorf("running %s --version: %w", py, err)
+	}
+	return parsePythonVersion(string(out))
+}
+
+// parsePythonVersion extracts the major and minor from a `python --version` line
+// such as "Python 3.11.15" (the version token may carry a patch and a pre-release
+// suffix, e.g. "3.12.0rc1").
+func parsePythonVersion(s string) (major, minor int, err error) {
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		return 0, 0, fmt.Errorf("unrecognized python version output %q", strings.TrimSpace(s))
+	}
+	ver := fields[len(fields)-1] // "3.11.15"
+	parts := strings.SplitN(ver, ".", 3)
+	if len(parts) < 2 {
+		return 0, 0, fmt.Errorf("unrecognized python version %q", ver)
+	}
+	major, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("parsing python major from %q: %w", ver, err)
+	}
+	minor, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("parsing python minor from %q: %w", ver, err)
+	}
+	return major, minor, nil
 }
 
 // resolveRuntimeSrc returns the leoflow_runtime package source to pip-install

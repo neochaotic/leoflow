@@ -78,6 +78,31 @@ taskPodSecurity:
   # -- Mount every task container's root filesystem read-only. Off by default deliberately: `restricted` does not require it, and it breaks ordinary Python tasks that write to `/tmp`, the pip cache, or a matplotlib config dir. Turn it on for a fleet of tasks known to write only to their mounted volumes.
   readOnlyRootFilesystem: false
 
+# Lowest-precedence (L0) per-cluster task defaults (ADR 0023). Applied at dispatch
+# only where a task/DAG left the value empty; a DAG that pins its own resources
+# always wins, keeping the dag.json artifact portable across clusters.
+executor:
+  defaults:
+    # -- Default CPU/memory for a task that declares none of its own. When set, the
+    # control plane applies the value as BOTH the request and the limit, so the task
+    # lands in Guaranteed QoS (least likely to be throttled/evicted under node
+    # pressure). Empty (default) leaves tasks with no platform resource floor, i.e.
+    # BestEffort QoS unless the DAG sets its own (#725). Kubernetes quantities.
+    resources:
+      # -- Default CPU request+limit (e.g. `250m`, `1`). Empty = unset.
+      cpu: ""
+      # -- Default memory request+limit (e.g. `256Mi`, `1Gi`). Empty = unset.
+      memory: ""
+    # -- Default size + StorageClass for the per-run staging volume when the DAG
+    # enabled staging without pinning them (#743). Env-only override path: the
+    # chart mounts no server config file, so these render as LEOFLOW_* env. Empty
+    # leaves the PVC on the cluster's default StorageClass and an unset size.
+    staging:
+      # -- Default staging PVC size (e.g. `10Gi`). Empty = unset.
+      size: ""
+      # -- Default staging PVC StorageClass (e.g. the cluster's RWX class). Empty = cluster default.
+      storageClass: ""
+
 # -- Ports the leoflow-server listens on. http: API + UI, metrics: Prometheus
 # /metrics, grpc: agent ↔ control plane channel (task pods dial back here).
 ports:
@@ -104,6 +129,8 @@ config:
     # -- CORS allowed origins for the API. `["*"]` is fine for Pro behind an authenticated ingress; tighten for public-facing deploys.
     allowedOrigins:
       - "*"
+  # -- Proxy IPs/CIDRs whose `X-Forwarded-For` the server honors when resolving the client IP (`server.trusted_proxies`). Empty (default) trusts NO proxy, so a spoofed XFF cannot forge the client IP. Behind an ingress this MUST be set to the ingress/pod CIDR, otherwise every request is attributed to the ingress IP and the per-IP login rate-limit locks out the whole deployment on a few bad logins (#725). Rendered as a comma-joined `LEOFLOW_SERVER_TRUSTED_PROXIES` env var, which viper splits into a list.
+  trustedProxies: []
   # -- gRPC address task pods dial back to reach the control plane. Defaults to the in-cluster Service DNS on `ports.grpc` when empty. Override for cross-cluster or external task pods.
   agentControlPlaneAddr: ""
 

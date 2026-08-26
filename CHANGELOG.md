@@ -8,6 +8,177 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`leoflow runs logs <dag> <run> <task> [--try N] [-f]` (#768).** Read a task
+  attempt's logs from the CLI — it streams the existing task-instance logs endpoint
+  (the same logs the UI shows), so a failed task's output is reachable without the
+  UI. `--try` defaults to the latest attempt; `-f` follows a running task.
+
+### Fixed
+
+- **`leoflow deploy --build` now works for a pure-dbt DAG (#769).** The synthesized
+  Dockerfile assumed a `dag.py` and failed the build (`COPY dag.py`) for a dbt-only
+  project; it now copies the dbt project (and its baked manifest) instead. A DAG
+  shipping its own Dockerfile is unaffected.
+- **A task refused for running as root now says so (#766).** A `CreateContainerConfigError`
+  from the non-root admission (`runAsNonRoot`) previously left the task polling and
+  its `failure_reason` generic; it now settles `failed` and names the cause + the
+  fix (end the image with a numeric `USER 65532`, or set `taskPodSecurity.runAsNonRoot=false`).
+
+### Security
+
+- **The `leoflow-server` control-plane image is now cosign-signed (#772),** closing
+  the one published image that was unsigned (migrate + runtime already were). A
+  release-gate step verifies the server signature and drafts the release if it is
+  missing.
+- **Release image signing retries transient OIDC flakes (#773).** Every `cosign sign`
+  now retries with backoff, so a momentary Sigstore/OIDC blip no longer drafts an
+  otherwise-good release.
+
+## [0.4.0] - 2026-08-26
+
+> Leoflow's biggest release to date. The headline work: **warm worker pools**
+> (N:1 pod reuse across attempts, ADR 0058), first-class support for a
+> **shared, multi-team Kubernetes cluster** (named task pools, per-DAG
+> admission, a shared-informer read path, full placement/DRA passthrough, and
+> quota/APF backpressure that no longer burns a task's retry budget — ADR
+> 0053/0054), **RBAC + OIDC/SSO** with fail-closed tenant pinning, **per-task
+> secret scoping and short-lived agent credentials** (the mechanism ADR 0045
+> left unshipped, ADR 0055), a **durable task-outcome** model that stops
+> pod-death-mid-report from reading as a false failure (ADR 0051/0052), and a
+> native **S3/GCS object log sink** (ADR 0056). Below that sits the rc.1→rc.4
+> hardening batch (Helm-reachability fixes, diagnostics, CLI polish).
+
+### Added
+
+#### Warm worker pools — N:1 pod reuse across attempts (ADR 0058)
+
+- **A task pod can now be reused across attempts instead of spawned fresh for
+  every one.** A warm worker's agent runs in a long-lived fork-per-attempt
+  mode (#676) over a dedicated gRPC assignment transport with ack/lease
+  semantics (#673), wired into scheduler dispatch (#675). Off by default —
+  `execution.warm_pools_enabled` defaults to `false`, a byte-for-byte no-op —
+  and the control plane **fails closed at boot** if it is turned on without
+  the ADR 0058 D2 security prerequisites already in force: the projected-SA
+  token-exchange transport and enforce-mode secret liveness (#671).
+- **Pool lifecycle.** A min-idle reconciler provisions warm pods and never
+  deletes a busy worker (#677, busy-aware fix #681, terminal-pod-skip fix
+  #678); each attempt gets a durable attempt→worker binding persisted on ack
+  (#679), backed by a failover reaper and double-run guard so two agents can
+  never claim the same binding (#680); an idle-slot reclaim path unstrands a
+  worker and fast-re-places its next attempt (#682); and every warm worker
+  enforces its own lifecycle — max attempts, max lifetime, an idle TTL, a
+  drain path, and an attempt watchdog (#683).
+- **Guardrails.** A per-tenant aggregate cap on warm pods, reserved and
+  rationed rather than first-come (#686); a per-DAG-version ConfigMap
+  GC-anchor so a warm pod can't outlive the DAG version it was spawned for
+  (#687); and a worker-scoped bootstrap token exchange so a warm pod never
+  holds a long-lived plaintext credential across the attempts it serves
+  (#689).
+- **Reachable from the Helm chart, with the same fail-closed guard the server
+  enforces (#695)** — see the full entry below.
+
+#### Shared-cluster / multi-team Kubernetes (ADR 0053, ADR 0054)
+
+- **Leoflow can now share a cluster without starving its neighbors or letting
+  them starve it.** A per-DAG `max_active_tasks` admission gate caps how many
+  of one DAG's tasks may be queued/running at once (#632), and named,
+  cross-DAG task pools (Pro-only) add a second, budget-based admission gate on
+  top of it (#642) — replacing the long-standing `/api/v2/pools` stub. A
+  shared pod informer replaces the reapers' per-second `LIST` storm and the
+  reconciler's 30-second `LIST` with one long-lived watch (#634).
+- **Placement and scheduling passthrough.** Declared tolerations (#621) and
+  the rest of the placement surface — `priorityClassName`,
+  `terminationGracePeriodSeconds`, `runtimeClassName`, topology-spread
+  constraints, affinity, DRA resource claims, ephemeral-storage, and custom
+  labels/annotations (#630) — now actually reach the pod spec instead of
+  being accepted at push and silently dropped.
+- **Quota/APF backpressure is no longer billed to the task's retry budget.** A
+  `ResourceQuota` 403 or an API Priority & Fairness 429 on pod create now
+  retries forever without incrementing `dispatch_attempts`, so a fan-out under
+  a tight quota self-throttles instead of producing a wave of false
+  `dispatch_failed` terminal states (#631).
+
+#### Identity & access
+
+- **RBAC foundation.** A seeded viewer/editor/operator role ladder, with roles
+  and permissions reloaded from the store on every token verify — so a
+  deactivated or deleted user loses access immediately, not at token TTL —
+  and nav menus filtered to what the caller can actually do (#654).
+- **OIDC/SSO with fail-closed tenant pinning (ADR 0057), Pro-gated.**
+  Authorization Code + PKCE against an external IdP (Entra ID / Google Cloud
+  Identity / Okta and any standard OIDC provider), JIT-provisioned users, and
+  every login reconciling the user's roles to the IdP-mapped set — a pin
+  failure is a 403, never a default-identity fallback (#656).
+- **User management.** `POST /api/v2/users` to create an account and
+  `GET /api/v2/users` to list them, admin-gated (#627, #649); `leoflow admin
+  users list` (#651); and a new `leoflow admin` operator CLI —
+  `health`/`dags pause`/`drain`/`runs list` — for operating a running Pro
+  control plane over the typed client (#635).
+
+#### Secret scoping & agent credentials (ADR 0055 — the ADR 0045 follow-up)
+
+- **The mechanism to stop every task from receiving the whole tenant vault.**
+  ADR 0045 was accepted but never shipped; this is that code. A declared-secret
+  schema lets a DAG or task name the variables/connections it actually needs
+  (#660), narrowing is enforced by a scope-by-policy gate paired with a
+  task-liveness check that stops a superseded or finished attempt's still-valid
+  token from resolving secrets (#663), and a task that is narrowly declared but
+  would still receive the full vault now gets a warning (#661). **Ships in
+  observe/permissive mode by default — nothing is denied yet** until an
+  operator flips it to enforce. Agent credentials also got shorter-lived:
+  a per-attempt token is now renewed on every heartbeat instead of living for
+  the whole attempt (#665), and a projected-ServiceAccount token-exchange
+  transport replaces the plaintext-env-var credential, flag-gated off (#667).
+
+#### Durable execution (ADR 0051, ADR 0052)
+
+- **A task's true outcome is no longer conflated with whether its report
+  survived.** If a pod dies mid-report (OOM, eviction) after the task itself
+  succeeded, the reconciler can now recover that success from a durable
+  outcome record instead of settling it as a failure (#615). Infra faults —
+  a lost agent, pod, or dispatch — now re-place the task without consuming
+  its own retry budget, bounded instead by a separate infra-attempt limit, so
+  an exhausted infra budget with retries remaining still finalizes rather
+  than hanging (#614). The four backstop reapers and the pod lifecycle moved
+  behind a dedicated execution seam ahead of warm pools, with no behavior
+  change (#669, #670).
+
+#### Object log sink (ADR 0056)
+
+- **Task logs can now be written straight to S3 or GCS instead of an
+  in-cluster PVC.** A native dual-SDK backend (`aws-sdk-go-v2` for S3/MinIO,
+  the native `cloud.google.com/go/storage` client for GCS — not the S3
+  interop endpoint, which cannot use Workload Identity) is keyless-first via
+  IRSA or GKE Workload Identity. Off by default; the on-disk sink is
+  unchanged for every deployment that does not opt in (#640).
+
+#### Deploy & MCP
+
+- **`helm install` no longer requires cert-manager just to turn on agent
+  TLS.** The chart now auto-generates a stable self-signed CA and gRPC server
+  cert by default (`agentTLS.autoGenerate`), reusing the same CA across `helm
+  upgrade` so it never silently rotates and breaks running agents; bring-your-
+  own/cert-manager remains the opt-in production path (#690, #692).
+  - The Helm chart is now published as a signed OCI artifact on every release
+    and RC tag (`oci://ghcr.io/neochaotic/charts/leoflow`) (#691).
+- **MCP `search_logs` can search a whole run, not just one known task.**
+  `task_id` is now optional — when omitted, the tool enumerates the run's
+  task instances and searches each one, tagging every match with the
+  `task_id`/`try_number` it came from (#612).
+
+#### Diagnostics & CLI
+
+- **Transparent CLI token renewal — no more hourly re-login (#755).** The CLI now
+  silently refreshes a file-persisted session token once it passes the halfway
+  point of its life (rewriting `~/.leoflow/config.yaml`), so long sessions no
+  longer hit `401 missing bearer token` every hour. Backed by a new
+  `POST /api/v2/auth/token/renew` that re-mints the same identity with a fresh
+  short TTL, bounded by `auth.jwt.max_lifetime_seconds` (default 24h). The
+  access-token TTL is unchanged and revocation is still enforced per request, so a
+  renewed token dies the moment its user is deactivated.
+- **`leoflow runs list` (#747).** The common `runs` verb now lists DAG runs
+  (`--state`/`--dag`/`--older-than`) alongside `trigger` and `status`, reusing the
+  same lister as `leoflow admin runs list`.
 - **A failed task now says why, even when it produced no logs (#698).** When a
   task pod died before its agent ever registered with the control plane — bad
   RBAC, a TLS trust failure, a network policy, image-pull auth, or an OOM at
@@ -58,6 +229,105 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Duplicate `dag_version` push returns 409, not a raw 500 (#746).** Pushing a
+  version that already exists with different content (the common
+  `tag_strategy: version`→`dev` dev loop) collided on the unique constraint and
+  surfaced `500 internal error` leaking the Postgres SQLSTATE/constraint name. It
+  now returns **409 Conflict** with no internal details; an identical re-push is
+  still an idempotent no-op.
+- **`leoflow.yaml` `defaults.resources` and `defaults.node_selector` now apply to
+  tasks.** Both were accepted by the schema but silently dropped, so DAG-wide
+  resource/placement defaults never reached the pod (and a DAG relying on
+  `defaults.resources` for Guaranteed QoS silently got BestEffort). They are now
+  applied as a per-task fallback at compile time (a task's own settings still
+  win), and unknown keys in the `defaults` block now fail loudly at compile
+  instead of being ignored.
+- **`read_only_task_root_filesystem` no longer prevents a pod from starting
+  (#741).** The hardening flag left no writable `/tmp`, so a read-only-rootfs task
+  — and especially a warm worker, which died before registering — could not run. A
+  writable `emptyDir` is now mounted at `/tmp` on task and warm pods whenever the
+  flag is set (default pods are unchanged), making the mitigation the warm-pool
+  docs recommend actually usable.
+- **Managed CPython is version-checked and never silently falls back to an
+  unsupported interpreter (#742).** `leoflow` re-installs the managed interpreter
+  when its pinned version changes (via a `.py-version` sentinel, like managed
+  Postgres), prefers the checksum-verified build over a host `python3.11`, and
+  rejects an unsupported interpreter with a "run `leoflow setup`" hint instead of
+  proceeding on system `python3`. Archive extraction is hardened against
+  interrupted and cross-version upgrades.
+- **`executor.defaults.staging_size` and `executor.defaults.staging_storage_class`
+  are now reachable in a Helm install (#743).** Like the earlier
+  `trusted_proxies`/resource-defaults fix, these keys were absent from the config
+  defaults so their `LEOFLOW_*` env vars never bound; they are now registered and
+  exposed as chart values.
+- **The chart version is gated against the release tag, and the chart is published
+  to OCI (#748).** A pre-tag check fails the release when `Chart.yaml`
+  `version`/`appVersion` lags the tag (which made a default `helm install` pull the
+  previous release's images); the OCI chart publish
+  (`oci://ghcr.io/neochaotic/charts/leoflow`) is now gated behind that check and
+  documented.
+- **Docs tooling cleaned up after the Hugo migration (#744).** The `ci-local`
+  docs gate now runs `hugo --gc --minify` instead of the removed MkDocs build,
+  `CONTRIBUTING` points at a template that exists again, and the CI path filters
+  account for `website/`.
+- **Secret-scope audit events are now recorded (#722).** `RecordSecretScopeWarning`
+  and `RecordSecretLivenessDenial` resolved the tenant argument by name, but the
+  agent RPC path calls them with the tenant **UUID** carried by the agent token —
+  so every ADR 0055 audit row failed silently with `resource not found`, including
+  the enforce-mode `secret.liveness_denied` security record. Both now resolve by
+  id, so the observe-mode readiness trail and the enforce-mode denials are
+  actually persisted rather than existing only as log lines.
+- **A retried task instance no longer wedges in `queued`/`running` (#723).** The
+  reaper liveness check (`TaskPodActive` and its cache fast-path `CachedPodActive`)
+  matched a pod by `(run, task)` only, so a lingering earlier-attempt pod made the
+  dispatch-lost and pod-lost reapers defer forever once a retry bumped
+  `try_number`. Both checks now pin `leoflow.io/try-number`, asking liveness about
+  the attempt being failed rather than any pod for the task.
+- **`server.trusted_proxies` and `executor.defaults.resources_*` are now
+  reachable from a Helm install (#725).** These keys were absent from
+  `serverDefaults`, and viper's `AutomaticEnv` only binds an env var for a key it
+  has seen via `SetDefault` — so `LEOFLOW_SERVER_TRUSTED_PROXIES` and
+  `LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU`/`_MEMORY` were silently dropped. The
+  chart ships no server config file, so env is the only override path, which left
+  two production defaults unconfigurable: with trusted proxies unset the login
+  rate-limiter keyed every request on the ingress IP, so a handful of bad logins
+  locked out the whole deployment; and with the resource defaults unset a task
+  that relied on them ran BestEffort (first evicted under node pressure). The
+  keys are now registered (`redis.ca_file` was missing from the same map and is
+  fixed too), `trusted_proxies` binds from a comma-separated env var (viper
+  splits it into a list), and the L0 resource default now sets **both** requests
+  and limits so such tasks reach Guaranteed QoS. The chart exposes
+  `config.trustedProxies` and `executor.defaults.resources`.
+- **The api role no longer receives the gRPC TLS private key in split mode
+  (#726).** The `grpc-tls` volume was gated only on `agentTLS.enabled`, so the
+  internet-facing api Deployment mounted the whole cert Secret — including
+  `tls.key` — although only the scheduler serves the agent gRPC listener. The
+  volume and mount are now scoped to the scheduler role (the TLS env vars stay on
+  both roles so the Pro boot guard still passes), keeping the private key off the
+  api pod (ADR 0049).
+- **Warm-pool attempts now get a fresh `TMPDIR` (#728).** A warm worker reused one
+  pod across attempts but never redirected `TMPDIR`, so anything a task wrote under
+  `/tmp` (a dbt profile, a cached credential) persisted to the next attempt on the
+  same worker — a filesystem channel around the per-task secret scoping. Each
+  attempt now gets a `TMPDIR` inside the per-attempt scratch that is wiped between
+  runs; the warm-pools doc is corrected to state the actual isolation guarantee
+  (image-level paths and `$HOME` still persist — use `read_only_task_root_filesystem`).
+- **Repository validation errors now return 400, not 500 (#724).** A DAG version
+  declaring an unknown variable or connection produced `500 internal error`
+  (reading as a server fault) because `handleRepoError` had no
+  `domain.ErrValidation` branch. It now maps validation errors to `400 invalid
+  request`, so the actionable message points the user at `leoflow connections set`
+  instead of the server logs.
+- **The migration Job no longer mounts an unused ServiceAccount token (#727).** The
+  Job talks only to Postgres but received the namespace default SA's projected
+  token; it now sets `automountServiceAccountToken: false`, matching the task-pod
+  path.
+- **`leoflow lite --postgres managed` is now idempotent across upgrades (#729).**
+  Re-extracting the managed Postgres bundle failed with `file exists` because
+  symlink extraction was not idempotent; it now removes an existing target before
+  creating the link. The managed-Postgres guard is also version-aware (keyed on the
+  bundled Postgres version), so a newer bundle is re-installed on upgrade instead
+  of silently keeping the old one.
 - **Chart RBAC now grants the `tokenreviews` permission the token-exchange
   transport requires (#696).** With `auth.agentTokenTransport=exchange` the
   control plane validates a task pod's projected ServiceAccount token via the

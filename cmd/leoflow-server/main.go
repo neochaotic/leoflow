@@ -519,6 +519,8 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		CORSOrigins:                  cfg.Server.CORS.AllowedOrigins,
 		TrustedProxies:               cfg.Server.TrustedProxies,
 		TokenTTLSecs:                 cfg.Auth.JWT.TokenTTLSeconds,
+		TokenRenewer:                 authn,
+		TokenMaxLifetimeSecs:         cfg.Auth.JWT.MaxLifetimeSeconds,
 		InstanceName:                 cfg.UI.InstanceName,
 		UIAutoRefreshIntervalSeconds: cfg.UI.AutoRefreshIntervalSeconds,
 		DevNoAuth:                    cfg.Auth.DevNoAuth,
@@ -1483,7 +1485,9 @@ func wrapBuffered(inner dispatch.Inner, sink dispatch.FailureSink, logger *slog.
 
 // platformDefaults maps the executor.defaults config (L0 task defaults, ADR
 // 0023) into the dispatcher's PlatformDefaults. Resources are set only when a
-// quantity is configured, so an unset section leaves req.Resources untouched.
+// quantity is configured, so an unset section leaves req.Resources untouched;
+// when set, both requests and limits are populated so the default lands the task
+// in Guaranteed QoS.
 func platformDefaults(c config.PlatformDefaultsSection) dispatch.PlatformDefaults {
 	d := dispatch.PlatformDefaults{
 		StagingSize:         c.StagingSize,
@@ -1495,8 +1499,15 @@ func platformDefaults(c config.PlatformDefaultsSection) dispatch.PlatformDefault
 		},
 	}
 	if c.ResourcesCPU != "" || c.ResourcesMemory != "" {
+		// Set requests AND limits to the same quantity so a task that relies on the
+		// platform default reaches Guaranteed QoS (requests == limits). Requests
+		// alone yields Burstable and is first to be throttled/evicted under node
+		// pressure — the opposite of what pinning a per-cluster default is for.
+		// A DAG/task that declares its own resources still overrides this wholesale
+		// (see internal/dispatch), so this only shapes the no-declaration case.
 		d.Resources = &domain.Resources{
 			Requests: &domain.ResourceQuantity{CPU: c.ResourcesCPU, Memory: c.ResourcesMemory},
+			Limits:   &domain.ResourceQuantity{CPU: c.ResourcesCPU, Memory: c.ResourcesMemory},
 		}
 	}
 	return d

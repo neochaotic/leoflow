@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,6 +203,100 @@ func TestWarmWorkerServesTwoAttempts(t *testing.T) {
 	assertAck(3, "asg-2")
 	if stream.sent[4].GetSlotFree() == nil {
 		t.Errorf("message 4 must be SlotFree, got %+v", stream.sent[4])
+	}
+}
+
+// lastEnvValue returns the value of the last KEY=... entry in env (exec semantics:
+// a duplicated var is resolved to its last occurrence), or "" if unset.
+func lastEnvValue(env []string, key string) string {
+	prefix := key + "="
+	val := ""
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			val = kv[len(prefix):]
+		}
+	}
+	return val
+}
+
+// tmpdirProbeCmd is a CommandRunner double that inspects the TMPDIR handed to each
+// child, records it, and — on every invocation — checks whether a sentinel written
+// to $TMPDIR by an earlier attempt still exists, then (re)writes it. A warm worker
+// that gives each attempt a fresh per-attempt TMPDIR (wiped between attempts) makes
+// attempt 2 see the sentinel ABSENT even though attempt 1 wrote one to its TMPDIR —
+// the filesystem-isolation invariant the docs advertise (#728).
+type tmpdirProbeCmd struct {
+	tmpdirs []string // TMPDIR handed to each attempt
+	sawLeak []bool   // whether the previous attempt's $TMPDIR sentinel survived
+}
+
+func (c *tmpdirProbeCmd) Run(_ context.Context, _, env []string, _, _ io.Writer) (int, error) {
+	tmp := lastEnvValue(env, "TMPDIR")
+	c.tmpdirs = append(c.tmpdirs, tmp)
+	if tmp == "" {
+		// No TMPDIR redirect: the child would inherit the pod's real /tmp, which
+		// persists across attempts. Record no leak-file write (avoid polluting cwd)
+		// so the TMPDIR-set assertion is what fails today.
+		c.sawLeak = append(c.sawLeak, false)
+		return 0, nil
+	}
+	sentinel := filepath.Join(tmp, "leaked-sentinel")
+	_, statErr := os.Stat(sentinel)
+	c.sawLeak = append(c.sawLeak, statErr == nil)
+	_ = os.WriteFile(sentinel, []byte("token cache / ~/.aws-style secret from an earlier attempt"), 0o600)
+	return 0, nil
+}
+
+// TestWarmWorkerGivesEachAttemptFreshTmpdir is the #728 regression: a warm worker
+// must hand each attempt a fresh, per-attempt TMPDIR under the agent scratch that
+// resetScratch already wipes, so anything attempt N writes to $TMPDIR (a dbt
+// profile, a token cache, ~/.aws-style credentials) is gone before attempt N+1
+// starts. Without the redirect the child inherits the pod's real /tmp, which
+// persists across attempts on one warm worker.
+func TestWarmWorkerGivesEachAttemptFreshTmpdir(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	stream := &fakeAssignmentStream{
+		ctx: context.Background(),
+		assignments: []*agentv1.WorkAssignment{
+			{AssignmentId: "asg-1", AttemptToken: "tok-1"},
+			{AssignmentId: "asg-2", AttemptToken: "tok-2"},
+		},
+	}
+	tokens := NewTokenSource("bootstrap")
+	client := &warmFake{fakeClient: &fakeClient{}, stream: stream, tokens: tokens, specs: warmSpecs(2)}
+	cmd := &tmpdirProbeCmd{}
+
+	w := &WarmRunner{
+		StreamClient:  client,
+		WorkClient:    client,
+		AttemptTokens: tokens,
+		Cmd:           cmd,
+		Hostname:      "warm-pod-1",
+		Version:       "test",
+		// A base env that already carries a TMPDIR (the pod's real /tmp): the
+		// per-attempt redirect must OVERRIDE it, not defer to it.
+		Env:        []string{"PATH=/usr/bin", "TMPDIR=/tmp"},
+		ScratchDir: scratch,
+	}
+
+	if err := w.Run(context.Background(), "dagver-1"); err != nil {
+		t.Fatalf("WarmRunner.Run: %v", err)
+	}
+	if len(cmd.tmpdirs) != 2 {
+		t.Fatalf("attempts run = %d, want 2", len(cmd.tmpdirs))
+	}
+	for i, tmp := range cmd.tmpdirs {
+		if tmp == "" || tmp == "/tmp" {
+			t.Errorf("attempt %d TMPDIR = %q, want a per-attempt dir under scratch (not the pod /tmp)", i+1, tmp)
+		}
+		if !strings.HasPrefix(tmp, scratch) {
+			t.Errorf("attempt %d TMPDIR = %q, want it under the wiped scratch dir %q", i+1, tmp, scratch)
+		}
+	}
+	// The core isolation guarantee: attempt 2 must not observe the sentinel attempt
+	// 1 wrote to its $TMPDIR.
+	if len(cmd.sawLeak) != 2 || cmd.sawLeak[0] || cmd.sawLeak[1] {
+		t.Errorf("TMPDIR leak across attempts: sawLeak=%v, want [false false]", cmd.sawLeak)
 	}
 }
 

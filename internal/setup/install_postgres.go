@@ -17,6 +17,12 @@ import (
 // archive is ~11 MB; the bound guards against a runaway/hostile response.
 const maxPostgresArchiveBytes = 150 << 20 // 150 MiB
 
+// pgVersionFile names the sentinel, written under Home/postgres after a
+// successful extraction, that records which managed PostgreSQL version is on
+// disk. The presence guard keys on it so an upgrade re-extracts instead of
+// silently keeping the prior release's binaries.
+const pgVersionFile = ".pg-version"
+
 // EnsurePostgres returns the bin directory of a managed relocatable PostgreSQL
 // (Home/postgres/bin), downloading + verifying + extracting the pinned build if
 // it is not already present. Unlike Python there is NO system fallback: Lite
@@ -24,13 +30,18 @@ const maxPostgresArchiveBytes = 150 << 20 // 150 MiB
 // — the point of Fase 2 — it needs no Docker. The data directory and process
 // lifecycle are the caller's concern (see the Lite runner).
 func EnsurePostgres(ctx context.Context, o EnsureOpts) (string, error) {
-	binDir := filepath.Join(o.Home, "postgres", "bin")
+	pgRoot := filepath.Join(o.Home, "postgres")
+	binDir := filepath.Join(pgRoot, "bin")
 	managed := filepath.Join(binDir, "postgres")
 	stat := o.Stat
 	if stat == nil {
 		stat = os.Stat
 	}
-	if _, err := stat(managed); err == nil {
+	// Short-circuit only when a COMPLETE install of the BUNDLED version is present.
+	// Keying on presence alone (the pre-#729 behavior) meant a clean upgrade never
+	// re-extracted — it silently kept the prior release's Postgres — and a partial
+	// extract (interrupted, or an older on-disk layout) was trusted blindly.
+	if _, err := stat(managed); err == nil && readManagedPostgresVersion(pgRoot) == pgVersion {
 		return binDir, nil
 	}
 	build, err := ResolvePostgres(o.GOOS, o.GOARCH, o.Libc)
@@ -49,11 +60,27 @@ func EnsurePostgres(ctx context.Context, o EnsureOpts) (string, error) {
 	// theseus-rs nests everything under a single postgresql-<version>-<triple>/
 	// directory; strip it so bin/postgres lands at Home/postgres/bin/postgres
 	// regardless of the triple.
-	if err := extractTarGzStrip(data, filepath.Join(o.Home, "postgres"), 1); err != nil {
+	if err := extractTarGzStrip(data, pgRoot, 1); err != nil {
 		return "", err
+	}
+	// Record the extracted version last, so an interrupted extract leaves no
+	// sentinel and is re-installed on the next run rather than trusted.
+	if err := os.WriteFile(filepath.Join(pgRoot, pgVersionFile), []byte(build.Version), 0o600); err != nil {
+		return "", fmt.Errorf("recording managed PostgreSQL version: %w", err)
 	}
 	logf(o.Logf, "PostgreSQL installed at %s", binDir)
 	return binDir, nil
+}
+
+// readManagedPostgresVersion returns the managed PostgreSQL version recorded
+// under pgRoot by the last successful extraction, or "" if none is recorded
+// (a pre-sentinel install or an interrupted extract).
+func readManagedPostgresVersion(pgRoot string) string {
+	b, err := os.ReadFile(filepath.Join(pgRoot, pgVersionFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // extractTarGzStrip unpacks a gzipped tar into destDir, dropping the first strip

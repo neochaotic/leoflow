@@ -462,10 +462,12 @@ func (w *WarmRunner) serveAssignment(ctx context.Context, stream agentv1.AgentSe
 // resetScratch removes and recreates the agent's per-attempt scratch dir. This is
 // the D4 filesystem scrub: it deletes everything the previous attempt (or its user
 // process) wrote UNDER the agent's own scratch — the return-value, extra-links,
-// xcom-pushes, and reschedule files, plus anything else the runtime staged there —
-// so no attempt observes another attempt's writable fs state. It deletes ONLY the
-// agent-owned scratch; paths outside it (the task image, mounts, the pod's own
-// /tmp) are left untouched.
+// xcom-pushes, and reschedule files, the per-attempt TMPDIR (attemptRunner points
+// the child's TMPDIR at a subdir of scratch, #728), plus anything else the runtime
+// staged there — so no attempt observes another attempt's writable fs state under
+// the agent's control. It deletes ONLY the agent-owned scratch; image-level paths
+// and mounts (and $HOME, unless the pod runs with a read-only root filesystem) are
+// left untouched and persist for the worker's lifetime.
 func (w *WarmRunner) resetScratch() error {
 	if err := os.RemoveAll(w.ScratchDir); err != nil {
 		return fmt.Errorf("removing scratch %q: %w", w.ScratchDir, err)
@@ -496,16 +498,19 @@ func (w *WarmRunner) openSink(ctx context.Context) LogSink {
 // per-attempt RPC carries the attempt_token.
 func (w *WarmRunner) attemptRunner(sink LogSink) *Runner {
 	return &Runner{
-		Client:             w.WorkClient,
-		Cmd:                w.Cmd,
-		Sink:               sink,
-		Hostname:           w.Hostname,
-		Version:            w.Version,
-		Env:                w.Env,
-		ReturnPath:         filepath.Join(w.ScratchDir, "return_value.json"),
-		LinksPath:          filepath.Join(w.ScratchDir, "extra_links.json"),
-		PushesPath:         filepath.Join(w.ScratchDir, "xcom_pushes.json"),
-		ReschedulePath:     filepath.Join(w.ScratchDir, "reschedule.txt"),
+		Client:         w.WorkClient,
+		Cmd:            w.Cmd,
+		Sink:           sink,
+		Hostname:       w.Hostname,
+		Version:        w.Version,
+		Env:            w.Env,
+		ReturnPath:     filepath.Join(w.ScratchDir, "return_value.json"),
+		LinksPath:      filepath.Join(w.ScratchDir, "extra_links.json"),
+		PushesPath:     filepath.Join(w.ScratchDir, "xcom_pushes.json"),
+		ReschedulePath: filepath.Join(w.ScratchDir, "reschedule.txt"),
+		// Per-attempt TMPDIR under the scratch resetScratch wipes, so the child's
+		// temp files never persist into the next attempt on this warm worker (#728).
+		TmpDir:             filepath.Join(w.ScratchDir, "tmp"),
 		TerminationLogPath: w.TerminationLogPath,
 		HeartbeatInterval:  w.HeartbeatInterval,
 		Token:              w.AttemptTokens,

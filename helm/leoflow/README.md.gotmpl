@@ -23,8 +23,28 @@ production-like install — distinct from the host-run `test/e2e/e2e.sh` smoke.
 
 ## Quick start
 
+Every release tag publishes this chart as a signed **OCI artifact** to
+`oci://ghcr.io/neochaotic/charts/leoflow` (ADR 0028), so you can install a
+pinned version without cloning the repo:
+
 ```bash
 kubectl create namespace leoflow
+helm install lf oci://ghcr.io/neochaotic/charts/leoflow --version <x.y.z> -n leoflow \
+  --set database.url='postgres://user:pass@postgres:5432/leoflow?sslmode=disable' \
+  --set redis.url='redis://redis:6379/0' \
+  --set auth.jwtSecret='change-me' \
+  --set bootstrap.password='admin'
+```
+
+Use the release tag **without** the leading `v` as `--version` (tag `v0.4.0` →
+`--version 0.4.0`); the chart `version`/`appVersion` move in lockstep with the
+tag. The chart is cosign-signed by digest — verify it with
+`cosign verify ghcr.io/neochaotic/charts/leoflow --certificate-identity-regexp '…' --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
+
+To install from a source checkout instead (e.g. an unreleased branch), point
+Helm at the chart directory:
+
+```bash
 helm install lf ./helm/leoflow -n leoflow \
   --set database.url='postgres://user:pass@postgres:5432/leoflow?sslmode=disable' \
   --set redis.url='redis://redis:6379/0' \

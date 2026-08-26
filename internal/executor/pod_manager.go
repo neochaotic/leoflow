@@ -26,10 +26,12 @@ type PodManager interface {
 	// orphan-run reaper, which abandons the whole run. The run-id is unique
 	// per run, so no other run's pod can match. Tolerates missing pods.
 	DeleteRunPods(ctx context.Context, runID string) error
-	// TaskPodActive reports whether a pod for (run, task) exists and is
-	// Pending or Running. The dispatch-lost reaper defers when it is true —
-	// the dispatch landed, the node is merely slow (#461).
-	TaskPodActive(ctx context.Context, runID, taskID string) (bool, error)
+	// TaskPodActive reports whether a pod for exactly the (run, task, try)
+	// attempt exists and is Pending or Running. The reaper defers when it is
+	// true — the dispatch landed, the node is merely slow (#461). Try-number is
+	// pinned so a retried TI's liveness gate asks about the attempt it is about
+	// to fail, not any older attempt whose pod may still linger (#723).
+	TaskPodActive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error)
 }
 
 // PodPresenceCache is an optional read-through cache of pod presence — backed by
@@ -50,7 +52,9 @@ type PodManager interface {
 // and before the informer warms: every candidate then uses the live path.
 type PodPresenceCache interface {
 	// CachedPodActive reports whether the cache holds a Pending/Running pod for
-	// (run, task). Only a true return is trusted (to defer); false is a "no
-	// speedup" signal that must not drive a reap.
-	CachedPodActive(runID, taskID string) bool
+	// exactly the (run, task, try) attempt. Only a true return is trusted (to
+	// defer); false is a "no speedup" signal that must not drive a reap.
+	// Try-number is pinned so the cache gate cannot defer on an older attempt's
+	// lingering pod (#723).
+	CachedPodActive(runID, taskID string, tryNumber int) bool
 }

@@ -99,6 +99,45 @@ You never write task dependencies — `{{ ref('stg_orders') }}` **is** the edge.
 > image-build time in Pro). Set `dbt.manifest: target/manifest.json` to point at a
 > pre-built one.
 
+{{% alert title="No local dbt, or your adapter has no wheel for your Python? Pre-build the manifest in a container" color="warning" %}}
+`leoflow compile`/`--build` shells out to `dbt parse` on your machine (the
+runtime never needs dbt — only compile-time manifest generation does). If your
+host has no dbt installed, or your adapter has no prebuilt wheel for your
+Python (a common one: `dbt-databricks` publishes wheels for 3.10–3.12, not the
+Python 3.9 that ships as the default `python3` on some LTS distros/older
+macOS), `dbt parse` fails or the adapter refuses to install — before Leoflow
+ever gets involved.
+
+**Escape hatch: generate the manifest in a throwaway container with a Python
+`dbt-databricks` actually supports, then point `dbt.manifest:` at the result.**
+
+`dbt parse` does not open a warehouse connection, so a **`profiles.yml` with
+placeholder values** (matching the profile name in `dbt_project.yml`) is
+enough — no real credentials need to enter the container:
+
+```console
+$ docker run --rm -v "$PWD":/proj -w /proj python:3.11-slim bash -c "
+    pip install --no-cache-dir dbt-databricks &&
+    dbt parse --profiles-dir . "
+$ ls target/manifest.json     # now sitting in your project dir
+```
+
+```yaml
+# leoflow.yaml
+dbt:
+  project: .
+  manifest: target/manifest.json   # pinned — leoflow compile skips `dbt parse` entirely
+  connection: warehouse_databricks
+```
+
+A pinned manifest is used **as-is** (see `loadDbtManifest` — no local dbt
+required at all from that point on); regenerate it in the container whenever
+you change models. This is the same trick CI runners use when their base image
+doesn't carry a compatible Python for every adapter — see [Python on the
+runner](/operate/cicd-deploy/#python-on-the-runner) for the CI-side version of
+this problem.
+{{% /alert %}}
+
 ---
 
 ## 2. Mixing dbt with operators
@@ -234,6 +273,19 @@ The compiled command becomes:
 python -m leoflow_runtime --dbt-profile warehouse_pg <profile> && dbt run --select …
 ```
 
+{{% alert title="Serverless warehouse cold-start (Databricks, and similar)" color="info" %}}
+A serverless SQL warehouse auto-stops after a period of inactivity (Databricks
+serverless: ~5 min by default). The `dbt-databricks` adapter wakes it
+transparently on the next query — no manual "resume" step — but the **first**
+task to hit a stopped warehouse pays a cold-start delay (observed ~10s) before
+its query starts. This is warehouse behavior, not a Leoflow limitation: a
+scheduled dbt DAG that runs at the top of every hour, say, should expect that
+delay on its first model each run (subsequent models in the same run land on
+the now-warm warehouse). Pre-warming (a scheduled no-op query shortly before
+your DAG's run time) is a warehouse-side mitigation if the delay matters for
+your SLA.
+{{% /alert %}}
+
 > **vs Cosmos.** Cosmos bridges Airflow connections to dbt profiles with a
 > per-warehouse `profile_mapping` class declared in Python. Leoflow does it from
 > the connection automatically — one `connection:` line, zero mapping classes,
@@ -365,7 +417,7 @@ is tested varies by adapter:
 | **duckdb** | contract + live | ✅ real dbt on Lite (`e2e-lite-dbt`) |
 | **snowflake** | ✅ contract-tested | ⚠️ hand-verified only |
 | **bigquery** | ✅ contract-tested | ⚠️ hand-verified only |
-| **databricks** | ✅ contract-tested | ⚠️ hand-verified only |
+| **databricks** | ✅ contract-tested | ⚠️ hand-verified (see below) |
 
 **Contract-tested** means CI feeds Leoflow's emitted profile through the *real* dbt
 adapter's own credential parsing (`dbt-adapter-contracts` job): correct field
@@ -377,7 +429,19 @@ succeeds against your account.
 **Live-query verification for the cloud adapters is maintainer-owned** — it needs
 real warehouse accounts + CI secrets. The template is `test/e2e/dbt-connection-e2e.sh`
 (today it runs against a local Postgres warehouse); pointing it at a real Snowflake/
-BigQuery/Databricks account, gated on org secrets, is the remaining step.
+BigQuery/Databricks account, gated on org secrets, is the remaining step — the
+`⚠️` stays until that runs in CI on every change, not just once by hand.
+
+{{% alert title="Databricks: hand-verified end-to-end on a real serverless account" color="success" %}}
+The full path has been validated against a real Databricks serverless SQL
+warehouse: managed **`connection:`** → Leoflow-generated `profiles.yml` →
+**service-principal OAuth M2M** auth → **pod-per-model** execution (`granularity:
+node`) → a `view` and a `Delta` table materialized → the warehouse's
+**transparent cold-start** observed and confirmed non-blocking (see the
+[serverless cold-start note](#4-the-warehouse-connection) in §4). This
+confirms the adapter integration works against a real account; it is still a
+**hand run**, not a CI-gated one — see the note above on closing that gap.
+{{% /alert %}}
 
 ---
 

@@ -145,12 +145,37 @@ type ConfigDefaults struct {
 	RetryDelaySeconds       int               `json:"retry_delay_seconds,omitempty" yaml:"retry_delay_seconds,omitempty"`
 	ExecutionTimeoutSeconds int               `json:"execution_timeout_seconds,omitempty" yaml:"execution_timeout_seconds,omitempty"`
 	Resources               *DefaultResources `json:"resources,omitempty" yaml:"resources,omitempty"`
+	// NodeSelector is the DAG-wide pod placement fallback applied to every task
+	// that declares no execution.node_selector of its own. Like Resources it is a
+	// default, so the most-specific per-task value always wins. Consumed at
+	// compile time by the overlay, which bakes it onto each task in dag.json.
+	NodeSelector map[string]string `json:"node_selector,omitempty" yaml:"node_selector,omitempty"`
 }
 
 // DefaultResources expresses default CPU and memory for generated tasks.
 type DefaultResources struct {
 	CPU    string `json:"cpu,omitempty" yaml:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty" yaml:"memory,omitempty"`
+}
+
+// AsResources expands the simplified default cpu/memory into a full Resources
+// with requests == limits (the QoS story of #725). This mirrors how the
+// per-cluster platform default is built at dispatch. Returns nil when the
+// receiver is nil or declares no quantity, so callers can treat a missing
+// default as "leave the task untouched".
+//
+// Guaranteed QoS is reached only when BOTH cpu and memory are set (and thus
+// equal across requests and limits). A partial default — only cpu, or only
+// memory — leaves the other dimension unset, so Kubernetes classifies the pod
+// as Burstable, not Guaranteed.
+func (d *DefaultResources) AsResources() *Resources {
+	if d == nil || (d.CPU == "" && d.Memory == "") {
+		return nil
+	}
+	return &Resources{
+		Requests: &ResourceQuantity{CPU: d.CPU, Memory: d.Memory},
+		Limits:   &ResourceQuantity{CPU: d.CPU, Memory: d.Memory},
+	}
 }
 
 // ApplyDefaults fills zero-valued fields with the defaults declared in the

@@ -194,10 +194,10 @@ across clusters.
 | `LEOFLOW_EXECUTOR_DEFAULTS_RUN_TASKS_AS_NON_ROOT` | `true` | Pro | **Refuses to start a task container whose image resolves to UID 0**, completing Pod Security Admission's `restricted` set. On by default — the images this repo ships carry a numeric non-root UID (`USER 65532:65532`) and the executor pairs it with a pod-level `fsGroup` so the staging PVC stays writable. Turn it off only for a cluster whose task images legitimately run as root. Operator-scoped (never a DAG field). |
 | `LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM` | `false` | Pro | Mounts every task container's root filesystem read-only. Off by default (`restricted` does not require it and it breaks ordinary Python tasks — pip cache, `/tmp`, matplotlib config). Turn on for a fleet of tasks known not to write outside their volumes. |
 | `LEOFLOW_EXECUTOR_DEFAULTS_STAGING_ACCESS_MODE` | `ReadWriteMany` | Pro | PVC access mode for the per-run staging volume. Default `ReadWriteMany` (multi-node prod); single-node dev (k3d local-path, no RWX) sets `ReadWriteOnce`. |
-| `executor.defaults.staging_size` | _(empty)_ | Pro | Default size of the per-run staging volume when the DAG enabled staging without pinning it. **Config file / Helm values only** — this key is not registered as a default, so its env var is not bound. |
-| `executor.defaults.staging_storage_class` | _(empty)_ | Pro | Default StorageClass for the staging volume (e.g. the cluster's RWX class). **Config file / Helm values only** (env var not bound). |
-| `executor.defaults.resources_cpu` | _(empty)_ | Pro | Default CPU request when neither the task override nor the DAG set any (a Kubernetes quantity, e.g. `250m`). **Config file / Helm values only** (env var not bound). |
-| `executor.defaults.resources_memory` | _(empty)_ | Pro | Default memory request when neither the task override nor the DAG set any (e.g. `256Mi`). **Config file / Helm values only** (env var not bound). |
+| `LEOFLOW_EXECUTOR_DEFAULTS_STAGING_SIZE` | _(empty)_ | Pro | Default size of the per-run staging volume when the DAG enabled staging without pinning it (a Kubernetes quantity, e.g. `10Gi`). Empty leaves the size unset. Helm: `executor.defaults.staging.size`. |
+| `LEOFLOW_EXECUTOR_DEFAULTS_STAGING_STORAGE_CLASS` | _(empty)_ | Pro | Default StorageClass for the staging volume (e.g. the cluster's RWX class). Empty falls back to the cluster's default StorageClass. Helm: `executor.defaults.staging.storageClass`. |
+| `LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU` | _(empty)_ | Pro | Default CPU for a task that declares none of its own (a Kubernetes quantity, e.g. `250m`). Applied as **both request and limit**, so the task lands in Guaranteed QoS; empty leaves it BestEffort unless the DAG sets its own. Helm: `executor.defaults.resources.cpu`. |
+| `LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_MEMORY` | _(empty)_ | Pro | Default memory for a task that declares none of its own (e.g. `256Mi`). Applied as **both request and limit** (Guaranteed QoS). Helm: `executor.defaults.resources.memory`. |
 
 ### Warm worker pools (`execution.*`)
 
@@ -264,3 +264,9 @@ instead of the proxy. **Do not** set this to a broad private range (e.g. all of
 `10.0.0.0/8`) in a cluster where task pods run: a task pod inside that range
 could then spoof the client IP. Scope it to the ingress. An invalid value fails
 secure (trust none) with a logged error.
+
+The value is a list. Via the env var (the Helm chart's only override path — it
+ships no server config file) set it **comma-separated**, e.g.
+`LEOFLOW_SERVER_TRUSTED_PROXIES=10.0.0.0/8,192.168.1.1`; viper splits it back
+into a list. In the chart set the `config.trustedProxies` value (a YAML list) and
+it is rendered comma-joined for you. In a config file it is an ordinary YAML list.

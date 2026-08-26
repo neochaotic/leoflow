@@ -1,12 +1,12 @@
 name: Website (Hugo+Docsy) build check
 
-# PHASE 0 of the docs migration to Hugo + Docsy. This workflow ONLY builds the new
-# site under website/ with `hugo --gc --minify` to prove it stays green — it never
-# deploys anywhere and never touches the gh-pages branch. The live MkDocs+mike site
-# (docs/, mkdocs.yml, docs.yml, docs-release.yaml) is a SEPARATE, untouched track
-# and remains the published documentation until the cutover happens at full parity.
+# Build check for the Hugo + Docsy documentation site under website/. The MkDocs +
+# mike migration is complete: Hugo is now the published docs (deployed separately by
+# website-deploy.yml). This workflow ONLY builds the site with `hugo --gc --minify`
+# to prove a PR keeps it green — it never deploys anywhere and never touches the
+# gh-pages branch.
 #
-# Scoped to website/** so it never fires on changes to the live docs, and vice versa.
+# Scoped to website/** so it only fires on changes that can affect the site build.
 on:
   push:
     branches: [main]
@@ -42,7 +42,7 @@ jobs:
           go-version-file: website/go.mod
 
       - name: Setup Node (for Docsy PostCSS/autoprefixer)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # Node 22 LTS (NOT 20): Hugo Extended sandboxes the PostCSS/autoprefixer
           # subprocess with Node's Permission Model — it invokes node with
@@ -90,6 +90,24 @@ jobs:
       - name: Build (no deploy)
         working-directory: website
         run: hugo --gc --minify --logLevel info
+
+      # Link/image check over the RENDERED site. Nothing checked internal links
+      # before, so a page or asset that moved (the README-image / doc-link 404 class)
+      # shipped silently. Run OFFLINE on purpose: the bug class is broken *internal*
+      # relative links/images, and offline resolves every root-relative /leoflow/…
+      # href and img src against the built output deterministically — no flaky
+      # external fan-out across thousands of doc links. External-link and governance-
+      # Markdown coverage lives in link-check.yml. Behaviour is in ../lychee.toml.
+      - name: Check links & images in the built site
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --config lychee.toml
+            --no-progress
+            --offline
+            --root-dir "${{ github.workspace }}/website/public"
+            "website/public/**/*.html"
+          fail: true
 
       - name: Upload built site (artifact only — NOT a deploy)
         uses: actions/upload-artifact@v4

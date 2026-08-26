@@ -23,7 +23,7 @@ leoflow deploy [path | dag_id] [flags]
       --dockerfile string    Dockerfile path relative to the DAG directory (default "Dockerfile")
   -h, --help                 help for deploy
       --server string        control plane base URL (default: config server_url)
-      --skip-build           re-use the already-built image (promote without rebuilding)
+      --skip-build           reuse the existing image (skip docker build/push) but still recompile dag.json from leoflow.yaml/dag.py
       --token string         JWT bearer token (default: config token)
       --trigger              trigger a run immediately after registering
   -y, --yes                  skip the confirmation prompt (for automation)

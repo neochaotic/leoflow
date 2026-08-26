@@ -79,3 +79,17 @@ tests:
       - equal:
           path: spec.template.spec.securityContext.seccompProfile.type
           value: RuntimeDefault
+
+  - it: "issue #727 — migration Job pod disables ServiceAccount token automount"
+    # The migrate binary talks only to Postgres via LEOFLOW_DATABASE_URL; it
+    # never calls the Kubernetes API, so it has no need for a projected SA
+    # token. Leaving automount on hands the most-hardened pod in the chart the
+    # namespace default SA's token — an unused credential and needless attack
+    # surface. Mirrors internal/executor/kubernetes.go, which already sets
+    # AutomountServiceAccountToken:false on the task pod.
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false

@@ -25,6 +25,13 @@ type jwtClaims struct {
 	TenantID string   `json:"tenant_id"`
 	Email    string   `json:"email,omitempty"`
 	Roles    []string `json:"roles"`
+	// OriginIssuedAt records when this session's credential was FIRST minted (at
+	// login). Unlike iat, it is preserved verbatim across renewals (RenewUserToken)
+	// so the control plane can bound a session's TOTAL lifetime no matter how many
+	// times its token is transparently re-minted, mirroring the agent token's oiat
+	// (ADR 0055 Fix #4). Omitempty so a token minted before this field existed is
+	// byte-identical; renewal then falls back to iat for such a token.
+	OriginIssuedAt *jwt.NumericDate `json:"oiat,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -118,18 +125,30 @@ func (a *JWTAuthenticator) Authenticate(ctx context.Context, token string) (*Use
 	return user, nil
 }
 
+// sign mints a fresh user token for a login: TTL is the authenticator's
+// configured lifetime and the session origin (oiat) is anchored at now.
 func (a *JWTAuthenticator) sign(user *User) (string, error) {
-	now := time.Now()
+	return a.mintUserToken(user, a.ttl, a.clock())
+}
+
+// mintUserToken signs a user token whose iat/exp are anchored at now and whose
+// preserved session origin (oiat) is `origin`. Login passes now as the origin; a
+// renewal passes the incoming token's origin so it never advances. exp is always
+// now+ttl — never accumulated onto the previous exp. It is the single write side
+// shared by login and RenewUserToken, mirroring mintAgentToken.
+func (a *JWTAuthenticator) mintUserToken(user *User, ttl time.Duration, origin time.Time) (string, error) {
+	now := a.clock()
 	c := jwtClaims{
-		TenantID: user.TenantID,
-		Email:    user.Email,
-		Roles:    user.Roles,
+		TenantID:       user.TenantID,
+		Email:          user.Email,
+		Roles:          user.Roles,
+		OriginIssuedAt: jwt.NewNumericDate(origin),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.ID,
 			Issuer:    tokenIssuer,
 			Audience:  jwt.ClaimStrings{audienceUser},
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(a.ttl)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString(a.secret)
@@ -137,4 +156,51 @@ func (a *JWTAuthenticator) sign(user *User) (string, error) {
 		return "", fmt.Errorf("signing token: %w", err)
 	}
 	return signed, nil
+}
+
+// RenewUserToken validates a still-valid user bearer token and re-mints it for the
+// SAME principal (subject, tenant, email, roles) with a fresh short TTL, without
+// ever changing what Authenticate verifies (signature, issuer, leoflow-user
+// audience, HS256). It is the server half of transparent CLI token renewal (EKS
+// validation aresta #5): the short access-token TTL still bounds a stolen token,
+// while renewal keeps a genuinely live session working so a long dev session
+// never has to `leoflow auth login` again on the hour. It is modeled directly on
+// RenewAgentToken.
+//
+// The session's original login time is preserved across every renewal (the oiat
+// claim, falling back to iat for a token minted before that claim existed).
+// maxLifetime is a hard ceiling on that total age: once the session has been
+// alive longer than maxLifetime since first login, renewal is refused (ok=false,
+// empty token, no error) so the user must re-authenticate. A non-positive
+// maxLifetime disables the ceiling. exp is always now+ttl — never accumulated.
+//
+// An invalid incoming token (bad signature, wrong audience, expired) returns an
+// error and is never re-minted. Roles are copied from the incoming token, exactly
+// as they were signed; Authenticate still reloads authorization from the store on
+// every request, so a renewed token confers no more than the original did.
+func (a *JWTAuthenticator) RenewUserToken(token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error) {
+	var c jwtClaims
+	parsed, err := jwt.ParseWithClaims(token, &c, func(*jwt.Token) (any, error) {
+		return a.secret, nil
+	}, jwt.WithIssuer(tokenIssuer), jwt.WithAudience(audienceUser), jwt.WithValidMethods([]string{"HS256"}), jwt.WithTimeFunc(a.clock))
+	if err != nil || !parsed.Valid {
+		return "", false, errors.Join(ErrInvalidToken, err)
+	}
+	// Preserve the session's first-login origin across renewals; fall back to iat
+	// for a token minted before the origin claim existed.
+	origin := time.Time{}
+	if c.OriginIssuedAt != nil {
+		origin = c.OriginIssuedAt.Time
+	} else if c.IssuedAt != nil {
+		origin = c.IssuedAt.Time
+	}
+	if maxLifetime > 0 && !origin.IsZero() && a.clock().Sub(origin) > maxLifetime {
+		return "", false, nil // past the ceiling: let the credential lapse
+	}
+	user := &User{ID: c.Subject, TenantID: c.TenantID, Email: c.Email, Roles: c.Roles}
+	renewed, err = a.mintUserToken(user, ttl, origin)
+	if err != nil {
+		return "", false, err
+	}
+	return renewed, true, nil
 }

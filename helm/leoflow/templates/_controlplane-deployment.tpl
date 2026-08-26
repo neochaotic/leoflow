@@ -91,6 +91,38 @@ spec:
             # (rbac.yaml, also .Values.taskNamespace) or every dispatch 403s (#480).
             - name: LEOFLOW_EXECUTOR_TASK_NAMESPACE
               value: {{ .ctx.Values.taskNamespace | quote }}
+            {{- if .ctx.Values.config.trustedProxies }}
+            # Proxy IPs/CIDRs whose X-Forwarded-For the server honors (#725).
+            # Rendered comma-joined because the chart ships no server config file
+            # and env is the only override path; viper's decode hook splits the
+            # single env var back into server.trusted_proxies ([]string). Without
+            # it the per-IP login limiter keys on the ingress IP and one client's
+            # bad logins lock out every user. Omitted when empty (trust none).
+            - name: LEOFLOW_SERVER_TRUSTED_PROXIES
+              value: {{ join "," .ctx.Values.config.trustedProxies | quote }}
+            {{- end }}
+            {{- if .ctx.Values.executor.defaults.resources.cpu }}
+            # L0 per-cluster CPU default (ADR 0023). The server applies it as both
+            # request and limit → Guaranteed QoS for tasks that declare none (#725).
+            - name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU
+              value: {{ .ctx.Values.executor.defaults.resources.cpu | quote }}
+            {{- end }}
+            {{- if .ctx.Values.executor.defaults.resources.memory }}
+            # L0 per-cluster memory default (ADR 0023), request == limit (#725).
+            - name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_MEMORY
+              value: {{ .ctx.Values.executor.defaults.resources.memory | quote }}
+            {{- end }}
+            {{- if .ctx.Values.executor.defaults.staging.size }}
+            # L0 per-cluster staging-volume size default (ADR 0023). Env is the only
+            # override path since the chart ships no server config file (#743).
+            - name: LEOFLOW_EXECUTOR_DEFAULTS_STAGING_SIZE
+              value: {{ .ctx.Values.executor.defaults.staging.size | quote }}
+            {{- end }}
+            {{- if .ctx.Values.executor.defaults.staging.storageClass }}
+            # L0 per-cluster staging-volume StorageClass default (ADR 0023, #743).
+            - name: LEOFLOW_EXECUTOR_DEFAULTS_STAGING_STORAGE_CLASS
+              value: {{ .ctx.Values.executor.defaults.staging.storageClass | quote }}
+            {{- end }}
             - name: LEOFLOW_LOGS_DIR
               value: {{ .ctx.Values.config.logsDir | quote }}
             {{- if ne .ctx.Values.logs.sink.provider "disk" }}
@@ -291,7 +323,15 @@ spec:
           volumeMounts:
             - name: logs
               mountPath: {{ .ctx.Values.config.logsDir }}
-            {{- if .ctx.Values.agentTLS.enabled }}
+            {{- if and .ctx.Values.agentTLS.enabled (ne .role "api") }}
+            # #726 — the private key is mounted only into the role that runs the
+            # agent gRPC server. The api role never builds a gRPC server
+            # (startAgentGRPC is reached only from the scheduler side), so mounting
+            # tls.key into its internet-facing pod only widens the blast radius
+            # ADR 0049 set out to shrink. The env vars above stay on every role:
+            # the Pro boot guard (guardTLSForEdition) checks only that both strings
+            # are non-empty, never reading the files, so the dangling path is
+            # harmless on api while scoping the env would CrashLoopBackOff it.
             - name: grpc-tls
               mountPath: /etc/leoflow/grpc-tls
               readOnly: true
@@ -319,7 +359,9 @@ spec:
           # `logs.persistence.enabled` for durable storage (#227).
           emptyDir: {}
           {{- end }}
-        {{- if .ctx.Values.agentTLS.enabled }}
+        {{- if and .ctx.Values.agentTLS.enabled (ne .role "api") }}
+        # #726 — see the matching volumeMount guard above: the api role omits the
+        # gRPC cert Secret volume entirely so tls.key never reaches its pod.
         - name: grpc-tls
           secret:
             # BYO serverCertSecret, or the chart-generated "<fullname>-agent-tls"

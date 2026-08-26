@@ -46,7 +46,7 @@ func newDeployCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&o.all, "all", false, "deploy every DAG project in the workspace")
-	cmd.Flags().BoolVar(&o.skipBuild, "skip-build", false, "re-use the already-built image (promote without rebuilding)")
+	cmd.Flags().BoolVar(&o.skipBuild, "skip-build", false, "reuse the existing image (skip docker build/push) but still recompile dag.json from leoflow.yaml/dag.py")
 	cmd.Flags().BoolVar(&o.trigger, "trigger", false, "trigger a run immediately after registering")
 	cmd.Flags().BoolVarP(&o.yes, "yes", "y", false, "skip the confirmation prompt (for automation)")
 	cmd.Flags().StringVar(&o.serverURL, "server", "", "control plane base URL (default: config server_url)")
@@ -191,8 +191,15 @@ func deployImageRef(cfg *domain.LeoflowConfig, version, sha string) string {
 // resolveServerToken applies the deploy auth precedence: --server/--token, then
 // LEOFLOW_* env (via the token flag default), then the persisted config written
 // by `leoflow auth login`.
+//
+// When the token comes from that persisted session file (not a --token flag or
+// LEOFLOW_TOKEN env, which are caller- or CI-managed), it is transparently
+// refreshed if near expiry and the file is rewritten with the fresh token (aresta
+// #5), so a long dev session never re-logs in every hour. The refresh is
+// best-effort: on any failure the current token is returned unchanged.
 func resolveServerToken(cmd *cobra.Command, serverFlag, tokenFlag string) (serverURL, token string, err error) {
 	serverURL, token = serverFlag, tokenFlag
+	tokenFromSession := false
 	if serverURL == "" || token == "" {
 		cfg, cerr := config.Load(configFilePath(cmd), cmd.Flags())
 		if cerr != nil {
@@ -203,7 +210,14 @@ func resolveServerToken(cmd *cobra.Command, serverFlag, tokenFlag string) (serve
 		}
 		if token == "" {
 			token = cfg.Token
+			tokenFromSession = true
 		}
+	}
+	// Only auto-refresh a file-persisted session token: a --token flag or a
+	// LEOFLOW_TOKEN env var (which config.Load also surfaces as cfg.Token) is
+	// externally managed and must never be silently rewritten.
+	if tokenFromSession && os.Getenv("LEOFLOW_TOKEN") == "" {
+		token = autoRefreshToken(cmdContext(cmd), configFilePath(cmd), serverURL, token)
 	}
 	return serverURL, token, nil
 }

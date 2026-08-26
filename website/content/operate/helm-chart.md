@@ -13,6 +13,26 @@ The **Pro** control plane installs on Kubernetes via the official Helm chart. Th
 chart is chart-test gated, publishes multi-arch images per release, and signs them
 with cosign. It runs on any cluster with an external Postgres + Redis.
 
+## Install from the published OCI chart
+
+Every release tag publishes the chart as a **cosign-signed OCI artifact** to
+`oci://ghcr.io/neochaotic/charts/leoflow` ([ADR 0028](/project/adrs/0028-release-versioning-two-editions/)),
+co-versioned with the release tag — so you can install a pinned version without
+cloning the repo:
+
+```bash
+helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <x.y.z> \
+  -n leoflow --create-namespace \
+  -f values.yaml
+```
+
+Pass the release tag **without** the leading `v` (tag `v0.4.0` → `--version 0.4.0`):
+the chart `version`/`appVersion` move in lockstep with the tag, so this also pins
+the control-plane image. Installing from a source checkout
+(`helm install ./helm/leoflow`) is still supported for unreleased branches — see
+the [chart README](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md#quick-start)
+for both paths and the full values surface.
+
 {{% alert title="Reference lives with the chart" color="info" %}}
 This operator-journey page is the entry point; the exhaustive values reference is
 maintained **alongside the chart source** so it never drifts from `values.yaml`:

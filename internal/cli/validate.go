@@ -47,7 +47,15 @@ func newValidateCommand() *cobra.Command {
 // (managed or system), we warn instead of failing — a fresh install that has
 // not yet run `leoflow setup` should still be able to lint its leoflow.yaml.
 func checkDagPythonSyntax(cmd *cobra.Command, dagPath string) error {
-	py := findPythonForValidate()
+	// Unified precedence with `leoflow dev` (#742): managed pinned build, then a
+	// host python3.11/python3 that reports >= 3.11. A present-but-unsupported
+	// interpreter is a hard error (validate must not lint under 3.9 a DAG that
+	// will run under 3.11), while no interpreter at all is a soft skip so a fresh
+	// install that has not run `leoflow setup` can still lint its leoflow.yaml.
+	py, err := resolvePython3(cmd.Context(), leoflowManagedPython(), exec.LookPath, pythonVersion)
+	if err != nil {
+		return err
+	}
 	if py == "" {
 		if _, werr := fmt.Fprintln(cmd.ErrOrStderr(),
 			"warning: skipping dag.py syntax check (no python3 found; run `leoflow setup` to provision one)"); werr != nil {
@@ -64,20 +72,4 @@ func checkDagPythonSyntax(cmd *cobra.Command, dagPath string) error {
 		msg = err.Error()
 	}
 	return fmt.Errorf("dag.py has a syntax error: %s", msg)
-}
-
-// findPythonForValidate prefers the managed interpreter that `leoflow setup`
-// installs (~/.leoflow/python/bin/python3.11), then falls back to whatever
-// `python3` resolves to on PATH. Empty when neither is available.
-func findPythonForValidate() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		managed := home + "/.leoflow/python/bin/python3.11"
-		if _, err := os.Stat(managed); err == nil {
-			return managed
-		}
-	}
-	if p, err := exec.LookPath("python3"); err == nil {
-		return p
-	}
-	return ""
 }

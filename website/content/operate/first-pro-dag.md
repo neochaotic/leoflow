@@ -160,12 +160,17 @@ shows state and logs. That is the whole Pro lifecycle, in one verb.
 | Task pod: `exec format error` | image arch ≠ cluster arch | already handled — deploy builds `linux/amd64`; for a Graviton cluster pass `--platform linux/arm64` |
 | DAG runs but a task fails on a missing `conn_id` | connections live in the control plane, **not** in the image | deploy prints `note: this DAG expects connection(s): …` — create them on Pro (UI/API) first; see [Variables & Connections](/author-dags/variables-connections/) |
 
+Hit something not on this list — an unsupported task type, `CreateContainerConfigError`,
+a `401`/`403`, a private-registry `ErrImagePull`, or a `409` on a second deploy?
+**[Deploy prerequisites & why shortcuts fail](/operate/deploy-prerequisites/)**
+collects every gate `deploy`/`push` enforce, with the exact error and the fix.
+
 ## Deploy more than one DAG
 
 ```bash
 leoflow deploy <dag_id>     # a specific DAG in a multi-DAG workspace
 leoflow deploy --all        # every DAG in the workspace (best-effort; non-zero exit if any fail)
-leoflow deploy --skip-build # promote an already-built image without rebuilding
+leoflow deploy --skip-build # reuse the existing image (skip docker build/push); dag.json is still recompiled from leoflow.yaml/dag.py
 ```
 
 ## The complete path — your own DAG, yaml-driven

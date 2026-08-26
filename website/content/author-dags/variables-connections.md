@@ -57,6 +57,47 @@ a host only resolvable inside the cluster (e.g. `host.k3d.internal` in dev) read
 as unreachable there even though pods can reach it. Full per-provider credential
 validation needs the provider hooks (a later addition).
 
+## Declare what a task consumes
+
+A task doesn't automatically get the value just because it exists on the
+control plane — the DAG that consumes a Variable or Connection should
+**declare** it in `leoflow.yaml`, the same consumption-declared model
+[declared secrets](/project/adrs/0045-declared-secret-delivery/) use:
+
+```yaml
+# leoflow.yaml
+dag_id: sales_report
+variables:
+  - greeting
+connections:
+  - warehouse
+```
+
+The three-step flow is: **create** the Variable/Connection (UI or API, above) →
+**declare** it in `leoflow.yaml` → **read** it in the task (below).
+
+{{% alert title="What declaring actually controls today" color="warning" %}}
+The control plane's secret-delivery policy (`auth.secret_scoping`, [ADR
+0055](/project/adrs/0055-secret-scoping-and-token-liveness/)) has two modes:
+
+- **`permissive`** (the shipped default) delivers the **whole tenant vault** to
+  every task regardless of declaration, and only logs a warning when a task's
+  declared set is narrower than what it received. An **undeclared** Variable or
+  Connection still resolves — `Variable.get` does **not** return empty under
+  this default.
+- **`enforce`** delivers **only** the declared subset — an undeclared name is
+  not delivered, and `Variable.get`/`BaseHook.get_connection` for it comes back
+  empty/missing, exactly like a declared-secrets task that requested nothing.
+
+**Declare anyway, even under `permissive`.** It documents your DAG's real
+dependencies, matches how a deploy already warns you about missing
+*connections* (see [Deploy your first Pro DAG](/operate/first-pro-dag/#when-it-doesnt-work)),
+and is what makes the DAG portable to a tenant running `enforce` — the
+direction least-privilege delivery is headed (tracked in
+[#59](https://github.com/neochaotic/leoflow/issues/59)). An operator sets the
+policy cluster-wide; it is never a DAG-author setting.
+{{% /alert %}}
+
 ## Read them in a task
 The agent injects each tenant's Variables/Connections before running your code:
 

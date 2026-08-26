@@ -1,6 +1,6 @@
 # leoflow
 
-![Version: 0.4.0-rc.2](https://img.shields.io/badge/Version-0.4.0--rc.2-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 0.4.0-rc.2](https://img.shields.io/badge/AppVersion-0.4.0--rc.2-informational?style=flat-square)
+![Version: 0.4.0](https://img.shields.io/badge/Version-0.4.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 0.4.0](https://img.shields.io/badge/AppVersion-0.4.0-informational?style=flat-square)
 
 Leoflow control plane — a GitOps-first, container-native workflow orchestrator (Airflow 3.2.x UI/API compatible).
 
@@ -23,8 +23,28 @@ production-like install — distinct from the host-run `test/e2e/e2e.sh` smoke.
 
 ## Quick start
 
+Every release tag publishes this chart as a signed **OCI artifact** to
+`oci://ghcr.io/neochaotic/charts/leoflow` (ADR 0028), so you can install a
+pinned version without cloning the repo:
+
 ```bash
 kubectl create namespace leoflow
+helm install lf oci://ghcr.io/neochaotic/charts/leoflow --version <x.y.z> -n leoflow \
+  --set database.url='postgres://user:pass@postgres:5432/leoflow?sslmode=disable' \
+  --set redis.url='redis://redis:6379/0' \
+  --set auth.jwtSecret='change-me' \
+  --set bootstrap.password='admin'
+```
+
+Use the release tag **without** the leading `v` as `--version` (tag `v0.4.0` →
+`--version 0.4.0`); the chart `version`/`appVersion` move in lockstep with the
+tag. The chart is cosign-signed by digest — verify it with
+`cosign verify ghcr.io/neochaotic/charts/leoflow --certificate-identity-regexp '…' --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
+
+To install from a source checkout instead (e.g. an unreleased branch), point
+Helm at the chart directory:
+
+```bash
 helm install lf ./helm/leoflow -n leoflow \
   --set database.url='postgres://user:pass@postgres:5432/leoflow?sslmode=disable' \
   --set redis.url='redis://redis:6379/0' \
@@ -311,6 +331,7 @@ differ from what's committed.
 | config.logsDir | string | `"/var/log/leoflow"` | Directory inside the pod where task logs are written. Mounted from `logs.persistence` (a PVC by default) so logs survive pod restarts. Set `logs.persistence.enabled: false` to fall back to an ephemeral emptyDir (dev only). |
 | config.scheduler.enabled | bool | `true` | Run the scheduler loop. Disable only for read-only API-only replicas (rare). |
 | config.scheduler.loopIntervalMs | int | `1000` | Scheduler loop interval in milliseconds. Lower = faster reactivity, higher CPU. 1000ms is the production-tested default. |
+| config.trustedProxies | list | `[]` | Proxy IPs/CIDRs whose `X-Forwarded-For` the server honors when resolving the client IP (`server.trusted_proxies`). Empty (default) trusts NO proxy, so a spoofed XFF cannot forge the client IP. Behind an ingress this MUST be set to the ingress/pod CIDR, otherwise every request is attributed to the ingress IP and the per-IP login rate-limit locks out the whole deployment on a few bad logins (#725). Rendered as a comma-joined `LEOFLOW_SERVER_TRUSTED_PROXIES` env var, which viper splits into a list. |
 | database.caConfigMap | string | `""` | Name of a ConfigMap with key `ca.crt` holding the managed-Postgres CA bundle (#315). When set, the chart mounts it at `/etc/leoflow/db-ca/ca.crt` so the operator can pin `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` in the DSN. Empty (default) means TLS still works via `sslmode=require`, but the server cert is NOT verified — the connection is encrypted but MITM-vulnerable, the standard managed-DB posture before this knob. |
 | database.existingSecret | string | `""` | Name of a Secret with key `databaseUrl` (takes precedence over `url`). |
 | database.maxIdleConns | int | `5` | Max idle DB connections kept in the pool. Should be ≤ `maxOpenConns`. |
@@ -323,6 +344,12 @@ differ from what's committed.
 | execution.minIdleWorkers | int | `0` | Warm workers kept ready per dag_version when a DAG declares no warmth of its own (ADR 0058 D6). `0` (default) is scale-to-zero: nothing idles until a DAG asks for it. Ignored while `warmPoolsEnabled` is false. |
 | execution.warmPoolsEnabled | bool | `false` | Reuse one warm pod across many attempts of a dag_version (ADR 0058). OFF = dedicated pod-per-task. Requires `auth.agentTokenTransport: exchange` AND `auth.secretLivenessMode: enforce`; the chart fails the render otherwise. Read ADR 0058's "Measurement & enable readiness" before enabling on a shared cluster — the go/no-go bar is stated in rates on a real cluster, not in unit tests. |
 | execution.workerIdleTtl | string | `"5m"` | How long an idle warm worker is kept before it is recycled (ADR 0058 D6). A Go duration string (`5m`, `90s`). This is also what drains the pool of a superseded dag_version after a deploy. Ignored while `warmPoolsEnabled` is false. |
+| executor.defaults.resources | object | `{"cpu":"","memory":""}` | Default CPU/memory for a task that declares none of its own. When set, the control plane applies the value as BOTH the request and the limit, so the task lands in Guaranteed QoS (least likely to be throttled/evicted under node pressure). Empty (default) leaves tasks with no platform resource floor, i.e. BestEffort QoS unless the DAG sets its own (#725). Kubernetes quantities. |
+| executor.defaults.resources.cpu | string | `""` | Default CPU request+limit (e.g. `250m`, `1`). Empty = unset. |
+| executor.defaults.resources.memory | string | `""` | Default memory request+limit (e.g. `256Mi`, `1Gi`). Empty = unset. |
+| executor.defaults.staging | object | `{"size":"","storageClass":""}` | Default size + StorageClass for the per-run staging volume when the DAG enabled staging without pinning them (#743). Env-only override path: the chart mounts no server config file, so these render as LEOFLOW_* env. Empty leaves the PVC on the cluster's default StorageClass and an unset size. |
+| executor.defaults.staging.size | string | `""` | Default staging PVC size (e.g. `10Gi`). Empty = unset. |
+| executor.defaults.staging.storageClass | string | `""` | Default staging PVC StorageClass (e.g. the cluster's RWX class). Empty = cluster default. |
 | extraEnv | list | `[]` | Extra environment variables appended to the control-plane container, for server settings this chart does not model as a first-class value (see `docs/configuration.md` for the full `LEOFLOW_*` surface). Standard K8s `env` entries, so `valueFrom` works, and a `value` is always rendered as a string (Kubernetes rejects a numeric one). Appended AFTER the chart-managed entries; do not use it to redefine one — the chart refuses to render an entry that shadows a variable whose value it guards (the warm-pool / agent-credential coupling). Example: `[{name: LEOFLOW_SCHEDULER_DISPATCH_WORKERS, value: "4"}]`. |
 | image.pullPolicy | string | `"IfNotPresent"` |  |
 | image.repository | string | `"ghcr.io/neochaotic/leoflow-server"` | Control-plane image. Published by GoReleaser on every tag, signed with cosign. |

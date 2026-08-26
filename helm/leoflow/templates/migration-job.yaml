@@ -26,6 +26,12 @@ spec:
         {{- include "leoflow.selectorLabels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      # The migrate binary talks only to Postgres via LEOFLOW_DATABASE_URL and
+      # never calls the Kubernetes API, so it has no use for a projected
+      # ServiceAccount token. Declining the automount keeps this pod from being
+      # handed the namespace default SA's credential. Mirrors the task pod in
+      # internal/executor/kubernetes.go.
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.migrations.podSecurityContext | nindent 8 }}
       containers:

@@ -5,7 +5,7 @@
 #   docker build -f deploy/Dockerfile.server -t leoflow-server .
 # Migrations are applied separately (see the migrate service in docker-compose).
 
-FROM golang:1.26-bookworm AS build
+FROM golang:1.27-bookworm AS build
 WORKDIR /src
 
 # Cache module downloads.

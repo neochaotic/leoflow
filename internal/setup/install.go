@@ -19,6 +19,12 @@ import (
 // runaway or hostile response (the real archive is ~30 MB).
 const maxPythonArchiveBytes = 200 << 20 // 200 MiB
 
+// pyVersionFile names the sentinel, written under Home/python after a successful
+// extraction, that records which managed CPython version is on disk. The
+// presence guard keys on it (symmetric with pgVersionFile) so an upgrade
+// re-extracts instead of silently keeping the prior release's interpreter.
+const pyVersionFile = ".py-version"
+
 // EnsureOpts configures EnsurePython.
 type EnsureOpts struct {
 	Home     string // the managed root, e.g. ~/.leoflow
@@ -36,15 +42,32 @@ type EnsureOpts struct {
 // Home, or a freshly downloaded-and-verified pinned build otherwise. The managed
 // build is extracted to Home/python (the archive's top-level "python/" dir).
 func EnsurePython(ctx context.Context, o EnsureOpts) (string, error) {
-	if o.LookPath != nil {
-		if p, err := o.LookPath("python3.11"); err == nil {
-			return p, nil
+	pyRoot := filepath.Join(o.Home, "python")
+	managed := filepath.Join(pyRoot, "bin", "python3.11")
+	stat := o.Stat
+	if stat == nil {
+		stat = os.Stat
+	}
+	// A COMPLETE managed install of the PINNED version wins over any host
+	// interpreter: it is the checksum-verified build Lite provisioned, at the
+	// exact version the runtime expects. Keying on mere presence (the pre-#742
+	// behavior) meant (a) a clean upgrade never re-extracted — it silently kept
+	// the prior release — and (b) LookPath("python3.11") ran FIRST, so a host
+	// python3.11 outranked the pinned managed one. Check the sentinel first.
+	managedPresent := false
+	if _, err := stat(managed); err == nil {
+		managedPresent = true
+		if readManagedPythonVersion(pyRoot) == pyVersion {
+			return managed, nil
 		}
 	}
-	managed := filepath.Join(o.Home, "python", "bin", "python3.11")
-	if o.Stat != nil {
-		if _, err := o.Stat(managed); err == nil {
-			return managed, nil
+	// No CURRENT managed install. Prefer a host python3.11 to avoid a download,
+	// but only when there is no managed tree to repair — a version-mismatched or
+	// half-extracted managed tree must be re-installed, not shadowed by a host
+	// interpreter of unknown version.
+	if !managedPresent && o.LookPath != nil {
+		if p, err := o.LookPath("python3.11"); err == nil {
+			return p, nil
 		}
 	}
 	build, err := ResolvePython(o.GOOS, o.GOARCH, o.Libc)
@@ -56,11 +79,39 @@ func EnsurePython(ctx context.Context, o EnsureOpts) (string, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	if derr := downloadVerifyExtract(ctx, client, build, o.Home); derr != nil {
-		return "", derr
+	data, err := fetchVerify(ctx, client, build.URL, build.SHA256, maxPythonArchiveBytes, "CPython")
+	if err != nil {
+		return "", err
+	}
+	// Wipe any prior (stale, wrong-version, or half-extracted) managed tree before
+	// re-extracting, so no file from an older on-disk layout survives and no tar
+	// TYPE change (e.g. a dir becoming a file) collides with an existing entry.
+	// Done only after the download verified, so a network failure never destroys a
+	// working install.
+	if rmErr := os.RemoveAll(pyRoot); rmErr != nil {
+		return "", fmt.Errorf("removing prior managed CPython: %w", rmErr)
+	}
+	if xerr := extractTarGz(data, o.Home); xerr != nil {
+		return "", xerr
+	}
+	// Record the extracted version LAST, so an interrupted extract leaves no
+	// sentinel and is re-installed on the next run rather than trusted.
+	if werr := os.WriteFile(filepath.Join(pyRoot, pyVersionFile), []byte(build.Version), 0o600); werr != nil {
+		return "", fmt.Errorf("recording managed CPython version: %w", werr)
 	}
 	logf(o.Logf, "CPython installed at %s", managed)
 	return managed, nil
+}
+
+// readManagedPythonVersion returns the managed CPython version recorded under
+// pyRoot by the last successful extraction, or "" if none is recorded (a
+// pre-sentinel install or an interrupted extract).
+func readManagedPythonVersion(pyRoot string) string {
+	b, err := os.ReadFile(filepath.Join(pyRoot, pyVersionFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // logf invokes the optional progress callback, ignoring a nil one.
@@ -149,10 +200,27 @@ func extractEntry(tr *tar.Reader, hdr *tar.Header, destDir, name string) error {
 	}
 	switch hdr.Typeflag {
 	case tar.TypeDir:
+		// A prior extract of an older layout may have left a non-directory here;
+		// MkdirAll would then fail. Clear the conflicting entry so the re-extract
+		// is idempotent across a tar TYPE change (file -> directory).
+		if fi, lerr := os.Lstat(target); lerr == nil && !fi.IsDir() {
+			if rmErr := os.RemoveAll(target); rmErr != nil {
+				return fmt.Errorf("removing conflicting %q before dir: %w", target, rmErr)
+			}
+		}
 		return os.MkdirAll(target, 0o750)
 	case tar.TypeReg:
 		if mkErr := os.MkdirAll(filepath.Dir(target), 0o750); mkErr != nil {
 			return fmt.Errorf("creating parent of %q: %w", target, mkErr)
+		}
+		// Symmetric to the dir branch: if a prior extract left a directory (or a
+		// symlink) where a regular file now belongs, O_TRUNC would fail EISDIR.
+		// Clear any non-regular entry first so the re-extract is idempotent across
+		// a TYPE change (directory -> file).
+		if fi, lerr := os.Lstat(target); lerr == nil && !fi.Mode().IsRegular() {
+			if rmErr := os.RemoveAll(target); rmErr != nil {
+				return fmt.Errorf("removing conflicting %q before file: %w", target, rmErr)
+			}
 		}
 		// Preserve only the executable bit (interpreters, scripts); everything
 		// else is owner read/write. This sidesteps trusting arbitrary archive
@@ -203,6 +271,16 @@ func extractSymlink(hdr *tar.Header, destDir, target, name string) error {
 	}
 	if mkErr := os.MkdirAll(filepath.Dir(target), 0o750); mkErr != nil {
 		return fmt.Errorf("creating parent of %q: %w", target, mkErr)
+	}
+	// os.Symlink fails EEXIST if target is already present, which breaks a
+	// re-extract over an existing install (the regular-file branch overwrites via
+	// O_TRUNC). Remove any prior entry first to match that idempotent behavior.
+	// RemoveAll (not os.Remove) so a TYPE change — a prior extract leaving a
+	// non-empty directory where a symlink now belongs — is cleared too, rather
+	// than failing with a non-IsNotExist ENOTEMPTY. Target is already sanitized by
+	// the containment checks above.
+	if rmErr := os.RemoveAll(target); rmErr != nil {
+		return fmt.Errorf("removing existing %q before symlink: %w", target, rmErr)
 	}
 	return os.Symlink(hdr.Linkname, target) //nolint:gosec // target sanitized; link resolved within destDir
 }

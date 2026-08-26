@@ -130,6 +130,14 @@ func handleRepoError(c *gin.Context, err error) {
 		AbortProblem(c, statusClientClosedRequest, "client closed request", err.Error())
 		return
 	}
+	// A business-rule input failure (unknown role, undeclared variable/connection)
+	// is the client's to fix, not a server fault. Every domain.ErrValidation wrap
+	// site is client-supplied input, so map the whole class to 400 — otherwise it
+	// reads as a server error and points users at the logs instead of their request.
+	if errors.Is(err, domain.ErrValidation) {
+		AbortProblem(c, http.StatusBadRequest, "invalid request", err.Error())
+		return
+	}
 	AbortProblem(c, http.StatusInternalServerError, "internal error", err.Error())
 }
 

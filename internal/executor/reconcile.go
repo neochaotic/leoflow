@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -44,11 +45,12 @@ type verdict struct {
 // unrecoverableWaiting lists container "waiting" reasons that never self-resolve
 // and mean the agent never started, so no state will be reported.
 var unrecoverableWaiting = map[string]bool{
-	"ImagePullBackOff":     true,
-	"ErrImagePull":         true,
-	"InvalidImageName":     true,
-	"CreateContainerError": true,
-	"CrashLoopBackOff":     true,
+	"ImagePullBackOff":           true,
+	"ErrImagePull":               true,
+	"InvalidImageName":           true,
+	"CreateContainerError":       true,
+	"CreateContainerConfigError": true,
+	"CrashLoopBackOff":           true,
 }
 
 // taskContainerName is the task pod's single container (see BuildPod).
@@ -84,7 +86,7 @@ func classifyPod(pod *corev1.Pod) verdict {
 	case corev1.PodPending, corev1.PodRunning, corev1.PodUnknown:
 		for _, cs := range pod.Status.ContainerStatuses {
 			if w := cs.State.Waiting; w != nil && unrecoverableWaiting[w.Reason] {
-				return verdict{terminal: true, settle: settleFailed, reason: waitingFailureReason(w.Reason)}
+				return verdict{terminal: true, settle: settleFailed, reason: waitingFailureReason(w.Reason, w.Message)}
 			}
 		}
 		return verdict{terminal: false}
@@ -161,8 +163,11 @@ func podFailureReason(pod *corev1.Pod) string {
 // waitingFailureReason explains a container stuck in an unrecoverable waiting
 // state. It names the Kubernetes reason (what an operator greps for and what
 // `kubectl describe` shows) and adds the context that makes it actionable, since
-// the bare enum alone is what left operators reaching for kubectl.
-func waitingFailureReason(reason string) string {
+// the bare enum alone is what left operators reaching for kubectl. The kubelet
+// message is consulted only to distinguish reasons that share one enum but need
+// different guidance (CreateContainerConfigError); it is never echoed, so an
+// unbounded, operator-controlled string cannot reach the end-user field.
+func waitingFailureReason(reason, message string) string {
 	switch reason {
 	case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
 		return boundReason(fmt.Sprintf(
@@ -170,6 +175,19 @@ func waitingFailureReason(reason string) string {
 	case "CreateContainerError":
 		return boundReason(fmt.Sprintf(
 			"%s: the task container could not be created; check the pod spec, mounts, and image entrypoint.", reason))
+	case "CreateContainerConfigError":
+		// The kubelet raises this both for a missing ConfigMap/Secret and for the
+		// runAsNonRoot admission refusal. The latter is a distinct, common cause
+		// under the non-root default and needs its own fix, so we match the
+		// kubelet's signature substring rather than lump it into the generic bucket.
+		if strings.Contains(message, "runAsNonRoot") {
+			return boundReason(fmt.Sprintf(
+				"%s: the DAG image runs as root, but task pods run as non-root by default; "+
+					"end the Dockerfile with a numeric `USER 65532`, "+
+					"or set `taskPodSecurity.runAsNonRoot=false` for the cluster.", reason))
+		}
+		return boundReason(fmt.Sprintf(
+			"%s: the task container could not be configured; check its ConfigMap, Secret, and env-var references.", reason))
 	case "CrashLoopBackOff":
 		return boundReason(fmt.Sprintf(
 			"%s: the task container keeps exiting at startup; inspect the task image entrypoint.", reason))

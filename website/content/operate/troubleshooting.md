@@ -59,11 +59,13 @@ leoflow-mcp --version
 | Symptom | Cause / fix |
 |---|---|
 | `leoflow compile` dumps a Python traceback with internal parser paths first | Recent builds lead the failure with the user-facing line (e.g. `SyntaxError: ...`) and put the parser paths in the bounded tail. If you still see the internal-first dump, you are on an older release — update. |
-| `leoflow compile` rejects a sensor / Jinja template / branching operator | This is **intentional** — Leoflow accepts a closed set of task types (`python`, `bash`, `airflow_operator`). See [DAG authoring → Not supported](/author-dags/dag-authoring/#not-supported-leoflow-compile-rejects-these) for the full list and workarounds (`@task` + poll loop for sensors; build values from `airflow.sdk` context for Jinja). |
+| `leoflow compile` rejects a sensor / Jinja template / branching operator | This is **intentional** — Leoflow accepts a closed set of task types (`python`, `bash`, `airflow_operator`). See [DAG authoring → Not supported](/author-dags/dag-authoring/#not-supported--leoflow-compile-rejects-these) for the full list and workarounds (`@task` + poll loop for sensors; build values from `airflow.sdk` context for Jinja). |
 | `Compiled .../dag.py -> dag.json (image , version dev)` (dangling comma) | Older build — update. Recent versions render `(no image, version dev)` when `--image` is unset. |
 | Task pod `ErrImagePull` (cluster mode) | The DAG's image is not in the cluster — rebuild + import. Cluster-mode rebuilds on save; for a manual push, `leoflow compile --build --push`. |
 | Run stuck at `queued` (subprocess) | The agent must reach the control plane — Lite uses `127.0.0.1:<grpc>`. The executor launches async and the agent reports state back. Look for the agent process in `ps`; if it exited, check `/tmp/leoflow-lite.log` for the launch error. |
 | Run stuck at `running` long after the task finished | The agent's heartbeat reaper picks these up after the configured window. Check `LEOFLOW_TI_HEARTBEAT_TIMEOUT_SECONDS` and look for a `reaped` log line. |
+| Task pod `CreateContainerConfigError: container has runAsNonRoot and image will run as root` | Your task image runs as UID 0; the executor's `taskPodSecurity.runAsNonRoot` default refuses it. Fix: numeric `USER 65532:65532` in your Dockerfile, or an operator sets `taskPodSecurity.runAsNonRoot: false`. See [Deploy prerequisites](/operate/deploy-prerequisites/#4-non-root-task-image). |
+| `leoflow deploy`/`push` fails on auth, registry, or a version conflict | One of the deploy-time gates. [Deploy prerequisites & why shortcuts fail](/operate/deploy-prerequisites/) covers every gate with the exact error and fix. |
 
 ## UI / browser
 
@@ -90,8 +92,15 @@ leoflow uninstall --purge                               # also remove the worksp
 Task logs stream from the agent over gRPC to the control plane's log sink and
 are served at
 `/api/v2/dags/<dag>/dagRuns/<run>/taskInstances/<task>/logs/<try>` (the UI's
-drill-down). The sink directory is `LEOFLOW_LOGS_DIR` (must be writable;
-`leoflow lite` points it at a temp dir).
+drill-down), or from the CLI: `leoflow runs logs <dag_id> <run_id> <task_id>
+[--try N] [-f]` (landing in v0.4.1). The sink directory is `LEOFLOW_LOGS_DIR`
+(must be writable; `leoflow lite` points it at a temp dir).
+
+{{% alert title="Not kubectl logs" color="warning" %}}
+On Pro, `kubectl logs <pod>` shows only the **agent wrapper's** own stderr —
+never the task's stdout/stderr, which the agent ships to the control plane's
+log sink instead. Use the UI, the API route above, or `leoflow runs logs`.
+{{% /alert %}}
 
 Control-plane logs are structured `slog` (JSON by default), one line per HTTP
 request with a request id — `grep <request_id>` correlates a UI click to its

@@ -175,6 +175,11 @@ func BuildWarmPod(spec WarmPodSpec) *corev1.Pod {
 	}
 	mergeMetadata(pod.Labels, spec.Labels)
 	mergeMetadata(pod.Annotations, spec.Annotations)
+	// A read-only rootfs otherwise leaves the warm agent's os.MkdirTemp scratch
+	// (under /tmp) with nowhere to write, so it dies before registering and the
+	// reconciler replaces it forever (issue #741). Give it a writable /tmp
+	// emptyDir; warmPodEnv points TMPDIR at it so the scratch lands there.
+	mountWritableTmp(pod, spec.PodSecurity)
 	mountWarmAgentTLSCA(pod, spec)
 	// Bootstrap-credential transport, shared with the task pod. identity is nil: a
 	// warm worker registers under its bearer's own identity, so no task-instance
@@ -293,6 +298,13 @@ func warmPodEnv(spec WarmPodSpec) []corev1.EnvVar {
 			corev1.EnvVar{Name: "LEOFLOW_AGENT_INSECURE", Value: "false"},
 			corev1.EnvVar{Name: "LEOFLOW_AGENT_TLS_CA", Value: agentCADir + "/" + agentCAFile},
 		)
+	}
+	// On a read-only rootfs the warm agent's scratch (os.MkdirTemp("", ...)) would
+	// resolve onto the read-only filesystem and fail before the worker registers
+	// (issue #741). BuildWarmPod mounts a writable emptyDir at /tmp; point TMPDIR at
+	// it so os.MkdirTemp — which honors $TMPDIR — lands the scratch on the emptyDir.
+	if spec.PodSecurity.ReadOnlyRootFilesystem {
+		env = append(env, corev1.EnvVar{Name: "TMPDIR", Value: writableTmpMountPath})
 	}
 	return env
 }

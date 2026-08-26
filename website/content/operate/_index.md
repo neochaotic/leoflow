@@ -20,6 +20,12 @@ the day-2 operations that keep a control plane healthy.
     <span class="lf-card__desc">Take a DAG from Lite to a Kubernetes control plane, end to end.</span>
     <span class="lf-card__more">Go to production →</span>
   </a>
+  <a class="lf-card" href="/operate/deploy-prerequisites/">
+    <span class="lf-card__icon"><i class="fa-solid fa-list-check"></i></span>
+    <span class="lf-card__title">Deploy prerequisites &amp; why shortcuts fail</span>
+    <span class="lf-card__desc">Every gate a Pro deploy enforces, its exact error, and the fix.</span>
+    <span class="lf-card__more">Check the gates →</span>
+  </a>
   <a class="lf-card" href="/operate/cicd-deploy/">
     <span class="lf-card__icon"><i class="fa-solid fa-code-branch"></i></span>
     <span class="lf-card__title">CI/CD &amp; deploy</span>

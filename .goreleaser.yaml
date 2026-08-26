@@ -3,7 +3,8 @@
 # Produces static (CGO-free) binaries for linux/darwin × amd64/arm64, bundles all
 # three binaries per platform into a single archive (so install.sh fetches the CLI,
 # server, and agent in one download), publishes SHA-256 checksums, an SBOM per
-# archive, cosign keyless signatures, and a control-plane container image on GHCR.
+# archive, cosign keyless signatures (the checksums file AND the control-plane
+# image manifests), and a control-plane container image on GHCR.
 version: 2
 
 project_name: leoflow
@@ -103,14 +104,10 @@ dockers:
   # server symmetric means a chart `--set image.tag=<X>` pin works no matter
   # which convention the operator follows.
   #
-  # NOT signed. This comment used to claim "both shapes are signed by cosign
-  # below" — there is no `docker_signs` block anywhere in this file, and the
-  # release workflow signs only leoflow-migrate and leoflow-runtime. The
-  # `signs:` block above covers the checksums file, which protects the
-  # ARCHIVES, not these images. So the control-plane image the Helm chart
-  # deploys is the one image that is unsigned, and a comment asserted the
-  # opposite. Tracked as its own decision: add docker_signs, or say so in the
-  # supply-chain docs (ADR 0014).
+  # Signed keyless by the `docker_signs:` block below — both manifest tags, by
+  # digest — so the control-plane image the Helm chart deploys carries the same
+  # supply-chain posture (ADR 0014) as leoflow-migrate and leoflow-runtime, which
+  # the release workflow signs in their own jobs.
   - id: server-amd64
     ids: [leoflow-server]
     goarch: amd64
@@ -147,6 +144,28 @@ docker_manifests:
     image_templates:
       - "ghcr.io/neochaotic/leoflow-server:v{{ .Version }}-amd64"
       - "ghcr.io/neochaotic/leoflow-server:v{{ .Version }}-arm64"
+
+# Cosign keyless signing of the control-plane image. `artifacts: manifests`
+# signs each multi-arch manifest (`:{{ .Version }}` and `:v{{ .Version }}`) by
+# its digest — the reference an operator actually pulls — so both tag shapes are
+# covered. GoReleaser resolves the pushed manifest digest and substitutes it for
+# ${digest}; `${artifact}@${digest}` therefore signs by digest, never by the
+# mutable tag. Requires id-token: write (set in the workflow) for the Sigstore
+# OIDC challenge; `--yes` skips cosign's interactive confirmation in CI.
+#
+# The command is the `scripts/cosign-retry.sh` wrapper rather than `cosign`
+# itself: a transient GitHub-OIDC blip once failed a `cosign sign` mid-release
+# and drafted an otherwise-good build, so every signature retries with backoff.
+# The migrate/runtime workflow steps route through the same wrapper.
+docker_signs:
+  - id: server
+    cmd: ./scripts/cosign-retry.sh
+    artifacts: manifests
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
+    output: true
 
 release:
   github:

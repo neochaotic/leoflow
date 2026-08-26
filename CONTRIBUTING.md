@@ -5,14 +5,14 @@ Thank you for your interest in contributing to Leoflow! This document explains h
 ## Before You Start
 
 1. Read [`README.md`](README.md) to understand what Leoflow is.
-2. Read the [Architecture Decision Records](docs/adr/) under `docs/adr/`. These document non-negotiable design choices. Contributions that contradict an ADR will be rejected unless the ADR is first amended via a separate PR.
+2. Read the [Architecture Decision Records](website/content/project/adrs/) under `website/content/project/adrs/`. These document non-negotiable design choices. Contributions that contradict an ADR will be rejected unless the ADR is first amended via a separate PR.
 3. Read [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## How to Contribute
 
 ### Reporting Bugs
 
-1. Search [existing issues](../../issues) to confirm the bug has not been reported.
+1. Search [existing issues](https://github.com/neochaotic/leoflow/issues) to confirm the bug has not been reported.
 2. If not, open a new issue using the **Bug Report** template.
 3. Include reproduction steps, expected behavior, actual behavior, and environment details (OS, Go version, K8s version if applicable).
 
@@ -20,7 +20,7 @@ Thank you for your interest in contributing to Leoflow! This document explains h
 
 1. Open an issue using the **Feature Request** template.
 2. Describe the use case and the proposed solution.
-3. **For significant features, propose an ADR.** Open a PR adding a draft ADR under `docs/adr/` with status "Proposed." Discussion happens on the PR.
+3. **For significant features, propose an ADR.** Open a PR adding a draft ADR under `website/content/project/adrs/` with status "Proposed." Discussion happens on the PR.
 
 ### Submitting Code
 
@@ -34,9 +34,9 @@ Open an issue or comment on an existing one before starting work on anything bey
 
 Leoflow has strict engineering standards documented in the ADRs:
 
-- **[ADR 0011 — TDD Strict](docs/adr/0011-tdd-strict.md):** every production change is preceded by a failing test. Two-commit pattern preferred (`test:` followed by `feat:`).
-- **[ADR 0012 — Code Quality Standards](docs/adr/0012-code-quality-standards.md):** Go Report Card A+ as floor. GoDocs mandatory on every exported identifier. Cyclomatic complexity ≤ 15.
-- **[ADR 0014 — Supply Chain Security](docs/adr/0014-supply-chain-security.md):** vulnerability scans, signed commits encouraged, no introduction of unsafe patterns.
+- **[ADR 0011 — TDD Strict](website/content/project/adrs/0011-tdd-strict.md):** every production change is preceded by a failing test. Two-commit pattern preferred (`test:` followed by `feat:`).
+- **[ADR 0012 — Code Quality Standards](website/content/project/adrs/0012-code-quality-standards.md):** Go Report Card A+ as floor. GoDocs mandatory on every exported identifier. Cyclomatic complexity ≤ 15.
+- **[ADR 0014 — Supply Chain Security](website/content/project/adrs/0014-supply-chain-security.md):** vulnerability scans, signed commits encouraged, no introduction of unsafe patterns.
 
 CI enforces all of the above automatically. PRs that fail CI cannot be merged.
 
@@ -96,7 +96,7 @@ docker compose --profile demo up --build
 
 ```bash
 # Optional, for Claude Code users (the file is gitignored):
-cp docs/agent-templates/CLAUDE.md.template ./CLAUDE.md
+cp .github/CLAUDE.md.template ./CLAUDE.md
 
 make setup        # Go tools, Python parser/runtime, pre-commit hook
 make build        # build bin/leoflow, bin/leoflow-server, bin/leoflow-agent
@@ -105,7 +105,7 @@ make lint test    # the quality gates you must pass before pushing
 ```
 
 For an end-to-end author→run loop without Kubernetes, use `leoflow dev`
-(see [`docs/operating-modes.md`](docs/operating-modes.md)).
+(see [Editions & operating modes](website/content/concepts/editions.md)).
 
 ## Project Layout
 
@@ -123,6 +123,6 @@ By contributing, you agree that your contributions will be licensed under the [A
 
 ## Recognition
 
-All contributors are listed in [`CONTRIBUTORS.md`](CONTRIBUTORS.md) (updated periodically by maintainers). Significant contributions are also highlighted in release notes.
+All contributors are shown on the repository's [contributors page](https://github.com/neochaotic/leoflow/graphs/contributors). Significant contributions are also highlighted in release notes.
 
 Thank you for helping make Leoflow better!

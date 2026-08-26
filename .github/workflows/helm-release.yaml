@@ -34,6 +34,30 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.0
+
+      # ── Preflight: gate the OCI publish on a passing chart check ──
+      # `helm package` below stamps version/appVersion from the tag, so the
+      # PUBLISHED chart is always correct — but the source Chart.yaml is what
+      # the from-source `helm install ./helm/leoflow` and the RC cluster-
+      # validation runbook use, and ADR 0028 says the two move in lockstep.
+      # This step FAILS the tag if Chart.yaml lags the tag (arestas #3), so a
+      # cut cannot ship a source tree whose default image tags point at the
+      # previous release. The full chart contract suite (helm unittest,
+      # template-checks, rbac-covers-executor, kubeconform) runs per-PR in
+      # helm-ci.yaml; here we run the fast, tag-specific gates that guard the
+      # release artifact before it is packaged and pushed.
+      - name: Gate — chart version + appVersion match the tag (ADR 0028)
+        run: bash scripts/check-chart-version-matches-tag.sh
+
+      - name: Gate — helm lint
+        run: helm lint helm/leoflow
+
+      - name: Gate — chart contract (env + Secret keys render)
+        run: bash scripts/helm-template-checks.sh
+
       # ── Sigstore cosign for keyless signing (same pin as release.yaml) ──
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:

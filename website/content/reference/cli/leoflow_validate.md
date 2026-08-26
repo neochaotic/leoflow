@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow validate"
 linkTitle: "validate"
-weight: 43
+weight: 45
 ---
 
 Validate leoflow.yaml and the DAG source against the schema.

@@ -402,6 +402,16 @@ type AuthSection struct {
 type JWTSection struct {
 	Secret          string `mapstructure:"secret"`
 	TokenTTLSeconds int    `mapstructure:"token_ttl_seconds"`
+	// MaxLifetimeSeconds is the hard ceiling on how long a user session may be kept
+	// alive by transparent token renewal (aresta #5), measured since first login
+	// (the token's oiat claim). Past it, POST /api/v2/auth/token/renew is refused
+	// and the user must `leoflow auth login` again. The short TokenTTLSeconds still
+	// bounds a stolen token independently; this only caps the total renewed
+	// lifetime, mirroring auth.max_attempt_credential_lifetime for agent tokens.
+	// Generous by default (24h) so a normal dev day never re-logs in mid-session; a
+	// non-positive value disables the ceiling (renewal never expires the session).
+	// Bind via LEOFLOW_AUTH_JWT_MAX_LIFETIME_SECONDS.
+	MaxLifetimeSeconds int `mapstructure:"max_lifetime_seconds"`
 }
 
 // OIDCSection configures the OIDC/SSO login flow (Authorization Code + PKCE).
@@ -519,16 +529,32 @@ var serverDefaults = map[string]any{
 	"server.grpc_tls_cert":        "",
 	"server.grpc_tls_key":         "",
 	"server.cors.allowed_origins": []string{"http://localhost:8080"},
-	"database.url":                "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
-	"database.max_open_conns":     25,
-	"database.max_idle_conns":     5,
+	// Registered so viper's AutomaticEnv binds LEOFLOW_SERVER_TRUSTED_PROXIES. It
+	// is a []string, but viper's default decode hook splits a single
+	// comma-separated env var into a list, so the env-only Helm override path
+	// works without a config file — this is what the chart renders (#725). Empty
+	// (the default) trusts no proxy.
+	"server.trusted_proxies":  []string{},
+	"database.url":            "postgres://leoflow:leoflow@localhost:5432/leoflow?sslmode=disable",
+	"database.max_open_conns": 25,
+	"database.max_idle_conns": 5,
 	// Empty by default: no Redis configured selects the embedded edition (Lite —
 	// XCom on Postgres, in-process log tailer, ADR 0026). Production sets this
 	// explicitly via the Helm chart (external Redis).
-	"redis.url":                        "",
-	"auth.provider":                    "jwt",
-	"auth.jwt.secret":                  "",
-	"auth.jwt.token_ttl_seconds":       3600,
+	"redis.url": "",
+	// Registered so AutomaticEnv binds LEOFLOW_REDIS_CA_FILE (the Helm chart sets
+	// it when redis.caConfigMap is configured); without it, verified TLS to a
+	// managed rediss:// endpoint silently falls back to system roots only (#725).
+	"redis.ca_file":              "",
+	"auth.provider":              "jwt",
+	"auth.jwt.secret":            "",
+	"auth.jwt.token_ttl_seconds": 3600,
+	// Ceiling on a transparently-renewed user session's total lifetime (aresta #5).
+	// 24h mirrors auth.max_attempt_credential_lifetime: a normal dev day renews
+	// silently, and a session must re-authenticate at most once per day. The short
+	// token_ttl_seconds is what bounds a stolen token; this only caps total renewed
+	// age. A non-positive value disables the ceiling.
+	"auth.jwt.max_lifetime_seconds":    86400,
 	"auth.login_rate_limit_per_minute": 5,
 	// Secret scope-by-declaration and token-liveness policies (ADR 0055). Both
 	// ship SAFE by default: permissive delivers the whole tenant vault (today's
@@ -569,18 +595,30 @@ var serverDefaults = map[string]any{
 	// Default: synchronous dispatch (BufferSize=0). Safe and zero-overhead for
 	// Lite. Pro deployments should set buffer_size>=1 + workers>=1 in their
 	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).
-	"scheduler.dispatch.buffer_size":                   0,
-	"scheduler.dispatch.workers":                       0,
-	"executor.http.user_agent":                         "leoflow/0.1",
-	"executor.task_namespace":                          "leoflow",
-	"executor.type":                                    "kubernetes",
-	"executor.agent_path":                              "leoflow-agent",
-	"executor.subprocess_workdir":                      "",
-	"executor.agent_control_plane_addr":                "",
-	"executor.agent_tls_ca_configmap":                  "",
-	"executor.task_secret_name":                        "",
-	"executor.task_secret_mount_path":                  "/etc/leoflow/secrets",
-	"executor.defaults.staging_access_mode":            "ReadWriteMany",
+	"scheduler.dispatch.buffer_size":        0,
+	"scheduler.dispatch.workers":            0,
+	"executor.http.user_agent":              "leoflow/0.1",
+	"executor.task_namespace":               "leoflow",
+	"executor.type":                         "kubernetes",
+	"executor.agent_path":                   "leoflow-agent",
+	"executor.subprocess_workdir":           "",
+	"executor.agent_control_plane_addr":     "",
+	"executor.agent_tls_ca_configmap":       "",
+	"executor.task_secret_name":             "",
+	"executor.task_secret_mount_path":       "/etc/leoflow/secrets",
+	"executor.defaults.staging_access_mode": "ReadWriteMany",
+	// Registered so AutomaticEnv binds LEOFLOW_EXECUTOR_DEFAULTS_STAGING_SIZE /
+	// _STORAGE_CLASS (the env-only Helm override path, #743, same class as #725).
+	// Empty leaves the L0 default unset, so a staging PVC inherits the cluster's
+	// default StorageClass and no pinned size unless the operator configures one.
+	"executor.defaults.staging_size":          "",
+	"executor.defaults.staging_storage_class": "",
+	// Registered so AutomaticEnv binds LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU /
+	// _MEMORY (the env-only Helm override path, #725). Empty leaves the L0 default
+	// unset, so a task inherits no platform resource default unless the operator
+	// configures one. Scalars (Kubernetes quantities, e.g. "250m"/"256Mi").
+	"executor.defaults.resources_cpu":                  "",
+	"executor.defaults.resources_memory":               "",
 	"executor.defaults.run_tasks_as_non_root":          true,
 	"executor.defaults.read_only_task_root_filesystem": false,
 	// Warm worker pools (ADR 0058). Ships a byte-for-byte no-op: warm pools OFF =

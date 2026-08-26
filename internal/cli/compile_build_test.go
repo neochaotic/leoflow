@@ -86,6 +86,72 @@ func TestGeneratedDockerfileLayers(t *testing.T) {
 	}
 }
 
+// TestGeneratedDockerfileDbtCopiesProject verifies that for a dbt project the
+// generated Dockerfile COPYs the dbt project directory (dbt_project.yml + models/
+// + baked manifest.json) to the workdir instead of the nonexistent dag.py, and
+// does not set a PYTHONPATH pointing at a Python module that dbt does not ship
+// (#769). The dbt task runs `dbt --project-dir <project>` from WORKDIR
+// /home/leoflow, so the project must land at /home/leoflow/<project>.
+func TestGeneratedDockerfileDbtCopiesProject(t *testing.T) {
+	cfg := &domain.LeoflowConfig{
+		PythonVersion: "3.11",
+		Dependencies:  []string{"dbt-duckdb==1.8.0"},
+		Dbt:           &domain.DbtConfig{Project: "analytics"},
+	}
+	// A dbt-only project defaults DagSource to dag.py, which does not exist —
+	// the pre-fix COPY dag.py is what fails the build.
+	df, err := generatedDockerfile(cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("generatedDockerfile() error = %v", err)
+	}
+	if !strings.Contains(df, "COPY analytics /home/leoflow/analytics") {
+		t.Errorf("generatedDockerfile() should COPY the dbt project dir, got:\n%s", df)
+	}
+	if strings.Contains(df, "dag.py") {
+		t.Errorf("generatedDockerfile() must not reference dag.py for a dbt project:\n%s", df)
+	}
+	if strings.Contains(df, "PYTHONPATH") {
+		t.Errorf("generatedDockerfile() must not set PYTHONPATH for a dbt project:\n%s", df)
+	}
+	// The dependency layer (dbt adapter) is still emitted before the COPY.
+	if !strings.Contains(df, "pip install") || !strings.Contains(df, "dbt-duckdb==1.8.0") {
+		t.Errorf("generatedDockerfile() should keep the pip dependency layer:\n%s", df)
+	}
+}
+
+// TestGeneratedDockerfileDbtProjectPathCleaned verifies a project declared with a
+// leading ./ lands at a clean /home/leoflow/<project> path matching the baked
+// --project-dir, so `dbt --project-dir ./transform` resolves inside the image.
+func TestGeneratedDockerfileDbtProjectPathCleaned(t *testing.T) {
+	cfg := &domain.LeoflowConfig{PythonVersion: "3.11", Dbt: &domain.DbtConfig{Project: "./transform"}}
+	df, err := generatedDockerfile(cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("generatedDockerfile() error = %v", err)
+	}
+	if !strings.Contains(df, "COPY transform /home/leoflow/transform") {
+		t.Errorf("generatedDockerfile() should COPY the cleaned project path, got:\n%s", df)
+	}
+}
+
+// TestEnsureDockerfileDbtUsesExisting verifies a dbt project that ships its own
+// Dockerfile still wins — ensureDockerfile honors it verbatim and never generates.
+func TestEnsureDockerfileDbtUsesExisting(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "Dockerfile")
+	if err := os.WriteFile(existing, []byte("FROM ghcr.io/acme/dbt:custom\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &domain.LeoflowConfig{PythonVersion: "3.11", Dbt: &domain.DbtConfig{Project: "analytics"}}
+	path, cleanup, err := ensureDockerfile(dir, "Dockerfile", cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("ensureDockerfile() error = %v", err)
+	}
+	defer cleanup()
+	if path != existing {
+		t.Errorf("path = %q, want the existing Dockerfile %q", path, existing)
+	}
+}
+
 // TestGeneratedDockerfileUnknownConnectorErrors verifies a typo'd connector name
 // fails generation loudly (it cannot resolve to a pip package) rather than
 // silently producing an image that ModuleNotFoundErrors at run time.

@@ -159,11 +159,15 @@ type DefaultResources struct {
 }
 
 // AsResources expands the simplified default cpu/memory into a full Resources
-// with requests == limits, so a task that inherits the DAG-wide default reaches
-// Guaranteed QoS rather than BestEffort/Burstable (the QoS story of #725). This
-// mirrors how the per-cluster platform default is built at dispatch. Returns nil
-// when the receiver is nil or declares no quantity, so callers can treat a
-// missing default as "leave the task untouched".
+// with requests == limits (the QoS story of #725). This mirrors how the
+// per-cluster platform default is built at dispatch. Returns nil when the
+// receiver is nil or declares no quantity, so callers can treat a missing
+// default as "leave the task untouched".
+//
+// Guaranteed QoS is reached only when BOTH cpu and memory are set (and thus
+// equal across requests and limits). A partial default — only cpu, or only
+// memory — leaves the other dimension unset, so Kubernetes classifies the pod
+// as Burstable, not Guaranteed.
 func (d *DefaultResources) AsResources() *Resources {
 	if d == nil || (d.CPU == "" && d.Memory == "") {
 		return nil

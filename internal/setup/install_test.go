@@ -189,6 +189,54 @@ func TestEnsurePythonBranches(t *testing.T) {
 	})
 }
 
+// TestEnsurePythonFailedDownloadKeepsExistingInstall locks the crash-safety
+// invariant of #754: EnsurePython runs fetchVerify (download + checksum) BEFORE
+// os.RemoveAll of the managed tree, so a download that errors — the network is
+// down, the mirror 500s, the checksum drifts — must leave a working managed
+// interpreter untouched on disk rather than destroying it and leaving nothing.
+//
+// The setup is the realistic upgrade case: a complete managed install of an
+// OLDER version is present (its sentinel forces EnsurePython past the
+// short-circuit and into the download), and the download fails. The pre-existing
+// binary must survive.
+func TestEnsurePythonFailedDownloadKeepsExistingInstall(t *testing.T) {
+	home := t.TempDir()
+	managed := filepath.Join(home, "python", "bin", "python3.11")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/existing interpreter"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Sentinel records an OLDER version, so EnsurePython reaches the download
+	// instead of short-circuiting on the present-and-current install.
+	if err := os.WriteFile(filepath.Join(home, "python", pyVersionFile), []byte("3.10.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingRoundTripper{}
+	_, err := EnsurePython(context.Background(), EnsureOpts{
+		Home: home, GOOS: "linux", GOARCH: "amd64",
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+		Stat:     os.Stat,
+		Client:   &http.Client{Transport: rt},
+	})
+	if err == nil {
+		t.Fatal("err = nil, want the failed download surfaced as an error")
+	}
+	if !rt.called {
+		t.Fatal("expected EnsurePython to attempt the download")
+	}
+	// The invariant: the pre-existing managed interpreter is still on disk,
+	// byte-for-byte, because the failed download returned before os.RemoveAll.
+	got, rerr := os.ReadFile(managed)
+	if rerr != nil {
+		t.Fatalf("existing managed interpreter was destroyed by a failed download: %v", rerr)
+	}
+	if string(got) != "#!/existing interpreter" {
+		t.Errorf("managed interpreter = %q, want the pre-existing content intact", got)
+	}
+}
+
 func TestExtractTarGzDirAndSymlink(t *testing.T) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)

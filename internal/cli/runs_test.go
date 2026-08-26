@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -160,6 +161,143 @@ func TestRunsTriggerEnvTokenBeatsConfig(t *testing.T) {
 	}
 	if *gotAuth != "Bearer env-token" {
 		t.Errorf("auth = %q, want the env var to win over config (Bearer env-token)", *gotAuth)
+	}
+}
+
+// logsServer mounts the Airflow-compatible task-instance endpoints the
+// `runs logs` command talks to: the single task-instance lookup (which carries
+// try_number, used to resolve the latest attempt) and the catch-all logs route
+// (`.../logs/{try}`). Each attempt's body is keyed by its try number so a test
+// can prove which attempt was streamed; the special try -1 stands in for the
+// graceful "no logs" passthrough. It records the last logs path + Authorization
+// header it served.
+func logsServer(t *testing.T, tryNumber int, bodyByTry map[int]string) (srv *httptest.Server, gotLogsPath, gotAuth *string) {
+	t.Helper()
+	var logsPath, auth string
+	mux := http.NewServeMux()
+	// GET .../taskInstances/etl-task -> the instance, carrying its try_number.
+	mux.HandleFunc("/api/v2/dags/etl/dagRuns/run-1/taskInstances/etl-task",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v2/dags/etl/dagRuns/run-1/taskInstances/etl-task" {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(`{"task_id":"etl-task","try_number":` + itoa(tryNumber) + `}`))
+		})
+	// GET .../taskInstances/etl-task/logs/{try} -> the attempt's plain-text logs.
+	mux.HandleFunc("/api/v2/dags/etl/dagRuns/run-1/taskInstances/etl-task/logs/",
+		func(w http.ResponseWriter, r *http.Request) {
+			logsPath = r.URL.Path
+			auth = r.Header.Get("Authorization")
+			try := 0
+			_, _ = fmt.Sscanf(strings.TrimPrefix(r.URL.Path,
+				"/api/v2/dags/etl/dagRuns/run-1/taskInstances/etl-task/logs/"), "%d", &try)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			if body, ok := bodyByTry[try]; ok {
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			_, _ = w.Write([]byte("No logs available for this attempt.\n"))
+		})
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, &logsPath, &auth
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
+
+// TestRunsLogsRegistered pins that `leoflow runs logs` exists as a subcommand
+// under `runs`, next to `trigger`/`status`/`list`.
+func TestRunsLogsRegistered(t *testing.T) {
+	root := NewRootCommand()
+	cmd, _, err := root.Find([]string{"runs", "logs"})
+	if err != nil {
+		t.Fatalf("finding `runs logs`: %v", err)
+	}
+	if cmd.Name() != "logs" {
+		t.Fatalf("`runs logs` resolved to %q, want a registered `logs` subcommand", cmd.Name())
+	}
+}
+
+// TestRunsLogsStreamsAttempt proves the command hits the task-instance logs
+// endpoint for the requested --try, injects the bearer token, and streams the
+// body to stdout.
+func TestRunsLogsStreamsAttempt(t *testing.T) {
+	srv, gotPath, gotAuth := logsServer(t, 2, map[int]string{2: "boot\nrunning task\ndone\n"})
+
+	out, _, err := run(t, "runs", "logs", "etl", "run-1", "etl-task",
+		"--try", "2", "--server", srv.URL, "--token", "jwt-xyz")
+	if err != nil {
+		t.Fatalf("runs logs: %v", err)
+	}
+	if *gotPath != "/api/v2/dags/etl/dagRuns/run-1/taskInstances/etl-task/logs/2" {
+		t.Errorf("hit %q, want the try-2 logs endpoint", *gotPath)
+	}
+	if *gotAuth != "Bearer jwt-xyz" {
+		t.Errorf("auth = %q, want Bearer jwt-xyz", *gotAuth)
+	}
+	if !strings.Contains(out, "running task") || !strings.Contains(out, "done") {
+		t.Errorf("output = %q, want the streamed log body", out)
+	}
+}
+
+// TestRunsLogsDefaultsToLatestTry proves that with no --try the command reads
+// the task instance's current try_number and streams that attempt.
+func TestRunsLogsDefaultsToLatestTry(t *testing.T) {
+	srv, gotPath, _ := logsServer(t, 3, map[int]string{3: "third attempt output\n"})
+
+	out, _, err := run(t, "runs", "logs", "etl", "run-1", "etl-task",
+		"--server", srv.URL, "--token", "t")
+	if err != nil {
+		t.Fatalf("runs logs (default try): %v", err)
+	}
+	if *gotPath != "/api/v2/dags/etl/dagRuns/run-1/taskInstances/etl-task/logs/3" {
+		t.Errorf("hit %q, want the latest attempt (try 3) resolved from the task instance", *gotPath)
+	}
+	if !strings.Contains(out, "third attempt output") {
+		t.Errorf("output = %q, want the latest attempt's logs", out)
+	}
+}
+
+// TestRunsLogsNoLogsMessagePassesThrough proves the endpoint's graceful
+// "No logs available for this attempt." body reaches stdout as-is, not an error.
+func TestRunsLogsNoLogsMessagePassesThrough(t *testing.T) {
+	srv, _, _ := logsServer(t, 1, map[int]string{}) // no body for any try -> the graceful message
+
+	out, _, err := run(t, "runs", "logs", "etl", "run-1", "etl-task",
+		"--try", "1", "--server", srv.URL, "--token", "t")
+	if err != nil {
+		t.Fatalf("the no-logs path must not error, got %v", err)
+	}
+	if !strings.Contains(out, "No logs available for this attempt.") {
+		t.Errorf("output = %q, want the graceful no-logs message passed through", out)
+	}
+}
+
+// TestRunsLogsUsesConfigToken is the logs-side counterpart of the trigger/status
+// config-token tests: a logged-in session's persisted token must reach the
+// endpoint without repeating the credential.
+func TestRunsLogsUsesConfigToken(t *testing.T) {
+	srv, _, gotAuth := logsServer(t, 1, map[int]string{1: "ok\n"})
+	cfgPath := seedSessionConfig(t, srv.URL, "jwt-from-config")
+
+	if _, _, err := run(t, "runs", "logs", "etl", "run-1", "etl-task", "--try", "1", "--config", cfgPath); err != nil {
+		t.Fatalf("runs logs with a logged-in session: %v", err)
+	}
+	if *gotAuth != "Bearer jwt-from-config" {
+		t.Errorf("auth = %q, want the token persisted by login (Bearer jwt-from-config)", *gotAuth)
+	}
+}
+
+// TestRunsLogsErrorsOnServerFailure pins that a non-2xx (that is not the
+// graceful no-logs 200) surfaces as a CLI error rather than empty success.
+func TestRunsLogsErrorsOnServerFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	if _, _, err := run(t, "runs", "logs", "etl", "run-1", "etl-task", "--try", "1", "--server", srv.URL); err == nil {
+		t.Error("a non-2xx logs response should error")
 	}
 }
 

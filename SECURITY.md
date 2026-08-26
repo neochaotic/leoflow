@@ -80,7 +80,7 @@ days", which described a versioning shape the project does not have.
 
 ## Recognition
 
-We maintain a [Security Hall of Fame](docs/security-hall-of-fame.md) acknowledging researchers who have responsibly disclosed vulnerabilities. With your permission, we credit you publicly when we publish the fix.
+We maintain a Security Hall of Fame acknowledging researchers who have responsibly disclosed vulnerabilities. With your permission, we credit you publicly when we publish the fix.
 
 ## Out of Scope
 

@@ -1,0 +1,66 @@
+name: Link & image check (Markdown)
+
+# Link + image checker for the repo's hand-written governance Markdown (README and
+# friends). It exists because two breakages shipped with nothing guarding them:
+# README images 404'd after the Hugo migration moved their assets, and README doc
+# links 404'd — both are dead *relative* paths a build-time check catches instantly.
+#
+# Companion coverage: the built Hugo site (website/public) is link-checked inside
+# website-build.yml, so between the two workflows we cover (a) the rendered site and
+# (b) the tracked Markdown. Behaviour (retries, accepted status codes, loopback) is
+# in lychee.toml; flaky-host ignores are in .lycheeignore — both at the repo root.
+#
+# Scoped to the checked files + the checker's own config so it only fires when a
+# change can actually affect the result.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "CODE_OF_CONDUCT.md"
+      - "SECURITY.md"
+      - "lychee.toml"
+      - ".lycheeignore"
+      - ".github/workflows/link-check.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "CODE_OF_CONDUCT.md"
+      - "SECURITY.md"
+      - "lychee.toml"
+      - ".lycheeignore"
+      - ".github/workflows/link-check.yml"
+  workflow_dispatch:
+
+# Least-privilege: read-only. No write scopes — this job only reports.
+permissions:
+  contents: read
+
+jobs:
+  markdown-links:
+    name: lychee (README + governance docs)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # lychee resolves relative links/images against each file's own directory, so
+      # a dead `docs/assets/x.png` in README (the #758 class) or a moved doc link
+      # (the #740 class) fails here. External links are checked too but softened by
+      # lychee.toml (429/403/timeouts tolerated) and .lycheeignore (flaky hosts).
+      - name: Check links & images
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --config lychee.toml
+            --no-progress
+            README.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md
+          # Fail the job (and thus the PR gate) when a link/image is broken.
+          fail: true
+          # Authenticated github.com requests dodge the anonymous rate limit that
+          # would otherwise flake links to the repo's own issues/PRs.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          jobSummary: true

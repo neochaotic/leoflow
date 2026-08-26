@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow server"
 linkTitle: "server"
-weight: 41
+weight: 42
 ---
 
 Information about running the control plane.

@@ -183,8 +183,10 @@ How it works, and the Phase-A limits:
 - The provider must be declared in `leoflow.yaml` (`connectors:` or
   `dependencies:`). If it isn't, `leoflow compile` fails and prints the exact line
   to add — no surprise `ModuleNotFoundError` in the pod.
-- **Sensors** run in **poke mode** (the pod holds until the condition is met).
-  `mode="reschedule"` is not supported yet and fails with a clear message.
+- **Sensors** run in **poke mode** by default (the pod holds until the
+  condition is met), or `mode="reschedule"` (ADR 0040 Phase B, #380/#389) — the
+  pod is released between pokes and the scheduler re-dispatches the sensor,
+  preserving its `try_number`, once its next-poke time passes.
 - **Jinja templating** is best-effort (`render_template_fields` runs with a
   minimal context); for rich macros (`{{ ds }}`, `{{ ti }}`, custom params),
   compute the value in a `@task` and pass it in.
@@ -204,11 +206,6 @@ refused at compile with a clear error naming the construct
 The unsupported set, with the things Airflow users most often expect to
 "just work" called out first:
 
-- **Reschedule-mode sensors** — a sensor with `mode="reschedule"` (frees the
-  worker between pokes) is not supported yet; it fails at runtime with a clear
-  message. Use the default `mode="poke"` (the pod holds until the condition is
-  met). *Poke-mode sensors and provider operators ARE supported* — see
-  [`airflow_operator`](#provider-operators-sensors-airflow_operator) above.
 - **Deferrable operators / sensors** — anything with `deferrable=True` (it suspends
   the task onto a *trigger*) is not supported yet: Leoflow has no triggerer (ADR
   0040 Phase C). It fails at runtime with a clear message. Pass `deferrable=False`

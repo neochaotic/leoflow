@@ -9,7 +9,15 @@ weight: 400
 description: "ADR 0040: Airflow operator + sensor execution — native fast path + generic executor"
 ---
 
-**Status:** Accepted (design; implementation post-RC, phased)
+**Status:** Accepted — **Phase A + B shipped**. `airflow_operator` is a live,
+validated task type (`internal/domain/dag.go` `TaskTypeAirflowOperator`;
+`internal/agent/command.go`, `internal/agentrpc/server.go`; parser support in
+`parser/leoflow_parser/compiler.py`) covering the generic executor for
+synchronous operators and poke-mode sensors (Phase A) and reschedule-mode
+sensors (Phase B — `task_reschedule` state in `internal/scheduler`,
+migrations 017/018). Phase C (deferrable operators/triggerer) and the
+goroutine-based native sensor engine remain **not started**, per the "Explicitly
+NOT in this pass" scope below.
 **Date:** 2026-06-04
 **Companions:** ADR 0038 (`connectors:` sugar), ADR 0039 (generated connector catalog), ADR 0024 (parser structural shim), ADR 0036 (runtime compat shim — deferred), ADR 0022/0023 (task config)
 

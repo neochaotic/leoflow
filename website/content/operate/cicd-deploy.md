@@ -63,6 +63,15 @@ manually so you can watch the DAG cross each boundary. Come back here to wire
 the same steps into CI.
 {{% /alert %}}
 
+{{% alert title="A CI run failing? Check the prerequisites" color="info" %}}
+Registry auth, RBAC scope, non-root images, private-registry pulls, and the
+`--dag-version`/`409` gotcha are exactly the errors CI hits first, since a
+runner has none of a laptop's ambient state (no `docker login`, no
+`leoflow auth login` session, no git history for `--dag-version` to resolve
+against). **[Deploy prerequisites & why shortcuts fail](/operate/deploy-prerequisites/)**
+has the exact error and fix for each.
+{{% /alert %}}
+
 ## Your repo of DAGs (CI is the recommended path)
 
 In Pro you keep your DAGs in a Git repository — one directory per DAG — and **CI**

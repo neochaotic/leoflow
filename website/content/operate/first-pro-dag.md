@@ -29,7 +29,7 @@ flowchart LR
 {{% alert title="Two versions of this walkthrough" color="info" %}}
 - **The simple path (below)** — a minimal DAG with a `Dockerfile`, deployed
   today with `leoflow deploy`. Everything here runs as-is.
-- **[The complete path](#the-complete-path-your-own-dag-yaml-driven)** — author
+- **[The complete path](#the-complete-path--your-own-dag-yaml-driven)** — author
   your own DAG with **no Dockerfile** (the build is synthesized from
   `leoflow.yaml`) and real `connectors:`. That richer flow is still landing;
   it is shown at the end so you can see where this is going.
@@ -103,7 +103,7 @@ Your image layers `FROM` the **published Leoflow task base**
 (`ghcr.io/neochaotic/leoflow-runtime:py3.11`) — it bundles the `leoflow-agent`
 (PID 1, talks gRPC to the control plane) and the `leoflow_runtime` helper, is
 multi-arch and signed, and is built by our CI. You only add your deps and copy
-your DAG in. (In [the complete path](#the-complete-path-your-own-dag-yaml-driven)
+your DAG in. (In [the complete path](#the-complete-path--your-own-dag-yaml-driven)
 even this Dockerfile goes away — it is synthesized from `leoflow.yaml`.)
 {{% /alert %}}
 

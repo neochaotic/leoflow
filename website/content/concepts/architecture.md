@@ -148,7 +148,7 @@ default** so a stock deployment is byte-for-byte the historical path:
 
 The credential mechanics are already drawn on the credential-transport page and
 are not redrawn here: the one-`TokenReview`-then-task-scoped-JWT handshake is the
-[exchange flow](/operate/agent-credential-transport/#exchange-projected-sa-token-tokenreview),
+[exchange flow](/operate/agent-credential-transport/#exchange--projected-sa-token--tokenreview),
 and the pod-scoped-vs-attempt-scoped split that makes warm-pool reuse safe is the
 [two-token model](/operate/agent-credential-transport/#the-two-token-model) (also reused
 by link from [Warm worker pools](/operate/warm-pools/)).

@@ -104,7 +104,7 @@ control plane** (measured against the `lifecycle` example).
 ### Choosing an executor
 
 There are **only these two** — and deliberately **no Docker executor**
-([ADR 0015](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0015-kubernetes-only-execution.md)).
+([ADR 0015](/project/adrs/0015-kubernetes-only-execution/)).
 A Docker-socket executor would mean importing the Docker Go SDK
 (`github.com/docker/docker`), which carries an unfixable advisory (Moby AuthZ
 bypass, GO-2026-4887) reachable from the control-plane binary — it would fail the

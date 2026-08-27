@@ -45,6 +45,11 @@ def _as_operator(node):
 # collects every non-default/description kwarg into the param's JSON Schema; we
 # pass through the recognised keyword set so the compiled schema is a clean,
 # validator-ready JSON-Schema object (unknown kwargs are ignored, not emitted).
+# Sentinel marking a Param declared with no default (a required parameter),
+# distinct from an explicit default of None.
+_UNSET = object()
+
+
 class Param:
     """Structural stand-in for Airflow's ``airflow.sdk.Param``.
 
@@ -58,8 +63,12 @@ class Param:
     validated here — the control plane validates the run conf against this schema
     at trigger time."""
 
-    def __init__(self, default=None, description=None, **kwargs):
-        self.default = default
+    def __init__(self, default=_UNSET, description=None, **kwargs):
+        # Distinguish "no default given" (a required param) from an explicit
+        # None/null default. Airflow uses the same sentinel technique; the
+        # compiler omits the `default` key entirely for a required param.
+        self.has_default = default is not _UNSET
+        self.default = None if default is _UNSET else default
         self.description = description
         schema = dict(kwargs.pop("schema", None) or {})
         schema.update(kwargs)

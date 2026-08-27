@@ -675,9 +675,15 @@ def _params(dag) -> dict[str, Any]:
         return {}
     out: dict[str, Any] = {}
     for name, value in declared.items():
-        default = getattr(value, "default", value)
         schema = getattr(value, "schema", None)
-        out[name] = {"default": default, "schema": dict(schema) if schema else {}}
+        entry: dict[str, Any] = {"schema": dict(schema) if schema else {}}
+        # Omit `default` for a required Param (one declared with no default), so
+        # the trigger-time check can distinguish required from a null default. A
+        # bare value (params={"limit": 5}) has no has_default attr → it IS its
+        # own default.
+        if getattr(value, "has_default", True):
+            entry["default"] = getattr(value, "default", value)
+        out[name] = entry
     return out
 
 

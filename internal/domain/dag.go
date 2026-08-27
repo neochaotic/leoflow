@@ -133,7 +133,10 @@ type DAGSpec struct {
 // verbatim. Schema is {} (or absent) when the author declared a bare default
 // with no constraints, in which case any conf value for that key is accepted.
 type ParamSpec struct {
-	Default json.RawMessage `json:"default"`
+	// Default is the value merged into a run's conf when the trigger omits this
+	// key. Absent (omitempty, len 0) means the param is REQUIRED — the trigger
+	// must supply it — as distinct from an explicit JSON null default.
+	Default json.RawMessage `json:"default,omitempty"`
 	Schema  json.RawMessage `json:"schema,omitempty"`
 }
 

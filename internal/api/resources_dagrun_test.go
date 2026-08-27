@@ -50,6 +50,26 @@ func TestTriggerDagRunDefaultsConfToEmptyObject(t *testing.T) {
 	}
 }
 
+// TestTriggerDagRunNormalizesNullConf pins that an explicit JSON null conf is
+// treated as absent and persisted as the empty object, not the literal null —
+// the run's conf is contractually never null.
+func TestTriggerDagRunNormalizesNullConf(t *testing.T) {
+	srv := authedServer()
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/dagRuns", `{"conf":null}`)
+	if rec.Code >= http.StatusMultipleChoices {
+		t.Fatalf("trigger with null conf = %d, want 2xx; body=%q", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Conf json.RawMessage `json:"conf"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parsing response %q: %v", rec.Body.String(), err)
+	}
+	if string(got.Conf) != "{}" {
+		t.Errorf("conf = %s, want {} when conf is JSON null", got.Conf)
+	}
+}
+
 // TestTriggerDagRunRejectsNonObjectConf pins that a conf that is valid JSON but
 // not an object (an array or scalar) is a 400: conf must map to task params.
 func TestTriggerDagRunRejectsNonObjectConf(t *testing.T) {

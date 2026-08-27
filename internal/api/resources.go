@@ -363,6 +363,12 @@ func createDagRunHandler(repo DagRunRepository, audit AuditWriter) gin.HandlerFu
 				AbortProblem(c, http.StatusBadRequest, "bad request", "conf must be a JSON object: "+err.Error())
 				return
 			}
+			// A JSON null unmarshals into a nil map without error; treat it as
+			// absent so the run defaults to the empty object rather than
+			// persisting a literal null (conf is contractually never null).
+			if obj == nil {
+				body.Conf = nil
+			}
 		}
 		logical := time.Now().UTC()
 		if body.LogicalDate != nil {

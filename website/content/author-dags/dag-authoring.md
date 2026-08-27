@@ -97,6 +97,19 @@ with DAG("my_pipeline", schedule="@daily", catchup=False, tags=["etl"]):
     transform(extract())
 ```
 
+`from airflow.sdk import …` is the canonical Airflow 3 spelling and what we
+recommend. The deprecated-but-still-valid Airflow 3 aliases resolve to the same
+objects, so a migrated DAG compiles unchanged:
+
+- `from airflow.decorators import task, dag` → the `airflow.sdk` decorators.
+- `from airflow import DAG` → `airflow.sdk.DAG`.
+
+The core `airflow.operators.*` operators, however, were **removed** from Airflow
+in 3.0 and relocated to `apache-airflow-providers-standard`. Importing one (e.g.
+`from airflow.operators.bash import BashOperator`) fails the compile with a
+message pointing at the replacement — use
+`from airflow.providers.standard.operators.bash import BashOperator` instead.
+
 ### Supported task types
 
 Leoflow runs the common types on a **native fast path** and everything else — any

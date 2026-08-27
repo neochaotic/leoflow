@@ -5,7 +5,15 @@ import functools
 
 from airflow._core import DAG, BaseOperator, XComArg
 
-__all__ = ["DAG", "BaseOperator", "XComArg", "task", "EmptyOperator", "PythonOperator"]
+__all__ = [
+    "DAG",
+    "BaseOperator",
+    "XComArg",
+    "task",
+    "dag",
+    "EmptyOperator",
+    "PythonOperator",
+]
 
 
 class PythonOperator(BaseOperator):
@@ -56,3 +64,25 @@ def task(fn=None, **dec_kwargs):
         return maker
 
     return wrap(fn) if callable(fn) else wrap
+
+
+def dag(dag_id=None, **dag_kwargs):
+    """TaskFlow @dag: decorate a function that defines a DAG's tasks. Calling the
+    decorated function builds a DAG (id defaults to the function name) and collects
+    the tasks its body defines within the DAG context — exactly like a
+    ``with DAG(...)`` block. Used bare (``@dag``) the first argument is the
+    decorated function; with arguments (``@dag(schedule=…)``) it is the dag_id."""
+    func = dag_id if callable(dag_id) else None
+    explicit_id = None if callable(dag_id) else dag_id
+
+    def wrap(defining_fn):
+        @functools.wraps(defining_fn)
+        def factory(*args, **kwargs):
+            built = DAG(explicit_id or defining_fn.__name__, **dag_kwargs)
+            with built:
+                defining_fn(*args, **kwargs)
+            return built
+
+        return factory
+
+    return wrap(func) if func is not None else wrap

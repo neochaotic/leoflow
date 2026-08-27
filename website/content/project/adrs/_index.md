@@ -70,3 +70,4 @@ The *why* behind Leoflow's design. ADRs are immutable once accepted.
 - [ADR 0056: Task-log object sink — native dual-SDK (S3 + GCS), keyless-first](/project/adrs/0056-task-log-object-sink/)
 - [ADR 0057: OIDC/SSO authentication with fail-closed tenant pinning](/project/adrs/0057-oidc-sso/)
 - [ADR 0058: Warm worker pools — pod-reuse semantics (N:1)](/project/adrs/0058-warm-worker-pools/)
+- [ADR 0059: OpenLineage emission from the Go control plane → OpenMetadata](/project/adrs/0059-openlineage-emission/)

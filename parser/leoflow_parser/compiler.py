@@ -73,6 +73,19 @@ def compile_dag(
     params = _params(dag)
     if params:
         spec["params"] = params
+    # Scheduling/metadata attributes the domain + scheduler honor. Emitted only
+    # when set, so a DAG that declares none keeps its compiled shape.
+    description = getattr(dag, "description", None)
+    if isinstance(description, str) and description:
+        spec["description"] = description
+    start_date = _start_date(dag)
+    if start_date:
+        spec["start_date"] = start_date
+    mar = getattr(dag, "max_active_runs", None)
+    if isinstance(mar, int) and not isinstance(mar, bool) and mar > 0:
+        spec["max_active_runs"] = mar
+    if getattr(dag, "catchup", None) is True:
+        spec["catchup"] = True
     return spec
 
 
@@ -660,6 +673,20 @@ def _schedule(dag) -> str | None:
         return summary
     schedule = getattr(dag, "schedule", None)
     return schedule if isinstance(schedule, str) else None
+
+
+def _start_date(dag) -> str | None:
+    """Serialize the DAG's start_date to an ISO-8601 string (the domain field is
+    a string; the schema wants date-time). Airflow's start_date is a datetime;
+    accept anything with isoformat() and fall back to str()."""
+    value = getattr(dag, "start_date", None)
+    if value is None:
+        return None
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        return iso()
+    text = str(value)
+    return text or None
 
 
 def _params(dag) -> dict[str, Any]:

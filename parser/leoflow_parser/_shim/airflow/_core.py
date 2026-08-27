@@ -127,6 +127,14 @@ class DAG:
         # control plane can default + validate a run's conf at trigger time. None
         # when the DAG declares none, keeping the compiled shape unchanged.
         self.params = kwargs.get("params")
+        # Scheduling/metadata attributes the domain + scheduler already honor
+        # (max_active_runs concurrency, catchup/start_date backfill, description
+        # for the UI): captured so they are not silently dropped. Absent leaves
+        # them off the compiled spec, keeping a DAG that sets none unchanged.
+        self.description = kwargs.get("description")
+        self.start_date = kwargs.get("start_date")
+        self.max_active_runs = kwargs.get("max_active_runs")
+        self.catchup = kwargs.get("catchup")
         # Collect on construction too, so DAGs defined without `with` (e.g.
         # module-level `dag = DAG(...)` with operators attached via dag=) are seen.
         COLLECTED[dag_id] = self

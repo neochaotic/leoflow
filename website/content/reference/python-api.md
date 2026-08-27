@@ -14,12 +14,15 @@ bridges its return value to XCom. It is installed in the DAG image (and the dev
 venv); your `dag.py` uses the **Apache Airflow Task SDK** (`from airflow.sdk import
 DAG, task`), and the agent invokes `leoflow_runtime` to execute the callable.
 
-{{% alert title="Open the rendered reference" color="primary" %}}
-The full docstring reference (every module, class, and function) is rendered from
-source by [`pdoc`](https://pdoc.dev/) and published as a self-contained subsite:
-
-**[→ Open the Python runtime API reference](/python-api/)**
-{{% /alert %}}
+<div class="lf-cards">
+  <a class="lf-card lf-card--hero" href="/python-api/leoflow_runtime.html">
+    <span class="lf-card__badge">Docstrings</span>
+    <span class="lf-card__icon"><i class="fa-brands fa-python"></i></span>
+    <span class="lf-card__title">Open the Python API reference (docstrings)</span>
+    <span class="lf-card__desc">The full generated docstring reference — every module, class, and function in <code>leoflow_runtime</code>, rendered from source by <a href="https://pdoc.dev/">pdoc</a>. Opens the self-contained reference subsite.</span>
+    <span class="lf-card__more">Open the reference →</span>
+  </a>
+</div>
 
 It is a **sidecar**: pdoc's output does not share this site's Docsy theming, so it
 is served verbatim under `/python-api/` and linked (not embedded) from here. The

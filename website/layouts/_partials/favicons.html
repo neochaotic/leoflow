@@ -1,0 +1,18 @@
+{{/*
+  Project override of Docsy's favicons partial.
+
+  Docsy's stock partial points at static/favicons/*, which this project does not
+  ship — the brand icons live under static/assets/ instead, so the tab icon was
+  blank. This points every favicon <link> at the existing assets. Paths go through
+  `relURL` so they carry the GitHub Pages /leoflow/ subpath (matching the baseURL +
+  canonifyURLs setup), and each target file exists under website/static/assets/.
+*/ -}}
+<link rel="icon" href="{{ "assets/favicon.ico" | relURL }}" sizes="any">
+<link rel="icon" type="image/png" href="{{ "assets/icon-16.png" | relURL }}" sizes="16x16">
+<link rel="icon" type="image/png" href="{{ "assets/icon-32.png" | relURL }}" sizes="32x32">
+<link rel="icon" type="image/png" href="{{ "assets/icon-48.png" | relURL }}" sizes="48x48">
+<link rel="icon" type="image/png" href="{{ "assets/icon-64.png" | relURL }}" sizes="64x64">
+<link rel="icon" type="image/png" href="{{ "assets/icon-128.png" | relURL }}" sizes="128x128">
+<link rel="icon" type="image/png" href="{{ "assets/icon-192.png" | relURL }}" sizes="192x192">
+<link rel="icon" type="image/png" href="{{ "assets/icon-256.png" | relURL }}" sizes="256x256">
+<link rel="apple-touch-icon" href="{{ "assets/icon-180.png" | relURL }}" sizes="180x180">

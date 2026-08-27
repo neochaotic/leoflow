@@ -3,6 +3,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -109,13 +110,31 @@ type DAGSpec struct {
 	// valid and means the DAG declares nothing — the additive, back-compatible
 	// default. These carry the declaration only; secret delivery still ships the
 	// whole tenant vault until enforcement lands on a later increment.
-	Variables   []string   `json:"variables,omitempty"`
-	Connections []string   `json:"connections,omitempty"`
-	Tasks       []TaskSpec `json:"tasks"`
+	Variables   []string `json:"variables,omitempty"`
+	Connections []string `json:"connections,omitempty"`
+	// Params are the DAG's author-declared run parameters (Airflow's params=),
+	// keyed by name. Each carries a Default (materialized into a run's conf when
+	// the trigger omits that key) and an optional JSON Schema the trigger-time
+	// conf value is validated against. Absent (empty) means the DAG declares no
+	// params — the additive, back-compatible default, so the compiled shape of a
+	// param-free DAG is unchanged. Part of the immutable spec (CanonicalHash), so
+	// changing a default or schema produces a new DAG version.
+	Params map[string]ParamSpec `json:"params,omitempty"`
+	Tasks  []TaskSpec           `json:"tasks"`
 	// Source is the original dag.py text, captured at compile time so the UI's
 	// Code tab can show the Python a human wrote (not the compiled spec). It is
 	// part of the artifact: changing it produces a new version.
 	Source string `json:"source,omitempty"`
+}
+
+// ParamSpec is one author-declared DAG-run parameter: a default value and the
+// JSON Schema its trigger-time conf value is validated against. Both are carried
+// as raw JSON so an arbitrary default and an arbitrary schema round-trip
+// verbatim. Schema is {} (or absent) when the author declared a bare default
+// with no constraints, in which case any conf value for that key is accepted.
+type ParamSpec struct {
+	Default json.RawMessage `json:"default"`
+	Schema  json.RawMessage `json:"schema,omitempty"`
 }
 
 // StagingConfig is the opt-in per-DAG-run shared staging volume (ADR 0022). Size
@@ -273,6 +292,14 @@ func (d *DAGSpec) Validate() error {
 			return fmt.Errorf("task %q uses the removed task type \"http_api\" (ADR 0047): "+
 				"the native inline HTTP executor ran in the control plane and was an SSRF surface. "+
 				"Use an HttpOperator, which runs in a task pod (declare connectors: [http])", t.TaskID)
+		}
+	}
+	// Refuse a declared param whose schema is invalid or whose default violates
+	// it now, at registration — not on every trigger (fail while the author can
+	// see it, matching the resource-quantity philosophy below).
+	for name, p := range d.Params {
+		if err := validateParamSpec(name, p.Schema, p.Default); err != nil {
+			return err
 		}
 	}
 	s, err := schemas()

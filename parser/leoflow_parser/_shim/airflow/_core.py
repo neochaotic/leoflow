@@ -41,6 +41,31 @@ def _as_operator(node):
     return node.operator if isinstance(node, XComArg) else node
 
 
+# JSON-Schema validation keywords a Param's kwargs may carry. Airflow's real Param
+# collects every non-default/description kwarg into the param's JSON Schema; we
+# pass through the recognised keyword set so the compiled schema is a clean,
+# validator-ready JSON-Schema object (unknown kwargs are ignored, not emitted).
+class Param:
+    """Structural stand-in for Airflow's ``airflow.sdk.Param``.
+
+    Records the declared default and its JSON Schema. Airflow treats a Param's
+    kwargs as the schema, so they are passed through verbatim (with an explicit
+    ``schema=`` dict, if given, as the base) rather than filtered against an
+    allow-list — that way composite keywords (``anyOf``/``allOf``/``oneOf``/
+    ``not``), every string/number facet, ``title``, ``examples``, etc. all reach
+    trigger-time validation. The compiler reads ``.default`` and ``.schema`` to
+    emit the DAG's ``params`` block. Task bodies never run, so nothing is
+    validated here — the control plane validates the run conf against this schema
+    at trigger time."""
+
+    def __init__(self, default=None, description=None, **kwargs):
+        self.default = default
+        self.description = description
+        schema = dict(kwargs.pop("schema", None) or {})
+        schema.update(kwargs)
+        self.schema = schema
+
+
 class BaseOperator:
     """Minimal operator base: registers into the active DAG and tracks edges."""
 
@@ -88,6 +113,11 @@ class DAG:
         # reads it as the fallback for a task's retries/retry_delay/execution_timeout
         # (#434). Kept as a plain dict; empty when not given.
         self.default_args: dict = dict(kwargs.get("default_args") or {})
+        # Author-declared DAG-run params (Airflow's params=): each value is a bare
+        # default or a Param carrying a JSON Schema. The compiler emits them so the
+        # control plane can default + validate a run's conf at trigger time. None
+        # when the DAG declares none, keeping the compiled shape unchanged.
+        self.params = kwargs.get("params")
         # Collect on construction too, so DAGs defined without `with` (e.g.
         # module-level `dag = DAG(...)` with operators attached via dag=) are seen.
         COLLECTED[dag_id] = self

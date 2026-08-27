@@ -70,6 +70,9 @@ def compile_dag(
     default_args = _default_args(config)
     if default_args:
         spec["default_args"] = default_args
+    params = _params(dag)
+    if params:
+        spec["params"] = params
     return spec
 
 
@@ -634,7 +637,7 @@ def _bind_call_arguments(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
 def _is_json_literal(value: Any) -> bool:
     """Reports whether value is safely round-trippable through JSON.
 
-    The runtime delivers params via LEOFLOW_PARAMS_JSON, so a value that
+    The runtime delivers params via LEOFLOW_PARAMS, so a value that
     survives ``json.dumps`` cleanly is the safe-to-capture set. Anything
     else (a class instance, a tuple of objects, a function) is dropped so
     we never emit invalid JSON into dag.json.
@@ -657,6 +660,25 @@ def _schedule(dag) -> str | None:
         return summary
     schedule = getattr(dag, "schedule", None)
     return schedule if isinstance(schedule, str) else None
+
+
+def _params(dag) -> dict[str, Any]:
+    """Emit the DAG's author-declared params as ``{name: {default, schema}}``.
+
+    A bare default (``params={"limit": 5}``) becomes ``{"default": 5, "schema": {}}``;
+    a ``Param`` contributes its recorded default plus the JSON Schema it built from
+    its kwargs. Returns an empty dict when the DAG declares no params, so the
+    compiler omits the key and the compiled shape of a param-free DAG is unchanged.
+    """
+    declared = getattr(dag, "params", None)
+    if not declared:
+        return {}
+    out: dict[str, Any] = {}
+    for name, value in declared.items():
+        default = getattr(value, "default", value)
+        schema = getattr(value, "schema", None)
+        out[name] = {"default": default, "schema": dict(schema) if schema else {}}
+    return out
 
 
 def _default_args(config: dict[str, Any]) -> dict[str, Any]:

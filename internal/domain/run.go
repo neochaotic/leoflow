@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // DAG is a registered DAG with its scheduling metadata (distinct from DAGSpec,
 // which is the compiled artifact).
@@ -42,6 +45,10 @@ type DagRun struct {
 	StartedAt   *time.Time
 	EndedAt     *time.Time
 	Note        string
+	// Conf is the run's configuration as a JSON object, supplied at trigger time
+	// and exposed to tasks as params. Empty means no configuration; storage
+	// persists the empty-object default so downstream readers never see NULL.
+	Conf json.RawMessage
 }
 
 // TaskInstance is an execution of a task within a DagRun.

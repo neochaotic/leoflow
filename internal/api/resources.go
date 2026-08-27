@@ -345,13 +345,30 @@ func getDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
 func createDagRunHandler(repo DagRunRepository, audit AuditWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			DagRunID    string     `json:"dag_run_id"`
-			LogicalDate *time.Time `json:"logical_date"`
-			Note        string     `json:"note"`
+			DagRunID    string          `json:"dag_run_id"`
+			LogicalDate *time.Time      `json:"logical_date"`
+			Note        string          `json:"note"`
+			Conf        json.RawMessage `json:"conf"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
 			return
+		}
+		// conf becomes the run's params; it must be a JSON object so it maps to
+		// keyed values, not an array or scalar. Absent conf leaves the run at the
+		// persisted empty-object default.
+		if len(body.Conf) > 0 {
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal(body.Conf, &obj); err != nil {
+				AbortProblem(c, http.StatusBadRequest, "bad request", "conf must be a JSON object: "+err.Error())
+				return
+			}
+			// A JSON null unmarshals into a nil map without error; treat it as
+			// absent so the run defaults to the empty object rather than
+			// persisting a literal null (conf is contractually never null).
+			if obj == nil {
+				body.Conf = nil
+			}
 		}
 		logical := time.Now().UTC()
 		if body.LogicalDate != nil {
@@ -377,6 +394,7 @@ func createDagRunHandler(repo DagRunRepository, audit AuditWriter) gin.HandlerFu
 			RunType:     "manual",
 			QueuedAt:    time.Now().UTC(),
 			Note:        body.Note,
+			Conf:        body.Conf,
 		}
 		created, err := repo.CreateDagRun(c.Request.Context(), tenantOf(c), c.Param("dag_id"), run)
 		if err != nil {

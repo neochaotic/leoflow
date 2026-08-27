@@ -61,3 +61,18 @@ func TestWarmTargetsWarmPoolsOff(t *testing.T) {
 		t.Errorf("warmTargets with pools off = %+v, want single dv1 with target 0", got)
 	}
 }
+
+// TestWarmTargetsExcludesStagingVersion pins ADR 0058 D5: a version whose DAG
+// opted into the per-run /staging volume gets no warm target, so the reconciler
+// never creates a warm pod (which lacks the mount) for it.
+func TestWarmTargetsExcludesStagingVersion(t *testing.T) {
+	exec := config.ExecutionSection{WarmPoolsEnabled: true, MinIdleWorkers: 1, MaxPoolSize: 8}
+	versions := []activeWarmVersion{
+		{dagVersionID: "dv1", image: "i", dagMinIdle: 2, tenantID: "tA"},
+		{dagVersionID: "dv2", image: "i", dagMinIdle: 2, tenantID: "tA", staging: true},
+	}
+	got := warmTargets(versions, exec)
+	if len(got) != 1 || got[0].DagVersionID != "dv1" {
+		t.Errorf("staging version must be excluded from warm targets, got %+v", got)
+	}
+}

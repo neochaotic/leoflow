@@ -4,8 +4,10 @@ package storage_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -13,6 +15,22 @@ import (
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/storage"
 )
+
+// confEqual compares two conf payloads by value, not by bytes: the conf column
+// is jsonb, so a round-trip re-serializes with canonical spacing (and unordered
+// keys). Byte comparison would fail on that cosmetic reformat even though the
+// data is identical.
+func confEqual(t *testing.T, got, want []byte) bool {
+	t.Helper()
+	var g, w any
+	if err := json.Unmarshal(got, &g); err != nil {
+		t.Fatalf("unmarshal got conf %s: %v", got, err)
+	}
+	if err := json.Unmarshal(want, &w); err != nil {
+		t.Fatalf("unmarshal want conf %s: %v", want, err)
+	}
+	return reflect.DeepEqual(g, w)
+}
 
 // TestCreateDagRunPersistsConf proves the conf column is written at create time
 // and reads back unchanged. The conf -> LEOFLOW_PARAMS -> task params pipeline
@@ -52,16 +70,16 @@ func TestCreateDagRunPersistsConf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create run with conf: %v", err)
 	}
-	if string(created.Conf) != string(conf) {
-		t.Errorf("created run conf = %s, want %s", created.Conf, conf)
+	if !confEqual(t, created.Conf, conf) {
+		t.Errorf("created run conf = %s, want %s (by value)", created.Conf, conf)
 	}
 
 	got, err := repo.GetDagRun(ctx, "default", dagID, "r1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
-	if string(got.Conf) != string(conf) {
-		t.Errorf("read-back conf = %s, want %s (the column must round-trip)", got.Conf, conf)
+	if !confEqual(t, got.Conf, conf) {
+		t.Errorf("read-back conf = %s, want %s (the column must round-trip by value)", got.Conf, conf)
 	}
 }
 

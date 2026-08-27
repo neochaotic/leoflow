@@ -48,6 +48,8 @@ In standalone mode, each task is either a Docker container (default) or a subpro
 
 The hybrid model resolves this without forcing every HTTP call to pay pod startup cost. Inline (goroutine) is the default and remains fast for the common short-call case. Pod mode is opt-in for the long-call case and inherits all the robustness, isolation, and observability of the standard pod-per-task model. A server-side cap on inline duration prevents misuse of the inline path for tasks that should be pod-based.
 
+**2026-08-27:** The "cold start matters more" consequence is addressed by three deliberate levers, each scoped to a real situation, so pod-per-task is not over-engineering for the cases where the per-pod overhead would otherwise dominate: (1) the **subprocess executor** for the local dev loop (`leoflow lite --executor subprocess`) runs tasks as host processes with no pod and no image build; (2) **`dbt_group()`** (ADR 0042/0043) runs a whole dbt project as one grouped task whose models dbt orchestrates internally, so N models are not N pods; (3) **warm worker pools** (ADR 0058, operator-set) reuse one pod across attempts of a DAG version. A *generic* "fuse arbitrary operators into one pod" capability was evaluated and **deliberately deferred** — see ADR 0043's decision log for the rationale. The pod-per-task default therefore stands unchanged; these levers relieve the cold-start cost without eroding the per-task isolation/retry/secret-scope the model exists to provide. The author-facing explanation lives in [Core concepts → When you pay for a pod](/concepts/core-concepts/#when-you-pay-for-a-pod-and-when-you-dont).
+
 ## Alternatives Rejected
 
 - **Persistent worker pool:** rejected because it reintroduces every problem Leoflow is trying to solve.

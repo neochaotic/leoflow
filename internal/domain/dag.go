@@ -77,16 +77,22 @@ type DAGSpec struct {
 	// exactly as before. The scheduler enforces it in PlanRun's scheduled→queued
 	// admission gate.
 	MaxActiveTasks int `json:"max_active_tasks,omitempty"`
-	// MinIdleWorkers is the number of warm workers the DAG AUTHOR wants kept ready
-	// for this DAG version so its tasks skip cold-pod startup (ADR 0058 N1b2b,
-	// warm pools model A2). It mirrors MaxActiveTasks as a per-DAG author-declared
-	// spec field: zero (the default) means no warmth, and a DAG that never sets it
-	// — and all of Lite — behaves exactly as before. It is only a REQUEST: the
-	// operator caps it at execution.max_pool_size, floors an unset value at
-	// execution.min_idle_workers, and the whole thing is inert unless the operator
-	// enabled execution.warm_pools_enabled (see config.ExecutionSection.
-	// EffectiveMinIdle). Whether a pod may be reused across attempts stays the
-	// operator's security decision; this field only tunes how many.
+	// MinIdleWorkers is a DORMANT seam for per-DAG author-declared warmth: the
+	// number of warm workers an author would want kept ready for this DAG version
+	// so its tasks skip cold-pod startup (ADR 0058, warm pools model A2). It is NOT
+	// author-settable today. There is no author entry point: the field is absent
+	// from the authoring schema (leoflow-yaml-schema.json, which is
+	// additionalProperties:false) and the parser never emits it, so after the
+	// parse→compile path this value is ALWAYS 0. The intended split is that the
+	// operator gates IF warmth happens at all (execution.warm_pools_enabled) while
+	// the author would only tune HOW MANY, with the operator clamping the request;
+	// whether a pod may be reused across attempts stays the operator's security
+	// decision. The downstream is intentionally pre-wired around this field —
+	// config.ExecutionSection.EffectiveMinIdle already clamps it and the scheduler
+	// store already reads it — so exposing it to authors later is a schema+parser
+	// change only (add the key to the authoring schema and have the parser emit
+	// it), with no domain/scheduler rework. Until then it stays 0 and every DAG,
+	// and all of Lite, behaves exactly as before.
 	MinIdleWorkers int          `json:"min_idle_workers,omitempty"`
 	Catchup        bool         `json:"catchup,omitempty"`
 	DefaultArgs    *DefaultArgs `json:"default_args,omitempty"`

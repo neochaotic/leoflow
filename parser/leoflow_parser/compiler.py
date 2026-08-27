@@ -171,6 +171,8 @@ def _load_dags_shim(source: str):
     try:
         runpy.run_path(source, run_name="__leoflow_dag__")
     except ModuleNotFoundError as exc:
+        if _is_removed_core_operator_module(exc.name):
+            return {}, _removed_core_operator_hint(exc.name)
         if _is_provider_module(exc.name):
             return {}, _provider_import_hint(exc.name)
         return {}, _unsupported(f"module {exc.name!r}")
@@ -196,6 +198,37 @@ def _load_dags_shim(source: str):
 def _unsupported(detail: str) -> str:
     return (f"{detail}: not supported by Leoflow "
             f"(supported: Bash, Http, Python/@task; no dynamic task mapping or task groups)")
+
+
+_REMOVED_CORE_OPERATORS_PREFIX = "airflow.operators."
+
+
+def _is_removed_core_operator_module(name: str | None) -> bool:
+    """True for a core ``airflow.operators.<x>`` module. These operators were
+    removed from Airflow core in 3.0 and relocated to
+    apache-airflow-providers-standard, so they are never aliasable: aliasing the
+    2.x-only spelling would accept a DAG that no Airflow-3 install can run."""
+    return bool(name) and name.startswith(_REMOVED_CORE_OPERATORS_PREFIX)
+
+
+def _removed_core_operator_hint(name: str) -> str:
+    """Actionable message for a removed core-operator import. It names the
+    canonical ``airflow.providers.standard.operators.<x>`` replacement (which the
+    shim supports) instead of falling through to the generic operator-unsupported
+    wording, so a migrating author sees the exact spelling to switch to.
+
+    ``name`` is the failed module, e.g. 'airflow.operators.bash'; the submodule
+    tail (``bash``) maps 1:1 onto the standard provider's operators package."""
+    submodule = name[len(_REMOVED_CORE_OPERATORS_PREFIX):]
+    canonical = "airflow.providers.standard.operators"
+    if submodule:
+        canonical = f"{canonical}.{submodule}"
+    return (
+        f"{name!r} was removed from Airflow core in 3.0 and relocated to the "
+        f"standard provider. Import from {canonical!r} instead "
+        f"(the apache-airflow-providers-standard package). Leoflow targets "
+        f"Airflow 3, so the pre-3 core-operator spelling is not accepted."
+    )
 
 
 def _is_provider_module(name: str | None) -> bool:

@@ -637,3 +637,25 @@ def test_removed_core_operator_import_names_providers_standard(
     assert f"airflow.providers.standard.operators.{submodule}" in msg
     # Must NOT fall through to the generic operator-unsupported wording.
     assert "supported: Bash, Http" not in msg
+
+
+def test_task_branch_rejected_cleanly_not_attributeerror(monkeypatch, tmp_path):
+    """@task.branch must fail with the clear branching reject (ADR 0040 Phase D),
+    not an opaque AttributeError from a missing decorator attribute. Branching is
+    parked pending scheduler skip-state; the parser owes a loud, actionable error
+    for the TaskFlow spelling just as it does for BranchPythonOperator."""
+    with pytest.raises(ValueError) as ei:
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG, task
+            @task
+            def a() -> None: ...
+            @task.branch
+            def pick() -> str:
+                return "a"
+            with DAG("g"):
+                a()
+                pick()
+        """)
+    msg = str(ei.value)
+    assert "not supported by Leoflow" in msg
+    assert "branching" in msg

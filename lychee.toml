@@ -1,0 +1,45 @@
+# lychee link/image checker configuration — shared by the CI PR gate
+# (.github/workflows/link-check.yml, which checks the tracked Markdown, and
+# .github/workflows/website-build.yml, which checks the built Hugo site under
+# website/public). Host-level ignore patterns live in .lycheeignore next to this.
+#
+# Why this exists: two recent breakages shipped because nothing checked links or
+# images — README images 404'd after the Hugo migration moved docs/assets, and
+# README doc links 404'd. Both are broken *relative* paths a build-time link check
+# catches. Keep this file behaviour-only; put flaky-host regexes in .lycheeignore.
+
+############################  Requests  ############################
+# Give transient network conditions a couple of chances before failing the gate,
+# so a single blip on an external host does not red a PR.
+max_retries = 3
+retry_wait_time = 2
+timeout = 20
+
+# Treat rate-limiting as success: shared CI runner IPs routinely get 429/403 from
+# GitHub and other popular hosts even though the target is perfectly valid. We are
+# gating on *broken* links (4xx/5xx that mean "gone"), not on throttling.
+accept = ["200..=299", "429", "403"]
+
+# Accept a timed-out request rather than failing on it — a slow external host is a
+# network condition, not a broken link. Local (file://) targets never time out, so
+# the dead-relative-path case we care about is unaffected.
+accept_timeouts = true
+
+############################  Scope  ###############################
+# Never resolve loopback / localhost examples in docs (curl http://localhost:8080,
+# 127.0.0.1 dev URLs, etc.) — they are illustrative, not live.
+exclude_loopback = true
+
+# mailto: links are not reachable over HTTP; don't try (this is lychee's default,
+# stated explicitly).
+include_mail = false
+
+# Fragment/anchor checking is OFF (lychee default). Hugo + Docsy slugify headings at
+# render time and inject anchors the raw Markdown source doesn't carry, so verifying
+# `#section` fragments against source produces false failures. Do NOT turn this on
+# (no --include-fragments) without re-checking the rendered anchors instead.
+
+############################  Exclusions  ##########################
+# Host-level and known-flaky exclusions are kept in .lycheeignore (one regex/line)
+# so contributors have a single obvious place to silence a genuinely flaky host
+# without editing this behavioural config.

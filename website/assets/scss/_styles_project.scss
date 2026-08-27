@@ -1,0 +1,153 @@
+/*
+  Leoflow project styles — layered on top of Docsy.
+
+  The `.lf-*` component is a reusable, theme-safe card grid used on the section
+  landing pages and high-traffic content pages to bring them up to the polish bar
+  set by /connections/. Every colour is expressed through Bootstrap 5.3 CSS custom
+  properties (--bs-body-bg, --bs-border-color, --bs-primary-rgb, …) which flip
+  automatically under data-bs-theme="dark", so light and dark both work with no
+  per-theme duplication. Layout is CSS grid with auto-fit, so it is responsive from
+  phone to wide desktop with no media queries.
+*/
+
+// ---- Card grid ------------------------------------------------------------
+.lf-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.25rem;
+  margin: 1.75rem 0 2rem;
+  padding: 0;
+  list-style: none;
+}
+
+// A whole-card link. Anchor so the entire tile is one large click target.
+a.lf-card,
+.lf-card {
+  display: flex;
+  flex-direction: column;
+  padding: 1.4rem 1.5rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.75rem;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
+  text-decoration: none;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+  height: 100%;
+}
+
+a.lf-card:hover,
+a.lf-card:focus-visible {
+  transform: translateY(-3px);
+  // --bs-link-color adapts per theme (navy in light, a light tint in dark), so the
+  // hover ring stays visible on dark card backgrounds where raw --bs-primary (navy)
+  // would nearly vanish.
+  border-color: var(--bs-link-color);
+  box-shadow: 0 0.6rem 1.5rem rgba(var(--bs-primary-rgb), 0.18);
+  color: var(--bs-body-color);
+  text-decoration: none;
+}
+
+a.lf-card:focus-visible {
+  outline: 2px solid var(--bs-link-color);
+  outline-offset: 2px;
+}
+
+.lf-card__icon {
+  font-size: 1.6rem;
+  line-height: 1;
+  margin-bottom: 0.85rem;
+  // Theme-adaptive: navy on light, lightened tint on dark (WCAG-safe both ways).
+  color: var(--bs-link-color);
+}
+
+.lf-card__title {
+  font-size: 1.12rem;
+  font-weight: 700;
+  margin: 0 0 0.35rem;
+  color: var(--bs-emphasis-color);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lf-card__desc {
+  margin: 0;
+  font-size: 0.94rem;
+  color: var(--bs-secondary-color);
+  flex: 1 1 auto;
+}
+
+.lf-card__more {
+  margin-top: 0.9rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  // Theme-adaptive accent (see .lf-card__icon).
+  color: var(--bs-link-color);
+}
+
+a.lf-card:hover .lf-card__more {
+  text-decoration: underline;
+}
+
+// Hero / "start here" variant: brand-tinted, slightly stronger.
+.lf-card--hero {
+  border-width: 2px;
+  border-color: rgba(var(--bs-primary-rgb), 0.55);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(var(--bs-primary-rgb), 0.08),
+      rgba(var(--bs-primary-rgb), 0.02)
+    ),
+    var(--bs-body-bg);
+}
+
+.lf-card__badge {
+  align-self: flex-start;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.55rem;
+  border-radius: 1rem;
+  margin-bottom: 0.85rem;
+  color: #fff;
+  background: var(--bs-primary);
+}
+
+// ---- Prominent single CTA button (deep-link into a sidecar, etc.) ---------
+.lf-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 1.25rem;
+  border-radius: 0.6rem;
+  font-weight: 600;
+  background: var(--bs-primary);
+  color: #fff;
+  text-decoration: none;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.lf-cta:hover,
+.lf-cta:focus-visible {
+  color: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 0.5rem 1.2rem rgba(var(--bs-primary-rgb), 0.3);
+  text-decoration: none;
+}
+
+// ---- Navbar brand logo ----------------------------------------------------
+// The project navbar override renders the mark as an <img>; keep it crisp and
+// vertically centred next to the "Leoflow" wordmark in both themes.
+.navbar-brand .lf-navbar-logo {
+  height: 2rem;
+  width: auto;
+  margin-right: 0.55rem;
+  vertical-align: middle;
+}

@@ -18,10 +18,14 @@ func podPhase(phase corev1.PodPhase) *corev1.Pod {
 }
 
 func podWaiting(reason string) *corev1.Pod {
+	return podWaitingMsg(reason, "")
+}
+
+func podWaitingMsg(reason, message string) *corev1.Pod {
 	return &corev1.Pod{Status: corev1.PodStatus{
 		Phase: corev1.PodPending,
 		ContainerStatuses: []corev1.ContainerStatus{
-			{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason}}},
+			{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason, Message: message}}},
 		},
 	}}
 }
@@ -373,5 +377,44 @@ func TestPodWaitingReasonExplainsItself(t *testing.T) {
 	}
 	if !strings.Contains(got.reason, "image") {
 		t.Errorf("reason = %q, want operator-facing context about the image", got.reason)
+	}
+}
+
+// TestClassifyPodSurfacesNonRootConfigError pins the runAsNonRoot case of
+// CreateContainerConfigError: a root task image under the non-root default is
+// refused by the kubelet before the container starts, so no agent ever reports a
+// cause. The classified reason must name the non-root cause and carry both the
+// image-side and the operator-side fixes, not degrade to the generic bucket.
+func TestClassifyPodSurfacesNonRootConfigError(t *testing.T) {
+	pod := podWaitingMsg("CreateContainerConfigError",
+		"container has runAsNonRoot and image will run as root")
+	got := classifyPod(pod)
+	if !got.terminal || got.settle != settleFailed {
+		t.Fatalf("classifyPod = {terminal:%v settle:%v}, want a terminal failure",
+			got.terminal, got.settle)
+	}
+	for _, want := range []string{"runAsNonRoot", "USER 65532", "taskPodSecurity.runAsNonRoot"} {
+		if !strings.Contains(got.reason, want) {
+			t.Errorf("reason = %q, want it to mention %q", got.reason, want)
+		}
+	}
+}
+
+// TestClassifyPodConfigErrorWithoutNonRoot keeps the generic
+// CreateContainerConfigError path (a missing ConfigMap/Secret, a bad env-var
+// reference) actionable without misattributing it to the non-root cause.
+func TestClassifyPodConfigErrorWithoutNonRoot(t *testing.T) {
+	pod := podWaitingMsg("CreateContainerConfigError",
+		`configmap "missing" not found`)
+	got := classifyPod(pod)
+	if !got.terminal || got.settle != settleFailed {
+		t.Fatalf("classifyPod = {terminal:%v settle:%v}, want a terminal failure",
+			got.terminal, got.settle)
+	}
+	if !strings.Contains(got.reason, "CreateContainerConfigError") {
+		t.Errorf("reason = %q, want it to name the waiting reason", got.reason)
+	}
+	if strings.Contains(got.reason, "runAsNonRoot") {
+		t.Errorf("reason = %q, must not attribute an unrelated config error to non-root", got.reason)
 	}
 }

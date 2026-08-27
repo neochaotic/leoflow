@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow setup"
 linkTitle: "setup"
-weight: 42
+weight: 43
 ---
 
 Bootstrap the managed Leoflow runtime (Python, parser, workspace).

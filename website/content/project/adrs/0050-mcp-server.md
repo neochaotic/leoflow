@@ -9,7 +9,13 @@ weight: 500
 description: "ADR 0050: Model Context Protocol (MCP) server"
 ---
 
-**Status:** Accepted — design ratified in a scoping review; implementation phased and **not started**.
+**Status:** Accepted — **Phases 1–3 shipped** (`internal/mcp`, `cmd/leoflow-mcp`):
+the read-only resources (`dag://`, `run://`, `task://`, `log://`,
+`health://control-plane`), the `list_dags`/`diagnose_run`/`search_logs` tools,
+and the Streamable HTTP transport for Pro are live. The **authoring** half of
+the Phase 1 MVP (`scaffold_dag`/`validate_dag`, the `dag_authoring` prompt) and
+**Phase 4** (run control) described under "Prerequisites and phasing" below
+remain **not started**.
 **Date:** 2026-08-10
 **Relates:** ADR 0008 (JWT auth), ADR 0024 (DAG parsing structural shim → `dag.json`), ADR 0040 (Airflow operator execution), ADR 0041 (build/push/register deploy), ADR 0048 (no user code in the control plane), ADR 0049 (split API/scheduler roles), ADR 0019 (secret encryption at rest)
 **Issues:** #228 (per-tenant auth), #508 (tenant isolation is a caller convention, not a SQL predicate), #66 (restrict `MintUserToken`), #59 / #388 (least-privilege secret delivery), H4 / #537 (no token revocation)

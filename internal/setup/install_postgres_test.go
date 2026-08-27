@@ -213,6 +213,47 @@ func TestEnsurePostgresReextractsWhenVersionUnknown(t *testing.T) {
 	}
 }
 
+// TestEnsurePostgresFailedDownloadKeepsExistingInstall locks the crash-safety
+// invariant of #754 for the Postgres entry point: EnsurePostgres runs fetchVerify
+// (download + checksum) BEFORE extractTarGzStrip touches the managed tree, so a
+// download that errors must leave a working managed Postgres on disk rather than
+// wiping it. Setup is the upgrade case: a complete install of an OLDER version is
+// present (its sentinel forces EnsurePostgres into the download), the download
+// fails, and the pre-existing binary must survive.
+func TestEnsurePostgresFailedDownloadKeepsExistingInstall(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, "postgres", "bin")
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	managed := filepath.Join(binDir, "postgres")
+	if err := os.WriteFile(managed, []byte("#!/existing postgres\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Sentinel records an OLDER version, so EnsurePostgres reaches the download.
+	if err := os.WriteFile(filepath.Join(home, "postgres", pgVersionFile), []byte("15.0.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingRoundTripper{}
+	_, err := EnsurePostgres(context.Background(), EnsureOpts{
+		Home: home, GOOS: "linux", GOARCH: "arm64",
+		Client: &http.Client{Transport: rt},
+	})
+	if err == nil {
+		t.Fatal("EnsurePostgres: err = nil, want the failed download surfaced as an error")
+	}
+	if !rt.called {
+		t.Fatal("expected EnsurePostgres to attempt the download")
+	}
+	got, rerr := os.ReadFile(managed)
+	if rerr != nil {
+		t.Fatalf("existing managed postgres was destroyed by a failed download: %v", rerr)
+	}
+	if string(got) != "#!/existing postgres\n" {
+		t.Errorf("managed postgres = %q, want the pre-existing content intact", got)
+	}
+}
+
 func TestStripComponents(t *testing.T) {
 	cases := map[string]string{
 		"postgresql-16.13.0-x/bin/postgres": filepath.Join("bin", "postgres"),

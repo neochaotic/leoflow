@@ -34,10 +34,22 @@ compile it to an immutable image. Native **map-reduce** for ML/AI as a Python li
 comprehension.
 {{% /blocks/feature %}}
 
+{{% blocks/feature icon="fa-solid fa-cubes-stacked" title="Run dbt as DAGs" url="/author-dags/dbt/" url_text="dbt projects as DAGs" %}}
+Render a **dbt** project into native model-level tasks — pod-per-task against your
+warehouse, no Airflow and no Cosmos at runtime. One `granularity` knob trades pods
+for speed.
+{{% /blocks/feature %}}
+
 {{% blocks/feature icon="fa-solid fa-plug" title="Connect" url="/connections/" url_text="Browse connectors" %}}
 54 documented connectors — Postgres, Snowflake, AWS, GCP, Kafka, Slack and more.
 Declare a provider, wire a Connection, and the control plane delivers it to your
 task pod.
+{{% /blocks/feature %}}
+
+{{% blocks/feature icon="fa-solid fa-robot" title="Automate with MCP" url="/mcp/" url_text="The MCP server" %}}
+Point an AI agent at Leoflow over the **Model Context Protocol**: *"diagnose the
+latest failed run of `sales`."* Read-only, scoped to the caller's token — its blast
+radius is your own API rights.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-solid fa-gears" title="Operate" url="/operate/first-pro-dag/" url_text="Deploy & operate" %}}

@@ -56,12 +56,15 @@ func resolveBuildImage(flagImage string, cfg *domain.LeoflowConfig, version stri
 // to their provider packages, ADR 0038), and finally the DAG source COPY with the
 // agent's PYTHONPATH convention. An unknown connector name is a hard error
 // (surfaced from EffectiveDependencies) rather than a runtime ModuleNotFoundError.
+//
+// For a dbt project (cfg.Dbt set, ADR 0042) the source is the dbt project
+// directory, not a dag.py: the final layer COPYs that directory to the workdir
+// and sets no PYTHONPATH, since dbt ships no importable Python module.
 func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, error) {
 	deps, err := cfg.EffectiveDependencies()
 	if err != nil {
 		return "", err
 	}
-	base := filepath.Base(dagSource)
 	var b strings.Builder
 	fmt.Fprintf(&b, "FROM %s\n", resolveBaseImage(cfg))
 	if len(cfg.SystemPackages) > 0 {
@@ -74,6 +77,17 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 		// edits to the DAG source.
 		fmt.Fprintf(&b, "RUN pip install --no-cache-dir %s\n", strings.Join(deps, " "))
 	}
+	if cfg.Dbt != nil {
+		// A dbt project is the DAG source (ADR 0042): there is no dag.py to COPY and
+		// no Python module to import, so COPY the project directory (dbt_project.yml
+		// + models/ + baked manifest.json) to the workdir and set no PYTHONPATH. The
+		// task runs `dbt --project-dir <project>` from WORKDIR /home/leoflow, so the
+		// project must land at /home/leoflow/<project> matching the baked --project-dir.
+		project := filepath.Clean(cfg.Dbt.Project)
+		fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\n", project, project)
+		return b.String(), nil
+	}
+	base := filepath.Base(dagSource)
 	fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\nENV PYTHONPATH=/home/leoflow\n", base, base)
 	return b.String(), nil
 }

@@ -176,3 +176,30 @@ func TestTriggerFailsLoudOnSpecReadError(t *testing.T) {
 		t.Fatalf("spec-read error trigger = %d, want 500 (fail loud, not a silent validation skip); body=%q", rec.Code, rec.Body.String())
 	}
 }
+
+// TestTriggerRejectsMissingRequiredParam pins that a param declared with no
+// default is required: a trigger that omits it is a 400.
+func TestTriggerRejectsMissingRequiredParam(t *testing.T) {
+	srv, _ := triggerServer(specWithParams(map[string]domain.ParamSpec{
+		"n": {Schema: json.RawMessage(`{"type":"integer"}`)}, // no Default -> required
+	}))
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/dagRuns", `{}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing required param = %d, want 400; body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestTriggerAcceptsProvidedRequiredParam pins that supplying the required param
+// in conf passes and is persisted.
+func TestTriggerAcceptsProvidedRequiredParam(t *testing.T) {
+	srv, _ := triggerServer(specWithParams(map[string]domain.ParamSpec{
+		"n": {Schema: json.RawMessage(`{"type":"integer"}`)},
+	}))
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/dagRuns", `{"conf":{"n":7}}`)
+	if rec.Code >= http.StatusMultipleChoices {
+		t.Fatalf("provided required param = %d, want 2xx; body=%q", rec.Code, rec.Body.String())
+	}
+	if conf := confOf(t, rec.Body); conf["n"] != float64(7) {
+		t.Errorf("conf = %v, want n=7 persisted", conf)
+	}
+}

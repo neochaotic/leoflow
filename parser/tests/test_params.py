@@ -86,3 +86,30 @@ def test_no_params_declared_emits_no_params_key(monkeypatch, tmp_path):
             a()
     """)
     assert "params" not in spec
+
+
+def test_required_param_no_default_omits_default_key(monkeypatch, tmp_path):
+    # A Param with no default is required: the compiler omits the default key so
+    # the control plane can tell required apart from a null default.
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, Param, task
+        @task
+        def a() -> None: ...
+        with DAG("g", params={"n": Param(type="integer", minimum=1)}):
+            a()
+    """)
+    assert spec["params"] == {"n": {"schema": {"type": "integer", "minimum": 1}}}
+    assert "default" not in spec["params"]["n"]
+
+
+def test_explicit_null_default_is_kept(monkeypatch, tmp_path):
+    # An explicit None default is a real default of null, distinct from required.
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, Param, task
+        @task
+        def a() -> None: ...
+        with DAG("g", params={"n": Param(None, type="integer")}):
+            a()
+    """)
+    assert "default" in spec["params"]["n"]
+    assert spec["params"]["n"]["default"] is None

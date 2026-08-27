@@ -153,13 +153,12 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "default": { "description": "Default value merged into a run's conf when the trigger omits this key." },
+          "default": { "description": "Default value merged into a run's conf when the trigger omits this key. Absent means the param is required — the trigger must supply it." },
           "schema": {
             "type": "object",
             "description": "JSON Schema the trigger-time conf value is validated against; {} means no constraints."
           }
         },
-        "required": ["default"],
         "additionalProperties": false
       }
     },

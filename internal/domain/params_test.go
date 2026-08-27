@@ -130,3 +130,25 @@ func TestValidateAllowsNullDefaultWithSchema(t *testing.T) {
 		t.Errorf("a null default with a schema should register: %v", err)
 	}
 }
+
+// TestRequiredParamOmitsDefaultOnMarshal pins that a param with no default (a
+// required param) marshals without a default key, so the trigger-time check can
+// distinguish required from a null default.
+func TestRequiredParamOmitsDefaultOnMarshal(t *testing.T) {
+	b, err := json.Marshal(ParamSpec{Schema: json.RawMessage(`{"type":"integer"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(b); got != `{"schema":{"type":"integer"}}` {
+		t.Errorf("required param marshaled to %s, want no default key", got)
+	}
+}
+
+// TestValidateAllowsRequiredParam pins that a required param (no default) with a
+// schema registers cleanly — there is no default to check against the schema.
+func TestValidateAllowsRequiredParam(t *testing.T) {
+	spec := paramSpecWith("n", ParamSpec{Schema: json.RawMessage(`{"type":"integer","minimum":1}`)})
+	if err := spec.Validate(); err != nil {
+		t.Errorf("a required param should register: %v", err)
+	}
+}

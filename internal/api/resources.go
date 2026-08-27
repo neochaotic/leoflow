@@ -371,8 +371,24 @@ func applyDeclaredParams(c *gin.Context, specs DagSpecReader, dagID string, conf
 	if len(spec.Params) == 0 {
 		return nil, false
 	}
-	merged := make(map[string]json.RawMessage, len(spec.Params)+len(conf))
-	for name, p := range spec.Params {
+	merged := mergeParams(spec.Params, conf)
+	if !validateMergedParams(c, spec.Params, merged) {
+		return nil, false
+	}
+	out, merr := json.Marshal(merged)
+	if merr != nil {
+		AbortProblem(c, http.StatusInternalServerError, "internal error", "encoding merged conf: "+merr.Error())
+		return nil, false
+	}
+	return out, true
+}
+
+// mergeParams overlays the supplied conf onto the declared param defaults (conf
+// wins per key). A param with no default contributes nothing; undeclared conf
+// keys are carried through.
+func mergeParams(params map[string]domain.ParamSpec, conf map[string]json.RawMessage) map[string]json.RawMessage {
+	merged := make(map[string]json.RawMessage, len(params)+len(conf))
+	for name, p := range params {
 		if len(p.Default) > 0 {
 			merged[name] = p.Default
 		}
@@ -380,7 +396,25 @@ func applyDeclaredParams(c *gin.Context, specs DagSpecReader, dagID string, conf
 	for k, v := range conf {
 		merged[k] = v
 	}
-	for name, p := range spec.Params {
+	return merged
+}
+
+// validateMergedParams enforces required params (a declared param with no
+// default must be supplied) and validates each declared value against its JSON
+// Schema. It aborts the request with 400 on the first violation and returns
+// false; true means the merged conf is valid to persist.
+func validateMergedParams(c *gin.Context, params map[string]domain.ParamSpec, merged map[string]json.RawMessage) bool {
+	for name, p := range params {
+		if len(p.Default) != 0 {
+			continue
+		}
+		if _, ok := merged[name]; !ok {
+			AbortProblem(c, http.StatusBadRequest, "bad request",
+				fmt.Sprintf("conf param %q is required (the DAG declares it with no default)", name))
+			return false
+		}
+	}
+	for name, p := range params {
 		if len(p.Schema) == 0 || string(p.Schema) == "{}" {
 			continue
 		}
@@ -391,15 +425,10 @@ func applyDeclaredParams(c *gin.Context, specs DagSpecReader, dagID string, conf
 		if verr := validateParamValue(p.Schema, val); verr != nil {
 			AbortProblem(c, http.StatusBadRequest, "bad request",
 				fmt.Sprintf("conf param %q: %s", name, verr.Error()))
-			return nil, false
+			return false
 		}
 	}
-	out, merr := json.Marshal(merged)
-	if merr != nil {
-		AbortProblem(c, http.StatusInternalServerError, "internal error", "encoding merged conf: "+merr.Error())
-		return nil, false
-	}
-	return out, true
+	return true
 }
 
 // validateParamValue checks one conf value against a param's JSON Schema,

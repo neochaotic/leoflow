@@ -73,3 +73,32 @@ func TestDispatchSetsAgentTLSCAConfigMap(t *testing.T) {
 		t.Errorf("agent TLS CA configmap = %q, want agent-ca", exec.req.AgentTLSCAConfigMap)
 	}
 }
+
+// TestDispatchSkipsWarmForStagingRun pins ADR 0058 D5: a staging attempt is
+// never offered to a warm worker (which carries no per-run /staging mount). Even
+// with a placer that WOULD accept, the staging run must take the dedicated path
+// and get its StagingClaim.
+func TestDispatchSkipsWarmForStagingRun(t *testing.T) {
+	res := &fakeResolver{resolved: Resolved{
+		TaskInstanceID: "ti-1", TenantID: "acme", Image: "etl:v1",
+		Staging: &domain.StagingConfig{Enabled: true},
+	}}
+	exec := &fakeExecutor{}
+	placer := &fakePlacer{ok: true} // would place if it were ever offered
+	d := newDispatcher(res, &fakeIssuer{token: "t"}, exec)
+	d.SetWarmPlacer(placer)
+
+	disp, err := d.Dispatch(context.Background(), "run-1", "etl", "ver-7", pythonTask())
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if placer.calls != 0 {
+		t.Errorf("staging attempt offered to the warm placer %d times, want 0 (ADR 0058 D5)", placer.calls)
+	}
+	if disp != executor.Dispatched {
+		t.Errorf("disposition = %v, want Dispatched via the dedicated path", disp)
+	}
+	if want := executor.StagingClaimName("etl", "run-1"); exec.req.StagingClaim != want {
+		t.Errorf("dedicated staging claim = %q, want %q", exec.req.StagingClaim, want)
+	}
+}

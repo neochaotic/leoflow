@@ -9,8 +9,8 @@ weight: 160
 description: "ADR 0016: Deferrable Tasks (Deferred to v0.3)"
 ---
 
-**Status:** Deferred — Not implemented in v0.1.0
-**Date:** 2026-05-22
+**Status:** Rejected — conscious non-goal (superseded by ADR 0048). See the Decision log at the end.
+**Date:** 2026-05-22 (rejected 2026-08-27)
 
 ## Context
 
@@ -99,3 +99,36 @@ Revisit this ADR when:
   Airflow's complexity without inheriting its constraints.
 - **Never implement:** rejected because the dispatch+poll pattern
   is real and common in production data pipelines.
+
+## Decision log
+
+**2026-08-27 — Rejected as a conscious non-goal.** This ADR's original "deferred,
+revisit after MVP" framing is retired. Deferrable execution is now a deliberate
+non-goal, on two grounds that did not exist (or were not decided) in 2026-05:
+
+- **The motivation is already satisfied.** Deferrable exists to free a worker slot
+  during a long wait. leoflow is pod-per-task with no persistent worker pool, and
+  reschedule-mode sensors already release the pod between pokes and re-dispatch
+  preserving `try_number`. There is no standing slot to free, so the efficiency
+  win is delivered by the existing model, not by a triggerer.
+- **A triggerer is foreclosed by [ADR 0048](/project/adrs/0048-no-user-code-in-control-plane/).**
+  Airflow compatibility requires running user-authored trigger coroutines
+  (`Trigger.run()`, Python asyncio) in a shared, long-lived process. That is
+  exactly the user-code/network-in-the-control-plane that ADR 0048 (2026-07-31)
+  prohibits, and in a shared triggerer it is a multi-tenant regression (shared-fate
+  event-loop starvation, co-mingled per-tenant secrets). The 2026-05 note above —
+  "a Go process avoids Airflow's GIL reason for a separate triggerer" — is moot: a
+  Go goroutine cannot run a Python trigger, and the compatible form is the
+  forbidden one. A compliant fallback (an ephemeral pod per trigger) is the very
+  pod deferrable was meant to avoid — zero net win.
+
+**Author-facing behavior:** `deferrable=True` is not honored; the task fails rather
+than defers. The supported alternatives are reschedule-mode sensors
+(`mode="reschedule"`), a synchronous poke (`deferrable=False`), or polling inside a
+`@task`. See [Operators & sensors](/author-dags/operators-sensors/).
+
+**Go/no-go:** NO-GO while ADR 0048 stands. **Revisit trigger:** a measured workload
+on a real cluster proving reschedule/poke churn is materially unacceptable, *and* a
+per-tenant-isolated trigger design that does not run user code in the shared control
+plane. The reserved `'deferred'` task state (migration 006) is kept as cheap
+insurance against that future, not as a signal that this is planned.

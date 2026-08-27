@@ -42,7 +42,7 @@ Almost nothing. The control plane, CLI, and agent are **static Go binaries**,
 and `leoflow setup` provisions a Python 3.11 itself if you don't have one.
 
 There are **two execution paths** — and **no Docker executor**, on purpose
-([ADR 0015](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0015-kubernetes-only-execution.md)):
+([ADR 0015](/project/adrs/0015-kubernetes-only-execution/)):
 the Docker Go SDK carries an unfixable advisory (Moby AuthZ bypass,
 GO-2026-4887) that would reach the control-plane binary and fail the security
 gate. So:
@@ -312,7 +312,7 @@ agent TLS, above).
 
 Managed services are first-class — RDS / Cloud SQL / Azure Database for
 Postgres on the SQL side; ElastiCache / Memorystore / Azure Cache for Redis.
-See the chart's [Datastore compatibility](/operate/helm-chart/#datastore-compatibility)
+See the chart's [Datastore compatibility](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md#datastore-compatibility)
 table for tested versions; managed providers that present a per-instance or
 provider-specific CA expose a `caConfigMap` knob (Postgres and Redis sides
 respectively) for verified TLS.

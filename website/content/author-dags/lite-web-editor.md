@@ -89,7 +89,7 @@ A few small UX rules the editor enforces so the cursor never lies to you:
 
 Saving a file is exactly like editing it on disk — the `leoflow lite` watcher
 picks up the change and **hot-reloads** the DAG, same as if you had saved from any
-editor. (Remember the [reload gotcha](/contribute/local-dev-loop/#the-edit-reload-see-it-cycle):
+editor. (Remember the [reload gotcha](/contribute/local-dev-loop/#the-edit--reload--see-it-cycle):
 the open Airflow tab does not auto-refresh DAG *structure* — reload it.)
 
 ## Provisioning the editor assets

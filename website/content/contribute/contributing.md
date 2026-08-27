@@ -19,7 +19,7 @@ the design *why* lives in the [ADRs](/project/adrs/).
 2. [Set up for development](#2-set-up-for-development) — tools, build, gates.
 3. [Know the quality bar](#3-the-quality-bar-non-negotiable) — TDD, A+, GoDocs.
 4. [Pick or open an issue](#4-pick-or-open-an-issue).
-5. [Fork → branch → TDD → PR](#5-fork-branch-tdd-pr).
+5. [Fork → branch → TDD → PR](#5-fork--branch--tdd--pr).
 6. [Pass the CI gates](#6-the-ci-gates).
 
 ---
@@ -111,7 +111,7 @@ reproduce.
 
 Open a [new issue](https://github.com/neochaotic/leoflow/issues/new/choose) and
 pick **Feature request**. For anything architectural or cross-cutting, also open
-a PR adding a draft ADR under `docs/adr/` with status **Proposed** — the design
+a PR adding a draft ADR under `website/content/project/adrs/` with status **Proposed** — the design
 discussion happens there.
 {{% /tab %}}
 {{< /tabpane >}}

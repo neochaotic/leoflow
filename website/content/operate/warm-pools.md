@@ -123,7 +123,7 @@ The exchange transport needs a cluster-scoped `tokenreviews` RBAC grant so the
 control plane can validate the projected ServiceAccount token each pod presents.
 The Helm chart renders that `ClusterRole` + binding **only** when the exchange
 transport is selected — see
-[Agent credential transport → RBAC](/operate/agent-credential-transport/#rbac-the-tokenreviews-grant).
+[Agent credential transport → RBAC](/operate/agent-credential-transport/#rbac--the-tokenreviews-grant).
 
 ### 2. Turn on the pool and tune it
 

@@ -9,7 +9,7 @@ weight: 590
 description: "ADR 0059: OpenLineage emission from the Go control plane → OpenMetadata"
 ---
 
-**Status:** Proposed
+**Status:** Accepted — implementation scheduled after v0.4.1 (2026-08-27); v1a lifecycle events + v1b dbt-first dataset lineage, dbt slice first
 **Date:** 2026-08-26
 **Relates:** ADR 0042 (dbt native rendering — the manifest is the lineage source), ADR 0043 (taskgroup split/fused execution — dbt node identity), ADR 0051 (separate orchestration/execution state machines — the seam an emit hook rides), ADR 0040 (airflow operator support — the `openlineage.sqlparser` transitive import), ADR 0035 (audit surface — the reuse-vs-separate decision), ADR 0056 (task-log object sink — the "opt-in external transport, default off" precedent)
 **Issues:** #760 (discovery: OpenLineage emission from the Go control plane → OpenMetadata integration)

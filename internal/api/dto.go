@@ -138,11 +138,20 @@ func toDagRunDTO(r domain.DagRun) dagRunDTO {
 		DataIntervalEnd:   &logical,
 		State:             string(r.State),
 		RunType:           r.RunType,
-		Conf:              json.RawMessage("{}"),
+		Conf:              confOrEmptyObject(r.Conf),
 		Note:              strPtrOrNil(r.Note),
 		DagVersions:       []any{},
 		Duration:          dur,
 	}
+}
+
+// confOrEmptyObject renders a run's conf for the API, defaulting an unset conf
+// to the empty object so the field is never null.
+func confOrEmptyObject(conf json.RawMessage) json.RawMessage {
+	if len(conf) == 0 {
+		return json.RawMessage("{}")
+	}
+	return conf
 }
 
 // taskInstanceDTO is the Airflow 3.2.1 TaskInstanceResponse. Every spec-required

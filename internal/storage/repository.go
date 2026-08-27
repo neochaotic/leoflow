@@ -424,6 +424,12 @@ func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run
 			return domain.DagRun{}, fmt.Errorf("dag %q is at max_active_runs cap of %d: %w", dagID, maxActive, domain.ErrConflict)
 		}
 	}
+	// Persist an explicit empty object when the run carries no conf, so the
+	// column is never NULL and downstream params readers see a valid object.
+	conf := []byte(run.Conf)
+	if len(conf) == 0 {
+		conf = []byte("{}")
+	}
 	created, err := r.q.CreateDagRun(ctx, queries.CreateDagRunParams{
 		TenantID:     dag.TenantID,
 		DagID:        dag.ID,
@@ -433,6 +439,7 @@ func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run
 		State:        queries.DagRunState(run.State),
 		Trigger:      queries.DagRunTrigger(run.RunType),
 		Note:         strPtr(run.Note),
+		Conf:         conf,
 	})
 	if err != nil {
 		return domain.DagRun{}, fmt.Errorf("creating dag run: %w", mapConflict(err))

@@ -357,7 +357,18 @@ func applyDeclaredParams(c *gin.Context, specs DagSpecReader, dagID string, conf
 		return nil, false
 	}
 	spec, err := specs.GetCurrentSpec(c.Request.Context(), tenantOf(c), dagID)
-	if err != nil || len(spec.Params) == 0 {
+	if errors.Is(err, ErrNotFound) {
+		// No registered version yet — nothing to validate against; the create
+		// path handles the missing DAG. Not a validation-skipping error.
+		return nil, false
+	}
+	if err != nil {
+		// A real spec-read failure must NOT silently skip param validation on a
+		// DAG that may declare typed params — fail loud instead of fail open.
+		AbortProblem(c, http.StatusInternalServerError, "internal error", "loading DAG params: "+err.Error())
+		return nil, false
+	}
+	if len(spec.Params) == 0 {
 		return nil, false
 	}
 	merged := make(map[string]json.RawMessage, len(spec.Params)+len(conf))

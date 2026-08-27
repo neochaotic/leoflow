@@ -37,6 +37,39 @@ func loadSchemas() (compiledSchemas, error) {
 	return compiledSchemas{dag: dag, leoflow: leoflow}, nil
 }
 
+// validateParamSpec refuses a declared DAG param whose JSON Schema does not
+// compile, or whose non-null default violates its own schema — at registration,
+// while the author is still looking, instead of failing every trigger forever. A
+// null or absent default is not checked (it means "no default / required").
+func validateParamSpec(name string, schema, def []byte) error {
+	if len(schema) == 0 || string(schema) == "{}" {
+		return nil
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schema))
+	if err != nil {
+		return fmt.Errorf("param %q: parsing schema: %w", name, err)
+	}
+	c := jsonschema.NewCompiler()
+	if aerr := c.AddResource("param.json", doc); aerr != nil {
+		return fmt.Errorf("param %q: loading schema: %w", name, aerr)
+	}
+	compiled, cerr := c.Compile("param.json")
+	if cerr != nil {
+		return fmt.Errorf("param %q: invalid schema: %w", name, cerr)
+	}
+	if len(def) == 0 || string(def) == "null" {
+		return nil
+	}
+	inst, ierr := jsonschema.UnmarshalJSON(bytes.NewReader(def))
+	if ierr != nil {
+		return fmt.Errorf("param %q: default is not valid JSON: %w", name, ierr)
+	}
+	if verr := compiled.Validate(inst); verr != nil {
+		return fmt.Errorf("param %q: default value violates its schema: %w", name, verr)
+	}
+	return nil
+}
+
 func compileSchema(name string, raw []byte) (*jsonschema.Schema, error) {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {

@@ -82,3 +82,51 @@ func TestNoParamsOmitsKey(t *testing.T) {
 		t.Errorf("a param-free spec must omit the params key, got %s", data)
 	}
 }
+
+// paramSpecWith builds an otherwise-valid DAGSpec declaring a single param, so a
+// Validate() failure can only come from that param.
+func paramSpecWith(name string, p ParamSpec) DAGSpec {
+	return DAGSpec{
+		SchemaVersion: "1.0", DagID: "etl", DagVersion: "v1", Image: "img:v1",
+		Params: map[string]ParamSpec{name: p},
+		Tasks:  []TaskSpec{{TaskID: "a", Type: TaskTypePython, Entrypoint: "dag:a"}},
+	}
+}
+
+// TestValidateRejectsParamDefaultViolatingSchema pins that a param whose default
+// breaks its own schema is refused at registration, not left to 400 on every
+// trigger.
+func TestValidateRejectsParamDefaultViolatingSchema(t *testing.T) {
+	spec := paramSpecWith("n", ParamSpec{
+		Default: json.RawMessage(`0`),
+		Schema:  json.RawMessage(`{"type":"integer","minimum":1}`),
+	})
+	if err := spec.Validate(); err == nil {
+		t.Error("want error: default 0 violates minimum 1")
+	}
+}
+
+// TestValidateRejectsUncompilableParamSchema pins that a param whose schema does
+// not compile is refused at registration.
+func TestValidateRejectsUncompilableParamSchema(t *testing.T) {
+	spec := paramSpecWith("n", ParamSpec{
+		Default: json.RawMessage(`1`),
+		Schema:  json.RawMessage(`{"type":123}`),
+	})
+	if err := spec.Validate(); err == nil {
+		t.Error("want error: {\"type\":123} is not a valid JSON Schema")
+	}
+}
+
+// TestValidateAllowsNullDefaultWithSchema pins that a required-style param (no
+// default / null default) with a schema still registers — the null default is
+// not checked against the schema.
+func TestValidateAllowsNullDefaultWithSchema(t *testing.T) {
+	spec := paramSpecWith("n", ParamSpec{
+		Default: json.RawMessage(`null`),
+		Schema:  json.RawMessage(`{"type":"integer","minimum":1}`),
+	})
+	if err := spec.Validate(); err != nil {
+		t.Errorf("a null default with a schema should register: %v", err)
+	}
+}

@@ -637,7 +637,7 @@ def _bind_call_arguments(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
 def _is_json_literal(value: Any) -> bool:
     """Reports whether value is safely round-trippable through JSON.
 
-    The runtime delivers params via LEOFLOW_PARAMS_JSON, so a value that
+    The runtime delivers params via LEOFLOW_PARAMS, so a value that
     survives ``json.dumps`` cleanly is the safe-to-capture set. Anything
     else (a class instance, a tuple of objects, a function) is dropped so
     we never emit invalid JSON into dag.json.

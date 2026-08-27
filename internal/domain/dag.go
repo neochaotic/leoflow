@@ -294,6 +294,14 @@ func (d *DAGSpec) Validate() error {
 				"Use an HttpOperator, which runs in a task pod (declare connectors: [http])", t.TaskID)
 		}
 	}
+	// Refuse a declared param whose schema is invalid or whose default violates
+	// it now, at registration — not on every trigger (fail while the author can
+	// see it, matching the resource-quantity philosophy below).
+	for name, p := range d.Params {
+		if err := validateParamSpec(name, p.Schema, p.Default); err != nil {
+			return err
+		}
+	}
 	s, err := schemas()
 	if err != nil {
 		return err

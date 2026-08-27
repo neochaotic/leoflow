@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -139,9 +140,9 @@ func TestTriggerAcceptsValidTypedValue(t *testing.T) {
 	}
 }
 
-// TestTriggerDefaultNotValidatedAgainstSchemaIsFine pins that a run supplying no
-// conf for a typed param materializes the declared default without a spurious
-// validation failure.
+// TestTriggerTypedDefaultMaterialized pins that a run supplying no conf for a
+// typed param materializes the declared default without a spurious validation
+// failure.
 func TestTriggerTypedDefaultMaterialized(t *testing.T) {
 	srv, _ := triggerServer(specWithParams(map[string]domain.ParamSpec{
 		"n": {Default: json.RawMessage(`3`), Schema: json.RawMessage(`{"type":"integer","minimum":1}`)},
@@ -152,5 +153,26 @@ func TestTriggerTypedDefaultMaterialized(t *testing.T) {
 	}
 	if conf := confOf(t, rec.Body); conf["n"] != float64(3) {
 		t.Errorf("conf = %v, want typed default n=3 materialized", conf)
+	}
+}
+
+// TestTriggerFailsLoudOnSpecReadError pins that a real spec-read failure fails
+// the trigger loud (500) rather than silently skipping param validation — a DAG
+// that declares typed params must not be triggered unvalidated on a transient
+// error. (A missing version is handled separately by the create path.)
+func TestTriggerFailsLoudOnSpecReadError(t *testing.T) {
+	admin := &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}
+	e := NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{user: admin},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		TokenTTLSecs:  3600,
+		DagRuns:       &fakeRunRepo{},
+		Specs:         &fakeSpecReader{err: errors.New("postgres briefly unreachable")},
+	})
+	rec := authGet(e, http.MethodPost, "/api/v2/dags/etl/dagRuns", `{"conf":{"x":1}}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("spec-read error trigger = %d, want 500 (fail loud, not a silent validation skip); body=%q", rec.Code, rec.Body.String())
 	}
 }

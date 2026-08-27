@@ -138,6 +138,20 @@ questions — shared image, sequential vs parallel, failure domain); split of ar
   stays observable per model even when packed into one pod (ties to ADR 0042 #397).
 - Real-pod fused validation (one pod runs `dbt build --select group` with threads).
 
+## Decision log
+
+**2026-08-27 — the generic in-pod runner stays deferred, as a product decision (not merely "unbuilt").** A viability review confirmed the generic fused path is feasible but is the **lowest value-per-effort** capability on the table, and re-confirmed a framing point worth recording: the dbt slice does **not** already give us a generic in-pod machine. A `dbt_group` collapses its models into **one leoflow task = one pod = one task-instance**; the ordered execution and per-model status are **dbt's own** doing (its manifest + `threads` + `run_results.json`), not a Leoflow in-pod runner. Leoflow has no way to run a heterogeneous sub-DAG in a pod, nor to report N task states from one pod. Building that runner is the real cost.
+
+Rationale for deferring:
+
+- **The headline capability already ships.** The need this ADR opened with — *mix operators + dbt in one DAG* — is delivered today by `dbt_group()`. What a generic fused group adds beyond that is a **pod-startup-cost optimization**, not a missing capability.
+- **The pod-cost cases are already covered** by the three levers recorded in ADR 0002's 2026-08-27 note (subprocess executor for the dev loop; `dbt_group` for dbt sprawl; warm pools for cold-start amortization). The residual case — a *non-dbt* DAG of many small, sequential, same-secret-scope, same-resource-profile tasks — is narrow, and every constraint it relaxes is a case where pod-per-task is *correct*.
+- **It trades away what the model exists to protect.** Fusing shares one pod's failure domain, one resource envelope, and (critically) **one per-attempt credential** (ADR 0055) across members — so fusing tasks with different declared `Variables`/`Connections` would silently widen secret scope. Per-task isolation, retry, and secret scoping are exactly the properties a production/audit posture values.
+
+Effort, if it is ever built: **M** for the smallest viable slice — shim `TaskGroup` capture (ADR 0024 rejects it today), an additive `dag.json` group node + `fuse` flag reusing the dbt embed wiring, the `groups:` overlay already specified above, and a **new sequential in-pod runner**, with **group = one task instance** (whole-group retry, single resource limit, refuse to fuse differing secret scopes). **L** for the full vision (per-member status, in-pod parallelism, per-member retry). No scheduler change is needed for the one-instance slice.
+
+**Revisit trigger:** demonstrated pod-startup pain on a real non-dbt DAG of many tiny tasks. Until then the parser keeps rejecting generic `TaskGroup` with a clear error, and this remains designed-not-built. Do not "finish wiring" the generic runner without re-opening this decision and writing an implementation ADR (retry model, secret-scope gate, resource rule, `dag.json` shape, XCom semantics).
+
 ## Consequences
 
 - Operators + dbt coexist in one DAG (the Cosmos `DbtTaskGroup` capability) without

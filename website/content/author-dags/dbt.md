@@ -143,7 +143,18 @@ this problem.
 ## 2. Mixing dbt with operators
 
 To run operators **before/after** your models in the same DAG, author a `dag.py`
-and embed the dbt project with `dbt_group("<name>")`:
+and embed the dbt project with `dbt_group("<name>")`.
+
+{{% alert title="Packing models into fewer pods" color="info" %}}
+By default (`granularity: node`) each model is its own pod — like Cosmos. Set
+`granularity: level` or `folder` (as below) to pack models into **grouped tasks**:
+each group compiles to a single `dbt build --select …` task — one pod that dbt runs
+internally — so a project of *N* models needn't become *N* pods. This is Leoflow's
+answer to pod sprawl for dbt; see
+[Core concepts → When you pay for a pod](/concepts/core-concepts/#when-you-pay-for-a-pod-and-when-you-dont).
+{{% /alert %}}
+
+Embed the dbt project between your operators with `dbt_group("<name>")`:
 
 ```python
 # sales/dag.py

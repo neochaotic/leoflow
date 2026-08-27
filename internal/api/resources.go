@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
@@ -342,7 +344,76 @@ func getDagRunHandler(repo DagRunRepository) gin.HandlerFunc {
 	}
 }
 
-func createDagRunHandler(repo DagRunRepository, audit AuditWriter) gin.HandlerFunc {
+// applyDeclaredParams merges the DAG version's declared param defaults under the
+// supplied conf (conf wins per key), validates each declared value against its
+// JSON Schema, and returns the merged conf to persist. It returns ok=false with
+// no change when the DAG declares no params (or the spec cannot be read) — the
+// trigger then proceeds with the raw conf, identical to a param-free DAG. On a
+// schema violation it aborts the request with 400 and returns ok=false. Conf
+// keys with no declared param are carried through unchanged (Airflow's
+// dag_run_conf_overrides_params default).
+func applyDeclaredParams(c *gin.Context, specs DagSpecReader, dagID string, conf map[string]json.RawMessage) (json.RawMessage, bool) {
+	if specs == nil {
+		return nil, false
+	}
+	spec, err := specs.GetCurrentSpec(c.Request.Context(), tenantOf(c), dagID)
+	if err != nil || len(spec.Params) == 0 {
+		return nil, false
+	}
+	merged := make(map[string]json.RawMessage, len(spec.Params)+len(conf))
+	for name, p := range spec.Params {
+		if len(p.Default) > 0 {
+			merged[name] = p.Default
+		}
+	}
+	for k, v := range conf {
+		merged[k] = v
+	}
+	for name, p := range spec.Params {
+		if len(p.Schema) == 0 || string(p.Schema) == "{}" {
+			continue
+		}
+		val, present := merged[name]
+		if !present {
+			continue
+		}
+		if verr := validateParamValue(p.Schema, val); verr != nil {
+			AbortProblem(c, http.StatusBadRequest, "bad request",
+				fmt.Sprintf("conf param %q: %s", name, verr.Error()))
+			return nil, false
+		}
+	}
+	out, merr := json.Marshal(merged)
+	if merr != nil {
+		AbortProblem(c, http.StatusInternalServerError, "internal error", "encoding merged conf: "+merr.Error())
+		return nil, false
+	}
+	return out, true
+}
+
+// validateParamValue checks one conf value against a param's JSON Schema,
+// returning an error describing the first violation.
+func validateParamValue(schema, value json.RawMessage) error {
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schema))
+	if err != nil {
+		return fmt.Errorf("parsing schema: %w", err)
+	}
+	comp := jsonschema.NewCompiler()
+	if aerr := comp.AddResource("param_schema.json", doc); aerr != nil {
+		return fmt.Errorf("loading schema: %w", aerr)
+	}
+	compiled, err := comp.Compile("param_schema.json")
+	if err != nil {
+		return fmt.Errorf("compiling schema: %w", err)
+	}
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(value))
+	if err != nil {
+		return fmt.Errorf("value is not valid JSON: %w", err)
+	}
+	return compiled.Validate(inst)
+}
+
+func createDagRunHandler(repo DagRunRepository, specs DagSpecReader, audit AuditWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			DagRunID    string          `json:"dag_run_id"`
@@ -357,18 +428,28 @@ func createDagRunHandler(repo DagRunRepository, audit AuditWriter) gin.HandlerFu
 		// conf becomes the run's params; it must be a JSON object so it maps to
 		// keyed values, not an array or scalar. Absent conf leaves the run at the
 		// persisted empty-object default.
+		var conf map[string]json.RawMessage
 		if len(body.Conf) > 0 {
-			var obj map[string]json.RawMessage
-			if err := json.Unmarshal(body.Conf, &obj); err != nil {
+			if err := json.Unmarshal(body.Conf, &conf); err != nil {
 				AbortProblem(c, http.StatusBadRequest, "bad request", "conf must be a JSON object: "+err.Error())
 				return
 			}
 			// A JSON null unmarshals into a nil map without error; treat it as
 			// absent so the run defaults to the empty object rather than
 			// persisting a literal null (conf is contractually never null).
-			if obj == nil {
+			if conf == nil {
 				body.Conf = nil
 			}
+		}
+		// Merge the DAG version's declared param defaults under the supplied conf
+		// (conf wins per key), validate each declared value against its schema, and
+		// persist the merged result so defaults are materialized into the run. A DAG
+		// that declares no params (or no Specs reader wired) leaves conf untouched —
+		// behavior identical to the pre-params conf pipeline.
+		if merged, ok := applyDeclaredParams(c, specs, c.Param("dag_id"), conf); ok {
+			body.Conf = merged
+		} else if c.IsAborted() {
+			return
 		}
 		logical := time.Now().UTC()
 		if body.LogicalDate != nil {
@@ -924,7 +1005,7 @@ func registerResources(r gin.IRouter, deps Dependencies) {
 	if deps.DagRuns != nil {
 		g := r.Group("/api/v2/dags/:dag_id/dagRuns")
 		g.GET("", RequirePermission("read", "dag_run"), listDagRunsHandler(deps.DagRuns))
-		g.POST("", RequirePermission("execute", "dag"), createDagRunHandler(deps.DagRuns, deps.Audit))
+		g.POST("", RequirePermission("execute", "dag"), createDagRunHandler(deps.DagRuns, deps.Specs, deps.Audit))
 		g.GET("/:dag_run_id", RequirePermission("read", "dag_run"), getDagRunHandler(deps.DagRuns))
 		g.PATCH("/:dag_run_id", RequirePermission("write", "dag_run"), patchDagRunHandler(deps.DagRuns, deps.Audit))
 		g.DELETE("/:dag_run_id", RequirePermission("write", "dag_run"), deleteDagRunHandler(deps.DagRuns))

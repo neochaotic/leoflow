@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import functools
 
-from airflow._core import DAG, BaseOperator, XComArg
+from airflow._core import DAG, BaseOperator, Param, XComArg
 
 __all__ = [
     "DAG",
     "BaseOperator",
+    "Param",
     "XComArg",
     "task",
     "dag",

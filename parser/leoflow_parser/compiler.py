@@ -319,8 +319,28 @@ def _check_literal_payload_size(task_id: str, kind: str, payload: dict[str, Any]
         )
 
 
+def _reject_deferrable(task) -> None:
+    """Refuse an operator that sets ``deferrable=True`` at COMPILE time, before the
+    image build — rather than letting it fail inside the pod after ``execute()``
+    raises TaskDeferred (the runtime keeps its own reject as defense-in-depth).
+    Explicit-kwarg only: an operator whose deferrable defaults through Airflow
+    config carries no kwarg here, so this never fires on it. Leoflow has no
+    triggerer, so deferral is not supported; the fix is a synchronous poke or a
+    reschedule-mode sensor.
+    """
+    args = getattr(task, "__leoflow_args__", None) or {}
+    if getattr(task, "deferrable", None) is True or args.get("deferrable") is True:
+        raise ValueError(
+            f"task {task.task_id!r} sets deferrable=True, which Leoflow does not "
+            "support (no triggerer). Set deferrable=False so the operator runs "
+            "synchronously in the pod (poke-style), or use a reschedule-mode "
+            "sensor for a long wait."
+        )
+
+
 def _map_task(task, source: str, dag=None) -> dict[str, Any]:
     task_type = _operator_type(task)
+    _reject_deferrable(task)
     entry: dict[str, Any] = {"task_id": task.task_id, "type": task_type}
 
     upstream = sorted(task.upstream_task_ids)

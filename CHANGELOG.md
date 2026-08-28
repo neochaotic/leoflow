@@ -6,6 +6,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-28
+
 ### Added
 
 - **`leoflow runs logs <dag> <run> <task> [--try N] [-f]` (#768).** Read a task
@@ -66,6 +68,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Release image signing retries transient OIDC flakes (#773).** Every `cosign sign`
   now retries with backoff, so a momentary Sigstore/OIDC blip no longer drafts an
   otherwise-good release.
+
+### Docs
+
+- **External secrets how-to (#812).** Reaching a credential that lives in AWS
+  Secrets Manager / GCP Secret Manager / Azure Key Vault / HashiCorp Vault from a
+  task pod — keyless (Workload Identity) first, then an ESO/CSI-synced or mounted
+  Kubernetes Secret — without duplicating it in Leoflow, plus how a secret is
+  scoped to the right pod.
+- **The pod model — "when you pay for a pod" (#785).** Pod-per-task and the levers
+  that avoid its cold-start cost (the subprocess dev executor, `dbt_group`, warm
+  pools); records the generic fused-`TaskGroup` as a deliberate, deferred non-goal.
+- **Deferrable operators recorded as a conscious non-goal (ADR 0016, #795),** with
+  reschedule-mode sensors documented as the supported alternative.
 
 ## [0.4.0] - 2026-08-26
 

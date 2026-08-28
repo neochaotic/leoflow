@@ -239,11 +239,30 @@ value from an untrusted `conf` cannot inject shell — write interpolations unqu
 Capabilities that need scheduler/control-plane work are rejected loudly rather
 than half-running:
 
-- **Reschedule-mode sensors** — need the scheduler to persist the next-poke time,
-  free the pod, and re-dispatch ([#380](https://github.com/neochaotic/leoflow/issues/380)).
-- **Deferrable operators** (the async triggerer) — [#374](https://github.com/neochaotic/leoflow/issues/374).
 - **Dynamic task mapping** — [#376](https://github.com/neochaotic/leoflow/issues/376).
 - **Branching** — [#377](https://github.com/neochaotic/leoflow/issues/377).
+
+**Reschedule-mode sensors *are* supported.** Set `mode="reschedule"` and the
+scheduler persists the next-poke time, frees the pod between pokes, and
+re-dispatches the sensor preserving its `try_number` — the idiomatic way to wait
+in leoflow (see [DAG authoring](/author-dags/dag-authoring/)).
+
+{{% alert title="`deferrable=True` is not supported — a conscious non-goal" color="warning" %}}
+Airflow's deferrable operators offload a wait to a shared **async triggerer** that
+runs user trigger code in a long-lived process. leoflow's control plane
+deliberately runs no user code or network
+([ADR 0048](/project/adrs/0048-no-user-code-in-control-plane/)), and pod-per-task
+plus reschedule already deliver what deferrable exists for — freeing the slot
+during a wait — so a triggerer would add multi-tenant risk for no gain. A task
+that sets `deferrable=True` **fails rather than defers**; the parameter is not
+honored. Use instead:
+
+- `mode="reschedule"` on a sensor — the direct replacement;
+- `deferrable=False` — a synchronous poke; or
+- compute or poll the condition inside a `@task`.
+
+Full rationale: [ADR 0016](/project/adrs/0016-deferrable-tasks/).
+{{% /alert %}}
 
 ## See also
 

@@ -179,7 +179,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID, dagVersionID st
 	// N1b1-place is assign-if-free-else-dedicated. The pool-size cap and
 	// defer-at-max belong to N1b2/N1d, where real pool accounting (registered
 	// workers + in-flight pods) exists; there is no admission cap here.
-	if d.placer != nil {
+	//
+	// Staging is excluded from warm reuse (ADR 0058 D5): a warm worker carries no
+	// per-run /staging mount, so a staging attempt placed on one would silently
+	// lose the run's shared volume. Staging attempts always take the dedicated
+	// path below, which provisions the StagingClaim.
+	if d.placer != nil && (r.Staging == nil || !r.Staging.Enabled) {
 		wa := &agentv1.WorkAssignment{
 			AssignmentId: uuid.NewString(),
 			AttemptToken: token,

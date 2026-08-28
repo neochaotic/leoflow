@@ -30,7 +30,7 @@ func newRunsCommand() *cobra.Command {
 }
 
 func newRunsTriggerCommand() *cobra.Command {
-	var serverURL, token string
+	var serverURL, token, conf, confFile string
 	cmd := &cobra.Command{
 		Use:   "trigger <dag_id>",
 		Short: "Trigger a new run of a DAG.",
@@ -40,8 +40,12 @@ func newRunsTriggerCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			body, err := triggerBody(conf, confFile)
+			if err != nil {
+				return err
+			}
 			url := strings.TrimRight(base, "/") + "/api/v2/dags/" + args[0] + "/dagRuns"
-			status, raw, err := apiRequest(cmdContext(cmd), http.MethodPost, url, bearer, []byte("{}"))
+			status, raw, err := apiRequest(cmdContext(cmd), http.MethodPost, url, bearer, body)
 			if err != nil {
 				return err
 			}
@@ -60,7 +64,41 @@ func newRunsTriggerCommand() *cobra.Command {
 		},
 	}
 	addRunsFlags(cmd, &serverURL, &token)
+	cmd.Flags().StringVar(&conf, "conf", "", "run configuration as an inline JSON object, exposed to tasks as params (e.g. --conf '{\"date\":\"2026-01-01\"}')")
+	cmd.Flags().StringVar(&confFile, "conf-file", "", "path to a JSON file whose object contents become the run configuration; mutually exclusive with --conf")
 	return cmd
+}
+
+// triggerBody builds the JSON request body for a trigger, folding an optional
+// run configuration into its conf field. The configuration may come inline via
+// --conf or from a file via --conf-file, but not both. Whichever source is
+// used, the payload must be a JSON object so it maps to the task params the
+// runtime exposes as {{ params.X }}; an array or scalar is rejected. With
+// neither flag the body is an empty object, preserving the prior behavior.
+func triggerBody(conf, confFile string) ([]byte, error) {
+	if conf != "" && confFile != "" {
+		return nil, fmt.Errorf("--conf and --conf-file are mutually exclusive; pass only one")
+	}
+	raw := conf
+	if confFile != "" {
+		data, err := os.ReadFile(confFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading --conf-file %q: %w", confFile, err)
+		}
+		raw = string(data)
+	}
+	if strings.TrimSpace(raw) == "" {
+		return []byte("{}"), nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return nil, fmt.Errorf("conf must be a JSON object: %w", err)
+	}
+	body, err := json.Marshal(map[string]json.RawMessage{"conf": json.RawMessage(raw)})
+	if err != nil {
+		return nil, fmt.Errorf("building request body: %w", err)
+	}
+	return body, nil
 }
 
 func newRunsStatusCommand() *cobra.Command {

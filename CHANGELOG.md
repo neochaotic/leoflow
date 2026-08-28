@@ -12,6 +12,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attempt's logs from the CLI — it streams the existing task-instance logs endpoint
   (the same logs the UI shows), so a failed task's output is reachable without the
   UI. `--try` defaults to the latest attempt; `-f` follows a running task.
+- **Airflow-3 alias imports accepted (#786).** `from airflow.decorators import task`
+  and `from airflow import DAG` now resolve to the Task SDK (`airflow.sdk`), so a
+  canonical Airflow-3 DAG compiles as-is. Legacy `airflow.operators.*` imports get a
+  clear error naming the `airflow.providers.standard.operators.*` replacement (they
+  were removed from core in Airflow 3.0), rather than a mistranslation.
+- **Trigger-time DAG parameters (#545).** `leoflow runs trigger --conf '{…}'` /
+  `--conf-file` supplies a run's `conf`, which reaches tasks as `{{ params.x }}`;
+  declared `params=` (Airflow's typed `Param`) are captured, defaulted, and validated
+  at trigger time (a schema violation is a 400), and a `Param` with no default is
+  required (a trigger that omits it is a 400).
+- **DAG scheduling/metadata attributes honored (#797).** `max_active_runs`, `catchup`,
+  `start_date`, and `description` set on the `DAG(...)` are now captured and honored
+  instead of silently dropped.
+- **How-to: trigger a run from an external system (#799).** A copy-paste REST flow
+  (obtain a JWT → `POST …/dagRuns` with `conf` → poll the run) for an external
+  integrator.
 
 ### Fixed
 
@@ -23,6 +39,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the non-root admission (`runAsNonRoot`) previously left the task polling and
   its `failure_reason` generic; it now settles `failed` and names the cause + the
   fix (end the image with a numeric `USER 65532`, or set `taskPodSecurity.runAsNonRoot=false`).
+- **Warm pools no longer place a staging DAG on a warm worker (#788, ADR 0058 D5).**
+  A staging attempt could be assigned to a reused warm pod that carries no per-run
+  `/staging` mount, silently diverging the run's shared-volume data; staging versions
+  now always take a dedicated pod and are excluded from the warm reconciler. Only
+  reachable with warm pools enabled (`min_idle > 0`), off by default.
+- **`@task.branch` fails with a clear error, not an opaque `AttributeError` (#809).**
+  The TaskFlow branch spelling now reports that branching is not supported yet
+  (ADR 0040 Phase D), matching how `BranchPythonOperator` is already refused, instead
+  of a confusing import-time crash.
+- **Warm-pool docs lead with the safe default and the dormant `min_idle_workers`
+  seam is documented honestly (#789).** The enable guide now leads with
+  `minIdleWorkers: 0` (scale-to-zero) and the not-yet-author-settable field is marked
+  dormant rather than reading as usable.
+- **Docs corrections (#790, #795).** Fixed broken cross-references/anchors, and the
+  stale claim that reschedule-mode sensors were unsupported (they are); deferrable
+  operators are recorded as a conscious non-goal (ADR 0016) with the reschedule
+  alternative.
 
 ### Security
 

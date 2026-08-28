@@ -529,3 +529,133 @@ def test_empty_callback_list_is_not_marked(monkeypatch, tmp_path):
             a()
     """)
     assert _task(spec, "a").get("on_failure_callback") is None
+
+
+# ─── Airflow-3 canonical import spellings (import-alias compatibility) ───
+# Airflow 3 kept `from airflow.decorators import task/dag` and
+# `from airflow import DAG` as deprecated-but-valid spellings that map onto
+# `airflow.sdk`. The shim only exposed `airflow.sdk`, so these line-1 imports
+# were rejected. `airflow.operators.*`, by contrast, was REMOVED from core in
+# 3.0 (relocated to apache-airflow-providers-standard): it must not be aliased,
+# but the error must name the canonical providers.standard path.
+
+
+def test_decorators_task_matches_sdk_task(monkeypatch, tmp_path):
+    """`from airflow.decorators import task` must resolve to the SAME shim object
+    as `from airflow.sdk import task` — identical captured graph."""
+    sdk_spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, task
+        @task
+        def extract() -> None: ...
+        @task
+        def load() -> None: ...
+        with DAG("g"):
+            extract() >> load()
+    """)
+    dec_spec = _compile(monkeypatch, tmp_path, """
+        from airflow.decorators import task
+        from airflow.sdk import DAG
+        @task
+        def extract() -> None: ...
+        @task
+        def load() -> None: ...
+        with DAG("g"):
+            extract() >> load()
+    """)
+    assert dec_spec["tasks"] == sdk_spec["tasks"]
+    assert [t["task_id"] for t in dec_spec["tasks"]] == ["extract", "load"]
+    assert _task(dec_spec, "load")["depends_on"] == ["extract"]
+
+
+def test_decorators_dag_matches_sdk_dag(monkeypatch, tmp_path):
+    """`from airflow.decorators import dag` must resolve to the SAME shim object as
+    `from airflow.sdk import dag`; the @dag TaskFlow decorator builds an equivalent
+    graph either way."""
+    sdk_spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import dag, task
+        @task
+        def a() -> None: ...
+        @dag(schedule="@daily")
+        def pipeline():
+            a()
+        pipeline()
+    """)
+    dec_spec = _compile(monkeypatch, tmp_path, """
+        from airflow.decorators import dag, task
+        @task
+        def a() -> None: ...
+        @dag(schedule="@daily")
+        def pipeline():
+            a()
+        pipeline()
+    """)
+    assert dec_spec == sdk_spec
+    assert dec_spec["dag_id"] == "pipeline"
+    assert dec_spec.get("schedule") == "@daily"
+    assert [t["task_id"] for t in dec_spec["tasks"]] == ["a"]
+
+
+def test_from_airflow_import_dag_matches_sdk(monkeypatch, tmp_path):
+    """`from airflow import DAG` (deprecated Airflow-3 convenience alias) resolves
+    to the same DAG shim as `from airflow.sdk import DAG`."""
+    top_spec = _compile(monkeypatch, tmp_path, """
+        from airflow import DAG
+        from airflow.sdk import task
+        @task
+        def a() -> None: ...
+        with DAG("g"):
+            a()
+    """)
+    sdk_spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG, task
+        @task
+        def a() -> None: ...
+        with DAG("g"):
+            a()
+    """)
+    assert top_spec == sdk_spec
+
+
+@pytest.mark.parametrize("submodule", ["bash", "python"])
+def test_removed_core_operator_import_names_providers_standard(
+    monkeypatch, tmp_path, submodule
+):
+    """`airflow.operators.*` was removed from Airflow core in 3.0 and relocated to
+    apache-airflow-providers-standard. It must NOT be aliased (that would be a
+    2.x-only spelling); it must raise a clear compile error naming the canonical
+    airflow.providers.standard.operators.<x> path — not the generic
+    operator-unsupported fall-through."""
+    op = {"bash": "BashOperator", "python": "PythonOperator"}[submodule]
+    with pytest.raises(ValueError) as ei:
+        _compile(monkeypatch, tmp_path, f"""
+            from airflow.operators.{submodule} import {op}
+            from airflow.sdk import DAG
+            with DAG("g"):
+                pass
+        """)
+    msg = str(ei.value)
+    assert f"airflow.providers.standard.operators.{submodule}" in msg
+    # Must NOT fall through to the generic operator-unsupported wording.
+    assert "supported: Bash, Http" not in msg
+
+
+def test_task_branch_rejected_cleanly_not_attributeerror(monkeypatch, tmp_path):
+    """@task.branch must fail with the clear branching reject (ADR 0040 Phase D),
+    not an opaque AttributeError from a missing decorator attribute. Branching is
+    parked pending scheduler skip-state; the parser owes a loud, actionable error
+    for the TaskFlow spelling just as it does for BranchPythonOperator."""
+    with pytest.raises(ValueError) as ei:
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG, task
+            @task
+            def a() -> None: ...
+            @task.branch
+            def pick() -> str:
+                return "a"
+            with DAG("g"):
+                a()
+                pick()
+        """)
+    msg = str(ei.value)
+    assert "not supported by Leoflow" in msg
+    assert "branching" in msg

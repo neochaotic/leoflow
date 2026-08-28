@@ -3,6 +3,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -77,16 +78,22 @@ type DAGSpec struct {
 	// exactly as before. The scheduler enforces it in PlanRun's scheduled→queued
 	// admission gate.
 	MaxActiveTasks int `json:"max_active_tasks,omitempty"`
-	// MinIdleWorkers is the number of warm workers the DAG AUTHOR wants kept ready
-	// for this DAG version so its tasks skip cold-pod startup (ADR 0058 N1b2b,
-	// warm pools model A2). It mirrors MaxActiveTasks as a per-DAG author-declared
-	// spec field: zero (the default) means no warmth, and a DAG that never sets it
-	// — and all of Lite — behaves exactly as before. It is only a REQUEST: the
-	// operator caps it at execution.max_pool_size, floors an unset value at
-	// execution.min_idle_workers, and the whole thing is inert unless the operator
-	// enabled execution.warm_pools_enabled (see config.ExecutionSection.
-	// EffectiveMinIdle). Whether a pod may be reused across attempts stays the
-	// operator's security decision; this field only tunes how many.
+	// MinIdleWorkers is a DORMANT seam for per-DAG author-declared warmth: the
+	// number of warm workers an author would want kept ready for this DAG version
+	// so its tasks skip cold-pod startup (ADR 0058, warm pools model A2). It is NOT
+	// author-settable today. There is no author entry point: the field is absent
+	// from the authoring schema (leoflow-yaml-schema.json, which is
+	// additionalProperties:false) and the parser never emits it, so after the
+	// parse→compile path this value is ALWAYS 0. The intended split is that the
+	// operator gates IF warmth happens at all (execution.warm_pools_enabled) while
+	// the author would only tune HOW MANY, with the operator clamping the request;
+	// whether a pod may be reused across attempts stays the operator's security
+	// decision. The downstream is intentionally pre-wired around this field —
+	// config.ExecutionSection.EffectiveMinIdle already clamps it and the scheduler
+	// store already reads it — so exposing it to authors later is a schema+parser
+	// change only (add the key to the authoring schema and have the parser emit
+	// it), with no domain/scheduler rework. Until then it stays 0 and every DAG,
+	// and all of Lite, behaves exactly as before.
 	MinIdleWorkers int          `json:"min_idle_workers,omitempty"`
 	Catchup        bool         `json:"catchup,omitempty"`
 	DefaultArgs    *DefaultArgs `json:"default_args,omitempty"`
@@ -103,13 +110,34 @@ type DAGSpec struct {
 	// valid and means the DAG declares nothing — the additive, back-compatible
 	// default. These carry the declaration only; secret delivery still ships the
 	// whole tenant vault until enforcement lands on a later increment.
-	Variables   []string   `json:"variables,omitempty"`
-	Connections []string   `json:"connections,omitempty"`
-	Tasks       []TaskSpec `json:"tasks"`
+	Variables   []string `json:"variables,omitempty"`
+	Connections []string `json:"connections,omitempty"`
+	// Params are the DAG's author-declared run parameters (Airflow's params=),
+	// keyed by name. Each carries a Default (materialized into a run's conf when
+	// the trigger omits that key) and an optional JSON Schema the trigger-time
+	// conf value is validated against. Absent (empty) means the DAG declares no
+	// params — the additive, back-compatible default, so the compiled shape of a
+	// param-free DAG is unchanged. Part of the immutable spec (CanonicalHash), so
+	// changing a default or schema produces a new DAG version.
+	Params map[string]ParamSpec `json:"params,omitempty"`
+	Tasks  []TaskSpec           `json:"tasks"`
 	// Source is the original dag.py text, captured at compile time so the UI's
 	// Code tab can show the Python a human wrote (not the compiled spec). It is
 	// part of the artifact: changing it produces a new version.
 	Source string `json:"source,omitempty"`
+}
+
+// ParamSpec is one author-declared DAG-run parameter: a default value and the
+// JSON Schema its trigger-time conf value is validated against. Both are carried
+// as raw JSON so an arbitrary default and an arbitrary schema round-trip
+// verbatim. Schema is {} (or absent) when the author declared a bare default
+// with no constraints, in which case any conf value for that key is accepted.
+type ParamSpec struct {
+	// Default is the value merged into a run's conf when the trigger omits this
+	// key. Absent (omitempty, len 0) means the param is REQUIRED — the trigger
+	// must supply it — as distinct from an explicit JSON null default.
+	Default json.RawMessage `json:"default,omitempty"`
+	Schema  json.RawMessage `json:"schema,omitempty"`
 }
 
 // StagingConfig is the opt-in per-DAG-run shared staging volume (ADR 0022). Size
@@ -267,6 +295,14 @@ func (d *DAGSpec) Validate() error {
 			return fmt.Errorf("task %q uses the removed task type \"http_api\" (ADR 0047): "+
 				"the native inline HTTP executor ran in the control plane and was an SSRF surface. "+
 				"Use an HttpOperator, which runs in a task pod (declare connectors: [http])", t.TaskID)
+		}
+	}
+	// Refuse a declared param whose schema is invalid or whose default violates
+	// it now, at registration — not on every trigger (fail while the author can
+	// see it, matching the resource-quantity philosophy below).
+	for name, p := range d.Params {
+		if err := validateParamSpec(name, p.Schema, p.Default); err != nil {
+			return err
 		}
 	}
 	s, err := schemas()

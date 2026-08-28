@@ -186,6 +186,11 @@ type activeWarmVersion struct {
 	// can enforce the per-tenant aggregate warm-pod cap (M4). Many active runs of a
 	// version share one tenant, so it dedupes with the version.
 	tenantID string
+	// staging marks a version whose DAG opted into the per-run shared /staging
+	// volume (ADR 0022). Such versions are excluded from warm pools (ADR 0058 D5):
+	// a warm worker carries no per-run /staging mount, so its attempts must run on
+	// dedicated pods. Kept on the pure input so the exclusion is unit-testable.
+	staging bool
 }
 
 // warmTargets dedupes the active versions (many runs share one immutable
@@ -201,6 +206,10 @@ func warmTargets(versions []activeWarmVersion, exec config.ExecutionSection) []e
 			continue
 		}
 		seen[v.dagVersionID] = true
+		if v.staging {
+			// ADR 0058 D5: staging versions never get a warm pool.
+			continue
+		}
 		out = append(out, executor.WarmTarget{
 			DagVersionID:     v.dagVersionID,
 			Image:            v.image,
@@ -245,6 +254,9 @@ func (s *SchedulerStore) ActiveWarmTargets(ctx context.Context) ([]executor.Warm
 			image:        spec.Image,
 			dagMinIdle:   spec.MinIdleWorkers,
 			tenantID:     uuidToString(run.TenantID),
+			// ADR 0058 D5: a staging version is excluded from warm pools by
+			// warmTargets. Defense-in-depth alongside the dispatch-path guard.
+			staging: spec.Staging != nil && spec.Staging.Enabled,
 		})
 	}
 	return warmTargets(versions, s.warmExec), nil

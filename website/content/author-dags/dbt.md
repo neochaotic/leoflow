@@ -15,17 +15,37 @@ Leoflow task, executed **pod-per-task** against your warehouse — no Apache
 Airflow in the control plane, and no [Cosmos](https://astronomer.github.io/astronomer-cosmos/)
 at runtime.
 
-> **vs Cosmos.** Cosmos generates Airflow tasks from a dbt project by importing a
-> Python library at DAG-parse time. Leoflow does the same translation in Go at
-> compile time, from the same `manifest.json` — so there is no library to import,
-> no profile-mapping boilerplate, and no per-run re-parse of the manifest.
+{{% pageinfo %}}
+**Your `ref()` graph *is* the DAG.** Leoflow reads dbt's manifest at compile time
+and emits one task per node — you never write task dependencies, and there is no
+library to import, no profile-mapping boilerplate, and no per-run re-parse.
+{{% /pageinfo %}}
 
-There are **two ways** to bring dbt into Leoflow:
+There are **two ways** to bring dbt into Leoflow — pick the one that fits your DAG:
 
-1. **The dbt project *is* the DAG** — declare it in `leoflow.yaml`. The fast path
-   when a DAG is purely dbt.
-2. **dbt mixed with operators** — author a `dag.py`, drop a `dbt_group()` between
-   your operators. This is the Cosmos `DbtTaskGroup` capability.
+<div class="lf-cards">
+  <a class="lf-card lf-card--hero" href="#1-the-dbt-project-is-the-dag">
+    <span class="lf-card__badge">Simplest</span>
+    <span class="lf-card__icon"><i class="fa-solid fa-cubes-stacked"></i></span>
+    <span class="lf-card__title">The dbt project <em>is</em> the DAG</span>
+    <span class="lf-card__desc">No Python — declare the project in <code>leoflow.yaml</code>. The fast path when a DAG is purely dbt.</span>
+    <span class="lf-card__more">See the pure-dbt path →</span>
+  </a>
+  <a class="lf-card" href="#2-mixing-dbt-with-operators">
+    <span class="lf-card__icon"><i class="fa-solid fa-diagram-project"></i></span>
+    <span class="lf-card__title">dbt mixed with operators</span>
+    <span class="lf-card__desc">Author a <code>dag.py</code> and drop a <code>dbt_group()</code> between your operators — the Cosmos <code>DbtTaskGroup</code> capability.</span>
+    <span class="lf-card__more">Mix in operators →</span>
+  </a>
+</div>
+
+{{% alert title="vs Cosmos" color="info" %}}
+Cosmos generates Airflow tasks from a dbt project by importing a Python library at
+DAG-parse time. Leoflow does the same translation in Go at **compile time**, from the
+same `manifest.json` — so there is no library to import, no profile-mapping
+boilerplate, and no per-run re-parse of the manifest. (A full side-by-side is in
+[Cosmos at a glance](#cosmos-at-a-glance).)
+{{% /alert %}}
 
 ---
 
@@ -123,7 +143,18 @@ this problem.
 ## 2. Mixing dbt with operators
 
 To run operators **before/after** your models in the same DAG, author a `dag.py`
-and embed the dbt project with `dbt_group("<name>")`:
+and embed the dbt project with `dbt_group("<name>")`.
+
+{{% alert title="Packing models into fewer pods" color="info" %}}
+By default (`granularity: node`) each model is its own pod — like Cosmos. Set
+`granularity: level` or `folder` (as below) to pack models into **grouped tasks**:
+each group compiles to a single `dbt build --select …` task — one pod that dbt runs
+internally — so a project of *N* models needn't become *N* pods. This is Leoflow's
+answer to pod sprawl for dbt; see
+[Core concepts → When you pay for a pod](/concepts/core-concepts/#when-you-pay-for-a-pod-and-when-you-dont).
+{{% /alert %}}
+
+Embed the dbt project between your operators with `dbt_group("<name>")`:
 
 ```python
 # sales/dag.py

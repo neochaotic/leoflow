@@ -57,5 +57,34 @@ own container image** — no shared `/dags` filesystem, no dependency hell. See
 [ADR 0001](/project/adrs/0001-why-leoflow/) and
 [ADR 0003](/project/adrs/0003-dag-as-image/).
 
+## When you pay for a pod (and when you don't)
+
+Every task runs in **its own fresh pod** — one task, one pod, by default
+([ADR 0002](/project/adrs/0002-pod-per-task/)). That is deliberate: each task gets
+**failure isolation** (an OOM or crash can't touch a sibling), **its own retry**,
+**right-sized CPU/memory**, and **its own secret scope**. For production — and
+especially for audit and compliance — those per-task properties are the feature,
+not overhead.
+
+The trade is a **cold start per task** (image pull, schedule, container start, the
+agent handshake). For a DAG of many short tasks that overhead can dominate. Leoflow
+gives you three levers so you don't over-pay — pick by the situation, not by
+reaching for a generic "pack tasks together" switch (there isn't one — see below):
+
+| Situation | Lever | What it does |
+|---|---|---|
+| **Iterating on DAG logic locally** | `leoflow lite --executor subprocess` | Runs tasks as host processes — **no pods, no image build** — the fast inner loop. (`--executor auto`, the default, uses a real k3d pod-per-task when Docker is present, for fidelity.) Dev-only, unsandboxed. |
+| **A dbt project with many models** | [`dbt_group()`](/author-dags/dbt/) with `granularity: level` or `folder` | Packs the project's models into **grouped tasks** (each group is one `dbt build` = one pod) that dbt orchestrates internally, so *N* models needn't be *N* pods. The default `granularity: node` is one pod per model. |
+| **Amortizing cold start across attempts** | [Warm worker pools](/operate/warm-pools/) (Pro, operator-set) | Reuse **one pod across many attempts of the same DAG version** ([ADR 0058](/project/adrs/0058-warm-worker-pools/)). An operator knob, not a DAG attribute — by design; it never groups *different* tasks. |
+
+{{% alert title="There is no generic pack-tasks-into-one-pod knob" color="info" %}}
+Fusing arbitrary operators into a single pod (a generic fused `TaskGroup`) is
+**designed but deliberately not built** ([ADR 0043](/project/adrs/0043-taskgroup-split-fused-execution/)):
+the levers above already cover the real pod-cost cases, and fusing would trade away
+the per-task isolation, retry, and secret scoping that pod-per-task exists to give.
+If you hit genuine pod-startup pain on a **non-dbt** DAG of many tiny tasks, that's
+the signal to revisit ADR 0043 — not a gap to work around.
+{{% /alert %}}
+
 See also: [Architecture](/concepts/architecture/) ·
 [DAG authoring](/author-dags/dag-authoring/) · [Glossary](/reference/glossary/).

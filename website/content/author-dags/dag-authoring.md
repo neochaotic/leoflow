@@ -25,7 +25,7 @@ Scaffold one with `leoflow init dags/my_pipeline`.
 > exist only in `leoflow lite` — the developer-mode loop. **Pro** does not have
 > a "workspace"; in Pro every DAG ships as its own image-and-`dag.json` pair,
 > built by CI and registered via `leoflow push dag.json`. See
-> [The development → deploy lifecycle](#the-development-deploy-lifecycle).
+> [The development → deploy lifecycle](#the-development--deploy-lifecycle).
 
 `leoflow lite` watches a **workspace** that can hold many DAGs as sibling
 subdirectories. The default workspace is `~/leoflow/` (set by `leoflow setup`).
@@ -96,6 +96,19 @@ def transform(data: dict) -> dict:
 with DAG("my_pipeline", schedule="@daily", catchup=False, tags=["etl"]):
     transform(extract())
 ```
+
+`from airflow.sdk import …` is the canonical Airflow 3 spelling and what we
+recommend. The deprecated-but-still-valid Airflow 3 aliases resolve to the same
+objects, so a migrated DAG compiles unchanged:
+
+- `from airflow.decorators import task, dag` → the `airflow.sdk` decorators.
+- `from airflow import DAG` → `airflow.sdk.DAG`.
+
+The core `airflow.operators.*` operators, however, were **removed** from Airflow
+in 3.0 and relocated to `apache-airflow-providers-standard`. Importing one (e.g.
+`from airflow.operators.bash import BashOperator`) fails the compile with a
+message pointing at the replacement — use
+`from airflow.providers.standard.operators.bash import BashOperator` instead.
 
 ### Supported task types
 

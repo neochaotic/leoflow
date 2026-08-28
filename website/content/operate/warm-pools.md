@@ -123,25 +123,44 @@ The exchange transport needs a cluster-scoped `tokenreviews` RBAC grant so the
 control plane can validate the projected ServiceAccount token each pod presents.
 The Helm chart renders that `ClusterRole` + binding **only** when the exchange
 transport is selected — see
-[Agent credential transport → RBAC](/operate/agent-credential-transport/#rbac-the-tokenreviews-grant).
+[Agent credential transport → RBAC](/operate/agent-credential-transport/#rbac--the-tokenreviews-grant).
 
 ### 2. Turn on the pool and tune it
 
 The pool knobs live under the chart's `execution` values (which map to the
-`LEOFLOW_EXECUTION_*` server environment). At minimum:
+`LEOFLOW_EXECUTION_*` server environment). Start with the default,
+`minIdleWorkers: 0`:
 
 ```yaml
 execution:
   warmPoolsEnabled: true      # LEOFLOW_EXECUTION_WARM_POOLS_ENABLED
-  minIdleWorkers: 1           # keep 1 warm pod ready per DAG version
+  minIdleWorkers: 0           # default: scale-to-zero, no standing cost
 ```
 
-Everything else carries a sane default (see the [config reference](#configuration-reference)).
-With `minIdleWorkers: 0` (the default) the pool scales to zero — no idle pods are
-kept, preserving the zero-idle floor of pod-per-task; a pod is provisioned on
-demand and then reused while it stays busy or within its idle-TTL. Raise
-`minIdleWorkers` to trade a little idle cost for a warm pod that is ready the
-instant an attempt arrives.
+`minIdleWorkers: 0` is the real code default and the right starting point. The
+pool scales to zero — **no idle pods are kept**, so there is **no standing
+cost**, preserving the zero-idle floor of pod-per-task. A pod is provisioned on
+demand at the first attempt and then reused while it stays busy or within its
+idle-TTL, so you still get the reuse win on a hot version without paying for a
+pod that sits idle. Everything else carries a sane default (see the
+[config reference](#configuration-reference)).
+
+**To see it work — or to measure the latency win — raise it to `1`:**
+
+```yaml
+execution:
+  warmPoolsEnabled: true
+  minIdleWorkers: 1           # keep 1 warm pod ready per DAG version — has a cost
+```
+
+`minIdleWorkers: 1` keeps a pod ready the instant an attempt arrives (no
+first-attempt provisioning wait), which is what you want when demonstrating or
+benchmarking the feature. It is not free: it keeps **one pod warm per DAG
+version** standing idle (multiplied across every active version), and — like
+turning warm pools on at all — it rides on the cluster-wide pod-auth change from
+the `exchange` transport + `enforce` liveness prerequisite above, which alters
+how **every** task pod authenticates, warm or dedicated. Measure the win against
+that cost before raising it in production.
 
 {{% alert title="Enable on a shared production cluster is a reliability decision" color="warning" %}}
 Unit and integration tests prove the *logic* with fakes; they cannot prove the

@@ -1,12 +1,85 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
+
+// TestTriggerDagRunPersistsConf pins that a conf object in the trigger request
+// is carried onto the created run and reflected back in the response, rather
+// than dropped. This is the server half of the CLI --conf plumbing: the
+// stored conf is what the agent later exposes to tasks as params.
+func TestTriggerDagRunPersistsConf(t *testing.T) {
+	srv := authedServer()
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/dagRuns",
+		`{"conf":{"date":"2026-01-01","limit":10}}`)
+	if rec.Code >= http.StatusMultipleChoices {
+		t.Fatalf("trigger with conf = %d, want 2xx; body=%q", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Conf map[string]any `json:"conf"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parsing response %q: %v", rec.Body.String(), err)
+	}
+	if got.Conf["date"] != "2026-01-01" || got.Conf["limit"] != float64(10) {
+		t.Errorf("conf = %v, want the posted conf carried onto the run", got.Conf)
+	}
+}
+
+// TestTriggerDagRunDefaultsConfToEmptyObject pins that a trigger with no conf
+// still reports conf as {}, preserving the prior contract.
+func TestTriggerDagRunDefaultsConfToEmptyObject(t *testing.T) {
+	srv := authedServer()
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/dagRuns", `{}`)
+	if rec.Code >= http.StatusMultipleChoices {
+		t.Fatalf("trigger without conf = %d, want 2xx; body=%q", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Conf json.RawMessage `json:"conf"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parsing response %q: %v", rec.Body.String(), err)
+	}
+	if string(got.Conf) != "{}" {
+		t.Errorf("conf = %s, want {} when no conf is supplied", got.Conf)
+	}
+}
+
+// TestTriggerDagRunNormalizesNullConf pins that an explicit JSON null conf is
+// treated as absent and persisted as the empty object, not the literal null —
+// the run's conf is contractually never null.
+func TestTriggerDagRunNormalizesNullConf(t *testing.T) {
+	srv := authedServer()
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/dagRuns", `{"conf":null}`)
+	if rec.Code >= http.StatusMultipleChoices {
+		t.Fatalf("trigger with null conf = %d, want 2xx; body=%q", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Conf json.RawMessage `json:"conf"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parsing response %q: %v", rec.Body.String(), err)
+	}
+	if string(got.Conf) != "{}" {
+		t.Errorf("conf = %s, want {} when conf is JSON null", got.Conf)
+	}
+}
+
+// TestTriggerDagRunRejectsNonObjectConf pins that a conf that is valid JSON but
+// not an object (an array or scalar) is a 400: conf must map to task params.
+func TestTriggerDagRunRejectsNonObjectConf(t *testing.T) {
+	for _, body := range []string{`{"conf":[1,2]}`, `{"conf":5}`, `{"conf":"x"}`} {
+		rec := authGet(authedServer(), http.MethodPost, "/api/v2/dags/etl/dagRuns", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s = %d, want 400", body, rec.Code)
+		}
+	}
+}
 
 func TestGetDagRunHandler(t *testing.T) {
 	srv := authedServer() // has run "r1"

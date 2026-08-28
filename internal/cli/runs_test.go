@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,6 +92,104 @@ func TestRunsTriggerUsesConfigToken(t *testing.T) {
 	}
 	if *gotAuth != "Bearer jwt-from-config" {
 		t.Errorf("auth = %q, want the token persisted by login (Bearer jwt-from-config)", *gotAuth)
+	}
+}
+
+// bodyRecorder is an httptest server that records the raw request body of the
+// last request it served, together with a canned JSON response body. The trigger
+// command POSTs its conf payload, so a test can prove exactly what reached the
+// control plane.
+func bodyRecorder(t *testing.T, body string) (srv *httptest.Server, got *string) {
+	t.Helper()
+	var reqBody string
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		reqBody = string(raw)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &reqBody
+}
+
+// TestRunsTriggerSendsConf proves an inline --conf JSON object reaches the
+// control plane as the request's conf field, lighting up the downstream
+// conf -> LEOFLOW_PARAMS -> {{ params.X }} pipeline that already exists.
+func TestRunsTriggerSendsConf(t *testing.T) {
+	srv, gotBody := bodyRecorder(t, `{"dag_run_id":"run-1","state":"queued"}`)
+
+	if _, _, err := run(t, "runs", "trigger", "etl",
+		"--conf", `{"x":1}`, "--server", srv.URL, "--token", "t"); err != nil {
+		t.Fatalf("runs trigger --conf: %v", err)
+	}
+	var sent struct {
+		Conf map[string]any `json:"conf"`
+	}
+	if err := json.Unmarshal([]byte(*gotBody), &sent); err != nil {
+		t.Fatalf("parsing request body %q: %v", *gotBody, err)
+	}
+	if got, ok := sent.Conf["x"]; !ok || got != float64(1) {
+		t.Errorf("conf = %v, want {\"x\":1} sent to the control plane", sent.Conf)
+	}
+}
+
+// TestRunsTriggerSendsConfFromFile proves --conf-file reads a JSON file from
+// disk and sends its contents as the run's conf.
+func TestRunsTriggerSendsConfFromFile(t *testing.T) {
+	srv, gotBody := bodyRecorder(t, `{"dag_run_id":"run-1","state":"queued"}`)
+	confPath := filepath.Join(t.TempDir(), "conf.json")
+	if err := os.WriteFile(confPath, []byte(`{"owner":"alice","limit":10}`), 0o600); err != nil {
+		t.Fatalf("write conf file: %v", err)
+	}
+
+	if _, _, err := run(t, "runs", "trigger", "etl",
+		"--conf-file", confPath, "--server", srv.URL, "--token", "t"); err != nil {
+		t.Fatalf("runs trigger --conf-file: %v", err)
+	}
+	var sent struct {
+		Conf map[string]any `json:"conf"`
+	}
+	if err := json.Unmarshal([]byte(*gotBody), &sent); err != nil {
+		t.Fatalf("parsing request body %q: %v", *gotBody, err)
+	}
+	if sent.Conf["owner"] != "alice" || sent.Conf["limit"] != float64(10) {
+		t.Errorf("conf = %v, want the file contents sent to the control plane", sent.Conf)
+	}
+}
+
+// TestRunsTriggerRejectsInvalidConf proves malformed JSON in --conf fails with a
+// CLI error rather than silently sending an empty conf.
+func TestRunsTriggerRejectsInvalidConf(t *testing.T) {
+	srv, _ := bodyRecorder(t, `{"dag_run_id":"run-1","state":"queued"}`)
+	if _, _, err := run(t, "runs", "trigger", "etl",
+		"--conf", "not json", "--server", srv.URL, "--token", "t"); err == nil {
+		t.Error("invalid --conf JSON should error")
+	}
+}
+
+// TestRunsTriggerRejectsNonObjectConf proves a valid-but-non-object top-level
+// (an array or a scalar) is rejected: conf must be a JSON object so it maps to
+// task params.
+func TestRunsTriggerRejectsNonObjectConf(t *testing.T) {
+	srv, _ := bodyRecorder(t, `{"dag_run_id":"run-1","state":"queued"}`)
+	for _, bad := range []string{`[1,2]`, `5`} {
+		if _, _, err := run(t, "runs", "trigger", "etl",
+			"--conf", bad, "--server", srv.URL, "--token", "t"); err == nil {
+			t.Errorf("non-object --conf %q should error", bad)
+		}
+	}
+}
+
+// TestRunsTriggerRejectsBothConfFlags proves --conf and --conf-file are mutually
+// exclusive: passing both is an operator mistake, not a silent precedence rule.
+func TestRunsTriggerRejectsBothConfFlags(t *testing.T) {
+	srv, _ := bodyRecorder(t, `{"dag_run_id":"run-1","state":"queued"}`)
+	confPath := filepath.Join(t.TempDir(), "conf.json")
+	if err := os.WriteFile(confPath, []byte(`{"a":1}`), 0o600); err != nil {
+		t.Fatalf("write conf file: %v", err)
+	}
+	if _, _, err := run(t, "runs", "trigger", "etl",
+		"--conf", `{"a":1}`, "--conf-file", confPath, "--server", srv.URL, "--token", "t"); err == nil {
+		t.Error("passing both --conf and --conf-file should error")
 	}
 }
 

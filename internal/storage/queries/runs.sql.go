@@ -236,8 +236,8 @@ func (q *Queries) CountTaskInstanceStatesInWindow(ctx context.Context, arg Count
 }
 
 const createDagRun = `-- name: CreateDagRun :one
-INSERT INTO dag_runs (tenant_id, dag_id, dag_version_id, run_id, logical_date, state, trigger, note)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO dag_runs (tenant_id, dag_id, dag_version_id, run_id, logical_date, state, trigger, note, conf)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id, tenant_id, dag_id, dag_version_id, run_id, logical_date, data_interval_start, data_interval_end, state, trigger, conf, triggered_by, queued_at, started_at, ended_at, note, alerted_at, alert_attempts, next_alert_attempt_at
 `
 
@@ -250,6 +250,7 @@ type CreateDagRunParams struct {
 	State        DagRunState        `json:"state"`
 	Trigger      DagRunTrigger      `json:"trigger"`
 	Note         *string            `json:"note"`
+	Conf         []byte             `json:"conf"`
 }
 
 func (q *Queries) CreateDagRun(ctx context.Context, arg CreateDagRunParams) (DagRun, error) {
@@ -262,6 +263,7 @@ func (q *Queries) CreateDagRun(ctx context.Context, arg CreateDagRunParams) (Dag
 		arg.State,
 		arg.Trigger,
 		arg.Note,
+		arg.Conf,
 	)
 	var i DagRun
 	err := row.Scan(

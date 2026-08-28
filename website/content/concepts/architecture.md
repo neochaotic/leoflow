@@ -8,6 +8,11 @@ weight: 30
 description: "The Go control plane, the split API/scheduler roles, and the execution data flow."
 ---
 
+Leoflow is a **Go control plane** that compiles each DAG to an immutable artifact and
+runs it **pod-per-task**. The diagram below traces one DAG from `leoflow compile` in
+dev, through the split API/scheduler roles of the control plane, to the executor that
+launches task pods — the sections that follow walk each stage in turn.
+
 ```mermaid
 flowchart LR
   subgraph Dev["Dev / CI"]
@@ -143,7 +148,7 @@ default** so a stock deployment is byte-for-byte the historical path:
 
 The credential mechanics are already drawn on the credential-transport page and
 are not redrawn here: the one-`TokenReview`-then-task-scoped-JWT handshake is the
-[exchange flow](/operate/agent-credential-transport/#exchange-projected-sa-token-tokenreview),
+[exchange flow](/operate/agent-credential-transport/#exchange--projected-sa-token--tokenreview),
 and the pod-scoped-vs-attempt-scoped split that makes warm-pool reuse safe is the
 [two-token model](/operate/agent-credential-transport/#the-two-token-model) (also reused
 by link from [Warm worker pools](/operate/warm-pools/)).

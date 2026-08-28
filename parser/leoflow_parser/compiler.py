@@ -70,6 +70,22 @@ def compile_dag(
     default_args = _default_args(config)
     if default_args:
         spec["default_args"] = default_args
+    params = _params(dag)
+    if params:
+        spec["params"] = params
+    # Scheduling/metadata attributes the domain + scheduler honor. Emitted only
+    # when set, so a DAG that declares none keeps its compiled shape.
+    description = getattr(dag, "description", None)
+    if isinstance(description, str) and description:
+        spec["description"] = description
+    start_date = _start_date(dag)
+    if start_date:
+        spec["start_date"] = start_date
+    mar = getattr(dag, "max_active_runs", None)
+    if isinstance(mar, int) and not isinstance(mar, bool) and mar > 0:
+        spec["max_active_runs"] = mar
+    if getattr(dag, "catchup", None) is True:
+        spec["catchup"] = True
     return spec
 
 
@@ -171,6 +187,8 @@ def _load_dags_shim(source: str):
     try:
         runpy.run_path(source, run_name="__leoflow_dag__")
     except ModuleNotFoundError as exc:
+        if _is_removed_core_operator_module(exc.name):
+            return {}, _removed_core_operator_hint(exc.name)
         if _is_provider_module(exc.name):
             return {}, _provider_import_hint(exc.name)
         return {}, _unsupported(f"module {exc.name!r}")
@@ -196,6 +214,37 @@ def _load_dags_shim(source: str):
 def _unsupported(detail: str) -> str:
     return (f"{detail}: not supported by Leoflow "
             f"(supported: Bash, Http, Python/@task; no dynamic task mapping or task groups)")
+
+
+_REMOVED_CORE_OPERATORS_PREFIX = "airflow.operators."
+
+
+def _is_removed_core_operator_module(name: str | None) -> bool:
+    """True for a core ``airflow.operators.<x>`` module. These operators were
+    removed from Airflow core in 3.0 and relocated to
+    apache-airflow-providers-standard, so they are never aliasable: aliasing the
+    2.x-only spelling would accept a DAG that no Airflow-3 install can run."""
+    return bool(name) and name.startswith(_REMOVED_CORE_OPERATORS_PREFIX)
+
+
+def _removed_core_operator_hint(name: str) -> str:
+    """Actionable message for a removed core-operator import. It names the
+    canonical ``airflow.providers.standard.operators.<x>`` replacement (which the
+    shim supports) instead of falling through to the generic operator-unsupported
+    wording, so a migrating author sees the exact spelling to switch to.
+
+    ``name`` is the failed module, e.g. 'airflow.operators.bash'; the submodule
+    tail (``bash``) maps 1:1 onto the standard provider's operators package."""
+    submodule = name[len(_REMOVED_CORE_OPERATORS_PREFIX):]
+    canonical = "airflow.providers.standard.operators"
+    if submodule:
+        canonical = f"{canonical}.{submodule}"
+    return (
+        f"{name!r} was removed from Airflow core in 3.0 and relocated to the "
+        f"standard provider. Import from {canonical!r} instead "
+        f"(the apache-airflow-providers-standard package). Leoflow targets "
+        f"Airflow 3, so the pre-3 core-operator spelling is not accepted."
+    )
 
 
 def _is_provider_module(name: str | None) -> bool:
@@ -601,7 +650,7 @@ def _bind_call_arguments(task) -> tuple[dict[str, list[str]], dict[str, Any]]:
 def _is_json_literal(value: Any) -> bool:
     """Reports whether value is safely round-trippable through JSON.
 
-    The runtime delivers params via LEOFLOW_PARAMS_JSON, so a value that
+    The runtime delivers params via LEOFLOW_PARAMS, so a value that
     survives ``json.dumps`` cleanly is the safe-to-capture set. Anything
     else (a class instance, a tuple of objects, a function) is dropped so
     we never emit invalid JSON into dag.json.
@@ -624,6 +673,45 @@ def _schedule(dag) -> str | None:
         return summary
     schedule = getattr(dag, "schedule", None)
     return schedule if isinstance(schedule, str) else None
+
+
+def _start_date(dag) -> str | None:
+    """Serialize the DAG's start_date to an ISO-8601 string (the domain field is
+    a string; the schema wants date-time). Airflow's start_date is a datetime;
+    accept anything with isoformat() and fall back to str()."""
+    value = getattr(dag, "start_date", None)
+    if value is None:
+        return None
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        return iso()
+    text = str(value)
+    return text or None
+
+
+def _params(dag) -> dict[str, Any]:
+    """Emit the DAG's author-declared params as ``{name: {default, schema}}``.
+
+    A bare default (``params={"limit": 5}``) becomes ``{"default": 5, "schema": {}}``;
+    a ``Param`` contributes its recorded default plus the JSON Schema it built from
+    its kwargs. Returns an empty dict when the DAG declares no params, so the
+    compiler omits the key and the compiled shape of a param-free DAG is unchanged.
+    """
+    declared = getattr(dag, "params", None)
+    if not declared:
+        return {}
+    out: dict[str, Any] = {}
+    for name, value in declared.items():
+        schema = getattr(value, "schema", None)
+        entry: dict[str, Any] = {"schema": dict(schema) if schema else {}}
+        # Omit `default` for a required Param (one declared with no default), so
+        # the trigger-time check can distinguish required from a null default. A
+        # bare value (params={"limit": 5}) has no has_default attr → it IS its
+        # own default.
+        if getattr(value, "has_default", True):
+            entry["default"] = getattr(value, "default", value)
+        out[name] = entry
+    return out
 
 
 def _default_args(config: dict[str, Any]) -> dict[str, Any]:

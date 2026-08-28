@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -99,6 +100,7 @@ func mapDagRun(r queries.DagRun, dagID string) domain.DagRun {
 		StartedAt:   timePtr(r.StartedAt),
 		EndedAt:     timePtr(r.EndedAt),
 		Note:        strOrEmpty(r.Note),
+		Conf:        json.RawMessage(r.Conf),
 	}
 }
 

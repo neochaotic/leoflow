@@ -106,8 +106,20 @@ func TestStepDedupsAlertPerEpisode(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected the first failure to alert")
 	}
+	// The page is sent from a dispatch goroutine that stamps delivery
+	// (MarkRunAlertDelivered) only after the send returns. Wait for that stamp
+	// before re-ticking: the invariant under test is "a re-tick of an
+	// already-DELIVERED episode must not re-alert", so racing the async stamp
+	// would be testing a different (unstamped) state — the #609 flake.
+	deadline := time.Now().Add(2 * time.Second)
+	for !store.wasDelivered("r1") {
+		if time.Now().After(deadline) {
+			t.Fatal("first alert was not stamped delivered within 2s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	// Second tick: the fake still returns the run as active (re-tick of the same
-	// failed episode, no clear). The claim is already held, so no second page.
+	// failed episode, no clear). The episode is stamped delivered, so no second page.
 	if err := s.Step(context.Background()); err != nil {
 		t.Fatal(err)
 	}

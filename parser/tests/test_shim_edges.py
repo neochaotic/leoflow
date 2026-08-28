@@ -659,3 +659,29 @@ def test_task_branch_rejected_cleanly_not_attributeerror(monkeypatch, tmp_path):
     msg = str(ei.value)
     assert "not supported by Leoflow" in msg
     assert "branching" in msg
+
+
+def test_deferrable_operator_rejected_at_compile(monkeypatch, tmp_path):
+    """deferrable=True is refused at compile (before the image build), not left to
+    fail inside the pod: Leoflow has no triggerer (ADR 0040 Phase C)."""
+    with pytest.raises(ValueError) as ei:
+        _compile(monkeypatch, tmp_path, """
+            from airflow.sdk import DAG
+            from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
+            with DAG("g"):
+                S3KeySensor(task_id="wait", bucket_key="k", bucket_name="b", deferrable=True)
+        """)
+    msg = str(ei.value)
+    assert "deferrable" in msg
+    assert "reschedule" in msg or "synchronously" in msg
+
+
+def test_non_deferrable_operator_compiles(monkeypatch, tmp_path):
+    """The guard is explicit-kwarg-only: deferrable=False compiles cleanly."""
+    spec = _compile(monkeypatch, tmp_path, """
+        from airflow.sdk import DAG
+        from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
+        with DAG("g"):
+            S3KeySensor(task_id="wait", bucket_key="k", bucket_name="b", deferrable=False)
+    """)
+    assert any(t["task_id"] == "wait" for t in spec["tasks"])

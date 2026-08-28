@@ -1,93 +1,53 @@
 ##############################################################################
-# DRAFT — NOT ACTIVE. This file ends in `.yml.draft`, so GitHub Actions IGNORES
-# it (only *.yml / *.yaml under .github/workflows/ are ever scheduled). It is the
-# staged cutover workflow for the Hugo + Docsy site under website/, kept next to
-# the live workflows for review. Activating it is a deliberate, maintainer-only
-# step (see CUTOVER below) — do NOT rename it to .yml until the maintainer gives
-# the go.
+# Website deploy — Hugo + Docsy, MULTI-VERSION (issue #814).
 #
-# What it does once activated: regenerate the four reference trees, build the
-# Hugo site with `hugo --gc --minify`, and deploy website/public to GitHub Pages
-# via the native Pages Actions flow (upload-pages-artifact + deploy-pages). It
-# REPLACES the mike/MkDocs deploy (docs.yml + docs-release.yaml), which must be
-# retired in the same cutover so two workflows never fight over Pages.
+# Publishes a combined tree to GitHub Pages with FOUR legs, each built from its
+# own git ref with its own baseURL:
 #
-# ─────────────────────────────────────────────────────────────────────────────
-# VERSION HANDLING (dev / latest) — replaces mike's per-version gh-pages dirs.
+#   https://neochaotic.github.io/leoflow/         <- latest GA  (ref: a tag)
+#   https://neochaotic.github.io/leoflow/dev/     <- main tip   (ref: the
+#                                                    commit that triggered this run)
+#   https://neochaotic.github.io/leoflow/vX.Y.Z/  <- one archived tree per
+#                                                    released tag (frozen)
 #
-# mike published each version into its own gh-pages subdirectory and stored the
-# public default as a root redirect (dev pre-GA, flipped to latest at GA — see
-# docs.yml / docs-release.yaml). Docsy does NOT version by subdirectory; the
-# version selector is the `[params.versions]` dropdown in hugo.toml, and the
-# "current" label is `params.version`. This site ships a single published tree
-# whose dropdown lists dev + latest (both pointing at the same base pre-GA, per
-# hugo.toml). The dev→latest GA flip is therefore a CONFIG flip, not a deploy
-# mechanic:
-#   * pre-GA  → params.version = "dev"    (hugo.toml default, or the input below)
-#   * at GA   → params.version = "latest" (set the input to `latest`, or edit
-#                hugo.toml once; mirrors the mike set-default flip in #719)
-# The `site_version` dispatch input overrides params.version for a one-off build
-# without editing config (HUGO_PARAMS_VERSION). If a future release needs true
-# multi-version archives (frozen /v1.2.3/ trees), that is a follow-up: build each
-# tag into its own subdir and list them in [params.versions] — out of scope here.
-# ─────────────────────────────────────────────────────────────────────────────
+# The version list — which tag is "latest", which tags are archived, and their
+# subpaths — is data, not workflow logic: website/scripts/ci/versions.json.
+# Cutting a new GA touches ONLY that file (see the comment inside it).
 #
-# ════════════════════════════════════════════════════════════════════════════
-# CUTOVER RUNBOOK — the EXACT steps the maintainer runs to go live. Nothing here
-# happens automatically; this workflow is inert until step 2.
+# WHY A COMBINED BUILD (not one `hugo` run): Docsy does not version content by
+# directory the way mike did for the old MkDocs site — a single Hugo site has
+# one baseURL and one content tree. So each leg is built SEPARATELY (its own
+# checkout, its own baseURL, its own rendered `public/`), and the results are
+# assembled into one directory tree before the single `upload-pages-artifact`
+# / `deploy-pages` step. GitHub Pages only ever sees ONE deploy per run.
 #
-#   0. Pre-flight (on the merged branch):
-#        cd website && hugo --gc --minify   # must be clean
-#        python3 scripts/migration/check_links.py     # 0 broken internal links
-#        # confirm public/ has the 211 alias stubs and offline-search-index.json
+# HOW AN ARCHIVED TAG IS HANDLED: an old tag's own website/hugo.toml predates
+# (or only has a stale copy of) this versioning scheme, so the build NEVER
+# trusts it for that. Two checkouts happen per leg:
+#   - `tooling/`  — this workflow's own ref (always current: versions.json +
+#                   the overlay-rendering script), used only to compute config;
+#   - `src/`      — the leg's ref (a GA tag, or the triggering commit for the
+#                   dev leg), used for EVERYTHING that renders the site: the
+#                   Hugo content tree, hugo.toml, layouts, and that ref's own
+#                   copy of the four reference generators (gen-cli.sh etc.),
+#                   so an archived tag reflects the CLI/Go/API/Python surface
+#                   AS IT WAS at that release, not as it is on main today.
+# `render-version-config.py` (run from `tooling/`) renders a small overlay TOML
+# from versions.json, and the build runs
+#     hugo --config hugo.toml,<overlay>.toml --gc --minify
+# Hugo merges multiple --config files left-to-right with the LAST file
+# winning per key (arrays replaced wholesale, not appended) — verified locally
+# against hugo v0.165.0 — so the overlay fully determines baseURL, the active
+# version label, the archived-version banner, and the complete 4-entry version
+# dropdown for every leg, regardless of what that leg's own hugo.toml contains.
 #
-#   1. Flip the Pages source (repo Settings → Pages → Build and deployment):
-#        Source: "Deploy from a branch" (gh-pages)  →  "GitHub Actions".
-#      This detaches Pages from the mike gh-pages branch. Until this flip, the
-#      deploy-pages step below cannot publish.
-#
-#   2. Activate THIS workflow:
-#        git mv .github/workflows/website-deploy.yml.draft \
-#               .github/workflows/website-deploy.yml
-#      (Keep the body unchanged; only the extension changes.)
-#
-#   3. Retire the mike / MkDocs deploy in the SAME change so nothing races Pages:
-#        git rm .github/workflows/docs.yml .github/workflows/docs-release.yaml
-#      The build-only website-build.yml can also be removed now (this workflow
-#      supersedes it: it both builds and deploys), or kept as a PR-only check by
-#      dropping its main-push trigger — either is fine; do not leave it deploying.
-#
-#   4. Promote website/ to the sole docs tree and archive the old MkDocs content.
-#      DO NOT blanket-remove docs/ — docs/api/ is NOT docs-site content: it holds
-#      the source-of-truth openapi.yaml + JSON schemas consumed by the Go codegen
-#      (`make pkg-client` / oapi-codegen), internal/api/docs_test.go, the CI
-#      redocly + pkg/client-sync gates, AND this workflow's own gen-openapi.sh.
-#      Deleting or moving it breaks the build, a unit test, CI, and the next docs
-#      deploy. Remove only the migrated MkDocs tree and KEEP docs/api/ in place:
-#        # remove every tracked file under docs/ EXCEPT docs/api/ (shared source)
-#        git ls-files docs/ | grep -v '^docs/api/' | xargs git rm
-#        git rm mkdocs.yml overrides/ mkdocs_templates/ -r            # live MkDocs
-#      (the generated docs/cli, docs/go, docs/openapi.yaml — the root copy — are
-#      git-ignored and vanish on their own). The `edit_uri`/github_subdir already
-#      points Docsy at website/, so "Edit this page" keeps working.
-#
-#   5. Merge to main. This workflow runs, builds, and publishes website/public to
-#      Pages at https://neochaotic.github.io/leoflow/ (same origin as today).
-#
-#   6. Post-cutover checks:
-#        * https://neochaotic.github.io/leoflow/ loads the Docsy home
-#        * a moved old URL redirects, e.g.
-#          /leoflow/warm-pools.html → /leoflow/operate/warm-pools/
-#          /leoflow/adr/0001-why-leoflow.html → /leoflow/project/adrs/0001-why-leoflow/
-#        * navbar search returns results (offline index)
-#        * the gh-pages branch can be deleted once Pages serves from Actions.
-#
-#   7. GA version flip (later, when the first stable release ships): run this
-#      workflow with site_version=latest (or set params.version="latest" in
-#      hugo.toml), mirroring the mike default flip.
-# ════════════════════════════════════════════════════════════════════════════
+# SAFETY: `build` failing on any leg (bad content, broken generator, whatever)
+# fails the workflow before `assemble`/`deploy` ever run — nothing reaches
+# Pages from a partially-broken run. The live site is only touched by the
+# `deploy` job, which runs last and only after every leg built cleanly.
+##############################################################################
 
-name: Website deploy (Hugo+Docsy → Pages)
+name: Website deploy (Hugo+Docsy → Pages, multi-version)
 
 on:
   push:
@@ -99,57 +59,82 @@ on:
       - "runtime/python/**"      # Python runtime API is generated by pdoc
       - "docs/api/openapi.yaml"  # Scalar spec source of truth
       - ".github/workflows/website-deploy.yml"
-  workflow_dispatch:
-    inputs:
-      site_version:
-        description: "Docsy version label for this build (params.version)."
-        type: choice
-        options: [dev, latest]
-        default: dev
+  workflow_dispatch: {}
 
 # Native Pages deploy needs pages:write + id-token:write; everything else stays
-# read-only. Unlike the mike flow this NEVER pushes to a git branch.
+# read-only. This NEVER pushes to a git branch.
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# One in-flight Pages deploy at a time. Not shared with docs-gh-pages (that group
-# belongs to the retiring mike flow); after cutover the mike workflows are gone.
+# One in-flight Pages deploy at a time.
 concurrency:
   group: pages-deploy
   cancel-in-progress: false
 
 env:
   HUGO_VERSION: "0.165.0"
-  # dispatch input wins; default to dev for push builds (pre-GA).
-  HUGO_PARAMS_VERSION: ${{ github.event.inputs.site_version || 'dev' }}
 
 jobs:
-  build:
-    name: generate + hugo build
+  plan:
+    name: resolve version matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
-      - name: Checkout
+      - name: Checkout (for versions.json only)
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+
+      - name: Resolve the dev leg's ref and emit the build matrix
+        id: resolve
+        run: |
+          set -euo pipefail
+          # versions.json's "dev" entry has ref: "" — meaning "whatever ref
+          # triggered this run". Resolve that to a concrete SHA here so every
+          # downstream checkout gets an unambiguous, checkout-able ref.
+          matrix="$(jq -c --arg sha "${{ github.sha }}" \
+            '{include: (.versions | map(if .ref == "" then .ref = $sha else . end))}' \
+            website/scripts/ci/versions.json)"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+          echo "Resolved matrix:"
+          echo "${matrix}" | jq .
+
+  build:
+    name: build (${{ matrix.id }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout tooling (this workflow's own ref — CI scripts only)
+        uses: actions/checkout@v4
+        with:
+          path: tooling
+          fetch-depth: 1
+
+      - name: Checkout version content (${{ matrix.id }} @ ${{ matrix.ref }})
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          path: src
           fetch-depth: 0   # Docsy "last modified" + enableGitInfo want history
 
       - name: Setup Go (Hugo Modules + generators)
         uses: actions/setup-go@v5
         with:
-          go-version-file: website/go.mod
+          go-version-file: src/website/go.mod
 
       - name: Setup Node (Docsy PostCSS/autoprefixer)
         uses: actions/setup-node@v7
         with:
           # Node 22 LTS (NOT 20): Hugo Extended sandboxes the PostCSS/autoprefixer
-          # subprocess with Node's Permission Model (`node --permission
-          # --allow-fs-read=... --import=<resolver> postcss`). The `--permission`
-          # flag only exists on Node >= 22.13 / 24; on Node 20.x node aborts with
-          # `bad option: --permission`, failing the main.css transform and the whole
-          # `hugo --gc --minify` build. Must match website-build.yml. See PR #721.
+          # subprocess with Node's Permission Model. See PR #721.
           node-version: "22"
 
       - name: Setup Python (pdoc + generator post-processing)
@@ -166,37 +151,90 @@ jobs:
           hugo version
 
       - name: Install PostCSS toolchain
-        working-directory: website
+        working-directory: src/website
         run: npm ci
 
-      # The four generators — parity with the live docs.yml pipeline. Each script
-      # cd's to the repo root itself, so run them from root.
+      # Regenerate the reference trees from THIS LEG'S OWN source (an archived
+      # tag's generators reflect the CLI/Go/API/Python surface as it was at
+      # that release, not as it is on main today). Each script cd's to its own
+      # repo root, so run them from the `src` checkout root.
       - name: Generate CLI reference (Cobra)
+        working-directory: src
         run: ./website/scripts/gen-cli.sh
       - name: Generate Go reference (gomarkdoc)
+        working-directory: src
         run: ./website/scripts/gen-go.sh
       - name: Refresh OpenAPI spec (Scalar)
+        working-directory: src
         run: ./website/scripts/gen-openapi.sh
       - name: Generate Python runtime API (pdoc)
+        working-directory: src
         run: ./website/scripts/gen-python.sh
 
-      # Redirect aliases are front matter on the pages (committed); no build step
-      # is needed for them — Hugo emits the alias stubs during the build below.
+      - name: Render version-selector config overlay (issue #814)
+        run: |
+          python3 tooling/website/scripts/ci/render-version-config.py \
+            --versions-file tooling/website/scripts/ci/versions.json \
+            --leg-id "${{ matrix.id }}" \
+            --out "${{ github.workspace }}/version-overlay.toml"
 
       - name: Build (production — enables fingerprinted offline search index)
-        working-directory: website
+        working-directory: src/website
         env:
           HUGO_ENVIRONMENT: production
-        run: hugo --gc --minify --logLevel info
+        run: |
+          hugo --config "hugo.toml,${{ github.workspace }}/version-overlay.toml" \
+               --gc --minify --logLevel info
+
+      - name: Upload leg artifact (not a Pages artifact — combined in `assemble`)
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-${{ matrix.id }}
+          path: src/website/public
+          retention-days: 1
+          if-no-files-found: error
+
+  assemble:
+    name: assemble combined tree
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (for versions.json only)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download every leg's built site
+        uses: actions/download-artifact@v4
+        with:
+          pattern: site-*
+          path: artifacts
+
+      - name: Assemble the combined public/ tree
+        run: |
+          set -euo pipefail
+          mkdir -p combined
+          jq -c '.versions[]' website/scripts/ci/versions.json | while read -r entry; do
+            id="$(echo "${entry}" | jq -r '.id')"
+            subpath="$(echo "${entry}" | jq -r '.subpath')"
+            dest="combined"
+            [ -n "${subpath}" ] && dest="combined/${subpath}"
+            mkdir -p "${dest}"
+            cp -r "artifacts/site-${id}/." "${dest}/"
+            echo "assembled ${id} -> ${dest}/"
+          done
+          echo "--- combined/ top level ---"
+          find combined -maxdepth 1 | sort
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: website/public
+          path: combined
 
   deploy:
     name: deploy to GitHub Pages
-    needs: build
+    needs: assemble
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:

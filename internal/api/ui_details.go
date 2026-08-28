@@ -174,6 +174,48 @@ func toDagDetailsDTO(d domain.DAG) dagDetailsDTO {
 	}
 }
 
+// paramsToAirflowDict reshapes Leoflow's stored declared params
+// (map[name]{default, schema}) into the Airflow 3.2.1 serialized param-dict the
+// trigger dialog's flexible form renders from: {name: {value, schema,
+// description}}. Three transforms carry the whole feature:
+//   - default -> value (the form reads entry.value for the prefilled value).
+//   - a required param (no default) still emits an entry, as value:null, so the
+//     field renders and the form's required-detector flags an empty required
+//     value.
+//   - schema is carried verbatim (type/title/enum/section/description drive the
+//     widget choice and grouping); an absent schema becomes {} so the entry is
+//     well-formed.
+//
+// description is null for now — the compiled artifact does not yet carry a
+// per-param description. An empty (or nil) param map yields {}, so a param-free
+// DAG serializes exactly as before and the dialog stays JSON-only.
+func paramsToAirflowDict(params map[string]domain.ParamSpec) json.RawMessage {
+	type airflowParam struct {
+		Value       json.RawMessage `json:"value"`
+		Schema      json.RawMessage `json:"schema"`
+		Description *string         `json:"description"`
+	}
+	out := make(map[string]airflowParam, len(params))
+	for name, p := range params {
+		value := json.RawMessage("null")
+		if len(p.Default) > 0 {
+			value = p.Default
+		}
+		schema := json.RawMessage("{}")
+		if len(p.Schema) > 0 {
+			schema = p.Schema
+		}
+		out[name] = airflowParam{Value: value, Schema: schema, Description: nil}
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		// The inputs are already valid raw JSON, so marshaling the wrapper
+		// cannot realistically fail; degrade to {} rather than break details.
+		return json.RawMessage("{}")
+	}
+	return raw
+}
+
 // rfc3339Ptr formats a time pointer as an RFC3339 string pointer (nil-safe).
 func rfc3339Ptr(t *time.Time) *string {
 	if t == nil {
@@ -190,7 +232,7 @@ func boolPtr(b bool) *bool { return &b }
 // latest_dag_version from the version lister — the Graph view reads the
 // version_number from there to fetch version-scoped structure, so a null version
 // leaves the graph blank.
-func dagDetailsHandler(repo DagRepository, versions DagVersionLister) gin.HandlerFunc {
+func dagDetailsHandler(repo DagRepository, versions DagVersionLister, specs DagSpecReader) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		dagID := c.Param("dag_id")
 		d, err := repo.GetDag(c.Request.Context(), tenantOf(c), dagID)
@@ -199,6 +241,16 @@ func dagDetailsHandler(repo DagRepository, versions DagVersionLister) gin.Handle
 			return
 		}
 		dto := toDagDetailsDTO(d)
+		// Serve the DAG's author-declared params in Airflow's param-dict shape so
+		// the trigger dialog renders its native typed form. This read is
+		// best-effort: any spec-read failure leaves params as {} and the dialog
+		// falls back to JSON-only — details must never break on it.
+		if specs != nil {
+			if spec, serr := specs.GetCurrentSpec(c.Request.Context(), tenantOf(c), dagID); serr == nil && len(spec.Params) > 0 {
+				raw := paramsToAirflowDict(spec.Params)
+				dto.Params = &raw
+			}
+		}
 		if versions != nil {
 			if vs, verr := versions.ListDagVersions(c.Request.Context(), tenantOf(c), dagID); verr == nil && len(vs) > 0 {
 				latest := vs[0] // ListDagVersions is newest-first.

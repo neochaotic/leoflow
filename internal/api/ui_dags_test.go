@@ -27,6 +27,13 @@ func (f *fakeLatestRuns) LatestRunsForDags(_ context.Context, _ string, _ []stri
 }
 
 func uiDagsServer(dags []domain.DAG, latest *fakeLatestRuns) *gin.Engine {
+	return uiDagsServerWithSpecs(dags, latest, nil)
+}
+
+// uiDagsServerWithSpecs is uiDagsServer with a DagSpecReader wired, so the
+// details endpoint can serve declared params. A nil reader reproduces the
+// param-free wiring exactly.
+func uiDagsServerWithSpecs(dags []domain.DAG, latest *fakeLatestRuns, specs DagSpecReader) *gin.Engine {
 	return NewServer(Dependencies{
 		Logger:        discardLogger(),
 		Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
@@ -34,6 +41,7 @@ func uiDagsServer(dags []domain.DAG, latest *fakeLatestRuns) *gin.Engine {
 		CORSOrigins:   []string{"*"},
 		Dags:          &fakeDagRepo{dags: dags},
 		LatestRuns:    latest,
+		Specs:         specs,
 	})
 }
 

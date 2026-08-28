@@ -1,0 +1,10 @@
+{
+  "_comment": "Single source of truth for the multi-version Pages tree (issue #814). One entry per published leg. `id` names the build's artifact/subdir; `ref` is the git ref to build from (empty string means \"whatever ref triggered the workflow\" — resolved to github.sha by the plan job); `subpath` is where it lands under https://neochaotic.github.io/leoflow/ (empty = site root); `label` is the string shown in the version dropdown and written to params.version; `archived` marks a superseded GA so Docsy renders the archived-version banner.\n\nCutting a new GA release (e.g. v0.4.2) touches ONLY this file: add a new entry for the outgoing GA (ref=<tag>, subpath=<tag>, archived=true), and repoint the `latest` entry's `ref`/`label` at the new tag.",
+  "root_url": "https://neochaotic.github.io/leoflow/",
+  "versions": [
+    { "id": "latest", "ref": "v0.4.1", "subpath": "", "label": "latest", "archived": false },
+    { "id": "v0.4.1", "ref": "v0.4.1", "subpath": "v0.4.1", "label": "v0.4.1", "archived": false },
+    { "id": "v0.4.0", "ref": "v0.4.0", "subpath": "v0.4.0", "label": "v0.4.0", "archived": true },
+    { "id": "dev", "ref": "", "subpath": "dev", "label": "dev", "archived": false }
+  ]
+}

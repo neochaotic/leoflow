@@ -96,19 +96,34 @@ enableGitInfo = true
     [params.ui.feedback]
       enable = false
 
-  # Version selector (LOCKED: replicate the dev/latest scheme mike gave us).
-  # Docsy renders these into the navbar dropdown. "dev" is the live tip today; the
-  # "latest" (GA) entry is wired now but points at the same base until we cut a tag.
+  # Version selector (issue #814: real multi-version archives, replacing the
+  # old cosmetic dev/latest pair that both pointed at the same base).
+  #
+  # This config is what a PLAIN `hugo` build (no CI) uses, and is also the
+  # fallback if an overlay were ever skipped — so it must stand on its own:
+  # a local/dev build defaults to version="dev" and lists all four published
+  # legs. .github/workflows/website-deploy.yml OVERRIDES version/versions/
+  # archived_version/baseURL per leg at build time (see
+  # website/scripts/ci/render-version-config.py) — that is the single source
+  # of truth for what actually ships; keep this block in sync by hand when
+  # website/scripts/ci/versions.json changes (a new GA, a newly-archived tag).
   version = "dev"
   version_menu = "Releases"
   version_menu_pagelinks = false
   archived_version = false
-  [[params.versions]]
-    version = "dev"
-    url = "https://neochaotic.github.io/leoflow/"
+  url_latest_version = "https://neochaotic.github.io/leoflow/"
   [[params.versions]]
     version = "latest"
     url = "https://neochaotic.github.io/leoflow/"
+  [[params.versions]]
+    version = "v0.4.1"
+    url = "https://neochaotic.github.io/leoflow/v0.4.1/"
+  [[params.versions]]
+    version = "v0.4.0"
+    url = "https://neochaotic.github.io/leoflow/v0.4.0/"
+  [[params.versions]]
+    version = "dev"
+    url = "https://neochaotic.github.io/leoflow/dev/"
 
   [params.links]
     [[params.links.user]]

@@ -57,6 +57,6 @@ the day-2 operations that keep a control plane healthy.
   <div class="lf-card">
     <span class="lf-card__icon"><i class="fa-solid fa-shield-halved"></i></span>
     <span class="lf-card__title">Security &amp; data-path internals</span>
-    <span class="lf-card__desc"><a href="/operate/agent-credential-transport/">Agent credential transport</a>, <a href="/operate/pro-tls/">Pro TLS</a>, and the <a href="/operate/staging-volume/">staging volume</a>.</span>
+    <span class="lf-card__desc"><a href="/operate/agent-credential-transport/">Agent credential transport</a>, <a href="/operate/pro-tls/">Pro TLS</a>, the <a href="/operate/staging-volume/">staging volume</a>, and <a href="/operate/external-secrets/">external secrets</a>.</span>
   </div>
 </div>

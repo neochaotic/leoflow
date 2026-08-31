@@ -452,6 +452,15 @@ func podEnv(req Request) []corev1.EnvVar {
 			corev1.EnvVar{Name: "LEOFLOW_AGENT_TLS_CA", Value: agentCADir + "/" + agentCAFile},
 		)
 	}
+	// External secrets backend (ADR 0060): operator-sourced, injected in the
+	// leoflow-owned group BEFORE author req.Env below. An author's task env cannot
+	// carry LEOFLOW_ keys (stripped at dispatch, #828), so this is never overridable.
+	if req.SecretsBackend != "" {
+		env = append(env,
+			corev1.EnvVar{Name: "LEOFLOW_SECRETS_BACKEND", Value: req.SecretsBackend},
+			corev1.EnvVar{Name: "LEOFLOW_SECRETS_BACKEND_KWARGS", Value: req.SecretsBackendKwargs},
+		)
+	}
 	for k, v := range req.Env {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}

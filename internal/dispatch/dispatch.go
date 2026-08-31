@@ -133,6 +133,19 @@ type Dispatcher struct {
 	// worker of its dag_version before falling back to a dedicated pod. nil means
 	// warm pools are off — the dedicated pod path is byte-for-byte today's behavior.
 	placer WarmPlacer
+	// secretsBackend / secretsBackendKwargs are the operator's external secrets
+	// backend (ADR 0060): the provider class + raw kwargs JSON, injected as
+	// LEOFLOW_SECRETS_* pod env. Empty = no external backend (chain vault-only).
+	secretsBackend       string
+	secretsBackendKwargs string
+}
+
+// SetSecretsBackend configures the operator's external secrets backend (ADR 0060):
+// the provider class the in-pod resolver drives and its raw kwargs JSON, delivered
+// to the pod as operator-owned LEOFLOW_SECRETS_* env. Empty leaves external secrets
+// off (the chain stays vault-only).
+func (d *Dispatcher) SetSecretsBackend(class, kwargs string) {
+	d.secretsBackend, d.secretsBackendKwargs = class, kwargs
 }
 
 // NewDispatcher builds a Dispatcher that launches tasks via exec, resolves their
@@ -228,20 +241,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID, dagVersionID st
 	}
 
 	req := executor.Request{
-		TaskInstanceID:   r.TaskInstanceID,
-		TenantID:         r.TenantID,
-		DagID:            dagID,
-		RunID:            runID,
-		TaskID:           task.TaskID,
-		TryNumber:        r.TryNumber,
-		Image:            r.Image,
-		ImagePullPolicy:  r.ImagePullPolicy,
-		Source:           r.Source,
-		Operator:         string(task.Type),
-		Entrypoint:       task.Entrypoint,
-		Env:              stripReservedEnv(task.Env),
-		ControlPlaneAddr: d.controlAddr,
-		AgentToken:       token,
+		TaskInstanceID:       r.TaskInstanceID,
+		TenantID:             r.TenantID,
+		DagID:                dagID,
+		RunID:                runID,
+		TaskID:               task.TaskID,
+		TryNumber:            r.TryNumber,
+		Image:                r.Image,
+		ImagePullPolicy:      r.ImagePullPolicy,
+		Source:               r.Source,
+		Operator:             string(task.Type),
+		Entrypoint:           task.Entrypoint,
+		Env:                  stripReservedEnv(task.Env),
+		SecretsBackend:       d.secretsBackend,
+		SecretsBackendKwargs: d.secretsBackendKwargs,
+		ControlPlaneAddr:     d.controlAddr,
+		AgentToken:           token,
 		// Cluster-operator policy, not a per-task choice — see PlatformDefaults.
 		PodSecurity: d.defaults.PodSecurity,
 	}

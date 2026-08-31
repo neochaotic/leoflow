@@ -152,6 +152,67 @@ Without ESO or CSI, create the Kubernetes Secret yourself
 it with the same `taskSecret` config as step 2. Identical from Leoflow's side —
 you just own the sync instead of ESO.
 
+## 4. Native external secrets resolver (Leoflow-managed, ADR 0060)
+
+Options 1–3 let a task *reach* a secret its own code reads. The **native resolver**
+goes further: a DAG **declares a Connection/Variable by name** exactly as it would
+for a vault secret, and Leoflow resolves it **pod-side** from your provider store —
+no copy in Leoflow's vault, no author-visible provider path. It covers operator,
+`@task`/python, and **bash** tasks uniformly (the value is exported as
+`AIRFLOW_CONN_*` / `AIRFLOW_VAR_*`), which a raw in-pod Airflow backend does not.
+
+**How it resolves.** For each name the task declared, the chain is
+**external backend → Leoflow vault → env**: an external hit wins, a miss falls back
+to the vault. Resolution runs in the task pod under the pod's **own keyless
+identity** — the control plane never reaches your secret store (ADR 0048). It is
+**off by default**; with no backend configured the vault is the only source.
+
+**Configure (operator, Helm).** Set the provider backend class and its kwargs; a
+kind is served iff its `*_prefix` kwarg is present:
+
+```yaml
+# values.yaml
+secrets:
+  backend: "airflow.providers.amazon.aws.secrets.secrets_manager.SecretsManagerBackend"
+  backendKwargs: '{"connections_prefix":"airflow/connections","variables_prefix":"airflow/variables","region_name":"us-east-1"}'
+
+# Keyless: the resolver authenticates as the task pod's ServiceAccount.
+taskServiceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<leoflow-secrets-reader>
+```
+
+```python
+# dag.py — declare the name; no provider path, no key in Leoflow.
+with DAG("etl", ...):
+    ...  # a task that declares connections=["warehouse"] / variables=["region"]
+```
+
+Leoflow resolves `warehouse` from `<connections_prefix>/warehouse` in the store,
+renders it as an Airflow connection URI, and exports `AIRFLOW_CONN_WAREHOUSE`.
+
+**Provider-neutral.** AWS is the reference; GCP Secret Manager, Azure Key Vault,
+and HashiCorp Vault use the same `secrets.backend` + `backendKwargs` with that
+provider's backend class and keyless mechanism.
+
+**Guarantees.**
+- **Operator-only.** The backend config is delivered as `LEOFLOW_SECRETS_*` pod
+  env, which an author's task `env:` can never set (reserved keys are stripped).
+- **Declaration is the scope authority.** Only names the task **declared** are
+  resolved — the same rule as the vault.
+- **Fail-closed.** A hard resolver error (access denied, throttle, malformed) fails
+  the task with a sanitized reason — never the secret. A clean miss falls through to
+  the vault; if it is also absent, the task runs without it (as today) unless the
+  name is required.
+- **No copy at rest.** The value lives only in the task process env for that
+  attempt, exactly like a vault secret — never on the pod object or in etcd.
+
+> **Keyless end-to-end (IRSA / Workload Identity) is verified on a real cluster.**
+> Leoflow only sets the pod's ServiceAccount; the cloud identity webhook injects
+> the token at admission. Confirm the KSA→role binding and any default-deny
+> NetworkPolicy egress to the provider on your cluster.
+
 ## What this does and does not cover
 
 - **File-based credentials** (SA keys, certs, CA bundles) are the natural fit for
@@ -184,16 +245,17 @@ How a credential is isolated to the right task depends on the path it takes:
 - **Keyless (option 1) is scoped by the pod's own identity.** A task reaches a
   cloud API as the ServiceAccount identity you bound to its pod; another task with
   a different ServiceAccount cannot assume it. No secret is delivered at all.
-- **Leoflow-vault Connections/Variables are scoped per-task by declaration.** For
-  secrets stored in Leoflow (not the subject of this page), the control plane
-  hands a task pod **only the names that task declared**, delivered against a
-  short-lived identity bound to that specific task attempt and only while the
-  attempt is live — a pod cannot request another task's secrets. See
-  [Variables & Connections](/author-dags/variables-connections/) and
-  [ADR 0055](/project/adrs/0055-secret-scoping-and-token-liveness/). The roadmap
-  resolver ([#811](https://github.com/neochaotic/leoflow/issues/811)) brings this
-  same per-task scoping to *external* secrets — the gap the cluster-wide mount
-  leaves today.
+- **Leoflow-vault Connections/Variables — always attempt-scoped; per-task only under
+  `enforce`.** Delivery is always against a short-lived identity bound to that
+  specific task attempt, over TLS. Whether a pod receives *only the names it
+  declared* is an operator policy: under `secret_scoping: enforce` (with
+  `secret_liveness_mode: enforce`) a task gets only its declared names and only
+  while the attempt is live; under the **default** (`permissive` / `observe`) a
+  task receives its whole tenant's vault and delivery is not gated on liveness. See
+  [ADR 0055](/project/adrs/0055-secret-scoping-and-token-liveness/). The **native
+  resolver (section 4, ADR 0060)** extends the *declaration* model to external
+  secrets — a task resolves only the names it declared — so the cluster-wide mount
+  (options 2–3) is no longer the only way to reach an external store.
 
 ## Security notes
 

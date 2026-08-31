@@ -223,16 +223,17 @@ that reach an endpoint in that range therefore need an explicit egress exception
 | AWS **Pod Identity** | `169.254.170.23` | **blocked** — needs an exception |
 | **GKE Workload Identity** | metadata server `169.254.169.254` | **blocked** — needs an exception |
 
-To use GKE WI or EKS Pod Identity, re-allow just that endpoint via
-`taskNetworkPolicy.extraEgress` (a deliberate, scoped security trade-off):
+To use GKE WI or EKS Pod Identity, re-allow **just that host** with
+`taskNetworkPolicy.allowMetadataEgress` — a scoped `/32` exception (the rest of
+`169.254.0.0/16` stays blocked), not a hole in the SSRF guard:
 
 ```yaml
 # values.yaml
 taskNetworkPolicy:
-  extraEgress:
-    - to:
-        - ipBlock:
-            cidr: 169.254.169.254/32   # GKE metadata server (169.254.170.23/32 for EKS Pod Identity)
+  enabled: true
+  allowMetadataEgress:
+    - 169.254.169.254/32   # GKE metadata server
+    # - 169.254.170.23/32  # EKS Pod Identity
 ```
 
 AWS IRSA needs no NetworkPolicy change (it authenticates against the public STS

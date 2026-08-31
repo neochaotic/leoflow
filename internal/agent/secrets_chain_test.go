@@ -136,3 +136,23 @@ func TestSecretsEnvUsesBatchResolverOnce(t *testing.T) {
 		t.Errorf("batched hits missing from env: %v", out)
 	}
 }
+
+// A hard external-secret resolver error must fail the task with a terminal FAILED
+// report (ADR 0060 B6) — not return before reporting, which would strand the TI as
+// agent_lost with no visible cause.
+func TestRunnerReportsFailedOnResolverError(t *testing.T) {
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "bash", Entrypoint: "echo hi",
+		DeclaredVariables: []string{"region"},
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.Resolver = fakeResolver{err: errors.New("access denied")}
+	r.SecretBackend = secretsource.Backend{Variables: true}
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a hard resolver error must fail the task")
+	}
+	if len(client.states) == 0 || client.states[len(client.states)-1] != agentv1.TaskState_TASK_STATE_FAILED {
+		t.Errorf("resolver error must report terminal FAILED (B6); states=%v", client.states)
+	}
+}

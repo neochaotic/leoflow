@@ -146,7 +146,12 @@ func (r *Runner) runOneAttempt(ctx context.Context) error {
 	}
 	env, err := r.buildEnv(ctx, spec)
 	if err != nil {
-		return err
+		// A buildEnv failure — notably a hard external-secret resolver error (ADR
+		// 0060 B6) — means the task cannot run. Report FAILED with the reason so the
+		// TI settles as failed with a visible cause, instead of being stranded until
+		// a reaper marks it agent_lost. The resolver's reason is already sanitized
+		// (no secret material).
+		return r.failWithReason(ctx, 1, err.Error())
 	}
 	return r.execute(ctx, argv, env, time.Duration(spec.GetExecutionTimeoutSeconds())*time.Second)
 }

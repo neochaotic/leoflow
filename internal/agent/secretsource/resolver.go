@@ -36,6 +36,22 @@ type SecretResolver interface {
 	Resolve(ctx context.Context, name string, kind Kind) (value string, found bool, err error)
 }
 
+// Ref identifies one declared secret to resolve: its leoflow name and kind.
+type Ref struct {
+	Name string
+	Kind Kind
+}
+
+// BatchResolver resolves many declared names in a single call. The 2b in-pod
+// resolver pays a heavy per-invocation startup (a Python/Airflow subprocess), so
+// it must batch rather than spawn once per name. A resolver may implement both
+// interfaces; the chain prefers ResolveBatch when available. The returned map
+// holds only the hits (a clean miss is an omission → the vault fallback stands);
+// a non-nil error is a hard failure the caller fails closed on.
+type BatchResolver interface {
+	ResolveBatch(ctx context.Context, refs []Ref) (map[Ref]string, error)
+}
+
 // NoOp is the default resolver, used when no external backend is configured. It
 // resolves nothing, so the chain falls through to the vault — behavior identical
 // to the pre-ADR-0060 env-export path. A DAG that declares no external backend

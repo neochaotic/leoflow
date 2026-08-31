@@ -90,3 +90,49 @@ func TestSecretsEnvVaultDeniedSkipsExternal(t *testing.T) {
 		t.Error("external resolution must be skipped when the vault RPC is PermissionDenied (B2)")
 	}
 }
+
+// fakeBatchResolver proves the chain prefers ONE batched call over per-name.
+type fakeBatchResolver struct {
+	hits  map[secretsource.Ref]string
+	calls int
+}
+
+func (f *fakeBatchResolver) Resolve(context.Context, string, secretsource.Kind) (value string, found bool, err error) {
+	return "", false, nil // must never be used when ResolveBatch is available
+}
+
+func (f *fakeBatchResolver) ResolveBatch(_ context.Context, refs []secretsource.Ref) (map[secretsource.Ref]string, error) {
+	f.calls++
+	out := map[secretsource.Ref]string{}
+	for _, ref := range refs {
+		if v, ok := f.hits[ref]; ok {
+			out[ref] = v
+		}
+	}
+	return out, nil
+}
+
+func TestSecretsEnvUsesBatchResolverOnce(t *testing.T) {
+	br := &fakeBatchResolver{hits: map[secretsource.Ref]string{
+		{Name: "region", Kind: secretsource.KindVariable}:      "us",
+		{Name: "warehouse", Kind: secretsource.KindConnection}: "postgres://w",
+	}}
+	r := &Runner{
+		Client:        &fakeClient{},
+		Resolver:      br,
+		SecretBackend: secretsource.Backend{Variables: true, Connections: true},
+	}
+	out, err := r.secretsEnv(context.Background(), &agentv1.TaskSpec{
+		DeclaredVariables:   []string{"region", "sample"},
+		DeclaredConnections: []string{"warehouse"},
+	})
+	if err != nil {
+		t.Fatalf("secretsEnv: %v", err)
+	}
+	if br.calls != 1 {
+		t.Errorf("expected ONE batched resolve for all covered names, got %d calls", br.calls)
+	}
+	if !slices.Contains(out, "AIRFLOW_VAR_REGION=us") || !slices.Contains(out, "AIRFLOW_CONN_WAREHOUSE=postgres://w") {
+		t.Errorf("batched hits missing from env: %v", out)
+	}
+}

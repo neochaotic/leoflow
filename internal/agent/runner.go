@@ -413,15 +413,20 @@ func (r *Runner) secretsEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]stri
 		}
 	}
 
-	// External backend: resolve each DECLARED name the operator's backend covers,
+	// External backend: resolve the DECLARED names the operator's backend covers,
 	// overriding the vault. Skipped when no backend is configured or the vault RPC
 	// was liveness-denied (B2). A hard resolver error fails the task closed (B6).
 	if r.Resolver != nil && !vaultDenied {
-		if err := r.resolveExternalKind(ctx, spec.GetDeclaredVariables(), secretsource.KindVariable, vars); err != nil {
+		resolved, err := r.resolveExternal(ctx, coveredRefs(spec, r.SecretBackend))
+		if err != nil {
 			return nil, err
 		}
-		if err := r.resolveExternalKind(ctx, spec.GetDeclaredConnections(), secretsource.KindConnection, conns); err != nil {
-			return nil, err
+		for ref, val := range resolved {
+			if ref.Kind == secretsource.KindConnection {
+				conns[ref.Name] = val
+			} else {
+				vars[ref.Name] = val
+			}
 		}
 	}
 
@@ -435,24 +440,45 @@ func (r *Runner) secretsEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]stri
 	return out, nil
 }
 
-// resolveExternalKind resolves each declared name of one kind against the external
-// backend and merges hits into dst (overriding the vault). It is a no-op unless
-// the operator's backend covers that kind. A clean miss falls through (dst keeps
-// the vault value); a hard resolver error fails the task closed (ADR 0060 B6).
-func (r *Runner) resolveExternalKind(ctx context.Context, names []string, kind secretsource.Kind, dst map[string]string) error {
-	if !r.SecretBackend.Covers(kind) {
-		return nil
+// coveredRefs is the set of declared names the operator's backend covers — the
+// exact request set the external resolver is asked for (declaration stays the
+// scope authority, ADR 0055/0060).
+func coveredRefs(spec *agentv1.TaskSpec, b secretsource.Backend) []secretsource.Ref {
+	var refs []secretsource.Ref
+	if b.Covers(secretsource.KindVariable) {
+		for _, n := range spec.GetDeclaredVariables() {
+			refs = append(refs, secretsource.Ref{Name: n, Kind: secretsource.KindVariable})
+		}
 	}
-	for _, name := range names {
-		v, found, err := r.Resolver.Resolve(ctx, name, kind)
+	if b.Covers(secretsource.KindConnection) {
+		for _, n := range spec.GetDeclaredConnections() {
+			refs = append(refs, secretsource.Ref{Name: n, Kind: secretsource.KindConnection})
+		}
+	}
+	return refs
+}
+
+// resolveExternal resolves the given refs against the backend, preferring one
+// batched call (the 2b subprocess pays a heavy startup) and falling back to the
+// per-name port. Only hits are returned; a hard error fails the task closed (B6).
+func (r *Runner) resolveExternal(ctx context.Context, refs []secretsource.Ref) (map[secretsource.Ref]string, error) {
+	if len(refs) == 0 {
+		return map[secretsource.Ref]string{}, nil
+	}
+	if br, ok := r.Resolver.(secretsource.BatchResolver); ok {
+		return br.ResolveBatch(ctx, refs)
+	}
+	out := make(map[secretsource.Ref]string, len(refs))
+	for _, ref := range refs {
+		v, found, err := r.Resolver.Resolve(ctx, ref.Name, ref.Kind)
 		if err != nil {
-			return fmt.Errorf("resolving external secret %q: %w", name, err)
+			return nil, fmt.Errorf("resolving external secret %q: %w", ref.Name, err)
 		}
 		if found {
-			dst[name] = v
+			out[ref] = v
 		}
 	}
-	return nil
+	return out, nil
 }
 
 // fetchFanInValues fetches each upstream's return_value and assembles them into

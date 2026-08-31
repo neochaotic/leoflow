@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -19,19 +18,15 @@ func configureSecrets(repo *storage.Repository, cfg *config.ServerConfig, logger
 	return configureSecretsCoverage(cfg.Secrets, repo)
 }
 
-// secretsKwargsJSON serializes the operator's backend kwargs to the JSON string
-// delivered to the pod (and parsed for routing). encoding/json sorts map keys, so
-// the output is deterministic (no pod-spec churn). A marshal never fails for
-// map[string]string; on the impossible error it falls back to an empty object.
+// secretsKwargsJSON is the operator's backend kwargs as a JSON string, delivered
+// to the pod and parsed for routing. It is already a JSON string in config; empty
+// becomes an empty object. A malformed value is caught (fail-closed) by
+// ParseBackendConfig, not silently swallowed here.
 func secretsKwargsJSON(sec config.SecretsSection) string {
-	if len(sec.BackendKwargs) == 0 {
+	if sec.BackendKwargs == "" {
 		return "{}"
 	}
-	raw, err := json.Marshal(sec.BackendKwargs)
-	if err != nil {
-		return "{}"
-	}
-	return string(raw)
+	return sec.BackendKwargs
 }
 
 // backendCoverage adapts an operator secretsource.Backend to the storage layer's

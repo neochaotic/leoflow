@@ -46,10 +46,12 @@ type SecretsSection struct {
 	// Backend is the provider secrets-backend class the in-pod resolver drives
 	// (e.g. the Airflow AWS SecretsManagerBackend). Empty disables external secrets.
 	Backend string `mapstructure:"backend"`
-	// BackendKwargs are the provider kwargs (connections_prefix, variables_prefix,
-	// region_name, …). A kind is served iff its `*_prefix` kwarg is present. The
-	// keys are fixed provider-kwarg names (no dots), so they decode via viper fine.
-	BackendKwargs map[string]string `mapstructure:"backend_kwargs"`
+	// BackendKwargs is the provider kwargs as a JSON object string (connections_prefix,
+	// variables_prefix, region_name, …); a kind is served iff its `*_prefix` kwarg is
+	// present. A JSON string (not a map) so it is settable via a single
+	// LEOFLOW_SECRETS_BACKEND_KWARGS env var, matching the env-only control-plane
+	// chart. Empty is treated as `{}`. Delivered verbatim to the pod.
+	BackendKwargs string `mapstructure:"backend_kwargs"`
 }
 
 // LogsSection configures task log shipping.
@@ -697,7 +699,7 @@ var serverDefaults = map[string]any{
 	"auth.dev_no_auth":                 false,
 	"secret_key":                       "",
 	"secrets.backend":                  "",
-	"secrets.backend_kwargs":           map[string]string{},
+	"secrets.backend_kwargs":           "",
 }
 
 // LoadServer assembles the server configuration from defaults, the given file,

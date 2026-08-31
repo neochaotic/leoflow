@@ -356,6 +356,18 @@ RC pass, not the code:
    vault fails the task legibly; an AccessDenied fails closed.
 5. **Cross-tenant isolation** (meaningful once warm workers exist): two tenants'
    tasks with different KSAs resolve only their own secrets.
+6. **GKE Workload Identity is a separate RC pass — no code changes, but different
+   runtime mechanics.** The resolver is provider-neutral (same `secrets.backend` +
+   `backendKwargs`, with GCP's `CloudSecretManagerBackend` and the KSA annotation
+   `iam.gke.io/gcp-service-account`), so nothing is built for GKE. But GKE WI
+   resolves credentials via the **GCP metadata server** (169.254.169.254 / ADC),
+   not an env-injected projected token + STS like EKS IRSA — so a default-deny
+   egress NetworkPolicy needs a **different allowlist** (the metadata server), and
+   `resolverBaseEnv` scrubbing `GOOGLE_APPLICATION_CREDENTIALS` must not break WI
+   (it does not — WI uses the metadata server, not that env). Validate on a real
+   GKE cluster: keyless resolve with no static creds, the metadata-server egress
+   under a default-deny policy, and the fail-closed path. Azure Workload Identity /
+   Vault k8s-auth are further separate passes when those adapters are used.
 
 ## Revisit triggers
 

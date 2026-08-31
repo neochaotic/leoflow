@@ -194,8 +194,11 @@ func NewServer(deps Dependencies) *gin.Engine {
 	// OIDC/SSO login flow (D1): registered only when a provider was discovered at
 	// boot. Both routes sit under the public /api/v2/auth/ prefix.
 	if deps.OIDCFlow != nil {
-		r.GET("/api/v2/auth/oidc/login", oidcLoginHandler(deps.OIDCFlow, deps.Logger))
-		r.GET("/api/v2/auth/oidc/callback", oidcCallbackHandler(oidcDeps{
+		// Rate-limit the OIDC endpoints on their own per-IP limiter (separate from
+		// the /auth/token budget), bounding state-generation / callback spam.
+		oidcLimiter := auth.NewRateLimiter(30, time.Minute)
+		r.GET("/api/v2/auth/oidc/login", rateLimitByIP(oidcLimiter), oidcLoginHandler(deps.OIDCFlow, deps.Logger))
+		r.GET("/api/v2/auth/oidc/callback", rateLimitByIP(oidcLimiter), oidcCallbackHandler(oidcDeps{
 			flow:      deps.OIDCFlow,
 			users:     deps.OIDCUsers,
 			audit:     deps.AuthAudit,

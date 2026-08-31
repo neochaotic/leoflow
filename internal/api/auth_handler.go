@@ -50,6 +50,23 @@ func (b *breakGlass) allows(email string) bool {
 	return b.emails[strings.ToLower(strings.TrimSpace(email))]
 }
 
+// rateLimitByIP is a gin middleware that caps requests per client IP against its
+// own limiter. It backs the OIDC login/callback endpoints (which otherwise had no
+// rate limit), on a limiter separate from the /auth/token one so OIDC traffic and
+// password-login lockouts never contaminate each other's budget.
+func rateLimitByIP(limiter *auth.RateLimiter) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		if limiter.Blocked(ip) {
+			AbortProblem(c, http.StatusTooManyRequests, "rate limited",
+				"too many requests; wait about a minute and try again")
+			return
+		}
+		limiter.Allow(ip)
+		c.Next()
+	}
+}
+
 type tokenRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`

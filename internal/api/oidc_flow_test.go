@@ -469,6 +469,26 @@ func TestOIDCReturningUserTenantMismatchRejected(t *testing.T) {
 	}
 }
 
+// The OIDC login endpoint is rate-limited per client IP (its own limiter, so it
+// never contaminates the /auth/token budget). The 31st request within the window
+// is refused with 429.
+func TestOIDCLoginRateLimited(t *testing.T) {
+	f := newFakeIDP(t)
+	cfg := baseOIDCConfig(f)
+	srv := oidcServer(t, f, cfg, newFakeOIDCStore(), &fakeAuthAudit{}, nil)
+
+	var last int
+	for i := 0; i < 31; i++ {
+		last = do(srv, http.MethodGet, "/api/v2/auth/oidc/login", "").Code
+		if i == 0 && last == http.StatusTooManyRequests {
+			t.Fatal("first OIDC login request was rate-limited")
+		}
+	}
+	if last != http.StatusTooManyRequests {
+		t.Errorf("31st OIDC login request = %d, want 429", last)
+	}
+}
+
 // ─────────────────────────── H1: tenant pin ───────────────────────────
 
 func TestOIDCTenantPinFailsClosed(t *testing.T) {

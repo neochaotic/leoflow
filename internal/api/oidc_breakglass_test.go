@@ -38,8 +38,27 @@ func breakGlassServer(allow []string, authn auth.Authenticator, audit AuthAuditW
 		CORSOrigins:   []string{"*"},
 		TokenTTLSecs:  3600,
 		AuthAudit:     audit,
+		OIDCEnabled:   true,
 		OIDCSettings:  config.OIDCSection{BreakGlassEmails: allow},
 	})
+}
+
+// Under OIDC, an EMPTY break-glass allowlist must mean SSO-only: every password
+// login is rejected. The bug (ADR 0060 sibling / #826 companion): newBreakGlass
+// returned nil for an empty list, leaving POST /auth/token fully open for every
+// password user (e.g. the seeded admin) — the exact bypass SSO exists to close.
+func TestBreakGlassOIDCEmptyAllowlistDeniesAllPasswordLogins(t *testing.T) {
+	authn := emailPassAuthn{email: "admin@corp.example", pass: "right"}
+	audit := &fakeAuthAudit{}
+	srv := breakGlassServer(nil, authn, audit) // OIDC mode, empty allowlist
+
+	rec := do(srv, http.MethodPost, "/auth/token", `{"username":"admin@corp.example","password":"right"}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("password login under OIDC with empty allowlist = %d, want 401 (SSO-only)", rec.Code)
+	}
+	if !audit.has(auditBreakGlass, "denied") {
+		t.Error("SSO-only denial was not audited")
+	}
 }
 
 func TestBreakGlassAllowsOnlyAllowlistedEmail(t *testing.T) {

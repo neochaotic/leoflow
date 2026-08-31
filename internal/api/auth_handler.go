@@ -28,11 +28,14 @@ type breakGlass struct {
 	audit  AuthAuditWriter
 }
 
-// newBreakGlass builds the gate from the allowlist. It returns nil for an empty
-// allowlist so the caller keeps the ungated behavior (JWT mode, or an OIDC
-// deployment that configured no break-glass account).
-func newBreakGlass(emails []string, audit AuthAuditWriter) *breakGlass {
-	if len(emails) == 0 {
+// newBreakGlass builds the gate from the allowlist. In JWT mode (oidcEnabled
+// false) the credential path is the primary auth, so an empty allowlist returns
+// nil (ungated) — break-glass is an OIDC concept. Under OIDC it ALWAYS gates: an
+// empty allowlist yields a gate that admits no one, i.e. SSO-only (every password
+// login rejected). Returning nil for OIDC + empty was the bypass — POST
+// /auth/token stayed fully open for every password user (e.g. the seeded admin).
+func newBreakGlass(emails []string, audit AuthAuditWriter, oidcEnabled bool) *breakGlass {
+	if len(emails) == 0 && !oidcEnabled {
 		return nil
 	}
 	set := make(map[string]bool, len(emails))

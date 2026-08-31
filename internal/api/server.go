@@ -119,6 +119,10 @@ type Dependencies struct {
 	// OIDCFlow is the discovered Authorization Code + PKCE flow; nil in JWT mode,
 	// in which case the /api/v2/auth/oidc/* routes are not registered.
 	OIDCFlow *oidc.Flow
+	// OIDCEnabled is true when auth.provider is "oidc". It makes the credential
+	// path break-glass-only: with OIDC on, an empty break-glass allowlist means
+	// SSO-only (every password login rejected), NOT ungated — the secure default.
+	OIDCEnabled bool
 	// OIDCSettings carries the role mappings, JIT policy, default_role, and
 	// break-glass allowlist the login flow and the credential gate read.
 	OIDCSettings config.OIDCSection
@@ -171,10 +175,11 @@ func NewServer(deps Dependencies) *gin.Engine {
 	// public API/UI surface. deps.Registry is retained for that listener's wiring.
 	registerDocs(r)
 
-	// Under OIDC the credential path is break-glass-only (D8): pass the allowlist
-	// so every non-allowlisted password login is rejected and audited. In JWT mode
-	// the allowlist is empty, newBreakGlass returns nil, and the path is unchanged.
-	bg := newBreakGlass(deps.OIDCSettings.BreakGlassEmails, deps.AuthAudit)
+	// Under OIDC the credential path is break-glass-only (D8): every non-allowlisted
+	// password login is rejected and audited, and an EMPTY allowlist means SSO-only
+	// (all password logins rejected) — not ungated. In JWT mode the credential path
+	// is the primary auth, so newBreakGlass returns nil (unchanged).
+	bg := newBreakGlass(deps.OIDCSettings.BreakGlassEmails, deps.AuthAudit, deps.OIDCEnabled)
 	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs, bg))
 	// Transparent renewal (aresta #5): a still-valid bearer is re-minted with a
 	// fresh short TTL, bounded by max_lifetime. Under the public /api/v2/auth/

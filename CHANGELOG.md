@@ -6,6 +6,47 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Typed trigger form in the UI (#798).** The "Trigger DAG w/ config" dialog
+  renders a generated form from a DAG's declared `params=`, with the raw JSON
+  editor still one toggle away.
+- **External secrets resolver (#811, ADR 0060) — off by default.** A declared
+  Connection/Variable can be resolved pod-side from a provider store (AWS Secrets
+  Manager reference; GCP / Azure / Vault via config) under the pod's own keyless
+  identity, instead of the Leoflow vault. Operator-configured (`secrets.backend`
+  + Helm); declaration-scoped, fail-closed, no copy at rest. Keyless end-to-end is
+  validated on a real cluster (EKS/GKE RC) before enabling; the vault stays the
+  only source when unset.
+
+### Changed
+
+- **`deferrable=True` rejected at compile time (#794, ADR 0016).** A clear error
+  points to `deferrable=False` / `mode="reschedule"` instead of compiling a task
+  that cannot defer at runtime.
+- **OpenTelemetry tracing is off by default** — opt in via `observability.otel`.
+
+### Security
+
+- **OIDC break-glass is SSO-only (#827).** Under `provider: oidc`, an empty
+  break-glass allowlist now denies all password logins instead of leaving
+  `POST /auth/token` open.
+- **Author task env can no longer override reserved `LEOFLOW_` variables
+  (GHSA-3r74-9w27-v32f).** Closes an in-pod agent control-plane / credential
+  redirect via a DAG's `env:`.
+- **OIDC hardening (#827):** dotted tenant/group config keys, returning-user
+  tenant-mismatch reject, rate-limited login/callback, and fail-closed handling of
+  Entra group-claim overage.
+
+### Fixed
+
+- **Flaky scheduler alert-dedup test (#609).**
+
+### Docs
+
+- **Versioned documentation site with per-release archives (#814).**
+- **External secrets how-to** (`operate/external-secrets.md`).
+
 ## [0.4.1] - 2026-08-28
 
 ### Added

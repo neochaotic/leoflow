@@ -529,3 +529,24 @@ func TestVerifyExtractGroups(t *testing.T) {
 		}
 	})
 }
+
+// TestVerifyGroupOverage: an Azure Entra group-overage token omits the groups
+// claim and points to it under _claim_names. It must fail closed (ErrGroupOverage),
+// not be silently treated as "no groups" — which would demote a heavily-grouped,
+// often-privileged user to default-deny with no signal.
+func TestVerifyGroupOverage(t *testing.T) {
+	f := newFakeIDP(t)
+	cfg := baseOIDCConfig(f)
+	v := newTestVerifier(t, cfg)
+	claims := baseClaims(cfg, testNonce)
+	delete(claims, "groups")
+	// A well-formed Entra overage token: _claim_names points groups at a source,
+	// _claim_sources describes it (a Graph endpoint we deliberately never call).
+	claims["_claim_names"] = map[string]any{"groups": "src1"}
+	claims["_claim_sources"] = map[string]any{"src1": map[string]any{"endpoint": "https://graph.microsoft.com/v1.0/users/x/getMemberObjects"}}
+
+	_, err := v.Verify(context.Background(), f.signIDToken(t, claims), testNonce)
+	if !errors.Is(err, ErrGroupOverage) {
+		t.Fatalf("Verify with group overage = %v, want ErrGroupOverage", err)
+	}
+}

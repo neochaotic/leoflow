@@ -188,6 +188,16 @@ func run() int {
 		// Fix #4); the per-RPC credential reads it on every subsequent call.
 		Token: tokens,
 	}
+	// External-secrets resolver (ADR 0060): built from the operator-injected
+	// LEOFLOW_SECRETS_* pod env. Nil unless an operator configured a backend, so
+	// the secret chain stays vault-only by default. A malformed config fails the
+	// task closed rather than silently disabling external secrets.
+	resolver, backend, rerr := agent.ResolverFromEnv(os.Getenv)
+	if rerr != nil {
+		slog.Error("external secrets backend config is invalid", "error", rerr)
+		os.Exit(1)
+	}
+	runner.Resolver, runner.SecretBackend = resolver, backend
 	// Fault-injection seam for the durable-outcome chaos E2E (ADR 0052): when a DAG
 	// sets LEOFLOW_CHAOS_DIE_BEFORE_REPORT to a task state, the agent writes the
 	// outcome record and then exits without delivering the report — simulating a pod

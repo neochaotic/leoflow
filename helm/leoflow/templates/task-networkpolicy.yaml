@@ -74,4 +74,15 @@ spec:
     {{- with .Values.taskNetworkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+    {{- with .Values.taskNetworkPolicy.allowMetadataEgress }}
+    # Scoped exceptions to the always-blocked cloud-metadata range, one host each,
+    # for keyless external-secrets auth via a metadata/link-local endpoint (GKE
+    # Workload Identity, EKS Pod Identity). NetworkPolicy egress is additive, so a
+    # /32 allow here re-permits exactly that host without opening 169.254.0.0/16.
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
 {{- end }}

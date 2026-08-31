@@ -111,6 +111,14 @@ type Request struct {
 	// the key in the cluster's secret store rather than in Leoflow (ADR 0035).
 	TaskSecretName      string
 	TaskSecretMountPath string
+
+	// SecretsBackend / SecretsBackendKwargs, when set, are the operator's external
+	// secrets backend (ADR 0060): the provider class the in-pod resolver drives and
+	// its raw kwargs JSON. Injected as LEOFLOW_SECRETS_BACKEND[_KWARGS] pod env, in
+	// the leoflow-owned group (operator-sourced — an author's task env cannot set
+	// LEOFLOW_ keys, #828). Empty = no external backend (chain stays vault-only).
+	SecretsBackend       string
+	SecretsBackendKwargs string
 }
 
 // Executor runs or dispatches a task. For asynchronous executors

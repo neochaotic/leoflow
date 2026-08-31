@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/neochaotic/leoflow/internal/agent/secretsource"
 	"github.com/neochaotic/leoflow/internal/taskoutcome"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 	"google.golang.org/grpc/codes"
@@ -100,6 +101,13 @@ type Runner struct {
 	// afterFunc returns a channel that fires after the given delay; it exists so
 	// tests can make the report-retry backoff instant. Nil uses time.After.
 	afterFunc func(time.Duration) <-chan time.Time
+	// Resolver resolves a declared secret name from an external backend, pod-side
+	// (ADR 0060). Nil = no external backend configured: the resolution chain is the
+	// vault only, byte-identical to the pre-0060 env-export. SecretBackend is the
+	// operator-configured routing (which kinds/names are externally sourced); its
+	// zero value covers nothing, so a nil-or-zero pair never calls the resolver.
+	Resolver      secretsource.SecretResolver
+	SecretBackend secretsource.Backend
 }
 
 // after waits for d, using the injected afterFunc when set (tests) and time.After
@@ -138,7 +146,12 @@ func (r *Runner) runOneAttempt(ctx context.Context) error {
 	}
 	env, err := r.buildEnv(ctx, spec)
 	if err != nil {
-		return err
+		// A buildEnv failure — notably a hard external-secret resolver error (ADR
+		// 0060 B6) — means the task cannot run. Report FAILED with the reason so the
+		// TI settles as failed with a visible cause, instead of being stranded until
+		// a reaper marks it agent_lost. The resolver's reason is already sanitized
+		// (no secret material).
+		return r.failWithReason(ctx, 1, err.Error())
 	}
 	return r.execute(ctx, argv, env, time.Duration(spec.GetExecutionTimeoutSeconds())*time.Second)
 }
@@ -214,7 +227,11 @@ func (r *Runner) buildEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string
 		// decodes this and instantiates the captured provider operator with it.
 		env = append(env, "LEOFLOW_OPERATOR_ARGS="+opArgs)
 	}
-	env = append(env, r.secretsEnv(ctx)...)
+	secretEnv, err := r.secretsEnv(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	env = append(env, secretEnv...)
 	pathEnv, err := r.outputPathEnv()
 	if err != nil {
 		return nil, err
@@ -363,23 +380,110 @@ func runContextEnv(spec *agentv1.TaskSpec) []string {
 // (and plain os.environ) resolve them (ADR 0021). Best-effort: a fetch failure
 // (e.g. an insecure channel refusing secrets) logs and is skipped, so tasks that
 // do not use Variables/Connections still run.
-func (r *Runner) secretsEnv(ctx context.Context) []string {
-	var out []string
+// secretsEnv builds the AIRFLOW_VAR_*/AIRFLOW_CONN_* env for the task. The
+// resolution chain (ADR 0060) is: declared name → external backend → leoflow
+// vault → env. The vault RPCs stay the declaration-scoped, liveness-gated source
+// they always were; when an external backend is configured, a declared name it
+// covers is resolved pod-side and OVERRIDES the vault entry for that name.
+//
+// Fail-closed / liveness (ADR 0060 B2/B6): a hard resolver error (not a clean
+// miss) fails the task. If a vault RPC returns PermissionDenied — the
+// liveness-enforce denial (ADR 0055) — external resolution is skipped entirely: a
+// non-live task instance resolves nothing, from the vault or externally. Other
+// vault errors stay best-effort (a task using no secrets still runs).
+func (r *Runner) secretsEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]string, error) {
+	vars := map[string]string{}
+	conns := map[string]string{}
+	// vaultDenied records a liveness-enforce PermissionDenied on either vault RPC;
+	// it gates the external branch (B2) so a non-live TI resolves nothing.
+	vaultDenied := false
 	if resp, err := r.Client.GetVariables(ctx, &agentv1.GetVariablesRequest{}); err != nil {
+		if status.Code(err) == codes.PermissionDenied {
+			vaultDenied = true
+		}
 		slog.Warn("fetching variables; Variable.get may be unavailable", "error", err)
 	} else {
 		for k, v := range resp.GetVariables() {
-			out = append(out, "AIRFLOW_VAR_"+strings.ToUpper(k)+"="+v)
+			vars[k] = v
 		}
 	}
 	if resp, err := r.Client.GetConnections(ctx, &agentv1.GetConnectionsRequest{}); err != nil {
+		if status.Code(err) == codes.PermissionDenied {
+			vaultDenied = true
+		}
 		slog.Warn("fetching connections; get_connection may be unavailable", "error", err)
 	} else {
 		for id, uri := range resp.GetConnectionUris() {
-			out = append(out, "AIRFLOW_CONN_"+strings.ToUpper(id)+"="+uri)
+			conns[id] = uri
 		}
 	}
-	return out
+
+	// External backend: resolve the DECLARED names the operator's backend covers,
+	// overriding the vault. Skipped when no backend is configured or the vault RPC
+	// was liveness-denied (B2). A hard resolver error fails the task closed (B6).
+	if r.Resolver != nil && !vaultDenied {
+		resolved, err := r.resolveExternal(ctx, coveredRefs(spec, r.SecretBackend))
+		if err != nil {
+			return nil, err
+		}
+		for ref, val := range resolved {
+			if ref.Kind == secretsource.KindConnection {
+				conns[ref.Name] = val
+			} else {
+				vars[ref.Name] = val
+			}
+		}
+	}
+
+	out := make([]string, 0, len(vars)+len(conns))
+	for k, v := range vars {
+		out = append(out, "AIRFLOW_VAR_"+strings.ToUpper(k)+"="+v)
+	}
+	for id, uri := range conns {
+		out = append(out, "AIRFLOW_CONN_"+strings.ToUpper(id)+"="+uri)
+	}
+	return out, nil
+}
+
+// coveredRefs is the set of declared names the operator's backend covers — the
+// exact request set the external resolver is asked for (declaration stays the
+// scope authority, ADR 0055/0060).
+func coveredRefs(spec *agentv1.TaskSpec, b secretsource.Backend) []secretsource.Ref {
+	var refs []secretsource.Ref
+	if b.Covers(secretsource.KindVariable) {
+		for _, n := range spec.GetDeclaredVariables() {
+			refs = append(refs, secretsource.Ref{Name: n, Kind: secretsource.KindVariable})
+		}
+	}
+	if b.Covers(secretsource.KindConnection) {
+		for _, n := range spec.GetDeclaredConnections() {
+			refs = append(refs, secretsource.Ref{Name: n, Kind: secretsource.KindConnection})
+		}
+	}
+	return refs
+}
+
+// resolveExternal resolves the given refs against the backend, preferring one
+// batched call (the 2b subprocess pays a heavy startup) and falling back to the
+// per-name port. Only hits are returned; a hard error fails the task closed (B6).
+func (r *Runner) resolveExternal(ctx context.Context, refs []secretsource.Ref) (map[secretsource.Ref]string, error) {
+	if len(refs) == 0 {
+		return map[secretsource.Ref]string{}, nil
+	}
+	if br, ok := r.Resolver.(secretsource.BatchResolver); ok {
+		return br.ResolveBatch(ctx, refs)
+	}
+	out := make(map[secretsource.Ref]string, len(refs))
+	for _, ref := range refs {
+		v, found, err := r.Resolver.Resolve(ctx, ref.Name, ref.Kind)
+		if err != nil {
+			return nil, fmt.Errorf("resolving external secret %q: %w", ref.Name, err)
+		}
+		if found {
+			out[ref] = v
+		}
+	}
+	return out, nil
 }
 
 // fetchFanInValues fetches each upstream's return_value and assembles them into

@@ -557,18 +557,20 @@ type TaskSpec struct {
 	Environment             map[string]string         `protobuf:"bytes,9,rep,name=environment,proto3" json:"environment,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	XcomInputMapping        map[string]*XComUpstreams `protobuf:"bytes,10,rep,name=xcom_input_mapping,json=xcomInputMapping,proto3" json:"xcom_input_mapping,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // param_name -> ordered list of upstream task_ids (1 = single, N = fan-in)
 	ExecutionTimeoutSeconds int32                     `protobuf:"varint,11,opt,name=execution_timeout_seconds,json=executionTimeoutSeconds,proto3" json:"execution_timeout_seconds,omitempty"`
-	Extra                   *structpb.Struct          `protobuf:"bytes,12,opt,name=extra,proto3" json:"extra,omitempty"`                                                     // operator-specific fields
-	CallArgsJson            string                    `protobuf:"bytes,13,opt,name=call_args_json,json=callArgsJson,proto3" json:"call_args_json,omitempty"`                 // TaskFlow literal call args, JSON-encoded (#115). Named call_args to leave 'params' free for Airflow's DAG-run params (#148).
-	OperatorClass           string                    `protobuf:"bytes,14,opt,name=operator_class,json=operatorClass,proto3" json:"operator_class,omitempty"`                // For operator='airflow_operator': the dotted provider operator/sensor class the runtime imports and executes (ADR 0040).
-	OperatorArgsJson        string                    `protobuf:"bytes,15,opt,name=operator_args_json,json=operatorArgsJson,proto3" json:"operator_args_json,omitempty"`     // For operator='airflow_operator': the operator's constructor kwargs, JSON-encoded. Delivered to the runtime as LEOFLOW_OPERATOR_ARGS.
-	LogicalDate             string                    `protobuf:"bytes,16,opt,name=logical_date,json=logicalDate,proto3" json:"logical_date,omitempty"`                      // The DagRun's logical date, RFC3339. The agent derives the runtime's LEOFLOW_TS (this value) and LEOFLOW_DS (the date) so the standalone operator context has a real ds/ts (ADR 0040). Empty leaves them unset.
-	DependsOn               []string                  `protobuf:"bytes,17,rep,name=depends_on,json=dependsOn,proto3" json:"depends_on,omitempty"`                            // The task's upstream task_ids. The agent fetches each one's return_value and delivers them as the LEOFLOW_XCOM_BY_TASK map so a captured operator's ti.xcom_pull(<id>) resolves it (chained operators, ADR 0040).
-	DataIntervalStart       string                    `protobuf:"bytes,18,opt,name=data_interval_start,json=dataIntervalStart,proto3" json:"data_interval_start,omitempty"`  // The DagRun's data interval start, RFC3339. The agent stamps LEOFLOW_DATA_INTERVAL_START so the standalone operator context exposes data_interval_start (ADR 0040). Empty leaves it unset.
-	DataIntervalEnd         string                    `protobuf:"bytes,19,opt,name=data_interval_end,json=dataIntervalEnd,proto3" json:"data_interval_end,omitempty"`        // The DagRun's data interval end, RFC3339. Stamped as LEOFLOW_DATA_INTERVAL_END -> context data_interval_end. Empty leaves it unset.
-	ParamsJson              string                    `protobuf:"bytes,20,opt,name=params_json,json=paramsJson,proto3" json:"params_json,omitempty"`                         // The DagRun's params/conf, JSON-encoded (#148). Stamped as LEOFLOW_PARAMS so the standalone operator context exposes context['params'] / {{ params.X }}. Empty leaves params={}.
-	FirstRescheduleAt       string                    `protobuf:"bytes,21,opt,name=first_reschedule_at,json=firstRescheduleAt,proto3" json:"first_reschedule_at,omitempty"`  // For a reschedule-mode sensor re-dispatched after poking not-ready (#380): the time it FIRST entered reschedule, RFC3339. Stamped as LEOFLOW_FIRST_RESCHEDULE_AT so get_first_reschedule_date returns the real value and the sensor honors its cumulative timeout. Empty on the first attempt.
-	MaxTries                int32                     `protobuf:"varint,22,opt,name=max_tries,json=maxTries,proto3" json:"max_tries,omitempty"`                              // The task's total attempt budget (retries + 1). The agent stamps LEOFLOW_MAX_TRIES so the runtime fires on_failure_callback only on the terminal attempt (try_number == max_tries), never on an intermediate retry (#424).
-	OnFailureCallback       bool                      `protobuf:"varint,23,opt,name=on_failure_callback,json=onFailureCallback,proto3" json:"on_failure_callback,omitempty"` // The task declares an Airflow on_failure_callback (#424). The agent stamps LEOFLOW_ON_FAILURE_CALLBACK=1 so the runtime re-imports dag.py and runs it in-process on the task's final failure. The callable itself is not carried.
+	Extra                   *structpb.Struct          `protobuf:"bytes,12,opt,name=extra,proto3" json:"extra,omitempty"`                                                        // operator-specific fields
+	CallArgsJson            string                    `protobuf:"bytes,13,opt,name=call_args_json,json=callArgsJson,proto3" json:"call_args_json,omitempty"`                    // TaskFlow literal call args, JSON-encoded (#115). Named call_args to leave 'params' free for Airflow's DAG-run params (#148).
+	OperatorClass           string                    `protobuf:"bytes,14,opt,name=operator_class,json=operatorClass,proto3" json:"operator_class,omitempty"`                   // For operator='airflow_operator': the dotted provider operator/sensor class the runtime imports and executes (ADR 0040).
+	OperatorArgsJson        string                    `protobuf:"bytes,15,opt,name=operator_args_json,json=operatorArgsJson,proto3" json:"operator_args_json,omitempty"`        // For operator='airflow_operator': the operator's constructor kwargs, JSON-encoded. Delivered to the runtime as LEOFLOW_OPERATOR_ARGS.
+	LogicalDate             string                    `protobuf:"bytes,16,opt,name=logical_date,json=logicalDate,proto3" json:"logical_date,omitempty"`                         // The DagRun's logical date, RFC3339. The agent derives the runtime's LEOFLOW_TS (this value) and LEOFLOW_DS (the date) so the standalone operator context has a real ds/ts (ADR 0040). Empty leaves them unset.
+	DependsOn               []string                  `protobuf:"bytes,17,rep,name=depends_on,json=dependsOn,proto3" json:"depends_on,omitempty"`                               // The task's upstream task_ids. The agent fetches each one's return_value and delivers them as the LEOFLOW_XCOM_BY_TASK map so a captured operator's ti.xcom_pull(<id>) resolves it (chained operators, ADR 0040).
+	DataIntervalStart       string                    `protobuf:"bytes,18,opt,name=data_interval_start,json=dataIntervalStart,proto3" json:"data_interval_start,omitempty"`     // The DagRun's data interval start, RFC3339. The agent stamps LEOFLOW_DATA_INTERVAL_START so the standalone operator context exposes data_interval_start (ADR 0040). Empty leaves it unset.
+	DataIntervalEnd         string                    `protobuf:"bytes,19,opt,name=data_interval_end,json=dataIntervalEnd,proto3" json:"data_interval_end,omitempty"`           // The DagRun's data interval end, RFC3339. Stamped as LEOFLOW_DATA_INTERVAL_END -> context data_interval_end. Empty leaves it unset.
+	ParamsJson              string                    `protobuf:"bytes,20,opt,name=params_json,json=paramsJson,proto3" json:"params_json,omitempty"`                            // The DagRun's params/conf, JSON-encoded (#148). Stamped as LEOFLOW_PARAMS so the standalone operator context exposes context['params'] / {{ params.X }}. Empty leaves params={}.
+	FirstRescheduleAt       string                    `protobuf:"bytes,21,opt,name=first_reschedule_at,json=firstRescheduleAt,proto3" json:"first_reschedule_at,omitempty"`     // For a reschedule-mode sensor re-dispatched after poking not-ready (#380): the time it FIRST entered reschedule, RFC3339. Stamped as LEOFLOW_FIRST_RESCHEDULE_AT so get_first_reschedule_date returns the real value and the sensor honors its cumulative timeout. Empty on the first attempt.
+	MaxTries                int32                     `protobuf:"varint,22,opt,name=max_tries,json=maxTries,proto3" json:"max_tries,omitempty"`                                 // The task's total attempt budget (retries + 1). The agent stamps LEOFLOW_MAX_TRIES so the runtime fires on_failure_callback only on the terminal attempt (try_number == max_tries), never on an intermediate retry (#424).
+	OnFailureCallback       bool                      `protobuf:"varint,23,opt,name=on_failure_callback,json=onFailureCallback,proto3" json:"on_failure_callback,omitempty"`    // The task declares an Airflow on_failure_callback (#424). The agent stamps LEOFLOW_ON_FAILURE_CALLBACK=1 so the runtime re-imports dag.py and runs it in-process on the task's final failure. The callable itself is not carried.
+	DeclaredVariables       []string                  `protobuf:"bytes,24,rep,name=declared_variables,json=declaredVariables,proto3" json:"declared_variables,omitempty"`       // The variable names this task declared (leoflow.yaml). The agent asks a pod-side external secret resolver only for declared names, so declaration stays the scope authority for externally-sourced secrets too (ADR 0060 / ADR 0055).
+	DeclaredConnections     []string                  `protobuf:"bytes,25,rep,name=declared_connections,json=declaredConnections,proto3" json:"declared_connections,omitempty"` // The connection ids this task declared (leoflow.yaml). Same role as declared_variables for connections.
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -762,6 +764,20 @@ func (x *TaskSpec) GetOnFailureCallback() bool {
 		return x.OnFailureCallback
 	}
 	return false
+}
+
+func (x *TaskSpec) GetDeclaredVariables() []string {
+	if x != nil {
+		return x.DeclaredVariables
+	}
+	return nil
+}
+
+func (x *TaskSpec) GetDeclaredConnections() []string {
+	if x != nil {
+		return x.DeclaredConnections
+	}
+	return nil
 }
 
 // XComUpstreams is the list of upstream task_ids whose return_values feed one
@@ -1808,7 +1824,7 @@ const file_agent_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12;\n" +
 	"\vserver_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\"\x14\n" +
-	"\x12GetTaskSpecRequest\"\xe1\b\n" +
+	"\x12GetTaskSpecRequest\"\xc3\t\n" +
 	"\bTaskSpec\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06dag_id\x18\x02 \x01(\tR\x05dagId\x12\x1f\n" +
@@ -1839,7 +1855,9 @@ const file_agent_proto_rawDesc = "" +
 	"paramsJson\x12.\n" +
 	"\x13first_reschedule_at\x18\x15 \x01(\tR\x11firstRescheduleAt\x12\x1b\n" +
 	"\tmax_tries\x18\x16 \x01(\x05R\bmaxTries\x12.\n" +
-	"\x13on_failure_callback\x18\x17 \x01(\bR\x11onFailureCallback\x1a>\n" +
+	"\x13on_failure_callback\x18\x17 \x01(\bR\x11onFailureCallback\x12-\n" +
+	"\x12declared_variables\x18\x18 \x03(\tR\x11declaredVariables\x121\n" +
+	"\x14declared_connections\x18\x19 \x03(\tR\x13declaredConnections\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ad\n" +

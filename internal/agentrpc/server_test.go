@@ -165,9 +165,11 @@ func newServerX(store Store, x XComService) (*Server, *auth.JWTAuthenticator) {
 func TestGetTaskSpecMapsStoreData(t *testing.T) {
 	store := &fakeStore{spec: TaskSpec{
 		Operator: "python", Entrypoint: "dag:hello", DagVersion: "v1",
-		Environment:      map[string]string{"FOO": "bar"},
-		XComInputMapping: map[string][]string{"val": {"upstream"}},
-		TimeoutSeconds:   300,
+		Environment:         map[string]string{"FOO": "bar"},
+		XComInputMapping:    map[string][]string{"val": {"upstream"}},
+		TimeoutSeconds:      300,
+		DeclaredVariables:   []string{"region"},
+		DeclaredConnections: []string{"warehouse"},
 	}}
 	srv, a := newServer(store)
 
@@ -189,6 +191,15 @@ func TestGetTaskSpecMapsStoreData(t *testing.T) {
 	}
 	if spec.GetExecutionTimeoutSeconds() != 300 {
 		t.Errorf("timeout = %d", spec.GetExecutionTimeoutSeconds())
+	}
+	// The declared secret names must reach the agent so a pod-side resolver asks
+	// the external backend only for what the DAG declared (ADR 0060 B2). They live
+	// server-side today; GetTaskSpec must thread them onto the agent proto.
+	if got := spec.GetDeclaredVariables(); len(got) != 1 || got[0] != "region" {
+		t.Errorf("declared variables = %v, want [region]", got)
+	}
+	if got := spec.GetDeclaredConnections(); len(got) != 1 || got[0] != "warehouse" {
+		t.Errorf("declared connections = %v, want [warehouse]", got)
 	}
 }
 

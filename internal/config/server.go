@@ -29,10 +29,29 @@ type ServerConfig struct {
 	Logs          LogsSection          `mapstructure:"logs"`
 	Observability ObservabilitySection `mapstructure:"observability"`
 	UI            UISection            `mapstructure:"ui"`
+	Secrets       SecretsSection       `mapstructure:"secrets"`
 	// SecretKey (LEOFLOW_SECRET_KEY) is the 32-byte key encrypting connection
 	// secrets at rest (ADR 0019). Raw 32 chars, 64-char hex, or base64. Empty
 	// disables connection writes.
 	SecretKey string `mapstructure:"secret_key"`
+}
+
+// SecretsSection configures the external secrets backend (ADR 0060). When Backend
+// is set, a Connection/Variable a DAG declares can be resolved pod-side from the
+// provider store under the pod's keyless identity instead of the leoflow vault.
+// Empty (the default) keeps the vault as the only source — byte-identical to
+// pre-0060. This is operator-only config: it is delivered to the pod as
+// LEOFLOW_SECRETS_* env, which an author's task env can never set (#828).
+type SecretsSection struct {
+	// Backend is the provider secrets-backend class the in-pod resolver drives
+	// (e.g. the Airflow AWS SecretsManagerBackend). Empty disables external secrets.
+	Backend string `mapstructure:"backend"`
+	// BackendKwargs is the provider kwargs as a JSON object string (connections_prefix,
+	// variables_prefix, region_name, …); a kind is served iff its `*_prefix` kwarg is
+	// present. A JSON string (not a map) so it is settable via a single
+	// LEOFLOW_SECRETS_BACKEND_KWARGS env var, matching the env-only control-plane
+	// chart. Empty is treated as `{}`. Delivered verbatim to the pod.
+	BackendKwargs string `mapstructure:"backend_kwargs"`
 }
 
 // LogsSection configures task log shipping.
@@ -679,6 +698,8 @@ var serverDefaults = map[string]any{
 	"ui.auto_refresh_interval_seconds": 0,
 	"auth.dev_no_auth":                 false,
 	"secret_key":                       "",
+	"secrets.backend":                  "",
+	"secrets.backend_kwargs":           "",
 }
 
 // LoadServer assembles the server configuration from defaults, the given file,

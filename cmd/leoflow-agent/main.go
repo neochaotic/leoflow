@@ -73,6 +73,28 @@ func envSeconds(key string) time.Duration {
 	return time.Duration(envInt(key)) * time.Second
 }
 
+// configureRunnerHooks wires the external-secrets resolver (ADR 0060) from the
+// operator-injected LEOFLOW_SECRETS_* pod env and the durable-outcome chaos seam
+// (ADR 0052) onto the runner. A malformed secrets backend config is a hard error
+// (fail closed); with none configured the secret chain stays vault-only. The chaos
+// seam is dev-only.
+func configureRunnerHooks(runner *agent.Runner) error {
+	resolver, backend, err := agent.ResolverFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("external secrets backend config is invalid: %w", err)
+	}
+	runner.Resolver, runner.SecretBackend = resolver, backend
+	if want := os.Getenv("LEOFLOW_CHAOS_DIE_BEFORE_REPORT"); want != "" {
+		runner.BeforeReport = func(state agentv1.TaskState) {
+			if state.String() == want {
+				slog.Warn("chaos: exiting before report to simulate a pod killed mid-report", "state", state.String())
+				os.Exit(137)
+			}
+		}
+	}
+	return nil
+}
+
 func run() int {
 	// Answer `--version`/`--help` before connecting, so an operator can query a
 	// deployed agent without a reachable control plane (#593). Without this,
@@ -188,18 +210,9 @@ func run() int {
 		// Fix #4); the per-RPC credential reads it on every subsequent call.
 		Token: tokens,
 	}
-	// Fault-injection seam for the durable-outcome chaos E2E (ADR 0052): when a DAG
-	// sets LEOFLOW_CHAOS_DIE_BEFORE_REPORT to a task state, the agent writes the
-	// outcome record and then exits without delivering the report — simulating a pod
-	// killed mid-report (OOM/eviction) with the record already on disk. Never set in
-	// production; the reconciler must then recover the outcome from the record.
-	if want := os.Getenv("LEOFLOW_CHAOS_DIE_BEFORE_REPORT"); want != "" {
-		runner.BeforeReport = func(state agentv1.TaskState) {
-			if state.String() == want {
-				slog.Warn("chaos: exiting before report to simulate a pod killed mid-report", "state", state.String())
-				os.Exit(137)
-			}
-		}
+	if herr := configureRunnerHooks(runner); herr != nil {
+		slog.Error("configuring runner", "error", herr)
+		return 1
 	}
 	if rerr := runner.Run(ctx); rerr != nil {
 		slog.Error("task failed", "error", rerr)

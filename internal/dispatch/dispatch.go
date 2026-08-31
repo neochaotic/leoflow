@@ -6,6 +6,7 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,33 @@ import (
 	"github.com/neochaotic/leoflow/internal/executor"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
 )
+
+// reservedEnvPrefix marks env vars owned by leoflow's control plane / agent. An
+// author's task env (leoflow.yaml `env:`) must never set these: they configure
+// the in-pod agent's control-plane address, token transport, and (ADR 0060) the
+// external-secrets backend. An author override reaches the agent's own container
+// (task env is appended last in the pod spec), so it could redirect the agent's
+// credential exchange or downgrade its transport (#828).
+const reservedEnvPrefix = "LEOFLOW_"
+
+// stripReservedEnv returns a copy of env without any leoflow-reserved key, so an
+// author's leoflow.yaml env: cannot override the agent's own configuration. The
+// prefix match is case-insensitive (env keys are case-sensitive on Linux, but the
+// agent only ever reads the canonical uppercase form; drop any case an author
+// tries). A nil map stays nil.
+func stripReservedEnv(env map[string]string) map[string]string {
+	if env == nil {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		if strings.HasPrefix(strings.ToUpper(k), reservedEnvPrefix) {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
 
 // warmLeaseSeconds is the ack deadline placed on a warm-worker assignment: the
 // worker must ack it as started within this window or the registry reclaims the
@@ -211,7 +239,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID, dagVersionID st
 		Source:           r.Source,
 		Operator:         string(task.Type),
 		Entrypoint:       task.Entrypoint,
-		Env:              task.Env,
+		Env:              stripReservedEnv(task.Env),
 		ControlPlaneAddr: d.controlAddr,
 		AgentToken:       token,
 		// Cluster-operator policy, not a per-task choice — see PlatformDefaults.

@@ -39,13 +39,21 @@ type fakeClient struct {
 	heartbeatTerminate bool
 	vars               map[string]string
 	conns              map[string]string
+	getVarsErr         error
+	getConnsErr        error
 }
 
 func (f *fakeClient) GetVariables(context.Context, *agentv1.GetVariablesRequest, ...grpc.CallOption) (*agentv1.GetVariablesResponse, error) {
+	if f.getVarsErr != nil {
+		return nil, f.getVarsErr
+	}
 	return &agentv1.GetVariablesResponse{Variables: f.vars}, nil
 }
 
 func (f *fakeClient) GetConnections(context.Context, *agentv1.GetConnectionsRequest, ...grpc.CallOption) (*agentv1.GetConnectionsResponse, error) {
+	if f.getConnsErr != nil {
+		return nil, f.getConnsErr
+	}
 	return &agentv1.GetConnectionsResponse{ConnectionUris: f.conns}, nil
 }
 

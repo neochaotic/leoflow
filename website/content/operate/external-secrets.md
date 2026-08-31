@@ -203,8 +203,8 @@ provider's backend class and keyless mechanism.
   resolved — the same rule as the vault.
 - **Fail-closed.** A hard resolver error (access denied, throttle, malformed) fails
   the task with a sanitized reason — never the secret. A clean miss falls through to
-  the vault; if it is also absent, the task runs without it (as today) unless the
-  name is required.
+  the vault; if it is also absent, the name is simply not exported and the task runs
+  (as it does today for an undeclared vault secret).
 - **No copy at rest.** The value lives only in the task process env for that
   attempt, exactly like a vault secret — never on the pod object or in etcd.
 

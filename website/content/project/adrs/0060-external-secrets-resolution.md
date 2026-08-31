@@ -365,8 +365,12 @@ RC pass, not the code:
    NetworkPolicy **always blocks the cloud metadata range `169.254.0.0/16`**
    (anti-SSRF), so GKE WI **and EKS Pod Identity** (`169.254.170.23`) need an
    explicit `taskNetworkPolicy.extraEgress` exception for that endpoint — IRSA
-   (public STS) works as-is. `resolverBaseEnv` scrubbing `GOOGLE_APPLICATION_CREDENTIALS`
-   must not break WI
+   (public STS) works as-is. `resolverBaseEnv` uses an allowlist that scrubs the
+   author-influenceable GCP vars (`GOOGLE_APPLICATION_CREDENTIALS`, and
+   `GCE_METADATA_HOST` — an ADC metadata-host redirect) while WI itself is
+   unaffected (it uses the real metadata server over the pod's network, reached via
+   the `allowMetadataEgress` exception, not an env override); confirm this does not
+   break WI
    (it does not — WI uses the metadata server, not that env). Validate on a real
    GKE cluster: keyless resolve with no static creds, the metadata-server egress
    under a default-deny policy, and the fail-closed path. Azure Workload Identity /

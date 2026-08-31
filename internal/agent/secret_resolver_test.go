@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/neochaotic/leoflow/internal/agent/secretsource"
@@ -107,5 +108,37 @@ func TestResolverFromEnv(t *testing.T) {
 	bad := map[string]string{"LEOFLOW_SECRETS_BACKEND": "x", "LEOFLOW_SECRETS_BACKEND_KWARGS": "{oops"}
 	if _, _, err := ResolverFromEnv(func(k string) string { return bad[k] }); err == nil {
 		t.Error("malformed kwargs must fail closed")
+	}
+}
+
+func TestResolverBaseEnvScrubsCredOverrides(t *testing.T) {
+	in := []string{
+		"PATH=/usr/bin",
+		"LEOFLOW_AGENT_TOKEN=secret",               // stripped by stripAgentOnly
+		"AWS_ROLE_ARN=arn:aws:iam::1:role/keyless", // keyless — must survive
+		"AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/tok", // keyless — must survive
+		"AWS_ACCESS_KEY_ID=AKIA_author",            // author static cred — scrubbed
+		"AWS_SECRET_ACCESS_KEY=x",                  // scrubbed
+		"AWS_ENDPOINT_URL=http://evil",             // endpoint override — scrubbed
+		"AWS_ENDPOINT_URL_S3=http://evil2",         // prefix — scrubbed
+		"AWS_PROFILE=hijack",                       // scrubbed
+		"GOOGLE_APPLICATION_CREDENTIALS=/k.json",   // scrubbed
+	}
+	got := map[string]bool{}
+	for _, kv := range resolverBaseEnv(in) {
+		name, _, _ := strings.Cut(kv, "=")
+		got[name] = true
+	}
+	// Keyless + neutral survive.
+	for _, keep := range []string{"PATH", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"} {
+		if !got[keep] {
+			t.Errorf("%s must survive (keyless/neutral)", keep)
+		}
+	}
+	// LEOFLOW_ secret + author cred/endpoint overrides scrubbed.
+	for _, drop := range []string{"LEOFLOW_AGENT_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", "AWS_PROFILE", "GOOGLE_APPLICATION_CREDENTIALS"} {
+		if got[drop] {
+			t.Errorf("%s must be scrubbed from the resolver base env", drop)
+		}
 	}
 }

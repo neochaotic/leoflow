@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/neochaotic/leoflow/internal/agent/secretsource"
 )
@@ -122,13 +123,48 @@ func (r *subprocessResolver) ResolveBatch(ctx context.Context, refs []secretsour
 	return result, nil
 }
 
-// spawn runs the Python resolver synchronously with config on stdin and a base
-// env scrubbed of the agent's LEOFLOW_ secrets (stripAgentOnly). Its stderr goes
-// to the agent debug log only — never the task log sink — since a backend may echo
-// secret material there. It completes before the task process is ever started.
+// resolverCredOverrideEnv are provider env vars an author could set in their task
+// env (they are not LEOFLOW_-prefixed, so #828's dispatch filter lets them through
+// into the pod env) that would divert the resolver SDK's credential chain or
+// endpoint away from the pod's own keyless workload identity — static creds, a
+// credentials file/profile, or an endpoint override. The resolver must authenticate
+// ONLY as the pod (IRSA / Workload Identity / Vault k8s-auth), so these are scrubbed
+// from its base env. The keyless vars the provider webhook injects (AWS_ROLE_ARN,
+// AWS_WEB_IDENTITY_TOKEN_FILE, AWS_CONTAINER_*, the GKE metadata server, the Azure
+// federated token) are NOT in this list and survive. (Real credential precedence
+// is a NEEDS-REAL-CLUSTER check on the EKS RC.)
+var resolverCredOverrideEnv = map[string]bool{
+	"AWS_ACCESS_KEY_ID": true, "AWS_SECRET_ACCESS_KEY": true, "AWS_SESSION_TOKEN": true,
+	"AWS_PROFILE": true, "AWS_SHARED_CREDENTIALS_FILE": true, "AWS_CONFIG_FILE": true,
+	"GOOGLE_APPLICATION_CREDENTIALS": true,
+	"AZURE_CLIENT_SECRET":            true, "AZURE_CLIENT_CERTIFICATE_PATH": true,
+}
+
+// resolverBaseEnv is the subprocess's base env: the agent's env minus its own
+// LEOFLOW_ secrets (stripAgentOnly) and minus any author-set provider credential /
+// endpoint override (so the resolver authenticates only as the pod, keyless).
+func resolverBaseEnv(agentEnv []string) []string {
+	stripped := stripAgentOnly(agentEnv)
+	out := stripped[:0:0]
+	for _, kv := range stripped {
+		name, _, _ := strings.Cut(kv, "=")
+		if resolverCredOverrideEnv[name] || strings.HasPrefix(name, "AWS_ENDPOINT_URL") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// spawn runs the Python resolver synchronously with config on stdin and a base env
+// scrubbed of the agent's LEOFLOW_ secrets and any author-set provider credential /
+// endpoint override (resolverBaseEnv), so it authenticates only as the pod's keyless
+// identity. Its stderr goes to the agent debug log only — never the task log sink —
+// since a backend may echo secret material there. It completes before the task
+// process is ever started.
 func (r *subprocessResolver) spawn(ctx context.Context, stdin []byte) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, resolverPython, "-m", resolverModule)
-	cmd.Env = stripAgentOnly(os.Environ())
+	cmd.Env = resolverBaseEnv(os.Environ())
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

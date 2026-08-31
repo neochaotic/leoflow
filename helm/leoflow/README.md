@@ -418,6 +418,8 @@ differ from what's committed.
 | resources | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resource requests + limits for the leoflow-server container. Defaults sized for a small Pro (50–500 DAGs); bump CPU+memory for larger deployments. The scheduler's main load is DB polling, not in-process compute. |
 | secretKey | string | `""` | AES-256 key encrypting Connection passwords + Extra at rest (ADR 0019). MUST be exactly 32 raw bytes OR 64-char hex OR base64-of-32-bytes. Without it, Connection management is disabled (Variables still work). |
 | secretKeyExistingSecret | string | `""` | Name of a Secret with key `secretKey` (takes precedence over `secretKey`). |
+| secrets.backend | string | `""` | Provider secrets-backend class the in-pod resolver drives (e.g. `airflow.providers.amazon.aws.secrets.secrets_manager.SecretsManagerBackend`). Empty disables external secrets. |
+| secrets.backendKwargs | string | `""` | Backend kwargs as a JSON object string (e.g. `'{"connections_prefix":"airflow/connections","variables_prefix":"airflow/variables","region_name":"us-east-1"}'`). A kind is served iff its `*_prefix` is present. Keyless auth (IRSA / Workload Identity) uses the task pod's ServiceAccount — set `taskServiceAccount` accordingly. |
 | securityContext.allowPrivilegeEscalation | bool | `false` |  |
 | securityContext.capabilities.drop[0] | string | `"ALL"` |  |
 | securityContext.readOnlyRootFilesystem | bool | `false` |  |

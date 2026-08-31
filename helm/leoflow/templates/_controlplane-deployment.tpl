@@ -200,6 +200,16 @@ spec:
             - name: LEOFLOW_EXECUTOR_TASK_SECRET_MOUNT_PATH
               value: {{ .ctx.Values.taskSecret.mountPath | quote }}
             {{- end }}
+            {{- if .ctx.Values.secrets.backend }}
+            # External secrets backend (ADR 0060): a declared Connection/Variable is
+            # resolved pod-side from the provider store under the pod's own keyless
+            # identity, instead of Leoflow's vault. Operator-only — delivered to task
+            # pods as LEOFLOW_SECRETS_*, which an author's task env can never set.
+            - name: LEOFLOW_SECRETS_BACKEND
+              value: {{ .ctx.Values.secrets.backend | quote }}
+            - name: LEOFLOW_SECRETS_BACKEND_KWARGS
+              value: {{ .ctx.Values.secrets.backendKwargs | quote }}
+            {{- end }}
             # Task-pod hardening. Always stamped, both directions: leaving the
             # secure value implicit would mean a chart upgrade could not turn an
             # opt-out back off without an operator noticing.

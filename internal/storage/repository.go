@@ -31,9 +31,20 @@ type txBeginner interface {
 // Repository implements the API resource and auth user-store interfaces over
 // Postgres using the sqlc-generated query set.
 type Repository struct {
-	q      *queries.Queries
-	pool   txBeginner
-	cipher secrets.Cipher
+	q           *queries.Queries
+	pool        txBeginner
+	cipher      secrets.Cipher
+	extCoverage externalSecretCoverage
+}
+
+// externalSecretCoverage reports whether a declared name is served by a
+// configured external secret backend (operator config, ADR 0060). The D6
+// registration check consults it to accept an externally-backed declared name
+// without a provider call. It must be operator-sourced: if a DAG could supply
+// its own coverage, it could mark any name covered and defeat D6 (ADR 0060 B1).
+type externalSecretCoverage interface {
+	CoversVariable(name string) bool
+	CoversConnection(name string) bool
 }
 
 // NewRepository builds a Repository backed by the given Postgres connection.
@@ -44,6 +55,12 @@ func NewRepository(pg *Postgres) *Repository {
 // SetCipher attaches the encryption cipher used for connection secrets (ADR
 // 0019). Without it, connection writes fail rather than storing plaintext.
 func (r *Repository) SetCipher(c secrets.Cipher) { r.cipher = c }
+
+// SetExternalSecretCoverage attaches the operator-configured external-backend
+// coverage used by the D6 registration check (ADR 0060 B1). Without it, the check
+// is the pre-0060 vault-existence check (a declared name must exist in the
+// vault). It must be wired from operator/Helm config, never from a DAG.
+func (r *Repository) SetExternalSecretCoverage(c externalSecretCoverage) { r.extCoverage = c }
 
 func toInt32(n int) int32 {
 	switch {
@@ -1000,16 +1017,25 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 // DAG declares anything, so this never rejects a pre-declaration DAG — the
 // Lite/back-compat safety.
 func (r *Repository) validateDeclaredSecrets(ctx context.Context, tid pgtype.UUID, spec domain.DAGSpec) error {
+	// A declared name that is not in the vault but IS covered by a configured
+	// external backend is accepted here without any provider call (ADR 0060 B1);
+	// existence is proven pod-side at resolve time. coveredVar/coveredConn are nil
+	// unless the operator wired an external backend, giving the pre-0060 check.
+	var coveredVar, coveredConn func(string) bool
+	if r.extCoverage != nil {
+		coveredVar = r.extCoverage.CoversVariable
+		coveredConn = r.extCoverage.CoversConnection
+	}
 	varNames := declaredSecretNames(spec.Variables, spec.Tasks, func(t domain.TaskSpec) []string { return t.Variables })
 	if len(varNames) > 0 {
 		existing, err := r.q.ExistingVariableKeys(ctx, queries.ExistingVariableKeysParams{TenantID: tid, Keys: varNames})
 		if err != nil {
 			return fmt.Errorf("checking declared variables: %w", err)
 		}
-		if missing := missingNames(varNames, existing); len(missing) > 0 {
+		if unknown := unknownDeclaredNames(varNames, existing, coveredVar); len(unknown) > 0 {
 			return fmt.Errorf(
 				"dag %q declares unknown variable(s) %s; define them (leoflow variables set) or remove them from the DAG's variables: declaration: %w",
-				spec.DagID, strings.Join(missing, ", "), domain.ErrValidation)
+				spec.DagID, strings.Join(unknown, ", "), domain.ErrValidation)
 		}
 	}
 	connNames := declaredSecretNames(spec.Connections, spec.Tasks, func(t domain.TaskSpec) []string { return t.Connections })
@@ -1018,10 +1044,10 @@ func (r *Repository) validateDeclaredSecrets(ctx context.Context, tid pgtype.UUI
 		if err != nil {
 			return fmt.Errorf("checking declared connections: %w", err)
 		}
-		if missing := missingNames(connNames, existing); len(missing) > 0 {
+		if unknown := unknownDeclaredNames(connNames, existing, coveredConn); len(unknown) > 0 {
 			return fmt.Errorf(
 				"dag %q declares unknown connection(s) %s; define them (leoflow connections set) or remove them from the DAG's connections: declaration: %w",
-				spec.DagID, strings.Join(missing, ", "), domain.ErrValidation)
+				spec.DagID, strings.Join(unknown, ", "), domain.ErrValidation)
 		}
 	}
 	return nil
@@ -1063,6 +1089,28 @@ func missingNames(declared, existing []string) []string {
 		}
 	}
 	return missing
+}
+
+// unknownDeclaredNames is the ADR 0055 D6 existence check extended for ADR 0060
+// B1: a declared name is unknown only if it is neither present in the vault
+// (existing) nor covered by a configured external backend. A name covered by an
+// operator-configured external backend is accepted at registration WITHOUT any
+// provider call — confirming it in the provider would be exactly the
+// author-named, core-identity network request ADR 0048 forecloses; existence is
+// instead proven pod-side at resolve time, fail-closed on miss. covered may be
+// nil (no external backend configured), giving the pre-0060 existence check.
+func unknownDeclaredNames(declared, existing []string, covered func(string) bool) []string {
+	missing := missingNames(declared, existing)
+	if covered == nil {
+		return missing
+	}
+	var unknown []string
+	for _, name := range missing {
+		if !covered(name) {
+			unknown = append(unknown, name)
+		}
+	}
+	return unknown
 }
 
 // BootstrapAdmin creates a default admin user with the given password when the

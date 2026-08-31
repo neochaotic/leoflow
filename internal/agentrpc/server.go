@@ -256,6 +256,8 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 		FirstRescheduleAt:       spec.FirstRescheduleAt,
 		MaxTries:                clampInt32(spec.MaxTries),
 		OnFailureCallback:       spec.OnFailureCallback,
+		DeclaredVariables:       spec.DeclaredVariables,
+		DeclaredConnections:     spec.DeclaredConnections,
 	}, nil
 }
 

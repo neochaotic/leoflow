@@ -149,6 +149,86 @@ const CRASH_RE = /Cannot read properties|is not a function|client-side exception
     }
   });
 
+  // The typed trigger form (#798 UI half). params_demo declares a bare default,
+  // a typed enum, and a required param; the details endpoint now serves them in
+  // Airflow's {value, schema} param-dict shape, so the native trigger dialog
+  // renders a generated form AND still offers the JSON editor. Prove it against
+  // the real Lite (no route mocking): the details shape, both surfaces render,
+  // and a real form submit creates a run carrying the expected conf.
+  const paramsDag = 'params_demo';
+  const mintToken = async () => {
+    const auth = await (await page.request.post(URL + '/auth/token',
+      { data: { username: USER, password: PASS } })).json().catch(() => ({}));
+    if (!auth.access_token) throw new Error('POST /auth/token returned no access_token');
+    return auth.access_token;
+  };
+
+  await step('params DAG: /details serves typed params in Airflow shape', async () => {
+    const tok = await mintToken();
+    const det = await (await page.request.get(`${URL}/api/v2/dags/${paramsDag}/details`,
+      { headers: { Authorization: 'Bearer ' + tok } })).json().catch(() => ({}));
+    const p = det.params || {};
+    // The leoflow seam: declared params reshaped to {value, schema, description}.
+    if (!p.region || !('value' in p.region) || !p.region.schema || p.region.schema.type !== 'string') {
+      throw new Error('region not served as {value, schema:{type}} (params wiring): ' + JSON.stringify(p.region));
+    }
+    if (!('run_label' in p) || p.run_label.value !== null) {
+      throw new Error('required param run_label should serve value:null: ' + JSON.stringify(p.run_label));
+    }
+  });
+
+  await step('trigger dialog: generated form + JSON editor both render', async () => {
+    await page.goto(`${URL}/dags/${paramsDag}`, { waitUntil: 'networkidle' });
+    const trig = page.getByRole('button', { name: /^trigger/i }).first();
+    if (!(await trig.count())) throw new Error('no Trigger button on the params DAG page');
+    await trig.click({ timeout: 5000 });
+    await page.waitForTimeout(1000);
+    // (a) a generated form field for a declared param (the enum "Region" or the
+    //     required "Run label") — proves the declared params drove the flexible form.
+    if (!(await page.getByText(/Run label|Region/i).first().count())) {
+      throw new Error('no generated form field rendered from declared params');
+    }
+    // (b) the JSON editor is still offered (form + JSON coexist — the "both" requirement).
+    if (!(await page.getByText(/Configuration JSON|Advanced Options/i).first().count())) {
+      throw new Error('Configuration JSON editor not offered alongside the form');
+    }
+  });
+
+  await step('trigger form: submit creates a run with the expected conf', async () => {
+    const tok = await mintToken();
+    const label = 'smoke-' + Date.now();
+    // Fill the required field (label = the param's title), then submit via the
+    // dialog's Trigger button. A missing required value would 400 server-side and
+    // create no run, so a created run proves the form fed a valid conf through.
+    // Airflow's FlexibleForm names each generated param field input
+    // `element_<param>`. For a plain-string field it renders the <label> with a
+    // generated `for` id that does NOT match the input's own id
+    // (id="element_run_label"), so the accessible-name association is broken and
+    // getByLabel(/Run label/) resolves nothing — and a generic first-textbox
+    // fallback lands on the logical-date picker (a datetime-local), leaving the
+    // required run_label empty so the dialog's Trigger button stays disabled and no
+    // run is ever created. Target the field by its stable, param-specific name; keep
+    // the label lookup first so a future Airflow that fixes the association still works.
+    let input = page.getByLabel(/Run label/i).first();
+    if (!(await input.count())) input = page.locator('input[name="element_run_label"]');
+    await input.fill(label);
+    await page.getByRole('button', { name: /^trigger$/i }).last().click({ timeout: 5000 }).catch(() => {});
+    // Poll for a run whose conf carries our unique label (order-independent).
+    let created = null;
+    for (let i = 0; i < 20 && !created; i++) {
+      await page.waitForTimeout(1000);
+      const runs = await (await page.request.get(`${URL}/api/v2/dags/${paramsDag}/dagRuns?limit=100`,
+        { headers: { Authorization: 'Bearer ' + tok } })).json().catch(() => ({}));
+      created = (runs.dag_runs || []).find((r) => r && r.conf && r.conf.run_label === label);
+    }
+    if (!created) throw new Error('form submit did not create a run carrying the submitted run_label conf');
+    // The v0.4.1 backend merges declared defaults under the conf, so the untouched
+    // enum defaults to "us" — the form is a faithful preview of what's enforced.
+    if (created.conf.region !== 'us') {
+      throw new Error('declared default region=us not materialized into conf: ' + JSON.stringify(created.conf));
+    }
+  });
+
   await browser.close();
 
   const failed = results.filter((r) => r.bad);

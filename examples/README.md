@@ -69,6 +69,7 @@ a `README.md` walking through their specific Connection wiring.
 | [montecarlo_pi](montecarlo_pi/) | Estimate pi with parallel Monte-Carlo workers, then combine. |
 | [mssql_load](mssql_load/) | Compute rows and load them into an external Microsoft SQL Server via a managed Connection. |
 | [mysql_load](mysql_load/) | Compute rows and load them into an external MySQL/MariaDB via a managed Connection. |
+| [params_demo](params_demo/) | Declares typed run `params` (bare default, typed enum, required) so the trigger dialog renders its native typed form. |
 | [postgres_load](postgres_load/) | Compute rows and load them into an external Postgres via a managed Connection. |
 | [redis_load](redis_load/) | Compute a key-value payload and write it into a Redis hash via a managed Connection. |
 | [sqlite_load](sqlite_load/) | Compute rows and load them into a sqlite file via a managed Connection. |

@@ -1,0 +1,8 @@
+schema_version: "1.0"
+dag_id: params_demo
+description: Declares typed run params (bare default, typed enum, required) so the trigger dialog renders its native form.
+owner: examples
+tags:
+  - example
+python_version: "3.11"
+dependencies: []

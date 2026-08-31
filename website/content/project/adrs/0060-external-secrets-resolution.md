@@ -361,9 +361,12 @@ RC pass, not the code:
    `backendKwargs`, with GCP's `CloudSecretManagerBackend` and the KSA annotation
    `iam.gke.io/gcp-service-account`), so nothing is built for GKE. But GKE WI
    resolves credentials via the **GCP metadata server** (169.254.169.254 / ADC),
-   not an env-injected projected token + STS like EKS IRSA — so a default-deny
-   egress NetworkPolicy needs a **different allowlist** (the metadata server), and
-   `resolverBaseEnv` scrubbing `GOOGLE_APPLICATION_CREDENTIALS` must not break WI
+   not an env-injected projected token + STS like EKS IRSA. The chart's task
+   NetworkPolicy **always blocks the cloud metadata range `169.254.0.0/16`**
+   (anti-SSRF), so GKE WI **and EKS Pod Identity** (`169.254.170.23`) need an
+   explicit `taskNetworkPolicy.extraEgress` exception for that endpoint — IRSA
+   (public STS) works as-is. `resolverBaseEnv` scrubbing `GOOGLE_APPLICATION_CREDENTIALS`
+   must not break WI
    (it does not — WI uses the metadata server, not that env). Validate on a real
    GKE cluster: keyless resolve with no static creds, the metadata-server egress
    under a default-deny policy, and the fail-closed path. Azure Workload Identity /

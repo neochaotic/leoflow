@@ -210,8 +210,33 @@ provider's backend class and keyless mechanism.
 
 > **Keyless end-to-end (IRSA / Workload Identity) is verified on a real cluster.**
 > Leoflow only sets the pod's ServiceAccount; the cloud identity webhook injects
-> the token at admission. Confirm the KSA→role binding and any default-deny
-> NetworkPolicy egress to the provider on your cluster.
+> the token at admission. Confirm the KSA→role binding on your cluster.
+
+**NetworkPolicy — metadata egress (important for GKE and EKS Pod Identity).** The
+task-pod NetworkPolicy always **blocks the cloud metadata range `169.254.0.0/16`**
+(an anti-SSRF measure — the classic credential-theft target). Keyless mechanisms
+that reach an endpoint in that range therefore need an explicit egress exception:
+
+| Keyless mechanism | Endpoint | Default task NetworkPolicy |
+|---|---|---|
+| AWS **IRSA** | STS (public) | works as-is |
+| AWS **Pod Identity** | `169.254.170.23` | **blocked** — needs an exception |
+| **GKE Workload Identity** | metadata server `169.254.169.254` | **blocked** — needs an exception |
+
+To use GKE WI or EKS Pod Identity, re-allow just that endpoint via
+`taskNetworkPolicy.extraEgress` (a deliberate, scoped security trade-off):
+
+```yaml
+# values.yaml
+taskNetworkPolicy:
+  extraEgress:
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32   # GKE metadata server (169.254.170.23/32 for EKS Pod Identity)
+```
+
+AWS IRSA needs no NetworkPolicy change (it authenticates against the public STS
+endpoint, not the metadata range).
 
 ## What this does and does not cover
 

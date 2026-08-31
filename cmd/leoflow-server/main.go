@@ -138,8 +138,8 @@ func run() error {
 	defer dsCleanup()
 
 	repo := storage.NewRepository(pg)
-	if cerr := configureSecretCipher(repo, cfg.SecretKey, tel.Logger); cerr != nil {
-		return cerr
+	if serr := configureSecrets(repo, cfg, tel.Logger); serr != nil {
+		return serr
 	}
 	authn := auth.NewJWTAuthenticator(repo, cfg.Auth.JWT.Secret, time.Duration(cfg.Auth.JWT.TokenTTLSeconds)*time.Second)
 	execStore := storage.NewExecutionStore(pg)
@@ -1422,6 +1422,11 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// BuildPod.
 	dispatcher.SetAgentTokenTransport(cfg.Auth.AgentTokenTransport, executor.DefaultAgentTokenAudience, 0)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
+	// External secrets backend (ADR 0060, Pro pod path): deliver the operator config
+	// to task pods as LEOFLOW_SECRETS_* env. Empty backend → podEnv skips it (chain
+	// stays vault-only). The D6 registration relaxation is wired separately in run()
+	// where the Repository is in scope.
+	dispatcher.SetSecretsBackend(cfg.Secrets.Backend, secretsKwargsJSON(cfg.Secrets))
 	// Warm placement seam (ADR 0058 N1b1-place): the dispatcher Assign()s onto the
 	// SAME registry the gRPC handler serves. nil when warm pools are off.
 	setWarmPlacer(dispatcher, warmPools)

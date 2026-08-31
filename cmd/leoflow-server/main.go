@@ -81,6 +81,23 @@ func main() {
 	}
 }
 
+// openVerifiedPostgres opens the pool and fails fast when the schema is not
+// current, with an actionable message — instead of booting and erroring at the
+// first query against a missing/old table. The check is a read-only SELECT, so it
+// works for the migration-less role:api (ADR 0049); the blessed Helm path applies
+// migrations in a pre-install/upgrade Job before any role starts.
+func openVerifiedPostgres(ctx context.Context, cfg config.DatabaseSection) (*storage.Postgres, error) {
+	pg, err := storage.NewPostgres(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if serr := pg.CheckSchemaCurrent(ctx); serr != nil {
+		pg.Close()
+		return nil, serr
+	}
+	return pg, nil
+}
+
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -105,7 +122,7 @@ func run() error {
 	}
 	defer shutdownTel()
 
-	pg, err := storage.NewPostgres(ctx, cfg.Database)
+	pg, err := openVerifiedPostgres(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("postgres: %w", err)
 	}
@@ -556,6 +573,7 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		// OIDC/SSO login flow (nil in JWT mode → routes not registered). The repo
 		// resolves/JIT-provisions identities and records auth-event audit.
 		OIDCFlow:     oidcFlow,
+		OIDCEnabled:  cfg.Auth.Provider == config.AuthProviderOIDC,
 		OIDCSettings: cfg.Auth.OIDC,
 		OIDCUsers:    repo,
 		AuthAudit:    repo,

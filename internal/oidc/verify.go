@@ -45,6 +45,14 @@ var (
 	// ErrNoSubject is returned when the ID token carries no subject — there is no
 	// stable identity to key on.
 	ErrNoSubject = errors.New("oidc: token has no subject")
+	// ErrGroupOverage signals the IdP omitted the groups claim and returned a
+	// _claim_names overage pointer instead (Azure Entra does this past ~200 group
+	// memberships). Silently treating that as "no groups" would demote a heavily-
+	// grouped user (often the most privileged) to default-deny / default_role with
+	// no signal, so it fails closed with an actionable message: configure Entra
+	// app roles (the "roles" claim) or narrow group membership. Full app-role
+	// resolution is the EKS-validated follow-up.
+	ErrGroupOverage = errors.New("oidc: group claim overage (IdP returned a _claim_names pointer, not the groups) — configure Entra app roles or the groups scope")
 )
 
 // VerifiedIdentity is the result of a fully-checked ID token: a trustworthy
@@ -277,6 +285,15 @@ func extractGroups(idToken *gooidc.IDToken, claimName string) ([]string, error) 
 	}
 	switch v := raw[claimName].(type) {
 	case nil:
+		// The claim is absent. Distinguish a genuine no-groups token from an Entra
+		// group-overage, where the IdP omits `groups` and points to it under
+		// `_claim_names` — treating the latter as "no groups" would silently
+		// deny/demote a heavily-grouped (often privileged) user. Fail closed.
+		if names, ok := raw["_claim_names"].(map[string]any); ok {
+			if _, overage := names[claimName]; overage {
+				return nil, ErrGroupOverage
+			}
+		}
 		return nil, nil
 	case string:
 		if v == "" {

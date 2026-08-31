@@ -249,6 +249,19 @@ func (a *fakeAuthAudit) has(action, outcome string) bool {
 	return false
 }
 
+// hasReason reports whether a "denied" event for action carries the given reason
+// in its extra metadata.
+func (a *fakeAuthAudit) hasReason(action, reason string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, e := range a.events {
+		if e.action == action && e.outcome == "denied" && e.extra["reason"] == reason {
+			return true
+		}
+	}
+	return false
+}
+
 // ─────────────────────────── harness ───────────────────────────
 
 const testHS256Secret = "oidc-flow-test-secret"
@@ -427,6 +440,52 @@ func TestOIDCHappyPathResolvesUserAndMintsSession(t *testing.T) {
 	}
 	if !audit.has(auditOIDCLoginSuccess, "success") {
 		t.Error("login success was not audited")
+	}
+}
+
+// A returning user whose STORED tenant differs from the claim-derived tenant must
+// be rejected — never mint a session against a tenant the stored row does not
+// belong to. Not reachable under a pinned single-tenant issuer, but an explicit
+// reject is defense-in-depth (the returning path previously trusted the
+// claim-derived tenant and discarded the stored one).
+func TestOIDCReturningUserTenantMismatchRejected(t *testing.T) {
+	f := newFakeIDP(t)
+	cfg := baseOIDCConfig(f)
+	store := newFakeOIDCStore()
+	store.seed(cfg.Issuer, "subject-123", &auth.User{ID: "user-1", TenantID: "other-tenant", Email: "alice@corp.example", Roles: []string{"editor"}}, true)
+	audit := &fakeAuthAudit{}
+	srv := oidcServer(t, f, cfg, store, audit, nil)
+
+	rec := driveCallback(t, srv, f, cfg, nil)
+
+	if rec.Code == http.StatusFound {
+		t.Fatal("callback minted a session for a tenant-mismatched returning user; want rejection")
+	}
+	if sessionCookie(rec) != nil {
+		t.Error("no session cookie must be set on tenant mismatch")
+	}
+	if !audit.hasReason(auditOIDCLoginFailure, "tenant_mismatch") {
+		t.Error("tenant mismatch was not audited with reason=tenant_mismatch")
+	}
+}
+
+// The OIDC login endpoint is rate-limited per client IP (its own limiter, so it
+// never contaminates the /auth/token budget). The 31st request within the window
+// is refused with 429.
+func TestOIDCLoginRateLimited(t *testing.T) {
+	f := newFakeIDP(t)
+	cfg := baseOIDCConfig(f)
+	srv := oidcServer(t, f, cfg, newFakeOIDCStore(), &fakeAuthAudit{}, nil)
+
+	var last int
+	for i := 0; i < 31; i++ {
+		last = do(srv, http.MethodGet, "/api/v2/auth/oidc/login", "").Code
+		if i == 0 && last == http.StatusTooManyRequests {
+			t.Fatal("first OIDC login request was rate-limited")
+		}
+	}
+	if last != http.StatusTooManyRequests {
+		t.Errorf("31st OIDC login request = %d, want 429", last)
 	}
 }
 

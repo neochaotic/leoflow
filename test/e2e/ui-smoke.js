@@ -200,13 +200,18 @@ const CRASH_RE = /Cannot read properties|is not a function|client-side exception
     // Fill the required field (label = the param's title), then submit via the
     // dialog's Trigger button. A missing required value would 400 server-side and
     // create no run, so a created run proves the form fed a valid conf through.
-    const input = page.getByLabel(/Run label/i).first();
-    if (await input.count()) {
-      await input.fill(label).catch(() => {});
-    } else {
-      // Fallback: the first empty textbox inside the open dialog.
-      await page.getByRole('textbox').first().fill(label).catch(() => {});
-    }
+    // Airflow's FlexibleForm names each generated param field input
+    // `element_<param>`. For a plain-string field it renders the <label> with a
+    // generated `for` id that does NOT match the input's own id
+    // (id="element_run_label"), so the accessible-name association is broken and
+    // getByLabel(/Run label/) resolves nothing — and a generic first-textbox
+    // fallback lands on the logical-date picker (a datetime-local), leaving the
+    // required run_label empty so the dialog's Trigger button stays disabled and no
+    // run is ever created. Target the field by its stable, param-specific name; keep
+    // the label lookup first so a future Airflow that fixes the association still works.
+    let input = page.getByLabel(/Run label/i).first();
+    if (!(await input.count())) input = page.locator('input[name="element_run_label"]');
+    await input.fill(label);
     await page.getByRole('button', { name: /^trigger$/i }).last().click({ timeout: 5000 }).catch(() => {});
     // Poll for a run whose conf carries our unique label (order-independent).
     let created = null;

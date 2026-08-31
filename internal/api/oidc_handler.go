@@ -223,7 +223,16 @@ func (d oidcDeps) resolveUser(c *gin.Context, id *oidc.VerifiedIdentity) (*auth.
 			d.deny(c, auditOIDCLoginFailure, id.Tenant, user.ID, id.Email, "inactive")
 			return nil, errRejected
 		}
-		resolved = &auth.User{ID: user.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}
+		// Defense-in-depth (H1 residual): never mint a session against a tenant the
+		// stored user does not belong to. Unreachable under a pinned single-tenant
+		// issuer (the attacker cannot alter tid/hd), but trusting the claim-derived
+		// tenant while discarding the stored one is a latent confused-deputy path;
+		// reject a mismatch explicitly and bind the session to the stored tenant.
+		if user.TenantID != id.Tenant {
+			d.deny(c, auditOIDCLoginFailure, id.Tenant, user.ID, id.Email, "tenant_mismatch")
+			return nil, errRejected
+		}
+		resolved = &auth.User{ID: user.ID, TenantID: user.TenantID, Email: id.Email, Roles: loginRoles}
 	case errors.Is(err, auth.ErrUserNotFound):
 		resolved, err = d.jitProvision(c, id, loginRoles)
 		if err != nil {

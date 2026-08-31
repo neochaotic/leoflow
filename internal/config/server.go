@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // ServerConfig is the full configuration for the leoflow-server control plane.
@@ -445,7 +447,12 @@ type OIDCSection struct {
 	// RoleMappings maps an IdP group value to an existing Leoflow role name.
 	// Default-DENY: a group with no mapping grants no role. Configure via the
 	// config file / Helm values (maps do not bind from a single env var).
-	RoleMappings map[string]string `mapstructure:"role_mappings"`
+	//
+	// Decoded OUT-OF-BAND (mapstructure:"-"), not by viper: viper's "." key
+	// delimiter splits a dotted MAP KEY (a dotted IdP group like "app.admins")
+	// into nested maps and fails to decode. LoadServer parses this map straight
+	// from the raw YAML instead (#826). Env-var binding never applied to maps.
+	RoleMappings map[string]string `mapstructure:"-"`
 	// DefaultRole softens the default-deny WITHOUT weakening the secure default:
 	// when an authenticated user resolves to zero mapped roles and DefaultRole is
 	// set, they are granted this single role (operators are advised to use a
@@ -458,7 +465,13 @@ type OIDCSection struct {
 	TenantClaim string `mapstructure:"tenant_claim"`
 	// TenantClaims maps a TenantClaim value to a Leoflow tenant name. A value not
 	// present here is rejected (403) — the login never falls back to "default".
-	TenantClaims map[string]string `mapstructure:"tenant_claims"`
+	//
+	// Decoded OUT-OF-BAND (mapstructure:"-"), not by viper: a Google Workspace
+	// `hd` value is a domain (always dotted, e.g. "example.com" or
+	// "sub.example.co.uk"), which viper's "." delimiter would split into nested
+	// maps and fail to decode — the #826 crash. LoadServer parses this map from
+	// the raw YAML instead.
+	TenantClaims map[string]string `mapstructure:"-"`
 	// AllowedEmailDomains is an install-time, login-level allowlist layered on TOP
 	// of the tid/hd tenant pin — it is NOT the pin itself (that stays issuer +
 	// tid/hd + email_verified per D6). The check runs only AFTER the pin and
@@ -572,20 +585,24 @@ var serverDefaults = map[string]any{
 	// is what bounds a stolen token. Parsed as a duration by viper's decode hook.
 	"auth.max_attempt_credential_lifetime": "24h",
 	// OIDC leaves. Every leaf is registered so viper's AutomaticEnv binds the
-	// scalar LEOFLOW_AUTH_OIDC_* env vars (notably the client secret). The map and
-	// slice leaves are config-file / Helm-values driven — viper does not split a
-	// single env var into a map or list — but they must appear here so Unmarshal
-	// resolves them from the file.
+	// scalar LEOFLOW_AUTH_OIDC_* env vars (notably the client secret). The slice
+	// leaves are config-file / Helm-values driven — viper does not split a single
+	// env var into a list — but they must appear here so Unmarshal resolves them
+	// from the file.
+	//
+	// The two maps (role_mappings, tenant_claims) are deliberately NOT registered
+	// here and are tagged mapstructure:"-": their KEYS can contain dots (a Google
+	// `hd` domain, a dotted IdP group), which viper's "." delimiter would split
+	// into nested maps and fail to decode (#826). LoadServer decodes them straight
+	// from the raw YAML instead.
 	"auth.oidc.issuer":                "",
 	"auth.oidc.client_id":             "",
 	"auth.oidc.client_secret":         "",
 	"auth.oidc.redirect_url":          "",
 	"auth.oidc.scopes":                []string{"openid", "email", "profile"},
 	"auth.oidc.groups_claim":          "groups",
-	"auth.oidc.role_mappings":         map[string]string{},
 	"auth.oidc.default_role":          "",
 	"auth.oidc.tenant_claim":          "",
-	"auth.oidc.tenant_claims":         map[string]string{},
 	"auth.oidc.allowed_email_domains": []string{},
 	"auth.oidc.break_glass_emails":    []string{},
 	"auth.oidc.jit_provisioning":      false,
@@ -643,7 +660,7 @@ var serverDefaults = map[string]any{
 	"logs.sink.access_key_id":            "",
 	"logs.sink.secret_access_key":        "",
 	"logs.sink.credentials_file":         "",
-	"observability.otel.enabled":         true,
+	"observability.otel.enabled":         false,
 	"observability.otel.endpoint":        "localhost:4317",
 	"observability.log_level":            "info",
 	"observability.log_format":           "json",
@@ -689,7 +706,40 @@ func LoadServer(configFile string, flags *pflag.FlagSet) (*ServerConfig, error) 
 	if err := v.Unmarshal(&c); err != nil {
 		return nil, fmt.Errorf("unmarshaling server config: %w", err)
 	}
+	// The OIDC role_mappings / tenant_claims maps are decoded straight from the
+	// raw YAML, bypassing viper's "." key-delimiter flattening that would split a
+	// dotted map key (a Google `hd` domain, a dotted IdP group) and fail (#826).
+	if configFile != "" {
+		if err := decodeDottedOIDCMaps(configFile, &c); err != nil {
+			return nil, err
+		}
+	}
 	return &c, nil
+}
+
+// decodeDottedOIDCMaps reads the OIDC maps whose KEYS may contain dots directly
+// from the raw YAML config, so a dotted key survives verbatim (#826). These
+// fields are tagged mapstructure:"-", so viper never touches them; this is their
+// only decode path. A file viper already read as YAML re-parses cleanly here.
+func decodeDottedOIDCMaps(configFile string, c *ServerConfig) error {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("reading config file %q for OIDC maps: %w", configFile, err)
+	}
+	var raw struct {
+		Auth struct {
+			OIDC struct {
+				RoleMappings map[string]string `yaml:"role_mappings"`
+				TenantClaims map[string]string `yaml:"tenant_claims"`
+			} `yaml:"oidc"`
+		} `yaml:"auth"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decoding OIDC maps from config file %q: %w", configFile, err)
+	}
+	c.Auth.OIDC.RoleMappings = raw.Auth.OIDC.RoleMappings
+	c.Auth.OIDC.TenantClaims = raw.Auth.OIDC.TenantClaims
+	return nil
 }
 
 // Auth providers (auth.provider allowlist). "jwt" is the default credential

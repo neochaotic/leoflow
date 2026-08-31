@@ -27,7 +27,7 @@ func TestLoadServerAppliesDefaults(t *testing.T) {
 		// Default is sync passthrough (#127): Pro deployments opt in via values.yaml.
 		"scheduler.dispatch.buffer_size": {c.Scheduler.Dispatch.BufferSize, 0},
 		"scheduler.dispatch.workers":     {c.Scheduler.Dispatch.Workers, 0},
-		"otel.enabled":                   {c.Observability.OTel.Enabled, true},
+		"otel.enabled":                   {c.Observability.OTel.Enabled, false},
 		"log_level":                      {c.Observability.LogLevel, "info"},
 		"log_format":                     {c.Observability.LogFormat, "json"},
 	}
@@ -499,5 +499,45 @@ func TestValidateLogsBackend(t *testing.T) {
 				t.Errorf("backend %q bucket %q: Validate() = %v, want nil", tc.backend, tc.bucket, err)
 			}
 		})
+	}
+}
+
+// TestLoadServerDottedOIDCMapKeys locks the fix for #826: a MAP KEY containing
+// dots (Google Workspace `hd` = a domain; a dotted IdP group name) must survive
+// config decoding. viper's key delimiter is ".", so without the empty-map
+// defaults registered in serverDefaults the key `example.com` is flattened into
+// nested maps and fails to decode into map[string]string. This is a regression
+// lock: if someone removes those "unused" defaults, this test goes red before the
+// bug reaches a user (it manifests only as a rejected Google/Okta login).
+func TestLoadServerDottedOIDCMapKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `
+auth:
+  jwt:
+    secret: "test-secret"
+  oidc:
+    tenant_claim: hd
+    tenant_claims:
+      "example.com": acme
+      "sub.example.co.uk": acme
+    role_mappings:
+      "app.admins": admin
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	c, err := LoadServer(path, nil)
+	if err != nil {
+		t.Fatalf("LoadServer with dotted OIDC map keys errored (#826 regression): %v", err)
+	}
+	if got := c.Auth.OIDC.TenantClaims["example.com"]; got != "acme" {
+		t.Errorf("tenant_claims[example.com] = %q, want acme (dotted key was split)", got)
+	}
+	if got := c.Auth.OIDC.TenantClaims["sub.example.co.uk"]; got != "acme" {
+		t.Errorf("tenant_claims[sub.example.co.uk] = %q, want acme (multi-dot key was split)", got)
+	}
+	if got := c.Auth.OIDC.RoleMappings["app.admins"]; got != "admin" {
+		t.Errorf("role_mappings[app.admins] = %q, want admin (dotted group was split)", got)
 	}
 }

@@ -123,32 +123,56 @@ func (r *subprocessResolver) ResolveBatch(ctx context.Context, refs []secretsour
 	return result, nil
 }
 
-// resolverCredOverrideEnv are provider env vars an author could set in their task
-// env (they are not LEOFLOW_-prefixed, so #828's dispatch filter lets them through
-// into the pod env) that would divert the resolver SDK's credential chain or
-// endpoint away from the pod's own keyless workload identity — static creds, a
-// credentials file/profile, or an endpoint override. The resolver must authenticate
-// ONLY as the pod (IRSA / Workload Identity / Vault k8s-auth), so these are scrubbed
-// from its base env. The keyless vars the provider webhook injects (AWS_ROLE_ARN,
-// AWS_WEB_IDENTITY_TOKEN_FILE, AWS_CONTAINER_*, the GKE metadata server, the Azure
-// federated token) are NOT in this list and survive. (Real credential precedence
-// is a NEEDS-REAL-CLUSTER check on the EKS RC.)
-var resolverCredOverrideEnv = map[string]bool{
-	"AWS_ACCESS_KEY_ID": true, "AWS_SECRET_ACCESS_KEY": true, "AWS_SESSION_TOKEN": true,
-	"AWS_PROFILE": true, "AWS_SHARED_CREDENTIALS_FILE": true, "AWS_CONFIG_FILE": true,
-	"GOOGLE_APPLICATION_CREDENTIALS": true,
-	"AZURE_CLIENT_SECRET":            true, "AZURE_CLIENT_CERTIFICATE_PATH": true,
+// resolverKeylessAllow are the ONLY cloud-namespace env vars the resolver
+// subprocess may inherit: the keyless workload-identity vars a provider webhook
+// injects at admission (IRSA / Pod Identity / Azure WI). Everything else in a
+// cloud/proxy/TLS-override namespace is dropped, so the resolver authenticates and
+// connects ONLY as the pod's own keyless identity — an author cannot divert its
+// credential chain, endpoint, proxy, or CA trust. (An author could still pre-set
+// one of these kept vars; that residual is compensated by the target role's OIDC
+// trust policy and the task-pod egress NetworkPolicy, and is a NEEDS-REAL-CLUSTER
+// check on the EKS/GKE RC.)
+var resolverKeylessAllow = map[string]bool{
+	"AWS_ROLE_ARN": true, "AWS_WEB_IDENTITY_TOKEN_FILE": true,
+	"AWS_CONTAINER_CREDENTIALS_FULL_URI": true, "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": true,
+	"AWS_CONTAINER_AUTHORIZATION_TOKEN": true, "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE": true,
+	"AZURE_FEDERATED_TOKEN_FILE": true, "AZURE_CLIENT_ID": true, "AZURE_TENANT_ID": true,
+	"AZURE_AUTHORITY_HOST": true,
+}
+
+// resolverDropped reports whether an env var must NOT reach the resolver
+// subprocess. It is an ALLOWLIST over the credential/transport-shaping namespaces
+// (a denylist leaks by default): any AWS_/AZURE_/GOOGLE_/GCP_/GCE_METADATA/CLOUDSDK
+// var, any *_PROXY (case-insensitive — Python honors lowercase), and any CA-bundle
+// / SSL cert-file override is dropped unless it is an explicitly-allowed keyless
+// var. Neutral base env (PATH, HOME, LANG, TZ, …) is untouched, and the system
+// default CA trust is used (no author override).
+func resolverDropped(name string) bool {
+	if resolverKeylessAllow[name] {
+		return false
+	}
+	u := strings.ToUpper(name)
+	switch {
+	case strings.HasPrefix(u, "AWS_"), strings.HasPrefix(u, "AZURE_"),
+		strings.HasPrefix(u, "GOOGLE_"), strings.HasPrefix(u, "GCP_"),
+		strings.HasPrefix(u, "GCE_METADATA"), strings.HasPrefix(u, "CLOUDSDK_"),
+		strings.HasSuffix(u, "_PROXY"),
+		strings.Contains(u, "CA_BUNDLE"), u == "SSL_CERT_FILE", u == "SSL_CERT_DIR":
+		return true
+	}
+	return false
 }
 
 // resolverBaseEnv is the subprocess's base env: the agent's env minus its own
-// LEOFLOW_ secrets (stripAgentOnly) and minus any author-set provider credential /
-// endpoint override (so the resolver authenticates only as the pod, keyless).
+// LEOFLOW_ secrets (stripAgentOnly) and minus every author-influenceable cloud
+// credential / endpoint / proxy / CA-trust var (resolverDropped), so the resolver
+// authenticates and connects only as the pod's keyless identity.
 func resolverBaseEnv(agentEnv []string) []string {
 	stripped := stripAgentOnly(agentEnv)
 	out := stripped[:0:0]
 	for _, kv := range stripped {
 		name, _, _ := strings.Cut(kv, "=")
-		if resolverCredOverrideEnv[name] || strings.HasPrefix(name, "AWS_ENDPOINT_URL") {
+		if resolverDropped(name) {
 			continue
 		}
 		out = append(out, kv)

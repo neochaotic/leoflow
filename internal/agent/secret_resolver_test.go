@@ -113,32 +113,41 @@ func TestResolverFromEnv(t *testing.T) {
 
 func TestResolverBaseEnvScrubsCredOverrides(t *testing.T) {
 	in := []string{
-		"PATH=/usr/bin",
-		"LEOFLOW_AGENT_TOKEN=secret",               // stripped by stripAgentOnly
-		"AWS_ROLE_ARN=arn:aws:iam::1:role/keyless", // keyless — must survive
-		"AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/tok", // keyless — must survive
-		"AWS_ACCESS_KEY_ID=AKIA_author",            // author static cred — scrubbed
-		"AWS_SECRET_ACCESS_KEY=x",                  // scrubbed
-		"AWS_ENDPOINT_URL=http://evil",             // endpoint override — scrubbed
-		"AWS_ENDPOINT_URL_S3=http://evil2",         // prefix — scrubbed
-		"AWS_PROFILE=hijack",                       // scrubbed
-		"GOOGLE_APPLICATION_CREDENTIALS=/k.json",   // scrubbed
+		"PATH=/usr/bin", "HOME=/root", "LANG=C.UTF-8", // neutral base — survive
+		"LEOFLOW_AGENT_TOKEN=secret",                               // stripped by stripAgentOnly
+		"AWS_ROLE_ARN=arn:aws:iam::1:role/keyless",                 // keyless — survive
+		"AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/tok",                 // keyless — survive
+		"AWS_CONTAINER_CREDENTIALS_FULL_URI=http://169.254.170.23", // keyless (Pod Identity) — survive
+		"AWS_ACCESS_KEY_ID=AKIA_author",                            // static cred — scrubbed
+		"AWS_SECRET_ACCESS_KEY=x",                                  // scrubbed
+		"AWS_ENDPOINT_URL=http://evil",                             // endpoint override — scrubbed
+		"AWS_PROFILE=hijack",                                       // scrubbed
+		"AWS_DEFAULT_REGION=us-evil-1",                             // region redirect — scrubbed
+		"GOOGLE_APPLICATION_CREDENTIALS=/k.json",                   // scrubbed
+		"GCE_METADATA_HOST=evil.host",                              // ADC metadata redirect — scrubbed
+		"HTTPS_PROXY=http://mitm",                                  // TLS MITM vector — scrubbed
+		"https_proxy=http://mitm",                                  // lowercase (Python honors it) — scrubbed
+		"NO_PROXY=x",                                               // *_PROXY — scrubbed
+		"AWS_CA_BUNDLE=/author/ca.pem",                             // CA-trust override (MITM) — scrubbed
+		"SSL_CERT_FILE=/author/ca.pem",                             // CA-trust override (MITM) — scrubbed
 	}
 	got := map[string]bool{}
 	for _, kv := range resolverBaseEnv(in) {
 		name, _, _ := strings.Cut(kv, "=")
 		got[name] = true
 	}
-	// Keyless + neutral survive.
-	for _, keep := range []string{"PATH", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"} {
+	for _, keep := range []string{"PATH", "HOME", "LANG", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_FULL_URI"} {
 		if !got[keep] {
 			t.Errorf("%s must survive (keyless/neutral)", keep)
 		}
 	}
-	// LEOFLOW_ secret + author cred/endpoint overrides scrubbed.
-	for _, drop := range []string{"LEOFLOW_AGENT_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", "AWS_PROFILE", "GOOGLE_APPLICATION_CREDENTIALS"} {
+	for _, drop := range []string{
+		"LEOFLOW_AGENT_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL",
+		"AWS_PROFILE", "AWS_DEFAULT_REGION", "GOOGLE_APPLICATION_CREDENTIALS", "GCE_METADATA_HOST",
+		"HTTPS_PROXY", "https_proxy", "NO_PROXY", "AWS_CA_BUNDLE", "SSL_CERT_FILE",
+	} {
 		if got[drop] {
-			t.Errorf("%s must be scrubbed from the resolver base env", drop)
+			t.Errorf("%s must be scrubbed from the resolver base env (author-influenceable cred/transport/CA vector)", drop)
 		}
 	}
 }

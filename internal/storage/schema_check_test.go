@@ -33,10 +33,13 @@ func TestCheckSchemaCurrent(t *testing.T) {
 		}
 	})
 
-	t.Run("ahead = fail (binary older than DB)", func(t *testing.T) {
-		err := checkSchemaCurrent(latest+1, true, false, latest)
-		if err == nil {
-			t.Fatal("a DB ahead of the binary must fail")
+	t.Run("ahead = ok (expand-contract; rollback/rollout must not crash)", func(t *testing.T) {
+		// A DB ahead of the binary (older code after a helm rollback, or an old pod
+		// restarting mid-rollout) must NOT hard-fail — expand-contract migrations
+		// keep older code working. Hard-failing here would CrashLoopBackOff on
+		// rollback. The caller logs a warning; boot proceeds.
+		if err := checkSchemaCurrent(latest+1, true, false, latest); err != nil {
+			t.Errorf("an ahead DB must be accepted (rollback safety), got: %v", err)
 		}
 	})
 

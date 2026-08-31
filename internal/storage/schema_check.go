@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/neochaotic/leoflow/migrations"
@@ -43,18 +44,21 @@ func (p *Postgres) SchemaVersion(ctx context.Context) (version uint, dirty, exis
 func checkSchemaCurrent(dbVersion uint, exists, dirty bool, latest uint) error {
 	switch {
 	case !exists:
-		return fmt.Errorf("%w: schema_migrations is absent — migrations have not run (apply them: the Helm migration Job, or `leoflow migrate`); schema v%d is required",
+		return fmt.Errorf("%w: schema_migrations is absent — migrations have not run (apply them: the Helm pre-upgrade migration Job, or `leoflow db migrate` for Lite); schema v%d is required",
 			errSchemaNotCurrent, latest)
 	case dirty:
 		return fmt.Errorf("%w: schema is dirty at v%d — a migration did not complete; resolve it before starting",
 			errSchemaNotCurrent, dbVersion)
 	case dbVersion < latest:
-		return fmt.Errorf("%w: schema is at v%d but this binary requires v%d — run the pending migrations (the Helm migration Job, or `leoflow migrate`)",
-			errSchemaNotCurrent, dbVersion, latest)
-	case dbVersion > latest:
-		return fmt.Errorf("%w: schema is at v%d, ahead of this binary's v%d — this server is older than the database; deploy a matching or newer build",
+		return fmt.Errorf("%w: schema is at v%d but this binary requires v%d — run the pending migrations (the Helm pre-upgrade migration Job, or `leoflow db migrate` for Lite)",
 			errSchemaNotCurrent, dbVersion, latest)
 	default:
+		// dbVersion >= latest. An AHEAD schema (dbVersion > latest) is NOT fatal:
+		// expand-contract migrations are backward-compatible by construction, so
+		// older code is expected to run against a newer schema during a rollout or a
+		// `helm rollback`. Hard-failing here would CrashLoopBackOff the old pods on
+		// rollback and turn a recoverable bad deploy into an outage. The caller logs
+		// a warning for the ahead case; boot proceeds.
 		return nil
 	}
 }
@@ -70,6 +74,13 @@ func (p *Postgres) CheckSchemaCurrent(ctx context.Context) error {
 	version, dirty, exists, err := p.SchemaVersion(ctx)
 	if err != nil {
 		return fmt.Errorf("reading database schema version: %w", err)
+	}
+	if exists && !dirty && version > latest {
+		// Ahead schema (see checkSchemaCurrent): boot proceeds — expand-contract
+		// migrations keep older code working — but surface it, since it means this
+		// binary is older than the DB (a rollout in progress or a rollback).
+		slog.Warn("database schema is ahead of this binary; proceeding (expand-contract assumed backward-compatible)",
+			"db_version", version, "binary_latest", latest)
 	}
 	return checkSchemaCurrent(version, exists, dirty, latest)
 }

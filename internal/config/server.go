@@ -3,9 +3,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -722,6 +724,17 @@ func LoadServer(configFile string, flags *pflag.FlagSet) (*ServerConfig, error) 
 // fields are tagged mapstructure:"-", so viper never touches them; this is their
 // only decode path. A file viper already read as YAML re-parses cleanly here.
 func decodeDottedOIDCMaps(configFile string, c *ServerConfig) error {
+	// The out-of-band decode is YAML (JSON is a YAML subset). A non-YAML config
+	// (e.g. TOML) is read by viper but not here — skip rather than hard-fail its
+	// boot; those maps then come back empty (OIDC tenant pinning fails closed).
+	// Production config is YAML (Helm ConfigMap), so this is a narrow edge.
+	switch strings.ToLower(filepath.Ext(configFile)) {
+	case ".yaml", ".yml", ".json", "":
+	default:
+		slog.Warn("dotted OIDC map keys (tenant_claims/role_mappings) are only decoded from YAML/JSON config; skipping for this format",
+			"config_file", configFile)
+		return nil
+	}
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return fmt.Errorf("reading config file %q for OIDC maps: %w", configFile, err)

@@ -227,6 +227,42 @@ the vault; the **declaration is still the scope authority**, and
 This does not change 0055's mechanism (declaration → scoped, gated request), only
 its *sources*.
 
+## Design-review refinements (2b invocation + chain)
+
+A K8s/security review of the 2b invocation contract + chain semantics
+(`spec/external-secrets-2b-chain-design.md`) required these before implementation:
+
+1. **Backend config is operator-only, and authors cannot forge it.** The resolver
+   gets its `backend` class + `backend_kwargs` from **operator/Helm-supplied pod
+   env** (`LEOFLOW_SECRETS_*`), injected server-side **after** the author's task
+   env so it always wins. This depends on **stripping `LEOFLOW_`-prefixed keys
+   from author `task.Env` at dispatch** (#828) — without it, an author could
+   override the backend class (arbitrary import) or the prefix (widen reads within
+   the pod's IAM ceiling). The class name is therefore never author-influenced.
+2. **Kwargs travel via stdin, never argv or the resolver's own env.** The agent,
+   resolver subprocess, and task share a PID namespace, so `/proc/<pid>/cmdline`
+   and `/environ` are readable by the task; pass config on stdin. Spawn the
+   resolver **synchronously** (gone before the task starts) with
+   `stripAgentOnly(os.Environ())` as its base so no `LEOFLOW_*` secret leaks into
+   it.
+3. **B2 has no short-circuit.** The agent **always** calls the vault RPCs
+   (`GetVariables`/`GetConnections`) even when every declared name is external —
+   they are the only liveness signal it sees — and skips **all** external
+   resolution when either returns `codes.PermissionDenied` (liveness-enforce /
+   insecure-channel). Other errors stay best-effort. Skipping the vault call for
+   all-external tasks would bypass the gate.
+4. **Required semantics narrowed.** `Backend.Covers` is kind-level, so
+   "covered ⇒ required" would make **every** declared name of an enabled kind
+   required the instant a backend is turned on. Drop it: keep **fail-closed on a
+   hard resolver error** (non-zero exit) unconditionally; gate required-on-*miss*
+   behind an explicit marker (#798), not inferred from coverage.
+5. **No secret leak on failure.** The resolver's stderr is captured to agent debug
+   only — never forwarded to the task log sink/UI — and the fail-closed reason is
+   sanitized (no ARN/URI/stderr passthrough). The AWS backend's `get_conn_value`
+   returns the raw stored string, so the resolver renders a proper Airflow
+   connection URI (matching `airflowConnURI`) before export, since bash tasks read
+   `$AIRFLOW_CONN_*` directly.
+
 ## Consequences
 
 - **Single source of truth for IaC-provisioned secrets** (#811's ask) without

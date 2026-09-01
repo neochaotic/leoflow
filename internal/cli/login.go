@@ -45,7 +45,7 @@ func newLoginCommand() *cobra.Command {
 			}
 			token, err := requestToken(cmdContext(cmd), serverURL, username, password)
 			if err != nil {
-				return err
+				return hintEmailUsername(username, err)
 			}
 			path, perr := sessionConfigPath(cmd)
 			if perr != nil {
@@ -103,6 +103,21 @@ func resolveCredentials(cmd *cobra.Command, username, password string) (user, pa
 }
 
 // promptValue prints a label and reads a trimmed line of input.
+// hintEmailUsername appends a first-login hint when authentication fails (a 401)
+// with a username that is not an e-mail. The bootstrap admin is
+// admin@leoflow.local, and a bare "admin" returns a generic "invalid
+// credentials"; the hint saves the trip. It is safe: it reveals nothing about
+// which accounts exist, only the expected username format.
+func hintEmailUsername(username string, err error) error {
+	if err == nil || username == "" || strings.Contains(username, "@") {
+		return err
+	}
+	if !strings.Contains(err.Error(), "401") {
+		return err
+	}
+	return fmt.Errorf("%w\nhint: the username is an e-mail address (the bootstrap admin is admin@leoflow.local)", err)
+}
+
 // readPasswordStdin reads one line — the password — from r. It backs the
 // --password-stdin flag: the CI-safe way to supply a credential without it
 // appearing on argv (visible in `ps` and the shell history) or in an env var. The

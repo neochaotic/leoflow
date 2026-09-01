@@ -433,35 +433,11 @@ func (r *Runner) secretsEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]stri
 				vars[ref.Name] = val
 			}
 		}
-	}
-
-	// Observability for the top field-support signal (#1): when an external backend
-	// is configured but a DECLARED name resolves from neither the backend nor the
-	// vault, the task will later fail with a bare "not delivered / AIRFLOW_*_ unset"
-	// and no trace of why. A backend miss is often not a clean miss at all — the
-	// provider backend reports an auth/permission failure (e.g. the pod ran as the
-	// wrong ServiceAccount) as a None, indistinguishable from "no such secret". Log
-	// the unresolved names with that pointer so the cause is one glance away. Skipped
-	// when the vault RPC was liveness-denied (a non-live TI resolves nothing by
-	// design, B2).
-	if r.Resolver != nil && !vaultDenied {
-		var unresolved []string
-		for _, n := range spec.GetDeclaredVariables() {
-			if _, ok := vars[n]; !ok {
-				unresolved = append(unresolved, "variable "+n)
-			}
-		}
-		for _, n := range spec.GetDeclaredConnections() {
-			if _, ok := conns[n]; !ok {
-				unresolved = append(unresolved, "connection "+n)
-			}
-		}
-		if len(unresolved) > 0 {
-			slog.Warn("declared secrets unresolved after the external backend and the vault; "+
-				"if these should come from the external backend, check the task pod's identity and permissions "+
-				"(the provider backend reports an auth failure as a miss, not an error)",
-				"unresolved", unresolved)
-		}
+		// Observability for the top field-support signal (#1): a declared name that
+		// resolves from neither the backend nor the vault otherwise fails downstream
+		// with a bare "not delivered / AIRFLOW_*_ unset" and no trace of why. conns
+		// and vars are final here (vault populated above, external override applied).
+		r.warnUnresolvedDeclared(spec, vars, conns)
 	}
 
 	out := make([]string, 0, len(vars)+len(conns))
@@ -472,6 +448,37 @@ func (r *Runner) secretsEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]stri
 		out = append(out, "AIRFLOW_CONN_"+strings.ToUpper(id)+"="+uri)
 	}
 	return out, nil
+}
+
+// warnUnresolvedDeclared logs the declared names the operator's backend covers but
+// that resolved from neither the backend nor the vault (#1). A backend miss is
+// often not a clean miss: the provider backend reports an auth/permission failure
+// (e.g. the pod ran as the wrong ServiceAccount) as a None, indistinguishable from
+// "no such secret", so the task otherwise fails downstream with no trace. Only
+// names of kinds the backend covers are checked, so a plain author typo on a
+// non-covered name is not misattributed to the backend identity.
+func (r *Runner) warnUnresolvedDeclared(spec *agentv1.TaskSpec, vars, conns map[string]string) {
+	var unresolved []string
+	if r.SecretBackend.Covers(secretsource.KindVariable) {
+		for _, n := range spec.GetDeclaredVariables() {
+			if _, ok := vars[n]; !ok {
+				unresolved = append(unresolved, "variable "+n)
+			}
+		}
+	}
+	if r.SecretBackend.Covers(secretsource.KindConnection) {
+		for _, n := range spec.GetDeclaredConnections() {
+			if _, ok := conns[n]; !ok {
+				unresolved = append(unresolved, "connection "+n)
+			}
+		}
+	}
+	if len(unresolved) > 0 {
+		slog.Warn("declared secrets unresolved after the external backend and the vault; "+
+			"if these should come from the external backend, check the task pod's identity and permissions "+
+			"(the provider backend reports an auth failure as a miss, not an error)",
+			"unresolved", unresolved)
+	}
 }
 
 // coveredRefs is the set of declared names the operator's backend covers — the

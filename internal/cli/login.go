@@ -112,7 +112,9 @@ func hintEmailUsername(username string, err error) error {
 	if err == nil || username == "" || strings.Contains(username, "@") {
 		return err
 	}
-	if !strings.Contains(err.Error(), "401") {
+	// Match the exact shape requestToken formats ("server returned 401:"), not a
+	// bare "401" that a host:port or a response body could contain by accident.
+	if !strings.Contains(err.Error(), "server returned 401") {
 		return err
 	}
 	return fmt.Errorf("%w\nhint: the username is an e-mail address (the bootstrap admin is admin@leoflow.local)", err)

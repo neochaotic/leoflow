@@ -689,6 +689,30 @@ func validateTaskBindings(overrides map[string]*domain.TaskConfig, tasks []domai
 	return nil
 }
 
+// dbtProfileConn extracts the managed connection id from a dbt task's compiled
+// entrypoint (`python -m leoflow_runtime --dbt-profile <conn> <profile> && …`),
+// or "" if the task has no dbt profile step. It is how applyTaskOverride knows a
+// task depends on a specific connection the author's override must not drop.
+func dbtProfileConn(entrypoint string) string {
+	fields := strings.Fields(entrypoint)
+	for i, f := range fields {
+		if f == "--dbt-profile" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+// containsString reports whether xs contains s.
+func containsString(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
 // applyTaskOverride sets each override field that is present onto the task,
 // leaving unset fields as compiled. Env entries are merged over any existing env.
 func applyTaskOverride(task *domain.TaskSpec, o *domain.TaskConfig) {
@@ -712,6 +736,14 @@ func applyTaskOverride(task *domain.TaskSpec, o *domain.TaskConfig) {
 	// matching the override semantics of the other scalar/struct fields above.
 	if len(o.Connections) > 0 {
 		task.Connections = o.Connections
+		// A dbt task's managed connection is a compiler-injected DEPENDENCY — its
+		// profile step reads AIRFLOW_CONN_<conn> — not an author preference. An
+		// override that narrows connections must not silently drop it, or the task
+		// fails "not delivered" under enforce scoping / an external backend (#10).
+		// Re-add it if the override omitted it.
+		if conn := dbtProfileConn(task.Entrypoint); conn != "" && !containsString(task.Connections, conn) {
+			task.Connections = append(task.Connections, conn)
+		}
 	}
 	if len(o.Variables) > 0 {
 		task.Variables = o.Variables

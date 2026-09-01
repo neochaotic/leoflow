@@ -8,9 +8,12 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	apiclient "github.com/neochaotic/leoflow/pkg/client"
 )
 
 // newDagsCommand groups DAG-management subcommands.
@@ -19,8 +22,72 @@ func newDagsCommand() *cobra.Command {
 		Use:   "dags",
 		Short: "Manage registered DAGs.",
 	}
+	cmd.AddCommand(newDagsListCommand())
 	cmd.AddCommand(newDagsDeleteCommand())
 	return cmd
+}
+
+// newDagsListCommand lists registered DAGs — the read counterpart to delete, so
+// verifying a registration no longer means hitting /api/v2/dags by hand.
+func newDagsListCommand() *cobra.Command {
+	var serverURL, token string
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List registered DAGs.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			base, bearer, err := resolveServerToken(cmd, serverURL, token)
+			if err != nil {
+				return err
+			}
+			c, err := apiclient.New(base, bearer)
+			if err != nil {
+				return err
+			}
+			resp, err := c.ListDagsWithResponse(cmdContext(cmd), nil)
+			if err != nil {
+				return fmt.Errorf("listing DAGs: %w", err)
+			}
+			if resp.StatusCode() != http.StatusOK {
+				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body))
+			}
+			return printDagList(cmd.OutOrStdout(), resp.JSON200)
+		},
+	}
+	cmd.Flags().StringVar(&serverURL, "server", "", "control plane base URL (default: config server_url)")
+	cmd.Flags().StringVar(&token, "token", os.Getenv("LEOFLOW_TOKEN"), "JWT bearer token (default: config token)")
+	return cmd
+}
+
+// printDagList renders the DAG collection as an aligned table (DAG_ID, PAUSED,
+// OWNERS), or a friendly line when nothing is registered.
+func printDagList(w io.Writer, coll *apiclient.DAGCollection) error {
+	if coll == nil || coll.Dags == nil || len(*coll.Dags) == 0 {
+		_, err := fmt.Fprintln(w, "No DAGs registered.")
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "DAG_ID\tPAUSED\tOWNERS"); err != nil {
+		return err
+	}
+	for _, d := range *coll.Dags {
+		id := ""
+		if d.DagId != nil {
+			id = *d.DagId
+		}
+		paused := "no"
+		if d.IsPaused != nil && *d.IsPaused {
+			paused = "yes"
+		}
+		owners := ""
+		if d.Owners != nil {
+			owners = strings.Join(*d.Owners, ",")
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", id, paused, owners); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
 }
 
 // newDagsDeleteCommand clears a DAG's history or deregisters it (ADR 0020).

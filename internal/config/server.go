@@ -130,6 +130,12 @@ type ExecutorSection struct {
 	// the agent verifies the control plane's gRPC TLS cert (issue #58). Empty =
 	// agents use the insecure channel (dev).
 	AgentTLSCAConfigMap string `mapstructure:"agent_tls_ca_configmap"`
+	// TaskServiceAccount is the ServiceAccount task pods run as when a DAG's task
+	// does not set execution.service_account. The chart wires its taskServiceAccount
+	// here, so creating that SA makes keyless work without every DAG opting in.
+	// Empty keeps pods on the namespace default SA (an explicit per-task value
+	// always wins).
+	TaskServiceAccount string `mapstructure:"task_service_account"`
 	// TaskSecretName names a Kubernetes Secret mounted (read-only) into every task
 	// pod at TaskSecretMountPath. It lets a task read a credential that lives in
 	// the cluster's secret store (e.g. a GCP service-account key) referenced by a
@@ -642,6 +648,7 @@ var serverDefaults = map[string]any{
 	"executor.subprocess_workdir":           "",
 	"executor.agent_control_plane_addr":     "",
 	"executor.agent_tls_ca_configmap":       "",
+	"executor.task_service_account":         "",
 	"executor.task_secret_name":             "",
 	"executor.task_secret_mount_path":       "/etc/leoflow/secrets",
 	"executor.defaults.staging_access_mode": "ReadWriteMany",

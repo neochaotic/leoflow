@@ -435,6 +435,35 @@ func (r *Runner) secretsEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]stri
 		}
 	}
 
+	// Observability for the top field-support signal (#1): when an external backend
+	// is configured but a DECLARED name resolves from neither the backend nor the
+	// vault, the task will later fail with a bare "not delivered / AIRFLOW_*_ unset"
+	// and no trace of why. A backend miss is often not a clean miss at all — the
+	// provider backend reports an auth/permission failure (e.g. the pod ran as the
+	// wrong ServiceAccount) as a None, indistinguishable from "no such secret". Log
+	// the unresolved names with that pointer so the cause is one glance away. Skipped
+	// when the vault RPC was liveness-denied (a non-live TI resolves nothing by
+	// design, B2).
+	if r.Resolver != nil && !vaultDenied {
+		var unresolved []string
+		for _, n := range spec.GetDeclaredVariables() {
+			if _, ok := vars[n]; !ok {
+				unresolved = append(unresolved, "variable "+n)
+			}
+		}
+		for _, n := range spec.GetDeclaredConnections() {
+			if _, ok := conns[n]; !ok {
+				unresolved = append(unresolved, "connection "+n)
+			}
+		}
+		if len(unresolved) > 0 {
+			slog.Warn("declared secrets unresolved after the external backend and the vault; "+
+				"if these should come from the external backend, check the task pod's identity and permissions "+
+				"(the provider backend reports an auth failure as a miss, not an error)",
+				"unresolved", unresolved)
+		}
+	}
+
 	out := make([]string, 0, len(vars)+len(conns))
 	for k, v := range vars {
 		out = append(out, "AIRFLOW_VAR_"+strings.ToUpper(k)+"="+v)

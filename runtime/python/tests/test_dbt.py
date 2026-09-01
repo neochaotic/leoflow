@@ -337,3 +337,26 @@ def test_write_dbt_profile_schema_override(tmp_path, monkeypatch):
     write_dbt_profile("wh", "p", str(tmp_path), schema="marts")
     data = json.loads((tmp_path / "profiles.yml").read_text())
     assert data["p"]["outputs"]["dev"]["schema"] == "marts"
+
+
+def test_write_dbt_profile_missing_conn_is_backend_aware(tmp_path):
+    # With an external secrets backend configured, a missing declared connection is
+    # most often the pod identity/permissions (the provider backend reports an auth
+    # failure as a miss). The error must point there instead of a bare "unset" (#1).
+    with pytest.raises(RuntimeError) as e:
+        write_dbt_profile(
+            "warehouse", "shop", str(tmp_path),
+            env={"LEOFLOW_SECRETS_BACKEND": "some.Backend"},
+        )
+    msg = str(e.value)
+    assert "was not delivered" in msg
+    assert "ServiceAccount" in msg
+
+
+def test_write_dbt_profile_missing_conn_no_backend_no_hint(tmp_path):
+    # With no backend configured, the message stays the plain vault-only form.
+    with pytest.raises(RuntimeError) as e:
+        write_dbt_profile("warehouse", "shop", str(tmp_path), env={})
+    msg = str(e.value)
+    assert "was not delivered" in msg
+    assert "ServiceAccount" not in msg

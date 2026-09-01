@@ -102,3 +102,27 @@ func TestCompileRequiresDagID(t *testing.T) {
 		t.Fatal("expected an error for an empty dag_id, got nil")
 	}
 }
+
+// A dbt DAG with a managed connection must emit a spec whose tasks DECLARE that
+// connection — the end-to-end lock for #10 (declaration is what makes the agent
+// inject AIRFLOW_CONN_<conn> under enforce scoping / an external backend; without
+// it the profile step fails "not delivered").
+func TestCompileDeclaresManagedConnection(t *testing.T) {
+	spec, err := Compile(loadManifest(t, "manifest_chain.json"), Meta{
+		DagID:      "shop",
+		Image:      "img",
+		Connection: "warehouse_pg",
+		Profile:    "transform",
+	})
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+	if len(spec.Tasks) == 0 {
+		t.Fatal("no tasks emitted")
+	}
+	for _, task := range spec.Tasks {
+		if !contains(task.Connections, "warehouse_pg") {
+			t.Errorf("task %q does not declare warehouse_pg: %v", task.TaskID, task.Connections)
+		}
+	}
+}

@@ -1073,6 +1073,7 @@ func warmPodSpecFunc(cfg *config.ServerConfig, authn *auth.JWTAuthenticator, con
 			TenantID:            t.TenantID,
 			ControlPlaneAddr:    controlAddr,
 			AgentTLSCAConfigMap: cfg.Executor.AgentTLSCAConfigMap,
+			ServiceAccount:      cfg.Executor.TaskServiceAccount,
 			PodSecurity:         defaults.PodSecurity,
 			// Self-lifecycle caps (ADR 0058 D9/D10/D6/H3). The attempt watchdog is
 			// anchored to the credential ceiling: an attempt can never validly outlive

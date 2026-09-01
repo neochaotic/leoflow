@@ -203,15 +203,25 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ github.ref_name }}
 
+      - name: Stamp build date
+        id: stamp
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build + push (multi-arch)
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: runtime/Dockerfile
+          # Stamp the baked agent with the release version/commit/date, so
+          # `leoflow-agent version` in a task pod is traceable to a commit (matches
+          # the cosign-signed release binaries' provenance).
           build-args: |
             PYTHON_VERSION=${{ matrix.python }}
             GO_VERSION=${{ env.GO_VERSION }}
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ steps.stamp.outputs.date }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

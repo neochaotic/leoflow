@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The in-pod agent baked into the runtime base image is now version-stamped.**
+  `leoflow-agent version` in a task pod reports the version, commit, and build date
+  it was built from (the same `-ldflags -X` as the release binaries), instead of an
+  empty/`none` build. This restores commit-level traceability for the task pod and
+  makes a control-plane↔agent version skew diagnosable. The runtime-image release
+  job already publishes an immutable per-release tag (`py<ver>-<release>`) alongside
+  the moving `py<ver>` line.
 - **Airflow Task SDK bumped to 3.3.x (`apache-airflow-task-sdk==1.3.1`).** DAGs
   now run under the Airflow 3.3 Task SDK in the task pod and the `leoflow lite`
   dev venv; the 3.3 SDK surface is additive over 3.2 (no removed `airflow.sdk`

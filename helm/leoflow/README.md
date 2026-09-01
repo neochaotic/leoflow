@@ -444,7 +444,7 @@ differ from what's committed.
 | taskSecret.mountPath | string | `"/etc/leoflow/secrets"` | Read-only mount path in the task pod. A connection references files here, e.g. `/etc/leoflow/secrets/key.json`. |
 | taskSecret.name | string | `""` | Name of an existing Kubernetes Secret to mount into task pods. Empty = none. |
 | taskServiceAccount.annotations | object | `{}` | Annotations. GKE Workload Identity: `iam.gke.io/gcp-service-account: GSA@PROJECT.iam.gserviceaccount.com`. EKS IRSA: `eks.amazonaws.com/role-arn: ...`. |
-| taskServiceAccount.create | bool | `false` | Create a ServiceAccount in taskNamespace for task pods to run as. |
+| taskServiceAccount.create | bool | `false` | Create a ServiceAccount in taskNamespace for task pods to run as. When true, task pods DEFAULT to this ServiceAccount (no per-DAG `execution.service_account` needed) — so keyless secret access works out of the box; a DAG may still set `execution.service_account` to override per task. |
 | taskServiceAccount.imagePullSecrets | list | `[]` | Pull secrets for private DAG images. Kubernetes auto-injects these into every task pod that runs as this SA, so a `leoflow deploy` to a private registry can be pulled (ADR 0041). Reference an existing docker-registry secret, e.g. `[{name: regcred}]`. |
-| taskServiceAccount.name | string | `"leoflow-task"` | Name of the task ServiceAccount (use this as `execution.service_account`). |
+| taskServiceAccount.name | string | `"leoflow-task"` | Name of the task ServiceAccount. With `create: true` it becomes the default task-pod SA; you can also reference it explicitly as `execution.service_account`. |
 | tolerations | list | `[]` | Pod tolerations (standard K8s — allow scheduling on tainted nodes). |

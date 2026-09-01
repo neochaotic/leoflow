@@ -1073,6 +1073,7 @@ func warmPodSpecFunc(cfg *config.ServerConfig, authn *auth.JWTAuthenticator, con
 			TenantID:            t.TenantID,
 			ControlPlaneAddr:    controlAddr,
 			AgentTLSCAConfigMap: cfg.Executor.AgentTLSCAConfigMap,
+			ServiceAccount:      cfg.Executor.TaskServiceAccount,
 			PodSecurity:         defaults.PodSecurity,
 			// Self-lifecycle caps (ADR 0058 D9/D10/D6/H3). The attempt watchdog is
 			// anchored to the credential ceiling: an attempt can never validly outlive
@@ -1415,6 +1416,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	dispatcher := dispatch.NewDispatcher(podExec, execStore, authn, controlAddr, attemptTokenTTL)
 	dispatcher.SetAgentTLSCAConfigMap(cfg.Executor.AgentTLSCAConfigMap)
 	dispatcher.SetTaskSecret(cfg.Executor.TaskSecretName, cfg.Executor.TaskSecretMountPath)
+	dispatcher.SetDefaultTaskServiceAccount(cfg.Executor.TaskServiceAccount)
 	// Agent-token transport (ADR 0055 Fix #3). Under the exchange transport the
 	// executor projects a ServiceAccount token instead of the plaintext one; the
 	// default (envvar) leaves the pod spec unchanged. The audience is the shared

@@ -138,6 +138,12 @@ type Dispatcher struct {
 	// LEOFLOW_SECRETS_* pod env. Empty = no external backend (chain vault-only).
 	secretsBackend       string
 	secretsBackendKwargs string
+	// defaultTaskServiceAccount is the operator-configured ServiceAccount task pods
+	// run as when a DAG's task does not set execution.service_account. Empty keeps
+	// today's behavior (pods run as the namespace default SA). Wiring the chart's
+	// taskServiceAccount here makes keyless work without every DAG having to opt in
+	// (the execution.service_account trap).
+	defaultTaskServiceAccount string
 }
 
 // SetSecretsBackend configures the operator's external secrets backend (ADR 0060):
@@ -147,6 +153,13 @@ type Dispatcher struct {
 func (d *Dispatcher) SetSecretsBackend(class, kwargs string) {
 	d.secretsBackend, d.secretsBackendKwargs = class, kwargs
 }
+
+// SetDefaultTaskServiceAccount sets the ServiceAccount task pods run as when a
+// DAG's task does not specify execution.service_account. Empty leaves pods on the
+// namespace default SA (today's behavior). Wiring the chart's task ServiceAccount
+// here closes the trap where creating the SA silently had no effect until every
+// DAG also set execution.service_account.
+func (d *Dispatcher) SetDefaultTaskServiceAccount(name string) { d.defaultTaskServiceAccount = name }
 
 // NewDispatcher builds a Dispatcher that launches tasks via exec, resolves their
 // context with resolver, mints tokens with issuer (valid for tokenTTL), and
@@ -272,6 +285,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID, dagVersionID st
 	}
 	if task.Execution != nil {
 		req.Execution = *task.Execution
+	}
+	// Default the task pod's ServiceAccount to the operator-configured one when the
+	// DAG did not set execution.service_account, so keyless works without every DAG
+	// opting in (the execution.service_account trap). An explicit per-task value
+	// always wins.
+	if req.Execution.ServiceAccount == "" {
+		req.Execution.ServiceAccount = d.defaultTaskServiceAccount
 	}
 	if r.Staging != nil && r.Staging.Enabled {
 		// All of the run's tasks share one PVC, named deterministically so a

@@ -355,3 +355,17 @@ func TestBuildWarmPodNoWritableTmpWhenRootWritable(t *testing.T) {
 		t.Error("TMPDIR must not be set when the rootfs is writable")
 	}
 }
+
+// A warm pod runs as the operator's default task ServiceAccount when set, so a
+// task placed on a warm worker resolves keyless secrets like a dedicated pod (#2).
+// Empty leaves it on the namespace default SA (today's behavior).
+func TestBuildWarmPodServiceAccount(t *testing.T) {
+	spec := baseWarmSpec()
+	spec.ServiceAccount = "leoflow-task"
+	if got := BuildWarmPod(spec).Spec.ServiceAccountName; got != "leoflow-task" {
+		t.Errorf("warm pod ServiceAccountName = %q, want leoflow-task", got)
+	}
+	if got := BuildWarmPod(baseWarmSpec()).Spec.ServiceAccountName; got != "" {
+		t.Errorf("no default SA → empty ServiceAccountName, got %q", got)
+	}
+}

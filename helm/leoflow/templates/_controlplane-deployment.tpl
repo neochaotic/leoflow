@@ -200,6 +200,14 @@ spec:
             - name: LEOFLOW_EXECUTOR_TASK_SECRET_MOUNT_PATH
               value: {{ .ctx.Values.taskSecret.mountPath | quote }}
             {{- end }}
+            {{- if .ctx.Values.taskServiceAccount.create }}
+            # Default task pods to the chart-created task ServiceAccount when a DAG
+            # does not set execution.service_account, so keyless (IRSA / Workload
+            # Identity, ADR 0035/0060) works without every DAG opting in. An explicit
+            # per-task execution.service_account still wins.
+            - name: LEOFLOW_EXECUTOR_TASK_SERVICE_ACCOUNT
+              value: {{ .ctx.Values.taskServiceAccount.name | quote }}
+            {{- end }}
             {{- if .ctx.Values.secrets.backend }}
             # External secrets backend (ADR 0060): a declared Connection/Variable is
             # resolved pod-side from the provider store under the pod's own keyless

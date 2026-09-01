@@ -75,6 +75,14 @@ type WarmPodSpec struct {
 	ControlPlaneAddr    string
 	AgentTLSCAConfigMap string
 
+	// ServiceAccount is the ServiceAccount the warm pod runs as — the operator's
+	// default task ServiceAccount (executor.task_service_account). A warm worker is
+	// pre-created and generic, so it can only carry the operator-wide default, not a
+	// per-DAG execution.service_account; empty leaves it on the namespace default SA.
+	// Without this a task placed on a warm worker runs as the default SA and keyless
+	// secret resolution breaks (#2, warm-pool path).
+	ServiceAccount string
+
 	// Bootstrap-credential transport (ADR 0055 Fix #3), mirroring Request's token
 	// fields: BootstrapToken rides plaintext on the env-var default; the exchange
 	// transport keeps it off the pod and projects a ServiceAccount token instead.
@@ -175,6 +183,14 @@ func BuildWarmPod(spec WarmPodSpec) *corev1.Pod {
 	}
 	mergeMetadata(pod.Labels, spec.Labels)
 	mergeMetadata(pod.Annotations, spec.Annotations)
+	if spec.ServiceAccount != "" {
+		// Run the warm worker as the operator's default task ServiceAccount so a task
+		// placed on it resolves keyless secrets exactly as a dedicated pod does (#2).
+		// AutomountServiceAccountToken stays false: keyless (IRSA / Workload Identity)
+		// works via the cloud webhook's projected token bound to the SA, not the
+		// Kubernetes API token — same as the dedicated task pod.
+		pod.Spec.ServiceAccountName = spec.ServiceAccount
+	}
 	// A read-only rootfs otherwise leaves the warm agent's os.MkdirTemp scratch
 	// (under /tmp) with nowhere to write, so it dies before registering and the
 	// reconciler replaces it forever (issue #741). Give it a writable /tmp

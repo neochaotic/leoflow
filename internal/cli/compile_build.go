@@ -73,14 +73,14 @@ func releaseBaseTag(v string) string {
 // derived from the registry block (url/image_name:version); a missing url or
 // image_name yields "" so the caller can fail with an actionable message rather
 // than building an untagged image.
-func resolveBuildImage(flagImage string, cfg *domain.LeoflowConfig, version string) string {
+func resolveBuildImage(flagImage string, cfg *domain.LeoflowConfig, dagVersion string) string {
 	if flagImage != "" {
 		return flagImage
 	}
 	if cfg.Registry == nil || cfg.Registry.URL == "" || cfg.Registry.ImageName == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/%s:%s", strings.TrimRight(cfg.Registry.URL, "/"), cfg.Registry.ImageName, version)
+	return fmt.Sprintf("%s/%s:%s", strings.TrimRight(cfg.Registry.URL, "/"), cfg.Registry.ImageName, dagVersion)
 }
 
 // generatedDockerfile renders the Dockerfile for a project that does not ship its

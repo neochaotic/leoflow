@@ -360,3 +360,19 @@ def test_write_dbt_profile_missing_conn_no_backend_no_hint(tmp_path):
     msg = str(e.value)
     assert "was not delivered" in msg
     assert "ServiceAccount" not in msg
+
+
+def test_write_dbt_profile_is_owner_only(tmp_path):
+    # profiles.yml carries warehouse credentials, so it must be written 0600
+    # (owner-only), not the default world-readable 0644 (#852 security review).
+    import os
+    import stat
+
+    from leoflow_runtime.dbt import write_dbt_profile
+
+    path = write_dbt_profile(
+        "warehouse", "shop", str(tmp_path),
+        env={"AIRFLOW_CONN_WAREHOUSE": "postgres://u:p@h:5432/db"},
+    )
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    assert mode == 0o600, f"profiles.yml mode = {oct(mode)}, want 0o600"

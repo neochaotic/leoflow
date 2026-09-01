@@ -154,6 +154,18 @@ func (d *Dispatcher) SetSecretsBackend(class, kwargs string) {
 	d.secretsBackend, d.secretsBackendKwargs = class, kwargs
 }
 
+// warmSACompatible reports whether a task can run on a warm worker, whose
+// ServiceAccount is the operator default fixed at pod creation. A task that pins a
+// different execution.service_account is incompatible (the warm pod cannot adopt
+// it) and must take the dedicated path; a task with no SA (uses the default) or one
+// equal to the default is compatible.
+func warmSACompatible(task domain.TaskSpec, warmSA string) bool {
+	if task.Execution == nil || task.Execution.ServiceAccount == "" {
+		return true
+	}
+	return task.Execution.ServiceAccount == warmSA
+}
+
 // SetDefaultTaskServiceAccount sets the ServiceAccount task pods run as when a
 // DAG's task does not specify execution.service_account. Empty leaves pods on the
 // namespace default SA (today's behavior). Wiring the chart's task ServiceAccount
@@ -238,7 +250,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID, dagVersionID st
 	// per-run /staging mount, so a staging attempt placed on one would silently
 	// lose the run's shared volume. Staging attempts always take the dedicated
 	// path below, which provisions the StagingClaim.
-	if d.placer != nil && (r.Staging == nil || !r.Staging.Enabled) {
+	// A warm worker is pre-created with the operator's default task ServiceAccount,
+	// fixed for its lifetime, so a task that pins a DIFFERENT execution.service_account
+	// cannot run on it (it would silently run as the wrong identity and break keyless
+	// resolution). Such a task takes the dedicated path below, which sets its own SA —
+	// the same degrade-not-strand exclusion as staging (ADR 0058 D5).
+	if d.placer != nil && (r.Staging == nil || !r.Staging.Enabled) && warmSACompatible(task, d.defaultTaskServiceAccount) {
 		wa := &agentv1.WorkAssignment{
 			AssignmentId: uuid.NewString(),
 			AttemptToken: token,

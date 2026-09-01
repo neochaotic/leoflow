@@ -223,3 +223,25 @@ func TestRenderNodeGranularity(t *testing.T) {
 		}
 	}
 }
+
+// The managed-connection declaration must reach grouped-granularity tasks too
+// (folder/level), not just per-node — they share decorateCommands, but lock it
+// so the grouped path can't regress (#10, review nit).
+func TestRenderGroupedDeclaresManagedConnection(t *testing.T) {
+	for _, gran := range []Granularity{GranularityFolder, GranularityLevel} {
+		tasks, err := Render(loadManifest(t, "manifest_wide.json"), Options{
+			Granularity: gran, Connection: "warehouse_pg", Profile: "transform",
+		})
+		if err != nil {
+			t.Fatalf("Render(%v) error: %v", gran, err)
+		}
+		if len(tasks) == 0 {
+			t.Fatalf("Render(%v) emitted no tasks", gran)
+		}
+		for _, task := range tasks {
+			if !contains(task.Connections, "warehouse_pg") {
+				t.Errorf("gran=%v task %q does not declare warehouse_pg: %v", gran, task.TaskID, task.Connections)
+			}
+		}
+	}
+}

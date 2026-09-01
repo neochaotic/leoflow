@@ -19,6 +19,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **dbt managed connection now works under enforce scoping and an external
+  secrets backend.** The dbt compiler wraps each task with the profile step that
+  reads `AIRFLOW_CONN_<conn>`, but did not **declare** the managed connection — so
+  the agent injected it only under permissive scoping (the whole vault). Under
+  enforce scoping or the external secrets resolver (which deliver declared names
+  only) the connection was missing and the task failed "not delivered". The
+  compiler now declares it on every dbt task, across all warehouse adapters
+  (postgres, snowflake, bigquery, databricks, duckdb). **Behavior change:** a dbt
+  DAG with `connection:` now validates that connection at registration (it must
+  exist, or be covered by an external backend) — create the connection before
+  deploying, the same order any declared connection follows.
 - **External secrets resolver failed against a real provider backend (ADR 0060).**
   Importing and initialising an Airflow provider secrets backend emits log lines
   on stdout (structlog, alembic, the secrets masker). The resolver's stdout is the

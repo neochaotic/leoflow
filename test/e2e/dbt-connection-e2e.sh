@@ -129,6 +129,11 @@ export LEOFLOW_SERVER_HTTP_ADDR="0.0.0.0:${HTTP_PORT}"
 export LEOFLOW_SERVER_METRICS_ADDR="0.0.0.0:${METRICS_PORT}"
 export LEOFLOW_AGENT_ALLOW_INSECURE_SECRETS=true
 export LEOFLOW_SECRET_KEY="e2e-secret-key-32-bytes-padding!"
+# Run under ENFORCE scoping so this gates #10: only DECLARED names are delivered,
+# so the task only gets AIRFLOW_CONN_WAREHOUSE_PG because the compiler declared the
+# dbt managed connection. Under permissive (the old default) the whole vault would
+# be delivered and the declaration bug would hide.
+export LEOFLOW_AUTH_SECRET_SCOPING=enforce
 "$ROOT/bin/leoflow-server" >"$WORKDIR/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 5
@@ -139,12 +144,17 @@ jq -e '.tasks[] | select(.entrypoint | startswith("python -m leoflow_runtime --d
   "$PROJ/dag.json" >/dev/null || fail "task commands are not wrapped with the managed-profile step"
 k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 
-log "Pushing the DAG and creating the managed Postgres connection"
+log "Creating the managed Postgres connection FIRST, then pushing the DAG"
+# The DAG declares warehouse_pg (the dbt compiler declares the managed connection,
+# #10). Under enforce scoping, registration validates a declared connection exists
+# (ADR 0055 D6), so the connection must be created BEFORE the push — the correct
+# create-then-deploy order. (An external secrets backend would satisfy D6 via
+# coverage instead, with no pre-created vault entry.)
 TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"
-"$ROOT/bin/leoflow" push "$PROJ/dag.json" --server "$API" --token "$TOKEN"
 curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d "{\"connection_id\":\"warehouse_pg\",\"conn_type\":\"postgres\",\"host\":\"${HOST_ADDR}\",\"port\":${WH_PORT},\"login\":\"postgres\",\"password\":\"pw\",\"schema\":\"wh\"}" \
   "$API/api/v2/connections" >/dev/null || fail "creating the warehouse_pg connection"
+"$ROOT/bin/leoflow" push "$PROJ/dag.json" --server "$API" --token "$TOKEN"
 
 log "Triggering a run"
 RUN_ID="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \

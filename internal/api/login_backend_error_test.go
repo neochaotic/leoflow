@@ -50,3 +50,20 @@ func TestLoginBadCredentialsReturns401(t *testing.T) {
 		t.Errorf("bad-credential login = %d, want 401", code)
 	}
 }
+
+// A DB outage (503) must NOT consume the per-IP lockout budget — otherwise an
+// outage locks every user out once the budget drains. With a tiny limit, repeated
+// DB-down logins must all stay 503, never flip to 429 (#843 / review invariant).
+func TestLoginBackendDownDoesNotConsumeRateLimit(t *testing.T) {
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: dbDownAuthn{},
+		RateLimiter: auth.NewRateLimiter(2, time.Minute), // tiny budget
+		CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+	})
+	body := `{"username":"admin@leoflow.local","password":"x"}`
+	for i := 0; i < 5; i++ {
+		if code := do(srv, http.MethodPost, "/auth/token", body).Code; code != http.StatusServiceUnavailable {
+			t.Fatalf("request %d = %d, want 503 every time (a 503 must not consume the lockout budget)", i, code)
+		}
+	}
+}

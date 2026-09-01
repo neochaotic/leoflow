@@ -6,6 +6,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-31
+
 ### Added
 
 - **Typed trigger form in the UI (#798).** The "Trigger DAG w/ config" dialog

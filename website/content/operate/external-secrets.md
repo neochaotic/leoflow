@@ -192,6 +192,20 @@ with DAG("etl", ...):
 Leoflow resolves `warehouse` from `<connections_prefix>/warehouse` in the store,
 renders it as an Airflow connection URI, and exports `AIRFLOW_CONN_WAREHOUSE`.
 
+{{% alert title="Required: the provider package in the task image" color="warning" %}}
+The pod-side resolver drives the provider's Airflow secrets backend, so that
+provider package must be present in the **task image** — the base image does not
+bundle it. Declare it as a DAG dependency (baked at build time), e.g. for AWS:
+
+```yaml
+# leoflow.yaml
+dependencies: [apache-airflow-providers-amazon]   # -google / -microsoft-azure / -hashicorp for other providers
+```
+
+Without it the resolver fails to import the backend class and the task fails
+closed. See the [cluster-validation runbook]({{< relref "external-secrets-cluster-validation" >}}).
+{{% /alert %}}
+
 **Provider-neutral.** AWS is the reference; GCP Secret Manager, Azure Key Vault,
 and HashiCorp Vault use the same `secrets.backend` + `backendKwargs` with that
 provider's backend class and keyless mechanism.

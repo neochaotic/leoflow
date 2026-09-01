@@ -111,7 +111,13 @@ func readPasswordStdin(r io.Reader) (string, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	if sc.Scan() {
-		return sc.Text(), nil
+		// Treat an empty first line the same as empty stdin: --password-stdin must
+		// never yield a silent empty password (echo '' | ... would otherwise pass
+		// "" downstream). A password is not trimmed — only a truly empty line fails.
+		if line := sc.Text(); line != "" {
+			return line, nil
+		}
+		return "", fmt.Errorf("--password-stdin got an empty password")
 	}
 	if err := sc.Err(); err != nil {
 		return "", fmt.Errorf("reading password from stdin: %w", err)

@@ -62,7 +62,11 @@ func TestResolvePasswordFlagPassthrough(t *testing.T) {
 }
 
 func TestReadPasswordStdinEmptyErrors(t *testing.T) {
-	if _, err := readPasswordStdin(bytes.NewBufferString("")); err == nil {
-		t.Error("empty stdin under --password-stdin must error, not return an empty password")
+	// Both no bytes at all and a single empty line must error — never a silent
+	// empty password.
+	for name, in := range map[string]string{"no bytes": "", "empty line": "\n"} {
+		if _, err := readPasswordStdin(bytes.NewBufferString(in)); err == nil {
+			t.Errorf("%s under --password-stdin must error, not return an empty password", name)
+		}
 	}
 }

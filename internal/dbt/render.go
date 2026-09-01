@@ -198,6 +198,15 @@ func decorateCommands(tasks []domain.TaskSpec, opts Options) {
 	}
 	for i := range tasks {
 		tasks[i].Entrypoint = prefix + tasks[i].Entrypoint
+		// Declare the managed connection the profile step reads, so the agent
+		// injects AIRFLOW_CONN_<conn> under ANY scoping mode and resolves it from an
+		// external backend — declaration is the scope authority (ADR 0055 / 0060).
+		// Without this, a dbt DAG with a connection breaks under enforce scoping and
+		// with the external secrets backend: the profile step reads an env the agent
+		// never delivered (#10).
+		if opts.Connection != "" {
+			tasks[i].Connections = append(tasks[i].Connections, opts.Connection)
+		}
 	}
 }
 

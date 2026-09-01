@@ -278,6 +278,18 @@ $ curl -X POST .../api/v2/connections -d '{
     "host":"db.internal","port":5432,"login":"etl","password":"…","schema":"transform"}'
 ```
 
+{{% alert title="Create the connection before you deploy" color="info" %}}
+The compiler **declares** the managed connection on the dbt tasks, so Leoflow
+validates it at registration: `leoflow push`/`deploy` is rejected if
+`connection:` names a connection that neither exists in the vault nor is covered
+by an [external secrets backend](/operate/external-secrets/). Create the
+connection first (or configure the backend), then deploy — the same
+create-then-deploy order any declared connection follows. This also means the
+connection is delivered under every [secret-scoping](/operate/agent-credential-transport/)
+mode (enforce included) and resolvable from an external backend, not only under
+permissive scoping.
+{{% /alert %}}
+
 The compiled command becomes:
 
 ```

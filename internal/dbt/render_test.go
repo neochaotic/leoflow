@@ -70,6 +70,39 @@ func TestRenderWrapsManagedConnection(t *testing.T) {
 	if got != want {
 		t.Errorf("entrypoint = %q, want %q", got, want)
 	}
+	// The managed connection the profile step reads must also be DECLARED on every
+	// task, or the agent never injects AIRFLOW_CONN_<conn> under enforce scoping /
+	// an external backend and the profile step fails "not delivered" (#10).
+	for _, task := range tasks {
+		if !contains(task.Connections, "warehouse_pg") {
+			t.Errorf("task %q does not declare the managed connection warehouse_pg: %v", task.TaskID, task.Connections)
+		}
+	}
+}
+
+// Without a managed connection, tasks declare none (the local/duckdb and
+// baked-profile paths must not invent a declaration).
+func TestRenderNoConnectionDeclaresNone(t *testing.T) {
+	tasks, err := Render(loadManifest(t, "manifest_chain.json"), Options{
+		Granularity: GranularityNode, Profile: "transform", Local: true,
+	})
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	for _, task := range tasks {
+		if len(task.Connections) != 0 {
+			t.Errorf("task %q declared connections with no managed connection: %v", task.TaskID, task.Connections)
+		}
+	}
+}
+
+func contains(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRenderDefaultDuckdbGatedOnLocal: with no connection, a local build prefixes the
@@ -187,6 +220,28 @@ func TestRenderNodeGranularity(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got.DependsOn, w.deps) {
 			t.Errorf("task %q depends_on = %v, want %v", id, got.DependsOn, w.deps)
+		}
+	}
+}
+
+// The managed-connection declaration must reach grouped-granularity tasks too
+// (folder/level), not just per-node — they share decorateCommands, but lock it
+// so the grouped path can't regress (#10, review nit).
+func TestRenderGroupedDeclaresManagedConnection(t *testing.T) {
+	for _, gran := range []Granularity{GranularityFolder, GranularityLevel} {
+		tasks, err := Render(loadManifest(t, "manifest_wide.json"), Options{
+			Granularity: gran, Connection: "warehouse_pg", Profile: "transform",
+		})
+		if err != nil {
+			t.Fatalf("Render(%v) error: %v", gran, err)
+		}
+		if len(tasks) == 0 {
+			t.Fatalf("Render(%v) emitted no tasks", gran)
+		}
+		for _, task := range tasks {
+			if !contains(task.Connections, "warehouse_pg") {
+				t.Errorf("gran=%v task %q does not declare warehouse_pg: %v", gran, task.TaskID, task.Connections)
+			}
 		}
 	}
 }

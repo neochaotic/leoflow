@@ -1473,6 +1473,10 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	if ms, ok := logSink.(logs.MarkerSink); ok {
 		reaper.SetLogSink(ms)
 	}
+	// Suppress agent-lost reaping for a grace window after this instance acquires
+	// leadership, so a control-plane restart doesn't mass-reap in-flight tasks
+	// whose heartbeats went stale during the outage (#858).
+	reaper.SetLeaderSince(sched.LeaderSince)
 	sched.SetExecutionReaper(reaper)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)

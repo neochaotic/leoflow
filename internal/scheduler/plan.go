@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"hash/fnv"
 	"math"
 	"time"
 
@@ -171,7 +172,7 @@ func planRetryTransitions(run RunState, effective map[string]domain.TaskState, d
 				// infra-attempt limit so a poison placement can't loop forever;
 				// exhausted → terminal (no fallback to the app-retry budget). The
 				// store bumps infra_attempts (not try_number) when applying failed→none.
-				if infraReplaceable(run, t.TaskID) {
+				if infraReplaceable(run, t.TaskID) && readyToInfraReplace(run, t.TaskID) {
 					out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
 					effective[t.TaskID] = domain.TaskStateNone
 				}
@@ -306,6 +307,42 @@ func triggerRuleOf(t domain.TaskSpec) domain.TriggerRule {
 // the run active until the retry resolves.
 func infraReplaceable(run RunState, taskID string) bool {
 	return run.InfraFailed[taskID] && run.InfraAttempts[taskID] < infraMaxAttempts
+}
+
+// infraReplaceJitterWindow spreads sibling infra re-placements across this window
+// so N tasks reaped in one tick (a control-plane restart marking the whole run
+// agent_lost) do not all re-dispatch simultaneously. 2× the heartbeat interval —
+// enough to de-synchronize the herd without materially delaying recovery.
+const infraReplaceJitterWindow = 30 * time.Second
+
+// readyToInfraReplace gates the infra re-placement (failed→none) behind the same
+// exponential backoff as a synchronous dispatch failure, keyed on the
+// infra-attempt count and measured from the reap's ended_at, plus a deterministic
+// per-task jitter (#859). Without it, a mass infra fault re-dispatches every
+// sibling on the next tick — a thundering herd of pod create/delete against the
+// kube-apiserver from the just-recovered scheduler, which re-throttles it. Honors
+// the "absent ended_at / zero clock → immediate" convention (mirroring
+// readyToRetry) so the never-failed common case and tests are unaffected.
+func readyToInfraReplace(run RunState, taskID string) bool {
+	ended := run.EndedAt[taskID]
+	if ended == nil {
+		return true
+	}
+	if run.Now.IsZero() {
+		return true
+	}
+	delay := dispatchBackoff(run.InfraAttempts[taskID]+1) + infraReplaceJitter(run.RunID, taskID)
+	return !run.Now.Before(ended.Add(delay))
+}
+
+// infraReplaceJitter returns a stable per-(run,task) offset in
+// [0, infraReplaceJitterWindow). Deterministic (FNV-1a over the key, no rand) so
+// the planner stays reproducible and unit-testable; distinct across sibling
+// task_ids so they spread rather than fire together.
+func infraReplaceJitter(runID, taskID string) time.Duration {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(runID + "\x00" + taskID))
+	return time.Duration(h.Sum64() % uint64(infraReplaceJitterWindow))
 }
 
 // FinalizeRun reports the terminal dag-run state once every task is terminal.

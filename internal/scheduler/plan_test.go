@@ -137,6 +137,85 @@ func TestPlanRunInfraBudgetExhaustedIsTerminal(t *testing.T) {
 	}
 }
 
+// TestPlanRunInfraReplaceRespectsBackoff: an infra-failed task is NOT re-placed
+// immediately — it waits out an exponential backoff from its ended_at (#859), so
+// a mass infra fault (a control-plane restart marking many TIs agent_lost at
+// once) cannot re-dispatch every sibling on the same tick and stampede the
+// just-recovered kube-apiserver. Within the backoff the task stays parked in
+// failed (no transition); past it, it re-places to none.
+func TestPlanRunInfraReplaceRespectsBackoff(t *testing.T) {
+	now := time.Now().UTC()
+	ended := now.Add(-2 * time.Second) // < 5s base backoff
+	run := RunState{
+		RunID:         "run-1",
+		Tasks:         linear(),
+		States:        map[string]domain.TaskState{"a": domain.TaskStateFailed, "b": domain.TaskStateNone},
+		Tries:         map[string]int{"a": 0},
+		MaxTries:      map[string]int{"a": 3},
+		InfraFailed:   map[string]bool{"a": true},
+		InfraAttempts: map[string]int{"a": 0},
+		EndedAt:       map[string]*time.Time{"a": &ended},
+		Now:           now,
+	}
+	if _, ok := planMap(run)["a"]; ok {
+		t.Error("infra-failed task within backoff must stay parked in failed (no transition)")
+	}
+	// Past the base backoff plus the whole jitter window, it must re-place.
+	run.Now = ended.Add(dispatchBackoffBase + infraReplaceJitterWindow)
+	if got := planMap(run)["a"]; got != domain.TaskStateNone {
+		t.Errorf("infra-failed task past backoff must re-place (none), got %q", got)
+	}
+}
+
+// TestReadyToInfraReplace pins the gate's edges: nil ended / zero clock fall back
+// to immediate (test seam + never-failed), and the delay grows with attempts.
+func TestReadyToInfraReplace(t *testing.T) {
+	now := time.Now().UTC()
+	ended := now.Add(-3 * time.Second)
+	run := RunState{
+		RunID:         "run-1",
+		EndedAt:       map[string]*time.Time{"a": &ended},
+		InfraAttempts: map[string]int{"a": 0},
+		Now:           now,
+	}
+	if readyToInfraReplace(run, "a") {
+		t.Error("3s elapsed < 5s base backoff: must not be ready")
+	}
+	run.Now = ended.Add(dispatchBackoffBase + infraReplaceJitterWindow)
+	if !readyToInfraReplace(run, "a") {
+		t.Error("past base backoff + jitter window: must be ready")
+	}
+	run.Now = time.Time{}
+	if !readyToInfraReplace(run, "a") {
+		t.Error("zero clock is the immediate test seam")
+	}
+	empty := RunState{RunID: "r", EndedAt: map[string]*time.Time{}, InfraAttempts: map[string]int{}, Now: now}
+	if !readyToInfraReplace(empty, "a") {
+		t.Error("nil ended must fall back to immediate")
+	}
+}
+
+// TestInfraReplaceJitterSpreadsSiblings: the jitter is deterministic per (run,
+// task) and spreads siblings across the window so N tasks reaped together do not
+// re-dispatch simultaneously.
+func TestInfraReplaceJitterSpreadsSiblings(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for _, task := range []string{"a", "b", "c", "d", "e", "f"} {
+		j := infraReplaceJitter("run-1", task)
+		if j < 0 || j >= infraReplaceJitterWindow {
+			t.Errorf("jitter %v out of [0,%v)", j, infraReplaceJitterWindow)
+		}
+		seen[j] = true
+	}
+	if len(seen) < 3 {
+		t.Errorf("expected the jitter to spread siblings, got %d distinct values", len(seen))
+	}
+	j1, j2 := infraReplaceJitter("run-1", "a"), infraReplaceJitter("run-1", "a")
+	if j1 != j2 {
+		t.Errorf("jitter must be deterministic for a given (run, task): %v != %v", j1, j2)
+	}
+}
+
 func TestPlanRunResetsUpForRetry(t *testing.T) {
 	run := RunState{
 		Tasks:    linear(),

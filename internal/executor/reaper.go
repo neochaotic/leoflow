@@ -44,6 +44,13 @@ const (
 	defaultAgentLostThreshold    = 90 * time.Second
 	defaultDispatchLostThreshold = 3 * time.Minute
 	defaultPodLostGrace          = 60 * time.Second
+	// defaultAgentLostGrace is the post-leadership window during which the
+	// agent-lost reaper does not fire (#858). Set to 2× the agent-lost threshold
+	// so a single control-plane restart + re-election (whose recorded silence can
+	// approach the threshold) cannot trip a mass false reap, while staying well
+	// under the 10-minute agent token TTL so a re-heartbeat still authenticates.
+	// Ladder: heartbeat(15s) < threshold(90s) < grace(180s) < tokenTTL(600s).
+	defaultAgentLostGrace = 2 * defaultAgentLostThreshold
 )
 
 // ReaperConfig holds the four idle thresholds the reapers apply. Zero values are
@@ -52,6 +59,7 @@ const (
 type ReaperConfig struct {
 	OrphanThreshold       time.Duration
 	AgentLostThreshold    time.Duration
+	AgentLostGrace        time.Duration
 	DispatchLostThreshold time.Duration
 	PodLostGrace          time.Duration
 }
@@ -62,6 +70,7 @@ func DefaultReaperConfig() ReaperConfig {
 	return ReaperConfig{
 		OrphanThreshold:       defaultOrphanThreshold,
 		AgentLostThreshold:    defaultAgentLostThreshold,
+		AgentLostGrace:        defaultAgentLostGrace,
 		DispatchLostThreshold: defaultDispatchLostThreshold,
 		PodLostGrace:          defaultPodLostGrace,
 	}
@@ -105,6 +114,7 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 
 	agentLost := newAgentLostReaper(store, logger, cfg.AgentLostThreshold, rec)
 	agentLost.pods = pods
+	agentLost.grace = cfg.AgentLostGrace
 
 	dispatchLost := newDispatchLostReaper(store, logger, cfg.DispatchLostThreshold, rec)
 	dispatchLost.pods = pods
@@ -136,6 +146,14 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 // logs.Sink satisfies the parameter; nil (Lite / unwired) leaves markers off.
 func (r *Reaper) SetLogSink(s logSink) {
 	r.agentLost.sink = s
+}
+
+// SetLeaderSince wires the accessor the agent-lost reaper uses to measure its
+// post-leadership grace (#858) — the window after a (re-)election during which a
+// stale heartbeat is assumed to be the outage's doing, not a dead agent, and is
+// not reaped. Nil (Lite / no leadership) leaves the grace off.
+func (r *Reaper) SetLeaderSince(fn func() time.Time) {
+	r.agentLost.leaderSince = fn
 }
 
 // ReapOnce runs the four reapers once, in the same order the scheduler drove

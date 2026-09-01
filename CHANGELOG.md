@@ -8,6 +8,25 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A control-plane restart no longer fails healthy in-flight tasks (#858).**
+  The agent-lost reaper failed any task whose last heartbeat was older than the
+  threshold — but a control-plane restart (rollout, node drain, kubelet kill)
+  makes *every* in-flight task look stale, because the process that records
+  heartbeats is the one that was down. The new leader would then mass-reap
+  healthy, still-running tasks. The reaper now honors a post-leadership **grace
+  window** (2× the agent-lost threshold, 180s) measured from when this instance
+  acquired leadership, so the fleet has time to re-heartbeat before any reap; a
+  genuinely lost agent is still reaped once the grace elapses.
+- **Infra re-placement is now backed off and jittered to avoid a thundering herd
+  (#859).** When a task fails for an infrastructure reason (agent/pod/dispatch
+  lost) it re-places without consuming its retry budget — but it did so
+  immediately, so a mass infra fault (a restart marking a whole run agent_lost at
+  once) re-dispatched every sibling on the same tick, stampeding the just-
+  recovered kube-apiserver and re-throttling the scheduler. Re-placement now
+  waits out an exponential backoff from the failure time (the same curve as a
+  synchronous dispatch failure, keyed on the infra-attempt count) plus a
+  deterministic per-task jitter, so siblings spread across a window instead of
+  firing together.
 - **A task killed by the agent-lost reaper now ends its log with a marker
   (#861).** When the control plane fails a task whose agent went silent, it
   deletes the pod and the log stream stops — previously leaving the task log

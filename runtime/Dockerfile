@@ -21,7 +21,17 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/leoflow-agent ./cmd/leoflow-agent
+# Stamp the agent with version/commit/date, exactly as the release binaries are
+# (Makefile LDFLAGS). Without this the baked agent reports empty version/commit,
+# so `leoflow-agent version` in a task pod is untraceable to a commit and a
+# control-plane↔agent version skew is undiagnosable. Defaults keep a local/source
+# build meaningful; the release passes the real values as build-args.
+ARG VERSION=dev
+ARG GIT_COMMIT=none
+ARG BUILD_DATE=unknown
+RUN CGO_ENABLED=0 go build -trimpath \
+	-ldflags="-s -w -X 'github.com/neochaotic/leoflow/internal/version.version=${VERSION}' -X 'github.com/neochaotic/leoflow/internal/version.gitCommit=${GIT_COMMIT}' -X 'github.com/neochaotic/leoflow/internal/version.buildDate=${BUILD_DATE}'" \
+	-o /out/leoflow-agent ./cmd/leoflow-agent
 
 # ── Stage 2: runtime base ─────────────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim-bookworm

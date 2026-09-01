@@ -41,9 +41,13 @@ taskNamespace: leoflow
 # 0035). Reference it per-task via `execution.service_account: <name>` in
 # leoflow.yaml. Created in `taskNamespace`.
 taskServiceAccount:
-  # -- Create a ServiceAccount in taskNamespace for task pods to run as.
+  # -- Create a ServiceAccount in taskNamespace for task pods to run as. When true,
+  # task pods DEFAULT to this ServiceAccount (no per-DAG `execution.service_account`
+  # needed) — so keyless secret access works out of the box; a DAG may still set
+  # `execution.service_account` to override per task.
   create: false
-  # -- Name of the task ServiceAccount (use this as `execution.service_account`).
+  # -- Name of the task ServiceAccount. With `create: true` it becomes the default
+  # task-pod SA; you can also reference it explicitly as `execution.service_account`.
   name: leoflow-task
   # -- Annotations. GKE Workload Identity: `iam.gke.io/gcp-service-account: GSA@PROJECT.iam.gserviceaccount.com`. EKS IRSA: `eks.amazonaws.com/role-arn: ...`.
   annotations: {}

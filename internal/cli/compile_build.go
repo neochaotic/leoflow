@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/version"
 )
 
 // generatedDockerfileName is the file a yaml-driven build writes its synthesized
@@ -31,7 +33,39 @@ func resolveBaseImage(cfg *domain.LeoflowConfig) string {
 	if cfg.BaseImage != "" {
 		return cfg.BaseImage
 	}
-	return publishedBaseRepo + ":py" + cfg.PythonVersion
+	return baseImageRef(publishedBaseRepo, cfg.PythonVersion, version.Get().Version)
+}
+
+// baseImageRef composes the task base image reference for a CLI of version
+// cliVersion. It pins the immutable per-release base (repo:py<ver>-v<X.Y.Z>) so a
+// compile from a release reproduces byte-for-byte (ADR 0003); a dev/dirty/`git
+// describe` build has no published versioned base and falls back to the moving
+// repo:py<ver> line. The published tag is ALWAYS `py<ver>-v<X.Y.Z>` (release.yaml
+// stamps `github.ref_name`, the git tag WITH its leading `v`), but GoReleaser
+// stamps the CLI's version WITHOUT the `v` (`{{ .Version }}`), so normalize to
+// exactly one leading `v` — otherwise a released CLI would FROM a `py<ver>-X.Y.Z`
+// tag that was never pushed.
+func baseImageRef(repo, pythonVersion, cliVersion string) string {
+	base := repo + ":py" + pythonVersion
+	if tag := releaseBaseTag(cliVersion); tag != "" {
+		return base + "-v" + strings.TrimPrefix(tag, "v")
+	}
+	return base
+}
+
+// devDescribeRe matches the `git describe` suffix a non-release build carries
+// (`-<commits>-g<sha>`), which has no published versioned base image.
+var devDescribeRe = regexp.MustCompile(`-\d+-g[0-9a-f]+`)
+
+// releaseBaseTag returns v when it names a clean release (a tag the release
+// workflow published a py<ver>-<v> base for), or "" for a dev/dirty/describe build
+// that has no such base. Keeps a source build working (moving tag) while a real
+// release pins its immutable base.
+func releaseBaseTag(v string) string {
+	if v == "" || v == "dev" || strings.HasSuffix(v, "-dirty") || devDescribeRe.MatchString(v) {
+		return ""
+	}
+	return v
 }
 
 // resolveBuildImage decides the image reference for a build. An explicit --image
@@ -39,14 +73,14 @@ func resolveBaseImage(cfg *domain.LeoflowConfig) string {
 // derived from the registry block (url/image_name:version); a missing url or
 // image_name yields "" so the caller can fail with an actionable message rather
 // than building an untagged image.
-func resolveBuildImage(flagImage string, cfg *domain.LeoflowConfig, version string) string {
+func resolveBuildImage(flagImage string, cfg *domain.LeoflowConfig, dagVersion string) string {
 	if flagImage != "" {
 		return flagImage
 	}
 	if cfg.Registry == nil || cfg.Registry.URL == "" || cfg.Registry.ImageName == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/%s:%s", strings.TrimRight(cfg.Registry.URL, "/"), cfg.Registry.ImageName, version)
+	return fmt.Sprintf("%s/%s:%s", strings.TrimRight(cfg.Registry.URL, "/"), cfg.Registry.ImageName, dagVersion)
 }
 
 // generatedDockerfile renders the Dockerfile for a project that does not ship its

@@ -48,8 +48,8 @@ RUN pip install --no-cache-dir /opt/leoflow-runtime
 # Leoflow DAGs are authored with the Apache Airflow Task SDK (`from airflow.sdk
 # import DAG, task`), so the task container must be able to import it to load the
 # user's dag.py. This is the lightweight Task SDK, not airflow-core, pinned to
-# the 3.2.x line Leoflow targets (ADR 0003 / parser SDK version).
-ARG AIRFLOW_TASK_SDK_VERSION=1.2.1
+# the 3.3.x line Leoflow targets (ADR 0003 / parser SDK version).
+ARG AIRFLOW_TASK_SDK_VERSION=1.3.1
 RUN pip install --no-cache-dir "apache-airflow-task-sdk==${AIRFLOW_TASK_SDK_VERSION}"
 
 USER 65532:65532

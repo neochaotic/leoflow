@@ -57,7 +57,7 @@ const (
 	devMigrateURL = "pgx5://leoflow:leoflow@localhost:5432/leoflow_dev?sslmode=disable"
 	// taskSDKVersion matches the task image (runtime/Dockerfile); the dev venv
 	// installs it so dag.py's `from airflow.sdk import ...` resolves.
-	taskSDKVersion = "apache-airflow-task-sdk==1.2.1"
+	taskSDKVersion = "apache-airflow-task-sdk==1.3.1"
 	// devJWTSecret is the legacy/fallback Lite JWT signing secret used only when a
 	// pre-#121 install has no jwt_secret in its config.yaml. Modern setups write a
 	// random per-install secret (rotated on every fresh install), so tokens from a

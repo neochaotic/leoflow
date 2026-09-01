@@ -6,6 +6,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Airflow Task SDK bumped to 3.3.x (`apache-airflow-task-sdk==1.3.1`).** DAGs
+  now run under the Airflow 3.3 Task SDK in the task pod and the `leoflow lite`
+  dev venv; the 3.3 SDK surface is additive over 3.2 (no removed `airflow.sdk`
+  exports), and the airflow-free parser shim is unaffected. The parser's optional
+  real-Airflow backend accepts `apache-airflow>=3.2,<3.4`. The embedded web UI
+  stays on the Airflow 3.2.x SPA and `/api/v2/` remains 3.2.x-compatible — the SPA
+  upgrade is tracked separately. Validated on the pod-path e2e against a 3.3.1
+  runtime image.
+
 ### Fixed
 
 - **External secrets resolver failed against a real provider backend (ADR 0060).**

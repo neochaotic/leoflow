@@ -44,7 +44,7 @@ func TestProvisionVenv(t *testing.T) {
 		parserSrc := filepath.Join(venvDir, "..", "pysrc", "parser")
 		venvPy, err := ProvisionVenv(context.Background(), run,
 			pythonPath, venvDir,
-			[]string{parserSrc, "apache-airflow-task-sdk==1.2.1"})
+			[]string{parserSrc, "apache-airflow-task-sdk==1.3.1"})
 		if err != nil {
 			t.Fatalf("err = %v, want nil", err)
 		}
@@ -67,7 +67,7 @@ func TestProvisionVenv(t *testing.T) {
 			if a == parserSrc {
 				sawParser = true
 			}
-			if a == "apache-airflow-task-sdk==1.2.1" {
+			if a == "apache-airflow-task-sdk==1.3.1" {
 				sawSDK = true
 			}
 		}

@@ -19,7 +19,7 @@ dependencies = []
 [project.optional-dependencies]
 # Opt-in fallback backend: LEOFLOW_PARSER_BACKEND=airflow uses the real DagBag.
 airflow = [
-    "apache-airflow>=3.2,<3.3",
+    "apache-airflow>=3.2,<3.4",
     "apache-airflow-providers-standard",
     "apache-airflow-providers-http",
 ]

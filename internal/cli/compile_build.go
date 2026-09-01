@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/neochaotic/leoflow/internal/domain"
+	"github.com/neochaotic/leoflow/internal/version"
 )
 
 // generatedDockerfileName is the file a yaml-driven build writes its synthesized
@@ -31,7 +33,31 @@ func resolveBaseImage(cfg *domain.LeoflowConfig) string {
 	if cfg.BaseImage != "" {
 		return cfg.BaseImage
 	}
-	return publishedBaseRepo + ":py" + cfg.PythonVersion
+	base := publishedBaseRepo + ":py" + cfg.PythonVersion
+	// Pin the base to THIS CLI's release, so a compile reproduces byte-for-byte: the
+	// release publishes an immutable py<ver>-<release> tag, and a compile from that
+	// release FROMs exactly it instead of the moving py<ver> line (ADR 0003). A dev/
+	// dirty/`git describe` build has no published versioned base, so it falls back to
+	// the moving tag. An explicit base_image (above) always wins.
+	if tag := releaseBaseTag(version.Get().Version); tag != "" {
+		return base + "-" + tag
+	}
+	return base
+}
+
+// devDescribeRe matches the `git describe` suffix a non-release build carries
+// (`-<commits>-g<sha>`), which has no published versioned base image.
+var devDescribeRe = regexp.MustCompile(`-\d+-g[0-9a-f]+`)
+
+// releaseBaseTag returns v when it names a clean release (a tag the release
+// workflow published a py<ver>-<v> base for), or "" for a dev/dirty/describe build
+// that has no such base. Keeps a source build working (moving tag) while a real
+// release pins its immutable base.
+func releaseBaseTag(v string) string {
+	if v == "" || v == "dev" || strings.HasSuffix(v, "-dirty") || devDescribeRe.MatchString(v) {
+		return ""
+	}
+	return v
 }
 
 // resolveBuildImage decides the image reference for a build. An explicit --image

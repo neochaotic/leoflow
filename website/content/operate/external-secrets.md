@@ -250,13 +250,13 @@ endpoint, not the metadata range).
   from **GCP Secret Manager** via ADC at task time (still needs a keyless
   identity to *read* the secret). That's a per-connection escape hatch, not the
   general mechanism this page covers.
-- **Resolving an arbitrary Connection/Variable directly from the external store**
-  — so a token-style secret in AWS Secrets Manager becomes a Leoflow Connection
-  with no Kubernetes Secret in between — is **not yet** built. It's tracked as an
-  open feature request ([#811](https://github.com/neochaotic/leoflow/issues/811))
-  with an advisory design study, but there's no accepted ADR or shipped code yet.
-  Until it lands, use keyless (option 1) for token-style access, or sync via ESO
-  (option 2).
+- **Resolving a declared Connection/Variable directly from the external store**
+  — so a secret in AWS Secrets Manager becomes a Leoflow Connection/Variable with
+  no Kubernetes Secret in between — is **option 4 above** (the native resolver,
+  ADR 0060, [#811](https://github.com/neochaotic/leoflow/issues/811)). It ships
+  **off by default**; enable it with `secrets.backend` after validating keyless
+  end-to-end on your cluster (see
+  [Validate the native resolver on a real cluster]({{< relref "external-secrets-cluster-validation" >}})).
 
 ## Scoping — which pod sees which secret
 
@@ -297,6 +297,7 @@ How a credential is isolated to the right task depends on the path it takes:
 
 ## See also
 
+- [Validate the native resolver on a real cluster]({{< relref "external-secrets-cluster-validation" >}}) — the EKS/GKE keyless gate before enabling option 4.
 - [ADR 0035 — Cloud connector auth: keyless-first](/project/adrs/0035-cloud-connector-auth-keyless-first/)
 - [Variables & Connections](/author-dags/variables-connections/) — how secrets reach a task.
 - [Connections reference](/connections/) — per-type `extra` fields (`key_path`, …).

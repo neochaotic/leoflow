@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,8 +56,18 @@ func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig, local 
 			pc.Env = append(pc.Env, "DBT_PROFILES_DIR="+pdir)
 		}
 	}
-	pc.Stderr = cmd.ErrOrStderr()
+	// dbt logs a parse failure's cause (a missing `dbt deps`, a bad profile) to
+	// STDOUT, not stderr — so a bare exec error surfaces as "exit status 2" with no
+	// reason, blinding CI and forcing a manual repro. Tee stderr to the CLI as
+	// before and capture BOTH streams; on failure, attach the tail so the dbt
+	// diagnostic travels with the returned error.
+	var captured bytes.Buffer
+	pc.Stdout = &captured
+	pc.Stderr = io.MultiWriter(cmd.ErrOrStderr(), &captured)
 	if rerr := pc.Run(); rerr != nil {
+		if tail := lastLines(captured.String(), 20); tail != "" {
+			return nil, fmt.Errorf("dbt parse in %s: %w\n%s", projectDir, rerr, tail)
+		}
 		return nil, fmt.Errorf("dbt parse in %s: %w", projectDir, rerr)
 	}
 	path := filepath.Join(projectDir, "target", "manifest.json")

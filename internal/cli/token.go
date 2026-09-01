@@ -124,7 +124,7 @@ func newCreateTokenCommand() *cobra.Command {
 			}
 			token, err := requestToken(cmdContext(cmd), serverURL, username, pw)
 			if err != nil {
-				return err
+				return hintEmailUsername(username, err)
 			}
 			_, err = fmt.Fprintln(cmd.OutOrStdout(), token)
 			return err

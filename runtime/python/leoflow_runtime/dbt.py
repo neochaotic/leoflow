@@ -194,9 +194,18 @@ def write_dbt_profile(
     key = f"AIRFLOW_CONN_{conn_id.upper()}"
     uri = env.get(key)
     if not uri:
-        raise RuntimeError(
-            f"dbt connection {conn_id!r} was not delivered to the task ({key} is unset)"
-        )
+        msg = f"dbt connection {conn_id!r} was not delivered to the task ({key} is unset)"
+        # Backend-aware hint (#1): when an external secrets backend is configured, a
+        # missing declared connection is most often the pod identity/permissions —
+        # the provider backend reports an auth failure as a miss, so it falls through
+        # silently. Point at that instead of leaving a bare "unset".
+        if env.get("LEOFLOW_SECRETS_BACKEND"):
+            msg += (
+                "; an external secrets backend is configured — if this connection "
+                "should come from it, check the task pod's ServiceAccount and the "
+                "backend's read permissions (an auth failure surfaces as a miss)"
+            )
+        raise RuntimeError(msg)
     output = dbt_profile_from_uri(uri)
     if schema:
         output["schema"] = schema  # explicit leoflow.yaml schema wins over the URI/default

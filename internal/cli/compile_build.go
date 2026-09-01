@@ -33,14 +33,22 @@ func resolveBaseImage(cfg *domain.LeoflowConfig) string {
 	if cfg.BaseImage != "" {
 		return cfg.BaseImage
 	}
-	base := publishedBaseRepo + ":py" + cfg.PythonVersion
-	// Pin the base to THIS CLI's release, so a compile reproduces byte-for-byte: the
-	// release publishes an immutable py<ver>-<release> tag, and a compile from that
-	// release FROMs exactly it instead of the moving py<ver> line (ADR 0003). A dev/
-	// dirty/`git describe` build has no published versioned base, so it falls back to
-	// the moving tag. An explicit base_image (above) always wins.
-	if tag := releaseBaseTag(version.Get().Version); tag != "" {
-		return base + "-" + tag
+	return baseImageRef(publishedBaseRepo, cfg.PythonVersion, version.Get().Version)
+}
+
+// baseImageRef composes the task base image reference for a CLI of version
+// cliVersion. It pins the immutable per-release base (repo:py<ver>-v<X.Y.Z>) so a
+// compile from a release reproduces byte-for-byte (ADR 0003); a dev/dirty/`git
+// describe` build has no published versioned base and falls back to the moving
+// repo:py<ver> line. The published tag is ALWAYS `py<ver>-v<X.Y.Z>` (release.yaml
+// stamps `github.ref_name`, the git tag WITH its leading `v`), but GoReleaser
+// stamps the CLI's version WITHOUT the `v` (`{{ .Version }}`), so normalize to
+// exactly one leading `v` — otherwise a released CLI would FROM a `py<ver>-X.Y.Z`
+// tag that was never pushed.
+func baseImageRef(repo, pythonVersion, cliVersion string) string {
+	base := repo + ":py" + pythonVersion
+	if tag := releaseBaseTag(cliVersion); tag != "" {
+		return base + "-v" + strings.TrimPrefix(tag, "v")
 	}
 	return base
 }

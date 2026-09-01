@@ -1,11 +1,6 @@
 package cli
 
-import (
-	"strings"
-	"testing"
-
-	"github.com/neochaotic/leoflow/internal/domain"
-)
+import "testing"
 
 func TestReleaseBaseTag(t *testing.T) {
 	cases := map[string]string{
@@ -25,18 +20,23 @@ func TestReleaseBaseTag(t *testing.T) {
 	}
 }
 
-func TestResolveBaseImage(t *testing.T) {
-	// An explicit base_image always wins.
-	if got := resolveBaseImage(&domain.LeoflowConfig{BaseImage: "my/base:tag", PythonVersion: "3.11"}); got != "my/base:tag" {
-		t.Errorf("base_image override = %q, want my/base:tag", got)
+func TestBaseImageRef(t *testing.T) {
+	const repo = "ghcr.io/neochaotic/leoflow-runtime"
+	cases := map[string]string{
+		// GoReleaser stamps the CLI version WITHOUT the leading v; the published base
+		// tag ALWAYS has it. Both forms must resolve to the same py<ver>-v<X> tag.
+		"0.4.2":      repo + ":py3.11-v0.4.2",
+		"v0.4.2":     repo + ":py3.11-v0.4.2",
+		"0.4.3-rc.1": repo + ":py3.11-v0.4.3-rc.1",
+		// dev/dirty/describe → moving tag (no versioned base is published for them).
+		"0.4.2-9-gabc1234": repo + ":py3.11",
+		"v0.4.2-dirty":     repo + ":py3.11",
+		"dev":              repo + ":py3.11",
+		"":                 repo + ":py3.11",
 	}
-	// A dev/test build (version = "dev") pins the moving py<ver> tag — no versioned
-	// base is published for a non-release build.
-	got := resolveBaseImage(&domain.LeoflowConfig{PythonVersion: "3.11"})
-	if got != publishedBaseRepo+":py3.11" {
-		t.Errorf("dev build base = %q, want %q (moving tag)", got, publishedBaseRepo+":py3.11")
-	}
-	if strings.Contains(got, "-") && !strings.HasPrefix(got, publishedBaseRepo) {
-		t.Errorf("unexpected version suffix on a dev build: %q", got)
+	for ver, want := range cases {
+		if got := baseImageRef(repo, "3.11", ver); got != want {
+			t.Errorf("baseImageRef(_, 3.11, %q) = %q, want %q", ver, got, want)
+		}
 	}
 }

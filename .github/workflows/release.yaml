@@ -43,7 +43,7 @@ jobs:
           cosign-release: v2.4.3
 
       # ── syft for SBOM generation ──
-      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
       # ── QEMU + Buildx so the arm64 control-plane image builds on the amd64 runner ──
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3

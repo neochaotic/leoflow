@@ -6,6 +6,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-01
+
 ### Added
 
 - **Task pods default to the operator's task ServiceAccount (#844).** A new

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from typing import Any
 
@@ -53,12 +54,49 @@ def resolve(
     return out
 
 
+def _stdout_fd() -> int | None:
+    """The OS file descriptor behind stdout, or None if it has none.
+
+    A unit test may replace ``sys.stdout`` with an in-memory buffer (StringIO),
+    which has no fileno; there is then no descriptor to protect and main writes
+    the JSON to it directly.
+    """
+    try:
+        return sys.stdout.fileno()
+    except (AttributeError, OSError):
+        return None
+
+
 def main() -> int:
-    """Read the request from stdin, resolve, write hits to stdout."""
+    """Read the request from stdin, resolve, write hits to stdout.
+
+    Importing the provider backend and initialising it makes Airflow, its
+    providers, alembic, and the secrets masker log to STDOUT (structlog defaults
+    there). But stdout is a strict JSON channel the agent parses, so a single log
+    line would corrupt the result ("malformed output"). Redirect the stdout
+    descriptor to stderr for the whole resolve — the providers' logs then land on
+    stderr, which the agent routes to its debug log — and emit the JSON result on
+    the real stdout, so stdout carries the JSON and nothing else.
+    """
     req = json.load(sys.stdin)
-    backend = load_backend(req["backend"], req.get("backend_kwargs") or {})
-    out = resolve(backend, req.get("connections") or [], req.get("variables") or [])
+    fd = _stdout_fd()
+    if fd is None:
+        backend = load_backend(req["backend"], req.get("backend_kwargs") or {})
+        out = resolve(backend, req.get("connections") or [], req.get("variables") or [])
+        json.dump(out, sys.stdout)
+        return 0
+
+    saved = os.dup(fd)
+    try:
+        os.dup2(2, fd)  # provider/Airflow stdout logging -> stderr
+        backend = load_backend(req["backend"], req.get("backend_kwargs") or {})
+        out = resolve(backend, req.get("connections") or [], req.get("variables") or [])
+    finally:
+        sys.stdout.flush()  # flush their logs while fd still points at stderr
+        os.dup2(saved, fd)  # restore the real stdout
+        os.close(saved)
     json.dump(out, sys.stdout)
+    sys.stdout.flush()
     return 0
 
 

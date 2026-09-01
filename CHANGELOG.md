@@ -6,6 +6,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **External secrets resolver failed against a real provider backend (ADR 0060).**
+  Importing and initialising an Airflow provider secrets backend emits log lines
+  on stdout (structlog, alembic, the secrets masker). The resolver's stdout is the
+  strict-JSON channel the in-pod agent parses, so that logging corrupted the
+  result and the agent rejected it as malformed, failing the task closed. The
+  resolver now isolates its stdout: provider logging is redirected to stderr for
+  the duration of the resolve and only the JSON result reaches stdout. The backend
+  ships off by default (added in 0.4.2), so no released configuration was affected.
+  Locked by a subprocess regression test and a new pod-path end-to-end test that
+  resolves a declared connection and variable from an emulated Secrets Manager
+  (LocalStack) in a real task pod.
+
 ## [0.4.2] - 2026-08-31
 
 ### Added

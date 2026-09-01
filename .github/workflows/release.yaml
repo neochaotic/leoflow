@@ -432,6 +432,18 @@ jobs:
           echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} upgrade-smoke=${{ needs.upgrade-smoke.result }} migrate-image=${{ needs.migrate-image.result }} runtime-image=${{ needs.runtime-image.result }} verify-server-signature=${{ needs.verify-server-signature.result }}; retracting ${GITHUB_REF_NAME} to a draft."
           gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft
           exit 1
-      - name: Confirm release passed all gates
+      - name: Confirm release passed all gates and ensure it is published
         if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.upgrade-smoke.result == 'success' && needs.migrate-image.result == 'success' && needs.runtime-image.result == 'success' && needs.verify-server-signature.result == 'success'
-        run: echo "install smoke + lite cold-start + upgrade smoke + migrate-image + runtime-image + server-signature passed; ${GITHUB_REF_NAME} stays published."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          echo "install smoke + lite cold-start + upgrade smoke + migrate-image + runtime-image + server-signature passed; ${GITHUB_REF_NAME} stays published."
+          # Idempotently ensure the release is published. On the first green run this
+          # is a no-op (the release job already published it). On a green RE-RUN after
+          # an earlier run retracted the release to a draft (e.g. a transient cosign
+          # download flake failed a smoke job), this un-drafts it — closing the gap
+          # where a passing re-run left the release stuck as a draft, needing a manual
+          # `gh release edit --draft=false`. --draft=false leaves the prerelease flag
+          # untouched, so an rc stays a pre-release.
+          gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false

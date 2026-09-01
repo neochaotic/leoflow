@@ -22,6 +22,7 @@ import (
 // token for CI rather than persisting an interactive session.
 func newLoginCommand() *cobra.Command {
 	var serverURL, username, password string
+	var passwordStdin bool
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate to a control plane (Pro) and store the token.",
@@ -35,6 +36,9 @@ func newLoginCommand() *cobra.Command {
 				serverURL = cfg.ServerURL
 			}
 			var cerr error
+			if password, cerr = resolvePassword(cmd, password, passwordStdin); cerr != nil {
+				return cerr
+			}
 			username, password, cerr = resolveCredentials(cmd, username, password)
 			if cerr != nil {
 				return cerr
@@ -57,6 +61,7 @@ func newLoginCommand() *cobra.Command {
 	cmd.Flags().StringVar(&serverURL, "server", "", "control plane base URL (default: config server_url)")
 	cmd.Flags().StringVar(&username, "username", os.Getenv("LEOFLOW_USERNAME"), "username")
 	cmd.Flags().StringVar(&password, "password", os.Getenv("LEOFLOW_PASSWORD"), "password")
+	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the password from stdin instead of --password (avoids ps/shell-history exposure)")
 	return cmd
 }
 
@@ -98,6 +103,44 @@ func resolveCredentials(cmd *cobra.Command, username, password string) (user, pa
 }
 
 // promptValue prints a label and reads a trimmed line of input.
+// readPasswordStdin reads one line — the password — from r. It backs the
+// --password-stdin flag: the CI-safe way to supply a credential without it
+// appearing on argv (visible in `ps` and the shell history) or in an env var. The
+// trailing newline is stripped.
+func readPasswordStdin(r io.Reader) (string, error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	if sc.Scan() {
+		// Treat an empty first line the same as empty stdin: --password-stdin must
+		// never yield a silent empty password (echo '' | ... would otherwise pass
+		// "" downstream). A password is not trimmed — only a truly empty line fails.
+		if line := sc.Text(); line != "" {
+			return line, nil
+		}
+		return "", fmt.Errorf("--password-stdin got an empty password")
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("reading password from stdin: %w", err)
+	}
+	return "", fmt.Errorf("--password-stdin was set but stdin was empty")
+}
+
+// resolvePassword applies the auth commands' credential-source precedence:
+// --password-stdin (read a line from stdin) wins; otherwise the --password flag
+// or its LEOFLOW_PASSWORD default is used. An explicit --password together with
+// --password-stdin is a conflict — but an env-var default is not, so only a flag
+// the user actually set counts. When neither is given the value is returned empty
+// and the caller decides whether to prompt (interactive) or error (CI).
+func resolvePassword(cmd *cobra.Command, passwordFlag string, stdin bool) (string, error) {
+	if !stdin {
+		return passwordFlag, nil
+	}
+	if cmd.Flags().Changed("password") {
+		return "", fmt.Errorf("--password and --password-stdin are mutually exclusive")
+	}
+	return readPasswordStdin(cmd.InOrStdin())
+}
+
 func promptValue(in io.Reader, out io.Writer, label string) (string, error) {
 	devPrintf(out, "%s", label)
 	line, err := bufio.NewReader(in).ReadString('\n')

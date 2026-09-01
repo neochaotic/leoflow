@@ -33,6 +33,7 @@ func newAuthCommand() *cobra.Command {
 // --token, then LEOFLOW_TOKEN, then the session saved by `auth login`.
 func newCreateUserCommand() *cobra.Command {
 	var serverURL, token, email, password string
+	var passwordStdin bool
 	var roles []string
 	cmd := &cobra.Command{
 		Use:   "create-user",
@@ -43,10 +44,14 @@ func newCreateUserCommand() *cobra.Command {
 			if rerr != nil {
 				return rerr
 			}
-			if email == "" || password == "" {
+			pw, perr := resolvePassword(cmd, password, passwordStdin)
+			if perr != nil {
+				return perr
+			}
+			if email == "" || pw == "" {
 				return fmt.Errorf("--email and --password are required")
 			}
-			created, err := createUser(cmdContext(cmd), resolvedServer, resolvedToken, email, password, roles)
+			created, err := createUser(cmdContext(cmd), resolvedServer, resolvedToken, email, pw, roles)
 			if err != nil {
 				return err
 			}
@@ -59,6 +64,7 @@ func newCreateUserCommand() *cobra.Command {
 	cmd.Flags().StringVar(&token, "token", os.Getenv("LEOFLOW_TOKEN"), "admin JWT bearer token (default: config token)")
 	cmd.Flags().StringVar(&email, "email", "", "email of the user to create")
 	cmd.Flags().StringVar(&password, "password", os.Getenv("LEOFLOW_PASSWORD"), "password for the new user")
+	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the password from stdin instead of --password (avoids ps/shell-history exposure)")
 	cmd.Flags().StringArrayVar(&roles, "role", nil, "existing role to grant (repeatable); empty grants none")
 	return cmd
 }
@@ -99,6 +105,7 @@ func rolesOrNone(roles []string) string {
 
 func newCreateTokenCommand() *cobra.Command {
 	var serverURL, username, password string
+	var passwordStdin bool
 	cmd := &cobra.Command{
 		Use:   "create-token",
 		Short: "Obtain a JWT from the control plane.",
@@ -111,7 +118,11 @@ func newCreateTokenCommand() *cobra.Command {
 				}
 				serverURL = cfg.ServerURL
 			}
-			token, err := requestToken(cmdContext(cmd), serverURL, username, password)
+			pw, perr := resolvePassword(cmd, password, passwordStdin)
+			if perr != nil {
+				return perr
+			}
+			token, err := requestToken(cmdContext(cmd), serverURL, username, pw)
 			if err != nil {
 				return err
 			}
@@ -122,6 +133,7 @@ func newCreateTokenCommand() *cobra.Command {
 	cmd.Flags().StringVar(&serverURL, "server", "", "control plane base URL (default: config server_url)")
 	cmd.Flags().StringVar(&username, "username", os.Getenv("LEOFLOW_USERNAME"), "username")
 	cmd.Flags().StringVar(&password, "password", os.Getenv("LEOFLOW_PASSWORD"), "password")
+	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the password from stdin instead of --password (avoids ps/shell-history exposure)")
 	return cmd
 }
 

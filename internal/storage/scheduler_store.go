@@ -700,6 +700,7 @@ func (s *SchedulerStore) ListAgentLostCandidates(ctx context.Context) ([]executo
 		}
 		out = append(out, executor.AgentLostCandidate{
 			TaskInstanceID: uuidToString(r.TaskInstanceID),
+			TenantID:       uuidToString(r.TenantID),
 			DagRunID:       uuidToString(r.DagRunID),
 			DagID:          r.DagIDText,
 			TaskID:         r.TaskID,

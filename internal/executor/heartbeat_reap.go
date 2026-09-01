@@ -2,10 +2,22 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"time"
+
+	"github.com/neochaotic/leoflow/internal/logs"
 )
+
+// logSink is the slice of logs.Sink a reaper needs to append a final marker to
+// a reaped attempt's log stream (#861). A reaper-killed pod stops mid-stream, so
+// without this the task log ends with a silent truncation; the marker turns it
+// into a diagnosable "killed: agent_lost …" line. Nil disables the marker (Lite
+// or an unwired sink) — the reaper's core work is unaffected.
+type logSink interface {
+	Open(ref logs.Ref) (logs.LogWriter, error)
+}
 
 // AgentLostCandidate is one task instance in `running` whose agent may have
 // gone silent, with the timestamp of its most recent heartbeat. The reaper
@@ -14,6 +26,7 @@ import (
 // and the TI is failed with reason "agent_lost".
 type AgentLostCandidate struct {
 	TaskInstanceID string
+	TenantID       string
 	DagRunID       string
 	DagID          string
 	TaskID         string
@@ -69,6 +82,10 @@ type agentLostReaper struct {
 	// silent agent may be a network-partitioned but still-running container;
 	// deleting the pod is what actually stops the abandoned work. Nil in Lite.
 	pods PodManager
+	// sink appends a final "killed: agent_lost" marker to the reaped attempt's
+	// log stream so a killed task's log does not end in a silent truncation
+	// (#861). Nil disables the marker; the reap itself is unaffected.
+	sink logSink
 }
 
 func newAgentLostReaper(store HeartbeatReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *agentLostReaper {
@@ -112,6 +129,10 @@ func (r *agentLostReaper) run(ctx context.Context) error {
 			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID,
 			"last_heartbeat", c.LastHeartbeat)
 		r.record("agent_lost")
+		// Append a final marker to the attempt's log BEFORE deleting the pod, so a
+		// killed task's log ends with the reason instead of a silent truncation
+		// (#861) — the log stream stops the moment the pod is gone.
+		r.writeAgentLostMarker(c, now)
 		// The TI is now durably failed; delete its pod so a partitioned-but-alive
 		// container stops (#474). Pinned to (run, task, try) so a retry's newer
 		// pod is never touched. Only reached after the DB mark, so we never delete
@@ -125,6 +146,32 @@ func (r *agentLostReaper) run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// writeAgentLostMarker appends one terminal line to the reaped attempt's log
+// stream so the user tailing it sees why it stopped instead of a truncation
+// (#861). Best-effort: a nil sink or an open/write error never blocks the reap —
+// the DB state and server slog remain the source of truth.
+func (r *agentLostReaper) writeAgentLostMarker(c AgentLostCandidate, now time.Time) {
+	if r.sink == nil {
+		return
+	}
+	w, err := r.sink.Open(logs.Ref{
+		TenantID: c.TenantID, DagID: c.DagID, RunID: c.DagRunID, TaskID: c.TaskID, TryNumber: c.TryNumber,
+	})
+	if err != nil {
+		r.record("agent_lost_log_marker_error")
+		return
+	}
+	werr := w.WriteEvent(logs.Event{
+		Time:    now,
+		Level:   "error",
+		Stream:  "system",
+		Message: fmt.Sprintf("killed: agent_lost (last heartbeat %s, silent past %s threshold)", c.LastHeartbeat.UTC().Format(time.RFC3339), r.threshold),
+	})
+	if cerr := w.Close(); werr != nil || cerr != nil {
+		r.record("agent_lost_log_marker_error")
+	}
 }
 
 func (r *agentLostReaper) record(decision string) {

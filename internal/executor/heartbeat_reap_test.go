@@ -3,9 +3,46 @@ package executor
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/neochaotic/leoflow/internal/logs"
 )
+
+// fakeLogSink captures the final markers a reaper appends to a task's log
+// stream (#861), keyed by the same identity the disk sink uses.
+type fakeLogSink struct {
+	openErr error
+	events  map[string][]logs.Event
+}
+
+func refKey(ref logs.Ref) string {
+	return ref.TenantID + "/" + ref.DagID + "/" + ref.RunID + "/" + ref.TaskID + "/" + strconv.Itoa(ref.TryNumber)
+}
+
+func (f *fakeLogSink) Open(ref logs.Ref) (logs.LogWriter, error) {
+	if f.openErr != nil {
+		return nil, f.openErr
+	}
+	return &fakeLogWriter{sink: f, ref: ref}, nil
+}
+
+type fakeLogWriter struct {
+	sink *fakeLogSink
+	ref  logs.Ref
+}
+
+func (w *fakeLogWriter) WriteEvent(ev logs.Event) error {
+	if w.sink.events == nil {
+		w.sink.events = map[string][]logs.Event{}
+	}
+	w.sink.events[refKey(w.ref)] = append(w.sink.events[refKey(w.ref)], ev)
+	return nil
+}
+
+func (w *fakeLogWriter) Close() error { return nil }
 
 // TestIsAgentLost: the pure decision returns true iff the gap between the
 // candidate's last heartbeat and now reaches the threshold. A zero
@@ -113,6 +150,51 @@ func TestReapAgentLost_NoopWhenAlreadyTransitioned(t *testing.T) {
 	}
 	if len(pods.deletedTasks) != 0 {
 		t.Errorf("no pod should be deleted for a settled TI, got %v", pods.deletedTasks)
+	}
+}
+
+// TestReapAgentLost_WritesLogMarker: when a TI is reaped, a final marker is
+// appended to that attempt's log stream (#861), at the exact Ref, so a killed
+// task's log ends with "agent_lost" instead of a silent truncation.
+func TestReapAgentLost_WritesLogMarker(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeHeartbeatStore{candidates: []AgentLostCandidate{
+		{TaskInstanceID: "ti1", TenantID: "tnt", DagID: "dag", DagRunID: "run", TaskID: "task", TryNumber: 2, LastHeartbeat: now.Add(-5 * time.Minute)},
+	}}
+	sink := &fakeLogSink{}
+	r := newAgentLostReaper(store, reapTestLogger(), 90*time.Second, nil)
+	r.sink = sink
+
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	evs := sink.events[refKey(logs.Ref{TenantID: "tnt", DagID: "dag", RunID: "run", TaskID: "task", TryNumber: 2})]
+	if len(evs) != 1 {
+		t.Fatalf("want exactly 1 marker at the reaped attempt's Ref, got %d (%v)", len(evs), sink.events)
+	}
+	if !strings.Contains(evs[0].Message, "agent_lost") {
+		t.Errorf("marker msg = %q, want it to mention agent_lost", evs[0].Message)
+	}
+}
+
+// TestReapAgentLost_NoMarkerOnNoop: a raced no-op mark must not write a log
+// marker (the TI was settled by a late terminal report; its log is not ours).
+func TestReapAgentLost_NoMarkerOnNoop(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeHeartbeatStore{
+		candidates: []AgentLostCandidate{
+			{TaskInstanceID: "raced", TenantID: "tnt", DagID: "dag", DagRunID: "run", TaskID: "task", TryNumber: 1, LastHeartbeat: now.Add(-5 * time.Minute)},
+		},
+		markNoop: true,
+	}
+	sink := &fakeLogSink{}
+	r := newAgentLostReaper(store, reapTestLogger(), 90*time.Second, nil)
+	r.sink = sink
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(sink.events) != 0 {
+		t.Errorf("no marker should be written for a settled TI, got %v", sink.events)
 	}
 }
 

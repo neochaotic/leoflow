@@ -1465,9 +1465,14 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// pod liveness (#474, #461), so it is wired only on the pod path. Lite/
 	// subprocess leaves the scheduler's reaper unset and does no reaping.
 	reaper := executor.NewReaper(store, podExec, cache, warmLister, metrics, logger, executor.DefaultReaperConfig(), sched.SteppingDown)
-	// Give the reaper the log sink so a reaped attempt's log ends with a
-	// "killed: agent_lost" marker instead of a silent truncation (#861).
-	reaper.SetLogSink(logSink)
+	// Give the reaper an append-aware marker sink so a reaped attempt's log ends
+	// with a "killed: agent_lost" marker instead of a silent truncation (#861).
+	// Both DiskSink and ObjectSink implement MarkerSink (append preserves the
+	// agent's streamed content on either backend); the assertion holds for every
+	// sink NewDurableSink returns.
+	if ms, ok := logSink.(logs.MarkerSink); ok {
+		reaper.SetLogSink(ms)
+	}
 	sched.SetExecutionReaper(reaper)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)

@@ -135,6 +135,16 @@ type Sink interface {
 	Read(ref Ref) (io.ReadCloser, error)
 }
 
+// MarkerSink appends a single event to an attempt's existing log while
+// PRESERVING prior content: O_APPEND on disk, read-modify-write on an object
+// store (which has no native append, so Open+Close there would overwrite the
+// whole object). A reaper uses it to add a terminal marker to a killed task's
+// log without clobbering the streamed output (#861). DiskSink and ObjectSink
+// both implement it; a caller holding a Sink type-asserts to reach it.
+type MarkerSink interface {
+	AppendEvent(ref Ref, ev Event) error
+}
+
 // DiskSink writes logs to ${root}/{tenant}/{dag}/{run}/{task}/{try}.log.
 type DiskSink struct {
 	root string
@@ -242,6 +252,17 @@ func (d *DiskSink) Open(ref Ref) (LogWriter, error) {
 		return nil, err
 	}
 	return &diskWriter{f: f, buf: bufio.NewWriterSize(f, flushThreshold)}, nil
+}
+
+// AppendEvent adds one event to the attempt's log file. The disk sink already
+// opens with O_APPEND, so this is a plain open-write-close that preserves the
+// streamed content — the marker lands after whatever the agent wrote (#861).
+func (d *DiskSink) AppendEvent(ref Ref, ev Event) error {
+	w, err := d.Open(ref)
+	if err != nil {
+		return err
+	}
+	return errors.Join(w.WriteEvent(ev), w.Close())
 }
 
 // Prune deletes log files whose last modification is older than retention,

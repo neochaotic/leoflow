@@ -98,6 +98,72 @@ func TestObjectSinkRoundTrip(t *testing.T) {
 	}
 }
 
+// TestObjectSinkAppendEventPreservesExisting is the #861 regression: over an
+// object store (no native append), adding a marker MUST read-modify-write, not
+// overwrite the agent's streamed log with a marker-only object. This is the
+// EKS/S3 path the disk-sink tests never exercise.
+func TestObjectSinkAppendEventPreservesExisting(t *testing.T) {
+	store := newMemStore()
+	sink := NewObjectSink(context.Background(), store, "logs")
+	ref := sampleRef()
+
+	// The agent streamed two lines and its object was Put.
+	w, err := sink.Open(ref)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	for _, ev := range []Event{{Level: "info", Message: "starting"}, {Level: "info", Message: "Running with dbt=1.12.3"}} {
+		if werr := w.WriteEvent(ev); werr != nil {
+			t.Fatalf("WriteEvent() error = %v", werr)
+		}
+	}
+	if cerr := w.Close(); cerr != nil {
+		t.Fatalf("Close() error = %v", cerr)
+	}
+
+	// The reaper appends a marker via the MarkerSink seam.
+	if aerr := sink.AppendEvent(ref, Event{Level: "error", Stream: "system", Message: "killed: agent_lost (last heartbeat ...)"}); aerr != nil {
+		t.Fatalf("AppendEvent() error = %v", aerr)
+	}
+
+	rc, err := sink.Read(ref)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	raw, _ := io.ReadAll(rc)
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want 3 lines (2 streamed + marker), got %d: %q", len(lines), string(raw))
+	}
+	if got := DecodeLine(lines[0]).Message; got != "starting" {
+		t.Errorf("first line = %q, want the agent's original output preserved", got)
+	}
+	if got := DecodeLine(lines[2]).Message; !strings.Contains(got, "agent_lost") {
+		t.Errorf("last line = %q, want the appended agent_lost marker", got)
+	}
+}
+
+// TestObjectSinkAppendEventCreatesWhenAbsent: appending to a ref with no prior
+// object (the agent Put nothing yet) writes a marker-only object, tolerating the
+// not-found rather than erroring.
+func TestObjectSinkAppendEventCreatesWhenAbsent(t *testing.T) {
+	sink := NewObjectSink(context.Background(), newMemStore(), "")
+	ref := sampleRef()
+	if err := sink.AppendEvent(ref, Event{Level: "error", Message: "killed: agent_lost"}); err != nil {
+		t.Fatalf("AppendEvent(absent) error = %v", err)
+	}
+	rc, err := sink.Read(ref)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	raw, _ := io.ReadAll(rc)
+	if !strings.Contains(string(raw), "agent_lost") {
+		t.Errorf("stored object = %q, want the marker", string(raw))
+	}
+}
+
 func TestObjectSinkKeyLayoutIncludesPrefix(t *testing.T) {
 	store := newMemStore()
 	sink := NewObjectSink(context.Background(), store, "acme/logs")

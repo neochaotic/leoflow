@@ -85,6 +85,39 @@ func (o *ObjectSink) Read(ref Ref) (io.ReadCloser, error) {
 	return rc, nil
 }
 
+// AppendEvent adds one event to the attempt's stored object WITHOUT clobbering
+// it. Object stores have no append, so a plain Open+Close would Put a
+// marker-only object over the agent's streamed log; instead this reads the
+// existing object (tolerating a not-yet-written one), appends the event as a
+// JSONL line, and Puts the combined object back (#861). Best-effort read-modify-
+// write: a lost task's agent is silent, so there is no concurrent writer to race.
+func (o *ObjectSink) AppendEvent(ref Ref, ev Event) error {
+	if err := ref.validate(); err != nil {
+		return err
+	}
+	key := o.key(ref)
+	var buf bytes.Buffer
+	rc, err := o.store.Get(o.ctx, key)
+	switch {
+	case err == nil:
+		if _, cerr := io.Copy(&buf, rc); cerr != nil {
+			return errors.Join(fmt.Errorf("reading log object for append: %w", cerr), rc.Close())
+		}
+		if cerr := rc.Close(); cerr != nil {
+			return fmt.Errorf("closing log object after read: %w", cerr)
+		}
+	case errors.Is(err, ErrObjectNotFound):
+		// No prior object (agent Put nothing yet): the marker is the whole object.
+	default:
+		return fmt.Errorf("reading log object for append: %w", err)
+	}
+	buf.WriteString(EncodeLine(ev) + "\n")
+	if err := o.store.Put(o.ctx, key, bytes.NewReader(buf.Bytes())); err != nil {
+		return fmt.Errorf("writing appended log object: %w", err)
+	}
+	return nil
+}
+
 // maxBufferedAttemptBytes caps how much of a single task attempt the object sink
 // buffers in the control plane. Object stores have no append, so the whole
 // attempt is held in RAM until Close; without a cap one chatty task could OOM the

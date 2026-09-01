@@ -10,13 +10,16 @@ import (
 	"github.com/neochaotic/leoflow/internal/logs"
 )
 
-// logSink is the slice of logs.Sink a reaper needs to append a final marker to
-// a reaped attempt's log stream (#861). A reaper-killed pod stops mid-stream, so
-// without this the task log ends with a silent truncation; the marker turns it
-// into a diagnosable "killed: agent_lost …" line. Nil disables the marker (Lite
-// or an unwired sink) — the reaper's core work is unaffected.
+// logSink is the slice of the log backend a reaper needs to append a final
+// marker to a reaped attempt's log stream (#861). A reaper-killed pod stops
+// mid-stream, so without this the task log ends with a silent truncation; the
+// marker turns it into a diagnosable "killed: agent_lost …" line. It is
+// logs.MarkerSink: AppendEvent preserves prior content on BOTH backends
+// (O_APPEND on disk, read-modify-write on an object store), so the marker never
+// clobbers the agent's streamed log. Nil disables the marker (Lite or an unwired
+// sink) — the reaper's core work is unaffected.
 type logSink interface {
-	Open(ref logs.Ref) (logs.LogWriter, error)
+	AppendEvent(ref logs.Ref, ev logs.Event) error
 }
 
 // AgentLostCandidate is one task instance in `running` whose agent may have
@@ -156,20 +159,14 @@ func (r *agentLostReaper) writeAgentLostMarker(c AgentLostCandidate, now time.Ti
 	if r.sink == nil {
 		return
 	}
-	w, err := r.sink.Open(logs.Ref{
-		TenantID: c.TenantID, DagID: c.DagID, RunID: c.DagRunID, TaskID: c.TaskID, TryNumber: c.TryNumber,
-	})
-	if err != nil {
-		r.record("agent_lost_log_marker_error")
-		return
-	}
-	werr := w.WriteEvent(logs.Event{
+	ref := logs.Ref{TenantID: c.TenantID, DagID: c.DagID, RunID: c.DagRunID, TaskID: c.TaskID, TryNumber: c.TryNumber}
+	ev := logs.Event{
 		Time:    now,
 		Level:   "error",
 		Stream:  "system",
 		Message: fmt.Sprintf("killed: agent_lost (last heartbeat %s, silent past %s threshold)", c.LastHeartbeat.UTC().Format(time.RFC3339), r.threshold),
-	})
-	if cerr := w.Close(); werr != nil || cerr != nil {
+	}
+	if err := r.sink.AppendEvent(ref, ev); err != nil {
 		r.record("agent_lost_log_marker_error")
 	}
 }

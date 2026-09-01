@@ -3,9 +3,36 @@ package executor
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/neochaotic/leoflow/internal/logs"
 )
+
+// fakeLogSink captures the final markers a reaper appends to a task's log
+// stream (#861) via the MarkerSink seam, keyed by the same identity the disk
+// sink uses. appendErr lets a test exercise the best-effort error path.
+type fakeLogSink struct {
+	appendErr error
+	events    map[string][]logs.Event
+}
+
+func refKey(ref logs.Ref) string {
+	return ref.TenantID + "/" + ref.DagID + "/" + ref.RunID + "/" + ref.TaskID + "/" + strconv.Itoa(ref.TryNumber)
+}
+
+func (f *fakeLogSink) AppendEvent(ref logs.Ref, ev logs.Event) error {
+	if f.appendErr != nil {
+		return f.appendErr
+	}
+	if f.events == nil {
+		f.events = map[string][]logs.Event{}
+	}
+	f.events[refKey(ref)] = append(f.events[refKey(ref)], ev)
+	return nil
+}
 
 // TestIsAgentLost: the pure decision returns true iff the gap between the
 // candidate's last heartbeat and now reaches the threshold. A zero
@@ -113,6 +140,82 @@ func TestReapAgentLost_NoopWhenAlreadyTransitioned(t *testing.T) {
 	}
 	if len(pods.deletedTasks) != 0 {
 		t.Errorf("no pod should be deleted for a settled TI, got %v", pods.deletedTasks)
+	}
+}
+
+// TestReapAgentLost_WritesLogMarker: when a TI is reaped, a final marker is
+// appended to that attempt's log stream (#861), at the exact Ref, so a killed
+// task's log ends with "agent_lost" instead of a silent truncation.
+func TestReapAgentLost_WritesLogMarker(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeHeartbeatStore{candidates: []AgentLostCandidate{
+		{TaskInstanceID: "ti1", TenantID: "tnt", DagID: "dag", DagRunID: "run", TaskID: "task", TryNumber: 2, LastHeartbeat: now.Add(-5 * time.Minute)},
+	}}
+	sink := &fakeLogSink{}
+	r := newAgentLostReaper(store, reapTestLogger(), 90*time.Second, nil)
+	r.sink = sink
+
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	evs := sink.events[refKey(logs.Ref{TenantID: "tnt", DagID: "dag", RunID: "run", TaskID: "task", TryNumber: 2})]
+	if len(evs) != 1 {
+		t.Fatalf("want exactly 1 marker at the reaped attempt's Ref, got %d (%v)", len(evs), sink.events)
+	}
+	if !strings.Contains(evs[0].Message, "agent_lost") {
+		t.Errorf("marker msg = %q, want it to mention agent_lost", evs[0].Message)
+	}
+}
+
+// TestReapAgentLost_NoMarkerOnNoop: a raced no-op mark must not write a log
+// marker (the TI was settled by a late terminal report; its log is not ours).
+func TestReapAgentLost_NoMarkerOnNoop(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeHeartbeatStore{
+		candidates: []AgentLostCandidate{
+			{TaskInstanceID: "raced", TenantID: "tnt", DagID: "dag", DagRunID: "run", TaskID: "task", TryNumber: 1, LastHeartbeat: now.Add(-5 * time.Minute)},
+		},
+		markNoop: true,
+	}
+	sink := &fakeLogSink{}
+	r := newAgentLostReaper(store, reapTestLogger(), 90*time.Second, nil)
+	r.sink = sink
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(sink.events) != 0 {
+		t.Errorf("no marker should be written for a settled TI, got %v", sink.events)
+	}
+}
+
+// TestReapAgentLost_MarkerErrorDoesNotBlockReap: a marker append failure is
+// best-effort — it records a metric but must NOT stop the TI being failed or its
+// pod being torn down. The log marker is a diagnostic nicety, never a gate.
+func TestReapAgentLost_MarkerErrorDoesNotBlockReap(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeHeartbeatStore{candidates: []AgentLostCandidate{
+		{TaskInstanceID: "ti1", TenantID: "tnt", DagID: "dag", DagRunID: "run", TaskID: "task", TryNumber: 1, LastHeartbeat: now.Add(-5 * time.Minute)},
+	}}
+	rec := &capturingRecorder{}
+	pods := &fakePodManager{active: map[string]bool{}}
+	r := newAgentLostReaper(store, reapTestLogger(), 90*time.Second, rec)
+	r.pods = pods
+	r.sink = &fakeLogSink{appendErr: errors.New("sink down")}
+
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(store.failed) != 1 {
+		t.Errorf("TI must still be failed despite a marker error, failed=%v", store.failed)
+	}
+	if len(pods.deletedTasks) != 1 {
+		t.Errorf("pod must still be deleted despite a marker error, deleted=%v", pods.deletedTasks)
+	}
+	if got := rec.count("agent_lost_log_marker_error"); got != 1 {
+		t.Errorf("agent_lost_log_marker_error = %d, want 1", got)
+	}
+	if got := rec.count("agent_lost"); got != 1 {
+		t.Errorf("agent_lost = %d, want 1 (reap still counts)", got)
 	}
 }
 

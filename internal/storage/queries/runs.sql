@@ -805,6 +805,7 @@ WHERE ti.state IN ('queued', 'running')
 -- reaper. The LIMIT bounds a single tick's reap work even after a large
 -- outage; the rest are picked up on the next tick.
 SELECT ti.id AS task_instance_id,
+       ti.tenant_id AS tenant_id,
        ti.dag_run_id AS dag_run_id,
        d.dag_id AS dag_id_text,
        ti.task_id AS task_id,

@@ -688,6 +688,7 @@ func (q *Queries) ListActiveDagRuns(ctx context.Context) ([]DagRun, error) {
 
 const listAgentLostCandidates = `-- name: ListAgentLostCandidates :many
 SELECT ti.id AS task_instance_id,
+       ti.tenant_id AS tenant_id,
        ti.dag_run_id AS dag_run_id,
        d.dag_id AS dag_id_text,
        ti.task_id AS task_id,
@@ -704,6 +705,7 @@ LIMIT 100
 
 type ListAgentLostCandidatesRow struct {
 	TaskInstanceID  pgtype.UUID        `json:"task_instance_id"`
+	TenantID        pgtype.UUID        `json:"tenant_id"`
 	DagRunID        pgtype.UUID        `json:"dag_run_id"`
 	DagIDText       string             `json:"dag_id_text"`
 	TaskID          string             `json:"task_id"`
@@ -728,6 +730,7 @@ func (q *Queries) ListAgentLostCandidates(ctx context.Context) ([]ListAgentLostC
 		var i ListAgentLostCandidatesRow
 		if err := rows.Scan(
 			&i.TaskInstanceID,
+			&i.TenantID,
 			&i.DagRunID,
 			&i.DagIDText,
 			&i.TaskID,

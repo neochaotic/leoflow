@@ -130,6 +130,14 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 	}
 }
 
+// SetLogSink wires the sink the agent-lost reaper uses to append a final
+// "killed: agent_lost" marker to a reaped attempt's log stream (#861), so a
+// killed task's log ends with the reason instead of a silent truncation. Any
+// logs.Sink satisfies the parameter; nil (Lite / unwired) leaves markers off.
+func (r *Reaper) SetLogSink(s logSink) {
+	r.agentLost.sink = s
+}
+
 // ReapOnce runs the four reapers once, in the same order the scheduler drove
 // them: orphan-run, then agent-lost, then dispatch-lost, then pod-lost. The
 // dispatch-lost reaper runs AFTER the orphan-run reaper so a clean

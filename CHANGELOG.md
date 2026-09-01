@@ -6,6 +6,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A task killed by the agent-lost reaper now ends its log with a marker
+  (#861).** When the control plane fails a task whose agent went silent, it
+  deletes the pod and the log stream stops — previously leaving the task log
+  truncated mid-line (e.g. `Running with dbt…`), indistinguishable from a hang.
+  The reaper now appends a final `killed: agent_lost (last heartbeat …)` line to
+  the reaped attempt's log before tearing the pod down, so the reason is visible
+  where the operator tails it. Best-effort: the marker never blocks the reap.
+
 ## [0.4.3] - 2026-09-01
 
 ### Added

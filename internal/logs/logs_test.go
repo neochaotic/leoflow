@@ -19,6 +19,39 @@ func TestRefChannel(t *testing.T) {
 	}
 }
 
+// TestDiskSinkAppendEventPreservesExisting: the marker seam appends after the
+// agent's streamed lines on disk (O_APPEND), never truncating them (#861).
+func TestDiskSinkAppendEventPreservesExisting(t *testing.T) {
+	dir := t.TempDir()
+	sink := NewDiskSink(dir)
+	w, err := sink.Open(ref())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if werr := w.WriteEvent(Event{Level: "info", Message: "Running with dbt=1.12.3"}); werr != nil {
+		t.Fatalf("WriteEvent() error = %v", werr)
+	}
+	if cerr := w.Close(); cerr != nil {
+		t.Fatalf("Close() error = %v", cerr)
+	}
+	if aerr := sink.AppendEvent(ref(), Event{Level: "error", Stream: "system", Message: "killed: agent_lost"}); aerr != nil {
+		t.Fatalf("AppendEvent() error = %v", aerr)
+	}
+	rc, err := sink.Read(ref())
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	raw, _ := io.ReadAll(rc)
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines (streamed + marker), got %d: %q", len(lines), string(raw))
+	}
+	if !strings.Contains(DecodeLine(lines[1]).Message, "agent_lost") {
+		t.Errorf("last line = %q, want appended marker", lines[1])
+	}
+}
+
 func TestDiskSinkWriteThenReadBack(t *testing.T) {
 	dir := t.TempDir()
 	sink := NewDiskSink(dir)

@@ -441,7 +441,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 
 	drain := func() {}
 	if cfg.Scheduler.Enabled {
-		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, warmReg, logger, metrics)
+		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, warmReg, logSink, logger, metrics)
 		if serr != nil {
 			grpcSrv.GracefulStop()
 			return nil, false, nil, serr
@@ -1144,7 +1144,7 @@ func startStagingGC(ctx context.Context, cs kubernetes.Interface, namespace stri
 	})
 }
 
-func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, io.Closer, error) {
+func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, warmPools *agentrpc.WorkerRegistry, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (*scheduler.Scheduler, bool, io.Closer, error) {
 	leaderPool, err := storage.NewLeaderPool(ctx, cfg.Database)
 	if err != nil {
 		return nil, false, nil, fmt.Errorf("leader pool: %w", err)
@@ -1168,7 +1168,7 @@ func startScheduler(ctx context.Context, cfg *config.ServerConfig, pg *storage.P
 		metrics,
 		logger,
 	))
-	podDispatch, dispatchCloser := setupDispatch(ctx, cfg, sched, execStore, authn, store, warmPools, logger, metrics)
+	podDispatch, dispatchCloser := setupDispatch(ctx, cfg, sched, execStore, authn, store, warmPools, logSink, logger, metrics)
 	leader := scheduler.NewLeader(leaderPool)
 	go func() {
 		defer leaderPool.Close()
@@ -1359,11 +1359,11 @@ func serve(s *http.Server, errCh chan<- error) {
 // setupDispatch wires the pod-path executor selected by executor.type onto the
 // scheduler and returns whether pod dispatch is active. "subprocess" runs the
 // agent on the host (dev only); "kubernetes" (default) launches task pods.
-func setupDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
+func setupDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, warmPools *agentrpc.WorkerRegistry, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
 	if cfg.Executor.Type == "subprocess" {
 		return setupSubprocessDispatch(cfg, sched, execStore, authn, warmPools, logger, store, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 	}
-	return setupK8sDispatch(ctx, cfg, sched, execStore, authn, store, warmPools, logger, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
+	return setupK8sDispatch(ctx, cfg, sched, execStore, authn, store, warmPools, logSink, logger, metrics) //nolint:contextcheck // buffered worker deliberately detaches from caller ctx
 }
 
 // setWarmPlacer attaches the warm-worker placement seam to the dispatcher, but
@@ -1404,7 +1404,7 @@ func setupSubprocessDispatch(cfg *config.ServerConfig, sched *scheduler.Schedule
 // setupK8sDispatch wires the production pod-per-task executor; it is a no-op
 // (tasks have no executor and are failed as undispatchable) when no Kubernetes
 // client is available.
-func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
+func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *scheduler.Scheduler, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, store *storage.SchedulerStore, warmPools *agentrpc.WorkerRegistry, logSink logs.Sink, logger *slog.Logger, metrics *observability.Metrics) (bool, io.Closer) {
 	cs, perr := buildK8sClient()
 	if perr != nil {
 		logger.Warn("pod dispatch disabled; tasks have no executor and will fail as undispatchable", "error", perr)
@@ -1465,6 +1465,14 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// pod liveness (#474, #461), so it is wired only on the pod path. Lite/
 	// subprocess leaves the scheduler's reaper unset and does no reaping.
 	reaper := executor.NewReaper(store, podExec, cache, warmLister, metrics, logger, executor.DefaultReaperConfig(), sched.SteppingDown)
+	// Give the reaper an append-aware marker sink so a reaped attempt's log ends
+	// with a "killed: agent_lost" marker instead of a silent truncation (#861).
+	// Both DiskSink and ObjectSink implement MarkerSink (append preserves the
+	// agent's streamed content on either backend); the assertion holds for every
+	// sink NewDurableSink returns.
+	if ms, ok := logSink.(logs.MarkerSink); ok {
+		reaper.SetLogSink(ms)
+	}
 	sched.SetExecutionReaper(reaper)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)

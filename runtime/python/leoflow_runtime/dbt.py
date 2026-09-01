@@ -211,8 +211,12 @@ def write_dbt_profile(
         output["schema"] = schema  # explicit leoflow.yaml schema wins over the URI/default
     profile = {profile_name: {"target": "dev", "outputs": {"dev": output}}}
     path = os.path.join(profiles_dir, "profiles.yml")
-    with open(path, "w", encoding="utf-8") as handle:
+    # profiles.yml carries warehouse credentials (password / private key / keyfile /
+    # token), so write it owner-only (0600), not the default 0644. The opener sets
+    # the mode on create; chmod also covers a pre-existing file.
+    with open(path, "w", encoding="utf-8", opener=lambda p, f: os.open(p, f, 0o600)) as handle:
         json.dump(profile, handle)
+    os.chmod(path, 0o600)
     return path
 
 

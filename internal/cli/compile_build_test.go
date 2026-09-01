@@ -206,3 +206,49 @@ func TestEnsureDockerfileGeneratesWhenAbsent(t *testing.T) {
 		t.Errorf("cleanup did not remove the generated Dockerfile %q", path)
 	}
 }
+
+// The synthesized Dockerfile must install deps as root (so console scripts like
+// dbt land on PATH, not ~/.local/bin) and drop back to the non-root runtime USER,
+// keeping the COPYed project root-owned/read-only (#852).
+func TestGeneratedDockerfileInstallsAsRoot(t *testing.T) {
+	cfg := &domain.LeoflowConfig{
+		PythonVersion: "3.11",
+		Dependencies:  []string{"dbt-postgres==1.9.0"},
+		Dbt:           &domain.DbtConfig{Project: "analytics"},
+	}
+	df, err := generatedDockerfile(cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("generatedDockerfile() error = %v", err)
+	}
+	// USER root must precede the pip install, and USER 65532 must be the last USER.
+	iRoot := strings.Index(df, "USER root")
+	iPip := strings.Index(df, "pip install")
+	iNonRoot := strings.LastIndex(df, "USER 65532:65532")
+	if iRoot < 0 || iPip < 0 || iNonRoot < 0 {
+		t.Fatalf("expected USER root, pip install, and a trailing USER 65532:65532 in:\n%s", df)
+	}
+	if iRoot >= iPip || iPip >= iNonRoot {
+		t.Errorf("order must be USER root -> pip install -> USER 65532:65532, got:\n%s", df)
+	}
+	// The runtime USER must be non-root (PSA runAsNonRoot): no USER directive after it.
+	if strings.Contains(df[iNonRoot+len("USER 65532:65532"):], "USER ") {
+		t.Errorf("a USER directive follows the final non-root USER:\n%s", df)
+	}
+	// The project stays read-only — no chown makes it task-writable.
+	if strings.Contains(df, "chown") {
+		t.Errorf("project must stay read-only (no chown); got:\n%s", df)
+	}
+}
+
+// A pure-Python DAG with NO deps needs no root switch (nothing to install) and
+// stays on the base's non-root USER.
+func TestGeneratedDockerfileNoDepsNoRootSwitch(t *testing.T) {
+	cfg := &domain.LeoflowConfig{PythonVersion: "3.11"}
+	df, err := generatedDockerfile(cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("generatedDockerfile() error = %v", err)
+	}
+	if strings.Contains(df, "USER root") {
+		t.Errorf("no deps → no root switch needed; got:\n%s", df)
+	}
+}

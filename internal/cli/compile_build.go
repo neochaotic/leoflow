@@ -101,6 +101,15 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "FROM %s\n", resolveBaseImage(cfg))
+	// apt requires root, and pip as the base's non-root USER (65532) falls back to a
+	// `--user` install whose console scripts (e.g. `dbt`) land in ~/.local/bin, which
+	// is not on PATH — so a synthesized dbt image would fail `dbt: command not found`.
+	// Install as root (system site → /usr/local/bin on PATH), then drop back to the
+	// non-root runtime USER before the source COPY (#852).
+	rootForInstall := len(cfg.SystemPackages) > 0 || len(deps) > 0
+	if rootForInstall {
+		b.WriteString("USER root\n")
+	}
 	if len(cfg.SystemPackages) > 0 {
 		// Single RUN so the apt cache cleanup stays in the same layer as the install.
 		fmt.Fprintf(&b, "RUN apt-get update && apt-get install -y --no-install-recommends %s "+
@@ -117,12 +126,20 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 		// + models/ + baked manifest.json) to the workdir and set no PYTHONPATH. The
 		// task runs `dbt --project-dir <project>` from WORKDIR /home/leoflow, so the
 		// project must land at /home/leoflow/<project> matching the baked --project-dir.
+		// COPYed while still root, so the project is read-only to the task: dbt writes
+		// target/, logs/, and profiles.yml to /tmp (base ENV), never the project (#852).
 		project := filepath.Clean(cfg.Dbt.Project)
 		fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\n", project, project)
+		if rootForInstall {
+			b.WriteString("USER 65532:65532\n")
+		}
 		return b.String(), nil
 	}
 	base := filepath.Base(dagSource)
 	fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\nENV PYTHONPATH=/home/leoflow\n", base, base)
+	if rootForInstall {
+		b.WriteString("USER 65532:65532\n")
+	}
 	return b.String(), nil
 }
 

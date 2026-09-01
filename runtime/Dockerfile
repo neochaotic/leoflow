@@ -52,6 +52,16 @@ RUN pip install --no-cache-dir /opt/leoflow-runtime
 ARG AIRFLOW_TASK_SDK_VERSION=1.3.1
 RUN pip install --no-cache-dir "apache-airflow-task-sdk==${AIRFLOW_TASK_SDK_VERSION}"
 
+# dbt defaults its writable artifacts (target/, logs/, profiles.yml) to the project
+# directory, but a compiled DAG image COPYs the project read-only (root-owned), so
+# dbt would explode writing there. Point them at an ephemeral, always-writable /tmp
+# dir instead — keeps the project read-only (a stronger posture) and lets the chart
+# run task pods with readOnlyRootFilesystem + a /tmp emptyDir. Harmless for non-dbt
+# tasks (they never read these). See #852.
+ENV DBT_PROFILES_DIR=/tmp/leoflow/dbt \
+    DBT_TARGET_PATH=/tmp/leoflow/dbt/target \
+    DBT_LOG_PATH=/tmp/leoflow/dbt/logs
+
 USER 65532:65532
 WORKDIR /home/leoflow
 

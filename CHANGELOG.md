@@ -6,6 +6,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Task pods default to the operator's task ServiceAccount (#844).** A new
+  `executor.task_service_account` (Helm: `taskServiceAccount`) is applied to every
+  task pod — and to warm-pool pods — when a DAG does not pin its own, so cloud
+  workload identity (EKS IRSA, GKE Workload Identity, AKS) works without wiring a
+  ServiceAccount into each task. A task that pins a different SA still wins and is
+  never placed on an incompatible warm pod (#853).
+- **`leoflow dags list` (#842).** Lists the registered DAGs from the CLI, matching
+  the operability of `leoflow runs`.
+- **`leoflow login --password-stdin` (#838).** Reads the password from stdin so it
+  never lands in shell history or a process listing, mirroring `docker login`.
+
 ### Changed
 
 - **The in-pod agent baked into the runtime base image is now version-stamped.**
@@ -23,6 +36,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays on the Airflow 3.2.x SPA and `/api/v2/` remains 3.2.x-compatible — the SPA
   upgrade is tracked separately. Validated on the pod-path e2e against a 3.3.1
   runtime image.
+- **`leoflow compile` pins the immutable per-release task base image by default
+  (#851).** A build from a released CLI now `FROM`s the per-release base tag
+  (`py<ver>-v<X.Y.Z>`) instead of the moving `py<ver>` line, so a DAG image built
+  today rebuilds byte-for-byte later; a dev/dirty CLI still tracks the moving tag,
+  and an explicit `base_image` in `leoflow.yaml` always wins.
 
 ### Fixed
 
@@ -57,6 +75,35 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Locked by a subprocess regression test and a new pod-path end-to-end test that
   resolves a declared connection and variable from an emulated Secrets Manager
   (LocalStack) in a real task pod.
+- **A per-task `connections:` override dropped a dbt task's managed connection
+  (#848).** Overriding a dbt task's `connections:` in `leoflow.yaml` replaced the
+  compiler-declared profile connection, so the profile step failed "not delivered".
+  The override now keeps the managed connection and adds the extra ones.
+- **dbt task failures were hard to diagnose (#838).** A failing dbt invocation now
+  surfaces its stderr in the task log instead of a bare non-zero exit, so a
+  compile/model error is visible from the run.
+- **A synthesized dbt image could not find `dbt` and left the project writable
+  (#852).** The generated Dockerfile installed dependencies as the base's non-root
+  user, so dbt's console script landed off `PATH` (`dbt: command not found`) and an
+  apt step failed. Dependencies now install as root (scripts on `PATH`), the task
+  drops back to the non-root UID before the source `COPY` (the project stays
+  read-only), and dbt writes `profiles.yml`, `target/`, and logs to `/tmp` — the
+  base image points `DBT_PROFILES_DIR`/`DBT_TARGET_PATH`/`DBT_LOG_PATH` there, and
+  `profiles.yml` is written `0600`.
+- **A missing declared secret under an external backend was hard to diagnose
+  (#842).** When the resolver is configured, an unresolved declared Connection or
+  Variable now logs the specific declared names that came back empty (scoped to the
+  backend's coverage), pointing at the pod identity / backend permissions instead
+  of failing silently. A non-email login username also gets a one-line hint (the
+  login is the email address).
+
+### Docs
+
+- **Cluster-validation runbook for the native secrets resolver (#841)** — EKS/GKE
+  keyless (IRSA / Pod Identity / Workload Identity) validation steps.
+- **The task ServiceAccount auto-default applies only with
+  `taskServiceAccount.create=true` (#849)**, with a bring-your-own-SA note in the
+  chart README.
 
 ## [0.4.2] - 2026-08-31
 

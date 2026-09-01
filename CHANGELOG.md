@@ -26,6 +26,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A database outage during login returned 401 "invalid credentials" instead of a
+  5xx (#843).** `IssueToken` collapsed every credential-store error into
+  `ErrInvalidCredentials`, so an unreachable DB read as "wrong password" — sending
+  operators to chase a password problem during an outage and masking the incident.
+  A genuine not-found now stays `ErrInvalidCredentials` (401, no user enumeration);
+  any other backend error propagates and the login endpoint answers **503
+  "authentication temporarily unavailable"** without consuming the per-IP lockout
+  budget. The 503 leaks nothing (returned regardless of whether the account exists).
+
 - **dbt managed connection now works under enforce scoping and an external
   secrets backend.** The dbt compiler wraps each task with the profile step that
   reads `AIRFLOW_CONN_<conn>`, but did not **declare** the managed connection — so

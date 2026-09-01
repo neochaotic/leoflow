@@ -75,7 +75,11 @@ func MintUserToken(secret string, ttl time.Duration, user User) (string, error) 
 func (a *JWTAuthenticator) IssueToken(ctx context.Context, creds Credentials) (string, error) {
 	user, hash, err := a.store.FindUserByLogin(ctx, creds.Tenant, creds.Username)
 	if err != nil {
-		return "", ErrInvalidCredentials
+		// Propagate as-is: the store returns ErrInvalidCredentials for a genuine
+		// not-found/inactive user (→ 401), and a real backend error otherwise (→ the
+		// handler's 5xx). Collapsing everything to ErrInvalidCredentials would report
+		// a DB outage as "invalid credentials" (#843).
+		return "", err
 	}
 	if !VerifyPassword(hash, creds.Password) {
 		return "", ErrInvalidCredentials

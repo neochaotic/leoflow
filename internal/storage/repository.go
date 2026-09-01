@@ -107,7 +107,13 @@ func (r *Repository) tenantID(ctx context.Context, name string) (pgtype.UUID, er
 func (r *Repository) FindUserByLogin(ctx context.Context, tenant, username string) (*auth.User, string, error) {
 	row, err := r.q.GetUserByEmail(ctx, queries.GetUserByEmailParams{Name: tenant, Email: username})
 	if err != nil {
-		return nil, "", mapNotFound(err)
+		// A genuine not-found is an auth failure (generic, no enumeration). Any other
+		// error is a real backend failure (DB down/unreachable) and MUST propagate so
+		// the caller returns a 5xx, not a misleading "invalid credentials" (#843).
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, "", auth.ErrInvalidCredentials
+		}
+		return nil, "", fmt.Errorf("looking up user for login: %w", err)
 	}
 	if !row.IsActive {
 		return nil, "", auth.ErrInvalidCredentials

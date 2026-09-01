@@ -130,7 +130,11 @@ func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSe
 				AbortProblem(c, http.StatusUnauthorized, "unauthorized", "invalid credentials")
 				return
 			}
-			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not issue token")
+			// A non-credential error means the backend (DB) could not be reached, not
+			// that the credentials are wrong. Answer 503 so operators/monitoring see an
+			// outage rather than a wall of "invalid credentials" (#843). It leaks
+			// nothing: it is returned regardless of whether the account exists.
+			AbortProblem(c, http.StatusServiceUnavailable, "service unavailable", "authentication temporarily unavailable")
 			return
 		}
 		if bg != nil {

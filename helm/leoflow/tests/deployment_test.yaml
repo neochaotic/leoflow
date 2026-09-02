@@ -696,3 +696,67 @@ tests:
           path: spec.template.spec.containers[0].readinessProbe.failureThreshold
           value: 3
           documentIndex: 1
+
+  # #868 — the update strategy must default to Recreate when the logs PVC is RWO
+  # (a RollingUpdate surges a 2nd pod that Multi-Attach-deadlocks on the RWO PVC),
+  # and stay RollingUpdate otherwise; an explicit value always wins.
+  - it: defaults strategy to Recreate when the logs PVC is ReadWriteOnce
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      # logs.persistence defaults: enabled true, accessMode ReadWriteOnce
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: uses RollingUpdate when the logs PVC is ReadWriteMany
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  - it: uses RollingUpdate when logs persistence is disabled (ephemeral emptyDir)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.persistence.enabled: false
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  - it: honors an explicit deployment.strategy override
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      deployment.strategy: Recreate
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: defaults strategy to Recreate for ReadWriteOncePod (stricter than RWO, always deadlocks a surge)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.persistence.accessMode: ReadWriteOncePod
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate

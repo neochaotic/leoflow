@@ -26,6 +26,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   task-pod burst and be restarted mid-run (cascading in-flight tasks to
   agent_lost). Default CPU/memory requests are raised to `250m`/`256Mi` so the
   server keeps enough headroom to answer probes while fanning out task pods.
+- **The control-plane Deployment update strategy is exposed and defaults safely
+  (#868).** A rolling upgrade surges a second pod that Multi-Attach-deadlocks on a
+  ReadWriteOnce logs PVC, so an upgrade never converged (operators worked around
+  it with an in-cluster patch). `deployment.strategy` is now settable, and when
+  unset it defaults to `Recreate` whenever `logs.persistence` is an RWO PVC (and
+  `RollingUpdate` for RWX or an ephemeral emptyDir).
 
 ### Fixed
 

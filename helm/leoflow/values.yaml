@@ -11,6 +11,11 @@ imagePullSecrets: []
 # -- Number of control-plane replicas. The scheduler leader-elects (ADR 0009), so `>1` is HA-safe (active-passive scheduler, active-active API).
 replicaCount: 1
 
+# Control-plane Deployment shape.
+deployment:
+  # -- Update strategy: `RollingUpdate`, `Recreate`, or `""` (auto). Auto picks `Recreate` when `logs.persistence` is a ReadWriteOnce/ReadWriteOncePod PVC — a RollingUpdate surges a second pod that Multi-Attach-deadlocks on the single-writer volume and the rollout never converges (#868/#282) — and `RollingUpdate` otherwise (RWX or ephemeral emptyDir). Set explicitly to override.
+  strategy: ""
+
 # ADR 0049 — split the control plane into two Deployments by role. OFF by default:
 # the chart renders a single `all`-role Deployment that is byte-identical to the
 # pre-0049 monolith, so existing installs upgrade in place with no topology change.
@@ -157,7 +162,7 @@ logs:
     size: 50Gi
     # -- StorageClass for the PVC. Empty uses the cluster default. Specify an RWX class when `accessMode: ReadWriteMany`.
     storageClass: ""
-    # -- PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments; `ReadWriteMany` is required when `replicaCount > 1`.
+    # -- PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments; `ReadWriteMany` is required when `replicaCount > 1`. Also drives `deployment.strategy`: an RWO/RWOP PVC auto-selects `Recreate` (a rolling upgrade would Multi-Attach-deadlock).
     accessMode: ReadWriteOnce
   # Object-store log backend (opt-in). Set `sink.provider` to `s3` or `gcs` and task
   # logs ship to a bucket instead of the PVC — `s3` for AWS S3 / MinIO / Ceph RGW,

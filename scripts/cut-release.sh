@@ -66,8 +66,13 @@ self_test() {
 # transient flakes (bounded); echo GREEN or RED. Robust to the post-rerun window
 # where gh briefly reports the prior conclusion (it waits for pending==0).
 wait_sha_green() {
-  local sha="$1" reruns=0 j pend failed rid isflake
+  local sha="$1" reruns=0 j pend failed rid isflake start=$SECONDS
+  local deadline="${CUT_WAIT_DEADLINE:-5400}" # 90 min; a stuck-queued run must not hang the cut forever
   while :; do
+    if [ $((SECONDS - start)) -gt "$deadline" ]; then
+      warn "timed out after ${deadline}s waiting on CI for ${sha:0:8} — inspect: gh run list --commit $sha"
+      echo RED; return 2
+    fi
     j=$(gh run list --limit 40 --json databaseId,status,conclusion,headSha \
           -q "[.[] | select(.headSha==\"$sha\")]" 2>/dev/null)
     [ "$(echo "$j" | jq 'length' 2>/dev/null || echo 0)" -eq 0 ] && { sleep 25; continue; }
@@ -109,7 +114,6 @@ date_the_changelog() {
 run_gates() { # <tag>
   local tag="$1" s ok=0
   for s in "$ROOT"/scripts/check-*.sh; do
-    [ "$s" = "$ROOT/scripts/cut-release.sh" ] && continue
     if [[ "$s" == *chart-version-matches-tag* ]]; then bash "$s" "$tag" >/dev/null 2>&1; else bash "$s" >/dev/null 2>&1; fi
     local rc=$?
     if [ "$rc" -eq 0 ]; then log "gate PASS $(basename "$s")"; else echo "gate FAIL $(basename "$s")" >&2; ok=1; fi
@@ -128,6 +132,10 @@ confirm_tag() { # <tag>
 # ---- main flow -------------------------------------------------------------
 
 main() {
+  # Initialize the confirmation flag HERE so an exported ASSUME_YES already in the
+  # operator's shell or CI env can never silently bypass confirm_tag (M1). Only
+  # --yes, parsed below, may set it.
+  ASSUME_YES=0
   local arg version="" dry=0
   for arg in "$@"; do
     case "$arg" in
@@ -163,9 +171,21 @@ main() {
   [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || warn "not on main (on $(git rev-parse --abbrev-ref HEAD))"
   git fetch origin main -q
 
+  # Re-cut guard: the target version must differ from what main already carries,
+  # so `--yes` with a fat-fingered or already-released version can't silently
+  # re-cut the current line.
+  local cur; cur="$(git show origin/main:helm/leoflow/Chart.yaml | awk '/^version:/{print $2; exit}')"
+  [ "$cv" != "$cur" ] || die "chart on main is already $cur — nothing to cut (re-cut of the same version?)"
+
   local branch="release/$tag"
+  # Safe re-run (M3): a prior failed cut can leave release/<tag> behind (local or
+  # remote) + an open PR. Refuse with an explicit cleanup rather than mutating the
+  # wrong tree or opening a duplicate PR.
+  if git show-ref --verify --quiet "refs/heads/$branch" || git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+    die "branch $branch already exists (a prior cut?) — clean it and re-run: git branch -D $branch 2>/dev/null; git push origin :$branch 2>/dev/null; and close/reopen its PR if any"
+  fi
   log "prepare on $branch"
-  git checkout -b "$branch" -q origin/main
+  git checkout -b "$branch" -q origin/main || die "could not create $branch off origin/main"
   bump_chart "$cv"
   is_rc "$version" || date_the_changelog "$cv"
   helm-docs --chart-search-root="$ROOT/helm" >/dev/null 2>&1 || die "helm-docs failed"
@@ -173,7 +193,7 @@ main() {
 
   git add helm/leoflow/Chart.yaml helm/leoflow/README.md CHANGELOG.md
   git commit -q -m "release: prepare $tag" || die "nothing to commit (already prepared?)"
-  git push -u origin "$branch" -q
+  git push -u origin "$branch" -q || die "pushing $branch failed"
 
   local title body
   if is_rc "$version"; then title="release: prepare $tag"; body="Chart version/appVersion -> $cv (ADR 0028 lockstep). rc keeps [Unreleased]."; \
@@ -192,15 +212,20 @@ main() {
   [ "$(wait_sha_green "$sha")" = GREEN ] || die "main red on the merge commit — NOT tagging"
 
   confirm_tag "$tag"
-  git tag -a "$tag" "$sha" -m "leoflow $tag"
-  git push origin "$tag"
+  git tag -a "$tag" "$sha" -m "leoflow $tag" || die "creating tag $tag failed"
+  git push origin "$tag" || die "pushing tag $tag failed — the tag is local only; 'git push origin $tag' when ready"
   log "tagged $tag @ ${sha:0:8}"
   { echo "tag=$tag sha=$sha date=$(date -u +%FT%TZ) kind=$(is_rc "$version" && echo rc || echo ga)"; } >>"$logf"
 
   log "release workflows"
   sleep 15
-  local reruns=0 j pend failed rid isflake
+  local reruns=0 j pend failed rid isflake rstart=$SECONDS
+  local rdeadline="${CUT_WAIT_DEADLINE:-5400}"
   while :; do
+    if [ $((SECONDS - rstart)) -gt "$rdeadline" ]; then
+      warn "timed out after ${rdeadline}s waiting on the $tag release workflows — inspect: gh run list --branch $tag"
+      break
+    fi
     j=$(gh run list --limit 25 --json databaseId,status,conclusion,headBranch -q "[.[] | select(.headBranch==\"$tag\")]" 2>/dev/null)
     [ "$(echo "$j" | jq 'length' 2>/dev/null || echo 0)" -eq 0 ] && { sleep 20; continue; }
     pend=$(echo "$j" | jq '[.[] | select(.status!="completed")] | length')

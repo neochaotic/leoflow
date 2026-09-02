@@ -285,6 +285,7 @@ type Scheduler struct {
 	executionReaper ExecutionReaper
 	lastTick        atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
 	leading         atomic.Bool  // true only while this instance holds leadership and ticks
+	leaderSince     atomic.Int64 // unix-nano when leadership was last acquired; 0 = not leading. Drives the agent-lost reaper's post-recovery grace (#858)
 	steppingDown    atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
@@ -348,8 +349,25 @@ func (s *Scheduler) SetStepTimeout(d time.Duration) { s.stepTimeout = d }
 func (s *Scheduler) SetLeading(on bool) {
 	if on {
 		s.lastTick.Store(0)
+		// Stamp when leadership was acquired so the agent-lost reaper measures its
+		// post-recovery grace from now, not from wall-clock (#858). Clear it on
+		// loss so a non-leader reports no leadership window.
+		s.leaderSince.Store(time.Now().UnixNano())
+	} else {
+		s.leaderSince.Store(0)
 	}
 	s.leading.Store(on)
+}
+
+// LeaderSince reports when this instance last acquired scheduler leadership, or
+// the zero time if it is not currently leading. The agent-lost reaper uses it to
+// suppress reaping within a grace window after a (re-)election (#858).
+func (s *Scheduler) LeaderSince() time.Time {
+	ns := s.leaderSince.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 // IsLeading reports whether this instance currently holds scheduler leadership.

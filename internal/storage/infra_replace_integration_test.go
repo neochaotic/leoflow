@@ -68,6 +68,16 @@ func seedInfraFailed(t *testing.T, repo *storage.Repository, sched *storage.Sche
 	if err != nil || !ok {
 		t.Fatalf("MarkTaskAgentLost ok=%v err=%v", ok, err)
 	}
+	// #859: infra re-placement is now backoff-gated from ended_at (readyToInfraReplace).
+	// These tests exercise the reap→re-place *loop*, not the backoff timing, so
+	// backdate ended_at past the backoff window to make the seeded infra failure
+	// immediately re-placeable. The timing gate itself is unit-tested in
+	// plan_test.go (TestPlanRunInfraReplaceRespectsBackoff).
+	if _, err := pg.Pool.Exec(ctx,
+		"UPDATE task_instances SET ended_at = now() - interval '1 hour' WHERE dag_run_id=$1::uuid AND task_id='t'",
+		runUUID); err != nil {
+		t.Fatalf("backdate ended_at: %v", err)
+	}
 	return runID, runUUID
 }
 

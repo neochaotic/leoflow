@@ -89,6 +89,16 @@ type agentLostReaper struct {
 	// log stream so a killed task's log does not end in a silent truncation
 	// (#861). Nil disables the marker; the reap itself is unaffected.
 	sink logSink
+	// grace suppresses reaping for this long after leadership is (re-)acquired
+	// (#858). A control-plane restart makes every in-flight TI's heartbeat look
+	// stale — the silence was manufactured by the outage, not a dead agent — so
+	// the new leader must wait for the fleet to re-heartbeat before reaping.
+	// Zero disables the grace (with a nil leaderSince). See DefaultReaperConfig.
+	grace time.Duration
+	// leaderSince reports when this instance last acquired scheduler leadership,
+	// so the grace is measured from recovery, not wall-clock. Nil (Lite/tests
+	// without leadership) disables the grace check.
+	leaderSince func() time.Time
 }
 
 func newAgentLostReaper(store HeartbeatReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *agentLostReaper {
@@ -105,11 +115,28 @@ func (r *agentLostReaper) run(ctx context.Context) error {
 			r.record("agent_lost_panic")
 		}
 	}()
+	now := time.Now().UTC()
+	// Post-leadership grace (#858): a control-plane restart manufactures the very
+	// silence this reaper punishes — every in-flight TI's last heartbeat elapses
+	// during the outage, and the heartbeat receiver is the same process that just
+	// came back. Suppress reaping until the fleet has had a full grace window to
+	// re-heartbeat under the recovered leader; a genuinely lost agent stays stale
+	// past the grace and is reaped on a later tick. The window is measured from
+	// leadership acquisition, not startup, so a re-election also resets it.
+	// Checked before the list so a grace tick does no query at all. NOTE: if
+	// leadership flaps with a period shorter than the grace, leaderSince keeps
+	// restamping and this reaper never fires — the orphan-run reaper (5m) is the
+	// backstop for that pathological case; steady-state leadership is the norm.
+	if r.leaderSince != nil && r.grace > 0 {
+		if ls := r.leaderSince(); !ls.IsZero() && now.Sub(ls) < r.grace {
+			r.record("agent_lost_grace_skip")
+			return nil
+		}
+	}
 	candidates, err := r.store.ListAgentLostCandidates(ctx)
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
 	for _, c := range candidates {
 		if !IsAgentLost(c, r.threshold, now) {
 			continue

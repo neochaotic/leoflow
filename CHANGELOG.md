@@ -6,6 +6,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Bumped `google.golang.org/grpc` to v1.83.1 (CVE-2026-84304, HIGH).** The
+  control plane ↔ agent RPC layer used gRPC-Go v1.83.0, which a HIGH advisory
+  covers; v1.83.1 is the upstream fix. `govulncheck` reports the vulnerable
+  symbol is not reachable from Leoflow's call graph, so no released build was
+  exploitable, but the dependency is patched to clear the advisory outright
+  rather than carry a known-fixable HIGH in the RPC layer.
+
 ### Added
 
 - **First-class `leoflow connections` and `leoflow variables` CLI groups (#881).**

@@ -1,24 +1,23 @@
 ---
 # --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
 aliases:
-  - /cli/leoflow_runs_status.html
+  - /cli/leoflow_connections_list.html
 # --- end AUTO redirect aliases ---
-title: "leoflow runs status"
-linkTitle: "runs status"
-weight: 46
+title: "leoflow connections list"
+linkTitle: "connections list"
+weight: 25
 ---
 
-Show the state of a DAG run (the latest by default).
+List connections (secrets never shown).
 
 ```
-leoflow runs status <dag_id> [flags]
+leoflow connections list [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help            help for status
-      --run string      specific dag_run_id (default: the most recent run)
+  -h, --help            help for list
       --server string   control plane base URL (default: config server_url)
       --token string    JWT bearer token (default: config token)
 ```
@@ -33,5 +32,5 @@ leoflow runs status <dag_id> [flags]
 
 ### SEE ALSO
 
-* [leoflow runs](/reference/cli/leoflow_runs/)	 - Trigger and inspect DAG runs.
+* [leoflow connections](/reference/cli/leoflow_connections/)	 - Manage control-plane connections.
 

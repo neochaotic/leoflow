@@ -19,6 +19,7 @@ leoflow auth login [flags]
 ```
   -h, --help              help for login
       --password string   password
+      --password-stdin    read the password from stdin instead of --password (avoids ps/shell-history exposure)
       --server string     control plane base URL (default: config server_url)
       --username string   username
 ```

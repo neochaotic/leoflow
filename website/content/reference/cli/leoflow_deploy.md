@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow deploy"
 linkTitle: "deploy"
-weight: 27
+weight: 33
 ---
 
 Build, push, and register a DAG to a control plane (Pro).

@@ -1,23 +1,25 @@
 ---
 # --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
 aliases:
-  - /cli/leoflow_validate.html
+  - /cli/leoflow_dags_list.html
 # --- end AUTO redirect aliases ---
-title: "leoflow validate"
-linkTitle: "validate"
-weight: 51
+title: "leoflow dags list"
+linkTitle: "dags list"
+weight: 29
 ---
 
-Validate leoflow.yaml and the DAG source against the schema.
+List registered DAGs.
 
 ```
-leoflow validate [path] [flags]
+leoflow dags list [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for validate
+  -h, --help            help for list
+      --server string   control plane base URL (default: config server_url)
+      --token string    JWT bearer token (default: config token)
 ```
 
 ### Options inherited from parent commands
@@ -30,5 +32,5 @@ leoflow validate [path] [flags]
 
 ### SEE ALSO
 
-* [leoflow](/reference/cli/leoflow/)	 - Leoflow is a GitOps-first, container-native workflow orchestrator.
+* [leoflow dags](/reference/cli/leoflow_dags/)	 - Manage registered DAGs.
 

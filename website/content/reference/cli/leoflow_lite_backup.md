@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow lite backup"
 linkTitle: "lite backup"
-weight: 31
+weight: 37
 ---
 
 Snapshot the Lite install (workspace + datastore + config) into a portable archive.

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow lite forget"
 linkTitle: "lite forget"
-weight: 32
+weight: 38
 ---
 
 Remove a DAG (and all its history) from the Lite registry without touching the source files.

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow db reset"
 linkTitle: "db reset"
-weight: 26
+weight: 32
 ---
 
 Drop, recreate, and migrate the Lite database (DESTRUCTIVE).

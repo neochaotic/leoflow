@@ -43,7 +43,7 @@ func NewRootCommand() *cobra.Command {
 	authoring := []*cobra.Command{newInitCommand(), newValidateCommand(), newCompileCommand(), newPushCommand(), newDeployCommand()}
 	runtime := []*cobra.Command{newLiteCommand(), newServerCommand()}
 	inspection := []*cobra.Command{newDagsCommand(), newRunsCommand(), newAuthCommand()}
-	operations := []*cobra.Command{newAdminCommand()}
+	operations := []*cobra.Command{newAdminCommand(), newConnectionsCommand(), newVariablesCommand()}
 	lifecycle := []*cobra.Command{newSetupCommand(), newDoctorCommand(), newDBCommand(), newUninstallCommand(), newVersionCommand()}
 
 	for _, c := range authoring {

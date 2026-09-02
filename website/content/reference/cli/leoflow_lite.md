@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow lite"
 linkTitle: "lite"
-weight: 30
+weight: 36
 ---
 
 Run Leoflow Lite locally with hot reload.

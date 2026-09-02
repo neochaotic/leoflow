@@ -25,6 +25,7 @@ Leoflow is a GitOps-first, container-native workflow orchestrator.
 * [leoflow auth](/reference/cli/leoflow_auth/)	 - Manage authentication tokens.
 * [leoflow compile](/reference/cli/leoflow_compile/)	 - Compile a DAG project into dag.json via the Python parser.
 * [leoflow completion](/reference/cli/leoflow_completion/)	 - Generate the autocompletion script for the specified shell
+* [leoflow connections](/reference/cli/leoflow_connections/)	 - Manage control-plane connections.
 * [leoflow dags](/reference/cli/leoflow_dags/)	 - Manage registered DAGs.
 * [leoflow db](/reference/cli/leoflow_db/)	 - Manage the local Lite database (schema name leoflow_dev for upgrade safety).
 * [leoflow deploy](/reference/cli/leoflow_deploy/)	 - Build, push, and register a DAG to a control plane (Pro).
@@ -37,5 +38,6 @@ Leoflow is a GitOps-first, container-native workflow orchestrator.
 * [leoflow setup](/reference/cli/leoflow_setup/)	 - Bootstrap the managed Leoflow runtime (Python, parser, workspace).
 * [leoflow uninstall](/reference/cli/leoflow_uninstall/)	 - Remove the Leoflow installation (~/.leoflow).
 * [leoflow validate](/reference/cli/leoflow_validate/)	 - Validate leoflow.yaml and the DAG source against the schema.
+* [leoflow variables](/reference/cli/leoflow_variables/)	 - Manage control-plane variables.
 * [leoflow version](/reference/cli/leoflow_version/)	 - Print the version, git commit, and build date.
 

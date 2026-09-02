@@ -191,6 +191,53 @@ func TestSetConnectionExtraFlagsMutuallyExclusive(t *testing.T) {
 	}
 }
 
+// TestConnectionsGetCommand exercises the full `connections get` path (request +
+// single-connection printer): it shows the metadata and the server-masked extra,
+// and never prints a password.
+func TestConnectionsGetCommand(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"connection_id":"pg","conn_type":"postgres","host":"db","login":"u","schema":"public","port":5432,"extra":"{\"token\":\"***\"}"}`)
+	}))
+	defer srv.Close()
+
+	cfg := seedSessionConfig(t, srv.URL, "tok")
+	out, _, err := run(t, "connections", "get", "pg", "--config", cfg)
+	if err != nil {
+		t.Fatalf("connections get: %v", err)
+	}
+	for _, want := range []string{"pg", "postgres", "db", "5432", "***"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("get output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "password") {
+		t.Errorf("get output should not mention a password field:\n%s", out)
+	}
+}
+
+// TestConnectionsListCommand exercises the full `connections list` path (request +
+// table printer): the row is present and no secret column is rendered.
+func TestConnectionsListCommand(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"connections":[{"connection_id":"pg","conn_type":"postgres","host":"db","login":"u","schema":"public","extra":"{\"token\":\"***\"}"}],"total_entries":1}`)
+	}))
+	defer srv.Close()
+
+	cfg := seedSessionConfig(t, srv.URL, "tok")
+	out, _, err := run(t, "connections", "list", "--config", cfg)
+	if err != nil {
+		t.Fatalf("connections list: %v", err)
+	}
+	if !strings.Contains(out, "pg") || !strings.Contains(out, "postgres") {
+		t.Errorf("list output missing the connection:\n%s", out)
+	}
+	if strings.Contains(out, "token") || strings.Contains(out, "extra") {
+		t.Errorf("list output must not render the extra column:\n%s", out)
+	}
+}
+
 func TestSetConnectionSurfaces503(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)

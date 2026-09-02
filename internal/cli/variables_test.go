@@ -152,6 +152,49 @@ func TestSetVariableCommandExplicitEmptyValue(t *testing.T) {
 	}
 }
 
+// TestVariablesGetCommand exercises the full `variables get` path (request +
+// single-variable printer).
+func TestVariablesGetCommand(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"key":"region","value":"us-east-1","description":"default region","is_encrypted":false}`)
+	}))
+	defer srv.Close()
+
+	cfg := seedSessionConfig(t, srv.URL, "tok")
+	out, _, err := run(t, "variables", "get", "region", "--config", cfg)
+	if err != nil {
+		t.Fatalf("variables get: %v", err)
+	}
+	for _, want := range []string{"region", "us-east-1", "default region"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("get output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestVariablesListCommand exercises the full `variables list` path (request +
+// table printer); the value column is never rendered.
+func TestVariablesListCommand(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"variables":[{"key":"region","value":"us-east-1","is_encrypted":false},{"key":"api_token","value":"***","is_encrypted":true}],"total_entries":2}`)
+	}))
+	defer srv.Close()
+
+	cfg := seedSessionConfig(t, srv.URL, "tok")
+	out, _, err := run(t, "variables", "list", "--config", cfg)
+	if err != nil {
+		t.Fatalf("variables list: %v", err)
+	}
+	if !strings.Contains(out, "region") || !strings.Contains(out, "api_token") {
+		t.Errorf("list output missing a key:\n%s", out)
+	}
+	if strings.Contains(out, "us-east-1") {
+		t.Errorf("list output must not render the value column:\n%s", out)
+	}
+}
+
 func TestGetVariableReq(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v2/variables/region" {

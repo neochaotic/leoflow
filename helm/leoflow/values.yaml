@@ -388,7 +388,7 @@ observability:
   # -- Log level: `debug`, `info`, `warn`, `error`. Production default is `info`.
   logLevel: info
 
-# -- Resource requests + limits for the leoflow-server container. Defaults sized for a small Pro (50–500 DAGs); bump CPU+memory for larger deployments. The scheduler fans out task pods and answers liveness/readiness probes, so the request must leave enough CPU headroom that a task-pod burst doesn't CFS-throttle it into a probe timeout and a kubelet restart (#860).
+# -- Resource requests + limits for the leoflow-server container. `250m`/`256Mi` requests are a floor for a small Pro (50–500 DAGs) — bump CPU+memory for larger deployments. The request guarantees the control plane its CPU shares under node contention (so a task-pod burst can't starve it); the actual probe-timeout fix is `probes.liveness.timeoutSeconds` below (CFS throttling is bounded by the CPU *limit*, not the request). See #860.
 resources:
   requests:
     cpu: 250m

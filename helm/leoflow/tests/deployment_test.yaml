@@ -674,3 +674,25 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].resources.requests.memory
           value: 256Mi
+
+  - it: renders the forgiving probe knobs on every split role (api + scheduler)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      split.enabled: true
+      logs.persistence.enabled: false # split = multiple pods; avoid the RWO PVC guard
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 5
+          documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 5
+          documentIndex: 1
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 3
+          documentIndex: 1

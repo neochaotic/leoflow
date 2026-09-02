@@ -144,6 +144,10 @@ PY
 [ "$ROWS" = "3" ] || fail "mart has $ROWS rows, want 3 (models did not materialize)" "$TMP/lite.log"
 pass "mart materialized with 3 rows in duckdb"
 
+echo "==> #882: the generated profiles.yml must land in the private scratch, NOT the project"
+[ -f "$PROJ/profiles.yml" ] && fail "profiles.yml was written into the project — #882 leak: the dbt profile step must write to the private scratch (DBT_PROFILES_DIR the Lite executor injects), never the task CWD, or a managed connection's secret would clobber a versioned profiles.yml" "$TMP/lite.log"
+pass "project stayed profiles-less after the run (generated profile went to the scratch dir, #882)"
+
 echo
 echo "  ✅ Lite dbt (duckdb) verified end to end: zero-config compile (#575) -> subprocess"
 echo "     execution -> models materialized, no warehouse and no profiles.yml needed."

@@ -35,6 +35,30 @@ func TestAgentEnv(t *testing.T) {
 	}
 }
 
+// TestDbtScratchEnv: a Lite task gets DBT_PROFILES_DIR/TARGET/LOG pointed at the
+// private scratch, never the CWD (the dbt project), so profiles.yml — which
+// carries the connection secret — can't clobber the repo's versioned file (#882).
+func TestDbtScratchEnv(t *testing.T) {
+	scratch := t.TempDir()
+	got := map[string]string{}
+	for _, kv := range dbtScratchEnv(scratch) {
+		i := strings.IndexByte(kv, '=')
+		got[kv[:i]] = kv[i+1:]
+	}
+	if got["DBT_PROFILES_DIR"] != scratch {
+		t.Errorf("DBT_PROFILES_DIR = %q, want %q", got["DBT_PROFILES_DIR"], scratch)
+	}
+	if got["DBT_TARGET_PATH"] != filepath.Join(scratch, "target") {
+		t.Errorf("DBT_TARGET_PATH = %q", got["DBT_TARGET_PATH"])
+	}
+	if got["DBT_LOG_PATH"] != filepath.Join(scratch, "logs") {
+		t.Errorf("DBT_LOG_PATH = %q", got["DBT_LOG_PATH"])
+	}
+	if cwd, _ := os.Getwd(); got["DBT_PROFILES_DIR"] == cwd {
+		t.Error("DBT_PROFILES_DIR must never be the task CWD (the dbt project) — #882")
+	}
+}
+
 func writeScript(t *testing.T, body string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "agent.sh")

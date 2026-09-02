@@ -13,8 +13,26 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 
 from leoflow_runtime.runner import run, run_bash, run_operator
+
+
+def _dbt_profiles_dir() -> str:
+    """Directory the generated dbt profiles.yml is written to.
+
+    Defense in depth (#882): NEVER fall back to os.getcwd(). In Lite the CWD is the
+    dbt project in the user's working tree, and profiles.yml carries the connection
+    secret in clear — writing it there clobbers the repo's versioned file, a git-add
+    from leaking a credential. When DBT_PROFILES_DIR is unset, use a private scratch
+    dir instead. In practice the Lite executor and the pod base image both set
+    DBT_PROFILES_DIR; this guards any path that forgot to.
+    """
+    d = os.environ.get("DBT_PROFILES_DIR")
+    if not d:
+        d = tempfile.mkdtemp(prefix="leoflow-dbt-")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,8 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         # arg overrides the dbt target schema.
         from leoflow_runtime.dbt import write_dbt_profile
 
-        profiles_dir = os.environ.get("DBT_PROFILES_DIR") or os.getcwd()
-        os.makedirs(profiles_dir, exist_ok=True)
+        profiles_dir = _dbt_profiles_dir()
         schema = args[3] if len(args) == 4 else None
         write_dbt_profile(args[1], args[2], profiles_dir, schema=schema)
         return 0
@@ -40,8 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         # a dbt group has no managed connection. Optional 3rd arg is the DB file path.
         from leoflow_runtime.dbt import write_dbt_default_duckdb
 
-        profiles_dir = os.environ.get("DBT_PROFILES_DIR") or os.getcwd()
-        os.makedirs(profiles_dir, exist_ok=True)
+        profiles_dir = _dbt_profiles_dir()
         db_path = args[2] if len(args) == 3 else ""
         write_dbt_default_duckdb(args[1], profiles_dir, db_path)
         return 0

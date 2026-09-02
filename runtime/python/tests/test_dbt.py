@@ -100,7 +100,9 @@ def test_profile_step_never_writes_to_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DBT_PROFILES_DIR", raising=False)
     assert main(["--dbt-default-duckdb", "shop"]) == 0
-    assert not (tmp_path / "profiles.yml").exists(), "must NOT write profiles.yml into the CWD (#882)"
+    assert not (tmp_path / "profiles.yml").exists(), (
+        "must NOT write profiles.yml into the CWD (#882)"
+    )
 
 
 def test_unsupported_adapter_is_a_loud_error():

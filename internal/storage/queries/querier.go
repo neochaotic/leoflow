@@ -522,10 +522,19 @@ type Querier interface {
 	// self-referential, so an already-stamped row is never re-stamped.
 	UpdateTaskInstanceStatesByRunTasks(ctx context.Context, arg UpdateTaskInstanceStatesByRunTasksParams) error
 	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error)
+	// A write preserves any nullable field the caller left NULL, rather than
+	// clobbering it: COALESCE(EXCLUDED.col, connections.col) keeps the stored value
+	// when the request omits that field. This is what makes a partial `set` safe —
+	// e.g. changing only --host must not wipe the (unreadable) password. conn_type is
+	// required on every write, so it is a plain overwrite. To clear a field, delete
+	// and recreate the connection.
 	UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
 	UpsertImportError(ctx context.Context, arg UpsertImportErrorParams) error
 	UpsertPool(ctx context.Context, arg UpsertPoolParams) error
+	// value is always supplied (a variable is its value), so it is overwritten;
+	// description is preserved when the request omits it (NULL) rather than being
+	// wiped — see the COALESCE rationale on UpsertConnection.
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) error
 }
 

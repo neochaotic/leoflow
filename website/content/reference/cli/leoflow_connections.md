@@ -30,5 +30,5 @@ Manage control-plane connections.
 * [leoflow connections delete](/reference/cli/leoflow_connections_delete/)	 - Delete a connection.
 * [leoflow connections get](/reference/cli/leoflow_connections_get/)	 - Show a connection (password omitted, extra masked).
 * [leoflow connections list](/reference/cli/leoflow_connections_list/)	 - List connections (secrets never shown).
-* [leoflow connections set](/reference/cli/leoflow_connections_set/)	 - Create or replace a connection (upsert).
+* [leoflow connections set](/reference/cli/leoflow_connections_set/)	 - Create or update a connection (upsert).
 

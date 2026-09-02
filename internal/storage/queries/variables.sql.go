@@ -184,7 +184,7 @@ INSERT INTO variables (tenant_id, key, value, description)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (tenant_id, key) DO UPDATE SET
     value = EXCLUDED.value,
-    description = EXCLUDED.description,
+    description = COALESCE(EXCLUDED.description, variables.description),
     updated_at = now()
 `
 
@@ -195,6 +195,9 @@ type UpsertVariableParams struct {
 	Description *string     `json:"description"`
 }
 
+// value is always supplied (a variable is its value), so it is overwritten;
+// description is preserved when the request omits it (NULL) rather than being
+// wiped — see the COALESCE rationale on UpsertConnection.
 func (q *Queries) UpsertVariable(ctx context.Context, arg UpsertVariableParams) error {
 	_, err := q.db.Exec(ctx, upsertVariable,
 		arg.TenantID,

@@ -32,11 +32,14 @@ SELECT key FROM variables
 WHERE tenant_id = $1 AND key = ANY(sqlc.arg(keys)::text[]);
 
 -- name: UpsertVariable :exec
+-- value is always supplied (a variable is its value), so it is overwritten;
+-- description is preserved when the request omits it (NULL) rather than being
+-- wiped — see the COALESCE rationale on UpsertConnection.
 INSERT INTO variables (tenant_id, key, value, description)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (tenant_id, key) DO UPDATE SET
     value = EXCLUDED.value,
-    description = EXCLUDED.description,
+    description = COALESCE(EXCLUDED.description, variables.description),
     updated_at = now();
 
 -- name: DeleteVariable :execrows

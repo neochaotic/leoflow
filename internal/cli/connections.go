@@ -44,13 +44,13 @@ func newConnectionsSetCommand() *cobra.Command {
 	var f connectionSetFlags
 	cmd := &cobra.Command{
 		Use:   "set <connection_id>",
-		Short: "Create or replace a connection (upsert).",
-		Long: "Creates a connection, or replaces an existing one with the same id. " +
+		Short: "Create or update a connection (upsert).",
+		Long: "Creates a connection, or updates an existing one with the same id. " +
 			"--conn-type is required.\n\n" +
-			"This is a full replace, not a partial patch: the connection is set to " +
-			"exactly the fields you pass, so any field you omit is cleared on an " +
-			"existing connection — including the password. To change one field, pass " +
-			"the others too (the password cannot be read back, so re-supply it).\n\n" +
+			"Only the fields you pass are changed; any field you omit keeps its " +
+			"current value. So you can change just --host without re-supplying the " +
+			"password (which cannot be read back anyway). To clear a field, delete " +
+			"and recreate the connection.\n\n" +
 			"The password and extra are sent to the control plane but never printed " +
 			"back; read commands show masked values. Prefer --password-stdin / " +
 			"--extra-file over --password / --extra so a secret never lands in your " +
@@ -117,11 +117,10 @@ func resolveConnectionExtra(cmd *cobra.Command, inline, file string) (string, er
 }
 
 // connectionBodyFromFlags maps the CLI flags to the typed request body, sending
-// only the fields the operator actually set. NOTE the control plane currently
-// applies a write as a full replace, so an omitted field is cleared server-side
-// regardless — the `set` help states this. Sending nil (not "") for an unset
-// field is nonetheless forward-compatible with a future merge-on-omit server
-// semantics (the invariant tracked alongside the masked-write follow-up).
+// only the fields the operator actually set: an unset flag is left out (nil), and
+// the control plane preserves the stored value for any omitted field (its upsert
+// COALESCEs EXCLUDED over the existing row). So changing one field never wipes the
+// others — in particular the unreadable password survives a `set --host x`.
 func connectionBodyFromFlags(cmd *cobra.Command, connID string, f connectionSetFlags, password, extra string) apiclient.ConnectionBody {
 	body := apiclient.ConnectionBody{ConnectionId: &connID, ConnType: f.connType}
 	if cmd.Flags().Changed("host") {

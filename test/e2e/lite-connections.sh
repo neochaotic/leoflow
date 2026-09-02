@@ -127,6 +127,19 @@ python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if "pass
   || fail "UI endpoint response contained a password field" "$TMP/ui.json"
 pass "UI-data endpoint masks extra and omits password (CLI<->UI integration proof)"
 
+echo "==> partial set (change only --host) must PRESERVE the omitted secret extra"
+"${CLI[@]}" connections set "$CONN_ID" "${srv[@]}" \
+  --conn-type postgres --host db.internal2 >"$TMP/partial.out" 2>&1 \
+  || fail "partial connections set failed" "$TMP/partial.out"
+curl -fsS "${BASE}/api/v2/connections/${CONN_ID}" >"$TMP/ui2.json" \
+  || fail "curl after partial set failed" "$TMP/lite.log"
+# The host changed; the extra we did NOT pass must still be there (masked), not
+# wiped. Before the COALESCE upsert this partial write nulled the extra + password.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("host")=="db.internal2" else 1)' "$TMP/ui2.json" \
+  || fail "partial set did not update the host" "$TMP/ui2.json"
+grep -q '\*\*\*' "$TMP/ui2.json" || fail "partial set WIPED the omitted extra (no masked value remains)" "$TMP/ui2.json"
+pass "partial set changed the host and preserved the omitted extra (safe merge)"
+
 # ---------------------------------------------------------------------------
 echo "==> variables set (plain + a secret-keyed one) via positional and --value-stdin"
 "${CLI[@]}" variables set "$VAR_PLAIN" us-east-1 "${srv[@]}" --description "default region" >"$TMP/vset.out" 2>&1 \

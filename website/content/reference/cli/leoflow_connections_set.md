@@ -8,13 +8,13 @@ linkTitle: "connections set"
 weight: 26
 ---
 
-Create or replace a connection (upsert).
+Create or update a connection (upsert).
 
 ### Synopsis
 
-Creates a connection, or replaces an existing one with the same id. --conn-type is required.
+Creates a connection, or updates an existing one with the same id. --conn-type is required.
 
-This is a full replace, not a partial patch: the connection is set to exactly the fields you pass, so any field you omit is cleared on an existing connection — including the password. To change one field, pass the others too (the password cannot be read back, so re-supply it).
+Only the fields you pass are changed; any field you omit keeps its current value. So you can change just --host without re-supplying the password (which cannot be read back anyway). To clear a field, delete and recreate the connection.
 
 The password and extra are sent to the control plane but never printed back; read commands show masked values. Prefer --password-stdin / --extra-file over --password / --extra so a secret never lands in your shell history or the process table.
 

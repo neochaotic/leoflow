@@ -6,6 +6,21 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **First-class `leoflow connections` and `leoflow variables` CLI groups (#881).**
+  The Lite inner loop (and Pro) can now manage connections and variables directly
+  — `set` (upsert), `list`, `get`, `delete` — instead of hand-rolling `curl`
+  against `/api/v2`; the error for an undeclared connection already pointed at
+  `leoflow connections set`, which now exists. Secrets are sent on write but never
+  printed back (list/get omit secret columns; the server masks `extra` and
+  sensitive-keyed values), and `--password-stdin` / `--extra-file` keep a secret
+  off argv and out of shell history. `set` is a **safe merge**: only the fields
+  you pass change, so a partial `set --host newhost` no longer wipes the omitted
+  (and unreadable) password — the control-plane upsert now preserves any field a
+  write omits rather than clobbering it (this also fixes the same latent overwrite
+  on the Admin UI and PATCH write paths). To clear a field, delete and recreate.
+
 ### Security
 
 - **A Lite dbt task no longer writes its generated `profiles.yml` into the project

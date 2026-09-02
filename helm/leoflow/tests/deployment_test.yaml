@@ -748,3 +748,15 @@ tests:
       - equal:
           path: spec.strategy.type
           value: Recreate
+
+  - it: defaults strategy to Recreate for ReadWriteOncePod (stricter than RWO, always deadlocks a surge)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.persistence.accessMode: ReadWriteOncePod
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate

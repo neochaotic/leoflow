@@ -23,7 +23,8 @@ spec:
        never converges). RWX or an ephemeral emptyDir tolerate RollingUpdate. */ -}}
   {{- $strategy := .ctx.Values.deployment.strategy }}
   {{- if not $strategy }}
-    {{- if and .ctx.Values.logs.persistence.enabled (eq .ctx.Values.logs.persistence.accessMode "ReadWriteOnce") }}
+    {{- $am := .ctx.Values.logs.persistence.accessMode }}
+    {{- if and .ctx.Values.logs.persistence.enabled (or (eq $am "ReadWriteOnce") (eq $am "ReadWriteOncePod")) }}
       {{- $strategy = "Recreate" }}
     {{- else }}
       {{- $strategy = "RollingUpdate" }}

@@ -17,6 +17,20 @@ metadata:
     {{- include "leoflow.labels" .ctx | nindent 4 }}
 spec:
   replicas: {{ .replicas }}
+  {{- /* Update strategy (#868): an explicit value wins; otherwise default to
+       Recreate when the logs PVC is ReadWriteOnce, because a RollingUpdate surges
+       a second pod that Multi-Attach-deadlocks on the RWO volume (the rollout
+       never converges). RWX or an ephemeral emptyDir tolerate RollingUpdate. */ -}}
+  {{- $strategy := .ctx.Values.deployment.strategy }}
+  {{- if not $strategy }}
+    {{- if and .ctx.Values.logs.persistence.enabled (eq .ctx.Values.logs.persistence.accessMode "ReadWriteOnce") }}
+      {{- $strategy = "Recreate" }}
+    {{- else }}
+      {{- $strategy = "RollingUpdate" }}
+    {{- end }}
+  {{- end }}
+  strategy:
+    type: {{ $strategy }}
   selector:
     matchLabels:
       {{- include "leoflow.roleSelectorLabels" (dict "ctx" .ctx "role" .role) | nindent 6 }}

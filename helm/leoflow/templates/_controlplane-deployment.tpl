@@ -328,14 +328,18 @@ spec:
             httpGet:
               path: /readyz
               port: {{ $probePort }}
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            initialDelaySeconds: {{ .ctx.Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .ctx.Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .ctx.Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .ctx.Values.probes.readiness.failureThreshold }}
           livenessProbe:
             httpGet:
               path: /healthz
               port: {{ $probePort }}
-            initialDelaySeconds: 10
-            periodSeconds: 20
+            initialDelaySeconds: {{ .ctx.Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .ctx.Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .ctx.Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .ctx.Values.probes.liveness.failureThreshold }}
           resources:
             {{- toYaml .ctx.Values.resources | nindent 12 }}
           volumeMounts:

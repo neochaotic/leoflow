@@ -125,6 +125,19 @@ func agentEnv(req Request) []string {
 	return env
 }
 
+// dbtScratchEnv points dbt's profiles/target/logs at a private per-task scratch
+// dir, mirroring the pod base image's ENV (runtime/Dockerfile) so a Lite dbt task
+// never writes profiles.yml (which carries the connection secret) into its CWD —
+// the dbt project in the user's working tree, where it would clobber the repo's
+// versioned profiles.yml (#882). Harmless for non-dbt tasks (they ignore it).
+func dbtScratchEnv(scratch string) []string {
+	return []string{
+		"DBT_PROFILES_DIR=" + scratch,
+		"DBT_TARGET_PATH=" + filepath.Join(scratch, "target"),
+		"DBT_LOG_PATH=" + filepath.Join(scratch, "logs"),
+	}
+}
+
 // Execute launches the agent subprocess and returns once it has started, like
 // the Kubernetes executor creating a pod. The agent reports its own task state
 // over gRPC, so the scheduler can record the task as queued before the agent
@@ -163,8 +176,22 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) (Disposit
 	// must run to completion and report its own terminal state over gRPC. Binding
 	// it to ctx would SIGKILL the agent when the dispatch ctx is canceled (surfacing
 	// as "signal: killed" and a falsely failed task), mirroring the inline runner.
+	// #882: give the Lite task the SAME private dbt scratch the pod base image
+	// provides (runtime/Dockerfile DBT_PROFILES_DIR/TARGET/LOG), so dbt writes
+	// profiles.yml/target/logs there — never the task's CWD (the dbt project in the
+	// user's working tree), where the generated profiles.yml would clobber the
+	// repo's versioned one with the connection secret in clear. A private per-TI
+	// dir (MkdirTemp is 0700), removed with the workdir when the task exits.
+	dbtScratch, err := os.MkdirTemp("", "leoflow-dbt-")
+	if err != nil {
+		cleanupWorkDir()
+		e.logger.Error("creating dbt scratch dir failed", "task", req.TaskID, "error", err)
+		return Rejected, fmt.Errorf("creating dbt scratch for task %s: %w", req.TaskID, err)
+	}
+
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), e.agentPath) //nolint:gosec // dev-only executor running the trusted agent binary
 	cmd.Env = append(os.Environ(), agentEnv(req)...)
+	cmd.Env = append(cmd.Env, dbtScratchEnv(dbtScratch)...)
 	// Lite-only: when a per-DAG venv exists, override the inherited
 	// LEOFLOW_PYTHON so the agent's `python -m leoflow_runtime` resolves the
 	// DAG's own dependencies. Last write wins in os/exec, so appending here
@@ -185,6 +212,7 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) (Disposit
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
 		cleanupWorkDir()
+		_ = os.RemoveAll(dbtScratch) //nolint:errcheck // best-effort cleanup of the dbt scratch dir
 		e.logger.Error("agent subprocess failed to start",
 			"task", req.TaskID, "agent_path", e.agentPath, "error", err)
 		return Rejected, fmt.Errorf("starting agent subprocess for task %s: %w", req.TaskID, err)
@@ -193,6 +221,7 @@ func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) (Disposit
 		"task", req.TaskID, "run", req.RunID, "pid", cmd.Process.Pid)
 	go func() {
 		defer cleanupWorkDir()
+		defer func() { _ = os.RemoveAll(dbtScratch) }() //nolint:errcheck // best-effort cleanup of the dbt scratch dir
 		werr := cmd.Wait()
 		if werr != nil {
 			e.logger.Warn("agent subprocess exited non-zero (the agent reports task state over gRPC)",

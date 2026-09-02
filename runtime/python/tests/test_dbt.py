@@ -87,15 +87,22 @@ def test_default_duckdb_defaults_to_memory(tmp_path):
     assert prof["shop"]["outputs"]["dev"]["path"] == ":memory:"
 
 
-def test_profile_step_writes_to_cwd_not_home(tmp_path, monkeypatch):
-    # Regression: the profile-generation step must write to the task's CWD, never
-    # clobber the user's global ~/.dbt/profiles.yml (Lite runs on the host).
+def test_profile_step_never_writes_to_cwd(tmp_path, monkeypatch):
+    # #882: with DBT_PROFILES_DIR unset, the profile step must NOT write profiles.yml
+    # into the CWD. In Lite the CWD is the dbt project in the user's working tree, and
+    # profiles.yml carries the connection secret in clear — writing it there clobbers
+    # the repo's versioned file (a git-add from leaking a credential). It goes to a
+    # private scratch instead (asserted in test_main.py::test_dbt_profiles_dir_never_cwd),
+    # and never ~/.dbt. (Superseded the old "writes to cwd" regression, which encoded
+    # the leaky behavior this fixes.)
     from leoflow_runtime.__main__ import main
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DBT_PROFILES_DIR", raising=False)
     assert main(["--dbt-default-duckdb", "shop"]) == 0
-    assert (tmp_path / "profiles.yml").exists()
+    assert not (tmp_path / "profiles.yml").exists(), (
+        "must NOT write profiles.yml into the CWD (#882)"
+    )
 
 
 def test_unsupported_adapter_is_a_loud_error():

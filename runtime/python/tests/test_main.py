@@ -1,8 +1,42 @@
 """Tests for the ``python -m leoflow_runtime`` CLI entry point."""
 
 import json
+import os
 
 from leoflow_runtime import __main__
+
+
+def test_dbt_profiles_dir_never_cwd(tmp_path, monkeypatch):
+    """#882: with DBT_PROFILES_DIR unset, the profiles dir must NOT be the CWD (the
+    dbt project in the user's working tree) — profiles.yml carries the secret and
+    would clobber the repo's versioned file. It must be a private (0700) scratch."""
+    monkeypatch.delenv("DBT_PROFILES_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)  # simulate running from the dbt project dir
+    d = __main__._dbt_profiles_dir()
+    assert d != str(tmp_path), "must not resolve to the project CWD (#882)"
+    assert os.path.isdir(d)
+    assert (os.stat(d).st_mode & 0o777) == 0o700, "scratch must be private (0700)"
+
+
+def test_dbt_profiles_dir_honors_env(tmp_path, monkeypatch):
+    target = tmp_path / "scr"
+    monkeypatch.setenv("DBT_PROFILES_DIR", str(target))
+    assert __main__._dbt_profiles_dir() == str(target)
+    assert target.is_dir()
+
+
+def test_dbt_profiles_dir_tolerates_chmod_failure(tmp_path, monkeypatch):
+    """The 0700 tightening is best-effort: on a filesystem that refuses chmod the
+    dir is still returned rather than crashing the task (#882)."""
+    target = tmp_path / "scr"
+    monkeypatch.setenv("DBT_PROFILES_DIR", str(target))
+
+    def _boom(*_a, **_k):
+        raise OSError("chmod not supported here")
+
+    monkeypatch.setattr(os, "chmod", _boom)
+    assert __main__._dbt_profiles_dir() == str(target)
+    assert target.is_dir()
 
 
 def test_main_requires_exactly_one_arg():

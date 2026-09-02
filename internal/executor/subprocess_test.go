@@ -35,6 +35,30 @@ func TestAgentEnv(t *testing.T) {
 	}
 }
 
+// TestDbtScratchEnv: a Lite task gets DBT_PROFILES_DIR/TARGET/LOG pointed at the
+// private scratch, never the CWD (the dbt project), so profiles.yml — which
+// carries the connection secret — can't clobber the repo's versioned file (#882).
+func TestDbtScratchEnv(t *testing.T) {
+	scratch := t.TempDir()
+	got := map[string]string{}
+	for _, kv := range dbtScratchEnv(scratch) {
+		i := strings.IndexByte(kv, '=')
+		got[kv[:i]] = kv[i+1:]
+	}
+	if got["DBT_PROFILES_DIR"] != scratch {
+		t.Errorf("DBT_PROFILES_DIR = %q, want %q", got["DBT_PROFILES_DIR"], scratch)
+	}
+	if got["DBT_TARGET_PATH"] != filepath.Join(scratch, "target") {
+		t.Errorf("DBT_TARGET_PATH = %q", got["DBT_TARGET_PATH"])
+	}
+	if got["DBT_LOG_PATH"] != filepath.Join(scratch, "logs") {
+		t.Errorf("DBT_LOG_PATH = %q", got["DBT_LOG_PATH"])
+	}
+	if cwd, _ := os.Getwd(); got["DBT_PROFILES_DIR"] == cwd {
+		t.Error("DBT_PROFILES_DIR must never be the task CWD (the dbt project) — #882")
+	}
+}
+
 func writeScript(t *testing.T, body string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "agent.sh")
@@ -78,6 +102,31 @@ func TestSubprocessExecuteRunsInWorkDir(t *testing.T) {
 	// macOS resolves TempDir under /private; compare the basename to stay portable.
 	if filepath.Base(strings.TrimSpace(string(got))) != filepath.Base(dir) {
 		t.Errorf("agent ran in %q, want workdir %q", strings.TrimSpace(string(got)), dir)
+	}
+}
+
+// TestSubprocessExecuteInjectsDbtScratch: Execute must actually put a private
+// DBT_PROFILES_DIR into the task's env (not just expose the pure helper) — the
+// wiring that keeps a Lite dbt task's profiles.yml out of the project CWD (#882).
+func TestSubprocessExecuteInjectsDbtScratch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash agent stub is POSIX-only")
+	}
+	dir := t.TempDir()
+	e := NewSubprocessExecutor(writeScript(t, `echo "$DBT_PROFILES_DIR" > scratch.txt`), discardLogger())
+	e.SetWorkDir(dir)
+	if _, err := e.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	got := strings.TrimSpace(string(waitForFile(t, filepath.Join(dir, "scratch.txt"))))
+	if got == "" {
+		t.Fatal("DBT_PROFILES_DIR was not injected into the task env")
+	}
+	if got == dir || got == "." {
+		t.Errorf("DBT_PROFILES_DIR = %q, must be a private scratch, never the task CWD (#882)", got)
+	}
+	if !strings.Contains(got, "leoflow-dbt-") {
+		t.Errorf("DBT_PROFILES_DIR = %q, want a private leoflow-dbt scratch dir", got)
 	}
 }
 

@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **A Lite dbt task no longer writes its generated `profiles.yml` into the project
+  (#12).** In Lite the dbt profile step defaulted its output dir to the process
+  CWD — the dbt project in the user's working tree — so the generated
+  `profiles.yml`, which carries the managed connection's secret in clear, could
+  overwrite the repo's version-controlled `profiles.yml`: one `git add` from
+  committing a live credential. The Lite executor now injects the same private
+  `DBT_PROFILES_DIR`/`DBT_TARGET_PATH`/`DBT_LOG_PATH` scratch the pod base image
+  provides, and the runtime never falls back to the CWD — the profile lands in a
+  private per-task dir, never the project.
 - **Sensitive values in a connection's `extra` are masked in read API responses
   (#11).** `GET /api/v2/connections` (list and by-id) returned the free-form
   `extra` verbatim, so provider secrets that ride there — OAuth `client_secret`,

@@ -29,18 +29,38 @@ func redactExtra(extra string) string {
 	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(extra), &m); err != nil {
-		return "***"
+		return "***" // not a JSON object → fail closed rather than echo a possible secret
 	}
-	for k := range m {
-		if isSensitiveKey(k) {
-			m[k] = "***"
-		}
-	}
+	redactMap(m)
 	b, err := json.Marshal(m)
 	if err != nil {
 		return "***"
 	}
 	return string(b)
+}
+
+// redactMap masks, to "***", every value whose key is sensitive, recursing into
+// nested objects and arrays so a secret nested under a non-sensitive key (extra
+// is free-form) is still caught, not just top-level ones.
+func redactMap(m map[string]any) {
+	for k, v := range m {
+		if isSensitiveKey(k) {
+			m[k] = "***"
+			continue
+		}
+		redactAny(v)
+	}
+}
+
+func redactAny(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		redactMap(t)
+	case []any:
+		for _, e := range t {
+			redactAny(e)
+		}
+	}
 }
 
 // ConnectionStore reads and writes Airflow-style Connections for the Admin UI.

@@ -145,6 +145,24 @@ func TestConnectionGetMasksSensitiveExtra(t *testing.T) {
 	}
 }
 
+// TestRedactExtraNestedAndFailClosed: secrets nested under a non-sensitive key
+// are still masked (extra is free-form), and a non-object extra fails closed.
+func TestRedactExtraNestedAndFailClosed(t *testing.T) {
+	nested := redactExtra(`{"config":{"client_secret":"deep"},"opts":[{"token":"t"}],"schema":"public"}`)
+	if strings.Contains(nested, "deep") || strings.Contains(nested, "\"t\"") {
+		t.Errorf("nested secrets must be masked: %s", nested)
+	}
+	if !strings.Contains(nested, "public") {
+		t.Errorf("nested non-secret must survive: %s", nested)
+	}
+	if got := redactExtra(`"a-bare-secret-string"`); got != "***" {
+		t.Errorf("non-object extra must fail closed to ***, got %q", got)
+	}
+	if got := redactExtra(""); got != "" {
+		t.Errorf("empty extra stays empty, got %q", got)
+	}
+}
+
 func TestConnectionWriteWithoutKeyReturns503(t *testing.T) {
 	// The store reports no encryption key -> the API refuses the write (never
 	// stores a credential in plaintext), surfaced as 503.

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow uninstall"
 linkTitle: "uninstall"
-weight: 44
+weight: 50
 ---
 
 Remove the Leoflow installation (~/.leoflow).

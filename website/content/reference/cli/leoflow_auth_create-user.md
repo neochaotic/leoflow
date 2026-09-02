@@ -20,6 +20,7 @@ leoflow auth create-user [flags]
       --email string       email of the user to create
   -h, --help               help for create-user
       --password string    password for the new user
+      --password-stdin     read the password from stdin instead of --password (avoids ps/shell-history exposure)
       --role stringArray   existing role to grant (repeatable); empty grants none
       --server string      control plane base URL (default: config server_url)
       --token string       admin JWT bearer token (default: config token)

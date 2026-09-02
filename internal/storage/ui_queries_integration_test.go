@@ -735,12 +735,16 @@ func TestVariablesIntegration(t *testing.T) {
 	if err != nil || got.Value != "v1" || got.Description != "first" {
 		t.Fatalf("GetVariable = %+v, err=%v", got, err)
 	}
-	// Upsert updates in place.
+	// Upsert updates the value in place but preserves a description the write
+	// omits (COALESCE), rather than wiping it — the safe-by-default upsert (#881).
 	if err := repo.SetVariable(ctx, "default", domain.Variable{Key: key, Value: "v2"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := repo.GetVariable(ctx, "default", key); got.Value != "v2" {
 		t.Errorf("upsert did not update: %q", got.Value)
+	}
+	if got, _ := repo.GetVariable(ctx, "default", key); got.Description != "first" {
+		t.Errorf("upsert clobbered the omitted description: got %q, want first (preserved)", got.Description)
 	}
 	// List includes it.
 	vars, total, err := repo.ListVariables(ctx, "default", 1000, 0)

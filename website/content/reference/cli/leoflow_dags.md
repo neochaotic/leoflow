@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow dags"
 linkTitle: "dags"
-weight: 22
+weight: 27
 ---
 
 Manage registered DAGs.
@@ -28,4 +28,5 @@ Manage registered DAGs.
 
 * [leoflow](/reference/cli/leoflow/)	 - Leoflow is a GitOps-first, container-native workflow orchestrator.
 * [leoflow dags delete](/reference/cli/leoflow_dags_delete/)	 - Clear a DAG's run history, or fully deregister it with --deregister.
+* [leoflow dags list](/reference/cli/leoflow_dags_list/)	 - List registered DAGs.
 

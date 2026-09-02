@@ -279,13 +279,13 @@ INSERT INTO connections (tenant_id, conn_id, conn_type, host, conn_schema, login
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (tenant_id, conn_id) DO UPDATE SET
     conn_type = EXCLUDED.conn_type,
-    host = EXCLUDED.host,
-    conn_schema = EXCLUDED.conn_schema,
-    login = EXCLUDED.login,
-    password = EXCLUDED.password,
-    port = EXCLUDED.port,
-    extra = EXCLUDED.extra,
-    description = EXCLUDED.description,
+    host = COALESCE(EXCLUDED.host, connections.host),
+    conn_schema = COALESCE(EXCLUDED.conn_schema, connections.conn_schema),
+    login = COALESCE(EXCLUDED.login, connections.login),
+    password = COALESCE(EXCLUDED.password, connections.password),
+    port = COALESCE(EXCLUDED.port, connections.port),
+    extra = COALESCE(EXCLUDED.extra, connections.extra),
+    description = COALESCE(EXCLUDED.description, connections.description),
     updated_at = now()
 `
 
@@ -302,6 +302,12 @@ type UpsertConnectionParams struct {
 	Description *string     `json:"description"`
 }
 
+// A write preserves any nullable field the caller left NULL, rather than
+// clobbering it: COALESCE(EXCLUDED.col, connections.col) keeps the stored value
+// when the request omits that field. This is what makes a partial `set` safe —
+// e.g. changing only --host must not wipe the (unreadable) password. conn_type is
+// required on every write, so it is a plain overwrite. To clear a field, delete
+// and recreate the connection.
 func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error {
 	_, err := q.db.Exec(ctx, upsertConnection,
 		arg.TenantID,

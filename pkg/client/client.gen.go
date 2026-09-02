@@ -145,6 +145,37 @@ type ComponentHealth struct {
 	Status                      *string `json:"status,omitempty"`
 }
 
+// Connection An Airflow-style connection. The password is write-only and never returned; secret-bearing keys inside `extra` are masked server-side.
+type Connection struct {
+	ConnType     string  `json:"conn_type"`
+	ConnectionId string  `json:"connection_id"`
+	Description  *string `json:"description,omitempty"`
+	Extra        *string `json:"extra,omitempty"`
+	Host         *string `json:"host,omitempty"`
+	Login        *string `json:"login,omitempty"`
+	Port         *int    `json:"port,omitempty"`
+	Schema       *string `json:"schema,omitempty"`
+}
+
+// ConnectionBody Connection create/replace payload. connection_id is required on POST (taken from the path on PATCH). password and extra are write-only.
+type ConnectionBody struct {
+	ConnType     string  `json:"conn_type"`
+	ConnectionId *string `json:"connection_id,omitempty"`
+	Description  *string `json:"description,omitempty"`
+	Extra        *string `json:"extra,omitempty"`
+	Host         *string `json:"host,omitempty"`
+	Login        *string `json:"login,omitempty"`
+	Password     *string `json:"password,omitempty"`
+	Port         *int    `json:"port,omitempty"`
+	Schema       *string `json:"schema,omitempty"`
+}
+
+// ConnectionCollection defines model for ConnectionCollection.
+type ConnectionCollection struct {
+	Connections  *[]Connection `json:"connections,omitempty"`
+	TotalEntries *int          `json:"total_entries,omitempty"`
+}
+
 // CreateUserRequest defines model for CreateUserRequest.
 type CreateUserRequest struct {
 	// Email Login email. Normalized to lowercase, so it is unique case-insensitively within the tenant.
@@ -348,6 +379,28 @@ type UserListItem struct {
 	Roles     []string  `json:"roles"`
 }
 
+// Variable An Airflow-style variable. The value is masked server-side when the key looks sensitive (secret/password/token/...).
+type Variable struct {
+	Description *string `json:"description,omitempty"`
+	IsEncrypted bool    `json:"is_encrypted"`
+	Key         string  `json:"key"`
+	TeamName    *string `json:"team_name,omitempty"`
+	Value       string  `json:"value"`
+}
+
+// VariableBody defines model for VariableBody.
+type VariableBody struct {
+	Description *string `json:"description,omitempty"`
+	Key         string  `json:"key"`
+	Value       *string `json:"value,omitempty"`
+}
+
+// VariableCollection defines model for VariableCollection.
+type VariableCollection struct {
+	TotalEntries *int        `json:"total_entries,omitempty"`
+	Variables    *[]Variable `json:"variables,omitempty"`
+}
+
 // VersionInfo defines model for VersionInfo.
 type VersionInfo struct {
 	GitVersion *string `json:"git_version,omitempty"`
@@ -364,6 +417,9 @@ type XComEntry struct {
 	Value     interface{} `json:"value,omitempty"`
 }
 
+// ConnectionID defines model for ConnectionID.
+type ConnectionID = string
+
 // DagID defines model for DagID.
 type DagID = string
 
@@ -379,11 +435,23 @@ type Offset = int
 // TaskID defines model for TaskID.
 type TaskID = string
 
+// VariableKey defines model for VariableKey.
+type VariableKey = string
+
+// EncryptionUnavailable defines model for EncryptionUnavailable.
+type EncryptionUnavailable = Error
+
 // NotFound defines model for NotFound.
 type NotFound = Error
 
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
+
+// ListConnectionsParams defines parameters for ListConnections.
+type ListConnectionsParams struct {
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
 
 // ListDagsParams defines parameters for ListDags.
 type ListDagsParams struct {
@@ -410,6 +478,18 @@ type ListUsersParams struct {
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// ListVariablesParams defines parameters for ListVariables.
+type ListVariablesParams struct {
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// CreateConnectionJSONRequestBody defines body for CreateConnection for application/json ContentType.
+type CreateConnectionJSONRequestBody = ConnectionBody
+
+// UpdateConnectionJSONRequestBody defines body for UpdateConnection for application/json ContentType.
+type UpdateConnectionJSONRequestBody = ConnectionBody
+
 // UpdateDagJSONRequestBody defines body for UpdateDag for application/json ContentType.
 type UpdateDagJSONRequestBody = DAGUpdate
 
@@ -421,6 +501,9 @@ type TriggerDagRunJSONRequestBody = DAGRunCreate
 
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = CreateUserRequest
+
+// CreateVariableJSONRequestBody defines body for CreateVariable for application/json ContentType.
+type CreateVariableJSONRequestBody = VariableBody
 
 // IssueTokenJSONRequestBody defines body for IssueToken for application/json ContentType.
 type IssueTokenJSONRequestBody = TokenRequest
@@ -505,6 +588,61 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/v2/auth/token/renew (the `RenewToken` operationId).
 	RenewToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListConnections List connections
+	//
+	// Lists the tenant's Airflow-style connections. Passwords are write-only and
+	// never returned; secret-bearing keys inside `extra` are masked server-side.
+	// Requires the read:connection permission.
+	//
+	// Corresponds with GET /api/v2/connections (the `ListConnections` operationId).
+	ListConnections(ctx context.Context, params *ListConnectionsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateConnectionWithBody Create or replace a connection (upsert)
+	//
+	// Upserts a connection: creates it, or replaces an existing one with the same
+	// connection_id. The password is write-only and never returned. Requires the
+	// write:connection permission and a configured encryption key.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+	CreateConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateConnection Create or replace a connection (upsert)
+	//
+	// Upserts a connection: creates it, or replaces an existing one with the same
+	// connection_id. The password is write-only and never returned. Requires the
+	// write:connection permission and a configured encryption key.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+	CreateConnection(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteConnection Delete a connection
+	//
+	// Corresponds with DELETE /api/v2/connections/{connection_id} (the `DeleteConnection` operationId).
+	DeleteConnection(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetConnection Get a connection
+	//
+	// Corresponds with GET /api/v2/connections/{connection_id} (the `GetConnection` operationId).
+	GetConnection(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateConnectionWithBody Update a connection
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+	UpdateConnectionWithBody(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateConnection Update a connection
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+	UpdateConnection(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetDagSource Get a DAG's source (the dag.py text)
 	//
@@ -644,6 +782,44 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
 	CreateUser(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListVariables List variables
+	//
+	// Lists the tenant's Airflow-style variables. Values of secret-ish keys are
+	// masked server-side. Requires the read:variable permission.
+	//
+	// Corresponds with GET /api/v2/variables (the `ListVariables` operationId).
+	ListVariables(ctx context.Context, params *ListVariablesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateVariableWithBody Create or replace a variable (upsert)
+	//
+	// Upserts a variable: creates it, or replaces an existing one with the same
+	// key. Requires the write:variable permission.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+	CreateVariableWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateVariable Create or replace a variable (upsert)
+	//
+	// Upserts a variable: creates it, or replaces an existing one with the same
+	// key. Requires the write:variable permission.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+	CreateVariable(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteVariable Delete a variable
+	//
+	// Corresponds with DELETE /api/v2/variables/{variable_key} (the `DeleteVariable` operationId).
+	DeleteVariable(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetVariable Get a variable
+	//
+	// Corresponds with GET /api/v2/variables/{variable_key} (the `GetVariable` operationId).
+	GetVariable(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetVersion Control-plane version (Airflow VersionInfo shape)
 	//
 	// Corresponds with GET /api/v2/version (the `GetVersion` operationId).
@@ -686,6 +862,131 @@ type ClientInterface interface {
 // Corresponds with POST /api/v2/auth/token/renew (the `RenewToken` operationId).
 func (c *Client) RenewToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRenewTokenRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListConnections List connections
+//
+// Lists the tenant's Airflow-style connections. Passwords are write-only and
+// never returned; secret-bearing keys inside `extra` are masked server-side.
+// Requires the read:connection permission.
+//
+// Corresponds with GET /api/v2/connections (the `ListConnections` operationId).
+func (c *Client) ListConnections(ctx context.Context, params *ListConnectionsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListConnectionsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateConnectionWithBody Create or replace a connection (upsert)
+//
+// Upserts a connection: creates it, or replaces an existing one with the same
+// connection_id. The password is write-only and never returned. Requires the
+// write:connection permission and a configured encryption key.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+func (c *Client) CreateConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateConnectionRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateConnection Create or replace a connection (upsert)
+//
+// Upserts a connection: creates it, or replaces an existing one with the same
+// connection_id. The password is write-only and never returned. Requires the
+// write:connection permission and a configured encryption key.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+func (c *Client) CreateConnection(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateConnectionRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DeleteConnection Delete a connection
+//
+// Corresponds with DELETE /api/v2/connections/{connection_id} (the `DeleteConnection` operationId).
+func (c *Client) DeleteConnection(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteConnectionRequest(c.Server, connectionId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetConnection Get a connection
+//
+// Corresponds with GET /api/v2/connections/{connection_id} (the `GetConnection` operationId).
+func (c *Client) GetConnection(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetConnectionRequest(c.Server, connectionId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// UpdateConnectionWithBody Update a connection
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+func (c *Client) UpdateConnectionWithBody(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateConnectionRequestWithBody(c.Server, connectionId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// UpdateConnection Update a connection
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+func (c *Client) UpdateConnection(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateConnectionRequest(c.Server, connectionId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1054,6 +1355,94 @@ func (c *Client) CreateUser(ctx context.Context, body CreateUserJSONRequestBody,
 	return c.Client.Do(req)
 }
 
+// ListVariables List variables
+//
+// Lists the tenant's Airflow-style variables. Values of secret-ish keys are
+// masked server-side. Requires the read:variable permission.
+//
+// Corresponds with GET /api/v2/variables (the `ListVariables` operationId).
+func (c *Client) ListVariables(ctx context.Context, params *ListVariablesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListVariablesRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateVariableWithBody Create or replace a variable (upsert)
+//
+// Upserts a variable: creates it, or replaces an existing one with the same
+// key. Requires the write:variable permission.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+func (c *Client) CreateVariableWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateVariableRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateVariable Create or replace a variable (upsert)
+//
+// Upserts a variable: creates it, or replaces an existing one with the same
+// key. Requires the write:variable permission.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+func (c *Client) CreateVariable(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateVariableRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DeleteVariable Delete a variable
+//
+// Corresponds with DELETE /api/v2/variables/{variable_key} (the `DeleteVariable` operationId).
+func (c *Client) DeleteVariable(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteVariableRequest(c.Server, variableKey)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetVariable Get a variable
+//
+// Corresponds with GET /api/v2/variables/{variable_key} (the `GetVariable` operationId).
+func (c *Client) GetVariable(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetVariableRequest(c.Server, variableKey)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // GetVersion Control-plane version (Airflow VersionInfo shape)
 //
 // Corresponds with GET /api/v2/version (the `GetVersion` operationId).
@@ -1171,6 +1560,227 @@ func NewRenewTokenRequest(server string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewListConnectionsRequest constructs an http.Request for the ListConnections method
+func NewListConnectionsRequest(server string, params *ListConnectionsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/connections")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "offset", *params.Offset, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateConnectionRequest calls the generic CreateConnection builder with application/json body
+func NewCreateConnectionRequest(server string, body CreateConnectionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateConnectionRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateConnectionRequestWithBody constructs an http.Request for the CreateConnection method, with any body, and a specified content type
+func NewCreateConnectionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/connections")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteConnectionRequest constructs an http.Request for the DeleteConnection method
+func NewDeleteConnectionRequest(server string, connectionId ConnectionID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "connection_id", connectionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/connections/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetConnectionRequest constructs an http.Request for the GetConnection method
+func NewGetConnectionRequest(server string, connectionId ConnectionID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "connection_id", connectionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/connections/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewUpdateConnectionRequest calls the generic UpdateConnection builder with application/json body
+func NewUpdateConnectionRequest(server string, connectionId ConnectionID, body UpdateConnectionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateConnectionRequestWithBody(server, connectionId, "application/json", bodyReader)
+}
+
+// NewUpdateConnectionRequestWithBody constructs an http.Request for the UpdateConnection method, with any body, and a specified content type
+func NewUpdateConnectionRequestWithBody(server string, connectionId ConnectionID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "connection_id", connectionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/connections/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -2025,6 +2635,180 @@ func NewCreateUserRequestWithBody(server string, contentType string, body io.Rea
 	return req, nil
 }
 
+// NewListVariablesRequest constructs an http.Request for the ListVariables method
+func NewListVariablesRequest(server string, params *ListVariablesParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/variables")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "offset", *params.Offset, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateVariableRequest calls the generic CreateVariable builder with application/json body
+func NewCreateVariableRequest(server string, body CreateVariableJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateVariableRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateVariableRequestWithBody constructs an http.Request for the CreateVariable method, with any body, and a specified content type
+func NewCreateVariableRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/variables")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteVariableRequest constructs an http.Request for the DeleteVariable method
+func NewDeleteVariableRequest(server string, variableKey VariableKey) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "variable_key", variableKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/variables/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetVariableRequest constructs an http.Request for the GetVariable method
+func NewGetVariableRequest(server string, variableKey VariableKey) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "variable_key", variableKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/variables/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetVersionRequest constructs an http.Request for the GetVersion method
 func NewGetVersionRequest(server string) (*http.Request, error) {
 	var err error
@@ -2254,6 +3038,67 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/auth/token/renew (the `RenewToken` operationId).
 	RenewTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*RenewTokenResponse, error)
 
+	// ListConnectionsWithResponse List connections
+	//
+	// Lists the tenant's Airflow-style connections. Passwords are write-only and
+	// never returned; secret-bearing keys inside `extra` are masked server-side.
+	// Requires the read:connection permission.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/connections (the `ListConnections` operationId).
+	ListConnectionsWithResponse(ctx context.Context, params *ListConnectionsParams, reqEditors ...RequestEditorFn) (*ListConnectionsResponse, error)
+
+	// CreateConnectionWithBodyWithResponse Create or replace a connection (upsert)
+	//
+	// Upserts a connection: creates it, or replaces an existing one with the same
+	// connection_id. The password is write-only and never returned. Requires the
+	// write:connection permission and a configured encryption key.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+	CreateConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateConnectionResponse, error)
+
+	// CreateConnectionWithResponse Create or replace a connection (upsert)
+	//
+	// Upserts a connection: creates it, or replaces an existing one with the same
+	// connection_id. The password is write-only and never returned. Requires the
+	// write:connection permission and a configured encryption key.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+	CreateConnectionWithResponse(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateConnectionResponse, error)
+
+	// DeleteConnectionWithResponse Delete a connection
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with DELETE /api/v2/connections/{connection_id} (the `DeleteConnection` operationId).
+	DeleteConnectionWithResponse(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*DeleteConnectionResponse, error)
+
+	// GetConnectionWithResponse Get a connection
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/connections/{connection_id} (the `GetConnection` operationId).
+	GetConnectionWithResponse(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*GetConnectionResponse, error)
+
+	// UpdateConnectionWithBodyWithResponse Update a connection
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+	UpdateConnectionWithBodyWithResponse(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateConnectionResponse, error)
+
+	// UpdateConnectionWithResponse Update a connection
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+	UpdateConnectionWithResponse(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateConnectionResponse, error)
+
 	// GetDagSourceWithResponse Get a DAG's source (the dag.py text)
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -2420,6 +3265,50 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/users (the `CreateUser` operationId).
 	CreateUserWithResponse(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateUserResponse, error)
 
+	// ListVariablesWithResponse List variables
+	//
+	// Lists the tenant's Airflow-style variables. Values of secret-ish keys are
+	// masked server-side. Requires the read:variable permission.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/variables (the `ListVariables` operationId).
+	ListVariablesWithResponse(ctx context.Context, params *ListVariablesParams, reqEditors ...RequestEditorFn) (*ListVariablesResponse, error)
+
+	// CreateVariableWithBodyWithResponse Create or replace a variable (upsert)
+	//
+	// Upserts a variable: creates it, or replaces an existing one with the same
+	// key. Requires the write:variable permission.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+	CreateVariableWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateVariableResponse, error)
+
+	// CreateVariableWithResponse Create or replace a variable (upsert)
+	//
+	// Upserts a variable: creates it, or replaces an existing one with the same
+	// key. Requires the write:variable permission.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+	CreateVariableWithResponse(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateVariableResponse, error)
+
+	// DeleteVariableWithResponse Delete a variable
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with DELETE /api/v2/variables/{variable_key} (the `DeleteVariable` operationId).
+	DeleteVariableWithResponse(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*DeleteVariableResponse, error)
+
+	// GetVariableWithResponse Get a variable
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/variables/{variable_key} (the `GetVariable` operationId).
+	GetVariableWithResponse(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*GetVariableResponse, error)
+
 	// GetVersionWithResponse Control-plane version (Airflow VersionInfo shape)
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -2505,6 +3394,288 @@ func (r RenewTokenResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r RenewTokenResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListConnectionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ConnectionCollection
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListConnectionsResponse) GetJSON200() *ConnectionCollection {
+	return r.JSON200
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r ListConnectionsResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetBody returns the raw response body bytes
+func (r ListConnectionsResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListConnectionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListConnectionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListConnectionsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateConnectionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *Connection
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+	// JSON503 the response for an HTTP 503 `application/json` response
+	JSON503 *EncryptionUnavailable
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r CreateConnectionResponse) GetJSON201() *Connection {
+	return r.JSON201
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r CreateConnectionResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r CreateConnectionResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetJSON503 returns the response for an HTTP 503 `application/json` response
+func (r CreateConnectionResponse) GetJSON503() *EncryptionUnavailable {
+	return r.JSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r CreateConnectionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateConnectionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateConnectionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateConnectionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DeleteConnectionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *NotFound
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r DeleteConnectionResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r DeleteConnectionResponse) GetJSON404() *NotFound {
+	return r.JSON404
+}
+
+// GetBody returns the raw response body bytes
+func (r DeleteConnectionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteConnectionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteConnectionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeleteConnectionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetConnectionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Connection
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *NotFound
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetConnectionResponse) GetJSON200() *Connection {
+	return r.JSON200
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r GetConnectionResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r GetConnectionResponse) GetJSON404() *NotFound {
+	return r.JSON404
+}
+
+// GetBody returns the raw response body bytes
+func (r GetConnectionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetConnectionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetConnectionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetConnectionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UpdateConnectionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Connection
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *NotFound
+	// JSON503 the response for an HTTP 503 `application/json` response
+	JSON503 *EncryptionUnavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r UpdateConnectionResponse) GetJSON200() *Connection {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r UpdateConnectionResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r UpdateConnectionResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r UpdateConnectionResponse) GetJSON404() *NotFound {
+	return r.JSON404
+}
+
+// GetJSON503 returns the response for an HTTP 503 `application/json` response
+func (r UpdateConnectionResponse) GetJSON503() *EncryptionUnavailable {
+	return r.JSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r UpdateConnectionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateConnectionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateConnectionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateConnectionResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3305,6 +4476,212 @@ func (r CreateUserResponse) ContentType() string {
 	return ""
 }
 
+type ListVariablesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *VariableCollection
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListVariablesResponse) GetJSON200() *VariableCollection {
+	return r.JSON200
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r ListVariablesResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetBody returns the raw response body bytes
+func (r ListVariablesResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListVariablesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListVariablesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListVariablesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateVariableResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *Variable
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r CreateVariableResponse) GetJSON201() *Variable {
+	return r.JSON201
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r CreateVariableResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r CreateVariableResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetBody returns the raw response body bytes
+func (r CreateVariableResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateVariableResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateVariableResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateVariableResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DeleteVariableResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *NotFound
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r DeleteVariableResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r DeleteVariableResponse) GetJSON404() *NotFound {
+	return r.JSON404
+}
+
+// GetBody returns the raw response body bytes
+func (r DeleteVariableResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteVariableResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteVariableResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeleteVariableResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetVariableResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Variable
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *Unauthorized
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *NotFound
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetVariableResponse) GetJSON200() *Variable {
+	return r.JSON200
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r GetVariableResponse) GetJSON401() *Unauthorized {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r GetVariableResponse) GetJSON404() *NotFound {
+	return r.JSON404
+}
+
+// GetBody returns the raw response body bytes
+func (r GetVariableResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetVariableResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetVariableResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetVariableResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetVersionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3523,6 +4900,109 @@ func (c *ClientWithResponses) RenewTokenWithResponse(ctx context.Context, reqEdi
 		return nil, err
 	}
 	return ParseRenewTokenResponse(rsp)
+}
+
+// ListConnectionsWithResponse List connections
+//
+// Lists the tenant's Airflow-style connections. Passwords are write-only and
+// never returned; secret-bearing keys inside `extra` are masked server-side.
+// Requires the read:connection permission.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/connections (the `ListConnections` operationId).
+func (c *ClientWithResponses) ListConnectionsWithResponse(ctx context.Context, params *ListConnectionsParams, reqEditors ...RequestEditorFn) (*ListConnectionsResponse, error) {
+	rsp, err := c.ListConnections(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListConnectionsResponse(rsp)
+}
+
+// CreateConnectionWithBodyWithResponse Create or replace a connection (upsert)
+//
+// Upserts a connection: creates it, or replaces an existing one with the same
+// connection_id. The password is write-only and never returned. Requires the
+// write:connection permission and a configured encryption key.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+func (c *ClientWithResponses) CreateConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateConnectionResponse, error) {
+	rsp, err := c.CreateConnectionWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateConnectionResponse(rsp)
+}
+
+// CreateConnectionWithResponse Create or replace a connection (upsert)
+//
+// Upserts a connection: creates it, or replaces an existing one with the same
+// connection_id. The password is write-only and never returned. Requires the
+// write:connection permission and a configured encryption key.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+func (c *ClientWithResponses) CreateConnectionWithResponse(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateConnectionResponse, error) {
+	rsp, err := c.CreateConnection(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateConnectionResponse(rsp)
+}
+
+// DeleteConnectionWithResponse Delete a connection
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with DELETE /api/v2/connections/{connection_id} (the `DeleteConnection` operationId).
+func (c *ClientWithResponses) DeleteConnectionWithResponse(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*DeleteConnectionResponse, error) {
+	rsp, err := c.DeleteConnection(ctx, connectionId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteConnectionResponse(rsp)
+}
+
+// GetConnectionWithResponse Get a connection
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/connections/{connection_id} (the `GetConnection` operationId).
+func (c *ClientWithResponses) GetConnectionWithResponse(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*GetConnectionResponse, error) {
+	rsp, err := c.GetConnection(ctx, connectionId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetConnectionResponse(rsp)
+}
+
+// UpdateConnectionWithBodyWithResponse Update a connection
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+func (c *ClientWithResponses) UpdateConnectionWithBodyWithResponse(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateConnectionResponse, error) {
+	rsp, err := c.UpdateConnectionWithBody(ctx, connectionId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateConnectionResponse(rsp)
+}
+
+// UpdateConnectionWithResponse Update a connection
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+func (c *ClientWithResponses) UpdateConnectionWithResponse(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateConnectionResponse, error) {
+	rsp, err := c.UpdateConnection(ctx, connectionId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateConnectionResponse(rsp)
 }
 
 // GetDagSourceWithResponse Get a DAG's source (the dag.py text)
@@ -3823,6 +5303,80 @@ func (c *ClientWithResponses) CreateUserWithResponse(ctx context.Context, body C
 	return ParseCreateUserResponse(rsp)
 }
 
+// ListVariablesWithResponse List variables
+//
+// Lists the tenant's Airflow-style variables. Values of secret-ish keys are
+// masked server-side. Requires the read:variable permission.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/variables (the `ListVariables` operationId).
+func (c *ClientWithResponses) ListVariablesWithResponse(ctx context.Context, params *ListVariablesParams, reqEditors ...RequestEditorFn) (*ListVariablesResponse, error) {
+	rsp, err := c.ListVariables(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListVariablesResponse(rsp)
+}
+
+// CreateVariableWithBodyWithResponse Create or replace a variable (upsert)
+//
+// Upserts a variable: creates it, or replaces an existing one with the same
+// key. Requires the write:variable permission.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+func (c *ClientWithResponses) CreateVariableWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateVariableResponse, error) {
+	rsp, err := c.CreateVariableWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateVariableResponse(rsp)
+}
+
+// CreateVariableWithResponse Create or replace a variable (upsert)
+//
+// Upserts a variable: creates it, or replaces an existing one with the same
+// key. Requires the write:variable permission.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+func (c *ClientWithResponses) CreateVariableWithResponse(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateVariableResponse, error) {
+	rsp, err := c.CreateVariable(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateVariableResponse(rsp)
+}
+
+// DeleteVariableWithResponse Delete a variable
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with DELETE /api/v2/variables/{variable_key} (the `DeleteVariable` operationId).
+func (c *ClientWithResponses) DeleteVariableWithResponse(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*DeleteVariableResponse, error) {
+	rsp, err := c.DeleteVariable(ctx, variableKey, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteVariableResponse(rsp)
+}
+
+// GetVariableWithResponse Get a variable
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/variables/{variable_key} (the `GetVariable` operationId).
+func (c *ClientWithResponses) GetVariableWithResponse(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*GetVariableResponse, error) {
+	rsp, err := c.GetVariable(ctx, variableKey, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetVariableResponse(rsp)
+}
+
 // GetVersionWithResponse Control-plane version (Airflow VersionInfo shape)
 //
 // Returns a wrapper object for the known response body format(s).
@@ -3928,6 +5482,216 @@ func ParseRenewTokenResponse(rsp *http.Response) (*RenewTokenResponse, error) {
 			return nil, err
 		}
 		response.JSON401 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListConnectionsResponse parses an HTTP response from a ListConnectionsWithResponse call
+func ParseListConnectionsResponse(rsp *http.Response) (*ListConnectionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListConnectionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConnectionCollection
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateConnectionResponse parses an HTTP response from a CreateConnectionWithResponse call
+func ParseCreateConnectionResponse(rsp *http.Response) (*CreateConnectionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateConnectionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Connection
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest EncryptionUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteConnectionResponse parses an HTTP response from a DeleteConnectionWithResponse call
+func ParseDeleteConnectionResponse(rsp *http.Response) (*DeleteConnectionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteConnectionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetConnectionResponse parses an HTTP response from a GetConnectionWithResponse call
+func ParseGetConnectionResponse(rsp *http.Response) (*GetConnectionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetConnectionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Connection
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateConnectionResponse parses an HTTP response from a UpdateConnectionWithResponse call
+func ParseUpdateConnectionResponse(rsp *http.Response) (*UpdateConnectionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateConnectionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Connection
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest EncryptionUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4449,6 +6213,155 @@ func ParseCreateUserResponse(rsp *http.Response) (*CreateUserResponse, error) {
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListVariablesResponse parses an HTTP response from a ListVariablesWithResponse call
+func ParseListVariablesResponse(rsp *http.Response) (*ListVariablesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListVariablesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest VariableCollection
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateVariableResponse parses an HTTP response from a CreateVariableWithResponse call
+func ParseCreateVariableResponse(rsp *http.Response) (*CreateVariableResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateVariableResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Variable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteVariableResponse parses an HTTP response from a DeleteVariableWithResponse call
+func ParseDeleteVariableResponse(rsp *http.Response) (*DeleteVariableResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteVariableResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetVariableResponse parses an HTTP response from a GetVariableWithResponse call
+func ParseGetVariableResponse(rsp *http.Response) (*GetVariableResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetVariableResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Variable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 

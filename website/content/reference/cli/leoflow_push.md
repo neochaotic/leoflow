@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow push"
 linkTitle: "push"
-weight: 36
+weight: 42
 ---
 
 Register a compiled dag.json with the control plane.

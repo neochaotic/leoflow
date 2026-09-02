@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow lite provision"
 linkTitle: "lite provision"
-weight: 33
+weight: 39
 ---
 
 Check and provision the local deps the from-source `leoflow lite` loop needs.

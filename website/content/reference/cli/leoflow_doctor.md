@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow doctor"
 linkTitle: "doctor"
-weight: 28
+weight: 34
 ---
 
 Report host platform, dependencies, and the achievable operating tier.

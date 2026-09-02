@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow init"
 linkTitle: "init"
-weight: 29
+weight: 35
 ---
 
 Scaffold a new DAG project (leoflow.yaml + dag.py).

@@ -105,6 +105,31 @@ func TestSubprocessExecuteRunsInWorkDir(t *testing.T) {
 	}
 }
 
+// TestSubprocessExecuteInjectsDbtScratch: Execute must actually put a private
+// DBT_PROFILES_DIR into the task's env (not just expose the pure helper) — the
+// wiring that keeps a Lite dbt task's profiles.yml out of the project CWD (#882).
+func TestSubprocessExecuteInjectsDbtScratch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash agent stub is POSIX-only")
+	}
+	dir := t.TempDir()
+	e := NewSubprocessExecutor(writeScript(t, `echo "$DBT_PROFILES_DIR" > scratch.txt`), discardLogger())
+	e.SetWorkDir(dir)
+	if _, err := e.Execute(context.Background(), Request{TaskID: "t"}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	got := strings.TrimSpace(string(waitForFile(t, filepath.Join(dir, "scratch.txt"))))
+	if got == "" {
+		t.Fatal("DBT_PROFILES_DIR was not injected into the task env")
+	}
+	if got == dir || got == "." {
+		t.Errorf("DBT_PROFILES_DIR = %q, must be a private scratch, never the task CWD (#882)", got)
+	}
+	if !strings.Contains(got, "leoflow-dbt-") {
+		t.Errorf("DBT_PROFILES_DIR = %q, want a private leoflow-dbt scratch dir", got)
+	}
+}
+
 func TestSubprocessExecuteSurvivesContextCancel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("bash agent stub is POSIX-only")

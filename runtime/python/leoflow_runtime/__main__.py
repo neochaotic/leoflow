@@ -31,7 +31,14 @@ def _dbt_profiles_dir() -> str:
     d = os.environ.get("DBT_PROFILES_DIR")
     if not d:
         d = tempfile.mkdtemp(prefix="leoflow-dbt-")
-    os.makedirs(d, exist_ok=True)
+    # 0700 so the dir holding profiles.yml (which carries the secret) is not
+    # world-listable — mkdtemp is already 0700, but an env-provided dir (the pod's
+    # /tmp/leoflow/dbt, created fresh) would otherwise inherit the umask (~0755).
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)  # tighten even if it pre-existed / umask widened it
+    except OSError:
+        pass
     return d
 
 

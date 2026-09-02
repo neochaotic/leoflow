@@ -228,6 +228,10 @@ def write_dbt_default_duckdb(profile_name: str, profiles_dir: str, db_path: str 
     output = {"type": "duckdb", "path": db_path or ":memory:", "threads": 4}
     profile = {profile_name: {"target": "dev", "outputs": {"dev": output}}}
     path = os.path.join(profiles_dir, "profiles.yml")
-    with open(path, "w", encoding="utf-8") as handle:
+    # 0600 to match write_dbt_profile: a duckdb profile carries no secret today, but
+    # keeping both profiles.yml writers owner-only avoids a future footgun if this
+    # ever grows credentialed fields (and keeps the two paths consistent).
+    with open(path, "w", encoding="utf-8", opener=lambda p, f: os.open(p, f, 0o600)) as handle:
         json.dump(profile, handle)
+    os.chmod(path, 0o600)
     return path

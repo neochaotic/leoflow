@@ -6,6 +6,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Sensitive values in a connection's `extra` are masked in read API responses
+  (#11).** `GET /api/v2/connections` (list and by-id) returned the free-form
+  `extra` verbatim, so provider secrets that ride there — OAuth `client_secret`,
+  PATs/`token`, `private_key`, BigQuery `keyfile_dict` — were echoed in clear (the
+  `password` field was already withheld). Secret-bearing keys are now redacted to
+  `***` on read, matching the Variable masking; non-secret keys (host, http_path,
+  account, schema, method) are preserved.
+
 ### Changed
 
 - **The control-plane Helm defaults no longer let the kubelet kill the server

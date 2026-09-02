@@ -23,15 +23,26 @@ type VariableStore interface {
 var sensitiveKeyParts = []string{
 	"secret", "password", "passwd", "passphrase", "token",
 	"apikey", "api_key", "access_key", "private_key", "authorization", "credential",
+	// keyfile covers a service-account JSON (BigQuery keyfile_dict / keyfile_json).
+	"keyfile",
+}
+
+// isSensitiveKey reports whether a key name looks like it holds a secret, so its
+// value is masked in API responses (variables and connection `extra`).
+func isSensitiveKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, part := range sensitiveKeyParts {
+		if strings.Contains(lower, part) {
+			return true
+		}
+	}
+	return false
 }
 
 // maskedValue returns "***" when the key looks sensitive, else the value.
 func maskedValue(key, value string) string {
-	lower := strings.ToLower(key)
-	for _, part := range sensitiveKeyParts {
-		if strings.Contains(lower, part) {
-			return "***"
-		}
+	if isSensitiveKey(key) {
+		return "***"
 	}
 	return value
 }

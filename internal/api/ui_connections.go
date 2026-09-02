@@ -2,12 +2,66 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 )
+
+// redactExtra masks secret-bearing values in a connection's free-form `extra`
+// before it is returned by the read API (#11). The extra is where provider
+// secrets live — Databricks `client_secret`/`token`, Snowflake/`private_key`,
+// BigQuery `keyfile_dict` — so echoing it verbatim leaks credentials on a plain
+// GET. Non-sensitive keys (host, http_path, account, warehouse, schema, method)
+// are preserved so the UI/operator can still read the connection's shape.
+//
+// Keys are matched by name via isSensitiveKey, which also covers Airflow's
+// prefixed form (extra__<type>__client_secret). If the extra is not a JSON
+// object (unexpected), it is redacted wholesale — fail closed rather than risk
+// echoing a secret. NOTE: a masked read that is written straight back would
+// persist "***"; the write path should treat "***" as "unchanged" (tracked as a
+// follow-up) — the same round-trip caveat the variable mask already carries.
+func redactExtra(extra string) string {
+	if extra == "" {
+		return extra
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(extra), &m); err != nil {
+		return "***" // not a JSON object → fail closed rather than echo a possible secret
+	}
+	redactMap(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "***"
+	}
+	return string(b)
+}
+
+// redactMap masks, to "***", every value whose key is sensitive, recursing into
+// nested objects and arrays so a secret nested under a non-sensitive key (extra
+// is free-form) is still caught, not just top-level ones.
+func redactMap(m map[string]any) {
+	for k, v := range m {
+		if isSensitiveKey(k) {
+			m[k] = "***"
+			continue
+		}
+		redactAny(v)
+	}
+}
+
+func redactAny(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		redactMap(t)
+	case []any:
+		for _, e := range t {
+			redactAny(e)
+		}
+	}
+}
 
 // ConnectionStore reads and writes Airflow-style Connections for the Admin UI.
 // Password is encrypted at rest by the store (ADR 0019) and never returned.
@@ -45,7 +99,7 @@ func toConnectionDTO(c domain.Connection) connectionDTO {
 		Login:        strPtrOrNil(c.Login),
 		Schema:       strPtrOrNil(c.Schema),
 		Port:         c.Port,
-		Extra:        strPtrOrNil(c.Extra),
+		Extra:        strPtrOrNil(redactExtra(c.Extra)),
 	}
 }
 

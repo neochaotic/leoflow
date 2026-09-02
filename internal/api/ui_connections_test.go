@@ -103,6 +103,48 @@ func TestConnectionCRUDNeverReturnsPassword(t *testing.T) {
 	}
 }
 
+// TestConnectionGetMasksSensitiveExtra: the read API must not echo secrets that
+// ride in a connection's `extra` (#11). A Databricks OAuth connection keeps its
+// client_secret/token there, and BigQuery its keyfile_dict — GET previously
+// returned them in clear, which cost a credential rotation in the field.
+func TestConnectionGetMasksSensitiveExtra(t *testing.T) {
+	store := &fakeConnStore{conns: map[string]domain.Connection{
+		"wh": {
+			ConnID: "wh", ConnType: "databricks",
+			Extra: `{"client_secret":"shhh","token":"tok-123","http_path":"/sql/1.0/x","account":"acme","keyfile_dict":"{\"p\":\"k\"}"}`,
+		},
+	}}
+	srv := connServer(store)
+
+	rec := authGet(srv, http.MethodGet, "/api/v2/connections/wh", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get = %d (%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, leaked := range []string{"shhh", "tok-123"} {
+		if strings.Contains(body, leaked) {
+			t.Errorf("GET leaked a secret from extra (%q): %s", leaked, body)
+		}
+	}
+	var dto connectionDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if dto.Extra == nil {
+		t.Fatal("extra should still be present (masked, not dropped)")
+	}
+	var ex map[string]any
+	if err := json.Unmarshal([]byte(*dto.Extra), &ex); err != nil {
+		t.Fatalf("extra not valid json: %v", err)
+	}
+	if ex["client_secret"] != "***" || ex["token"] != "***" || ex["keyfile_dict"] != "***" {
+		t.Errorf("sensitive extra keys must be masked to ***: %v", ex)
+	}
+	if ex["http_path"] != "/sql/1.0/x" || ex["account"] != "acme" {
+		t.Errorf("non-sensitive extra keys must survive: %v", ex)
+	}
+}
+
 func TestConnectionWriteWithoutKeyReturns503(t *testing.T) {
 	// The store reports no encryption key -> the API refuses the write (never
 	// stores a credential in plaintext), surfaced as 503.

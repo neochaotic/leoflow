@@ -31,4 +31,10 @@ How to work on Leoflow itself.
     <span class="lf-card__desc">Build and preview this Hugo + Docsy site locally.</span>
     <span class="lf-card__more">Build the site →</span>
   </a>
+  <a class="lf-card" href="/contribute/secret-handling/">
+    <span class="lf-card__icon"><i class="fa-solid fa-key"></i></span>
+    <span class="lf-card__title">Handling secrets</span>
+    <span class="lf-card__desc">The two rules — private locality and masked-on-read — every feature that touches a credential must follow (<a href="/project/adrs/0061-secret-locality/">ADR 0061</a>).</span>
+    <span class="lf-card__more">Read the rules →</span>
+  </a>
 </div>

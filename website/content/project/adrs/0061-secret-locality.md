@@ -13,7 +13,7 @@ description: "ADR 0061: Secret material is written only to a private, ephemeral 
 **Date:** 2026-09-02
 **Accepted:** 2026-09-02
 **Relates:** ADR 0019 (secret encryption at rest — the vault), ADR 0021 (exposing variables/connections to pods), ADR 0045 (declared secret delivery), ADR 0055 (secret scoping + token liveness), ADR 0060 (external secrets resolution). This ADR is the cross-cutting *locality* invariant those composed decisions all assume but none stated.
-**Issues:** #882 (#12, Lite dbt `profiles.yml` written to the project CWD), #11 (connection `extra` echoed on read), GHSA-3r74-9w27-v32f / #828 (author env override) — three instances of one class.
+**Issues:** #882 (#12, Lite dbt `profiles.yml` written to the project CWD — fix in progress), PR #867 (connection `extra` echoed on read; field report #11), GHSA-3r74-9w27-v32f / #828 (author env override) — three instances of one class.
 
 ## Context
 
@@ -30,9 +30,10 @@ same bug three times:
   the repo's version-controlled `profiles.yml`. One `git add` from committing a
   live credential. (The pod path was safe only because the base image happened to
   set `DBT_PROFILES_DIR` to `/tmp`.)
-- **#11.** `GET /api/v2/connections` returned the free-form `extra` verbatim, so
-  provider secrets (`client_secret`, `token`, `keyfile_dict`) were echoed to any
-  reader — the write-only `password` field was protected, `extra` was not.
+- **PR #867 (field report #11).** `GET /api/v2/connections` returned the free-form
+  `extra` verbatim, so provider secrets (`client_secret`, `token`, `keyfile_dict`)
+  were echoed to any reader — the write-only `password` field was protected,
+  `extra` was not.
 - **#828 (GHSA-3r74-9w27-v32f).** A DAG's `env:` could override reserved
   `LEOFLOW_` variables and redirect the in-pod agent's credentials.
 
@@ -68,9 +69,11 @@ be committed; masking keeps it out of responses where it could be observed.
 Enforcement — every feature touching a secret carries this, and review checks it:
 
 - **Materializing a credential to disk** → target the executor-injected scratch
-  (the `DBT_PROFILES_DIR`/`DBT_TARGET_PATH`/`DBT_LOG_PATH` pattern: the pod base
-  image and the Lite subprocess executor both provide one), and the code's own
-  fallback, when the env is unset, is a private `mkdtemp` — **never the CWD**.
+  (the `DBT_PROFILES_DIR`/`DBT_TARGET_PATH`/`DBT_LOG_PATH` pattern). The pod base
+  image sets these to `/tmp/leoflow/...` today; the Lite subprocess executor **must**
+  inject the same, and the code's own fallback, when the env is unset, **must** be a
+  private `mkdtemp` — **never the CWD**. (Bringing the Lite path into compliance is
+  the #882 fix; the pod path was already compliant via the base image.)
 - **Serializing a secret to a response/log/audit** → mask secret-bearing fields
   (reuse `isSensitiveKey`); prefer omitting write-only fields entirely.
 - **Tests are mandatory and specific**: a feature that writes a credential proves
@@ -91,3 +94,7 @@ credential) and, as the three issues show, easy to reintroduce by omission.
 This ADR is a locality/read invariant, not a new mechanism; it does not change the
 vault, the exchange, or scoping. It states the rule those already assume so the
 next feature does not have to rediscover it through an incident.
+
+The practical how-to for satisfying both invariants — the scratch pattern, the
+masking helper, and the tests each requires — is
+[Handling secrets in a feature](/contribute/secret-handling/).

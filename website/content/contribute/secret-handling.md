@@ -10,7 +10,8 @@ URI, a generated `profiles.yml`, a keyfile, a token, an API key — it is bound 
 the two invariants in [ADR 0061](/project/adrs/0061-secret-locality/). This page
 is the practical how-to. Both rules exist because the same leak has happened three
 times ([#882](https://github.com/neochaotic/leoflow/issues/882),
-#11, GHSA-3r74-9w27-v32f) — each avoidable.
+[PR #867](https://github.com/neochaotic/leoflow/pull/867) (field report #11),
+GHSA-3r74-9w27-v32f) — each avoidable.
 
 ## Rule 1 — Private locality: never write a secret where it could be committed
 
@@ -19,17 +20,18 @@ removed when the task ends) — **never** the project directory, the process CWD
 the repo, or a committable dotfile. The default output location must be a private
 `mkdtemp`, never `os.getcwd()` / `"."`.
 
-leoflow already provides the scratch on both execution paths — use it, don't
-reinvent it:
+leoflow provides the scratch on both execution paths — use it, don't reinvent it:
 
 - **Pod**: the base image sets `DBT_PROFILES_DIR` / `DBT_TARGET_PATH` /
   `DBT_LOG_PATH` to `/tmp/leoflow/...` (`runtime/Dockerfile`).
 - **Lite**: the subprocess executor injects the same three at a per-task
-  `MkdirTemp` (`internal/executor/subprocess.go`, `dbtScratchEnv`).
+  `MkdirTemp` (`internal/executor/subprocess.go`, `dbtScratchEnv`) — this Lite-side
+  injection lands with the #882 fix.
 
 So a task reads `DBT_PROFILES_DIR` and writes there. The runtime's own fallback,
-for any path that forgot to set it, is a private `mkdtemp` — **never the CWD**
-(`runtime/python/leoflow_runtime/__main__.py`, `_dbt_profiles_dir`):
+for any path that forgot to set it, must be a private `mkdtemp` — **never the CWD**
+(`runtime/python/leoflow_runtime/__main__.py`, `_dbt_profiles_dir`, also part of the
+#882 fix):
 
 ```python
 d = os.environ.get("DBT_PROFILES_DIR")

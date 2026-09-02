@@ -617,3 +617,60 @@ tests:
               secretKeyRef:
                 name: my-object-creds
                 key: secretAccessKey
+
+  # #860 — the control-plane probes must be forgiving by default (a busy scheduler
+  # can miss a 1s /healthz under CPU pressure and be kubelet-killed mid-run) and be
+  # operator-tunable via values.
+  - it: renders forgiving liveness/readiness probe defaults (timeout + failureThreshold)
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 3
+
+  - it: lets the operator tune the probe knobs via values
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      probes.liveness.timeoutSeconds: 10
+      probes.liveness.failureThreshold: 6
+      probes.readiness.periodSeconds: 15
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 6
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 15
+
+  - it: defaults the control-plane resource requests high enough to answer probes under load
+    template: deployment.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 250m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 256Mi

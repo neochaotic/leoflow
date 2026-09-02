@@ -6,6 +6,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The control-plane Helm defaults no longer let the kubelet kill the server
+  under load (#860).** The liveness/readiness probes are now exposed in
+  `values.yaml` (`probes.liveness` / `probes.readiness`) and default to a
+  forgiving 5s liveness / 3s readiness timeout with `failureThreshold: 3` —
+  instead of Kubernetes' implicit 1s/3, which a busy scheduler could miss during a
+  task-pod burst and be restarted mid-run (cascading in-flight tasks to
+  agent_lost). Default CPU/memory requests are raised to `250m`/`256Mi` so the
+  server keeps enough headroom to answer probes while fanning out task pods.
+
 ### Fixed
 
 - **A control-plane restart no longer fails healthy in-flight tasks (#858).**

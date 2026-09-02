@@ -76,13 +76,20 @@ func newVariablesSetCommand() *cobra.Command {
 
 // resolveVariableValue applies the value-source precedence: --value-stdin reads
 // stdin (and conflicts with a positional value); otherwise the positional value
-// is used, defaulting to empty when neither is given.
+// is used. A value must be supplied one way or the other — omitting it entirely
+// is an error rather than a silent overwrite-to-empty (which would quietly blank
+// an existing variable on an upsert). An explicit empty value is still allowed
+// via `set <key> ""`.
 func resolveVariableValue(cmd *cobra.Command, positional string, havePositional, stdin bool) (string, error) {
 	if stdin {
 		if havePositional {
 			return "", fmt.Errorf("a positional value and --value-stdin are mutually exclusive")
 		}
 		return readValueStdin(cmd.InOrStdin())
+	}
+	if !havePositional {
+		return "", fmt.Errorf("a value is required: pass it as the second argument or via --value-stdin " +
+			"(use `set <key> \"\"` to set an explicit empty value)")
 	}
 	return positional, nil
 }

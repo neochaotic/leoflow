@@ -12,9 +12,11 @@ Create or replace a connection (upsert).
 
 ### Synopsis
 
-Upserts a connection: creates it, or replaces an existing one with the same id. --conn-type is required. The password and extra are sent to the control plane but never printed back; read commands show masked values.
+Creates a connection, or replaces an existing one with the same id. --conn-type is required.
 
-Prefer --password-stdin over --password so the secret never lands in your shell history or the process table.
+This is a full replace, not a partial patch: the connection is set to exactly the fields you pass, so any field you omit is cleared on an existing connection — including the password. To change one field, pass the others too (the password cannot be read back, so re-supply it).
+
+The password and extra are sent to the control plane but never printed back; read commands show masked values. Prefer --password-stdin / --extra-file over --password / --extra so a secret never lands in your shell history or the process table.
 
 ```
 leoflow connections set <connection_id> [flags]
@@ -26,6 +28,7 @@ leoflow connections set <connection_id> [flags]
       --conn-type string     connection type, e.g. postgres, http, aws (required)
       --description string   human-readable description
       --extra string         extra JSON blob (provider-specific; secrets here are masked on read)
+      --extra-file string    read the extra JSON from a file instead of --extra (keeps provider secrets out of argv)
   -h, --help                 help for set
       --host string          connection host
       --login string         connection login/username

@@ -35,6 +35,7 @@ func newConnectionsCommand() *cobra.Command {
 type connectionSetFlags struct {
 	serverURL, token                                     string
 	connType, host, login, password, schema, extra, desc string
+	extraFile                                            string
 	port                                                 int
 	passwordStdin                                        bool
 }
@@ -44,10 +45,15 @@ func newConnectionsSetCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set <connection_id>",
 		Short: "Create or replace a connection (upsert).",
-		Long: "Upserts a connection: creates it, or replaces an existing one with the " +
-			"same id. --conn-type is required. The password and extra are sent to the " +
-			"control plane but never printed back; read commands show masked values.\n\n" +
-			"Prefer --password-stdin over --password so the secret never lands in your " +
+		Long: "Creates a connection, or replaces an existing one with the same id. " +
+			"--conn-type is required.\n\n" +
+			"This is a full replace, not a partial patch: the connection is set to " +
+			"exactly the fields you pass, so any field you omit is cleared on an " +
+			"existing connection — including the password. To change one field, pass " +
+			"the others too (the password cannot be read back, so re-supply it).\n\n" +
+			"The password and extra are sent to the control plane but never printed " +
+			"back; read commands show masked values. Prefer --password-stdin / " +
+			"--extra-file over --password / --extra so a secret never lands in your " +
 			"shell history or the process table.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,7 +69,11 @@ func newConnectionsSetCommand() *cobra.Command {
 			if perr != nil {
 				return perr
 			}
-			body := connectionBodyFromFlags(cmd, connID, f, pw)
+			extra, xerr := resolveConnectionExtra(cmd, f.extra, f.extraFile)
+			if xerr != nil {
+				return xerr
+			}
+			body := connectionBodyFromFlags(cmd, connID, f, pw, extra)
 			conn, err := setConnectionReq(cmdContext(cmd), base, bearer, body)
 			if err != nil {
 				return err
@@ -81,14 +91,38 @@ func newConnectionsSetCommand() *cobra.Command {
 	cmd.Flags().StringVar(&f.schema, "schema", "", "connection schema/database")
 	cmd.Flags().IntVar(&f.port, "port", 0, "connection port (0 leaves it unset)")
 	cmd.Flags().StringVar(&f.extra, "extra", "", "extra JSON blob (provider-specific; secrets here are masked on read)")
+	cmd.Flags().StringVar(&f.extraFile, "extra-file", "", "read the extra JSON from a file instead of --extra (keeps provider secrets out of argv)")
 	cmd.Flags().StringVar(&f.desc, "description", "", "human-readable description")
 	return cmd
 }
 
+// resolveConnectionExtra applies the extra-source precedence: --extra-file reads
+// the JSON blob from a file (keeping a provider secret out of argv/shell history)
+// and is mutually exclusive with the inline --extra. Returns whether an extra was
+// supplied at all so the caller can leave it untouched when neither flag was used.
+func resolveConnectionExtra(cmd *cobra.Command, inline, file string) (string, error) {
+	byFlag := cmd.Flags().Changed("extra")
+	byFile := cmd.Flags().Changed("extra-file")
+	if byFlag && byFile {
+		return "", fmt.Errorf("--extra and --extra-file are mutually exclusive")
+	}
+	if byFile {
+		data, err := os.ReadFile(file) //nolint:gosec // path is operator-supplied on their own CLI.
+		if err != nil {
+			return "", fmt.Errorf("reading --extra-file: %w", err)
+		}
+		return string(data), nil
+	}
+	return inline, nil
+}
+
 // connectionBodyFromFlags maps the CLI flags to the typed request body, sending
-// only the fields the operator actually set (so an omitted flag never clobbers an
-// existing value with an empty string on the upsert).
-func connectionBodyFromFlags(cmd *cobra.Command, connID string, f connectionSetFlags, password string) apiclient.ConnectionBody {
+// only the fields the operator actually set. NOTE the control plane currently
+// applies a write as a full replace, so an omitted field is cleared server-side
+// regardless — the `set` help states this. Sending nil (not "") for an unset
+// field is nonetheless forward-compatible with a future merge-on-omit server
+// semantics (the invariant tracked alongside the masked-write follow-up).
+func connectionBodyFromFlags(cmd *cobra.Command, connID string, f connectionSetFlags, password, extra string) apiclient.ConnectionBody {
 	body := apiclient.ConnectionBody{ConnectionId: &connID, ConnType: f.connType}
 	if cmd.Flags().Changed("host") {
 		body.Host = &f.host
@@ -106,8 +140,8 @@ func connectionBodyFromFlags(cmd *cobra.Command, connID string, f connectionSetF
 		p := f.port
 		body.Port = &p
 	}
-	if cmd.Flags().Changed("extra") {
-		body.Extra = &f.extra
+	if cmd.Flags().Changed("extra") || cmd.Flags().Changed("extra-file") {
+		body.Extra = &extra
 	}
 	if cmd.Flags().Changed("description") {
 		body.Description = &f.desc

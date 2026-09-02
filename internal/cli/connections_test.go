@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,6 +133,59 @@ func TestSetConnectionCommandRequiresConnType(t *testing.T) {
 	cfg := seedSessionConfig(t, "http://127.0.0.1:0", "tok")
 	if _, _, err := run(t, "connections", "set", "pg", "--config", cfg); err == nil {
 		t.Error("expected an error when --conn-type is missing")
+	}
+}
+
+// TestSetConnectionExtraFile: --extra-file reads the provider-secret JSON from a
+// file so it never lands on argv/shell history; the file's contents must reach
+// the server as the connection's extra.
+func TestSetConnectionExtraFile(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"connection_id":"pg","conn_type":"postgres"}`)
+	}))
+	defer srv.Close()
+
+	extraPath := filepath.Join(t.TempDir(), "extra.json")
+	extraJSON := `{"token":"FROM-FILE-SECRET"}`
+	if werr := os.WriteFile(extraPath, []byte(extraJSON), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	cfg := seedSessionConfig(t, srv.URL, "tok")
+	out, _, err := run(t, "connections", "set", "pg", "--config", cfg,
+		"--conn-type", "postgres", "--extra-file", extraPath)
+	if err != nil {
+		t.Fatalf("connections set --extra-file: %v", err)
+	}
+	var sent apiclient.ConnectionBody
+	if uerr := json.Unmarshal([]byte(gotBody), &sent); uerr != nil {
+		t.Fatalf("request body not JSON: %v (%s)", uerr, gotBody)
+	}
+	if sent.Extra == nil || *sent.Extra != extraJSON {
+		t.Errorf("extra from file not sent verbatim: %s", gotBody)
+	}
+	if strings.Contains(out, "FROM-FILE-SECRET") {
+		t.Errorf("output leaked the extra secret: %q", out)
+	}
+}
+
+// TestSetConnectionExtraFlagsMutuallyExclusive: --extra and --extra-file name the
+// same field from two sources, so supplying both is a user error rather than a
+// silent pick-one.
+func TestSetConnectionExtraFlagsMutuallyExclusive(t *testing.T) {
+	extraPath := filepath.Join(t.TempDir(), "extra.json")
+	if werr := os.WriteFile(extraPath, []byte(`{"a":"b"}`), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	cfg := seedSessionConfig(t, "http://127.0.0.1:0", "tok")
+	_, _, err := run(t, "connections", "set", "pg", "--config", cfg,
+		"--conn-type", "postgres", "--extra", `{"a":"b"}`, "--extra-file", extraPath)
+	if err == nil {
+		t.Error("expected an error when both --extra and --extra-file are given")
 	}
 }
 

@@ -106,6 +106,52 @@ func TestSetVariableCommandRequiresKey(t *testing.T) {
 	}
 }
 
+// TestSetVariableCommandRequiresValue: `variables set <key>` with no value and no
+// --value-stdin must error, not silently overwrite an existing variable's value
+// with the empty string. It must never reach the server.
+func TestSetVariableCommandRequiresValue(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	cfg := seedSessionConfig(t, srv.URL, "tok")
+	if _, _, err := run(t, "variables", "set", "onlykey", "--config", cfg); err == nil {
+		t.Error("expected an error when no value is supplied")
+	}
+	if called {
+		t.Error("no request should be sent when the value is missing")
+	}
+}
+
+// TestSetVariableCommandExplicitEmptyValue: an explicit empty value (`set k ""`)
+// is a deliberate write and must be allowed through.
+func TestSetVariableCommandExplicitEmptyValue(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"key":"k","value":"","is_encrypted":false}`)
+	}))
+	defer srv.Close()
+
+	cfg := seedSessionConfig(t, srv.URL, "tok")
+	if _, _, err := run(t, "variables", "set", "k", "", "--config", cfg); err != nil {
+		t.Fatalf("explicit empty value should be allowed: %v", err)
+	}
+	var sent apiclient.VariableBody
+	if uerr := json.Unmarshal([]byte(gotBody), &sent); uerr != nil {
+		t.Fatalf("request body not JSON: %v (%s)", uerr, gotBody)
+	}
+	if sent.Value == nil || *sent.Value != "" {
+		t.Errorf("explicit empty value not sent: %s", gotBody)
+	}
+}
+
 func TestGetVariableReq(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v2/variables/region" {

@@ -13,7 +13,7 @@ description: "ADR 0061: Secret material is written only to a private, ephemeral 
 **Date:** 2026-09-02
 **Accepted:** 2026-09-02
 **Relates:** ADR 0019 (secret encryption at rest — the vault), ADR 0021 (exposing variables/connections to pods), ADR 0045 (declared secret delivery), ADR 0055 (secret scoping + token liveness), ADR 0060 (external secrets resolution). This ADR is the cross-cutting *locality* invariant those composed decisions all assume but none stated.
-**Issues:** #882 (#12, Lite dbt `profiles.yml` written to the project CWD — fix in progress), PR #867 (connection `extra` echoed on read; field report #11), GHSA-3r74-9w27-v32f / #828 (author env override) — three instances of one class.
+**Issues:** #882 (field report #12, Lite dbt `profiles.yml` written to the project CWD — fix in progress), PR #867 (connection `extra` echoed on read; field report #11), GHSA-3r74-9w27-v32f / #828 (author env override) — three instances of one class.
 
 ## Context
 
@@ -24,7 +24,7 @@ over the ADR 0055 exchange (ADR 0021/0045/0060). That covers the secret's life
 feature may put a secret once it holds one — and that gap has now produced the
 same bug three times:
 
-- **#882 (#12).** A Lite dbt task's profile step defaulted its output dir to the
+- **#882 (field report #12).** A Lite dbt task's profile step defaulted its output dir to the
   process CWD — the dbt project in the user's working tree — so the generated
   `profiles.yml`, carrying the managed connection's secret in clear, overwrote
   the repo's version-controlled `profiles.yml`. One `git add` from committing a

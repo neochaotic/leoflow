@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -89,7 +90,7 @@ func newConnectionsSetCommand() *cobra.Command {
 	cmd.Flags().StringVar(&f.password, "password", "", "connection password (prefer --password-stdin)")
 	cmd.Flags().BoolVar(&f.passwordStdin, "password-stdin", false, "read the password from stdin instead of --password (avoids ps/shell-history exposure)")
 	cmd.Flags().StringVar(&f.schema, "schema", "", "connection schema/database")
-	cmd.Flags().IntVar(&f.port, "port", 0, "connection port (0 leaves it unset)")
+	cmd.Flags().IntVar(&f.port, "port", 0, "connection port (omit to keep the stored value; an explicit value, including 0, overwrites it)")
 	cmd.Flags().StringVar(&f.extra, "extra", "", "extra JSON blob (provider-specific; secrets here are masked on read)")
 	cmd.Flags().StringVar(&f.extraFile, "extra-file", "", "read the extra JSON from a file instead of --extra (keeps provider secrets out of argv)")
 	cmd.Flags().StringVar(&f.desc, "description", "", "human-readable description")
@@ -111,7 +112,9 @@ func resolveConnectionExtra(cmd *cobra.Command, inline, file string) (string, er
 		if err != nil {
 			return "", fmt.Errorf("reading --extra-file: %w", err)
 		}
-		return string(data), nil
+		// Drop a single trailing newline so a normal text editor's file and an
+		// inline --extra produce the identical stored blob (matches --value-stdin).
+		return strings.TrimSuffix(string(data), "\n"), nil
 	}
 	return inline, nil
 }

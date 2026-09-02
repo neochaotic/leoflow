@@ -152,7 +152,9 @@ func TestSetConnectionExtraFile(t *testing.T) {
 
 	extraPath := filepath.Join(t.TempDir(), "extra.json")
 	extraJSON := `{"token":"FROM-FILE-SECRET"}`
-	if werr := os.WriteFile(extraPath, []byte(extraJSON), 0o600); werr != nil {
+	// Write with a trailing newline (as an editor would) to prove it is trimmed
+	// so the stored blob matches an inline --extra byte-for-byte.
+	if werr := os.WriteFile(extraPath, []byte(extraJSON+"\n"), 0o600); werr != nil {
 		t.Fatal(werr)
 	}
 	cfg := seedSessionConfig(t, srv.URL, "tok")

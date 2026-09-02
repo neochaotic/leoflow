@@ -34,7 +34,7 @@ leoflow connections set <connection_id> [flags]
       --login string         connection login/username
       --password string      connection password (prefer --password-stdin)
       --password-stdin       read the password from stdin instead of --password (avoids ps/shell-history exposure)
-      --port int             connection port (0 leaves it unset)
+      --port int             connection port (omit to keep the stored value; an explicit value, including 0, overwrites it)
       --schema string        connection schema/database
       --server string        control plane base URL (default: config server_url)
       --token string         JWT bearer token (default: config token)

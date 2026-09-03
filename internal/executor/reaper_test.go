@@ -354,3 +354,110 @@ func TestReaperThreadsPresenceCacheToDispatchLost(t *testing.T) {
 		t.Errorf("a cache-active defer must skip the live LIST, got %d live calls", pods.activeCalls)
 	}
 }
+
+// gateOpenThenClosed returns a destructiveGate that is open for the first n
+// consultations and closed for every one after. It models a step-down or cancel
+// that lands between two writes of the same reap, so a test can let the mark
+// through and have the teardown that follows refused.
+func gateOpenThenClosed(n int) destructiveGate {
+	calls := 0
+	return func(context.Context) bool {
+		calls++
+		return calls <= n
+	}
+}
+
+// TestReapersHonorGateAtTeardown: the destructive gate is consulted a SECOND time
+// right before the pod teardown that follows a successful mark — not only at the
+// top of reapOne. With a gate that closes after the first consultation the DB
+// mark applies (it was authorized), but the pod delete is refused and metered as
+// <reaper>_teardown_gate_skip. The always-closed gate in
+// TestReapersHonorGateMidTick can never reach this branch because the top check
+// returns first; this test is the proof of the "re-checked before EVERY
+// mark/delete" claim for the four reapers that own a teardown. The
+// warm-worker-lost reaper deletes no pod (a warm worker outlives its attempts),
+// so it has no teardown re-check to cover.
+func TestReapersHonorGateAtTeardown(t *testing.T) {
+	past := time.Now().UTC().Add(-1 * time.Hour)
+
+	t.Run("orphan", func(t *testing.T) {
+		store := &fakeReaperStore{orphanCands: []ReapCandidate{{RunID: "stuck", LastActivity: past}}}
+		rec := &capturingRecorder{}
+		pods := &fakePodManager{active: map[string]bool{}}
+		r := newOrphanReaper(store, reapTestLogger(), time.Minute, rec)
+		r.pods = pods
+		r.gate = gateOpenThenClosed(1)
+		if err := r.run(context.Background()); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if len(store.reapedRuns) != 1 {
+			t.Errorf("the authorized mark must apply, reapedRuns=%v", store.reapedRuns)
+		}
+		if len(pods.deletedRuns) != 0 {
+			t.Errorf("the teardown must be refused once the gate closed, deletedRuns=%v", pods.deletedRuns)
+		}
+		if got := rec.count("orphan_teardown_gate_skip"); got != 1 {
+			t.Errorf("orphan_teardown_gate_skip = %d, want 1", got)
+		}
+	})
+	t.Run("agent-lost", func(t *testing.T) {
+		store := &fakeHeartbeatStore{candidates: []AgentLostCandidate{{TaskInstanceID: "silent", DagRunID: "r", TaskID: "t", TryNumber: 1, LastHeartbeat: past}}}
+		rec := &capturingRecorder{}
+		pods := &fakePodManager{active: map[string]bool{}}
+		r := newAgentLostReaper(store, reapTestLogger(), time.Minute, rec)
+		r.pods = pods
+		r.gate = gateOpenThenClosed(1)
+		if err := r.run(context.Background()); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if len(store.failed) != 1 {
+			t.Errorf("the authorized mark must apply, failed=%v", store.failed)
+		}
+		if len(pods.deletedTasks) != 0 {
+			t.Errorf("the teardown must be refused once the gate closed, deletedTasks=%v", pods.deletedTasks)
+		}
+		if got := rec.count("agent_lost_teardown_gate_skip"); got != 1 {
+			t.Errorf("agent_lost_teardown_gate_skip = %d, want 1", got)
+		}
+	})
+	t.Run("dispatch-lost", func(t *testing.T) {
+		store := &fakeReaperStore{queuedCands: []StaleQueuedCandidate{{TaskInstanceID: "stuck", DagRunID: "r", TaskID: "t", TryNumber: 1, QueuedAt: past}}}
+		rec := &capturingRecorder{}
+		pods := &fakePodManager{active: map[string]bool{}}
+		r := newDispatchLostReaper(store, reapTestLogger(), time.Minute, rec)
+		r.pods = pods
+		r.gate = gateOpenThenClosed(1)
+		if err := r.run(context.Background()); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if len(store.queuedMarked) != 1 {
+			t.Errorf("the authorized mark must apply, queuedMarked=%v", store.queuedMarked)
+		}
+		if len(pods.deletedTasks) != 0 {
+			t.Errorf("the teardown must be refused once the gate closed, deletedTasks=%v", pods.deletedTasks)
+		}
+		if got := rec.count("dispatch_lost_teardown_gate_skip"); got != 1 {
+			t.Errorf("dispatch_lost_teardown_gate_skip = %d, want 1", got)
+		}
+	})
+	t.Run("pod-lost", func(t *testing.T) {
+		store := &fakePodLostStore{candidates: []PodLostCandidate{{TaskInstanceID: "gone", DagRunID: "r", TaskID: "t", TryNumber: 1, RunningSince: past}}}
+		rec := &capturingRecorder{}
+		pods := &fakePodManager{active: map[string]bool{}}
+		r := newPodLostReaper(store, reapTestLogger(), time.Minute, rec)
+		r.pods = pods
+		r.gate = gateOpenThenClosed(1)
+		if err := r.run(context.Background()); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if len(store.marked) != 1 {
+			t.Errorf("the authorized mark must apply, marked=%v", store.marked)
+		}
+		if len(pods.deletedTasks) != 0 {
+			t.Errorf("the teardown must be refused once the gate closed, deletedTasks=%v", pods.deletedTasks)
+		}
+		if got := rec.count("pod_lost_teardown_gate_skip"); got != 1 {
+			t.Errorf("pod_lost_teardown_gate_skip = %d, want 1", got)
+		}
+	})
+}

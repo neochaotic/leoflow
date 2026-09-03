@@ -14,7 +14,7 @@ Create or update a connection (upsert).
 
 Creates a connection, or updates an existing one with the same id. --conn-type is required.
 
-Only the fields you pass are changed; any field you omit keeps its current value. So you can change just --host without re-supplying the password (which cannot be read back anyway). To clear a field, delete and recreate the connection.
+Only the fields you pass are changed; any field you omit keeps its current value. So you can change just --host without re-supplying the password (which cannot be read back anyway). To clear a field, pass it as an empty string, e.g. --login '' or --schema ''.
 
 The password and extra are sent to the control plane but never printed back; read commands show masked values. Prefer --password-stdin / --extra-file over --password / --extra so a secret never lands in your shell history or the process table.
 

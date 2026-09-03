@@ -157,7 +157,7 @@ type Connection struct {
 	Schema       *string `json:"schema,omitempty"`
 }
 
-// ConnectionBody Connection create/replace payload. connection_id is required on POST (taken from the path on PATCH). password and extra are write-only.
+// ConnectionBody Connection create/replace payload. connection_id is required on POST (taken from the path on PATCH). password and extra are write-only. Every optional field is tri-state: omit the key to preserve the stored value (a partial write never wipes a field it does not mention, so the unreadable password survives a `--host`-only edit), send an empty string to clear the field, or send a value to set it. A password equal to the mask `***`, and any key inside `extra` whose value is exactly `***`, is treated as "unchanged" — so re-submitting a connection read back from GET (whose secrets are masked) never overwrites the real secret with the mask.
 type ConnectionBody struct {
 	ConnType     string  `json:"conn_type"`
 	ConnectionId *string `json:"connection_id,omitempty"`
@@ -388,7 +388,7 @@ type Variable struct {
 	Value       string  `json:"value"`
 }
 
-// VariableBody defines model for VariableBody.
+// VariableBody Variable create/replace payload. value and description are tri-state: omit the key to preserve the stored value, send an empty string to clear it, or send a value to set it. A value equal to the mask `***` for a sensitive-looking key (secret/password/token/...) is treated as "unchanged", so re-submitting a variable read back from GET (whose sensitive value is masked) never overwrites the real value with the mask.
 type VariableBody struct {
 	Description *string `json:"description,omitempty"`
 	Key         string  `json:"key"`

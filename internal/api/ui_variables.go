@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -14,7 +15,7 @@ import (
 type VariableStore interface {
 	ListVariables(ctx context.Context, tenant string, limit, offset int) ([]domain.Variable, int, error)
 	GetVariable(ctx context.Context, tenant, key string) (domain.Variable, error)
-	SetVariable(ctx context.Context, tenant string, v domain.Variable) error
+	SetVariablePatch(ctx context.Context, tenant string, p domain.VariablePatch) error
 	DeleteVariable(ctx context.Context, tenant, key string) error
 }
 
@@ -39,12 +40,35 @@ func isSensitiveKey(key string) bool {
 	return false
 }
 
-// maskedValue returns "***" when the key looks sensitive, else the value.
+// maskedValue returns the mask when the key looks sensitive, else the value.
 func maskedValue(key, value string) string {
 	if isSensitiveKey(key) {
-		return "***"
+		return secretMask
 	}
 	return value
+}
+
+// buildVariablePatch maps the tri-state variable body to a VariablePatch (#887),
+// applying the masked round-trip rule: a value equal to the mask for a
+// sensitive-looking key is treated as "unchanged". Because the `value` column is
+// NOT NULL it cannot be preserved at the SQL layer, so "preserve" is resolved
+// here to the stored value (available on update). On create there is nothing to
+// preserve, so an absent or masked value becomes an explicit empty string (fail
+// closed — never persist a literal mask as the real value). An explicit "" for a
+// non-mask value always clears.
+func buildVariablePatch(key string, value, desc *string, stored domain.Variable, isCreate bool) domain.VariablePatch {
+	p := domain.VariablePatch{Key: key, Description: desc}
+	switch {
+	case value != nil && (!isSensitiveKey(key) || *value != secretMask):
+		p.Value = value // explicit set (including "" to clear)
+	case isCreate:
+		empty := ""
+		p.Value = &empty // nothing to preserve on create → empty
+	default:
+		v := stored.Value // update: absent or masked → preserve the stored value
+		p.Value = &v
+	}
+	return p
 }
 
 // variableDTO is the Airflow 3.2.1 VariableResponse. Leoflow stores variables in
@@ -105,9 +129,9 @@ func getVariableHandler(store VariableStore) gin.HandlerFunc {
 func createVariableHandler(store VariableStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			Key         string `json:"key"`
-			Value       string `json:"value"`
-			Description string `json:"description"`
+			Key         string  `json:"key"`
+			Value       *string `json:"value"`
+			Description *string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
@@ -117,12 +141,27 @@ func createVariableHandler(store VariableStore) gin.HandlerFunc {
 			AbortProblem(c, http.StatusBadRequest, "bad request", "key is required")
 			return
 		}
-		v := domain.Variable{Key: body.Key, Value: body.Value, Description: body.Description}
-		if err := store.SetVariable(c.Request.Context(), tenantOf(c), v); err != nil {
+		// POST is an upsert (`leoflow variables set`), so merge against any existing
+		// variable: a masked value for an existing sensitive key then preserves the
+		// stored value, exactly as on PATCH. A genuinely new key (not found) is a
+		// create, where a masked value has nothing to preserve → empty (fail closed).
+		stored, gerr := store.GetVariable(c.Request.Context(), tenantOf(c), body.Key)
+		isCreate := errors.Is(gerr, ErrNotFound)
+		if gerr != nil && !isCreate {
+			handleRepoError(c, gerr)
+			return
+		}
+		patch := buildVariablePatch(body.Key, body.Value, body.Description, stored, isCreate)
+		if err := store.SetVariablePatch(c.Request.Context(), tenantOf(c), patch); err != nil {
 			handleRepoError(c, err)
 			return
 		}
-		c.JSON(http.StatusCreated, toVariableDTO(v))
+		dto, err := effectiveVariableDTO(c, store, body.Key)
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		c.JSON(http.StatusCreated, dto)
 	}
 }
 
@@ -130,25 +169,42 @@ func createVariableHandler(store VariableStore) gin.HandlerFunc {
 func updateVariableHandler(store VariableStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key := c.Param("variable_key")
-		if _, err := store.GetVariable(c.Request.Context(), tenantOf(c), key); err != nil {
-			handleRepoError(c, err)
+		stored, gerr := store.GetVariable(c.Request.Context(), tenantOf(c), key)
+		if gerr != nil {
+			handleRepoError(c, gerr)
 			return
 		}
 		var body struct {
-			Value       string `json:"value"`
-			Description string `json:"description"`
+			Value       *string `json:"value"`
+			Description *string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
 			return
 		}
-		v := domain.Variable{Key: key, Value: body.Value, Description: body.Description}
-		if err := store.SetVariable(c.Request.Context(), tenantOf(c), v); err != nil {
+		patch := buildVariablePatch(key, body.Value, body.Description, stored, false)
+		if err := store.SetVariablePatch(c.Request.Context(), tenantOf(c), patch); err != nil {
 			handleRepoError(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, toVariableDTO(v))
+		dto, err := effectiveVariableDTO(c, store, key)
+		if err != nil {
+			handleRepoError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, dto)
 	}
+}
+
+// effectiveVariableDTO re-reads the variable after a write so the response
+// reflects the merged result (preserved + cleared + set fields), with a
+// sensitive-keyed value masked — never an echo of the request body.
+func effectiveVariableDTO(c *gin.Context, store VariableStore, key string) (variableDTO, error) {
+	v, err := store.GetVariable(c.Request.Context(), tenantOf(c), key)
+	if err != nil {
+		return variableDTO{}, err
+	}
+	return toVariableDTO(v), nil
 }
 
 // deleteVariableHandler implements DELETE /api/v2/variables/{variable_key}.

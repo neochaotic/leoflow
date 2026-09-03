@@ -32,9 +32,13 @@ SELECT key FROM variables
 WHERE tenant_id = $1 AND key = ANY(sqlc.arg(keys)::text[]);
 
 -- name: UpsertVariable :exec
--- value is always supplied (a variable is its value), so it is overwritten;
--- description is preserved when the request omits it (NULL) rather than being
--- wiped — see the COALESCE rationale on UpsertConnection.
+-- value is always supplied (the variable IS its value, and the `value` column is
+-- NOT NULL, so a NULL param cannot reach the COALESCE — Postgres rejects it on
+-- the INSERT arm). The tri-state write (#887) therefore resolves value in the
+-- handler: an omitted or masked ("***") value on update is replaced with the
+-- stored value before it reaches here, so this always overwrites value.
+-- description is nullable, so it keeps the COALESCE preserve semantics: a NULL
+-- param keeps the stored description rather than wiping it.
 INSERT INTO variables (tenant_id, key, value, description)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (tenant_id, key) DO UPDATE SET

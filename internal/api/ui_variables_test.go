@@ -33,12 +33,23 @@ func (f *fakeVariableStore) GetVariable(_ context.Context, _, key string) (domai
 	return domain.Variable{}, ErrNotFound
 }
 
-func (f *fakeVariableStore) SetVariable(_ context.Context, _ string, v domain.Variable) error {
+// SetVariablePatch applies the tri-state patch to the in-memory store, mirroring
+// the repository's COALESCE upsert: a nil field preserves the stored value, a
+// non-nil field overwrites it (an empty string clears).
+func (f *fakeVariableStore) SetVariablePatch(_ context.Context, _ string, p domain.VariablePatch) error {
 	if f.vars == nil {
 		f.vars = map[string]domain.Variable{}
 	}
-	f.vars[v.Key] = v
-	f.setCalls = append(f.setCalls, v)
+	cur := f.vars[p.Key]
+	cur.Key = p.Key
+	if p.Value != nil {
+		cur.Value = *p.Value
+	}
+	if p.Description != nil {
+		cur.Description = *p.Description
+	}
+	f.vars[p.Key] = cur
+	f.setCalls = append(f.setCalls, cur)
 	return nil
 }
 
@@ -124,6 +135,106 @@ func TestVariableSecretMasking(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &v)
 	if v.Value != "us-east" {
 		t.Errorf("plain value should not be masked, got %q", v.Value)
+	}
+}
+
+// TestVariableUpdateTriState locks the #887 write semantics on the variable
+// PATCH path: a masked value ("***") for a sensitive key is treated as unchanged
+// (the #874 rule for variables), an omitted value preserves, and an explicit ""
+// clears.
+func TestVariableUpdateTriState(t *testing.T) {
+	newStore := func() *fakeVariableStore {
+		return &fakeVariableStore{vars: map[string]domain.Variable{
+			"api_token": {Key: "api_token", Value: "tok-REAL", Description: "prod"},
+			"region":    {Key: "region", Value: "us-east"},
+		}}
+	}
+
+	t.Run("masked sensitive value preserves the real value", func(t *testing.T) {
+		store := newStore()
+		srv := variablesServer(store)
+		// The UI GET'd api_token (value shown as ***) and re-submitted it verbatim.
+		rec := authGet(srv, http.MethodPatch, "/api/v2/variables/api_token", `{"value":"***"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		if got := store.vars["api_token"].Value; got != "tok-REAL" {
+			t.Errorf("masked value overwrote the real secret: %q", got)
+		}
+	})
+
+	t.Run("masked value for a NON-sensitive key is a literal set", func(t *testing.T) {
+		store := newStore()
+		srv := variablesServer(store)
+		// "region" is not sensitive, so "***" is a real value the user chose.
+		rec := authGet(srv, http.MethodPatch, "/api/v2/variables/region", `{"value":"***"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		if got := store.vars["region"].Value; got != "***" {
+			t.Errorf("a non-sensitive key must set the literal value: %q", got)
+		}
+	})
+
+	t.Run("omitted value preserves, description updates", func(t *testing.T) {
+		store := newStore()
+		srv := variablesServer(store)
+		rec := authGet(srv, http.MethodPatch, "/api/v2/variables/api_token", `{"description":"staging"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		got := store.vars["api_token"]
+		if got.Value != "tok-REAL" {
+			t.Errorf("omitted value was clobbered: %q", got.Value)
+		}
+		if got.Description != "staging" {
+			t.Errorf("description not updated: %q", got.Description)
+		}
+	})
+
+	t.Run("explicit empty value clears", func(t *testing.T) {
+		store := newStore()
+		srv := variablesServer(store)
+		rec := authGet(srv, http.MethodPatch, "/api/v2/variables/region", `{"value":""}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		if got := store.vars["region"].Value; got != "" {
+			t.Errorf("explicit empty value did not clear: %q", got)
+		}
+	})
+}
+
+// TestVariableCreateMaskedFailsClosed: creating a sensitive-keyed variable whose
+// value is the mask has nothing to preserve, so it stores an empty value rather
+// than persisting a literal "***" as the real secret.
+func TestVariableCreateMaskedFailsClosed(t *testing.T) {
+	store := &fakeVariableStore{vars: map[string]domain.Variable{}}
+	srv := variablesServer(store)
+	rec := authGet(srv, http.MethodPost, "/api/v2/variables", `{"key":"api_token","value":"***"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if got := store.vars["api_token"].Value; got != "" {
+		t.Errorf("masked create must not persist the literal mask: %q", got)
+	}
+}
+
+// TestVariableUpsertPOSTMaskedRoundTrip locks that the POST upsert path (what
+// `leoflow variables set` uses) preserves an existing sensitive value when the
+// masked value is written back, rather than treating it as a fresh create and
+// clearing it.
+func TestVariableUpsertPOSTMaskedRoundTrip(t *testing.T) {
+	store := &fakeVariableStore{vars: map[string]domain.Variable{
+		"api_token": {Key: "api_token", Value: "tok-REAL"},
+	}}
+	srv := variablesServer(store)
+	rec := authGet(srv, http.MethodPost, "/api/v2/variables", `{"key":"api_token","value":"***"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if got := store.vars["api_token"].Value; got != "tok-REAL" {
+		t.Errorf("POST upsert overwrote the real value with the mask: %q", got)
 	}
 }
 

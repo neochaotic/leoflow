@@ -6,6 +6,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Connection/variable writes are now tri-state, restoring explicit-clear and
+  fixing the masked write-back overwrite (#887, subsumes #874).** The safe-merge
+  upsert (v0.4.4) preserved any omitted field, but because the API request body
+  used plain strings it could not tell "field omitted" (preserve) from "field
+  present and empty" (clear), so `connections set c --login ""` was a silent
+  no-op and a masked secret (`***`) read back from a GET and re-submitted — as
+  the Admin UI does — overwrote the real secret with the literal mask. The write
+  body is now tri-state: an omitted field preserves the stored value, an explicit
+  empty string clears it, and a secret field equal to the mask (a password, or
+  any key inside `extra` whose value is exactly `***`, or a sensitive-keyed
+  variable value) is treated as unchanged and preserved. `leoflow connections set`
+  can now clear a field by passing it as an empty string (e.g. `--login ''`)
+  instead of "delete and recreate", and re-saving a connection/variable read
+  from the API no longer clobbers its unreadable secrets.
+
 ## [0.4.4] - 2026-09-03
 
 ### Security

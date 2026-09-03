@@ -50,8 +50,8 @@ func newConnectionsSetCommand() *cobra.Command {
 			"--conn-type is required.\n\n" +
 			"Only the fields you pass are changed; any field you omit keeps its " +
 			"current value. So you can change just --host without re-supplying the " +
-			"password (which cannot be read back anyway). To clear a field, delete " +
-			"and recreate the connection.\n\n" +
+			"password (which cannot be read back anyway). To clear a field, pass it " +
+			"as an empty string, e.g. --login '' or --schema ''.\n\n" +
 			"The password and extra are sent to the control plane but never printed " +
 			"back; read commands show masked values. Prefer --password-stdin / " +
 			"--extra-file over --password / --extra so a secret never lands in your " +
@@ -132,7 +132,12 @@ func connectionBodyFromFlags(cmd *cobra.Command, connID string, f connectionSetF
 	if cmd.Flags().Changed("login") {
 		body.Login = &f.login
 	}
-	if password != "" {
+	// Send the password only when it was actually supplied — via --password
+	// (including an explicit empty string, which clears it) or --password-stdin.
+	// Omitting both leaves it absent (nil), so the control plane preserves the
+	// stored, unreadable password. Gating on non-empty would make --password ''
+	// a silent no-op, inconsistent with --login '' clearing.
+	if cmd.Flags().Changed("password") || cmd.Flags().Changed("password-stdin") {
 		body.Password = &password
 	}
 	if cmd.Flags().Changed("schema") {

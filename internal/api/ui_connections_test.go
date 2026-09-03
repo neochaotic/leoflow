@@ -35,14 +35,41 @@ func (f *fakeConnStore) GetConnection(_ context.Context, _, id string) (domain.C
 	return domain.Connection{}, ErrNotFound
 }
 
-func (f *fakeConnStore) SetConnection(_ context.Context, _ string, c domain.Connection) error {
+// SetConnectionPatch applies the tri-state patch to the in-memory store,
+// mirroring the repository's COALESCE upsert: a nil field preserves the stored
+// value, a non-nil field overwrites it (an empty string clears).
+func (f *fakeConnStore) SetConnectionPatch(_ context.Context, _ string, p domain.ConnectionPatch) error {
 	if f.writeErr != nil {
 		return f.writeErr
 	}
 	if f.conns == nil {
 		f.conns = map[string]domain.Connection{}
 	}
-	f.conns[c.ConnID] = c
+	cur := f.conns[p.ConnID]
+	cur.ConnID = p.ConnID
+	cur.ConnType = p.ConnType
+	if p.Host != nil {
+		cur.Host = *p.Host
+	}
+	if p.Login != nil {
+		cur.Login = *p.Login
+	}
+	if p.Schema != nil {
+		cur.Schema = *p.Schema
+	}
+	if p.Password != nil {
+		cur.Password = *p.Password
+	}
+	if p.Port != nil {
+		cur.Port = p.Port
+	}
+	if p.Extra != nil {
+		cur.Extra = *p.Extra
+	}
+	if p.Description != nil {
+		cur.Description = *p.Description
+	}
+	f.conns[p.ConnID] = cur
 	return nil
 }
 
@@ -171,6 +198,278 @@ func TestConnectionWriteWithoutKeyReturns503(t *testing.T) {
 		`{"connection_id":"pg","conn_type":"postgres","password":"x"}`)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("write without key = %d, want 503", rec.Code)
+	}
+}
+
+// TestConnectionUpdateTriState locks the #887 write semantics on the PATCH path:
+// an omitted field preserves the stored value, an explicit "" clears it, and a
+// masked password ("***") is treated as unchanged so a round-tripped GET never
+// overwrites the real secret with the mask (#874).
+func TestConnectionUpdateTriState(t *testing.T) {
+	newStore := func() *fakeConnStore {
+		return &fakeConnStore{conns: map[string]domain.Connection{
+			"pg": {
+				ConnID: "pg", ConnType: "postgres", Host: "db", Login: "analytics",
+				Password: "s3cr3t", Schema: "public", Extra: `{"sslmode":"require"}`,
+			},
+		}}
+	}
+
+	t.Run("omitted field preserves", func(t *testing.T) {
+		store := newStore()
+		srv := connServer(store)
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/pg",
+			`{"conn_type":"postgres","host":"db2"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		got := store.conns["pg"]
+		if got.Host != "db2" {
+			t.Errorf("host not updated: %q", got.Host)
+		}
+		if got.Login != "analytics" || got.Password != "s3cr3t" || got.Extra != `{"sslmode":"require"}` {
+			t.Errorf("omitted fields were clobbered: %+v", got)
+		}
+	})
+
+	t.Run("explicit empty clears a non-secret field", func(t *testing.T) {
+		store := newStore()
+		srv := connServer(store)
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/pg",
+			`{"conn_type":"postgres","login":""}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		if got := store.conns["pg"]; got.Login != "" {
+			t.Errorf("login was not cleared: %q", got.Login)
+		}
+		if got := store.conns["pg"]; got.Password != "s3cr3t" {
+			t.Errorf("clearing login must not touch the password: %q", got.Password)
+		}
+	})
+
+	t.Run("masked password preserves the real secret", func(t *testing.T) {
+		store := newStore()
+		srv := connServer(store)
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/pg",
+			`{"conn_type":"postgres","password":"***","host":"db3"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		got := store.conns["pg"]
+		if got.Password != "s3cr3t" {
+			t.Errorf("masked password overwrote the real secret: %q", got.Password)
+		}
+		if got.Host != "db3" {
+			t.Errorf("the co-submitted host edit did not land: %q", got.Host)
+		}
+	})
+
+	t.Run("explicit empty password clears it", func(t *testing.T) {
+		store := newStore()
+		srv := connServer(store)
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/pg",
+			`{"conn_type":"postgres","password":""}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		if got := store.conns["pg"]; got.Password != "" {
+			t.Errorf("explicit empty password did not clear: %q", got.Password)
+		}
+	})
+}
+
+// TestConnectionUpdateExtraUnmask locks that a round-tripped `extra` (secrets
+// shown as the mask by GET) is merged back against the stored blob rather than
+// persisting the mask over the real secret (#874), while a co-edited plain key
+// still lands. It also covers the wholesale-mask case and an explicit clear.
+func TestConnectionUpdateExtraUnmask(t *testing.T) {
+	seed := func() *fakeConnStore {
+		return &fakeConnStore{conns: map[string]domain.Connection{
+			"wh": {
+				ConnID: "wh", ConnType: "databricks",
+				Extra: `{"token":"tok-REAL","http_path":"/sql/1.0/x","account":"acme"}`,
+			},
+		}}
+	}
+
+	t.Run("masked secret key is restored, plain edit lands", func(t *testing.T) {
+		store := seed()
+		srv := connServer(store)
+		// The UI GET'd the connection (token shown as ***) and the user changed
+		// http_path, then re-submitted the whole extra.
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/wh",
+			`{"conn_type":"databricks","extra":"{\"token\":\"***\",\"http_path\":\"/sql/2.0/y\",\"account\":\"acme\"}"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		var ex map[string]any
+		if err := json.Unmarshal([]byte(store.conns["wh"].Extra), &ex); err != nil {
+			t.Fatalf("stored extra not json: %v (%q)", err, store.conns["wh"].Extra)
+		}
+		if ex["token"] != "tok-REAL" {
+			t.Errorf("masked token overwrote the real secret: %v", ex["token"])
+		}
+		if ex["http_path"] != "/sql/2.0/y" {
+			t.Errorf("the plain edit did not land: %v", ex["http_path"])
+		}
+	})
+
+	t.Run("wholesale mask preserves the stored extra", func(t *testing.T) {
+		store := seed()
+		srv := connServer(store)
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/wh",
+			`{"conn_type":"databricks","extra":"***"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		if got := store.conns["wh"].Extra; got != `{"token":"tok-REAL","http_path":"/sql/1.0/x","account":"acme"}` {
+			t.Errorf("wholesale mask did not preserve the stored extra: %q", got)
+		}
+	})
+
+	t.Run("explicit empty extra clears it", func(t *testing.T) {
+		store := seed()
+		srv := connServer(store)
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/wh",
+			`{"conn_type":"databricks","extra":""}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		if got := store.conns["wh"].Extra; got != "" {
+			t.Errorf("explicit empty extra did not clear: %q", got)
+		}
+	})
+
+	t.Run("secret nested in an array is restored, top-level edit lands", func(t *testing.T) {
+		store := &fakeConnStore{conns: map[string]domain.Connection{
+			"wh": {
+				ConnID: "wh", ConnType: "databricks",
+				// A secret buried in an array-of-objects (redactExtra masks these too).
+				Extra: `{"account":"acme","hosts":[{"password":"arr-REAL"}]}`,
+			},
+		}}
+		srv := connServer(store)
+		// UI GET'd it (array password shown as ***) and edited the top-level account.
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/wh",
+			`{"conn_type":"databricks","extra":"{\"account\":\"beta\",\"hosts\":[{\"password\":\"***\"}]}"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		var ex map[string]any
+		if err := json.Unmarshal([]byte(store.conns["wh"].Extra), &ex); err != nil {
+			t.Fatalf("stored extra not json: %v (%q)", err, store.conns["wh"].Extra)
+		}
+		if ex["account"] != "beta" {
+			t.Errorf("top-level edit was dropped (whole field force-preserved?): %v", ex["account"])
+		}
+		hosts, _ := ex["hosts"].([]any)
+		if len(hosts) != 1 {
+			t.Fatalf("array shape changed: %v", ex)
+		}
+		first, _ := hosts[0].(map[string]any)
+		if first["password"] != "arr-REAL" {
+			t.Errorf("array-nested secret overwritten by the mask: %v", first)
+		}
+	})
+}
+
+// TestConnectionUpsertPOSTMaskedRoundTrip locks that the POST upsert path (what
+// `leoflow connections set` uses) merges a masked field against the EXISTING
+// connection, not an empty one. A regression here silently wiped a round-tripped
+// secret extra to "{}" even though PATCH was correct (caught by the e2e).
+func TestConnectionUpsertPOSTMaskedRoundTrip(t *testing.T) {
+	store := &fakeConnStore{conns: map[string]domain.Connection{
+		"pg": {
+			ConnID: "pg", ConnType: "postgres", Host: "db",
+			Password: "s3cr3t", Extra: `{"token":"tok-REAL"}`,
+		},
+	}}
+	srv := connServer(store)
+	// Re-POST the same connection with a masked password and masked extra.
+	rec := authGet(srv, http.MethodPost, "/api/v2/connections",
+		`{"connection_id":"pg","conn_type":"postgres","password":"***","extra":"{\"token\":\"***\"}"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post = %d (%s)", rec.Code, rec.Body.String())
+	}
+	got := store.conns["pg"]
+	if got.Password != "s3cr3t" {
+		t.Errorf("POST upsert overwrote the real password with the mask: %q", got.Password)
+	}
+	if got.Extra != `{"token":"tok-REAL"}` {
+		t.Errorf("POST upsert wiped/masked the real extra token: %q", got.Extra)
+	}
+}
+
+// TestUnmaskExtra unit-tests the fail-closed merge helper directly.
+func TestUnmaskExtra(t *testing.T) {
+	stored := `{"token":"real","cfg":{"secret":"deep"},"opts":["a"]}`
+
+	// A masked key is restored from stored; a plain key passes through.
+	got, preserve := unmaskExtra(`{"token":"***","region":"eu"}`, stored)
+	if preserve {
+		t.Fatal("a resolvable object must not preserve wholesale")
+	}
+	var m map[string]any
+	_ = json.Unmarshal([]byte(got), &m)
+	if m["token"] != "real" || m["region"] != "eu" {
+		t.Errorf("unmask/merge wrong: %v", m)
+	}
+
+	// Nested masked key restored from the stored nested object.
+	got, _ = unmaskExtra(`{"cfg":{"secret":"***"}}`, stored)
+	_ = json.Unmarshal([]byte(got), &m)
+	cfg, _ := m["cfg"].(map[string]any)
+	if cfg["secret"] != "deep" {
+		t.Errorf("nested unmask wrong: %v", m)
+	}
+
+	// Wholesale mask preserves.
+	if _, preserve = unmaskExtra("***", stored); !preserve {
+		t.Error("wholesale mask must preserve")
+	}
+
+	// A mask with no stored counterpart is dropped (never persisted literally).
+	got, preserve = unmaskExtra(`{"ghost":"***","keep":"v"}`, stored)
+	if preserve {
+		t.Fatal("a droppable mask should not force wholesale preserve")
+	}
+	_ = json.Unmarshal([]byte(got), &m)
+	if _, ok := m["ghost"]; ok {
+		t.Errorf("unresolvable mask must be dropped, not persisted: %v", m)
+	}
+
+	// A secret nested inside an array-of-objects is restored from the stored array
+	// (aligned by index), and a co-edited plain key at the top level still lands —
+	// the whole field must NOT be force-preserved.
+	arrStored := `{"region":"us-east","items":[{"token":"real-arr","note":"n"}]}`
+	got, preserve = unmaskExtra(`{"region":"eu-west","items":[{"token":"***","note":"n"}]}`, arrStored)
+	if preserve {
+		t.Fatal("a restorable array-nested mask must not force wholesale preserve")
+	}
+	_ = json.Unmarshal([]byte(got), &m)
+	if m["region"] != "eu-west" {
+		t.Errorf("top-level co-edit lost when a mask sat in an array: %v", m)
+	}
+	if items, _ := m["items"].([]any); len(items) != 1 {
+		t.Fatalf("array shape changed: %v", m)
+	} else if first, _ := items[0].(map[string]any); first["token"] != "real-arr" {
+		t.Errorf("array-nested secret not restored from stored: %v", m)
+	}
+
+	// A masked array element the stored side cannot supply (shorter/empty array)
+	// fails closed to preserve — never a silent drop that shifts indices.
+	if _, preserve = unmaskExtra(`{"items":[{"token":"***"}]}`, `{"items":[]}`); !preserve {
+		t.Error("an unresolvable array-nested mask must fail closed to preserve")
+	}
+	// A bare masked string in an array with no stored counterpart also fails closed.
+	if _, preserve = unmaskExtra(`{"opts":["***"]}`, `{"opts":[]}`); !preserve {
+		t.Error("an unresolvable bare array mask must fail closed to preserve")
+	}
+
+	// An explicit empty extra clears (not the mask, not an object).
+	if got, preserve := unmaskExtra("", stored); preserve || got != "" {
+		t.Errorf(`empty extra must clear: got %q preserve=%v`, got, preserve)
 	}
 }
 

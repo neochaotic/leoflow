@@ -1027,27 +1027,6 @@ jobs:
         run: bash scripts/check-no-stale-deploy-path.sh
 
   # ─────────────────────────────────────────────────────────────────────
-  # CHANGELOG entry guard. Entries under `## [Unreleased]` were manual and
-  # repeatedly forgotten, so features merged with no changelog line and were
-  # back-filled by separate "docs(changelog)" PRs (#529/#532/#708/#739/#756/
-  # #780/#781/#888). This fails a PR whose [Unreleased] section is unchanged
-  # from the base — unless it carries the `skip-changelog` label (release-prep,
-  # chore, dependabot, docs-only). It compares section bodies (not a 3-dot
-  # diff), so it needs no merge base and is immune to the shallow-fetch trap.
-  # ─────────────────────────────────────────────────────────────────────
-  changelog-guard:
-    name: CHANGELOG entry present
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Fetch the base branch tip
-        run: git fetch --no-tags --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
-      - name: Require a CHANGELOG [Unreleased] entry (or the skip-changelog label)
-        run: bash scripts/check-changelog-entry.sh "origin/${{ github.base_ref }}"
-
-  # ─────────────────────────────────────────────────────────────────────
   # Python parser tests — matrix across every Python the host detector
   # claims to support (`internal/setup/detect.go` pythonCandidates). If a
   # new minor is added to that list, add it here too — otherwise the

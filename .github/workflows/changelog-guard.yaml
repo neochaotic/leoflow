@@ -1,0 +1,32 @@
+# Requires a CHANGELOG entry per PR (see scripts/check-changelog-entry.sh).
+#
+# A standalone workflow — not a job in ci.yaml — so it can trigger on `labeled`
+# / `unlabeled` too: applying the `skip-changelog` label re-runs THIS guard (and
+# only this guard, not all of CI) with the updated label set, so the exemption
+# takes effect immediately. Entries under `## [Unreleased]` were manual and
+# repeatedly forgotten, back-filled by separate "docs(changelog)" PRs
+# (#529/#532/#708/#739/#756/#780/#781/#888); this ends that pattern.
+name: CHANGELOG guard
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  changelog-guard:
+    name: CHANGELOG entry present
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Exempt PRs with no user-facing change (release-prep, chore, dependabot,
+    # docs-only). The `labeled`/`unlabeled` triggers above make this re-evaluate
+    # as soon as the label is added or removed.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Fetch the base branch tip
+        run: git fetch --no-tags --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+      - name: Require a CHANGELOG [Unreleased] entry (or the skip-changelog label)
+        run: bash scripts/check-changelog-entry.sh "origin/${{ github.base_ref }}"

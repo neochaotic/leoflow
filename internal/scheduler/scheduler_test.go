@@ -457,8 +457,6 @@ func TestStepFollowerSkipsAllWrites(t *testing.T) {
 	store.scheduled = []ScheduledDAG{{DagID: "etl", Schedule: "@hourly"}}
 	s := newScheduler(store)
 	s.SetLeading(false) // newScheduler defaults to leader; opt out for this follower-mode test.
-	reaper := &spyExecutionReaper{}
-	s.SetExecutionReaper(reaper)
 
 	if err := s.Step(context.Background()); err != nil {
 		t.Fatalf("Step on follower must not return infra-level error: %v", err)
@@ -471,9 +469,6 @@ func TestStepFollowerSkipsAllWrites(t *testing.T) {
 	}
 	if len(store.createdRuns) != 0 {
 		t.Errorf("follower must not create scheduled runs; got %v", store.createdRuns)
-	}
-	if reaper.calls != 0 {
-		t.Errorf("follower must not drive the execution reaper; got %d calls", reaper.calls)
 	}
 	// Heartbeat MUST still fire — the leadership check sits AFTER lastTick.Store
 	// so the orchestrator can prove the instance is alive without granting it

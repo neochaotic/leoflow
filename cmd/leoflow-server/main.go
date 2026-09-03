@@ -1095,18 +1095,43 @@ func buildPodInformer(ctx context.Context, cfg *config.ServerConfig, cs kubernet
 	return pi
 }
 
-func startReconciler(ctx context.Context, cs kubernetes.Interface, namespace string, reporter executor.OutcomeReporter, leading func() bool, logger *slog.Logger, snapshotter executor.PodSnapshotter) {
+// startMaintenance runs the leader's periodic recovery work — the pod
+// reconciler's sweep and the execution reapers — as ONE ordered cycle on one
+// leader-gated ticker, every reconcileInterval: reconcile, then reap. The
+// reapers used to run from the scheduler's 1s tick while the reconciler swept on
+// its own 30s timer; two independent clocks gave no ordering, so a reaper could
+// judge a task pod "gone" at 1s that the reconciler would have recovered as
+// succeeded at its next sweep. In one cycle the reap always sees post-reconcile
+// state, and the reaper's settling gate reads the reconciler's sweep record to
+// know a sweep has completed under this leadership. The cost is detection
+// latency: a stuck run/TI is now noticed up to one interval (30s) later than at
+// the 1s tick — negligible against 60s–5m thresholds, and reaping is a backstop,
+// never the primary path. Lite/subprocess never calls this: no pods, no reaping.
+func startMaintenance(ctx context.Context, cs kubernetes.Interface, namespace string, reporter executor.OutcomeReporter, reaper *executor.Reaper, leading func() bool, logger *slog.Logger, snapshotter executor.PodSnapshotter) {
 	rec := executor.NewReconciler(cs, namespace, reporter)
 	// Read task pods from the shared informer cache instead of a live LIST every
 	// tick when the informer is wired (PR-10); nil keeps the live LIST.
 	if snapshotter != nil {
 		rec.SetPodSnapshotter(snapshotter)
 	}
-	startGatedTicker(ctx, "pod-reconcile", reconcileInterval, leading, logger, func() {
-		if err := rec.Reconcile(ctx); err != nil {
-			logger.Error("pod reconcile", "error", err)
-		}
+	reaper.SetLastSweepCompleted(rec.LastSweepCompletedAt)
+	startGatedTicker(ctx, "maintenance", reconcileInterval, leading, logger, func() {
+		maintenanceCycle(ctx, rec.Reconcile, reaper.ReapOnce, logger)
 	})
+}
+
+// maintenanceCycle is one pass of the maintenance loop: reconcile, then reap,
+// in that order, always. A reconcile error (the LIST failed) is logged and the
+// reapers still run — they are independent backstops with their own fail-closed
+// liveness reads, and whether a leader that has never completed a sweep may reap
+// is the reaper's settling gate's decision, not this loop's.
+func maintenanceCycle(ctx context.Context, reconcile, reap func(context.Context) error, logger *slog.Logger) {
+	if err := reconcile(ctx); err != nil {
+		logger.Error("pod reconcile", "error", err)
+	}
+	if err := reap(ctx); err != nil {
+		logger.Error("execution reaper", "error", err)
+	}
 }
 
 // startWarmPoolReconciler runs the leader-gated warm-pool reconciler (ADR 0058
@@ -1552,7 +1577,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// The execution reaper (#120/#128/#202/#527) fails stuck runs and TIs; it
 	// tears down a reaped task's pod and gates the dispatch-lost decision on real
 	// pod liveness (#474, #461), so it is wired only on the pod path. Lite/
-	// subprocess leaves the scheduler's reaper unset and does no reaping.
+	// subprocess starts no maintenance loop and does no reaping.
 	reaper := executor.NewReaper(store, podExec, cache, warmLister, metrics, logger, executor.DefaultReaperConfig(), sched.SteppingDown)
 	// Give the reaper an append-aware marker sink so a reaped attempt's log ends
 	// with a "killed: agent_lost" marker instead of a silent truncation (#861).
@@ -1562,19 +1587,22 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	if ms, ok := logSink.(logs.MarkerSink); ok {
 		reaper.SetLogSink(ms)
 	}
-	// Suppress agent-lost AND pod-lost reaping for a grace window after this
-	// instance acquires leadership, so a control-plane restart doesn't mass-reap
-	// in-flight tasks whose heartbeats went stale during the outage (#858), nor
-	// fail a task whose pod finished during the outage before the reconciler has
-	// recovered its durable outcome record.
+	// Leader-settling gate: no reaper fires until this instance has led for the
+	// settling grace, the pod informer has synced, and the reconciler has
+	// completed a sweep under this leadership (wired in startMaintenance). A
+	// control-plane restart makes heartbeats look stale and finished task pods
+	// look lost; the gate holds every reaper until the true outcomes have been
+	// recovered, with a liveness valve so a broken sweep cannot disable reaping.
 	reaper.SetLeaderSince(sched.LeaderSince)
+	if podInformer != nil {
+		reaper.SetInformerSynced(podInformer.HasSynced)
+	}
 	// Close the reaper's destructive gate the moment this instance stops leading:
 	// together with the step-down flag and the run-context cancel, this keeps a
 	// draining or stepping-down leader from marking TIs failed or deleting pods
-	// on its way out — the successor redoes the reap under its own grace.
+	// on its way out — the successor redoes the reap under its own settling gate.
 	reaper.SetLeading(sched.IsLeading)
-	sched.SetExecutionReaper(reaper)
-	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
+	startMaintenance(ctx, cs, cfg.Executor.TaskNamespace, execStore, reaper, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)
 	// Warm-pool reconciler (ADR 0058 N1b2b, model A2): keeps min_idle warm workers
 	// ready per active dag_version. Started ONLY when warm pools are enabled — with

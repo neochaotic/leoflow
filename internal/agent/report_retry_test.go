@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -170,5 +171,73 @@ func TestReportRetryAbortsOnContextCancel(t *testing.T) {
 	}
 	if client.reportAttempts != 1 {
 		t.Errorf("expected 1 attempt before the canceled backoff aborted, got %d", client.reportAttempts)
+	}
+}
+
+// holdingCmd is a CommandRunner that records, at the moment user code would
+// start, how many reports the control plane had accepted — so a test can prove
+// user code is held back until the RUNNING pre-flight report has landed.
+type holdingCmd struct {
+	client             *fakeClient
+	acceptedAtStart    int
+	attemptsAtStart    int
+	stateAcceptedFirst agentv1.TaskState
+	ran                bool
+}
+
+func (c *holdingCmd) Run(context.Context, []string, []string, io.Writer, io.Writer) (int, error) {
+	c.ran = true
+	c.acceptedAtStart = len(c.client.reports)
+	c.attemptsAtStart = c.client.reportAttempts
+	if len(c.client.reports) > 0 {
+		c.stateAcceptedFirst = c.client.reports[0].GetState()
+	}
+	return 0, nil
+}
+
+// TestRunningReportOutlastsControlPlaneRestart: the RUNNING pre-flight report
+// shares the terminal report's retry loop and therefore also outlasts a
+// control-plane outage — deliberately. An agent that cannot reach the control
+// plane does not start user code until it can: the pod sits in its pre-flight,
+// not in a half-observed run. Here the control plane is Unavailable for twice
+// the retired 6-attempt budget while the agent tries to report RUNNING; user
+// code must not have started before that report was accepted, and the task
+// then completes normally.
+func TestRunningReportOutlastsControlPlaneRestart(t *testing.T) {
+	const outageAttempts = 12
+	client := &fakeClient{
+		spec:            &agentv1.TaskSpec{Operator: "bash", Entrypoint: "true"},
+		reportFailCode:  codes.Unavailable,
+		reportFailTimes: outageAttempts,
+	}
+	cmd := &holdingCmd{client: client}
+	r := &Runner{
+		Client:   client,
+		Cmd:      cmd,
+		Sink:     &recordingSink{},
+		Hostname: "pod-1",
+		Version:  "test",
+		afterFunc: func(time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
+	}
+
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("the task must complete once the control plane returns, got %v", err)
+	}
+	if !cmd.ran {
+		t.Fatal("user code must run once the RUNNING report landed")
+	}
+	if cmd.acceptedAtStart != 1 || cmd.stateAcceptedFirst != agentv1.TaskState_TASK_STATE_RUNNING {
+		t.Errorf("user code started with %d accepted reports (first %v); want exactly the RUNNING report accepted first",
+			cmd.acceptedAtStart, cmd.stateAcceptedFirst)
+	}
+	if want := outageAttempts + 1; cmd.attemptsAtStart != want {
+		t.Errorf("user code started after %d report attempts, want %d (%d refused + the accepted RUNNING)", cmd.attemptsAtStart, want, outageAttempts)
+	}
+	if n := len(client.reports); n != 2 || client.reports[1].GetState() != agentv1.TaskState_TASK_STATE_SUCCESS {
+		t.Errorf("accepted reports = %d (last %v), want RUNNING then SUCCESS", n, client.reports[n-1].GetState())
 	}
 }

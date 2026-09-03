@@ -1456,6 +1456,12 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// BuildPod.
 	dispatcher.SetAgentTokenTransport(cfg.Auth.AgentTokenTransport, executor.DefaultAgentTokenAudience, 0)
 	dispatcher.SetPlatformDefaults(platformDefaults(cfg.Executor.Defaults))
+	// Deadline floor for task pods that declare no execution timeout: the agent's
+	// reports retry for as long as the control plane is unreachable, so a pod
+	// with no deadline of its own would outlive a total outage indefinitely. The
+	// credential ceiling is the natural bound — past it the pod cannot renew its
+	// bearer — and it is the same knob the warm worker's attempt watchdog uses.
+	dispatcher.SetAttemptLifetimeCeiling(cfg.Auth.MaxAttemptCredentialLifetime)
 	// External secrets backend (ADR 0060, Pro pod path): deliver the operator config
 	// to task pods as LEOFLOW_SECRETS_* env. Empty backend → podEnv skips it (chain
 	// stays vault-only). The D6 registration relaxation is wired separately in run()

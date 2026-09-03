@@ -149,3 +149,28 @@ func TestDispatchPropagatesErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestDispatchThreadsAttemptLifetimeCeiling: the operator's credential-lifetime
+// ceiling reaches the executor request as whole seconds, so the pod builder can
+// floor the pod's ActiveDeadlineSeconds with it when the task declares no
+// timeout. Unset (the zero value) is passed through as zero — "no floor".
+func TestDispatchThreadsAttemptLifetimeCeiling(t *testing.T) {
+	res := &fakeResolver{resolved: Resolved{TaskInstanceID: "ti-1", TenantID: "acme", Image: "etl:v1", TryNumber: 1}}
+	exec := &fakeExecutor{}
+	d := newDispatcher(res, &fakeIssuer{token: "t"}, exec)
+
+	if _, err := d.Dispatch(context.Background(), "run-uuid", "etl", "", pythonTask()); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if exec.req.AttemptLifetimeCeilingSeconds != 0 {
+		t.Errorf("unset ceiling must pass through as 0, got %d", exec.req.AttemptLifetimeCeilingSeconds)
+	}
+
+	d.SetAttemptLifetimeCeiling(24 * time.Hour)
+	if _, err := d.Dispatch(context.Background(), "run-uuid", "etl", "", pythonTask()); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if exec.req.AttemptLifetimeCeilingSeconds != 86400 {
+		t.Errorf("ceiling must reach the request as seconds, got %d want 86400", exec.req.AttemptLifetimeCeilingSeconds)
+	}
+}

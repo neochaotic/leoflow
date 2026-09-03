@@ -895,6 +895,16 @@ func reportBackoff(attempt int) time.Duration {
 // lands — the pod is deleted or times out first — is recovered by the reconciler
 // from that record; the retry loop only shortens the path to the same result.
 //
+// The RUNNING pre-flight report takes this same path, so it too outlasts an
+// outage — intentionally. An agent that cannot reach the control plane does not
+// start user code until it can: the pod waits in its pre-flight rather than
+// running half-observed work whose RUNNING transition the control plane never
+// saw (the dispatch-lost reaper would then fail a task that is actually
+// executing). The cost is a pod that holds its requests for the length of the
+// outage; that is bounded by the pod's ActiveDeadlineSeconds, which the
+// executor floors with the attempt credential ceiling when the task declares
+// no timeout of its own, so no task pod is immortal.
+//
 // Warm-pool workers share this path (the per-attempt Runner is built by
 // WarmRunner.attemptRunner). A warm worker retrying a report stays busy only
 // while the control plane is down, which is exactly the window in which no new

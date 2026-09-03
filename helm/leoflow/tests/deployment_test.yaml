@@ -682,7 +682,7 @@ tests:
       redis.url: redis://h/0
       auth.jwtSecret: jwt
       split.enabled: true
-      logs.persistence.enabled: false # split = multiple pods; avoid the RWO PVC guard
+      logs.persistence.accessMode: ReadWriteMany # split = multiple mounters; an RWO PVC or per-pod emptyDir logs both fail the render
     asserts:
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds

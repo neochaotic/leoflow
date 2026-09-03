@@ -57,11 +57,15 @@ spec:
       serviceAccountName: {{ include "leoflow.roleServiceAccountName" (dict "ctx" .ctx "role" .role) }}
       {{- with .ctx.Values.terminationGracePeriodSeconds }}
       # A voluntary eviction (drain, consolidation, upgrade) sends SIGTERM and
-      # waits this long before SIGKILL. The server drains its HTTP listeners and
-      # releases the scheduler lease on SIGTERM; a grace shorter than that drain
-      # kills the leader mid-step-down and the follower must wait out the lock
-      # instead of taking over at once. Omitted when unset so a default install's
-      # pod spec is unchanged (Kubernetes applies its own 30s).
+      # waits this long before SIGKILL. What the grace buys is headroom for the
+      # HTTP shutdown (in-flight requests get up to 10s to finish) and the
+      # dispatch-pool drain (in-flight dispatches settle instead of leaving task
+      # instances stuck queued). It does NOT decide leadership handoff: the
+      # scheduler lease is released within a tick of SIGTERM and frees anyway
+      # when the connection drops. The gRPC graceful stop waits on open agent
+      # log streams, so with tasks running the pod normally exhausts the grace
+      # and is SIGKILLed — expected, and safe. Omitted when unset so a default
+      # install's pod spec is unchanged (Kubernetes applies its own 30s).
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
       {{- with .ctx.Values.imagePullSecrets }}
@@ -440,6 +444,25 @@ spec:
       {{- with .ctx.Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .ctx.Values.topologySpreadConstraints }}
+      # Spread the replicas: consolidation bin-packs both onto one node unless
+      # told otherwise, and two replicas on one node are one replica — a node
+      # failure takes the whole control plane, and the PDB (one of two must stay
+      # up, both on the drained node) then blocks the eviction. A constraint that
+      # omits labelSelector gets this Deployment's own selector, so a values file
+      # need not know the release name or the role.
+      topologySpreadConstraints:
+        {{- range . }}
+        - labelSelector:
+            {{- if .labelSelector }}
+            {{- toYaml .labelSelector | nindent 12 }}
+            {{- else }}
+            matchLabels:
+              {{- include "leoflow.roleSelectorLabels" (dict "ctx" $.ctx "role" $.role) | nindent 14 }}
+            {{- end }}
+          {{- omit . "labelSelector" | toYaml | nindent 10 }}
+        {{- end }}
       {{- end }}
 
 {{- end -}}

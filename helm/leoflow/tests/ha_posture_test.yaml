@@ -273,7 +273,7 @@ tests:
       logs.persistence.enabled: false
     asserts:
       - matchRegexRaw:
-          pattern: "WARNING: replicaCount > 1 with logs.persistence.enabled=false and logs.sink.provider=disk"
+          pattern: "WARNING: more than one control-plane pod \\(up to 2\\) with logs.persistence.enabled=false and logs.sink.provider=disk"
 
   - it: NOTES stay quiet on the recommended HA profile (object sink, auto PDB)
     template: NOTES.txt
@@ -284,6 +284,209 @@ tests:
       logs.sink.bucket: leoflow-task-logs
     asserts:
       - notMatchRegexRaw:
-          pattern: "WARNING: replicaCount > 1"
+          pattern: "WARNING: more than one control-plane pod"
       - notMatchRegexRaw:
           pattern: "WARNING: podDisruptionBudget.enabled=true"
+
+  # ─── Topology spread: two replicas on one node is one replica ────────────
+  # Consolidation bin-packs both replicas onto one node unless told otherwise;
+  # a node failure then takes the whole control plane, and the auto PDB (one
+  # of two must stay up, both on the drained node) blocks the eviction — the
+  # single-replica trap one level up. Constraints without a labelSelector get
+  # the Deployment's own selector so a values file need not know the release.
+  - it: renders no topologySpreadConstraints by default
+    template: deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.topologySpreadConstraints
+
+  - it: renders topologySpreadConstraints and fills the role selector when a constraint omits labelSelector
+    template: deployment.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      logs.sink.provider: s3
+      logs.sink.bucket: b
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].topologyKey
+          value: kubernetes.io/hostname
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: ScheduleAnyway
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].maxSkew
+          value: 1
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels
+          value:
+            app.kubernetes.io/name: leoflow
+            app.kubernetes.io/instance: leoflow
+
+  - it: keeps an explicit labelSelector on a topologySpreadConstraint verbatim
+    template: deployment.yaml
+    set:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              team: data
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels
+          value:
+            team: data
+
+  - it: renders topologySpreadConstraints on the split api Deployment with the api selector
+    template: deployment.yaml
+    documentIndex: 0
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels["app.kubernetes.io/component"]
+          value: api
+
+  - it: renders topologySpreadConstraints on the split scheduler Deployment with the scheduler selector
+    template: deployment.yaml
+    documentIndex: 1
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels["app.kubernetes.io/component"]
+          value: scheduler
+
+  # ─── Per-pod emptyDir logs across more than one mounter ──────────────────
+  # The warning must key on the same mounter ceiling as the render guard (HPA
+  # maxReplicas, split api+scheduler), not on replicaCount alone.
+  - it: NOTES warn on per-pod emptyDir logs when the HPA can scale past one replica
+    template: NOTES.txt
+    set:
+      replicaCount: 1
+      autoscaling.enabled: true
+      autoscaling.minReplicas: 1
+      autoscaling.maxReplicas: 3
+      logs.persistence.enabled: false
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: more than one control-plane pod \\(up to 3\\) with logs.persistence.enabled=false and logs.sink.provider=disk"
+
+  # Split + emptyDir + disk sink is not risky, it is broken: the scheduler pod
+  # writes every task log into its own emptyDir and each api pod reads from its
+  # own, so no log is ever readable. Refuse at render.
+  - it: fails the render when split.enabled with logs persistence disabled and the disk sink
+    template: deployment.yaml
+    set:
+      split.enabled: true
+      logs.persistence.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "split.enabled with logs.persistence.enabled=false and logs.sink.provider=disk cannot serve task logs: the scheduler pod writes them into its own emptyDir and every api pod reads from its own, so no task log is ever readable from the API/UI. Ship task logs to object storage (logs.sink.provider=s3|gcs with logs.sink.bucket), or use a ReadWriteMany logs PVC (logs.persistence.enabled=true, logs.persistence.accessMode=ReadWriteMany). See helm/leoflow/examples/values-ha.yaml."
+
+  - it: renders split.enabled with logs persistence disabled when the object sink is configured
+    template: deployment.yaml
+    set:
+      split.enabled: true
+      logs.persistence.enabled: false
+      logs.sink.provider: gcs
+      logs.sink.bucket: b
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  # ─── PDB: evicting an already-broken control plane must stay possible ────
+  # The Kubernetes default (IfHealthyBudget) refuses to evict even unhealthy
+  # pods once the budget is not met, so with BOTH replicas unready (bad DB
+  # credentials after a rotation, image-pull failure, wedged rollout) a drain
+  # hangs on a control plane that is already down.
+  - it: sets unhealthyPodEvictionPolicy AlwaysAllow on the auto PDB by default
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+    asserts:
+      - equal:
+          path: spec.unhealthyPodEvictionPolicy
+          value: AlwaysAllow
+
+  - it: honors an explicit podDisruptionBudget.unhealthyPodEvictionPolicy
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.unhealthyPodEvictionPolicy: IfHealthyBudget
+    asserts:
+      - equal:
+          path: spec.unhealthyPodEvictionPolicy
+          value: IfHealthyBudget
+
+  - it: omits unhealthyPodEvictionPolicy when set empty (for apiservers that prune the field)
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.unhealthyPodEvictionPolicy: ""
+    asserts:
+      - isNull:
+          path: spec.unhealthyPodEvictionPolicy
+
+  # ─── Upgrade call-out: a PDB that appears on `helm upgrade` ──────────────
+  - it: NOTES call out an auto-rendered PDB on upgrade
+    template: NOTES.txt
+    release:
+      name: leoflow
+      upgrade: true
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      logs.sink.provider: s3
+      logs.sink.bucket: b
+    asserts:
+      - matchRegexRaw:
+          pattern: "NOTE: this release renders a PodDisruptionBudget \\(auto: replica floor 2 > 1\\)"
+
+  - it: NOTES stay quiet about the PDB on a fresh install
+    template: NOTES.txt
+    release:
+      name: leoflow
+      upgrade: false
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      logs.sink.provider: s3
+      logs.sink.bucket: b
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "NOTE: this release renders a PodDisruptionBudget"
+
+  - it: NOTES do not call out a PDB the operator set explicitly
+    template: NOTES.txt
+    release:
+      name: leoflow
+      upgrade: true
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      logs.sink.provider: s3
+      logs.sink.bucket: b
+      podDisruptionBudget.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "NOTE: this release renders a PodDisruptionBudget"

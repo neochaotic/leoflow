@@ -134,6 +134,30 @@ drains and auto-upgrades stall), so it is only safe-by-default above one.
 {{- end -}}
 
 {{/*
+Largest number of control-plane pods that may mount the logs volume at once:
+the ceiling, not the floor. Non-split: replicaCount, or autoscaling.maxReplicas
+when the HPA owns the count. Split (ADR 0049): the scheduler writes logs and
+every api replica reads them from the same volume, so the mounters are the api
+replicas (or their HPA ceiling) plus the one scheduler. Both the single-writer
+PVC render guard and the per-pod emptyDir warning key on this value, so a shape
+one of them misses is a shape both miss — there is one definition.
+*/}}
+{{- define "leoflow.logMounterCeiling" -}}
+{{- $n := .Values.replicaCount -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- $n = .Values.autoscaling.maxReplicas -}}
+{{- end -}}
+{{- if .Values.split.enabled -}}
+{{- $api := .Values.split.api.replicaCount -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- $api = .Values.autoscaling.maxReplicas -}}
+{{- end -}}
+{{- $n = add (int $api) 1 -}}
+{{- end -}}
+{{- int $n -}}
+{{- end -}}
+
+{{/*
 Whether the PodDisruptionBudget renders. podDisruptionBudget.enabled is
 tri-state: an explicit true/false wins (true on a single replica is the
 operator's informed choice, and NOTES.txt says what it costs); unset (auto)

@@ -97,15 +97,19 @@ of defaulting into it:
 | Setting | Behavior |
 |---|---|
 | `replicaCount > 1` (or an HPA / split with more than one mounter) with a `ReadWriteOnce` / `ReadWriteOncePod` logs PVC | **render fails** — the extra pods would hang in `ContainerCreating` on a Multi-Attach error while the install reports success |
-| `podDisruptionBudget.enabled` unset (auto) | PDB renders **iff** the guaranteed replica floor is `> 1` (`replicaCount`, the HPA `minReplicas`, or `split.api.replicaCount`). A `minAvailable: 1` budget over a **single** replica blocks every voluntary eviction — node drains hang, auto-upgrades stall — so it is only safe-by-default for HA. Explicit `true`/`false` always wins |
-| `terminationGracePeriodSeconds` | unset by default (Kubernetes' 30s); the HA profile raises it to `60` so the SIGTERM drain + lease release completes before SIGKILL |
+| `split.enabled` with `logs.persistence.enabled: false` and the `disk` sink | **render fails** — the scheduler pod would write every task log into its own emptyDir and each api pod read from its own, so no log is ever readable |
+| `podDisruptionBudget.enabled` unset (auto) | PDB renders **iff** the guaranteed replica floor is `> 1` (`replicaCount`, the HPA `minReplicas`, or `split.api.replicaCount`). A `minAvailable: 1` budget over a **single** replica blocks every voluntary eviction — node drains hang, auto-upgrades stall — so it is only safe-by-default for HA. Explicit `true`/`false` always wins. **On upgrade** this means every `split.enabled` install (api default 2) and every `autoscaling.enabled` install (`minReplicas` default 2) gains a PDB; NOTES say so |
+| `podDisruptionBudget.unhealthyPodEvictionPolicy` | `AlwaysAllow` by default, so both replicas being unready (bad DB credentials, image-pull failure, wedged rollout) does not leave a drain hanging on an already-down control plane |
+| `topologySpreadConstraints` | empty by default; the HA profile spreads the replicas across nodes (`kubernetes.io/hostname`, `ScheduleAnyway`) — two replicas bin-packed onto one node are one replica, and the PDB then blocks that node's drain. A constraint without `labelSelector` gets the Deployment's own selector |
+| `terminationGracePeriodSeconds` | unset by default (Kubernetes' 30s); the HA profile sets `60`. It buys headroom for the HTTP shutdown (10s) and the dispatch-pool drain; it does **not** decide leadership handoff (the lease is released within a tick of SIGTERM and frees anyway when the connection drops), and with tasks running the pod normally exhausts the grace and is SIGKILLed — expected and safe |
 | `podAnnotations: {karpenter.sh/do-not-disrupt: "true"}` | **EKS/Karpenter-only opt-in**, not set by default: exempts the node from voluntary disruption, trading maintenance friction for eviction protection |
 
 The one-switch HA profile is
 [`examples/values-ha.yaml`](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/examples/values-ha.yaml):
-two replicas, task logs in object storage (`logs.persistence.enabled: false` +
-`logs.sink.provider: s3|gcs` — the recommended HA log path; a `ReadWriteMany`
-PVC is the alternative), auto PDB, and the longer drain grace:
+two replicas spread across nodes, task logs in object storage
+(`logs.persistence.enabled: false` + `logs.sink.provider: s3|gcs` — the
+recommended HA log path; a `ReadWriteMany` PVC is the alternative), auto PDB,
+memory sized for the object sink's per-attempt buffer, and the longer drain grace:
 
 ```bash
 helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <x.y.z> -n leoflow \
@@ -114,8 +118,10 @@ helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <x.y.z> -
 
 Involuntary disruptions — node failure, spot reclamation, a kernel panic — are
 stopped by **no** PDB or annotation, which is why the second replica is the
-posture that matters. The full reasoning, per-platform PDB behavior, and the
-upgrade path from a single replica are in the
+posture that matters. Note that the api/scheduler **split** is not dispatch-HA:
+its scheduler is pinned to one replica with no standby and no PDB, so only
+non-split `replicaCount: 2` fails dispatch over today. The full reasoning,
+per-platform PDB behavior, and the upgrade path from a single replica are in the
 [Control-plane HA and disruption posture](https://neochaotic.github.io/leoflow/operate/control-plane-ha/)
 page.
 
@@ -445,6 +451,7 @@ differ from what's committed.
 | podDisruptionBudget.enabled | bool | `nil` | Tri-state. Unset/empty (default) = auto: the PDB renders iff the guaranteed replica floor is `> 1`. `true` forces it on (on a single replica this blocks node drains and auto-upgrades — an informed choice; NOTES warns). `false` forces it off. |
 | podDisruptionBudget.maxUnavailable | string | `""` | Maximum replicas allowed unavailable during voluntary disruption. Set only ONE of minAvailable / maxUnavailable. |
 | podDisruptionBudget.minAvailable | int | `1` | Minimum replicas that must remain up during voluntary disruption. Set only ONE of minAvailable / maxUnavailable. |
+| podDisruptionBudget.unhealthyPodEvictionPolicy | string | `"AlwaysAllow"` | `spec.unhealthyPodEvictionPolicy` (policy/v1, GA since Kubernetes 1.27; older apiservers prune the field — set `""` to omit it). `AlwaysAllow` (default) lets unhealthy pods be evicted even when the budget is unmet: with the Kubernetes default `IfHealthyBudget`, both replicas unready (bad DB credentials after a rotation, image-pull failure, wedged rollout) means even the broken pods cannot be evicted and node drains hang on an already-down control plane. |
 | podSecurityContext.fsGroup | int | `65532` |  |
 | podSecurityContext.runAsGroup | int | `65532` |  |
 | podSecurityContext.runAsNonRoot | bool | `true` |  |
@@ -489,5 +496,6 @@ differ from what's committed.
 | taskServiceAccount.create | bool | `false` | Create a ServiceAccount in taskNamespace for task pods to run as. When true, task pods DEFAULT to this ServiceAccount (no per-DAG `execution.service_account` needed) — so keyless secret access works out of the box; a DAG may still set `execution.service_account` to override per task. NOTE: the auto-default is wired only when `create: true`. If you bring your own pre-existing SA (`create: false` + `name:`), task pods do NOT auto-default to it — reference it per-DAG via `execution.service_account: <name>` (which always works), or let the chart both create and default to it with `create: true`. |
 | taskServiceAccount.imagePullSecrets | list | `[]` | Pull secrets for private DAG images. Kubernetes auto-injects these into every task pod that runs as this SA, so a `leoflow deploy` to a private registry can be pulled (ADR 0041). Reference an existing docker-registry secret, e.g. `[{name: regcred}]`. |
 | taskServiceAccount.name | string | `"leoflow-task"` | Name of the task ServiceAccount. With `create: true` it becomes the default task-pod SA; you can also reference it explicitly as `execution.service_account`. |
-| terminationGracePeriodSeconds | string | `""` | Pod `terminationGracePeriodSeconds` for the control plane. Empty (default) omits the field, so Kubernetes applies its own 30s and a default install's pod spec is unchanged. A voluntary eviction (drain, consolidation, upgrade) sends SIGTERM and waits this long before SIGKILL; the server drains its HTTP listeners and releases the scheduler lease on SIGTERM, so raise it (the HA profile uses `60`) when a shorter grace would kill the leader mid-step-down and leave the follower waiting out the lock. |
+| terminationGracePeriodSeconds | string | `""` | Pod `terminationGracePeriodSeconds` for the control plane. Empty (default) omits the field: Kubernetes applies its own 30s, a default install's pod spec is unchanged, and no downtime is added to a single-replica `Recreate` upgrade (a chart default would). A voluntary eviction sends SIGTERM and waits this long before SIGKILL. What the grace buys is headroom for the HTTP shutdown (in-flight requests get up to 10s) and the dispatch-pool drain (in-flight dispatches settle instead of leaving task instances stuck `queued`). It does NOT decide leadership handoff — the scheduler lease is released within a tick of SIGTERM and frees anyway when the connection drops — and with tasks running the pod normally exhausts the grace and is SIGKILLed (the gRPC stop waits on open agent log streams), which is expected and safe. The HA profile sets `60` for drain headroom under load. |
 | tolerations | list | `[]` | Pod tolerations (standard K8s — allow scheduling on tainted nodes). |
+| topologySpreadConstraints | list | `[]` | Pod `topologySpreadConstraints` for the control plane (standard K8s schema), rendered on every control-plane Deployment. A constraint that omits `labelSelector` gets the Deployment's own selector labels, so a values file need not know the release name or role. Empty by default. Set for HA: consolidation bin-packs both replicas onto one node unless told otherwise, and two replicas on one node are one replica — a node failure takes the whole control plane, and the PDB then blocks that node's drain. Use `whenUnsatisfiable: ScheduleAnyway`, not `DoNotSchedule`: the latter leaves the second replica Pending on a single-node cluster, where the PDB then blocks every drain. |

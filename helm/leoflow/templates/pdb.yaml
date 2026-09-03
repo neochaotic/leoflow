@@ -29,6 +29,13 @@ spec:
   {{- with .Values.podDisruptionBudget.maxUnavailable }}
   maxUnavailable: {{ . }}
   {{- end }}
+  {{- with .Values.podDisruptionBudget.unhealthyPodEvictionPolicy }}
+  # Kubernetes' default (IfHealthyBudget) refuses to evict even UNHEALTHY pods
+  # once the budget is unmet, so with both replicas unready — bad DB credentials
+  # after a rotation, an image-pull failure, a wedged rollout — a node drain hangs
+  # on a control plane that is already down. AlwaysAllow lets the broken pods go.
+  unhealthyPodEvictionPolicy: {{ . }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "leoflow.roleSelectorLabels" (dict "ctx" . "role" $role) | nindent 6 }}

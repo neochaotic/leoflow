@@ -853,9 +853,10 @@ func (r *Runner) writeOutcome(rec taskoutcome.Record) {
 // reportRetryMaxDelay caps the pause between two attempts to deliver a report.
 // It equals the heartbeat interval on purpose: the heartbeat is the agent's
 // other channel to the control plane, and once the server is back a report
-// retry lands within about one heartbeat of it — the same posture the kubelet's
-// status manager takes toward an unreachable apiserver (keep trying at a bounded
-// cadence, never abandon the status).
+// retry lands within about one heartbeat plus the gRPC channel's own reconnect
+// backoff (the channel re-dials on its own schedule, independent of this cap) —
+// the same posture the kubelet's status manager takes toward an unreachable
+// apiserver (keep trying at a bounded cadence, never abandon the status).
 const reportRetryMaxDelay = DefaultHeartbeatInterval
 
 // reportBackoff returns the delay before report retry attempt n (1-based): an
@@ -894,6 +895,16 @@ func reportBackoff(attempt int) time.Duration {
 // durably recorded (recordOutcome) before this is called, so a report that never
 // lands — the pod is deleted or times out first — is recovered by the reconciler
 // from that record; the retry loop only shortens the path to the same result.
+//
+// The RUNNING pre-flight report takes this same path, so it too outlasts an
+// outage — intentionally. An agent that cannot reach the control plane does not
+// start user code until it can: the pod waits in its pre-flight rather than
+// running half-observed work whose RUNNING transition the control plane never
+// saw (the dispatch-lost reaper would then fail a task that is actually
+// executing). The cost is a pod that holds its requests for the length of the
+// outage; that is bounded by the pod's ActiveDeadlineSeconds, which the
+// executor floors with the attempt credential ceiling when the task declares
+// no timeout of its own, so no task pod is immortal.
 //
 // Warm-pool workers share this path (the per-attempt Runner is built by
 // WarmRunner.attemptRunner). A warm worker retrying a report stays busy only

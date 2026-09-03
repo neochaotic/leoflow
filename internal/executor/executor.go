@@ -48,6 +48,19 @@ type Request struct {
 	Resources       domain.Resources
 	Execution       domain.Execution
 	TimeoutSeconds  int
+	// AttemptLifetimeCeilingSeconds is the operator's attempt credential ceiling
+	// (auth.max_attempt_credential_lifetime) in whole seconds. The Kubernetes
+	// executor floors the task pod's ActiveDeadlineSeconds with it when the task
+	// declares no TimeoutSeconds, so no task pod is immortal: the agent's reports
+	// retry for as long as the control plane is unreachable, and without a floor
+	// a total control-plane outage would leave every such pod Running forever,
+	// holding its requests and blocking node scale-down. Past the ceiling the pod
+	// can do nothing useful — heartbeat renewal stops and its bearer lapses. A
+	// user-declared TimeoutSeconds always wins, even when longer. Non-positive
+	// means "no ceiling" (the same convention as the warm worker's attempt
+	// watchdog for the same knob) and applies no floor. Ignored by the subprocess
+	// executor, which has no pod.
+	AttemptLifetimeCeilingSeconds int64
 
 	// PodSecurity carries the two hardening choices that can change how a task
 	// runs. Everything else BuildPod applies is unconditional, because dropping

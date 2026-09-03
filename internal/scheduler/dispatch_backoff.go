@@ -39,3 +39,16 @@ func dispatchBackoff(attempts int) time.Duration {
 	}
 	return d
 }
+
+// InfraReplaceMaxDelay is the longest the planner may park an infra-failed task
+// before re-placing it: the backoff before the last permitted re-place (attempt
+// infraMaxAttempts) plus the full de-synchronizing jitter window. It is the
+// upper bound on how long a run whose only live task is infra-parked shows no
+// activity, so the executor's orphan-run threshold must sit above it or the
+// orphan reaper fails a run that is still recovering. The two values live in
+// packages that depend in one direction only (the scheduler imports the
+// executor), so this is exported for the server to hand to the executor's
+// boot-time resilience ladder rather than read from there.
+func InfraReplaceMaxDelay() time.Duration {
+	return dispatchBackoff(infraMaxAttempts) + infraReplaceJitterWindow
+}

@@ -126,8 +126,7 @@ func BuildPod(req Request) *corev1.Pod {
 			}},
 		},
 	}
-	if req.TimeoutSeconds > 0 {
-		deadline := int64(req.TimeoutSeconds)
+	if deadline := podActiveDeadline(req); deadline > 0 {
 		pod.Spec.ActiveDeadlineSeconds = &deadline
 	}
 	if req.Execution.ServiceAccount != "" {
@@ -141,6 +140,30 @@ func BuildPod(req Request) *corev1.Pod {
 	mountTaskSecret(pod, req)
 	mountAgentToken(pod, agentTokenOf(req))
 	return pod
+}
+
+// podActiveDeadline returns the task pod's ActiveDeadlineSeconds: the user's
+// declared timeout when set, otherwise the attempt credential ceiling as a
+// floor, otherwise 0 (no deadline). The user's value is never shortened — a
+// declared timeout is the author's bound to make, even one above the ceiling.
+// The floor exists because the agent's RUNNING and terminal reports retry for as
+// long as the control plane is unreachable (by design: a report that gives up is
+// how a succeeded task ends up marked failed), so a pod with no deadline of its
+// own would survive a total control-plane outage indefinitely, pinned Running
+// with its requests held and blocking node scale-down. Past the credential
+// ceiling the pod can do nothing useful — its bearer stops renewing and lapses —
+// so that is the natural bound; a non-positive ceiling is the operator's "no
+// ceiling" and applies no floor. When the pod hits the floor the kubelet kills
+// it and the reconciler recovers the durable outcome record the agent wrote
+// before its first report attempt, so no result is lost, only a stuck pod.
+func podActiveDeadline(req Request) int64 {
+	if req.TimeoutSeconds > 0 {
+		return int64(req.TimeoutSeconds)
+	}
+	if req.AttemptLifetimeCeilingSeconds > 0 {
+		return req.AttemptLifetimeCeilingSeconds
+	}
+	return 0
 }
 
 // Agent-token transport (ADR 0055 Fix #3). The env-var transport keeps the

@@ -252,8 +252,11 @@ func (r *Reaper) SetLogSink(s logSink) {
 // a dead agent or a lost pod, and is not reaped (see inLeaderGrace). It reaches
 // every reaper that acts on a restart-manufactured signal: agent-lost and
 // pod-lost. Nil (Lite / no leadership) leaves the grace off. The warm-worker-lost
-// reaper is deliberately not gated: its signal is the warm pod's own liveness,
-// which a control-plane restart does not disturb.
+// reaper is deliberately not gated: its signal is the warm pod's own liveness
+// read by a live apiserver LIST (ListWarmPods, not an informer cache that a
+// restart could leave cold), and a LIST error aborts its tick with zero marks —
+// so a fresh leader either sees the real warm fleet or marks nothing, and there
+// is no restart-manufactured false signal for a grace to absorb.
 func (r *Reaper) SetLeaderSince(fn func() time.Time) {
 	r.agentLost.leaderSince = fn
 	r.podLost.leaderSince = fn

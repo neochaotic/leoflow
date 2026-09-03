@@ -144,6 +144,29 @@ type Dispatcher struct {
 	// taskServiceAccount here makes keyless work without every DAG having to opt in
 	// (the execution.service_account trap).
 	defaultTaskServiceAccount string
+	// attemptLifetimeCeiling is the operator's auth.max_attempt_credential_lifetime,
+	// handed to the executor so a task pod that declares no timeout still gets a
+	// deadline floor. Zero (unset / disabled) applies no floor.
+	attemptLifetimeCeiling time.Duration
+}
+
+// SetAttemptLifetimeCeiling wires the operator's attempt credential ceiling
+// (auth.max_attempt_credential_lifetime) into every dispatched request, where the
+// Kubernetes executor floors the pod's ActiveDeadlineSeconds with it when the
+// task declares no execution timeout. A non-positive value is "no ceiling" and
+// applies no floor; the subprocess executor ignores it.
+func (d *Dispatcher) SetAttemptLifetimeCeiling(ceiling time.Duration) {
+	d.attemptLifetimeCeiling = ceiling
+}
+
+// wholeSeconds converts a positive duration to whole seconds for the executor
+// request; a non-positive duration ("disabled") maps to 0 so the executor applies
+// no floor.
+func wholeSeconds(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return int64(d.Seconds())
 }
 
 // SetSecretsBackend configures the operator's external secrets backend (ADR 0060):
@@ -288,7 +311,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, runID, dagID, dagVersionID st
 		ControlPlaneAddr:     d.controlAddr,
 		AgentToken:           token,
 		// Cluster-operator policy, not a per-task choice — see PlatformDefaults.
-		PodSecurity: d.defaults.PodSecurity,
+		PodSecurity:                   d.defaults.PodSecurity,
+		AttemptLifetimeCeilingSeconds: wholeSeconds(d.attemptLifetimeCeiling),
 	}
 	if task.ExecutionTimeoutSeconds != nil {
 		req.TimeoutSeconds = *task.ExecutionTimeoutSeconds

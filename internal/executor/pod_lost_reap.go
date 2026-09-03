@@ -66,8 +66,12 @@ type PodLostReapStore interface {
 //
 // Warm-pool attempts are out of this reaper's scope: a warm attempt has no
 // per-task pod, so it never appears live here; the warm-worker-lost reaper
-// recovers those from the warm pod's own liveness, which a control-plane restart
-// does not disturb — hence that reaper carries no leadership grace.
+// recovers those from the warm pod's own liveness. That reaper carries no
+// leadership grace because its liveness signal is not one a control-plane
+// restart can manufacture: ListWarmPods is a live apiserver LIST (not an
+// informer-backed cache that could be cold or stale after a restart), and a
+// LIST error aborts its tick with zero marks, so a fresh leader either sees the
+// real warm fleet or marks nothing.
 type podLostReaper struct {
 	store    PodLostReapStore
 	logger   *slog.Logger

@@ -110,7 +110,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   can now clear a field by passing it as an empty string (e.g. `--login ''`)
   instead of "delete and recreate", and re-saving a connection/variable read
   from the API no longer clobbers its unreadable secrets.
-- **A control-plane eviction no longer drops the in-flight attempt logs.** Two
+- **A control-plane eviction no longer drops the part of an attempt's log written before it.** Two
   coupled defects made the recommended HA log path (object storage) lose the
   complete log of every attempt running at the moment of an eviction. The object
   sink held a whole attempt in memory and wrote it as one object on close, and
@@ -124,9 +124,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   most each attempt's unflushed tail; open log streams are closed and flushed as
   soon as `SIGTERM` arrives (the agent keeps running its task — log shipping is
   best-effort); and the gRPC graceful stop is bounded at 5 s with a forced-stop
-  fallback that still lets the remaining handlers finish their flushes, so the
-  shutdown completes within the default 30 s grace instead of ending in
-  `SIGKILL`. The final flush runs on a context detached from the server's
+  fallback that still lets the remaining handlers finish their flushes, so a
+  normal shutdown completes in well under a second instead of ending in
+  `SIGKILL` (the bounded worst case is ~35 s; set the grace to 45–60 s when
+  running the object sink at scale — the HA profile ships 60). The final flush runs on a context detached from the server's
   lifecycle, which `SIGTERM` cancels at exactly that moment. The disk sink (Lite,
   RWX PVC) is unchanged. Known gap, documented: the agent does not re-open a log
   stream its control plane closed, so lines a task prints after its control

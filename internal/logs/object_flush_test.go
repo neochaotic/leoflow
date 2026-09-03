@@ -309,9 +309,12 @@ func TestShouldFlushDamping(t *testing.T) {
 		{"small object, interval elapsed", 10, 0, 6 * time.Second, true},
 		{"small object, interval not elapsed", 10, 100, time.Second, false},
 		{"size threshold reached", 1 << 20, 0, 0, true},
-		{"large object, tail below damping fraction, interval elapsed", 1 << 20, 64 << 20, time.Hour, false},
+		{"large object, tail below damping fraction, interval elapsed", 1 << 20, 64 << 20, 6 * time.Second, false},
+		{"large object, tail below damping fraction, staleness bound reached", 1 << 20, 64 << 20, objectFlushMaxStaleness, true},
+		{"large object, tail below damping fraction, just under the staleness bound", 1 << 20, 64 << 20, objectFlushMaxStaleness - time.Millisecond, false},
 		{"large object, tail at damping fraction", 8 << 20, 64 << 20, 0, true},
-		{"medium object, tail under fraction but time elapsed", 100 << 10, 8 << 20, time.Hour, false},
+		{"medium object, tail under fraction, interval elapsed", 100 << 10, 8 << 20, 6 * time.Second, false},
+		{"medium object, tail under fraction, staleness bound reached", 100 << 10, 8 << 20, time.Hour, true},
 		{"medium object, tail at fraction, time elapsed", 1 << 20, 8 << 20, 6 * time.Second, true},
 	}
 	for _, tc := range cases {
@@ -432,5 +435,49 @@ func TestDiskSinkPathUnchangedByObjectFlushTuning(t *testing.T) {
 	}
 	if !strings.Contains(b.String(), "disk") {
 		t.Errorf("disk sink read back %q, want the line", b.String())
+	}
+}
+
+// TestObjectWriterFlushesStaleTailDespiteDamping: the damping bounds upload
+// amplification, never staleness. A task that logs a large burst and then goes
+// quiet (or trickles) has a tail under the damping fraction that would otherwise
+// stay unflushed until Close — for a chatty hour-long task that is minutes of
+// log at risk, not the seconds the sink promises. Past the staleness bound the
+// tail is flushed regardless of its fraction; the cost is at most one extra
+// rewrite per quiet bound.
+func TestObjectWriterFlushesStaleTailDespiteDamping(t *testing.T) {
+	setFlushTuning(t, 1<<20, time.Hour) // no size or cadence trigger in play
+	origStale := objectFlushMaxStaleness
+	objectFlushMaxStaleness = 20 * time.Millisecond
+	t.Cleanup(func() { objectFlushMaxStaleness = origStale })
+	origInterval := objectFlushInterval
+	objectFlushInterval = 5 * time.Millisecond // the flusher ticks; only the staleness rule may fire
+	t.Cleanup(func() { objectFlushInterval = origInterval })
+
+	store := newMemStore()
+	sink := NewObjectSink(context.Background(), store, "")
+	ref := sampleRef()
+	w, err := sink.Open(ref)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	ow := w.(*objectWriter)
+
+	// A large stored prefix, as after a burst: 64 MiB already flushed.
+	ow.mu.Lock()
+	ow.flushed = 64 << 20
+	ow.lastFlush = time.Now()
+	ow.mu.Unlock()
+	// A tail far below the damping fraction (1/8 of 64 MiB = 8 MiB).
+	if werr := w.WriteEvent(Event{Message: "the quiet tail"}); werr != nil {
+		t.Fatalf("WriteEvent() error = %v", werr)
+	}
+	key := sink.key(ref)
+	if !waitFor(t, 2*time.Second, func() bool {
+		body, ok := store.object(key)
+		return ok && strings.Contains(string(body), "the quiet tail")
+	}) {
+		t.Fatal("a tail under the damping fraction was never flushed by the staleness bound; it would sit in memory until Close")
 	}
 }

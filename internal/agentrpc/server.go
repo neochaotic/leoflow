@@ -485,9 +485,20 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 		return status.Errorf(codes.Internal, "opening log sink: %v", oerr)
 	}
 	defer func() {
-		if cerr := w.Close(); cerr != nil && err == nil {
-			err = status.Errorf(codes.Internal, "flushing logs: %v", cerr)
+		cerr := w.Close()
+		if cerr == nil {
+			return
 		}
+		if err == nil {
+			err = status.Errorf(codes.Internal, "flushing logs: %v", cerr)
+			return
+		}
+		// The stream already ended with its own error (the shutdown path returns
+		// Unavailable), so the failed final flush cannot ride on the return
+		// value; it is the signal that this attempt's tail did not reach the
+		// store, and it must not be silent.
+		slog.Warn("flushing logs on stream end failed; the attempt's tail may not have reached the store",
+			"dag", id.DagID, "run", id.RunID, "task", id.TaskID, "try", id.TryNumber, "error", cerr)
 	}()
 
 	ref := logs.Ref{TenantID: id.TenantID, DagID: id.DagID, RunID: id.RunID, TaskID: id.TaskID, TryNumber: id.TryNumber}

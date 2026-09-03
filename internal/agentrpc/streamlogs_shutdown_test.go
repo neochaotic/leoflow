@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -279,3 +281,63 @@ func TestStreamLogsShutdownOverRealTransport(t *testing.T) {
 		t.Fatal("GracefulStop still hangs after the shutdown context ended the log streams")
 	}
 }
+
+// failingCloseSink is a closeTrackingSink whose final flush fails — the store
+// rejected or timed out the last Put.
+type failingCloseSink struct{ closeTrackingSink }
+
+func (f *failingCloseSink) Open(logs.Ref) (logs.LogWriter, error) { return f, nil }
+func (f *failingCloseSink) Close() error {
+	_ = f.closeTrackingSink.Close()
+	return errors.New("store rejected the final put")
+}
+
+// TestStreamLogsShutdownLogsFailedFinalFlush: on the shutdown path StreamLogs
+// already returns Unavailable, so a failed final flush — "this attempt's tail did
+// not reach the store" — cannot ride on the return value. It must be logged, or
+// the one failure mode this path exists to prevent is invisible to operators.
+func TestStreamLogsShutdownLogsFailedFinalFlush(t *testing.T) {
+	var logBuf syncBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv, a := newServer(&fakeStore{})
+	sink := &failingCloseSink{}
+	srv.SetLogSink(sink)
+	shutdownCtx, shutdown := context.WithCancel(context.Background())
+	defer shutdown()
+	srv.SetShutdown(shutdownCtx)
+
+	streamCtx, cancelStream := context.WithCancel(ctxWithToken(t, a))
+	defer cancelStream()
+	stream := &blockingStreamLogsServer{ctx: streamCtx}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.StreamLogs(stream) }()
+	time.Sleep(50 * time.Millisecond)
+	shutdown()
+	select {
+	case err := <-errCh:
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("StreamLogs on shutdown = %v, want Unavailable (the flush failure must not change the agent-facing code)", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamLogs did not return within 2s of shutdown")
+	}
+	if got := logBuf.String(); !strings.Contains(got, "store rejected the final put") {
+		t.Fatalf("a failed final flush on the shutdown path left no log line; got %q", got)
+	}
+}
+
+// syncBuffer is a goroutine-safe bytes.Buffer for capturing log output.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }

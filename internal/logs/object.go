@@ -152,6 +152,14 @@ var (
 	// object on every tick. Small objects (below damping*objectFlushBytes) are
 	// unaffected: their fraction is under the size threshold anyway.
 	objectFlushDamping = 8
+	// objectFlushMaxStaleness caps how long a non-empty unflushed tail may wait
+	// regardless of the damping fraction. The damping bounds upload
+	// amplification, never staleness: without this cap a task that logs a large
+	// burst and then trickles keeps up to 1/objectFlushDamping of its log
+	// unflushed until Close — minutes of an hour-long chatty task, not the
+	// seconds the sink promises. Past the cap the tail is flushed; the cost is at
+	// most one extra rewrite per quiet cap, after which nothing is unflushed.
+	objectFlushMaxStaleness = 60 * time.Second
 	// objectPutTimeout bounds each Put. It runs on a context detached from the
 	// server's lifecycle, so the final flush on shutdown survives the SIGTERM
 	// cancellation yet cannot hang the shutdown forever.
@@ -161,9 +169,16 @@ var (
 // shouldFlush reports whether an unflushed tail of the given size, over an
 // object of `flushed` stored bytes, warrants rewriting the object now: the tail
 // reached the size threshold, or the cadence elapsed — in either case only once
-// the tail is at least the damping fraction of the stored object.
+// the tail is at least the damping fraction of the stored object — or the tail
+// has waited the staleness cap, which overrides the damping.
 func shouldFlush(unflushed, flushed int, sinceLast time.Duration) bool {
-	if unflushed == 0 || unflushed < flushed/objectFlushDamping {
+	if unflushed == 0 {
+		return false
+	}
+	if sinceLast >= objectFlushMaxStaleness {
+		return true
+	}
+	if damping := objectFlushDamping; damping > 0 && unflushed < flushed/damping {
 		return false
 	}
 	return unflushed >= objectFlushBytes || sinceLast >= objectFlushInterval

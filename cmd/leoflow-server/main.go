@@ -502,13 +502,17 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	return health, podDispatch, stop, nil
 }
 
-// grpcStopTimeout bounds the agent gRPC server's graceful stop on shutdown. The
-// HTTP shutdown (10 s) and the dispatch drain (15 s) run before it; this bound
-// keeps the whole sequence inside the kubelet's default 30 s grace so the pod
-// exits on its own instead of being SIGKILLed with its deferred log flushes
-// skipped. Open log streams end at SIGTERM (agentrpc.Server.SetShutdown), so
-// the graceful path normally finishes in milliseconds; the bound is the safety
-// net for a stream or unary call that does not.
+// grpcStopTimeout bounds the agent gRPC server's graceful stop on shutdown.
+// Open log streams end at SIGTERM (agentrpc.Server.SetShutdown), so the
+// graceful path normally finishes in milliseconds and the whole shutdown in well
+// under a second; the bound is the safety net for a stream or unary call that
+// does not end. The bounded WORST case is not inside the kubelet's default 30 s
+// grace: the HTTP shutdown (10 s) and the dispatch drain (15 s, configurable)
+// run before it, and stopGRPCWithin spends up to 2 × this timeout (graceful,
+// then the wait for handlers after the forced stop), so a shutdown that hits
+// every bound takes ~35 s plus the telemetry flush. The default grace covers the
+// normal shutdown; an installation running the object log sink at scale should
+// set terminationGracePeriodSeconds to 45-60 s (the HA profile ships 60).
 const grpcStopTimeout = 5 * time.Second
 
 // grpcStopper is the subset of *grpc.Server the bounded stop needs; a fake

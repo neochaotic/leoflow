@@ -216,6 +216,87 @@ func TestInfraReplaceJitterSpreadsSiblings(t *testing.T) {
 	}
 }
 
+// TestPlanRunInfraReplaceInBackoffDoesNotCondemnDownstream pins the lazy
+// upstream_failed invariant: a downstream must see its upstream as failed ONLY
+// once the upstream is terminally failed. An infra-failed upstream that is still
+// re-placeable but parked in its re-place backoff is an ACTIVE upstream — the
+// downstream waits, exactly as it does for an app-retriable upstream. Before the
+// fix the infra branch left the effective state as `failed` during the backoff,
+// so the downstream was persisted `upstream_failed` (a terminal state nothing
+// ever reverts) while its upstream went on to re-run and succeed — condemning
+// the run on a control-plane restart that the upstream itself survived.
+func TestPlanRunInfraReplaceInBackoffDoesNotCondemnDownstream(t *testing.T) {
+	now := time.Now().UTC()
+	ended := now.Add(-2 * time.Second) // < 5s base backoff: replaceable, not yet ready
+	run := RunState{
+		RunID:         "run-1",
+		Tasks:         linear(),
+		States:        map[string]domain.TaskState{"a": domain.TaskStateFailed, "b": domain.TaskStateNone},
+		Tries:         map[string]int{"a": 0},
+		MaxTries:      map[string]int{"a": 3},
+		InfraFailed:   map[string]bool{"a": true},
+		InfraAttempts: map[string]int{"a": 0},
+		EndedAt:       map[string]*time.Time{"a": &ended},
+		Now:           now,
+	}
+	got := planMap(run)
+	if _, ok := got["a"]; ok {
+		t.Errorf("a within the infra backoff must stay parked (no transition), got %q", got["a"])
+	}
+	if to, ok := got["b"]; ok {
+		t.Errorf("b must WAIT while its upstream is still infra-replaceable, got planned to %q", to)
+	}
+
+	// Past the backoff the upstream re-places to none; the downstream still waits
+	// (none is an active state) rather than being condemned or scheduled.
+	run.Now = ended.Add(dispatchBackoffBase + infraReplaceJitterWindow)
+	got = planMap(run)
+	if got["a"] != domain.TaskStateNone {
+		t.Errorf("a past the backoff must re-place (none), got %q", got["a"])
+	}
+	if to, ok := got["b"]; ok {
+		t.Errorf("b must still wait while a re-places, got planned to %q", to)
+	}
+}
+
+// TestPlanRunDownstreamSchedulesAfterInfraReplaceSucceeds: once the re-placed
+// upstream runs again and succeeds, the downstream — which was never condemned —
+// plans none→scheduled. The InfraFailed marker of a task that has since
+// succeeded is irrelevant to downstream planning.
+func TestPlanRunDownstreamSchedulesAfterInfraReplaceSucceeds(t *testing.T) {
+	run := RunState{
+		Tasks:         linear(),
+		States:        map[string]domain.TaskState{"a": domain.TaskStateSuccess, "b": domain.TaskStateNone},
+		InfraFailed:   map[string]bool{"a": true},
+		InfraAttempts: map[string]int{"a": 1},
+	}
+	if got := planMap(run); got["b"] != domain.TaskStateScheduled {
+		t.Errorf("b = %q, want scheduled once the re-placed upstream succeeded", got["b"])
+	}
+}
+
+// TestPlanRunInfraExhaustedCondemnsDownstream is the regression guard for the
+// lazy marking: once the upstream is TERMINALLY failed — infra budget spent, and
+// infra faults never fall back to the app-retry budget — the downstream DOES get
+// upstream_failed. Lazy must not mean never.
+func TestPlanRunInfraExhaustedCondemnsDownstream(t *testing.T) {
+	run := RunState{
+		Tasks:         linear(),
+		States:        map[string]domain.TaskState{"a": domain.TaskStateFailed, "b": domain.TaskStateNone},
+		Tries:         map[string]int{"a": 0}, // app budget available, but infra routes exclusively
+		MaxTries:      map[string]int{"a": 3},
+		InfraFailed:   map[string]bool{"a": true},
+		InfraAttempts: map[string]int{"a": infraMaxAttempts},
+	}
+	got := planMap(run)
+	if _, ok := got["a"]; ok {
+		t.Errorf("infra-exhausted a must be terminal (no transition), got %q", got["a"])
+	}
+	if got["b"] != domain.TaskStateUpstreamFailed {
+		t.Errorf("b = %q, want upstream_failed once a is terminally failed", got["b"])
+	}
+}
+
 func TestPlanRunResetsUpForRetry(t *testing.T) {
 	run := RunState{
 		Tasks:    linear(),

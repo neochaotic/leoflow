@@ -52,7 +52,7 @@ the day-2 operations that keep a control plane healthy.
   <div class="lf-card">
     <span class="lf-card__icon"><i class="fa-solid fa-heart-pulse"></i></span>
     <span class="lf-card__title">Resilience &amp; latency</span>
-    <span class="lf-card__desc"><a href="/operate/scheduler-resilience/">Scheduler resilience</a> and <a href="/operate/warm-pools/">warm worker pools</a> — availability and latency.</span>
+    <span class="lf-card__desc"><a href="/operate/scheduler-resilience/">Scheduler resilience</a>, <a href="/operate/control-plane-ha/">control-plane HA &amp; disruption posture</a>, and <a href="/operate/warm-pools/">warm worker pools</a> — availability and latency.</span>
   </div>
   <div class="lf-card">
     <span class="lf-card__icon"><i class="fa-solid fa-shield-halved"></i></span>

@@ -510,7 +510,7 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	// read or write scheduler state. The lastTick.Store above keeps the
 	// follower's heartbeat live so the orchestrator can prove the instance
 	// is alive without granting it the writer role. Lifting the gate here
-	// (instead of only inside reapOrphansIfLeader) removes the wasted reads,
+	// (instead of only around individual phases) removes the wasted reads,
 	// the duplicate ApplyTransition / CreateScheduledRun attempts that ON
 	// CONFLICT used to swallow, and the "what does a follower's count drift
 	// mean?" puzzle.

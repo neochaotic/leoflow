@@ -97,9 +97,9 @@ It sets, and documents why:
 | `replicaCount` | `2` | leader-elected scheduler standby + active-active API |
 | `topologySpreadConstraints` | hostname spread, `ScheduleAnyway` | two replicas bin-packed onto one node are one replica (see below) |
 | `logs.persistence.enabled` / `logs.sink.provider` | `false` / `s3` (or `gcs`) | task logs in object storage — the recommended HA log path (see below) |
-| `resources` | `1Gi` request / `2Gi` limit | the object sink buffers each running attempt in memory; size for your fan-out |
+| `resources` | `1Gi` request / `2Gi` limit | the object sink keeps each running attempt's log in memory until the attempt ends (it is flushed incrementally, but re-uploaded whole); size for your fan-out |
 | `podDisruptionBudget.enabled` | *unset (auto)* | the PDB renders itself because the replica floor is above one; `unhealthyPodEvictionPolicy: AlwaysAllow` |
-| `terminationGracePeriodSeconds` | `60` | headroom for the HTTP shutdown and dispatch-pool drain (see below) |
+| `terminationGracePeriodSeconds` | `60` | headroom for the HTTP shutdown, the dispatch-pool drain and the bounded gRPC stop (see below) |
 | `podAnnotations` → `karpenter.sh/do-not-disrupt` | *commented out* | EKS/Karpenter-only opt-in, see below |
 
 Edit the `CHANGEME` datastore URLs, secrets and bucket, and annotate the
@@ -162,24 +162,38 @@ rules out the default volume:
 | Log store | HA-safe? | Notes |
 |---|---|---|
 | **Object storage** — `logs.persistence.enabled: false` + `logs.sink.provider: s3` or `gcs` ([ADR 0056](/project/adrs/0056-task-log-object-sink/)) | **Yes — recommended** | no PVC at all; every replica reads the same bucket; retention is the bucket's lifecycle policy; keyless auth via the control-plane ServiceAccount; the Deployment can roll. Read the durability note below |
-| **`ReadWriteMany` PVC** — `accessMode: ReadWriteMany` on an RWX class (EFS, GCP Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) | Yes | the alternative when no object store is reachable from the control plane; the disk sink flushes incrementally, so a mid-attempt control-plane death loses nothing already written; needs an RWX-capable StorageClass |
+| **`ReadWriteMany` PVC** — `accessMode: ReadWriteMany` on an RWX class (EFS, GCP Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) | Yes | the alternative when no object store is reachable from the control plane; the disk sink flushes through a 1 MiB buffer, so a mid-attempt control-plane death loses at most that last chunk; needs an RWX-capable StorageClass |
 | **`ReadWriteOnce` / `ReadWriteOncePod` PVC** (the default) | **No** | attaches to one node / one pod; a second replica Multi-Attach-deadlocks |
 | **emptyDir** — `logs.persistence.enabled: false` with `logs.sink.provider: disk` | No | each pod keeps its own logs: the leader's logs are invisible to every other pod's API, and everything is lost on restart. Dev only. The chart's NOTES warn whenever more than one pod can mount it (`replicaCount`, the HPA ceiling), and **refuse to render** it in split mode, where the scheduler is the only writer and no api pod could ever read a log |
 
 **What the object sink makes durable, and when.** The live tail the UI shows
 while a task runs is Redis pub/sub and works from any replica. The durable
-object, though, is written **once, when the attempt ends**: object stores have
-no append, so the control plane buffers the whole attempt in memory (capped at
-128 MiB per attempt) and does a single write on close. A control plane killed
-mid-attempt — an eviction that exhausts the drain grace, which under load is
-the normal case (see [drain grace](#drain-grace)) — never reaches that write,
-and that attempt's buffered log is lost. The task itself is unaffected and the
-reconciler still recovers its outcome; only the log body of attempts running at
-the moment of the kill is gone. Two consequences for the HA profile: size
-`resources.limits.memory` for *concurrent attempts × their log volume*, not for
-the chart's 512 Mi default (a wide fan-out of chatty tasks can OOM a small
-control plane, and OOM is a restart); and if losing an in-flight attempt's log
-is unacceptable for you, prefer the RWX PVC, which flushes as it goes.
+object is **rewritten incrementally while the attempt runs**: object stores
+have no append, so the control plane accumulates the attempt in memory and
+re-uploads the whole object (an overwrite `Put` of the same key) whenever the
+unflushed tail reaches 1 MiB, or every 5 s while anything is unflushed, with a
+final write on close. Once the stored object is large the cadence is damped —
+a flush waits until the unflushed tail is at least one eighth of what is
+already stored — so a big log costs about nine times its final size in upload
+rather than a quadratic bill; small logs (the common case) trail the live tail
+by at most a few seconds. What a kill loses is therefore **the unflushed tail
+of each running attempt** — for a typical task, the lines of the last ~5 s —
+not the attempt's whole log; and an orderly shutdown loses nothing on the
+control-plane side, because open log streams are closed and flushed at
+`SIGTERM` (see [drain grace](#drain-grace)). Two honest caveats. First, the
+agent does not currently re-open a log stream the control plane closed, so the
+lines a task prints *after* its control plane went away are not shipped by that
+task; the task itself is unaffected, the reconciler still recovers its outcome,
+and a replacement control plane serves the stored partial log. Second, a bucket
+with **object versioning** keeps every rewrite as a version — set a lifecycle
+rule on noncurrent versions or expect the versioned size to be several times
+the log size. On memory: the whole attempt is still held in RAM until it ends
+(capped at 128 MiB per attempt), so size `resources.limits.memory` for
+*concurrent attempts × their log volume*, not for the chart's 512 Mi default (a
+wide fan-out of chatty tasks can OOM a small control plane, and OOM is a
+restart — the flushed prefix survives it). If even a few seconds of tail is
+unacceptable for you, prefer the RWX PVC, which flushes at 1 MiB without
+re-uploading.
 
 The chart refuses to render the unsafe combination. `replicaCount > 1` (or an
 HPA with `maxReplicas > 1`, or the api/scheduler split — any shape where more than
@@ -315,11 +329,19 @@ because it is not leadership:
   dispatches already in progress settle instead of leaving task instances stuck
   `queued`. Reapers are gated off during the step-down so nothing destructive
   fires from a dying leader.
-- **With tasks running, the pod will exhaust the grace and be `SIGKILL`ed.** The
-  gRPC server's graceful stop waits for the agents' open log streams, which stay
-  open as long as the tasks run. That is expected and safe — nothing in the
-  handoff needs the graceful stop to finish — but it is why the object sink's
-  in-memory buffer for those attempts is lost (see above).
+- **With tasks running, the stop is bounded.** Open agent log streams are
+  closed and flushed the moment `SIGTERM` arrives (the agent keeps running its
+  task; log shipping is best-effort), and the gRPC graceful stop that follows is
+  bounded at 5 s before falling back to a forced stop — which still lets the
+  remaining handlers finish their deferred flushes, waited for up to another
+  5 s. A normal shutdown therefore completes in well under a second. The
+  bounded **worst case** does not fit the default 30 s: HTTP (≤10 s) + dispatch
+  drain (≤15 s, configurable) + gRPC stop (≤10 s) is ~35 s plus the telemetry
+  flush. Set `terminationGracePeriodSeconds` to 45–60 when running the object
+  log sink at scale (the HA profile ships 60). A `SIGKILL` (`exitCode: 137` on
+  the terminated container) means a stop that overran the grace — look for the
+  `agent grpc graceful stop exceeded its bound` warning first, then for a slow
+  object store. Nothing in the leadership handoff needs any of this to finish.
 
 The HA profile sets `60` for comfortable HTTP + dispatch drain headroom under
 load. The chart deliberately ships **no default**: a default would add up to

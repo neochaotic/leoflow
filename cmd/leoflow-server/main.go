@@ -434,7 +434,8 @@ func handleReclaim(ctx context.Context, store redispatchStore, logger *slog.Logg
 // whether pod dispatch is on, and a stop func to defer. When servesScheduler is
 // false (the api role) it starts nothing and returns a nil handle + no-op stop, so
 // the caller defers unconditionally. The stop func fires drain-then-gRPC-stop,
-// matching the pre-0049 defer order (LIFO: drainDispatch before GracefulStop).
+// matching the pre-0049 defer order (LIFO: drainDispatch before the bounded
+// graceful stop, see stopGRPCWithin).
 func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *storage.Postgres, repo *storage.Repository, execStore *storage.ExecutionStore, authn *auth.JWTAuthenticator, xcomSvc *xcom.Service, logSink logs.Sink, logTailer logs.Tailer, allowInsecureSecrets bool, servesScheduler bool, logger *slog.Logger, metrics *observability.Metrics) (health api.Heartbeater, podDispatch bool, stop func(), err error) {
 	if !servesScheduler {
 		return nil, false, func() {}, nil
@@ -496,9 +497,56 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	}
 	stop = func() {
 		drain()
-		grpcSrv.GracefulStop()
+		stopGRPCWithin(grpcSrv, grpcStopTimeout, logger)
 	}
 	return health, podDispatch, stop, nil
+}
+
+// grpcStopTimeout bounds the agent gRPC server's graceful stop on shutdown.
+// Open log streams end at SIGTERM (agentrpc.Server.SetShutdown), so the
+// graceful path normally finishes in milliseconds and the whole shutdown in well
+// under a second; the bound is the safety net for a stream or unary call that
+// does not end. The bounded WORST case is not inside the kubelet's default 30 s
+// grace: the HTTP shutdown (10 s) and the dispatch drain (15 s, configurable)
+// run before it, and stopGRPCWithin spends up to 2 × this timeout (graceful,
+// then the wait for handlers after the forced stop), so a shutdown that hits
+// every bound takes ~35 s plus the telemetry flush. The default grace covers the
+// normal shutdown; an installation running the object log sink at scale should
+// set terminationGracePeriodSeconds to 45-60 s (the HA profile ships 60).
+const grpcStopTimeout = 5 * time.Second
+
+// grpcStopper is the subset of *grpc.Server the bounded stop needs; a fake
+// stands in for it in tests.
+type grpcStopper interface {
+	GracefulStop()
+	Stop()
+}
+
+// stopGRPCWithin stops the agent gRPC server gracefully, but for at most timeout;
+// past it, Stop force-closes the transports. The unbounded GracefulStop waited
+// on every in-flight RPC, and a task's StreamLogs stays open for the whole
+// task, so with any task running the process exhausted the pod's termination
+// grace and died by SIGKILL — the normal terminal state under load. Forcing
+// cancels the remaining handlers' stream contexts; GracefulStop is still
+// waiting for those handlers to return, and they return after their deferred
+// log flushes, so the wait for it is kept (bounded again) and forced reports
+// whether the fallback was taken.
+func stopGRPCWithin(srv grpcStopper, timeout time.Duration, logger *slog.Logger) (forced bool) {
+	done := make(chan struct{})
+	go func() { srv.GracefulStop(); close(done) }()
+	select {
+	case <-done:
+		return false
+	case <-time.After(timeout):
+	}
+	logger.Warn("agent grpc graceful stop exceeded its bound; forcing stop so shutdown completes within the pod's grace", "timeout", timeout)
+	srv.Stop()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		logger.Error("agent grpc handlers did not finish after the forced stop; exiting without them", "timeout", timeout)
+	}
+	return true
 }
 
 // buildAPIServer assembles the HTTP API + embedded UI server for the api/"all"
@@ -654,6 +702,10 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 		return nil, nil, fmt.Errorf("listening for agent grpc on %s: %w", addr, err)
 	}
 	agentSrv = agentrpc.NewServer(authn, store, xcomSvc)
+	// End open task log streams as soon as shutdown begins (ctx is the SIGTERM
+	// context), so each stream's deferred log flush runs while the process is
+	// alive and the bounded graceful stop below is not held open by running tasks.
+	agentSrv.SetShutdown(ctx)
 	agentSrv.SetLogSink(logSink)
 	agentSrv.SetLogPublisher(logTailer)
 	agentSrv.SetSecrets(secretsStore, allowInsecureSecrets)

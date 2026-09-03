@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // memStore is an in-memory ObjectStore for exercising ObjectSink without a real
@@ -16,6 +15,7 @@ import (
 type memStore struct {
 	mu     sync.Mutex
 	objs   map[string][]byte
+	puts   []int // body size of every Put, in order
 	putErr error
 	getErr error
 }
@@ -23,6 +23,8 @@ type memStore struct {
 func newMemStore() *memStore { return &memStore{objs: map[string][]byte{}} }
 
 func (m *memStore) Put(_ context.Context, key string, r io.Reader) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.putErr != nil {
 		return m.putErr
 	}
@@ -30,10 +32,32 @@ func (m *memStore) Put(_ context.Context, key string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
+	m.objs[key] = b
+	m.puts = append(m.puts, len(b))
+	return nil
+}
+
+// setPutErr swaps the injected Put failure under the lock, so a test can flip it
+// while a writer's flusher goroutine is running.
+func (m *memStore) setPutErr(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.objs[key] = b
-	return nil
+	m.putErr = err
+}
+
+// object returns a copy of the stored body for key and whether it exists.
+func (m *memStore) object(key string) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.objs[key]
+	return append([]byte(nil), b...), ok
+}
+
+// putCount reports how many Puts succeeded so far.
+func (m *memStore) putCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.puts)
 }
 
 func (m *memStore) Get(_ context.Context, key string) (io.ReadCloser, error) {
@@ -209,7 +233,7 @@ func TestObjectSinkReadMissing(t *testing.T) {
 
 func TestObjectSinkClosePropagatesPutError(t *testing.T) {
 	store := newMemStore()
-	store.putErr = errors.New("network down")
+	store.setPutErr(errors.New("network down"))
 	sink := NewObjectSink(context.Background(), store, "")
 	w, err := sink.Open(sampleRef())
 	if err != nil {
@@ -302,6 +326,3 @@ func TestNewDurableSinkUnknownBackend(t *testing.T) {
 		t.Fatal("NewDurableSink(unknown) error = nil, want error")
 	}
 }
-
-// keep time imported for future dated assertions without churn.
-var _ = time.Now

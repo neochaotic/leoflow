@@ -34,7 +34,7 @@ func TestWriteLinesRefinesLevelButKeepsStream(t *testing.T) {
 	}
 
 	w := &capLogWriter{}
-	if err := writeLines(w, recv, func(string) {}); err != nil {
+	if err := writeLines(nil, w, recv, func(string) {}); err != nil {
 		t.Fatalf("writeLines: %v", err)
 	}
 	if len(w.events) != 3 {

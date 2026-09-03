@@ -49,6 +49,12 @@ leader's maintenance loop, which every 30 s performs **one ordered cycle**:
    and garbage-collects old finished pods;
 2. **then** the five reapers run.
 
+Each phase runs under its own budget of one interval (30 s): a sweep hung on a
+slow apiserver cannot starve the reap, and a reap pass over a large namespace
+cannot starve the sweep it depends on. Overrunning a budget is a load signal,
+logged at `WARN` with the budget, not an error; a cycle can take up to two
+intervals and the ticker coalesces the ticks it overruns.
+
 The order is structural, not a matter of timers lining up. Before this, the
 reapers ticked at 1 s and the reconciler at 30 s on an independent clock, so a
 pod-lost verdict could land on a pod the reconciler would have recovered as

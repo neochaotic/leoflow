@@ -1040,8 +1040,6 @@ func startXComSweep(ctx context.Context, backend *xcom.PostgresBackend, logger *
 	}()
 }
 
-// startReconciler runs a periodic pod reconciler that marks task instances
-// failed when their pod failed without the agent reporting (feeding retries).
 // startGatedTicker runs fn every interval on a background goroutine, but only
 // while leading() reports this instance holds leadership. It stops when ctx is
 // done. The pod reconciler and staging GC mutate cluster state, so at
@@ -1106,7 +1104,9 @@ func buildPodInformer(ctx context.Context, cfg *config.ServerConfig, cs kubernet
 // know a sweep has completed under this leadership. The cost is detection
 // latency: a stuck run/TI is now noticed up to one interval (30s) later than at
 // the 1s tick — negligible against 60s–5m thresholds, and reaping is a backstop,
-// never the primary path. Lite/subprocess never calls this: no pods, no reaping.
+// never the primary path. Each phase runs under its own one-interval budget
+// (maintenancePhaseTimeout). Lite/subprocess never calls this: no pods, no
+// reaping.
 func startMaintenance(ctx context.Context, cs kubernetes.Interface, namespace string, reporter executor.OutcomeReporter, reaper *executor.Reaper, leading func() bool, logger *slog.Logger, snapshotter executor.PodSnapshotter) {
 	rec := executor.NewReconciler(cs, namespace, reporter)
 	// Read task pods from the shared informer cache instead of a live LIST every
@@ -1116,21 +1116,51 @@ func startMaintenance(ctx context.Context, cs kubernetes.Interface, namespace st
 	}
 	reaper.SetLastSweepCompleted(rec.LastSweepCompletedAt)
 	startGatedTicker(ctx, "maintenance", reconcileInterval, leading, logger, func() {
-		maintenanceCycle(ctx, rec.Reconcile, reaper.ReapOnce, logger)
+		maintenanceCycle(ctx, maintenancePhaseTimeout, rec.Reconcile, reaper.ReapOnce, logger)
 	})
 }
 
+// maintenancePhaseTimeout bounds each phase of a maintenance cycle — the
+// reconciler's sweep and the reaper pass — separately, at one interval. The
+// reapers used to run inside the scheduler tick under its step timeout; sharing
+// one goroutine with the reconciler must not lose that bound: a sweep hung on a
+// slow apiserver would otherwise starve the reap indefinitely, and a reap that
+// issues one live LIST per running task instance (plus lock-blocked UPDATEs)
+// would starve the very sweep it depends on. Each phase gets its own FRESH
+// budget, so a reconcile that spends all of its own still hands the reap a live
+// context — the reaper's destructive gate reads ctx.Err() and a dead context
+// would silently disable reaping rather than fail loudly. A cycle can therefore
+// take up to two intervals; the ticker coalesces the ticks it overruns, and the
+// settling gate's "two cycles inside the grace" still holds by construction.
+const maintenancePhaseTimeout = reconcileInterval
+
 // maintenanceCycle is one pass of the maintenance loop: reconcile, then reap,
-// in that order, always. A reconcile error (the LIST failed) is logged and the
-// reapers still run — they are independent backstops with their own fail-closed
-// liveness reads, and whether a leader that has never completed a sweep may reap
-// is the reaper's settling gate's decision, not this loop's.
-func maintenanceCycle(ctx context.Context, reconcile, reap func(context.Context) error, logger *slog.Logger) {
-	if err := reconcile(ctx); err != nil {
-		logger.Error("pod reconcile", "error", err)
-	}
-	if err := reap(ctx); err != nil {
-		logger.Error("execution reaper", "error", err)
+// in that order, always, each under its own phaseTimeout. A reconcile error
+// (the LIST failed) is logged and the reapers still run — they are independent
+// backstops with their own fail-closed liveness reads, and whether a leader that
+// has never completed a sweep may reap is the reaper's settling gate's decision,
+// not this loop's.
+func maintenanceCycle(ctx context.Context, phaseTimeout time.Duration, reconcile, reap func(context.Context) error, logger *slog.Logger) {
+	runMaintenancePhase(ctx, "pod reconcile", phaseTimeout, reconcile, logger)
+	runMaintenancePhase(ctx, "execution reaper", phaseTimeout, reap, logger)
+}
+
+// runMaintenancePhase runs one phase under its own deadline. Overrunning the
+// budget is a load signal (a large namespace, a slow apiserver), not a bug, so
+// it logs at WARN with the budget; any other error logs at ERROR. Nothing is
+// logged once the parent context is done — that cancel fan-out at shutdown is
+// expected, not a finding.
+func runMaintenancePhase(ctx context.Context, name string, timeout time.Duration, fn func(context.Context) error, logger *slog.Logger) {
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err := fn(pctx)
+	switch {
+	case ctx.Err() != nil:
+		return
+	case errors.Is(pctx.Err(), context.DeadlineExceeded):
+		logger.Warn(name+" exceeded its maintenance budget", "budget", timeout, "error", err)
+	case err != nil:
+		logger.Error(name, "error", err)
 	}
 }
 

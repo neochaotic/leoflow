@@ -71,7 +71,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `reap_settling_skip` / `reap_settling_valve_open`; `agent_lost_grace_skip` and
   `pod_lost_grace_skip` are gone. The boot-time ladder check now enforces
   `heartbeat < agent-lost threshold < settling grace < token TTL` and two
-  maintenance cycles inside the grace. **Detection latency note:** a stuck
+  maintenance cycles inside the grace. Each phase of a cycle runs under its own
+  one-interval budget, so a sweep hung on a slow apiserver cannot starve the
+  reap and a slow reap cannot starve the sweep it depends on (an overrun logs a
+  `WARN`). **Detection latency note:** a stuck
   run/TI is now noticed up to 30 s after its threshold elapses instead of
   within 1 s — against thresholds of 60 s–5 min, and reaping being a backstop
   rather than the primary path. Lite (no pods) is unchanged: no maintenance loop,

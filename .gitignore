@@ -23,6 +23,8 @@ bin/
 dist/
 /leoflow-mcp
 /leoflow
+/leoflow-server
+/leoflow-agent
 *.exe
 *.exe~
 *.dll

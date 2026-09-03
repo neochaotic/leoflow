@@ -1473,9 +1473,11 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	if ms, ok := logSink.(logs.MarkerSink); ok {
 		reaper.SetLogSink(ms)
 	}
-	// Suppress agent-lost reaping for a grace window after this instance acquires
-	// leadership, so a control-plane restart doesn't mass-reap in-flight tasks
-	// whose heartbeats went stale during the outage (#858).
+	// Suppress agent-lost AND pod-lost reaping for a grace window after this
+	// instance acquires leadership, so a control-plane restart doesn't mass-reap
+	// in-flight tasks whose heartbeats went stale during the outage (#858), nor
+	// fail a task whose pod finished during the outage before the reconciler has
+	// recovered its durable outcome record.
 	reaper.SetLeaderSince(sched.LeaderSince)
 	sched.SetExecutionReaper(reaper)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)

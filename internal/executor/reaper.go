@@ -51,17 +51,33 @@ const (
 	// under the 10-minute agent token TTL so a re-heartbeat still authenticates.
 	// Ladder: heartbeat(15s) < threshold(90s) < grace(180s) < tokenTTL(600s).
 	defaultAgentLostGrace = 2 * defaultAgentLostThreshold
+	// defaultPodLostLeaderGrace is the post-leadership window during which the
+	// pod-lost reaper does not fire. The same control-plane restart that makes
+	// heartbeats look stale also makes a task pod that FINISHED during the outage
+	// look lost: its container exited, so it is no longer Pending/Running, yet its
+	// TI is still `running` because the terminal report never reached a server.
+	// The pod's durable outcome record (termination log) is recovered by the
+	// reconciler on its own, slower sweep; if the pod-lost reaper fires first it
+	// marks a succeeded task failed and the reconciler then finds a settled row.
+	// Reusing the agent-lost grace keeps one ladder value for "one restart fault"
+	// and leaves the reconciler (30s sweep) several passes to recover the true
+	// outcome before this reaper may act. It is additive to PodLostGrace, which
+	// is a per-task liveness floor measured from the TI's running transition.
+	defaultPodLostLeaderGrace = defaultAgentLostGrace
 )
 
-// ReaperConfig holds the four idle thresholds the reapers apply. Zero values are
-// legal but reap aggressively; callers pass DefaultReaperConfig unless a test or
-// load harness deliberately overrides them.
+// ReaperConfig holds the idle thresholds and post-leadership graces the reapers
+// apply. Zero values are legal but reap aggressively; callers pass
+// DefaultReaperConfig unless a test or load harness deliberately overrides them.
 type ReaperConfig struct {
 	OrphanThreshold       time.Duration
 	AgentLostThreshold    time.Duration
 	AgentLostGrace        time.Duration
 	DispatchLostThreshold time.Duration
 	PodLostGrace          time.Duration
+	// PodLostLeaderGrace suppresses pod-lost reaping for this long after this
+	// instance acquires leadership. See defaultPodLostLeaderGrace.
+	PodLostLeaderGrace time.Duration
 }
 
 // DefaultReaperConfig returns the production thresholds — the exact values the
@@ -73,7 +89,30 @@ func DefaultReaperConfig() ReaperConfig {
 		AgentLostGrace:        defaultAgentLostGrace,
 		DispatchLostThreshold: defaultDispatchLostThreshold,
 		PodLostGrace:          defaultPodLostGrace,
+		PodLostLeaderGrace:    defaultPodLostLeaderGrace,
 	}
+}
+
+// inLeaderGrace reports whether now falls within the post-leadership grace: a
+// leaderSince accessor is wired, the grace is positive, leadership is currently
+// held (non-zero stamp), and less than grace has elapsed since it was acquired.
+// A nil accessor (Lite / no leadership) or a zero grace disables the check.
+//
+// It is the single definition of the leader-settling gate the reapers share. A
+// control-plane restart manufactures the signals several reapers act on (a stale
+// heartbeat, a task pod that exited during the outage), so a freshly elected
+// leader must let the fleet re-heartbeat and the reconciler recover durable
+// outcomes before any of them fires; a genuinely lost task stays stale past the
+// grace and is reaped on a later tick. Measured from leadership acquisition, not
+// process start, so a re-election also resets it. If leadership flaps with a
+// period shorter than the grace the stamp keeps moving and the gated reapers
+// never fire — the orphan-run reaper is the backstop for that pathological case.
+func inLeaderGrace(leaderSince func() time.Time, grace time.Duration, now time.Time) bool {
+	if leaderSince == nil || grace <= 0 {
+		return false
+	}
+	ls := leaderSince()
+	return !ls.IsZero() && now.Sub(ls) < grace
 }
 
 // Reaper is the execution-side backstop that fails stuck runs and task instances
@@ -124,6 +163,7 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 	podLost := newPodLostReaper(store, logger, cfg.PodLostGrace, rec)
 	podLost.pods = pods
 	podLost.cache = cache
+	podLost.leaderGrace = cfg.PodLostLeaderGrace
 
 	warmWorkerLost := newWarmWorkerLostReaper(store, logger, rec)
 	warmWorkerLost.warmPods = warmPods
@@ -148,12 +188,17 @@ func (r *Reaper) SetLogSink(s logSink) {
 	r.agentLost.sink = s
 }
 
-// SetLeaderSince wires the accessor the agent-lost reaper uses to measure its
-// post-leadership grace (#858) — the window after a (re-)election during which a
-// stale heartbeat is assumed to be the outage's doing, not a dead agent, and is
-// not reaped. Nil (Lite / no leadership) leaves the grace off.
+// SetLeaderSince wires the accessor the leadership-gated reapers use to measure
+// their post-leadership grace — the window after a (re-)election during which a
+// stale heartbeat or a vanished task pod is assumed to be the outage's doing, not
+// a dead agent or a lost pod, and is not reaped (see inLeaderGrace). It reaches
+// every reaper that acts on a restart-manufactured signal: agent-lost and
+// pod-lost. Nil (Lite / no leadership) leaves the grace off. The warm-worker-lost
+// reaper is deliberately not gated: its signal is the warm pod's own liveness,
+// which a control-plane restart does not disturb.
 func (r *Reaper) SetLeaderSince(fn func() time.Time) {
 	r.agentLost.leaderSince = fn
+	r.podLost.leaderSince = fn
 }
 
 // ReapOnce runs the four reapers once, in the same order the scheduler drove

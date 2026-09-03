@@ -116,22 +116,15 @@ func (r *agentLostReaper) run(ctx context.Context) error {
 		}
 	}()
 	now := time.Now().UTC()
-	// Post-leadership grace (#858): a control-plane restart manufactures the very
+	// Post-leadership grace: a control-plane restart manufactures the very
 	// silence this reaper punishes — every in-flight TI's last heartbeat elapses
 	// during the outage, and the heartbeat receiver is the same process that just
 	// came back. Suppress reaping until the fleet has had a full grace window to
-	// re-heartbeat under the recovered leader; a genuinely lost agent stays stale
-	// past the grace and is reaped on a later tick. The window is measured from
-	// leadership acquisition, not startup, so a re-election also resets it.
-	// Checked before the list so a grace tick does no query at all. NOTE: if
-	// leadership flaps with a period shorter than the grace, leaderSince keeps
-	// restamping and this reaper never fires — the orphan-run reaper (5m) is the
-	// backstop for that pathological case; steady-state leadership is the norm.
-	if r.leaderSince != nil && r.grace > 0 {
-		if ls := r.leaderSince(); !ls.IsZero() && now.Sub(ls) < r.grace {
-			r.record("agent_lost_grace_skip")
-			return nil
-		}
+	// re-heartbeat under the recovered leader (see inLeaderGrace for the shared
+	// gate semantics). Checked before the list so a grace tick does no query.
+	if inLeaderGrace(r.leaderSince, r.grace, now) {
+		r.record("agent_lost_grace_skip")
+		return nil
 	}
 	candidates, err := r.store.ListAgentLostCandidates(ctx)
 	if err != nil {

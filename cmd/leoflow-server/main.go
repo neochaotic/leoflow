@@ -106,7 +106,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	if verr := cfg.Validate(); verr != nil {
+	if verr := validateStartup(cfg); verr != nil {
 		return verr
 	}
 
@@ -341,6 +341,33 @@ func bootstrapAdmin(ctx context.Context, repo *storage.Repository, logger *slog.
 // TTL at the dispatch site; the total renewed lifetime is separately capped by
 // auth.max_attempt_credential_lifetime.
 var attemptTokenTTL = agent.AttemptTokenTTL(agent.DefaultHeartbeatInterval)
+
+// validateStartup runs every boot-time invariant check before any subsystem
+// starts: the operator's configuration, then the resilience timing ladder the
+// restart recovery depends on. A violation fails boot with the offending
+// relation named, instead of surfacing as a false reap after the next restart.
+func validateStartup(cfg *config.ServerConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return executor.ValidateResilienceLadder(resilienceLadder())
+}
+
+// resilienceLadder assembles the effective timing knobs the control-plane
+// restart recovery depends on, exactly as this binary wires them: the agent's
+// heartbeat interval and derived token TTL, the reaper thresholds/graces, and
+// the reconciler sweep. validateStartup checks it before anything starts.
+func resilienceLadder() executor.ResilienceLadder {
+	rc := executor.DefaultReaperConfig()
+	return executor.ResilienceLadder{
+		HeartbeatInterval:  agent.DefaultHeartbeatInterval,
+		AgentLostThreshold: rc.AgentLostThreshold,
+		AgentLostGrace:     rc.AgentLostGrace,
+		PodLostLeaderGrace: rc.PodLostLeaderGrace,
+		AttemptTokenTTL:    attemptTokenTTL,
+		ReconcileInterval:  reconcileInterval,
+	}
+}
 
 // loginRateLimit returns the per-minute failed-login cap with a safe floor: a
 // missing or nonsensical (<=0) config value falls back to the conservative

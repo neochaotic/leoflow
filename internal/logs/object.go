@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"path"
+	"sync"
 	"time"
 )
 
@@ -39,8 +41,10 @@ type Pruner interface {
 // ObjectSink stores each task attempt as a single object in an ObjectStore,
 // keyed the same way the disk sink lays out files
 // ({prefix}/{tenant}/{dag}/{run}/{task}/{try}.log). Object stores have no
-// append, so a writer buffers the attempt's events and writes one object on
-// Close; the live-tail path (a separate Tailer) still streams lines as they
+// append, so a writer accumulates the attempt's events and rewrites the object
+// incrementally (by size and on a time cadence) with a final rewrite on Close,
+// so a control plane killed mid-attempt leaves a partial object rather than
+// nothing; the live-tail path (a separate Tailer) still streams lines as they
 // arrive. It is opt-in — the disk sink stays the default (see NewDurableSink).
 type ObjectSink struct {
 	ctx    context.Context
@@ -63,13 +67,13 @@ func (o *ObjectSink) key(ref Ref) string {
 	return path.Join(o.prefix, ref.TenantID, ref.DagID, ref.RunID, ref.TaskID, fmt.Sprintf("%d.log", ref.TryNumber))
 }
 
-// Open validates the ref and returns a writer that buffers events and flushes
-// them as one object on Close.
+// Open validates the ref and returns a writer that keeps the attempt's object
+// current as lines arrive (see objectWriter) and performs the last flush on Close.
 func (o *ObjectSink) Open(ref Ref) (LogWriter, error) {
 	if err := ref.validate(); err != nil {
 		return nil, err
 	}
-	return &objectWriter{ctx: o.ctx, store: o.store, key: o.key(ref)}, nil
+	return newObjectWriter(o.ctx, o.store, o.key(ref)), nil
 }
 
 // Read fetches the stored object for the ref. A missing object surfaces as
@@ -119,46 +123,168 @@ func (o *ObjectSink) AppendEvent(ref Ref, ev Event) error {
 }
 
 // maxBufferedAttemptBytes caps how much of a single task attempt the object sink
-// buffers in the control plane. Object stores have no append, so the whole
-// attempt is held in RAM until Close; without a cap one chatty task could OOM the
-// shared control plane (unlike the disk sink, which flushes incrementally). This
-// bound is far above any sane task log yet keeps the blast radius of a runaway
-// task to its own attempt.
+// holds in the control plane. Object stores have no append, so every flush
+// rewrites the whole object from the accumulated content — the writer must keep
+// the entire attempt in memory until Close, and this bound is the per-attempt
+// ceiling of that memory (not of the unflushed tail). Without it one chatty task
+// could OOM the shared control plane. What the cap no longer decides is
+// durability: everything flushed before it trips is already stored. Far above
+// any sane task log; it keeps the blast radius of a runaway task to its own
+// attempt.
 // var (not const) so tests can lower it without buffering 128 MiB.
 var maxBufferedAttemptBytes = 128 << 20 // 128 MiB
 
-// objectWriter accumulates a task attempt's events in memory and writes them as
-// a single object on Close. Object stores do not support append, so the whole
-// attempt is one Put; memory use is bounded by maxBufferedAttemptBytes.
+// Flush cadence of the object writer. A kill loses at most the unflushed tail,
+// so these bound the loss; but each flush re-uploads the whole object, so they
+// also bound upload amplification. var (not const) so tests can tighten them.
+var (
+	// objectFlushBytes is the unflushed-tail size that forces a flush, matching
+	// the disk sink's bufio threshold so both sinks trail the live log alike.
+	objectFlushBytes = 1 << 20 // 1 MiB
+	// objectFlushInterval is the cadence on which a writer with anything
+	// unflushed rewrites its object, so a quiet task's few lines become durable
+	// within seconds instead of at attempt end.
+	objectFlushInterval = 5 * time.Second
+	// objectFlushDamping delays a flush until the unflushed tail is at least
+	// 1/objectFlushDamping of what is already stored. Each flush grows the object
+	// by that fraction at minimum, so a log of final size S uploads about
+	// (damping+1)*S in total instead of the quadratic bill of rewriting a large
+	// object on every tick. Small objects (below damping*objectFlushBytes) are
+	// unaffected: their fraction is under the size threshold anyway.
+	objectFlushDamping = 8
+	// objectPutTimeout bounds each Put. It runs on a context detached from the
+	// server's lifecycle, so the final flush on shutdown survives the SIGTERM
+	// cancellation yet cannot hang the shutdown forever.
+	objectPutTimeout = 30 * time.Second
+)
+
+// shouldFlush reports whether an unflushed tail of the given size, over an
+// object of `flushed` stored bytes, warrants rewriting the object now: the tail
+// reached the size threshold, or the cadence elapsed — in either case only once
+// the tail is at least the damping fraction of the stored object.
+func shouldFlush(unflushed, flushed int, sinceLast time.Duration) bool {
+	if unflushed == 0 || unflushed < flushed/objectFlushDamping {
+		return false
+	}
+	return unflushed >= objectFlushBytes || sinceLast >= objectFlushInterval
+}
+
+// objectWriter accumulates a task attempt's events in memory and keeps the
+// stored object current by rewriting it (overwrite Put of the accumulated
+// content) whenever the unflushed tail crosses shouldFlush, from WriteEvent and
+// from a flusher goroutine on the time cadence; Close performs the last flush.
+// Invariant: after any flush the stored object is a prefix of the attempt, so a
+// process kill (no Close) loses at most the unflushed tail. Memory is bounded by
+// maxBufferedAttemptBytes; mu serializes the writer against the flusher.
 type objectWriter struct {
 	ctx   context.Context
 	store ObjectStore
 	key   string
-	buf   bytes.Buffer
+
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	flushed   int  // bytes of buf already stored
+	stored    bool // at least one Put succeeded (an empty attempt still Puts once)
+	lastFlush time.Time
+
+	stopOnce sync.Once
+	stop     chan struct{} // closed by stopFlusher to end the flusher
+	done     chan struct{} // closed by the flusher when it exits
+}
+
+// newObjectWriter builds a writer and starts its flusher.
+func newObjectWriter(ctx context.Context, store ObjectStore, key string) *objectWriter {
+	w := &objectWriter{ctx: ctx, store: store, key: key, lastFlush: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
+	go w.runFlusher(ctx)
+	return w
+}
+
+// runFlusher rewrites the object on the time cadence while lines are pending, so
+// a quiet task's log does not wait for the attempt to end. It exits on Close.
+func (w *objectWriter) runFlusher(ctx context.Context) {
+	defer close(w.done)
+	ticker := time.NewTicker(objectFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.stop:
+			return
+		case <-ticker.C:
+			w.mu.Lock()
+			w.maybeFlushLocked(ctx)
+			w.mu.Unlock()
+		}
+	}
 }
 
 // WriteEvent appends an event to the in-memory buffer as a JSON line, matching
-// the JSONL format the disk sink writes and the UI reader decodes. It fails
-// loudly once the attempt exceeds maxBufferedAttemptBytes rather than growing the
-// control plane's memory without bound; whatever was buffered before the cap is
-// still flushed on Close.
+// the JSONL format the disk sink writes and the UI reader decodes, then flushes
+// when the tail crosses the threshold. It fails loudly once the attempt exceeds
+// maxBufferedAttemptBytes rather than growing the control plane's memory without
+// bound; whatever was buffered before the cap is still flushed on Close.
 func (w *objectWriter) WriteEvent(ev Event) error {
 	line := EncodeLine(ev) + "\n"
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.buf.Len()+len(line) > maxBufferedAttemptBytes {
 		return fmt.Errorf("task attempt log exceeds the %d-byte object-sink buffer cap; not buffering further lines", maxBufferedAttemptBytes)
 	}
 	if _, err := w.buf.WriteString(line); err != nil {
 		return fmt.Errorf("buffering log line: %w", err)
 	}
+	w.maybeFlushLocked(w.ctx)
 	return nil
 }
 
-// Close writes the buffered attempt to the object store as one object.
-func (w *objectWriter) Close() error {
-	if err := w.store.Put(w.ctx, w.key, bytes.NewReader(w.buf.Bytes())); err != nil {
+// maybeFlushLocked flushes when shouldFlush says so. An incremental flush
+// failure is logged, not returned: the lines stay buffered and the next trigger
+// retries, so a transient store error never ends the agent's log stream; Close
+// surfaces the final flush's error. Caller holds mu.
+func (w *objectWriter) maybeFlushLocked(ctx context.Context) {
+	if !shouldFlush(w.buf.Len()-w.flushed, w.flushed, time.Since(w.lastFlush)) {
+		return
+	}
+	if err := w.flushLocked(ctx); err != nil {
+		slog.Warn("incremental log object flush failed; will retry", "key", w.key, "error", err)
+	}
+}
+
+// flushLocked rewrites the stored object with the whole accumulated content. The
+// Put runs on a context detached from the sink's lifecycle context — which is
+// canceled by SIGTERM at exactly the moment the shutdown path closes writers —
+// and bounded by objectPutTimeout. Caller holds mu.
+func (w *objectWriter) flushLocked(ctx context.Context) error {
+	putCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), objectPutTimeout)
+	defer cancel()
+	if err := w.store.Put(putCtx, w.key, bytes.NewReader(w.buf.Bytes())); err != nil {
 		return fmt.Errorf("writing log object: %w", err)
 	}
+	w.flushed = w.buf.Len()
+	w.stored = true
+	w.lastFlush = time.Now()
 	return nil
+}
+
+// stopFlusher ends the flusher goroutine and waits for it; idempotent. It is the
+// part of Close a process kill never reaches, split out so tests can model the
+// kill (flusher gone, no final flush) without leaking the goroutine.
+func (w *objectWriter) stopFlusher() {
+	w.stopOnce.Do(func() { close(w.stop) })
+	<-w.done
+}
+
+// Close stops the flusher and performs the final flush — skipped when nothing
+// arrived since the last one, so Close is the last flush rather than an extra
+// full re-upload. An attempt that logged nothing still stores an empty object.
+// Safe to call more than once.
+func (w *objectWriter) Close() error {
+	w.stopFlusher()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stored && w.flushed == w.buf.Len() {
+		return nil
+	}
+	return w.flushLocked(w.ctx)
 }
 
 // NewDurableSink selects the durable log sink from configuration. The default —

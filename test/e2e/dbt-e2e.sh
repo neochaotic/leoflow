@@ -38,7 +38,24 @@ WAREHOUSE="leoflow-dbt-e2e-wh"
 API="http://localhost:${HTTP_PORT}"
 WORKDIR="$(mktemp -d)"
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
+# dump_pods prints the task pods, a describe tail for those not Running, and
+# their logs — the evidence for diagnosing a failed task before the cleanup trap
+# deletes the cluster. Without it a failed run leaves only the server log, which
+# says nothing about why a pod exited.
+dump_pods() {
+  printf '\033[1;33m--- task pods (namespace leoflow) ---\033[0m\n' >&2
+  kubectl get pods -n leoflow -o wide >&2 2>&1 || true
+  for p in $(kubectl get pods -n leoflow -o name 2>/dev/null); do
+    phase="$(kubectl get -n leoflow "$p" -o jsonpath='{.status.phase}' 2>/dev/null)"
+    if [ "$phase" != "Running" ]; then
+      printf '\033[1;33m--- describe %s (%s) ---\033[0m\n' "$p" "$phase" >&2
+      kubectl describe -n leoflow "$p" >&2 2>&1 | tail -25 || true
+    fi
+    printf '\033[1;33m--- logs %s ---\033[0m\n' "$p" >&2
+    kubectl logs -n leoflow "$p" --all-containers --tail=80 >&2 2>&1 || true
+  done
+}
+fail() { echo "FAIL: $*" >&2; dump_pods; exit 1; }
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 SERVER_PID=""

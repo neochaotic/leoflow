@@ -21,10 +21,12 @@ When the single control-plane pod is evicted, the replacement has to:
 2. **Boot**: connect to Postgres and Redis, start the API, gRPC and metrics
    listeners, pass readiness.
 3. **Take leadership**: acquire the scheduler's advisory lock
-   ([ADR 0009](/project/adrs/0009-leader-election/)) and start the loop. For a
-   post-leadership grace window the infra reapers (agent-lost, pod-lost) hold
-   their destructive verdicts, so a task that merely lost its control plane for
-   the duration of the restart is not falsely reaped
+   ([ADR 0009](/project/adrs/0009-leader-election/)) and start the loop. For the
+   **post-leadership grace** (180 s by default) the two reapers that judge a
+   task by its pod — **agent-lost** and **pod-lost** — hold their verdicts, so a
+   task that merely lost its control plane for the duration of the restart is
+   not failed before the reconciler has recovered its durable outcome. The other
+   reapers (dispatch-lost, orphan-run, warm-worker-lost) carry no such grace
    ([scheduler resilience](/operate/scheduler-resilience/)).
 
 Measured on a production drill (EKS Auto Mode), that window is **48–80 seconds**,
@@ -32,11 +34,13 @@ dominated by the image pull. During it:
 
 - **Nothing dispatches.** Queued task instances wait; scheduled runs slip.
 - **In-flight tasks lose their control plane.** Agents keep running the task and
-  retry their heartbeats and outcome reports, but a long enough outage pushes
-  them toward the agent-lost threshold. The scheduler's post-restart grace and
-  backoff exist precisely so a restart does not turn healthy running tasks into
-  false `agent_lost` failures — but they bound the damage, they do not remove
-  the window.
+  retry their heartbeats and outcome reports until the server returns. The
+  post-leadership grace on agent-lost and pod-lost is what keeps that from
+  becoming a false `agent_lost` / `pod_lost` failure; the server also validates
+  at boot that the timing ladder this depends on holds (heartbeat < agent-lost
+  threshold < grace < token TTL, and the reconcile interval below both graces),
+  refusing to start if a knob was moved out of order. These bound the damage;
+  they do not remove the window.
 - **The API and UI are down.** Every replica is the same binary, so one replica
   means one API.
 
@@ -66,9 +70,8 @@ honors a PodDisruptionBudget. The last is not. The posture below handles both.
 The control plane already supports more than one replica: the scheduler
 **leader-elects** — one active scheduler, the others standing by on the same
 Postgres advisory lock — and the API serves **active-active** from every replica
-([ADR 0009](/project/adrs/0009-leader-election/); the api/scheduler role split of
-[ADR 0049](/project/adrs/0049-split-api-and-scheduler-roles/) builds on the same
-mechanism). With `replicaCount: 2`:
+([ADR 0009](/project/adrs/0009-leader-election/)). With `replicaCount: 2`
+(non-split — see [split mode](#split-mode-is-not-dispatch-ha) below):
 
 - an eviction of the leader becomes a **failover measured in seconds** — the
   standby is already pulled, booted and connected; it only has to win the lock
@@ -92,9 +95,11 @@ It sets, and documents why:
 | Value | HA profile | Purpose |
 |---|---|---|
 | `replicaCount` | `2` | leader-elected scheduler standby + active-active API |
+| `topologySpreadConstraints` | hostname spread, `ScheduleAnyway` | two replicas bin-packed onto one node are one replica (see below) |
 | `logs.persistence.enabled` / `logs.sink.provider` | `false` / `s3` (or `gcs`) | task logs in object storage — the recommended HA log path (see below) |
-| `podDisruptionBudget.enabled` | *unset (auto)* | the PDB renders itself because the replica floor is above one |
-| `terminationGracePeriodSeconds` | `60` | the SIGTERM drain + lease release completes before SIGKILL |
+| `resources` | `1Gi` request / `2Gi` limit | the object sink buffers each running attempt in memory; size for your fan-out |
+| `podDisruptionBudget.enabled` | *unset (auto)* | the PDB renders itself because the replica floor is above one; `unhealthyPodEvictionPolicy: AlwaysAllow` |
+| `terminationGracePeriodSeconds` | `60` | headroom for the HTTP shutdown and dispatch-pool drain (see below) |
 | `podAnnotations` → `karpenter.sh/do-not-disrupt` | *commented out* | EKS/Karpenter-only opt-in, see below |
 
 Edit the `CHANGEME` datastore URLs, secrets and bucket, and annotate the
@@ -109,6 +114,44 @@ upgrade` reports success. "First-class HA" therefore means an explicit,
 documented, one-file profile plus render-time guards — not a flipped default.
 {{% /alert %}}
 
+### Two replicas on one node are one replica
+
+Nothing in Kubernetes keeps two replicas of a Deployment apart by default, and
+autoscaler consolidation actively pushes them together — bin-packing both onto
+one node is exactly what it is for. Then a node failure takes the whole control
+plane, and the auto PDB makes it worse: `minAvailable: 1` with both pods on the
+node being drained **blocks the drain**, which is the single-replica trap one
+level up. The profile therefore sets a `topologySpreadConstraints` entry on
+`kubernetes.io/hostname` with `maxSkew: 1`:
+
+```yaml
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+```
+
+`whenUnsatisfiable: ScheduleAnyway`, deliberately not `DoNotSchedule`: on a
+single-node cluster `DoNotSchedule` leaves the second replica `Pending` forever,
+and the PDB then blocks every drain of the one node. A constraint that omits
+`labelSelector` gets the Deployment's own selector labels from the chart, so the
+values file does not need to know the release name. On multi-zone clusters add
+a second constraint on `topology.kubernetes.io/zone` (also `ScheduleAnyway`).
+
+### Split mode is not dispatch-HA
+
+The api/scheduler role split
+([ADR 0049](/project/adrs/0049-split-api-and-scheduler-roles/)) is a
+**security** topology, not an availability one. Its `api` Deployment is HA — it
+runs `split.api.replicaCount` active-active replicas and gets the auto PDB — but
+its `scheduler` Deployment is **pinned to one replica** by the chart, with no
+standby and, correctly, no PDB (a budget over one pod would block every drain).
+Every eviction of the split scheduler is therefore still the full restart window
+above: image pull, boot, leadership. Non-split `replicaCount: 2` is the only
+topology that gives dispatch failover today; choose the split when you need the
+restricted API identity more than scheduler failover, and know which one you
+picked.
+
 ## The storage precondition
 
 Task pods stream their logs over gRPC to the control plane, which persists them
@@ -118,10 +161,25 @@ rules out the default volume:
 
 | Log store | HA-safe? | Notes |
 |---|---|---|
-| **Object storage** — `logs.persistence.enabled: false` + `logs.sink.provider: s3` or `gcs` ([ADR 0056](/project/adrs/0056-task-log-object-sink/)) | **Yes — recommended** | no PVC at all; the bucket owns durability and retention; keyless auth via the control-plane ServiceAccount; the Deployment can roll |
-| **`ReadWriteMany` PVC** — `accessMode: ReadWriteMany` on an RWX class (EFS, GCP Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) | Yes | the alternative when no object store is reachable from the control plane; needs an RWX-capable StorageClass |
+| **Object storage** — `logs.persistence.enabled: false` + `logs.sink.provider: s3` or `gcs` ([ADR 0056](/project/adrs/0056-task-log-object-sink/)) | **Yes — recommended** | no PVC at all; every replica reads the same bucket; retention is the bucket's lifecycle policy; keyless auth via the control-plane ServiceAccount; the Deployment can roll. Read the durability note below |
+| **`ReadWriteMany` PVC** — `accessMode: ReadWriteMany` on an RWX class (EFS, GCP Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) | Yes | the alternative when no object store is reachable from the control plane; the disk sink flushes incrementally, so a mid-attempt control-plane death loses nothing already written; needs an RWX-capable StorageClass |
 | **`ReadWriteOnce` / `ReadWriteOncePod` PVC** (the default) | **No** | attaches to one node / one pod; a second replica Multi-Attach-deadlocks |
-| **emptyDir** — `logs.persistence.enabled: false` with `logs.sink.provider: disk` | No | each replica keeps its own logs: the leader's logs are invisible to the other replica's API, and everything is lost on restart. Dev only; the chart's NOTES warn if you do this at `replicaCount > 1` |
+| **emptyDir** — `logs.persistence.enabled: false` with `logs.sink.provider: disk` | No | each pod keeps its own logs: the leader's logs are invisible to every other pod's API, and everything is lost on restart. Dev only. The chart's NOTES warn whenever more than one pod can mount it (`replicaCount`, the HPA ceiling), and **refuse to render** it in split mode, where the scheduler is the only writer and no api pod could ever read a log |
+
+**What the object sink makes durable, and when.** The live tail the UI shows
+while a task runs is Redis pub/sub and works from any replica. The durable
+object, though, is written **once, when the attempt ends**: object stores have
+no append, so the control plane buffers the whole attempt in memory (capped at
+128 MiB per attempt) and does a single write on close. A control plane killed
+mid-attempt — an eviction that exhausts the drain grace, which under load is
+the normal case (see [drain grace](#drain-grace)) — never reaches that write,
+and that attempt's buffered log is lost. The task itself is unaffected and the
+reconciler still recovers its outcome; only the log body of attempts running at
+the moment of the kill is gone. Two consequences for the HA profile: size
+`resources.limits.memory` for *concurrent attempts × their log volume*, not for
+the chart's 512 Mi default (a wide fan-out of chatty tasks can OOM a small
+control plane, and OOM is a restart); and if losing an in-flight attempt's log
+is unacceptable for you, prefer the RWX PVC, which flushes as it goes.
 
 The chart refuses to render the unsafe combination. `replicaCount > 1` (or an
 HPA with `maxReplicas > 1`, or the api/scheduler split — any shape where more than
@@ -156,7 +214,8 @@ only one pod can hold.
    history in the UI.
 3. **Apply the profile.** `helm upgrade -f values-ha.yaml`. With the PVC gone the
    update strategy auto-selects `RollingUpdate`, the second replica comes up
-   alongside the first, and the PDB appears.
+   alongside the first on another node (the spread constraint), and the PDB
+   appears — the install NOTES say so.
 4. **Confirm leadership moves.** Delete the leader pod once and watch the
    standby take the lock within seconds — no image pull, and the dispatch gap is
    the re-election poll, not a restart.
@@ -185,6 +244,22 @@ It protects the pod at the cost of cluster operations. So the chart never turns
 it on for a single replica by default; `podDisruptionBudget.enabled: true` still
 forces it (an informed choice — the install NOTES say what it costs), and
 `false` forces it off even in HA.
+
+Two more details the chart gets right for you:
+
+- **`unhealthyPodEvictionPolicy: AlwaysAllow`** (the chart default; `""` omits
+  the field for apiservers older than 1.27). Kubernetes' own default,
+  `IfHealthyBudget`, refuses to evict even *unhealthy* pods once the budget is
+  unmet — so with both replicas unready (bad database credentials after a
+  rotation, an image-pull failure, a wedged rollout) a node drain hangs on a
+  control plane that is already down. `AlwaysAllow` lets the broken pods go.
+- **Auto mode counts every shape.** The floor is `replicaCount`, or the HPA
+  `minReplicas` when autoscaling is on, or `split.api.replicaCount` in split
+  mode. That means an existing `split.enabled` install (api default 2) or
+  `autoscaling.enabled` install (`minReplicas` default 2) **gains a PDB on
+  upgrade** to this chart version; the upgrade NOTES call it out, and
+  `podDisruptionBudget.enabled: false` opts out if your maintenance tooling
+  assumed none.
 
 ### How platforms honor a PDB
 
@@ -228,13 +303,27 @@ the second replica first.
 ## Drain grace
 
 A voluntary eviction sends `SIGTERM` and waits `terminationGracePeriodSeconds`
-(Kubernetes default 30s) before `SIGKILL`. On `SIGTERM` the server drains its
-HTTP listeners and releases the scheduler lock so the standby can take it at
-once. If the grace expires first, the leader is killed mid-step-down and the
-follower must wait for Postgres to notice the dead session instead — slower and
-noisier than a clean handoff. The HA profile sets the value to `60`; the chart
-omits the field when unset so a default install's pod spec is byte-for-byte
-unchanged.
+(Kubernetes default 30s) before `SIGKILL`. Be precise about what the grace buys,
+because it is not leadership:
+
+- **Leadership handoff does not depend on it.** The scheduler releases its
+  advisory lock within about one tick of `SIGTERM`, and the lock frees anyway
+  the moment the Postgres connection drops — `SIGKILL` included. The standby
+  wins the lock on its next poll either way.
+- **What it does buy is drain headroom.** On `SIGTERM` the server gives
+  in-flight HTTP requests up to 10 s to finish, then drains the dispatch pool so
+  dispatches already in progress settle instead of leaving task instances stuck
+  `queued`. Reapers are gated off during the step-down so nothing destructive
+  fires from a dying leader.
+- **With tasks running, the pod will exhaust the grace and be `SIGKILL`ed.** The
+  gRPC server's graceful stop waits for the agents' open log streams, which stay
+  open as long as the tasks run. That is expected and safe — nothing in the
+  handoff needs the graceful stop to finish — but it is why the object sink's
+  in-memory buffer for those attempts is lost (see above).
+
+The HA profile sets `60` for comfortable HTTP + dispatch drain headroom under
+load. The chart deliberately ships **no default**: a default would add up to
+30 s of downtime to every single-replica `Recreate` upgrade, for nothing.
 
 ## Involuntary disruptions: why HA is the posture that matters
 
@@ -248,9 +337,11 @@ No PDB, annotation or grace period prevents:
 
 Each of those is the 48–80 second restart window with no warning. The only
 thing that shrinks it is a replica that is already running somewhere else — and
-the scheduler's own resilience (the post-leadership grace on the infra reapers,
-at-most-once reaping, and the reconciler that recovers a pod's durable outcome,
-described in [scheduler resilience](/operate/scheduler-resilience/)) is what keeps the tasks
+the scheduler's own resilience — the post-leadership grace on the agent-lost and
+pod-lost reapers, the destructive gate that holds every reaper during a step-down,
+the reconciler that recovers a pod's durable outcome, and the boot-time check of
+the timing ladder they depend on, described in
+[scheduler resilience](/operate/scheduler-resilience/) — is what keeps the tasks
 that were in flight during the window from being falsely failed. HA shortens the
 window; the resilience mechanisms make the remaining window survivable. Run both.
 

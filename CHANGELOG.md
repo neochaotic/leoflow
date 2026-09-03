@@ -6,6 +6,35 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Control-plane HA as the first-class, guarded posture (Helm chart + docs).** A
+  production drill showed the single-replica control plane is evicted by
+  autoscaler consolidation as routine bin-packing, and each restart costs tens
+  of seconds (image pull + boot + leadership) during which nothing dispatches.
+  The chart already supported `replicaCount > 1` (leader election); it now makes
+  the safe HA path one switch and guards the unsafe one. `replicaCount > 1` (or
+  an HPA / split with more than one mounter) on a `ReadWriteOnce` **or**
+  `ReadWriteOncePod` logs PVC now **fails the render** with a message that leads
+  with the recommended fix (object-store task logs, `logs.persistence.enabled:
+  false` + `logs.sink`) and names the `ReadWriteMany` alternative — previously
+  `ReadWriteOncePod` slipped through and the message pointed only at RWX.
+  `podDisruptionBudget.enabled` is now tri-state: unset (the new default) renders
+  the PDB **iff** the guaranteed replica floor is above one (`replicaCount`, the
+  HPA `minReplicas`, or `split.api.replicaCount`), because a `minAvailable: 1`
+  budget over a single replica blocks every voluntary eviction (node drains hang,
+  auto-upgrades stall); explicit `true`/`false` still wins, and NOTES warns when
+  a PDB is forced onto one replica or HA runs on per-pod emptyDir logs. New
+  `terminationGracePeriodSeconds` value (unset by default, so a default install's
+  pod spec is unchanged) sizes the SIGTERM drain window. New
+  `helm/leoflow/examples/values-ha.yaml` profile: two replicas, object-store
+  logs, auto PDB, 60s drain grace, and a commented EKS/Karpenter-only
+  `karpenter.sh/do-not-disrupt` opt-in. New docs page *Control-plane HA and
+  disruption posture* covers the restart window, the storage precondition, the
+  single-replica PDB trap and how each platform honors PDBs, and the involuntary
+  disruptions no PDB prevents. The shipped default stays `replicaCount: 1`:
+  flipping it would Multi-Attach-break every existing install on upgrade.
+
 ### Fixed
 
 - **A control-plane restart no longer marks a succeeded task failed, and no

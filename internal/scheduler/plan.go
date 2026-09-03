@@ -18,9 +18,12 @@ type PlannedTransition struct {
 // retries — a failed task with retry budget moves to up_for_retry, and an
 // up_for_retry task resets (none, try_number+1) — then plans the rest off the
 // resulting effective states: none -> scheduled (or skipped / upstream_failed
-// per the trigger rule) and scheduled -> queued. A retriable failed task is
-// treated as still active, so downstream tasks wait rather than seeing a
-// failure. The result is deterministic: identical inputs yield identical output.
+// per the trigger rule) and scheduled -> queued. A failed task that can still
+// recover — app-retriable, or infra-failed with re-place budget left (even while
+// parked in its re-place backoff) — is treated as still active, so downstream
+// tasks wait rather than seeing a failure; a downstream is condemned to
+// upstream_failed only once its upstream is terminally failed. The result is
+// deterministic: identical inputs yield identical output.
 func PlanRun(run RunState) []PlannedTransition {
 	upstreams := make(map[string][]string, len(run.Tasks))
 	for _, t := range run.Tasks {
@@ -172,9 +175,21 @@ func planRetryTransitions(run RunState, effective map[string]domain.TaskState, d
 				// infra-attempt limit so a poison placement can't loop forever;
 				// exhausted → terminal (no fallback to the app-retry budget). The
 				// store bumps infra_attempts (not try_number) when applying failed→none.
-				if infraReplaceable(run, t.TaskID) && readyToInfraReplace(run, t.TaskID) {
-					out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
-					effective[t.TaskID] = domain.TaskStateNone
+				//
+				// The effective state downstream planning sees is decoupled from the
+				// transition emitted this tick. A re-placeable task is ACTIVE for its
+				// downstream from the moment it is re-placeable — not only once its
+				// backoff elapses — mirroring the app-retry branch below. Otherwise a
+				// downstream would be persisted upstream_failed (terminal; nothing
+				// reverts it) during the backoff, condemning the run even though the
+				// upstream goes on to re-run and succeed. A downstream may only see
+				// `failed` once the upstream is terminally failed (budget exhausted).
+				if infraReplaceable(run, t.TaskID) {
+					effective[t.TaskID] = domain.TaskStateUpForRetry
+					if readyToInfraReplace(run, t.TaskID) {
+						out = append(out, PlannedTransition{TaskID: t.TaskID, To: domain.TaskStateNone})
+						effective[t.TaskID] = domain.TaskStateNone
+					}
 				}
 				decided[t.TaskID] = true
 			case retriable(run, t.TaskID):

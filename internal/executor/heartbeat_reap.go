@@ -99,6 +99,8 @@ type agentLostReaper struct {
 	// so the grace is measured from recovery, not wall-clock. Nil (Lite/tests
 	// without leadership) disables the grace check.
 	leaderSince func() time.Time
+	// gate is re-checked before every destructive call (see destructiveGate).
+	gate destructiveGate
 }
 
 func newAgentLostReaper(store HeartbeatReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *agentLostReaper {
@@ -116,22 +118,15 @@ func (r *agentLostReaper) run(ctx context.Context) error {
 		}
 	}()
 	now := time.Now().UTC()
-	// Post-leadership grace (#858): a control-plane restart manufactures the very
+	// Post-leadership grace: a control-plane restart manufactures the very
 	// silence this reaper punishes — every in-flight TI's last heartbeat elapses
 	// during the outage, and the heartbeat receiver is the same process that just
 	// came back. Suppress reaping until the fleet has had a full grace window to
-	// re-heartbeat under the recovered leader; a genuinely lost agent stays stale
-	// past the grace and is reaped on a later tick. The window is measured from
-	// leadership acquisition, not startup, so a re-election also resets it.
-	// Checked before the list so a grace tick does no query at all. NOTE: if
-	// leadership flaps with a period shorter than the grace, leaderSince keeps
-	// restamping and this reaper never fires — the orphan-run reaper (5m) is the
-	// backstop for that pathological case; steady-state leadership is the norm.
-	if r.leaderSince != nil && r.grace > 0 {
-		if ls := r.leaderSince(); !ls.IsZero() && now.Sub(ls) < r.grace {
-			r.record("agent_lost_grace_skip")
-			return nil
-		}
+	// re-heartbeat under the recovered leader (see inLeaderGrace for the shared
+	// gate semantics). Checked before the list so a grace tick does no query.
+	if inLeaderGrace(r.leaderSince, r.grace, now) {
+		r.record("agent_lost_grace_skip")
+		return nil
 	}
 	candidates, err := r.store.ListAgentLostCandidates(ctx)
 	if err != nil {
@@ -141,41 +136,56 @@ func (r *agentLostReaper) run(ctx context.Context) error {
 		if !IsAgentLost(c, r.threshold, now) {
 			continue
 		}
-		applied, ferr := r.store.MarkTaskAgentLost(ctx, c.TaskInstanceID)
-		if ferr != nil {
-			r.logger.Error("marking task agent-lost",
-				"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
-			r.record("agent_lost_error")
-			continue
-		}
-		if !applied {
-			// A late terminal report transitioned the TI between our list and our
-			// write (WHERE state='running' matched 0 rows). It is no longer ours
-			// to reap — do not log a false reap or delete a pod for a settled TI.
-			r.record("agent_lost_noop")
-			continue
-		}
-		r.logger.Warn("task agent silent past threshold; failing as agent_lost",
-			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID,
-			"last_heartbeat", c.LastHeartbeat)
-		r.record("agent_lost")
-		// Append a final marker to the attempt's log BEFORE deleting the pod, so a
-		// killed task's log ends with the reason instead of a silent truncation
-		// (#861) — the log stream stops the moment the pod is gone.
-		r.writeAgentLostMarker(c, now)
-		// The TI is now durably failed; delete its pod so a partitioned-but-alive
-		// container stops (#474). Pinned to (run, task, try) so a retry's newer
-		// pod is never touched. Only reached after the DB mark, so we never delete
-		// a pod for a TI we did not settle. Best-effort: a delete error is logged.
-		if r.pods != nil {
-			if derr := r.pods.DeleteTaskPod(ctx, c.DagRunID, c.TaskID, c.TryNumber); derr != nil {
-				r.logger.Error("deleting agent-lost task pod",
-					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "try", c.TryNumber, "error", derr)
-				r.record("agent_lost_pod_delete_error")
-			}
-		}
+		r.reapOne(ctx, c, now)
 	}
 	return nil
+}
+
+// reapOne fails one silent TI, writes its log marker and tears down its pod,
+// re-checking the destructive gate immediately before each write.
+func (r *agentLostReaper) reapOne(ctx context.Context, c AgentLostCandidate, now time.Time) {
+	if !gateOpen(r.gate, ctx) {
+		r.record("agent_lost_gate_skip")
+		return
+	}
+	applied, ferr := r.store.MarkTaskAgentLost(ctx, c.TaskInstanceID)
+	if ferr != nil {
+		r.logger.Error("marking task agent-lost",
+			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
+		r.record("agent_lost_error")
+		return
+	}
+	if !applied {
+		// A late terminal report transitioned the TI between our list and our
+		// write (WHERE state='running' matched 0 rows). It is no longer ours
+		// to reap — do not log a false reap or delete a pod for a settled TI.
+		r.record("agent_lost_noop")
+		return
+	}
+	r.logger.Warn("task agent silent past threshold; failing as agent_lost",
+		"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID,
+		"last_heartbeat", c.LastHeartbeat)
+	r.record("agent_lost")
+	// Append a final marker to the attempt's log BEFORE deleting the pod, so a
+	// killed task's log ends with the reason instead of a silent truncation
+	// (#861) — the log stream stops the moment the pod is gone.
+	r.writeAgentLostMarker(c, now)
+	// The TI is now durably failed; delete its pod so a partitioned-but-alive
+	// container stops (#474). Pinned to (run, task, try) so a retry's newer
+	// pod is never touched. Only reached after the DB mark, so we never delete
+	// a pod for a TI we did not settle. Best-effort: a delete error is logged.
+	if r.pods == nil {
+		return
+	}
+	if !gateOpen(r.gate, ctx) {
+		r.record("agent_lost_teardown_gate_skip")
+		return
+	}
+	if derr := r.pods.DeleteTaskPod(ctx, c.DagRunID, c.TaskID, c.TryNumber); derr != nil {
+		r.logger.Error("deleting agent-lost task pod",
+			"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "try", c.TryNumber, "error", derr)
+		r.record("agent_lost_pod_delete_error")
+	}
 }
 
 // writeAgentLostMarker appends one terminal line to the reaped attempt's log

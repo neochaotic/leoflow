@@ -8,6 +8,34 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A control-plane restart no longer marks a succeeded task failed, and no
+  longer condemns the rest of its run.** A production drill (kill the
+  control-plane pod mid-run) turned a dbt task that had SUCCEEDED into `failed`
+  and failed the whole run. Four compounding causes, each now fixed:
+  - The agent abandoned a terminal report after 6 attempts (~31s) — shorter than
+    a control-plane restart — while its heartbeat loop kept going indefinitely.
+    The report now retries until its context ends (SIGTERM, pod delete, execution
+    timeout), with the pause between attempts capped at the heartbeat interval so
+    it reconnects within about one heartbeat of the server returning.
+    Credential rejections are still returned at once.
+  - The pod-lost reaper (every scheduler tick) raced the reconciler (every 30s)
+    for a pod that finished during the outage, and won — marking it `pod_lost`
+    before the reconciler could recover the pod's durable outcome record. It now
+    honors the same post-leadership grace as the agent-lost reaper, so the
+    durable outcome is recovered first.
+  - A downstream task was persisted `upstream_failed` — a terminal state nothing
+    reverts — while its upstream was infra-failed but still re-placeable (parked
+    in its re-place backoff). Downstream tasks now wait until an upstream is
+    TERMINALLY failed (retries and infra re-place exhausted).
+  - Reapers could mark or delete during the SIGTERM drain or a leader step-down.
+    Every destructive reaper action is now gated on a live context, no step-down
+    in progress, and (when wired) current leadership; the successor redoes the
+    reap under its own grace.
+  - The timing ladder the recovery depends on (`heartbeat < agent-lost threshold
+    < agent-lost grace < token TTL`, and `reconcile interval` below both
+    graces) is validated at server boot; a knob moved out of order fails startup
+    naming the violated relation.
+
 - **Connection/variable writes are now tri-state, restoring explicit-clear and
   fixing the masked write-back overwrite (#887, subsumes #874).** The safe-merge
   upsert (v0.4.4) preserved any omitted field, but because the API request body

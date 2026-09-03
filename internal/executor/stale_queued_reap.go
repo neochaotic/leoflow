@@ -90,6 +90,8 @@ type dispatchLostReaper struct {
 	// off / not wired) yields an empty live set, so the warm check never defers
 	// and the dedicated pod-liveness path is byte-for-byte unchanged.
 	warmPods WarmPodLister
+	// gate is re-checked before every destructive call (see destructiveGate).
+	gate destructiveGate
 }
 
 func newDispatchLostReaper(store DispatchLostReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *dispatchLostReaper {
@@ -163,28 +165,43 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 				continue
 			}
 		}
-		if ferr := r.store.MarkTaskDispatchLost(ctx, c.TaskInstanceID); ferr != nil {
-			r.logger.Error("marking task dispatch-lost",
-				"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
-			r.record("dispatch_lost_error")
-			continue
-		}
-		r.logger.Warn("task queued past dispatch threshold; failing as dispatch_lost",
-			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID,
-			"queued_at", c.QueuedAt)
-		r.record("dispatch_lost")
-		// Best-effort teardown of any lingering pod for this attempt (#474). By
-		// here TaskPodActive said no live pod exists (or pods is nil), so this
-		// only cleans up a terminal/failed pod; pinned to (run, task, try).
-		if r.pods != nil {
-			if derr := r.pods.DeleteTaskPod(ctx, c.DagRunID, c.TaskID, c.TryNumber); derr != nil {
-				r.logger.Error("deleting dispatch-lost task pod",
-					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "try", c.TryNumber, "error", derr)
-				r.record("dispatch_lost_pod_delete_error")
-			}
-		}
+		r.reapOne(ctx, c)
 	}
 	return nil
+}
+
+// reapOne fails one dispatch-lost TI and tears down any lingering pod,
+// re-checking the destructive gate immediately before each write.
+func (r *dispatchLostReaper) reapOne(ctx context.Context, c StaleQueuedCandidate) {
+	if !gateOpen(r.gate, ctx) {
+		r.record("dispatch_lost_gate_skip")
+		return
+	}
+	if ferr := r.store.MarkTaskDispatchLost(ctx, c.TaskInstanceID); ferr != nil {
+		r.logger.Error("marking task dispatch-lost",
+			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
+		r.record("dispatch_lost_error")
+		return
+	}
+	r.logger.Warn("task queued past dispatch threshold; failing as dispatch_lost",
+		"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID,
+		"queued_at", c.QueuedAt)
+	r.record("dispatch_lost")
+	// Best-effort teardown of any lingering pod for this attempt (#474). By
+	// here TaskPodActive said no live pod exists (or pods is nil), so this
+	// only cleans up a terminal/failed pod; pinned to (run, task, try).
+	if r.pods == nil {
+		return
+	}
+	if !gateOpen(r.gate, ctx) {
+		r.record("dispatch_lost_teardown_gate_skip")
+		return
+	}
+	if derr := r.pods.DeleteTaskPod(ctx, c.DagRunID, c.TaskID, c.TryNumber); derr != nil {
+		r.logger.Error("deleting dispatch-lost task pod",
+			"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "try", c.TryNumber, "error", derr)
+		r.record("dispatch_lost_pod_delete_error")
+	}
 }
 
 func (r *dispatchLostReaper) record(decision string) {

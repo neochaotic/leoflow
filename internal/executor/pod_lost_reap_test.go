@@ -150,6 +150,67 @@ func TestPodLostReaper(t *testing.T) {
 		}
 	})
 
+	t.Run("post-leadership grace defers, then reaps once it elapses", func(t *testing.T) {
+		// A control-plane restart manufactures the very signal this reaper acts
+		// on: a task pod that finished DURING the outage is no longer live, yet
+		// its TI is still `running` because its terminal report never landed.
+		// The pod's durable outcome record is recovered by the reconciler on its
+		// slower sweep — so the new leader must hold off pod-lost reaping until
+		// the reconciler has had time to settle the true outcome. Within the
+		// grace: NO MarkTaskPodLost, a recorded skip. Past it: reap as usual.
+		newStore := func() *fakePodLostStore {
+			return &fakePodLostStore{candidates: []PodLostCandidate{
+				{TaskInstanceID: "finished-during-outage", DagRunID: "run-a", TaskID: "work", TryNumber: 1, RunningSince: past},
+			}}
+		}
+		within := newStore()
+		rec := &capturingRecorder{}
+		pods := &fakePodManager{active: map[string]bool{}} // pod gone (Succeeded, not Pending/Running)
+		r := newPodLostReaper(within, reapTestLogger(), grace, rec)
+		r.pods = pods
+		r.leaderGrace = 180 * time.Second
+		r.leaderSince = func() time.Time { return now.Add(-10 * time.Second) } // just became leader
+		if err := r.run(context.Background()); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if len(within.marked) != 0 {
+			t.Fatalf("must not mark pod_lost within the post-leadership grace, got %v", within.marked)
+		}
+		if len(pods.deletedTasks) != 0 {
+			t.Fatalf("must not tear down a pod within the post-leadership grace, got %v", pods.deletedTasks)
+		}
+		if got := rec.count("pod_lost_grace_skip"); got != 1 {
+			t.Errorf("pod_lost_grace_skip = %d, want 1", got)
+		}
+
+		pastGrace := newStore()
+		r2 := newPodLostReaper(pastGrace, reapTestLogger(), grace, &capturingRecorder{})
+		r2.pods = &fakePodManager{active: map[string]bool{}}
+		r2.leaderGrace = 180 * time.Second
+		r2.leaderSince = func() time.Time { return now.Add(-10 * time.Minute) } // leader long enough
+		if err := r2.run(context.Background()); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if len(pastGrace.marked) != 1 || pastGrace.marked[0] != "finished-during-outage" {
+			t.Fatalf("must reap once the post-leadership grace elapsed, got %v", pastGrace.marked)
+		}
+	})
+
+	t.Run("nil leaderSince (Lite / no leadership) leaves the grace off", func(t *testing.T) {
+		store := &fakePodLostStore{candidates: []PodLostCandidate{
+			{TaskInstanceID: "lost", DagRunID: "run-a", TaskID: "work", TryNumber: 1, RunningSince: past},
+		}}
+		r := newPodLostReaper(store, reapTestLogger(), grace, nil)
+		r.pods = &fakePodManager{active: map[string]bool{}}
+		r.leaderGrace = 180 * time.Second // configured, but no leadership accessor
+		if err := r.run(context.Background()); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if len(store.marked) != 1 {
+			t.Fatalf("without a leaderSince accessor the reaper must behave as before, got %v", store.marked)
+		}
+	})
+
 	t.Run("a list error surfaces and reaps nothing", func(t *testing.T) {
 		store := &fakePodLostStore{listErr: errors.New("db down")}
 		pods := &fakePodManager{active: map[string]bool{}}

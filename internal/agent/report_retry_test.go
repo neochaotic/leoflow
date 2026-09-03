@@ -43,21 +43,95 @@ func TestReportRetriesTransientThenSucceeds(t *testing.T) {
 	}
 }
 
-// TestReportGivesUpAfterMaxAttempts: a report that never recovers stops after
-// the bounded number of attempts and returns an error — it must not loop
-// forever holding the task.
-func TestReportGivesUpAfterMaxAttempts(t *testing.T) {
-	client := &fakeClient{reportFailCode: codes.Unavailable, reportFailTimes: 1000}
+// TestReportOutlastsControlPlaneRestart: a terminal report must keep retrying
+// for as long as the control plane is down — it is never abandoned on an attempt
+// count. The previous policy gave up after 6 attempts (~31s of backoff), shorter
+// than a control-plane pod restart (48-80s observed), so a SUCCEEDED task's
+// report was dropped and a reaper later marked it failed. The heartbeat loop
+// already tolerates the outage indefinitely and renews the token when the
+// server returns; the report must not give up earlier than the heartbeat.
+// Here the server is Unavailable for twice the old attempt budget, then
+// recovers — the report lands.
+func TestReportOutlastsControlPlaneRestart(t *testing.T) {
+	const outageAttempts = 12 // > the retired 6-attempt budget
+	client := &fakeClient{reportFailCode: codes.Unavailable, reportFailTimes: outageAttempts}
+	r := instantRunner(client)
+
+	if err := r.report(context.Background(), agentv1.TaskState_TASK_STATE_SUCCESS, 0, ""); err != nil {
+		t.Fatalf("report must succeed once the control plane returns, got %v", err)
+	}
+	if want := outageAttempts + 1; client.reportAttempts != want {
+		t.Errorf("expected %d attempts (%d failed + 1 success), got %d", want, outageAttempts, client.reportAttempts)
+	}
+	if len(client.reports) != 1 || client.reports[0].GetState() != agentv1.TaskState_TASK_STATE_SUCCESS {
+		t.Errorf("exactly one successful SUCCESS report expected, got %+v", client.reports)
+	}
+}
+
+// TestReportBackoffRampsThenHoldsAtHeartbeatInterval pins the per-attempt delay
+// policy: an exponential ramp (1s, 2s, 4s, 8s) that is CAPPED at the heartbeat
+// interval and then holds there for every further attempt — never longer. Capping
+// the delay rather than the duration means the agent reconnects within about one
+// heartbeat of the server returning, however long the outage lasted.
+func TestReportBackoffRampsThenHoldsAtHeartbeatInterval(t *testing.T) {
+	want := []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		DefaultHeartbeatInterval, DefaultHeartbeatInterval, DefaultHeartbeatInterval, DefaultHeartbeatInterval,
+	}
+	for i, w := range want {
+		if got := reportBackoff(i + 1); got != w {
+			t.Errorf("reportBackoff(%d) = %v, want %v", i+1, got, w)
+		}
+	}
+	for _, n := range []int{0, -3, 100, 1 << 20} {
+		if got := reportBackoff(n); got <= 0 || got > DefaultHeartbeatInterval {
+			t.Errorf("reportBackoff(%d) = %v, want a positive delay no longer than the heartbeat interval", n, got)
+		}
+	}
+
+	// The loop uses exactly that schedule: capture the delays it sleeps for.
+	var delays []time.Duration
+	client := &fakeClient{reportFailCode: codes.Unavailable, reportFailTimes: len(want)}
+	r := &Runner{
+		Client:   client,
+		Hostname: "pod-1",
+		Version:  "test",
+		afterFunc: func(d time.Duration) <-chan time.Time {
+			delays = append(delays, d)
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
+	}
+	if err := r.report(context.Background(), agentv1.TaskState_TASK_STATE_SUCCESS, 0, ""); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(delays) != len(want) {
+		t.Fatalf("slept %d times, want %d", len(delays), len(want))
+	}
+	for i, d := range delays {
+		if d != want[i] {
+			t.Errorf("sleep %d = %v, want %v", i+1, d, want[i])
+		}
+		if d > DefaultHeartbeatInterval {
+			t.Errorf("sleep %d = %v exceeds the heartbeat-interval cap", i+1, d)
+		}
+	}
+}
+
+// TestReportDoesNotRetryUnauthenticated: a credential rejection is not a
+// transient outage — retrying it can never succeed and would only hold the pod.
+// It is returned at once, and the durable outcome record (written before the
+// report) is what the reconciler recovers from.
+func TestReportDoesNotRetryUnauthenticated(t *testing.T) {
+	client := &fakeClient{reportFailCode: codes.Unauthenticated, reportFailTimes: 1000}
 	r := instantRunner(client)
 
 	if err := r.report(context.Background(), agentv1.TaskState_TASK_STATE_SUCCESS, 0, ""); err == nil {
-		t.Fatal("report should fail after exhausting attempts")
+		t.Fatal("an Unauthenticated report error must be returned, not retried")
 	}
-	// One initial attempt plus maxRetryAttempts retries (Backoff yields a delay
-	// for attempts 1..maxRetryAttempts, then exhausts on the next), bounding the
-	// total at maxRetryAttempts+1 calls / ~31s of backoff.
-	if want := maxRetryAttempts + 1; client.reportAttempts != want {
-		t.Errorf("expected exactly %d attempts, got %d", want, client.reportAttempts)
+	if client.reportAttempts != 1 {
+		t.Errorf("Unauthenticated must not be retried, got %d attempts", client.reportAttempts)
 	}
 }
 

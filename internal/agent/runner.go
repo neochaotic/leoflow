@@ -850,15 +850,57 @@ func (r *Runner) writeOutcome(rec taskoutcome.Record) {
 	}
 }
 
+// reportRetryMaxDelay caps the pause between two attempts to deliver a report.
+// It equals the heartbeat interval on purpose: the heartbeat is the agent's
+// other channel to the control plane, and once the server is back a report
+// retry lands within about one heartbeat of it — the same posture the kubelet's
+// status manager takes toward an unreachable apiserver (keep trying at a bounded
+// cadence, never abandon the status).
+const reportRetryMaxDelay = DefaultHeartbeatInterval
+
+// reportBackoff returns the delay before report retry attempt n (1-based): an
+// exponential ramp from 1s that is clipped at reportRetryMaxDelay and then holds
+// there — 1s, 2s, 4s, 8s, then the cap for every further attempt. It caps the
+// per-attempt DELAY and never the DURATION: there is no attempt budget, so the
+// policy alone never ends a retry loop; only the caller's context does. Out-of-
+// range attempts (n < 1) are treated as the first.
+func reportBackoff(attempt int) time.Duration {
+	d := time.Second
+	for i := 1; i < attempt && d < reportRetryMaxDelay; i++ {
+		d *= 2
+	}
+	if d > reportRetryMaxDelay {
+		d = reportRetryMaxDelay
+	}
+	return d
+}
+
 // reportRequest sends a ReportState request and translates the response's
 // should_terminate signal into an error. A transient RPC failure (the api pod
-// momentarily Unavailable, a deadline) is retried with exponential backoff so a
-// task's terminal result is not lost to a network blip — which would otherwise
-// leave the TI to be failed as agent_lost by a reaper even though it succeeded.
-// The server's ReportState is idempotent (a report that already applied comes
-// back as a stale ack, not a double-apply), so retrying is safe. A logical
-// rejection is returned immediately, and a canceled context (parent shutdown,
-// SIGTERM) aborts the backoff at once.
+// Unavailable, a deadline) is retried until it lands, with the delay between
+// attempts following reportBackoff. Retrying is safe: the server's ReportState
+// is idempotent (a report that already applied comes back as a stale ack, not a
+// double-apply). A logical rejection or a credential rejection (Unauthenticated,
+// PermissionDenied) is returned immediately, and a canceled context (parent
+// shutdown, SIGTERM, pod deletion, execution timeout) aborts the loop at once
+// with the context error.
+//
+// The loop deliberately has NO attempt budget. A control-plane restart lasts
+// longer than any handful of attempts, and a terminal report that gives up while
+// the server is down is how a SUCCEEDED task ends up marked failed by a reaper.
+// The heartbeat loop already tolerates the outage indefinitely and renews the
+// bearer on the first heartbeat the recovered server answers, so the report has
+// no reason to give up earlier than the heartbeat does. The true outcome is
+// durably recorded (recordOutcome) before this is called, so a report that never
+// lands — the pod is deleted or times out first — is recovered by the reconciler
+// from that record; the retry loop only shortens the path to the same result.
+//
+// Warm-pool workers share this path (the per-attempt Runner is built by
+// WarmRunner.attemptRunner). A warm worker retrying a report stays busy only
+// while the control plane is down, which is exactly the window in which no new
+// work can be assigned to it anyway; and the warm-worker-lost reaper is keyed
+// on the warm pod's own liveness, so a live worker retrying is never falsely
+// reaped for it.
 func (r *Runner) reportRequest(ctx context.Context, req *agentv1.ReportStateRequest) error {
 	for attempt := 1; ; attempt++ {
 		resp, err := r.Client.ReportState(ctx, req)
@@ -878,10 +920,7 @@ func (r *Runner) reportRequest(ctx context.Context, req *agentv1.ReportStateRequ
 		if !retryableReportErr(err) {
 			return fmt.Errorf("reporting state %v: %w", req.GetState(), err)
 		}
-		delay, ok := Backoff(attempt)
-		if !ok {
-			return fmt.Errorf("reporting state %v after %d attempts: %w", req.GetState(), attempt, err)
-		}
+		delay := reportBackoff(attempt)
 		slog.Warn("report failed; retrying after backoff",
 			"state", req.GetState(), "attempt", attempt, "delay", delay, "error", err)
 		select {

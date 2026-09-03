@@ -112,6 +112,67 @@ name here, so neither half needs truncating.
 {{- printf "%s-%s-tokenreview" (include "leoflow.fullname" .) .Release.Namespace -}}
 {{- end -}}
 
+{{/*
+Guaranteed replica floor of the Deployment a PodDisruptionBudget would protect:
+the smallest number of pods the chart promises to keep, not the largest it may
+scale to. Non-split: replicaCount, or autoscaling.minReplicas when the HPA owns
+the count (it never scales below that floor, and replicaCount is ignored). Split
+(ADR 0049): the active-active api Deployment's count — the scheduler is a single
+leader and is never covered by a PDB. The PDB auto mode keys on this value: a
+budget over a floor of one blocks every voluntary eviction of that pod (node
+drains and auto-upgrades stall), so it is only safe-by-default above one.
+*/}}
+{{- define "leoflow.controlPlaneReplicaFloor" -}}
+{{- $floor := .Values.replicaCount -}}
+{{- if .Values.split.enabled -}}
+{{- $floor = .Values.split.api.replicaCount -}}
+{{- end -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- $floor = .Values.autoscaling.minReplicas -}}
+{{- end -}}
+{{- int $floor -}}
+{{- end -}}
+
+{{/*
+Largest number of control-plane pods that may mount the logs volume at once:
+the ceiling, not the floor. Non-split: replicaCount, or autoscaling.maxReplicas
+when the HPA owns the count. Split (ADR 0049): the scheduler writes logs and
+every api replica reads them from the same volume, so the mounters are the api
+replicas (or their HPA ceiling) plus the one scheduler. Both the single-writer
+PVC render guard and the per-pod emptyDir warning key on this value, so a shape
+one of them misses is a shape both miss — there is one definition.
+*/}}
+{{- define "leoflow.logMounterCeiling" -}}
+{{- $n := .Values.replicaCount -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- $n = .Values.autoscaling.maxReplicas -}}
+{{- end -}}
+{{- if .Values.split.enabled -}}
+{{- $api := .Values.split.api.replicaCount -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- $api = .Values.autoscaling.maxReplicas -}}
+{{- end -}}
+{{- $n = add (int $api) 1 -}}
+{{- end -}}
+{{- int $n -}}
+{{- end -}}
+
+{{/*
+Whether the PodDisruptionBudget renders. podDisruptionBudget.enabled is
+tri-state: an explicit true/false wins (true on a single replica is the
+operator's informed choice, and NOTES.txt says what it costs); unset (auto)
+renders the PDB exactly when the guaranteed replica floor is above one, i.e.
+when there is a second pod to keep serving while one is evicted.
+*/}}
+{{- define "leoflow.pdbEnabled" -}}
+{{- $enabled := .Values.podDisruptionBudget.enabled -}}
+{{- if kindIs "bool" $enabled -}}
+{{- $enabled -}}
+{{- else -}}
+{{- gt (include "leoflow.controlPlaneReplicaFloor" . | int) 1 -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Name of the Secret holding generated/inline credentials. */}}
 {{- define "leoflow.secretName" -}}
 {{- printf "%s-secrets" (include "leoflow.fullname" .) -}}

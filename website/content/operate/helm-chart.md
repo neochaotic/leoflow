@@ -48,8 +48,13 @@ A first-class values reference on this site is a TODO for a later migration phas
 - The `/api/v2/` Airflow-compatible API + UI, and the scheduler — as one process
   (`role=all`) or split into `role=api` + `role=scheduler`
   ([ADR 0049](/project/adrs/0049-split-api-and-scheduler-roles/)).
-- Opt-in hardening templates: HPA, PodDisruptionBudget, NetworkPolicy, and a
-  Prometheus ServiceMonitor.
+- A guarded HA posture: `replicaCount > 1` refuses to render onto a single-writer
+  log volume, and the PodDisruptionBudget turns itself on exactly when a second
+  replica makes it safe — see
+  [Control-plane HA and disruption posture](/operate/control-plane-ha/) and the
+  one-switch `examples/values-ha.yaml` profile.
+- Opt-in hardening templates: HPA, NetworkPolicy, and a Prometheus
+  ServiceMonitor.
 - TLS termination via cert-manager — see [Pro TLS](/operate/pro-tls/).
 
 ## Related

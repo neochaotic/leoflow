@@ -6,6 +6,52 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Control-plane HA as the first-class, guarded posture (Helm chart + docs).** A
+  production drill showed the single-replica control plane is evicted by
+  autoscaler consolidation as routine bin-packing, and each restart costs tens
+  of seconds (image pull + boot + leadership) during which nothing dispatches.
+  The chart already supported `replicaCount > 1` (leader election); it now makes
+  the safe HA path one switch and guards the unsafe one. `replicaCount > 1` (or
+  an HPA / split with more than one mounter) on a `ReadWriteOnce` **or**
+  `ReadWriteOncePod` logs PVC now **fails the render** with a message that leads
+  with the recommended fix (object-store task logs, `logs.persistence.enabled:
+  false` + `logs.sink`) and names the `ReadWriteMany` alternative — previously
+  `ReadWriteOncePod` slipped through and the message pointed only at RWX. The
+  same mounter ceiling now drives a second refusal: `split.enabled` with
+  `logs.persistence.enabled: false` and the `disk` sink fails the render, because
+  the scheduler pod would write every task log into its own emptyDir while each
+  api pod reads from its own — no log ever readable, silently.
+  `podDisruptionBudget.enabled` is now tri-state: unset (the new default) renders
+  the PDB **iff** the guaranteed replica floor is above one (`replicaCount`, the
+  HPA `minReplicas`, or `split.api.replicaCount`), because a `minAvailable: 1`
+  budget over a single replica blocks every voluntary eviction (node drains hang,
+  auto-upgrades stall); explicit `true`/`false` still wins. **Upgrade note:** this
+  is not only for hand-set `replicaCount > 1` — every `split.enabled` install
+  (api default 2) and every `autoscaling.enabled` install (`minReplicas` default
+  2) gains a PodDisruptionBudget on `helm upgrade`; the install NOTES call it out,
+  and `podDisruptionBudget.enabled: false` opts out. The PDB sets
+  `unhealthyPodEvictionPolicy: AlwaysAllow` (new value, `""` omits it for
+  apiservers older than 1.27) so two unready replicas never leave a node drain
+  hanging on an already-down control plane. NOTES also warn when a PDB is forced
+  onto one replica or when more than one pod (HPA ceiling or split included) runs
+  on per-pod emptyDir logs. New `topologySpreadConstraints` value (a constraint
+  without `labelSelector` gets the Deployment's own selector) and new
+  `terminationGracePeriodSeconds` value, both unset by default so a default
+  install's pod spec is unchanged; the grace buys headroom for the HTTP shutdown
+  and the dispatch-pool drain, not leadership handoff (the lease frees within a
+  tick of SIGTERM regardless). New `helm/leoflow/examples/values-ha.yaml`
+  profile: two replicas spread across nodes, object-store logs with memory sized
+  for the sink's per-attempt buffer, auto PDB, 60s drain grace, and a commented
+  EKS/Karpenter-only `karpenter.sh/do-not-disrupt` opt-in. New docs page
+  *Control-plane HA and disruption posture* covers the restart window, the
+  storage precondition (including what the object sink makes durable and when),
+  why the api/scheduler split is not dispatch-HA, the single-replica PDB trap and
+  how each platform honors PDBs, and the involuntary disruptions no PDB prevents.
+  The shipped default stays `replicaCount: 1`: flipping it would
+  Multi-Attach-break every existing install on upgrade.
+
 ### Fixed
 
 - **A control-plane restart no longer marks a succeeded task failed, and no

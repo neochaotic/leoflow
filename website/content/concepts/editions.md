@@ -134,8 +134,10 @@ ship between minor versions with a migration note, ADR 0037).
 
 Install via the **[Helm chart](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md)**
 (chart-test gated, multi-arch images published per release, signed with cosign).
-Hardening templates ship as opt-in toggles: HPA + PDB + NetworkPolicy +
-ServiceMonitor. Runs on any K8s cluster with external Postgres + Redis.
+Hardening templates ship as opt-in toggles: HPA + NetworkPolicy + ServiceMonitor;
+the PodDisruptionBudget turns itself on when the control plane runs more than one
+replica (see [Control-plane HA](/operate/control-plane-ha/)). Runs on any K8s
+cluster with external Postgres + Redis.
 
 ### Deployment topology (role split)
 

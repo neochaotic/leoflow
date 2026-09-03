@@ -79,6 +79,52 @@ its own.
 > the chart's visibility**: rotating them requires a manual
 > `kubectl rollout restart deployment/leoflow` for the change to take effect.
 
+## High availability
+
+A single control-plane replica is evicted as **routine** cluster housekeeping —
+autoscaler consolidation / bin-packing (Karpenter on EKS, GKE Autopilot), node
+drains, node auto-upgrades — and every eviction costs a full restart (image pull
++ boot + leadership: tens of seconds during which nothing dispatches). Running
+`replicaCount: 2` turns that into seconds of failover with no image pull: the
+scheduler leader-elects (active-passive), the API serves from both replicas
+(active-active).
+
+The chart keeps `replicaCount: 1` as the shipped default because HA needs a log
+store **every replica can write**, and the default install puts task logs on a
+ReadWriteOnce PVC (one node). It therefore guards the unsafe combination instead
+of defaulting into it:
+
+| Setting | Behavior |
+|---|---|
+| `replicaCount > 1` (or an HPA / split with more than one mounter) with a `ReadWriteOnce` / `ReadWriteOncePod` logs PVC | **render fails** — the extra pods would hang in `ContainerCreating` on a Multi-Attach error while the install reports success |
+| `split.enabled` with `logs.persistence.enabled: false` and the `disk` sink | **render fails** — the scheduler pod would write every task log into its own emptyDir and each api pod read from its own, so no log is ever readable |
+| `podDisruptionBudget.enabled` unset (auto) | PDB renders **iff** the guaranteed replica floor is `> 1` (`replicaCount`, the HPA `minReplicas`, or `split.api.replicaCount`). A `minAvailable: 1` budget over a **single** replica blocks every voluntary eviction — node drains hang, auto-upgrades stall — so it is only safe-by-default for HA. Explicit `true`/`false` always wins. **On upgrade** this means every `split.enabled` install (api default 2) and every `autoscaling.enabled` install (`minReplicas` default 2) gains a PDB; NOTES say so |
+| `podDisruptionBudget.unhealthyPodEvictionPolicy` | `AlwaysAllow` by default, so both replicas being unready (bad DB credentials, image-pull failure, wedged rollout) does not leave a drain hanging on an already-down control plane |
+| `topologySpreadConstraints` | empty by default; the HA profile spreads the replicas across nodes (`kubernetes.io/hostname`, `ScheduleAnyway`) — two replicas bin-packed onto one node are one replica, and the PDB then blocks that node's drain. A constraint without `labelSelector` gets the Deployment's own selector |
+| `terminationGracePeriodSeconds` | unset by default (Kubernetes' 30s); the HA profile sets `60`. It buys headroom for the HTTP shutdown (10s) and the dispatch-pool drain; it does **not** decide leadership handoff (the lease is released within a tick of SIGTERM and frees anyway when the connection drops), and with tasks running the pod normally exhausts the grace and is SIGKILLed — expected and safe |
+| `podAnnotations: {karpenter.sh/do-not-disrupt: "true"}` | **EKS/Karpenter-only opt-in**, not set by default: exempts the node from voluntary disruption, trading maintenance friction for eviction protection |
+
+The one-switch HA profile is
+[`examples/values-ha.yaml`](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/examples/values-ha.yaml):
+two replicas spread across nodes, task logs in object storage
+(`logs.persistence.enabled: false` + `logs.sink.provider: s3|gcs` — the
+recommended HA log path; a `ReadWriteMany` PVC is the alternative), auto PDB,
+memory sized for the object sink's per-attempt buffer, and the longer drain grace:
+
+```bash
+helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <x.y.z> -n leoflow \
+  -f helm/leoflow/examples/values-ha.yaml
+```
+
+Involuntary disruptions — node failure, spot reclamation, a kernel panic — are
+stopped by **no** PDB or annotation, which is why the second replica is the
+posture that matters. Note that the api/scheduler **split** is not dispatch-HA:
+its scheduler is pinned to one replica with no standby and no PDB, so only
+non-split `replicaCount: 2` fails dispatch over today. The full reasoning,
+per-platform PDB behavior, and the upgrade path from a single replica are in the
+[Control-plane HA and disruption posture](https://neochaotic.github.io/leoflow/operate/control-plane-ha/)
+page.
+
 ## Verified TLS to managed Postgres (#315)
 
 Managed Postgres (Cloud SQL, RDS, Azure DB) presents a server cert signed by

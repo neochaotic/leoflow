@@ -49,7 +49,10 @@ tests:
           value: 80
 
   # ─── PDB ────────────────────────────────────────────────────────────────
-  - it: PDB not rendered when podDisruptionBudget.enabled is false (default)
+  # podDisruptionBudget.enabled is unset (auto) by default: the PDB renders only
+  # when the guaranteed replica floor is above one, so a default single-replica
+  # install gets none (a budget over one pod would block every node drain).
+  - it: PDB not rendered by default on a single replica (enabled unset = auto)
     templates: [pdb.yaml]
     set:
       database.url: postgres://h/d

@@ -15,8 +15,7 @@ func defaultLadder() ResilienceLadder {
 	return ResilienceLadder{
 		HeartbeatInterval:            15 * time.Second,
 		AgentLostThreshold:           cfg.AgentLostThreshold,
-		AgentLostGrace:               cfg.AgentLostGrace,
-		PodLostLeaderGrace:           cfg.PodLostLeaderGrace,
+		SettlingGrace:                cfg.SettlingGrace,
 		AttemptTokenTTL:              10 * time.Minute,
 		ReconcileInterval:            30 * time.Second,
 		OrphanThreshold:              cfg.OrphanThreshold,
@@ -45,22 +44,21 @@ func TestValidateResilienceLadderDisabledCredentialCeilingPasses(t *testing.T) {
 	}
 }
 
-// TestValidateResilienceLadderRequiresTwoSweepsUnderGrace: the reconciler must
-// get at least TWO full sweeps under a new leader before either grace ends. A
-// reconcile interval just under the grace (179s vs 180s) satisfies a plain
-// "reconcile < grace" ordering yet guarantees zero completed sweeps in the
+// TestValidateResilienceLadderRequiresTwoSweepsUnderGrace: at least TWO whole
+// maintenance cycles (reconcile sweep, then reap) must fit under the settling
+// grace. A maintenance interval just under the grace (179s vs 180s) satisfies a
+// plain "interval < grace" ordering yet guarantees zero completed cycles in the
 // window, so the validator must reject it.
 func TestValidateResilienceLadderRequiresTwoSweepsUnderGrace(t *testing.T) {
 	l := defaultLadder()
 	l.ReconcileInterval = 179 * time.Second
-	l.AgentLostGrace = 180 * time.Second
-	l.PodLostLeaderGrace = 180 * time.Second
+	l.SettlingGrace = 180 * time.Second
 	l.AttemptTokenTTL = 10 * time.Minute
 	err := ValidateResilienceLadder(l)
 	if err == nil {
-		t.Fatal("reconcile=179s under grace=180s must be rejected")
+		t.Fatal("maintenance interval=179s under grace=180s must be rejected")
 	}
-	for _, w := range []string{"reconcile interval", "grace", "build-time invariant violated"} {
+	for _, w := range []string{"maintenance interval", "settling grace", "build-time invariant violated"} {
 		if !strings.Contains(err.Error(), w) {
 			t.Errorf("error %q must name %q", err, w)
 		}
@@ -88,27 +86,21 @@ func TestValidateResilienceLadderRejectsEachViolation(t *testing.T) {
 			notWant: []string{key},
 		},
 		{
-			name:    "agent-lost threshold not below agent-lost grace",
-			mutate:  func(l *ResilienceLadder) { l.AgentLostGrace = l.AgentLostThreshold },
-			want:    []string{"agent-lost threshold", "agent-lost grace", bug},
+			name:    "agent-lost threshold not below settling grace",
+			mutate:  func(l *ResilienceLadder) { l.SettlingGrace = l.AgentLostThreshold },
+			want:    []string{"agent-lost threshold", "settling grace", bug},
 			notWant: []string{key},
 		},
 		{
-			name:    "agent-lost grace not below attempt token TTL",
-			mutate:  func(l *ResilienceLadder) { l.AttemptTokenTTL = l.AgentLostGrace },
-			want:    []string{"agent-lost grace", "attempt token TTL", bug},
+			name:    "settling grace not below attempt token TTL",
+			mutate:  func(l *ResilienceLadder) { l.AttemptTokenTTL = l.SettlingGrace },
+			want:    []string{"settling grace", "attempt token TTL", bug},
 			notWant: []string{key},
 		},
 		{
-			name:    "two reconcile intervals not below agent-lost grace",
-			mutate:  func(l *ResilienceLadder) { l.ReconcileInterval = l.AgentLostGrace / 2 },
-			want:    []string{"reconcile interval", "agent-lost grace", bug},
-			notWant: []string{key},
-		},
-		{
-			name:    "two reconcile intervals not below pod-lost leader grace",
-			mutate:  func(l *ResilienceLadder) { l.PodLostLeaderGrace = 2 * l.ReconcileInterval },
-			want:    []string{"reconcile interval", "pod-lost leader grace", bug},
+			name:    "two maintenance intervals not below settling grace",
+			mutate:  func(l *ResilienceLadder) { l.ReconcileInterval = l.SettlingGrace / 2 },
+			want:    []string{"maintenance interval", "settling grace", bug},
 			notWant: []string{key},
 		},
 		{

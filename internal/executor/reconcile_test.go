@@ -2,13 +2,16 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/neochaotic/leoflow/internal/taskoutcome"
 )
@@ -416,5 +419,36 @@ func TestClassifyPodConfigErrorWithoutNonRoot(t *testing.T) {
 	}
 	if strings.Contains(got.reason, "runAsNonRoot") {
 		t.Errorf("reason = %q, must not attribute an unrelated config error to non-root", got.reason)
+	}
+}
+
+// TestReconcileRecordsCompletedSweep: the reconciler stamps the time of its last
+// COMPLETED sweep — the task-pod set was listed and every pod visited — and only
+// then. A sweep that could not list pods records nothing. The stamp is what the
+// reaper's leader-settling gate reads to know a post-leadership sweep has had
+// its chance to recover durable outcomes before anything is declared lost.
+func TestReconcileRecordsCompletedSweep(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	r := NewReconciler(fake.NewClientset(managedPod("p-ok", "ti-ok", corev1.PodSucceeded)), "leoflow", &fakeReporter{})
+	r.now = func() time.Time { return now }
+	if !r.LastSweepCompletedAt().IsZero() {
+		t.Fatalf("no sweep yet, got %v", r.LastSweepCompletedAt())
+	}
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := r.LastSweepCompletedAt(); !got.Equal(now) {
+		t.Errorf("LastSweepCompletedAt = %v, want %v", got, now)
+	}
+
+	failing := NewReconciler(fake.NewClientset(), "leoflow", &fakeReporter{})
+	failing.clientset.(*fake.Clientset).PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("apiserver down")
+	})
+	if err := failing.Reconcile(context.Background()); err == nil {
+		t.Fatal("a failed LIST must surface")
+	}
+	if !failing.LastSweepCompletedAt().IsZero() {
+		t.Errorf("a sweep that could not list pods must record nothing, got %v", failing.LastSweepCompletedAt())
 	}
 }

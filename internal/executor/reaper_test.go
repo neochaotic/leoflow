@@ -274,61 +274,6 @@ func TestReapersHonorGateMidTick(t *testing.T) {
 	})
 }
 
-// TestReaperSetLeaderSinceGatesPodLost: the post-leadership grace must reach the
-// pod-lost reaper, not only the agent-lost one. Both reapers act on a signal a
-// control-plane restart manufactures (a stale heartbeat; a task pod that finished
-// during the outage and is no longer live), so both must let the fleet
-// re-heartbeat and the reconciler recover durable outcomes before firing. A
-// `running` TI whose pod is gone, past its own liveness grace, is NOT marked
-// through ReapOnce while leadership is fresh; it is once the grace elapsed.
-func TestReaperSetLeaderSinceGatesPodLost(t *testing.T) {
-	now := time.Now().UTC()
-	newStore := func() *fakeReaperStore {
-		return &fakeReaperStore{runningCands: []PodLostCandidate{
-			{TaskInstanceID: "finished-during-outage", DagRunID: "run-a", TaskID: "work", TryNumber: 1, RunningSince: now.Add(-10 * time.Minute)},
-		}}
-	}
-
-	fresh := newStore()
-	rec := &capturingRecorder{}
-	r := NewReaper(fresh, &fakePodManager{active: map[string]bool{}}, nil, nil, rec, reapTestLogger(), DefaultReaperConfig(), nil)
-	r.SetLeaderSince(func() time.Time { return now.Add(-5 * time.Second) })
-	if err := r.ReapOnce(context.Background()); err != nil {
-		t.Fatalf("ReapOnce: %v", err)
-	}
-	if len(fresh.podMarked) != 0 {
-		t.Errorf("pod-lost must defer within the post-leadership grace, marked %v", fresh.podMarked)
-	}
-	if got := rec.count("pod_lost_grace_skip"); got != 1 {
-		t.Errorf("pod_lost_grace_skip = %d, want 1", got)
-	}
-
-	settled := newStore()
-	r2 := NewReaper(settled, &fakePodManager{active: map[string]bool{}}, nil, nil, nil, reapTestLogger(), DefaultReaperConfig(), nil)
-	r2.SetLeaderSince(func() time.Time { return now.Add(-time.Hour) })
-	if err := r2.ReapOnce(context.Background()); err != nil {
-		t.Fatalf("ReapOnce: %v", err)
-	}
-	if len(settled.podMarked) != 1 {
-		t.Errorf("pod-lost must reap once the post-leadership grace elapsed, marked %v", settled.podMarked)
-	}
-}
-
-// TestDefaultReaperConfigPodLostLeaderGrace pins the ladder position of the
-// pod-lost leadership grace: it equals the agent-lost grace (the same restart
-// fault manufactures both signals) and sits well above the 30s reconciler sweep,
-// so the reconciler gets several sweeps to recover a durable outcome before the
-// pod-lost reaper may fire on the same pod.
-func TestDefaultReaperConfigPodLostLeaderGrace(t *testing.T) {
-	cfg := DefaultReaperConfig()
-	if cfg.PodLostLeaderGrace != cfg.AgentLostGrace {
-		t.Errorf("PodLostLeaderGrace = %v, want AgentLostGrace (%v)", cfg.PodLostLeaderGrace, cfg.AgentLostGrace)
-	}
-	if cfg.PodLostLeaderGrace < 2*30*time.Second {
-		t.Errorf("PodLostLeaderGrace = %v must leave margin over the 30s reconcile interval", cfg.PodLostLeaderGrace)
-	}
-}
-
 // TestReaperThreadsPresenceCacheToDispatchLost is the wiring check re-homed from
 // the scheduler's TestStepThreadsPresenceCacheToReapers: a presence cache passed
 // to NewReaper must reach the dispatch-lost reaper. A stale queued TI whose pod

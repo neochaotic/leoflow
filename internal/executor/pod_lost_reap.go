@@ -86,19 +86,6 @@ type podLostReaper struct {
 	// TaskPodActive read below, so cache lag can only delay a reap, never cause a
 	// false-positive one (#461). Nil keeps every candidate on the live path.
 	cache PodPresenceCache
-	// leaderGrace suppresses reaping for this long after leadership is
-	// (re-)acquired, ADDITIVE to the per-task grace above. A control-plane
-	// restart makes a task pod that finished during the outage look lost (its
-	// container exited; its TI is still `running` because the terminal report
-	// found no server), while the pod's durable outcome record is still waiting
-	// for the reconciler's slower sweep. Without this window the pod-lost mark
-	// wins that race and a succeeded task is recorded failed. Zero disables it.
-	leaderGrace time.Duration
-	// leaderSince reports when this instance last acquired scheduler leadership,
-	// so leaderGrace is measured from recovery, not wall-clock. Nil (Lite/tests
-	// without leadership) disables the leadership grace; the per-task grace and
-	// the liveness read are unchanged.
-	leaderSince func() time.Time
 	// gate is re-checked before every destructive call (see destructiveGate).
 	gate destructiveGate
 }
@@ -123,13 +110,12 @@ func (r *podLostReaper) run(ctx context.Context) error {
 		return nil
 	}
 	now := time.Now().UTC()
-	// Post-leadership grace: let the reconciler recover durable outcomes of pods
-	// that finished during the outage before declaring any of them lost. Checked
-	// before the list so a grace tick does no query at all.
-	if inLeaderGrace(r.leaderSince, r.leaderGrace, now) {
-		r.record("pod_lost_grace_skip")
-		return nil
-	}
+	// A control-plane restart makes a task pod that finished during the outage
+	// look lost: its container exited, yet its TI is still `running` because the
+	// terminal report found no server. Only the reconciler's sweep can recover
+	// that pod's durable outcome; Reaper.settling holds the whole tick until one
+	// has completed under this leadership, so by the time run is reached a
+	// `running` TI with no live pod is genuinely lost.
 	candidates, err := r.store.ListRunningTasks(ctx)
 	if err != nil {
 		return err

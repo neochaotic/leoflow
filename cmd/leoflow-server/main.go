@@ -364,8 +364,7 @@ func resilienceLadder(cfg *config.ServerConfig) executor.ResilienceLadder {
 	return executor.ResilienceLadder{
 		HeartbeatInterval:            agent.DefaultHeartbeatInterval,
 		AgentLostThreshold:           rc.AgentLostThreshold,
-		AgentLostGrace:               rc.AgentLostGrace,
-		PodLostLeaderGrace:           rc.PodLostLeaderGrace,
+		SettlingGrace:                rc.SettlingGrace,
 		AttemptTokenTTL:              attemptTokenTTL,
 		ReconcileInterval:            reconcileInterval,
 		OrphanThreshold:              rc.OrphanThreshold,

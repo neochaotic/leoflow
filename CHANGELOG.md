@@ -57,13 +57,21 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A control-plane restart no longer marks a succeeded task failed, and no
   longer condemns the rest of its run.** A production drill (kill the
   control-plane pod mid-run) turned a dbt task that had SUCCEEDED into `failed`
-  and failed the whole run. Four compounding causes, each now fixed:
+  and failed the whole run. Five compounding causes, each now fixed:
   - The agent abandoned a terminal report after 6 attempts (~31s) — shorter than
     a control-plane restart — while its heartbeat loop kept going indefinitely.
     The report now retries until its context ends (SIGTERM, pod delete, execution
     timeout), with the pause between attempts capped at the heartbeat interval so
-    it reconnects within about one heartbeat of the server returning.
-    Credential rejections are still returned at once.
+    it reconnects within about one heartbeat plus the gRPC channel's own
+    reconnect backoff once the server returns. Credential rejections are still
+    returned at once. The RUNNING pre-flight report takes the same path, on
+    purpose: an agent that cannot reach the control plane does not start user
+    code until it can. Because both reports now outlast an outage, every task
+    pod also gets an `activeDeadlineSeconds` floor when its DAG declares no
+    execution timeout — derived from `auth.max_attempt_credential_lifetime`,
+    past which the pod cannot renew its credential — so no task pod is left
+    Running forever after a total control-plane outage. A user-declared timeout
+    is never shortened.
   - The pod-lost reaper (every scheduler tick) raced the reconciler (every 30s)
     for a pod that finished during the outage, and won — marking it `pod_lost`
     before the reconciler could recover the pod's durable outcome record. It now
@@ -77,10 +85,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     Every destructive reaper action is now gated on a live context, no step-down
     in progress, and (when wired) current leadership; the successor redoes the
     reap under its own grace.
-  - The timing ladder the recovery depends on (`heartbeat < agent-lost threshold
-    < agent-lost grace < token TTL`, and `reconcile interval` below both
-    graces) is validated at server boot; a knob moved out of order fails startup
-    naming the violated relation.
+  - The timing ladder the recovery depends on is validated at server boot:
+    `heartbeat < agent-lost threshold < agent-lost grace < token TTL`, two
+    `reconcile interval`s below both post-leadership graces (one is not enough
+    to guarantee a completed sweep), the scheduler's longest infra re-place
+    delay below the orphan-run threshold, and the token TTL below
+    `auth.max_attempt_credential_lifetime`. That last rung is the only one an
+    operator can move — hardening the ceiling below the TTL would silently
+    disable heartbeat renewal and with it the whole recovery — so its failure
+    names the config key; every other rung is a build-time constant and its
+    failure asks for a bug report.
 
 - **Connection/variable writes are now tri-state, restoring explicit-clear and
   fixing the masked write-back overwrite (#887, subsumes #874).** The safe-merge

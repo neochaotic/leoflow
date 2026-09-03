@@ -72,8 +72,9 @@ func TestReportOutlastsControlPlaneRestart(t *testing.T) {
 // TestReportBackoffRampsThenHoldsAtHeartbeatInterval pins the per-attempt delay
 // policy: an exponential ramp (1s, 2s, 4s, 8s) that is CAPPED at the heartbeat
 // interval and then holds there for every further attempt — never longer. Capping
-// the delay rather than the duration means the agent reconnects within about one
-// heartbeat of the server returning, however long the outage lasted.
+// the delay rather than the duration means the agent's next attempt is at most
+// one heartbeat away once the server returns (plus the gRPC channel's own
+// reconnect backoff), however long the outage lasted.
 func TestReportBackoffRampsThenHoldsAtHeartbeatInterval(t *testing.T) {
 	want := []time.Duration{
 		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,

@@ -75,9 +75,13 @@ wait_sha_green() {
     fi
     j=$(gh run list --limit 40 --json databaseId,status,conclusion,headSha \
           -q "[.[] | select(.headSha==\"$sha\")]" 2>/dev/null)
-    [ "$(echo "$j" | jq 'length' 2>/dev/null || echo 0)" -eq 0 ] && { sleep 25; continue; }
-    pend=$(echo "$j" | jq '[.[] | select(.status!="completed")] | length')
-    [ "${pend:-1}" -gt 0 ] && { sleep 45; continue; }
+    # jq can emit partial output or `null` before erroring, so coerce to a real
+    # integer before any [ -eq/-gt ] (else "integer expression expected"). Safe
+    # defaults keep the loop waiting rather than falsely declaring a verdict.
+    cnt=$(printf '%s' "$j" | jq 'length' 2>/dev/null); [[ "$cnt" =~ ^[0-9]+$ ]] || cnt=0
+    [ "$cnt" -eq 0 ] && { sleep 25; continue; }
+    pend=$(printf '%s' "$j" | jq '[.[] | select(.status!="completed")] | length' 2>/dev/null); [[ "$pend" =~ ^[0-9]+$ ]] || pend=1
+    [ "$pend" -gt 0 ] && { sleep 45; continue; }
     failed=$(echo "$j" | jq -r '.[] | select(.conclusion=="failure") | .databaseId')
     [ -z "$failed" ] && { echo GREEN; return 0; }
     isflake=1
@@ -227,9 +231,11 @@ main() {
       break
     fi
     j=$(gh run list --limit 25 --json databaseId,status,conclusion,headBranch -q "[.[] | select(.headBranch==\"$tag\")]" 2>/dev/null)
-    [ "$(echo "$j" | jq 'length' 2>/dev/null || echo 0)" -eq 0 ] && { sleep 20; continue; }
-    pend=$(echo "$j" | jq '[.[] | select(.status!="completed")] | length')
-    [ "${pend:-1}" -gt 0 ] && { sleep 45; continue; }
+    # Coerce jq output to an integer before [ -eq/-gt ] (see wait_sha_green).
+    cnt=$(printf '%s' "$j" | jq 'length' 2>/dev/null); [[ "$cnt" =~ ^[0-9]+$ ]] || cnt=0
+    [ "$cnt" -eq 0 ] && { sleep 20; continue; }
+    pend=$(printf '%s' "$j" | jq '[.[] | select(.status!="completed")] | length' 2>/dev/null); [[ "$pend" =~ ^[0-9]+$ ]] || pend=1
+    [ "$pend" -gt 0 ] && { sleep 45; continue; }
     failed=$(echo "$j" | jq -r '.[] | select(.conclusion=="failure") | .databaseId')
     if [ -z "$failed" ]; then log "$tag PUBLISHED"; break; fi
     isflake=1; for rid in $failed; do gh run view "$rid" --log-failed 2>/dev/null | grep -qE "$FLAKE_RE" || isflake=0; done

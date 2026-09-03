@@ -4,6 +4,16 @@ Cutting a release is one command: `scripts/cut-release.sh <version>`. The script
 owns the mechanical flow so it is not re-derived (and re-broken) by hand each time
 (#879). You own the *decisions*: whether to cut, the version, and rc-vs-GA.
 
+## The changelog fills itself, per PR
+
+Every PR records its own user-facing change under `## [Unreleased]` in
+`CHANGELOG.md`, enforced by the **`changelog-guard`** CI job
+(`scripts/check-changelog-entry.sh`). So by the time you cut, `[Unreleased]` is
+already the complete release note — no scramble to reconstruct it, and no
+back-fill "docs(changelog)" PRs (the recurring pattern this gate ends). A PR with
+no user-facing change (release-prep, chore, dependabot, docs-only) carries the
+**`skip-changelog`** label to bypass the gate.
+
 ## The flow the script runs
 
 1. **Preflight** — required tools, clean tree, on `main`, version validated,

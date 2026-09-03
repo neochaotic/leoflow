@@ -566,7 +566,13 @@ jobs:
             echo "Not a pull_request event — running heavy k3d E2E."
             exit 0
           fi
-          git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          # Full fetch of the base, not --depth=1: the checkout above is fetch-depth 0,
+          # and a depth-1 fetch marks the base's CURRENT tip as a shallow boundary. The
+          # PR merge ref was cut against the base as it was when the run was queued, so
+          # whenever the base advances during the run (a merge landing), the shallow tip
+          # has no path back to the merge ref's parent and `...` fails with "no merge
+          # base" — and a rerun reuses the same merge ref, so it fails again.
+          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
           if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
@@ -653,7 +659,13 @@ jobs:
             echo "Not a pull_request event — running heavy k3d E2E."
             exit 0
           fi
-          git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          # Full fetch of the base, not --depth=1: the checkout above is fetch-depth 0,
+          # and a depth-1 fetch marks the base's CURRENT tip as a shallow boundary. The
+          # PR merge ref was cut against the base as it was when the run was queued, so
+          # whenever the base advances during the run (a merge landing), the shallow tip
+          # has no path back to the merge ref's parent and `...` fails with "no merge
+          # base" — and a rerun reuses the same merge ref, so it fails again.
+          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
           if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
@@ -737,7 +749,13 @@ jobs:
             echo "Not a pull_request event — running heavy k3d E2E."
             exit 0
           fi
-          git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          # Full fetch of the base, not --depth=1: the checkout above is fetch-depth 0,
+          # and a depth-1 fetch marks the base's CURRENT tip as a shallow boundary. The
+          # PR merge ref was cut against the base as it was when the run was queued, so
+          # whenever the base advances during the run (a merge landing), the shallow tip
+          # has no path back to the merge ref's parent and `...` fails with "no merge
+          # base" — and a rerun reuses the same merge ref, so it fails again.
+          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
           if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
@@ -855,7 +873,13 @@ jobs:
             echo "Not a pull_request event — running heavy k3d E2E."
             exit 0
           fi
-          git fetch --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          # Full fetch of the base, not --depth=1: the checkout above is fetch-depth 0,
+          # and a depth-1 fetch marks the base's CURRENT tip as a shallow boundary. The
+          # PR merge ref was cut against the base as it was when the run was queued, so
+          # whenever the base advances during the run (a merge landing), the shallow tip
+          # has no path back to the merge ref's parent and `...` fails with "no merge
+          # base" — and a rerun reuses the same merge ref, so it fails again.
+          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
           if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then

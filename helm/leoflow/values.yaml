@@ -8,8 +8,11 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# -- Number of control-plane replicas. The scheduler leader-elects (ADR 0009), so `>1` is HA-safe (active-passive scheduler, active-active API).
+# -- Number of control-plane replicas. The scheduler leader-elects (ADR 0009), so `>1` is HA-safe (active-passive scheduler, active-active API) and is the recommended production posture: a single replica evicted by consolidation, a drain, or a node upgrade costs a full restart (image pull + boot + leadership, tens of seconds) during which nothing dispatches; a standby replica turns that into seconds of failover. The shipped default stays `1` because HA needs a log store every replica can write — see `logs.persistence.accessMode` / `logs.sink` — and the chart refuses to render `>1` onto the default single-writer PVC. `examples/values-ha.yaml` is the one-file HA profile.
 replicaCount: 1
+
+# -- Pod `terminationGracePeriodSeconds` for the control plane. Empty (default) omits the field, so Kubernetes applies its own 30s and a default install's pod spec is unchanged. A voluntary eviction (drain, consolidation, upgrade) sends SIGTERM and waits this long before SIGKILL; the server drains its HTTP listeners and releases the scheduler lease on SIGTERM, so raise it (the HA profile uses `60`) when a shorter grace would kill the leader mid-step-down and leave the follower waiting out the lock.
+terminationGracePeriodSeconds: ""
 
 # Control-plane Deployment shape.
 deployment:
@@ -150,19 +153,24 @@ config:
 # Persistent log storage for the control plane (#227 — Pro alpha).
 # Task pods stream logs over gRPC to the control plane, which writes them under
 # `config.logsDir`. By default this directory lives on a PVC so logs survive
-# pod restarts. For multi-replica HA, set `accessMode: ReadWriteMany` and a
-# storage class that supports it (NFS, Longhorn-rwx, CephFS, EFS, Azure Files,
-# GCP Filestore). When you do not need durable logs (dev / throwaway clusters),
-# set `enabled: false` to use an emptyDir instead — logs vanish on pod restart.
+# pod restarts. For multi-replica HA the log store must be writable by every
+# replica: the recommended path is the object-store sink below with
+# `persistence.enabled: false` (no PVC at all); the alternative is `accessMode:
+# ReadWriteMany` on a storage class that supports it (EFS, GCP Filestore, Azure
+# Files, NFS, CephFS, Longhorn-rwx). A ReadWriteOnce / ReadWriteOncePod PVC
+# attaches to one node / one pod, so a second replica hangs in ContainerCreating
+# on a Multi-Attach error — the chart refuses to render that combination. When
+# you do not need durable logs (dev / throwaway clusters), set `enabled: false`
+# with the `disk` sink to use an emptyDir instead — logs vanish on pod restart.
 logs:
   persistence:
-    # -- Persist control-plane logs in a PVC (default ON). Disable for ephemeral emptyDir (dev only — logs lost on pod restart).
+    # -- Persist control-plane logs in a PVC (default ON). Disable for the object-store sink (HA — the bucket owns durability) or for an ephemeral emptyDir (dev only — logs lost on pod restart, and per-pod at `replicaCount > 1`).
     enabled: true
     # -- PVC size for control-plane logs. ~1 GB/day per ~1000 active task runs is a sane starting point.
     size: 50Gi
     # -- StorageClass for the PVC. Empty uses the cluster default. Specify an RWX class when `accessMode: ReadWriteMany`.
     storageClass: ""
-    # -- PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments; `ReadWriteMany` is required when `replicaCount > 1`. Also drives `deployment.strategy`: an RWO/RWOP PVC auto-selects `Recreate` (a rolling upgrade would Multi-Attach-deadlock).
+    # -- PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments. At `replicaCount > 1` (or an HPA / split with more than one mounter) the chart FAILS the render on `ReadWriteOnce` / `ReadWriteOncePod` — a single-writer volume Multi-Attach-deadlocks the extra pods silently — so HA needs either `ReadWriteMany` here or `persistence.enabled: false` + the object-store `sink`. Also drives `deployment.strategy`: an RWO/RWOP PVC auto-selects `Recreate` (a rolling upgrade would Multi-Attach-deadlock).
     accessMode: ReadWriteOnce
   # Object-store log backend (opt-in). Set `sink.provider` to `s3` or `gcs` and task
   # logs ship to a bucket instead of the PVC — `s3` for AWS S3 / MinIO / Ceph RGW,
@@ -433,12 +441,22 @@ autoscaling:
   # -- HPA scaling behavior (scale-up/scale-down policies). See K8s docs for autoscaling/v2 `behavior` schema.
   behavior: {}
 
-# PodDisruptionBudget so voluntary disruptions (node drains, upgrades) keep
-# enough control-plane replicas serving the API. Disabled by default; set
-# `replicaCount > 1` (HA, leader-elected) before enabling.
+# PodDisruptionBudget so voluntary disruptions — node drains, cluster and node
+# auto-upgrades, autoscaler consolidation / bin-packing — keep at least one
+# control-plane replica serving while another is evicted. It turns itself on
+# exactly when that is safe: `enabled` unset (auto) renders the PDB when the
+# guaranteed replica floor is above one (`replicaCount`, or the HPA's
+# `minReplicas`, or `split.api.replicaCount` in split mode).
+#
+# Why not always on: a PDB with `minAvailable: 1` over a SINGLE replica blocks
+# every voluntary eviction of that pod. Node drains hang on it, cluster/node
+# auto-upgrades stall (platforms that bound the wait override it after a while),
+# and the pod still dies to involuntary disruptions (node failure, spot
+# reclamation). It protects the pod at the cost of cluster operations — an
+# informed trade an operator may still choose with an explicit `enabled: true`.
 podDisruptionBudget:
-  # -- Enable PDB for the leoflow-server Deployment. Pair with replicaCount > 1.
-  enabled: false
+  # -- (bool) Tri-state. Unset/empty (default) = auto: the PDB renders iff the guaranteed replica floor is `> 1`. `true` forces it on (on a single replica this blocks node drains and auto-upgrades — an informed choice; NOTES warns). `false` forces it off.
+  enabled:
   # -- Minimum replicas that must remain up during voluntary disruption. Set only ONE of minAvailable / maxUnavailable.
   minAvailable: 1
   # -- Maximum replicas allowed unavailable during voluntary disruption. Set only ONE of minAvailable / maxUnavailable.
@@ -503,6 +521,7 @@ ingress:
   # -- TLS configuration. Each entry maps hosts to a TLS Secret (typically a cert-manager Certificate Secret).
   tls: []
 
+# -- Extra annotations on the control-plane pod template. EKS/Karpenter opt-in: `karpenter.sh/do-not-disrupt: "true"` exempts the pod's node from Karpenter's voluntary disruption (consolidation, drift, expiration), trading maintenance friction — that node is never consolidated or upgraded by Karpenter while the pod runs — for eviction protection. Not set by default; a second replica plus the auto PDB is the platform-neutral answer.
 podAnnotations: {}
 # podSecurityContext: K8s enforces `runAsNonRoot: true` by verifying the UID.
 # The control-plane image (deploy/Dockerfile.server) sets `USER nonroot:nonroot`

@@ -53,12 +53,14 @@ fail the cert chain (x509: unknown authority) and hang. See #280, #690.
 {{- fail "agentTLS has no CA source: task pods need a CA trust bundle to verify the gRPC server cert (otherwise the agent's dial fails x509: certificate signed by unknown authority and tasks hang). Either keep agentTLS.autoGenerate=true (default — the chart mints a stable self-signed CA + server cert, no cert-manager needed, #690), or set agentTLS.serverCertSecret + agentTLS.caConfigMap for BYO/cert-manager (production). See #280, #690." -}}
 {{- end -}}
 {{- /*
-A ReadWriteOnce logs PVC attaches to a single node, so more than one replica —
-whether static (replicaCount > 1) or via the HPA (autoscaling.enabled with
-maxReplicas > 1, where replicaCount is ignored) — leaves the extra pods stuck on a
-Multi-Attach error, silently from helm's view. The effective ceiling is
-maxReplicas when autoscaling is on, else replicaCount. Fail with the RWX pointer.
-See #282.
+A ReadWriteOnce logs PVC attaches to a single node (ReadWriteOncePod to a single
+pod), so more than one control-plane pod mounting it — static (replicaCount > 1)
+or via the HPA (autoscaling.enabled with maxReplicas > 1, where replicaCount is
+ignored) — leaves the extra pods stuck in ContainerCreating on a Multi-Attach
+error while helm reports success. HA must never deploy onto a single-writer
+volume silently, so refuse at render. The effective ceiling is maxReplicas when
+autoscaling is on, else replicaCount. The message leads with the recommended HA
+log path (object-store sink, no PVC at all) and names RWX as the alternative.
 */ -}}
 {{- $maxReplicas := .Values.replicaCount -}}
 {{- if .Values.autoscaling.enabled -}}
@@ -70,8 +72,10 @@ never satisfy that. Treat the mounter count as api replicas + 1 (the scheduler).
 {{- if .Values.split.enabled -}}
 {{- $maxReplicas = add (int .Values.split.api.replicaCount) 1 -}}
 {{- end -}}
-{{- if and (gt (int $maxReplicas) 1) .Values.logs.persistence.enabled (eq .Values.logs.persistence.accessMode "ReadWriteOnce") -}}
-{{- fail "a ReadWriteOnce logs PVC attaches to only one pod, so more than one control-plane replica — replicaCount > 1, or autoscaling.enabled with maxReplicas > 1 — hangs the extra pods in ContainerCreating (Multi-Attach error), silently. Set logs.persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS / Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore); or keep a single replica; or set logs.persistence.enabled=false (ephemeral emptyDir). See #282." -}}
+{{- $logsAccessMode := .Values.logs.persistence.accessMode -}}
+{{- $singleWriter := or (eq $logsAccessMode "ReadWriteOnce") (eq $logsAccessMode "ReadWriteOncePod") -}}
+{{- if and (gt (int $maxReplicas) 1) .Values.logs.persistence.enabled $singleWriter -}}
+{{- fail (printf "more than one control-plane pod would mount the logs PVC (replicaCount > 1, autoscaling.maxReplicas > 1, or split.enabled), but logs.persistence.accessMode=%s attaches the volume to a single node/pod: the extra pods hang in ContainerCreating with a Multi-Attach error while the install reports success. HA needs a log store every replica can write. Recommended: set logs.persistence.enabled=false and ship task logs to object storage (logs.sink.provider=s3|gcs with logs.sink.bucket). Alternative: logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass (EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx). Or keep a single replica. See helm/leoflow/examples/values-ha.yaml." $logsAccessMode) -}}
 {{- end -}}
 
 {{- /*

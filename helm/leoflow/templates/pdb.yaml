@@ -1,9 +1,15 @@
 {{- /*
-DRAFT (Production track) — PodDisruptionBudget so voluntary disruptions (node
-drains, upgrades) keep enough control-plane replicas serving the API. Disabled by
-default; set replicaCount > 1 (HA, leader-elected) before enabling.
+PodDisruptionBudget so voluntary disruptions — node drains, cluster and node
+auto-upgrades, autoscaler consolidation / bin-packing — keep at least one
+control-plane replica serving while another is evicted. Rendered automatically
+when the guaranteed replica floor is above one (see leoflow.pdbEnabled), because
+the same budget over a SINGLE replica is a trap: minAvailable 1 over one pod
+blocks every voluntary eviction of it, node drains hang, auto-upgrades stall, and
+platforms that bound the wait eventually override the budget anyway. It protects
+the pod at the cost of cluster operations, so it is only safe-by-default for HA.
+An explicit podDisruptionBudget.enabled true/false always wins.
 */ -}}
-{{- if .Values.podDisruptionBudget.enabled }}
+{{- if eq (include "leoflow.pdbEnabled" .) "true" }}
 {{- /* ADR 0049: in split mode the PDB protects the api Deployment (the
 multi-replica, active-active role). The scheduler is a single leader (ADR 0009);
 a PDB over one pod would block node drains, so it is deliberately excluded.

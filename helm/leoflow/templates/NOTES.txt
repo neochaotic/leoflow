@@ -26,6 +26,24 @@ Agent gRPC TLS:
     server cert Secret: {{ .Values.agentTLS.serverCertSecret }}
     CA ConfigMap:       {{ .Values.agentTLS.caConfigMap }}
 {{- end }}
+{{- $replicaFloor := include "leoflow.controlPlaneReplicaFloor" . | int }}
+{{- if and (kindIs "bool" .Values.podDisruptionBudget.enabled) .Values.podDisruptionBudget.enabled (le $replicaFloor 1) }}
+
+WARNING: podDisruptionBudget.enabled=true with a single replica. The budget
+blocks EVERY voluntary eviction of the one control-plane pod: node drains hang
+on it, cluster/node auto-upgrades stall (platforms that bound the wait override
+it after a while), and the pod still dies to involuntary disruptions. Prefer
+replicaCount > 1 — the PDB then turns itself on — or leave enabled unset (auto).
+{{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.logs.persistence.enabled) (eq .Values.logs.sink.provider "disk") }}
+
+WARNING: replicaCount > 1 with logs.persistence.enabled=false and logs.sink.provider=disk.
+Each replica keeps task logs in its own emptyDir: a log written by the scheduler
+leader is invisible to the other replica's API/UI, and every log is lost when a
+pod restarts. For HA, ship task logs to object storage (logs.sink.provider=s3|gcs
+with logs.sink.bucket) or use a ReadWriteMany logs PVC — see
+helm/leoflow/examples/values-ha.yaml.
+{{- end }}
 {{- if not (or .Values.database.existingSecret .Values.database.url) }}
 
 WARNING: no database URL set. Provide .Values.database.url or .Values.database.existingSecret (key databaseUrl).

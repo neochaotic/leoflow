@@ -55,6 +55,15 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "leoflow.roleServiceAccountName" (dict "ctx" .ctx "role" .role) }}
+      {{- with .ctx.Values.terminationGracePeriodSeconds }}
+      # A voluntary eviction (drain, consolidation, upgrade) sends SIGTERM and
+      # waits this long before SIGKILL. The server drains its HTTP listeners and
+      # releases the scheduler lease on SIGTERM; a grace shorter than that drain
+      # kills the leader mid-step-down and the follower must wait out the lock
+      # instead of taking over at once. Omitted when unset so a default install's
+      # pod spec is unchanged (Kubernetes applies its own 30s).
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- with .ctx.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

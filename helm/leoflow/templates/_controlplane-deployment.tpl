@@ -62,10 +62,11 @@ spec:
       # dispatch-pool drain (in-flight dispatches settle instead of leaving task
       # instances stuck queued). It does NOT decide leadership handoff: the
       # scheduler lease is released within a tick of SIGTERM and frees anyway
-      # when the connection drops. The gRPC graceful stop waits on open agent
-      # log streams, so with tasks running the pod normally exhausts the grace
-      # and is SIGKILLed — expected, and safe. Omitted when unset so a default
-      # install's pod spec is unchanged (Kubernetes applies its own 30s).
+      # when the connection drops. With tasks running, open agent log streams
+      # are closed and flushed at SIGTERM and the gRPC stop is bounded (5s,
+      # then forced), so the shutdown completes within the default 30s instead
+      # of being SIGKILLed. Omitted when unset so a default install's pod spec
+      # is unchanged (Kubernetes applies its own 30s).
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
       {{- with .ctx.Values.imagePullSecrets }}

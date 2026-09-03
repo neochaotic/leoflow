@@ -6,6 +6,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-03
+
 ### Security
 
 - **Bumped `google.golang.org/grpc` to v1.83.1 (CVE-2026-84304, HIGH).** The

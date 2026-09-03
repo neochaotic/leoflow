@@ -27,9 +27,9 @@ import (
 //     run up and fails it with `orphaned`.
 //
 // Wall-clock dogfood would wait 3 min + 5 min for the production thresholds;
-// here we shrink them to a couple hundred ms in the ReaperConfig wired to the
-// scheduler's execution-reaper seam so the test stays fast. We are validating
-// the contract SHAPE, not the production tuning.
+// here we shrink them to a couple hundred ms in the ReaperConfig of a reaper the
+// test drives directly, the way the server's maintenance loop does, so the test
+// stays fast. We are validating the contract SHAPE, not the production tuning.
 //
 // Skips when DATABASE_URL is absent (no PG available).
 func TestChaosMidTickCrashRecoveryIntegration(t *testing.T) {
@@ -64,36 +64,47 @@ func TestChaosMidTickCrashRecoveryIntegration(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := scheduler.NewScheduler(sched, logger, time.Millisecond)
 	s.SetLeading(true)
-	// The reapers now live behind the execution-reaper seam. Wire one over the
-	// same store (Lite path: nil pods/cache/recorder) with thresholds tight
-	// enough for a fast test but well above the ~ms in-process Step() latency.
-	// AgentLostThreshold is a minute — irrelevant here, kept high so it can't fire
-	// on unrelated rows; PodLostGrace is a no-op with nil pods.
-	s.SetExecutionReaper(executor.NewReaper(sched, nil, nil, nil, nil, logger, executor.ReaperConfig{
+	// The reapers run from the server's leader maintenance loop, not from the
+	// scheduler tick; here the test plays that loop, driving ReapOnce after each
+	// Step exactly as the loop orders reconcile -> reap (no pods, so no
+	// reconciler on this Lite-shaped path). Wire one over the same store (nil
+	// pods/cache/recorder) with thresholds tight enough for a fast test but well
+	// above the ~ms in-process latency. AgentLostThreshold is a minute —
+	// irrelevant here, kept high so it can't fire on unrelated rows; PodLostGrace
+	// is a no-op with nil pods; no leadership stamp is wired, so the settling
+	// gate is open, as it is in Lite.
+	reaper := executor.NewReaper(sched, nil, nil, nil, nil, logger, executor.ReaperConfig{
 		OrphanThreshold:       400 * time.Millisecond,
 		AgentLostThreshold:    time.Minute,
 		DispatchLostThreshold: 200 * time.Millisecond,
 		PodLostGrace:          time.Minute,
-	}, s.SteppingDown))
+	}, s.SteppingDown)
+	reaper.SetLeading(s.IsLeading)
 
-	// 3. Wait past the dispatch-lost threshold, then tick. The reaper must
-	//    flip our queued TI to failed/dispatch_lost.
+	// 3. Wait past the dispatch-lost threshold, then tick and reap. The reaper
+	//    must flip our queued TI to failed/dispatch_lost.
 	time.Sleep(250 * time.Millisecond)
 	if err := s.Step(ctx); err != nil {
 		t.Fatalf("dispatch-lost tick: %v", err)
 	}
+	if err := reaper.ReapOnce(ctx); err != nil {
+		t.Fatalf("dispatch-lost reap: %v", err)
+	}
 	tiState := taskInstanceState(t, sched, ctx, runUUID, "t")
 	if tiState != domain.TaskStateFailed {
-		t.Fatalf("TI state after dispatch-lost tick = %q, want failed", tiState)
+		t.Fatalf("TI state after dispatch-lost reap = %q, want failed", tiState)
 	}
 
 	// 4. Wait past the orphan threshold (relative to the run's last
 	//    activity, which our queued TI's transition just bumped), then
-	//    tick again. The orphan-run reaper should flip the run to failed
-	//    now that no active TI remains on it.
+	//    tick and reap again. The orphan-run reaper should flip the run to
+	//    failed now that no active TI remains on it.
 	time.Sleep(450 * time.Millisecond)
 	if err := s.Step(ctx); err != nil {
 		t.Fatalf("orphan-run tick: %v", err)
+	}
+	if err := reaper.ReapOnce(ctx); err != nil {
+		t.Fatalf("orphan-run reap: %v", err)
 	}
 	runState := dagRunState(t, sched, ctx, runUUID)
 	if runState != domain.DagRunStateFailed {

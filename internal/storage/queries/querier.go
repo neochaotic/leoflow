@@ -522,19 +522,25 @@ type Querier interface {
 	// self-referential, so an already-stamped row is never re-stamped.
 	UpdateTaskInstanceStatesByRunTasks(ctx context.Context, arg UpdateTaskInstanceStatesByRunTasksParams) error
 	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error)
-	// A write preserves any nullable field the caller left NULL, rather than
-	// clobbering it: COALESCE(EXCLUDED.col, connections.col) keeps the stored value
-	// when the request omits that field. This is what makes a partial `set` safe —
-	// e.g. changing only --host must not wipe the (unreadable) password. conn_type is
-	// required on every write, so it is a plain overwrite. To clear a field, delete
-	// and recreate the connection.
+	// Tri-state write (#887): COALESCE(EXCLUDED.col, connections.col) preserves the
+	// stored value when the param is NULL, overwrites it when the param is a value,
+	// and clears it when the param is a non-NULL empty string. A NULL param is how a
+	// partial `set` stays safe — changing only --host must not wipe the (unreadable)
+	// password — while an explicit empty string now clears a field, and a masked
+	// secret ("***") is mapped to NULL by the caller so it preserves rather than
+	// overwrites (#874). conn_type is required on every write, so it is a plain
+	// overwrite.
 	UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error
 	UpsertDag(ctx context.Context, arg UpsertDagParams) (Dag, error)
 	UpsertImportError(ctx context.Context, arg UpsertImportErrorParams) error
 	UpsertPool(ctx context.Context, arg UpsertPoolParams) error
-	// value is always supplied (a variable is its value), so it is overwritten;
-	// description is preserved when the request omits it (NULL) rather than being
-	// wiped — see the COALESCE rationale on UpsertConnection.
+	// value is always supplied (the variable IS its value, and the `value` column is
+	// NOT NULL, so a NULL param cannot reach the COALESCE — Postgres rejects it on
+	// the INSERT arm). The tri-state write (#887) therefore resolves value in the
+	// handler: an omitted or masked ("***") value on update is replaced with the
+	// stored value before it reaches here, so this always overwrites value.
+	// description is nullable, so it keeps the COALESCE preserve semantics: a NULL
+	// param keeps the stored description rather than wiping it.
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) error
 }
 

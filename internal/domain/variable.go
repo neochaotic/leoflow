@@ -8,3 +8,15 @@ type Variable struct {
 	Value       string
 	Description string
 }
+
+// VariablePatch is a tri-state write to a Variable (#887). Description mirrors
+// domain.ConnectionPatch: nil preserves the stored value (COALESCE), non-nil ""
+// clears, and a value sets. Value is subtly different because the `value` column
+// is NOT NULL: the caller resolves an omitted or masked ("***" for a sensitive
+// key) value to the stored value BEFORE building the patch, so Value is expected
+// non-nil here — a non-nil "" still clears. Key is always written.
+type VariablePatch struct {
+	Key         string
+	Value       *string
+	Description *string
+}

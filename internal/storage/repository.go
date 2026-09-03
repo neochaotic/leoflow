@@ -1635,7 +1635,10 @@ func (r *Repository) GetVariable(ctx context.Context, tenant, key string) (domai
 	return domain.Variable{Key: v.Key, Value: v.Value, Description: strOrEmpty(v.Description)}, nil
 }
 
-// SetVariable creates or updates a variable.
+// SetVariable creates or updates a variable, always overwriting the value and
+// preserving description when empty. It is the full-write convenience the
+// storage tests and internal callers use; the tri-state API write path goes
+// through SetVariablePatch.
 func (r *Repository) SetVariable(ctx context.Context, tenant string, v domain.Variable) error {
 	tid, err := r.tenantID(ctx, tenant)
 	if err != nil {
@@ -1643,6 +1646,30 @@ func (r *Repository) SetVariable(ctx context.Context, tenant string, v domain.Va
 	}
 	if err := r.q.UpsertVariable(ctx, queries.UpsertVariableParams{
 		TenantID: tid, Key: v.Key, Value: v.Value, Description: strPtr(v.Description),
+	}); err != nil {
+		return fmt.Errorf("upserting variable: %w", err)
+	}
+	return nil
+}
+
+// SetVariablePatch upserts a variable with tri-state semantics on description
+// (#887): a nil Description is preserved (NULL param → COALESCE), a non-nil one
+// is written ("" clears it). The `value` column is NOT NULL, so value cannot be
+// preserved at the SQL layer (a NULL param is rejected on the INSERT arm before
+// COALESCE); the API handler therefore resolves an omitted/masked value to the
+// stored value before calling here, and Value is expected non-nil (a nil Value
+// defensively clears to empty rather than panicking).
+func (r *Repository) SetVariablePatch(ctx context.Context, tenant string, p domain.VariablePatch) error {
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	value := ""
+	if p.Value != nil {
+		value = *p.Value
+	}
+	if err := r.q.UpsertVariable(ctx, queries.UpsertVariableParams{
+		TenantID: tid, Key: p.Key, Value: value, Description: p.Description,
 	}); err != nil {
 		return fmt.Errorf("upserting variable: %w", err)
 	}
@@ -1705,6 +1732,64 @@ func (r *Repository) SetConnection(ctx context.Context, tenant string, c domain.
 		TenantID: tid, ConnID: c.ConnID, ConnType: c.ConnType,
 		Host: strPtr(c.Host), ConnSchema: strPtr(c.Schema), Login: strPtr(c.Login),
 		Password: encPass, Port: port, Extra: encExtra, Description: strPtr(c.Description),
+	})
+}
+
+// encPatch encrypts a tri-state secret param (#887): a nil pointer preserves the
+// stored column (NULL), a non-empty value is encrypted, and an explicit empty
+// string clears the column to empty (stored as-is — an empty value is not a
+// secret, so there is nothing to encrypt, and decryptExtra returns "" for it).
+// This differs from encOrEmpty, which collapses "" to NULL (preserve) and so
+// cannot express a clear.
+func (r *Repository) encPatch(p *string) (*string, error) {
+	if p == nil {
+		return nil, nil //nolint:nilnil // nil param preserves the stored value via COALESCE
+	}
+	if *p == "" {
+		empty := ""
+		return &empty, nil // explicit clear: overwrite with empty, not preserve
+	}
+	enc, err := r.cipher.Encrypt(*p)
+	if err != nil {
+		return nil, err
+	}
+	return &enc, nil
+}
+
+// SetConnectionPatch upserts a connection with tri-state field semantics (#887):
+// a nil field is preserved (NULL param → COALESCE keeps the stored value), a
+// non-nil field is written exactly ("" clears it). Password and extra are
+// encrypted when set. It is how the API write path distinguishes an omitted
+// field from an explicit empty one without reintroducing the password-wipe, and
+// where a masked secret round-trip is preserved (the handler maps a masked
+// password to a nil field, and unmasks extra, before calling here). It fails if
+// no encryption cipher is configured (never stores a credential in plaintext —
+// ADR 0019).
+func (r *Repository) SetConnectionPatch(ctx context.Context, tenant string, p domain.ConnectionPatch) error {
+	if r.cipher == nil {
+		return secrets.ErrNoKey
+	}
+	tid, err := r.tenantID(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	encPass, err := r.encPatch(p.Password)
+	if err != nil {
+		return fmt.Errorf("encrypting password: %w", err)
+	}
+	encExtra, err := r.encPatch(p.Extra)
+	if err != nil {
+		return fmt.Errorf("encrypting extra: %w", err)
+	}
+	var port *int32
+	if p.Port != nil {
+		pp := toInt32(*p.Port)
+		port = &pp
+	}
+	return r.q.UpsertConnection(ctx, queries.UpsertConnectionParams{
+		TenantID: tid, ConnID: p.ConnID, ConnType: p.ConnType,
+		Host: p.Host, ConnSchema: p.Schema, Login: p.Login,
+		Password: encPass, Port: port, Extra: encExtra, Description: p.Description,
 	})
 }
 

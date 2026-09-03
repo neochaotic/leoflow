@@ -50,8 +50,8 @@ func newConnectionsSetCommand() *cobra.Command {
 			"--conn-type is required.\n\n" +
 			"Only the fields you pass are changed; any field you omit keeps its " +
 			"current value. So you can change just --host without re-supplying the " +
-			"password (which cannot be read back anyway). To clear a field, delete " +
-			"and recreate the connection.\n\n" +
+			"password (which cannot be read back anyway). To clear a field, pass it " +
+			"as an empty string, e.g. --login '' or --schema ''.\n\n" +
 			"The password and extra are sent to the control plane but never printed " +
 			"back; read commands show masked values. Prefer --password-stdin / " +
 			"--extra-file over --password / --extra so a secret never lands in your " +

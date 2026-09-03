@@ -302,12 +302,14 @@ type UpsertConnectionParams struct {
 	Description *string     `json:"description"`
 }
 
-// A write preserves any nullable field the caller left NULL, rather than
-// clobbering it: COALESCE(EXCLUDED.col, connections.col) keeps the stored value
-// when the request omits that field. This is what makes a partial `set` safe —
-// e.g. changing only --host must not wipe the (unreadable) password. conn_type is
-// required on every write, so it is a plain overwrite. To clear a field, delete
-// and recreate the connection.
+// Tri-state write (#887): COALESCE(EXCLUDED.col, connections.col) preserves the
+// stored value when the param is NULL, overwrites it when the param is a value,
+// and clears it when the param is a non-NULL empty string. A NULL param is how a
+// partial `set` stays safe — changing only --host must not wipe the (unreadable)
+// password — while an explicit empty string now clears a field, and a masked
+// secret ("***") is mapped to NULL by the caller so it preserves rather than
+// overwrites (#874). conn_type is required on every write, so it is a plain
+// overwrite.
 func (q *Queries) UpsertConnection(ctx context.Context, arg UpsertConnectionParams) error {
 	_, err := q.db.Exec(ctx, upsertConnection,
 		arg.TenantID,

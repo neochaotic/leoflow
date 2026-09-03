@@ -140,6 +140,37 @@ python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get
 grep -q '\*\*\*' "$TMP/ui2.json" || fail "partial set WIPED the omitted extra (no masked value remains)" "$TMP/ui2.json"
 pass "partial set changed the host and preserved the omitted extra (safe merge)"
 
+echo "==> explicit clear: set --login '' blanks the login but preserves the rest (#887)"
+"${CLI[@]}" connections set "$CONN_ID" "${srv[@]}" \
+  --conn-type postgres --login "" >"$TMP/clear.out" 2>&1 \
+  || fail "explicit-clear connections set failed" "$TMP/clear.out"
+curl -fsS "${BASE}/api/v2/connections/${CONN_ID}" >"$TMP/ui3.json" \
+  || fail "curl after explicit clear failed" "$TMP/lite.log"
+# login was "analytics"; an explicit "" must clear it (rendered as null/absent).
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v=d.get("login"); sys.exit(0 if (v is None or v=="") else 1)' "$TMP/ui3.json" \
+  || fail "explicit --login \"\" did not clear the login" "$TMP/ui3.json"
+# Clearing login must not disturb the omitted extra (still masked-present).
+grep -q '\*\*\*' "$TMP/ui3.json" || fail "explicit clear WIPED the omitted extra" "$TMP/ui3.json"
+pass "explicit --login '' cleared the login and preserved the omitted extra"
+
+echo "==> masked write-back: extra token as *** must PRESERVE the real secret (#874)"
+# Simulate the Admin UI GETting the connection (extra token shown as ***) and
+# saving it straight back. The mask must be treated as "unchanged", not persisted
+# over the real secret.
+"${CLI[@]}" connections set "$CONN_ID" "${srv[@]}" \
+  --conn-type postgres --extra '{"token":"***"}' >"$TMP/mask.out" 2>&1 \
+  || fail "masked-extra connections set failed" "$TMP/mask.out"
+curl -fsS "${BASE}/api/v2/connections/${CONN_ID}" >"$TMP/ui4.json" \
+  || fail "curl after masked write-back failed" "$TMP/lite.log"
+# The extra must still be present and masked — not cleared, and never the literal
+# mask leaked as a real value. The value-level proof (that the stored secret is
+# still EXTRA_SENTINEL rather than "***") lives in the Go integration tests
+# (internal/storage + internal/api full-stack), which the delivery path cannot
+# expose over HTTP; here we prove the write did not wipe or leak.
+grep -q '\*\*\*' "$TMP/ui4.json" || fail "masked write-back WIPED the extra" "$TMP/ui4.json"
+grep -q "$EXTRA_SENTINEL" "$TMP/ui4.json" && fail "masked write-back leaked the real secret" "$TMP/ui4.json"
+pass "masked extra write-back preserved a masked extra (no wipe, no leak)"
+
 # ---------------------------------------------------------------------------
 echo "==> variables set (plain + a secret-keyed one) via positional and --value-stdin"
 "${CLI[@]}" variables set "$VAR_PLAIN" us-east-1 "${srv[@]}" --description "default region" >"$TMP/vset.out" 2>&1 \

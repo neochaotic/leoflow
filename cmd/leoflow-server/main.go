@@ -350,22 +350,27 @@ func validateStartup(cfg *config.ServerConfig) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	return executor.ValidateResilienceLadder(resilienceLadder())
+	return executor.ValidateResilienceLadder(resilienceLadder(cfg))
 }
 
 // resilienceLadder assembles the effective timing knobs the control-plane
 // restart recovery depends on, exactly as this binary wires them: the agent's
-// heartbeat interval and derived token TTL, the reaper thresholds/graces, and
-// the reconciler sweep. validateStartup checks it before anything starts.
-func resilienceLadder() executor.ResilienceLadder {
+// heartbeat interval and derived token TTL, the reaper thresholds/graces, the
+// reconciler sweep, the scheduler's longest infra re-place delay, and the
+// operator's credential-lifetime ceiling — the one rung a deployment can move.
+// validateStartup checks it before anything starts.
+func resilienceLadder(cfg *config.ServerConfig) executor.ResilienceLadder {
 	rc := executor.DefaultReaperConfig()
 	return executor.ResilienceLadder{
-		HeartbeatInterval:  agent.DefaultHeartbeatInterval,
-		AgentLostThreshold: rc.AgentLostThreshold,
-		AgentLostGrace:     rc.AgentLostGrace,
-		PodLostLeaderGrace: rc.PodLostLeaderGrace,
-		AttemptTokenTTL:    attemptTokenTTL,
-		ReconcileInterval:  reconcileInterval,
+		HeartbeatInterval:            agent.DefaultHeartbeatInterval,
+		AgentLostThreshold:           rc.AgentLostThreshold,
+		AgentLostGrace:               rc.AgentLostGrace,
+		PodLostLeaderGrace:           rc.PodLostLeaderGrace,
+		AttemptTokenTTL:              attemptTokenTTL,
+		ReconcileInterval:            reconcileInterval,
+		OrphanThreshold:              rc.OrphanThreshold,
+		InfraReplaceMaxDelay:         scheduler.InfraReplaceMaxDelay(),
+		MaxAttemptCredentialLifetime: cfg.Auth.MaxAttemptCredentialLifetime,
 	}
 }
 

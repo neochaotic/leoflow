@@ -7,17 +7,21 @@ import (
 )
 
 // defaultLadder is the production ladder as the server wires it: the agent's
-// heartbeat interval and token TTL, the default reaper thresholds/graces, and
-// the reconciler's sweep interval.
+// heartbeat interval and token TTL, the default reaper thresholds/graces, the
+// reconciler's sweep interval, the scheduler's longest infra re-place delay and
+// the default credential-lifetime ceiling.
 func defaultLadder() ResilienceLadder {
 	cfg := DefaultReaperConfig()
 	return ResilienceLadder{
-		HeartbeatInterval:  15 * time.Second,
-		AgentLostThreshold: cfg.AgentLostThreshold,
-		AgentLostGrace:     cfg.AgentLostGrace,
-		PodLostLeaderGrace: cfg.PodLostLeaderGrace,
-		AttemptTokenTTL:    10 * time.Minute,
-		ReconcileInterval:  30 * time.Second,
+		HeartbeatInterval:            15 * time.Second,
+		AgentLostThreshold:           cfg.AgentLostThreshold,
+		AgentLostGrace:               cfg.AgentLostGrace,
+		PodLostLeaderGrace:           cfg.PodLostLeaderGrace,
+		AttemptTokenTTL:              10 * time.Minute,
+		ReconcileInterval:            30 * time.Second,
+		OrphanThreshold:              cfg.OrphanThreshold,
+		InfraReplaceMaxDelay:         190 * time.Second,
+		MaxAttemptCredentialLifetime: 24 * time.Hour,
 	}
 }
 
@@ -29,44 +33,110 @@ func TestValidateResilienceLadderDefaultsPass(t *testing.T) {
 	}
 }
 
+// TestValidateResilienceLadderDisabledCredentialCeilingPasses: a non-positive
+// credential lifetime is the operator's documented "no ceiling" setting, under
+// which a token renews for as long as the attempt lives — so the TTL-below-
+// ceiling rung is trivially satisfied and must not be reported as a violation.
+func TestValidateResilienceLadderDisabledCredentialCeilingPasses(t *testing.T) {
+	l := defaultLadder()
+	l.MaxAttemptCredentialLifetime = 0
+	if err := ValidateResilienceLadder(l); err != nil {
+		t.Fatalf("a disabled credential ceiling must validate, got %v", err)
+	}
+}
+
+// TestValidateResilienceLadderRequiresTwoSweepsUnderGrace: the reconciler must
+// get at least TWO full sweeps under a new leader before either grace ends. A
+// reconcile interval just under the grace (179s vs 180s) satisfies a plain
+// "reconcile < grace" ordering yet guarantees zero completed sweeps in the
+// window, so the validator must reject it.
+func TestValidateResilienceLadderRequiresTwoSweepsUnderGrace(t *testing.T) {
+	l := defaultLadder()
+	l.ReconcileInterval = 179 * time.Second
+	l.AgentLostGrace = 180 * time.Second
+	l.PodLostLeaderGrace = 180 * time.Second
+	l.AttemptTokenTTL = 10 * time.Minute
+	err := ValidateResilienceLadder(l)
+	if err == nil {
+		t.Fatal("reconcile=179s under grace=180s must be rejected")
+	}
+	for _, w := range []string{"reconcile interval", "grace", "build-time invariant violated"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("error %q must name %q", err, w)
+		}
+	}
+}
+
 // TestValidateResilienceLadderRejectsEachViolation: each single inverted (or
 // equal — the relations are strict) rung fails, and the error names BOTH sides
-// of the violated relation so an operator can tell which knob to move.
+// of the violated relation so an operator can tell which knob moved. Rungs made
+// of build-time constants tell the operator to file a bug; the one operator-
+// tunable rung names its config key instead.
 func TestValidateResilienceLadderRejectsEachViolation(t *testing.T) {
+	const bug = "build-time invariant violated"
+	const key = "auth.max_attempt_credential_lifetime"
 	cases := []struct {
-		name   string
-		mutate func(*ResilienceLadder)
-		want   []string // substrings the error must carry
+		name    string
+		mutate  func(*ResilienceLadder)
+		want    []string // substrings the error must carry
+		notWant []string // substrings the error must NOT carry
 	}{
 		{
-			name:   "heartbeat interval not below agent-lost threshold",
-			mutate: func(l *ResilienceLadder) { l.HeartbeatInterval = l.AgentLostThreshold },
-			want:   []string{"heartbeat interval", "agent-lost threshold"},
+			name:    "heartbeat interval not below agent-lost threshold",
+			mutate:  func(l *ResilienceLadder) { l.HeartbeatInterval = l.AgentLostThreshold },
+			want:    []string{"heartbeat interval", "agent-lost threshold", bug},
+			notWant: []string{key},
 		},
 		{
-			name:   "agent-lost threshold not below agent-lost grace",
-			mutate: func(l *ResilienceLadder) { l.AgentLostGrace = l.AgentLostThreshold },
-			want:   []string{"agent-lost threshold", "agent-lost grace"},
+			name:    "agent-lost threshold not below agent-lost grace",
+			mutate:  func(l *ResilienceLadder) { l.AgentLostGrace = l.AgentLostThreshold },
+			want:    []string{"agent-lost threshold", "agent-lost grace", bug},
+			notWant: []string{key},
 		},
 		{
-			name:   "agent-lost grace not below attempt token TTL",
-			mutate: func(l *ResilienceLadder) { l.AttemptTokenTTL = l.AgentLostGrace },
-			want:   []string{"agent-lost grace", "attempt token TTL"},
+			name:    "agent-lost grace not below attempt token TTL",
+			mutate:  func(l *ResilienceLadder) { l.AttemptTokenTTL = l.AgentLostGrace },
+			want:    []string{"agent-lost grace", "attempt token TTL", bug},
+			notWant: []string{key},
 		},
 		{
-			name:   "reconcile interval not below agent-lost grace",
-			mutate: func(l *ResilienceLadder) { l.ReconcileInterval = l.AgentLostGrace },
-			want:   []string{"reconcile interval", "agent-lost grace"},
+			name:    "two reconcile intervals not below agent-lost grace",
+			mutate:  func(l *ResilienceLadder) { l.ReconcileInterval = l.AgentLostGrace / 2 },
+			want:    []string{"reconcile interval", "agent-lost grace", bug},
+			notWant: []string{key},
 		},
 		{
-			name:   "reconcile interval not below pod-lost leader grace",
-			mutate: func(l *ResilienceLadder) { l.PodLostLeaderGrace = l.ReconcileInterval },
-			want:   []string{"reconcile interval", "pod-lost leader grace"},
+			name:    "two reconcile intervals not below pod-lost leader grace",
+			mutate:  func(l *ResilienceLadder) { l.PodLostLeaderGrace = 2 * l.ReconcileInterval },
+			want:    []string{"reconcile interval", "pod-lost leader grace", bug},
+			notWant: []string{key},
+		},
+		{
+			name:    "infra re-place delay not below orphan threshold",
+			mutate:  func(l *ResilienceLadder) { l.InfraReplaceMaxDelay = l.OrphanThreshold },
+			want:    []string{"infra re-place", "orphan threshold", bug},
+			notWant: []string{key},
+		},
+		{
+			name:    "attempt token TTL not below the credential lifetime ceiling",
+			mutate:  func(l *ResilienceLadder) { l.MaxAttemptCredentialLifetime = 5 * time.Minute },
+			want:    []string{"attempt token TTL", key},
+			notWant: []string{bug, "file a bug"},
 		},
 		{
 			name:   "a non-positive rung",
 			mutate: func(l *ResilienceLadder) { l.HeartbeatInterval = 0 },
 			want:   []string{"heartbeat interval", "positive"},
+		},
+		{
+			name:   "a non-positive orphan threshold",
+			mutate: func(l *ResilienceLadder) { l.OrphanThreshold = 0 },
+			want:   []string{"orphan threshold", "positive"},
+		},
+		{
+			name:   "a non-positive infra re-place delay",
+			mutate: func(l *ResilienceLadder) { l.InfraReplaceMaxDelay = -time.Second },
+			want:   []string{"infra re-place", "positive"},
 		},
 	}
 	for _, tc := range cases {
@@ -80,6 +150,11 @@ func TestValidateResilienceLadderRejectsEachViolation(t *testing.T) {
 			for _, w := range tc.want {
 				if !strings.Contains(err.Error(), w) {
 					t.Errorf("error %q must name %q", err, w)
+				}
+			}
+			for _, nw := range tc.notWant {
+				if strings.Contains(err.Error(), nw) {
+					t.Errorf("error %q must not carry %q", err, nw)
 				}
 			}
 		})

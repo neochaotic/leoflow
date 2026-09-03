@@ -21,13 +21,14 @@ When the single control-plane pod is evicted, the replacement has to:
 2. **Boot**: connect to Postgres and Redis, start the API, gRPC and metrics
    listeners, pass readiness.
 3. **Take leadership**: acquire the scheduler's advisory lock
-   ([ADR 0009](/project/adrs/0009-leader-election/)) and start the loop. For the
-   **post-leadership grace** (180 s by default) the two reapers that judge a
-   task by its pod — **agent-lost** and **pod-lost** — hold their verdicts, so a
-   task that merely lost its control plane for the duration of the restart is
-   not failed before the reconciler has recovered its durable outcome. The other
-   reapers (dispatch-lost, orphan-run, warm-worker-lost) carry no such grace
-   ([scheduler resilience](/operate/scheduler-resilience/)).
+   ([ADR 0009](/project/adrs/0009-leader-election/)) and start the loop. Until
+   the new leader has **settled** — the settling grace (180 s by default) has
+   elapsed, the pod informer has synced, and the pod reconciler has completed a
+   sweep under this leadership — **no reaper** fires, so a task that merely lost
+   its control plane for the duration of the restart is not failed before the
+   reconciler has recovered its durable outcome. One gate covers all five
+   reapers; a liveness valve opens it after 2 × grace if the sweep never
+   completes ([scheduler resilience](/operate/scheduler-resilience/)).
 
 Measured on a production drill (EKS Auto Mode), that window is **48–80 seconds**,
 dominated by the image pull. During it:
@@ -35,10 +36,10 @@ dominated by the image pull. During it:
 - **Nothing dispatches.** Queued task instances wait; scheduled runs slip.
 - **In-flight tasks lose their control plane.** Agents keep running the task and
   retry their heartbeats and outcome reports until the server returns. The
-  post-leadership grace on agent-lost and pod-lost is what keeps that from
-  becoming a false `agent_lost` / `pod_lost` failure; the server also validates
-  at boot that the timing ladder this depends on holds (heartbeat < agent-lost
-  threshold < grace < token TTL, and the reconcile interval below both graces),
+  leader-settling gate on the reapers is what keeps that from becoming a false
+  `agent_lost` / `pod_lost` failure; the server also validates at boot that the
+  timing ladder this depends on holds (heartbeat < agent-lost threshold <
+  settling grace < token TTL, and two maintenance cycles inside the grace),
   refusing to start if a knob was moved out of order. These bound the damage;
   they do not remove the window.
 - **The API and UI are down.** Every replica is the same binary, so one replica
@@ -359,10 +360,11 @@ No PDB, annotation or grace period prevents:
 
 Each of those is the 48–80 second restart window with no warning. The only
 thing that shrinks it is a replica that is already running somewhere else — and
-the scheduler's own resilience — the post-leadership grace on the agent-lost and
-pod-lost reapers, the destructive gate that holds every reaper during a step-down,
-the reconciler that recovers a pod's durable outcome, and the boot-time check of
-the timing ladder they depend on, described in
+the scheduler's own resilience — the leader-settling gate that holds every reaper
+until the reconciler has swept under the new leader, the destructive gate that
+holds every reaper during a step-down, the reconciler that recovers a pod's
+durable outcome (now run in the same cycle as, and before, the reapers), and the
+boot-time check of the timing ladder they depend on, described in
 [scheduler resilience](/operate/scheduler-resilience/) — is what keeps the tasks
 that were in flight during the window from being falsely failed. HA shortens the
 window; the resilience mechanisms make the remaining window survivable. Run both.

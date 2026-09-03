@@ -52,6 +52,31 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The shipped default stays `replicaCount: 1`: flipping it would
   Multi-Attach-break every existing install on upgrade.
 
+### Changed
+
+- **The reapers now run from a 30 s leader maintenance loop, ordered after the
+  pod reconciler, behind one leader-settling gate.** The five reapers
+  (orphan-run, agent-lost, dispatch-lost, pod-lost, warm-worker-lost) no longer
+  run from the scheduler's 1 s tick. They run once per maintenance cycle, and
+  every cycle reconciles first — recovering each finished pod's durable outcome —
+  then reaps, so a reaper always judges post-reconcile state. The two clocks
+  whose independence let a restart mark a succeeded task failed are now one.
+  The per-reaper post-leadership graces (agent-lost, pod-lost) are replaced by a
+  single **settling gate** at the entry of the reaper pass: after a
+  (re-)election no reaper fires until the settling grace (180 s) has elapsed,
+  the pod informer has synced, and a reconciler sweep has completed under this
+  leadership. A **liveness valve** opens the gate after 2 × grace with a `WARN`
+  and a `reap_settling_valve_open` decision if the sweep never completes, so a
+  broken reconciler cannot silently disable reaping. New decisions
+  `reap_settling_skip` / `reap_settling_valve_open`; `agent_lost_grace_skip` and
+  `pod_lost_grace_skip` are gone. The boot-time ladder check now enforces
+  `heartbeat < agent-lost threshold < settling grace < token TTL` and two
+  maintenance cycles inside the grace. **Detection latency note:** a stuck
+  run/TI is now noticed up to 30 s after its threshold elapses instead of
+  within 1 s — against thresholds of 60 s–5 min, and reaping being a backstop
+  rather than the primary path. Lite (no pods) is unchanged: no maintenance loop,
+  no reaping.
+
 ### Fixed
 
 - **A control-plane restart no longer marks a succeeded task failed, and no

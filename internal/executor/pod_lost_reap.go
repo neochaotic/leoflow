@@ -95,6 +95,8 @@ type podLostReaper struct {
 	// without leadership) disables the leadership grace; the per-task grace and
 	// the liveness read are unchanged.
 	leaderSince func() time.Time
+	// gate is re-checked before every destructive call (see destructiveGate).
+	gate destructiveGate
 }
 
 func newPodLostReaper(store PodLostReapStore, logger *slog.Logger, grace time.Duration, rec DecisionRecorder) *podLostReaper {
@@ -154,33 +156,47 @@ func (r *podLostReaper) run(ctx context.Context) error {
 		if active {
 			continue
 		}
-		applied, ferr := r.store.MarkTaskPodLost(ctx, c.TaskInstanceID)
-		if ferr != nil {
-			r.logger.Error("marking task pod-lost",
-				"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
-			r.record("pod_lost_error")
-			continue
-		}
-		if !applied {
-			// A late terminal report transitioned the TI between our list and our
-			// write (WHERE state='running' matched 0 rows) — it settled on its own,
-			// so do not log a false reap or run the teardown.
-			r.record("pod_lost_noop")
-			continue
-		}
-		r.logger.Warn("running task has no live pod past grace; failing as pod_lost",
-			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "running_since", c.RunningSince)
-		r.record("pod_lost")
-		// Best-effort teardown pinned to (run, task, try). TaskPodActive said no
-		// live pod, so this only sweeps a lingering terminal pod at most; a
-		// retry's newer pod has a different try-number label and is never touched.
-		if derr := r.pods.DeleteTaskPod(ctx, c.DagRunID, c.TaskID, c.TryNumber); derr != nil {
-			r.logger.Error("deleting pod-lost task pod",
-				"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "try", c.TryNumber, "error", derr)
-			r.record("pod_lost_pod_delete_error")
-		}
+		r.reapOne(ctx, c)
 	}
 	return nil
+}
+
+// reapOne fails one TI whose pod is gone and sweeps any lingering pod,
+// re-checking the destructive gate immediately before each write.
+func (r *podLostReaper) reapOne(ctx context.Context, c PodLostCandidate) {
+	if !gateOpen(r.gate, ctx) {
+		r.record("pod_lost_gate_skip")
+		return
+	}
+	applied, ferr := r.store.MarkTaskPodLost(ctx, c.TaskInstanceID)
+	if ferr != nil {
+		r.logger.Error("marking task pod-lost",
+			"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "error", ferr)
+		r.record("pod_lost_error")
+		return
+	}
+	if !applied {
+		// A late terminal report transitioned the TI between our list and our
+		// write (WHERE state='running' matched 0 rows) — it settled on its own,
+		// so do not log a false reap or run the teardown.
+		r.record("pod_lost_noop")
+		return
+	}
+	r.logger.Warn("running task has no live pod past grace; failing as pod_lost",
+		"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "running_since", c.RunningSince)
+	r.record("pod_lost")
+	// Best-effort teardown pinned to (run, task, try). TaskPodActive said no
+	// live pod, so this only sweeps a lingering terminal pod at most; a
+	// retry's newer pod has a different try-number label and is never touched.
+	if !gateOpen(r.gate, ctx) {
+		r.record("pod_lost_teardown_gate_skip")
+		return
+	}
+	if derr := r.pods.DeleteTaskPod(ctx, c.DagRunID, c.TaskID, c.TryNumber); derr != nil {
+		r.logger.Error("deleting pod-lost task pod",
+			"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "try", c.TryNumber, "error", derr)
+		r.record("pod_lost_pod_delete_error")
+	}
 }
 
 func (r *podLostReaper) record(decision string) {

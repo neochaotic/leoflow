@@ -1479,6 +1479,11 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	// fail a task whose pod finished during the outage before the reconciler has
 	// recovered its durable outcome record.
 	reaper.SetLeaderSince(sched.LeaderSince)
+	// Close the reaper's destructive gate the moment this instance stops leading:
+	// together with the step-down flag and the run-context cancel, this keeps a
+	// draining or stepping-down leader from marking TIs failed or deleting pods
+	// on its way out — the successor redoes the reap under its own grace.
+	reaper.SetLeading(sched.IsLeading)
 	sched.SetExecutionReaper(reaper)
 	startReconciler(ctx, cs, cfg.Executor.TaskNamespace, execStore, sched.IsLeading, logger, snapshotter)
 	startStagingGC(ctx, cs, cfg.Executor.TaskNamespace, store, sched.IsLeading, logger)

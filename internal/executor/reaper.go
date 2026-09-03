@@ -115,8 +115,26 @@ func inLeaderGrace(leaderSince func() time.Time, grace time.Duration, now time.T
 	return !ls.IsZero() && now.Sub(ls) < grace
 }
 
+// destructiveGate reports whether a reaper may take a destructive action — mark
+// a TI or run failed, delete a pod — right now. Every reaper consults it
+// immediately before each such call (not only at the top of the tick), so a
+// shutdown or leader step-down that lands after the candidate list was read
+// still stops the write that would follow. A nil gate is open (Lite / tests).
+//
+// The invariant: a leader that is terminating or stepping down must not mark or
+// delete. Its context is being canceled, its view of the fleet is about to go
+// stale, and the successor redoes every reap under its own post-leadership
+// grace — so a destructive write on the way out is at best redundant and at
+// worst the false reap the grace exists to prevent.
+type destructiveGate func(ctx context.Context) bool
+
+// gateOpen evaluates a possibly-nil destructiveGate.
+func gateOpen(g destructiveGate, ctx context.Context) bool {
+	return g == nil || g(ctx)
+}
+
 // Reaper is the execution-side backstop that fails stuck runs and task instances
-// the scheduler dispatched but that then went dark. It bundles the four
+// the scheduler dispatched but that then went dark. It bundles the five
 // independent reapers behind one ReapOnce entrypoint the scheduler drives once
 // per leader tick, so the scheduler depends on a single capability rather than
 // wiring each reaper itself.
@@ -128,10 +146,16 @@ type Reaper struct {
 	warmWorkerLost *warmWorkerLostReaper
 	logger         *slog.Logger
 	rec            DecisionRecorder
-	// inStepDown reports whether the scheduler is in a graceful leader step-down,
-	// so an expected context-cancel fanout of the run-context logs at WARN, not
-	// ERROR (#311). Nil is tolerated (treated as "not stepping down").
+	// inStepDown reports whether the scheduler is in a graceful leader step-down.
+	// It downgrades an expected context-cancel fanout of the run-context to WARN
+	// (#311) and, with ctx and leading, closes the destructive gate: a leader
+	// stepping down must not mark or delete. Nil is tolerated ("not stepping
+	// down").
 	inStepDown func() bool
+	// leading reports whether this instance currently holds scheduler leadership;
+	// part of the destructive gate. Nil is tolerated ("leading") so Lite and
+	// tests without an election are unaffected.
+	leading func() bool
 }
 
 // NewReaper constructs the reapers and wires their pod-teardown / liveness
@@ -168,7 +192,7 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 	warmWorkerLost := newWarmWorkerLostReaper(store, logger, rec)
 	warmWorkerLost.warmPods = warmPods
 
-	return &Reaper{
+	r := &Reaper{
 		orphan:         orphan,
 		agentLost:      agentLost,
 		dispatchLost:   dispatchLost,
@@ -178,6 +202,40 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 		rec:            rec,
 		inStepDown:     inStepDown,
 	}
+	// One destructive gate, shared by every reaper: each re-checks it right before
+	// a mark or delete, so a cancel/step-down that lands mid-tick still stops the
+	// write. The closure reads r's predicates at call time, so SetLeading may be
+	// wired after construction.
+	orphan.gate = r.mayReap
+	agentLost.gate = r.mayReap
+	dispatchLost.gate = r.mayReap
+	podLost.gate = r.mayReap
+	warmWorkerLost.gate = r.mayReap
+	return r
+}
+
+// SetLeading wires the leadership predicate into the destructive gate, so a
+// reaper tick on an instance that no longer holds leadership marks and deletes
+// nothing. The scheduler already drives ReapOnce only while leading; this is the
+// defensive re-check at the point of the write. Nil leaves the gate on ctx and
+// step-down alone.
+func (r *Reaper) SetLeading(fn func() bool) {
+	r.leading = fn
+}
+
+// mayReap is the destructive gate: open only while the tick's context is live,
+// the scheduler is not stepping down, and (when wired) this instance leads.
+func (r *Reaper) mayReap(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if r.inStepDown != nil && r.inStepDown() {
+		return false
+	}
+	if r.leading != nil && !r.leading() {
+		return false
+	}
+	return true
 }
 
 // SetLogSink wires the sink the agent-lost reaper uses to append a final
@@ -201,11 +259,17 @@ func (r *Reaper) SetLeaderSince(fn func() time.Time) {
 	r.podLost.leaderSince = fn
 }
 
-// ReapOnce runs the four reapers once, in the same order the scheduler drove
-// them: orphan-run, then agent-lost, then dispatch-lost, then pod-lost. The
-// dispatch-lost reaper runs AFTER the orphan-run reaper so a clean
-// stuck-queued -> failed -> orphan-run-failed chain can complete in a single
-// tick once the thresholds elapse.
+// ReapOnce runs the five reapers once, in the same order the scheduler drove
+// them: orphan-run, then agent-lost, then dispatch-lost, then pod-lost, then
+// warm-worker-lost. The dispatch-lost reaper runs AFTER the orphan-run reaper so
+// a clean stuck-queued -> failed -> orphan-run-failed chain can complete in a
+// single tick once the thresholds elapse.
+//
+// The whole tick is skipped — and the skip metered as reap_gate_skip — when the
+// destructive gate is closed on entry: a canceled context (SIGTERM drain, the
+// step-down cancel fan-out), a scheduler in step-down, or a lost leadership. The
+// reapers also re-check the gate before each individual write, so this early
+// return is the cheap common case, not the only defense.
 //
 // Each reaper's infra-level list error is logged and metered but never returned:
 // the reapers are independent backstops, so one's failure must not block the
@@ -214,6 +278,10 @@ func (r *Reaper) SetLeaderSince(fn func() time.Time) {
 // always returns nil today; the error return is kept for the seam so a future
 // hard-failure mode need not change the scheduler.
 func (r *Reaper) ReapOnce(ctx context.Context) error {
+	if !r.mayReap(ctx) {
+		r.record("reap_gate_skip")
+		return nil
+	}
 	if err := r.orphan.run(ctx); err != nil {
 		r.logError("orphan reaper", err)
 		r.record("orphan_list_error")

@@ -96,6 +96,8 @@ type warmWorkerLostReaper struct {
 	// warmPods is the live warm-pod seam. Nil (warm off / not wired) makes run a
 	// no-op via the empty live set.
 	warmPods WarmPodLister
+	// gate is re-checked before every destructive call (see destructiveGate).
+	gate destructiveGate
 }
 
 func newWarmWorkerLostReaper(store WarmWorkerLostReapStore, logger *slog.Logger, rec DecisionRecorder) *warmWorkerLostReaper {
@@ -153,6 +155,10 @@ func (r *warmWorkerLostReaper) run(ctx context.Context) error {
 	for _, ti := range bound {
 		if live[ti.WarmWorkerID] {
 			// The serving warm worker is still alive; the attempt is healthy.
+			continue
+		}
+		if !gateOpen(r.gate, ctx) {
+			r.record("warm_worker_lost_gate_skip")
 			continue
 		}
 		applied, ferr := r.store.MarkTaskPodLost(ctx, ti.TaskInstanceID)

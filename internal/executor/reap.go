@@ -57,6 +57,8 @@ type orphanReaper struct {
 	// pods tears down the reaped run's pods after the DB transition (#474).
 	// Nil in Lite (no pods); the delete is skipped.
 	pods PodManager
+	// gate is re-checked before every destructive call (see destructiveGate).
+	gate destructiveGate
 }
 
 func newOrphanReaper(store ReapStore, logger *slog.Logger, threshold time.Duration, rec DecisionRecorder) *orphanReaper {
@@ -83,26 +85,41 @@ func (r *orphanReaper) run(ctx context.Context) error {
 		if !IsOrphaned(c, r.threshold, now) {
 			continue
 		}
-		if rerr := r.store.ReapRun(ctx, c.RunID); rerr != nil {
-			r.logger.Error("reaping orphan run", "run", c.RunID, "dag", c.DagID, "error", rerr)
-			r.record("orphan_reap_error")
-			continue
-		}
-		r.logger.Warn("reaped orphan run", "run", c.RunID, "dag", c.DagID, "last_activity", c.LastActivity)
-		r.record("orphan_reaped")
-		// The run is now durably failed; tear down its pods so any still-running
-		// task containers stop instead of finishing abandoned work (#474). The
-		// run-id is unique, so this can only ever hit this run's pods. Best-effort:
-		// a delete failure is logged but does not undo the DB reap — the pod's own
-		// ActiveDeadline and the reconciler's GC remain backstops.
-		if r.pods != nil {
-			if derr := r.pods.DeleteRunPods(ctx, c.RunID); derr != nil {
-				r.logger.Error("deleting orphaned run pods", "run", c.RunID, "dag", c.DagID, "error", derr)
-				r.record("orphan_pod_delete_error")
-			}
-		}
+		r.reapOne(ctx, c)
 	}
 	return nil
+}
+
+// reapOne fails one orphaned run and tears down its pods, re-checking the
+// destructive gate immediately before each write.
+func (r *orphanReaper) reapOne(ctx context.Context, c ReapCandidate) {
+	if !gateOpen(r.gate, ctx) {
+		r.record("orphan_gate_skip")
+		return
+	}
+	if rerr := r.store.ReapRun(ctx, c.RunID); rerr != nil {
+		r.logger.Error("reaping orphan run", "run", c.RunID, "dag", c.DagID, "error", rerr)
+		r.record("orphan_reap_error")
+		return
+	}
+	r.logger.Warn("reaped orphan run", "run", c.RunID, "dag", c.DagID, "last_activity", c.LastActivity)
+	r.record("orphan_reaped")
+	// The run is now durably failed; tear down its pods so any still-running
+	// task containers stop instead of finishing abandoned work (#474). The
+	// run-id is unique, so this can only ever hit this run's pods. Best-effort:
+	// a delete failure is logged but does not undo the DB reap — the pod's own
+	// ActiveDeadline and the reconciler's GC remain backstops.
+	if r.pods == nil {
+		return
+	}
+	if !gateOpen(r.gate, ctx) {
+		r.record("orphan_teardown_gate_skip")
+		return
+	}
+	if derr := r.pods.DeleteRunPods(ctx, c.RunID); derr != nil {
+		r.logger.Error("deleting orphaned run pods", "run", c.RunID, "dag", c.DagID, "error", derr)
+		r.record("orphan_pod_delete_error")
+	}
 }
 
 func (r *orphanReaper) record(decision string) {

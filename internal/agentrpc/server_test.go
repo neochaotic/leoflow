@@ -393,7 +393,7 @@ func TestWriteLinesDrainsStreamToSink(t *testing.T) {
 	}
 	w := &fakeLogWriter{}
 	var published []string
-	if err := writeLines(w, recv, func(l string) { published = append(published, l) }); err != nil {
+	if err := writeLines(nil, w, recv, func(l string) { published = append(published, l) }); err != nil {
 		t.Fatalf("writeLines: %v", err)
 	}
 	if len(w.lines) != 3 || w.lines[2] != "line three" {
@@ -408,7 +408,7 @@ func TestWriteLinesDrainsStreamToSink(t *testing.T) {
 
 func TestWriteLinesPropagatesRecvError(t *testing.T) {
 	recv := func() (*agentv1.LogLine, error) { return nil, errors.New("stream broke") }
-	if err := writeLines(&fakeLogWriter{}, recv, func(string) {}); err == nil {
+	if err := writeLines(nil, &fakeLogWriter{}, recv, func(string) {}); err == nil {
 		t.Error("a non-EOF receive error should propagate")
 	}
 }

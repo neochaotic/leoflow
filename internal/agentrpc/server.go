@@ -181,6 +181,12 @@ type Server struct {
 	// "unchecked" (single-node / tests serve as before); production wires it to the
 	// scheduler's own leadership so exactly one replica — the leader — serves.
 	leaderCheck func() bool
+	// shutdown, when non-nil, is closed as the control plane begins shutting down.
+	// StreamLogs is a bidi stream held open for the whole task; without this signal
+	// its receive loop blocked on Recv until the agent finished, so a graceful stop
+	// waited on every running task and the pod was SIGKILLed with its log writers
+	// never Closed. nil (the default) keeps streams open until the agent ends them.
+	shutdown <-chan struct{}
 }
 
 // NewServer builds an AgentService server backed by the given authenticator,
@@ -199,6 +205,13 @@ func NewServer(authn Authenticator, store Store, xcomSvc XComService) *Server {
 func (s *Server) SetTokenRenewal(renewer AgentTokenRenewer, renewalTTL, maxAttemptLifetime time.Duration) {
 	s.renewer, s.renewalTTL, s.maxAttemptLifetime = renewer, renewalTTL, maxAttemptLifetime
 }
+
+// SetShutdown wires the control plane's shutdown context: once ctx ends, every
+// open StreamLogs returns Unavailable after closing (flushing) its log writer,
+// so the gRPC graceful stop that follows completes instead of waiting for the
+// tasks themselves to finish. The agent treats the closed stream as best-effort
+// log delivery and keeps running its task.
+func (s *Server) SetShutdown(ctx context.Context) { s.shutdown = ctx.Done() }
 
 // SetLogSink attaches the log sink that StreamLogs writes to. Without it,
 // StreamLogs reports Unimplemented.
@@ -448,7 +461,8 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 }
 
 // StreamLogs receives the task's log lines and writes them through the sink,
-// flushing on stream end so the logs survive the pod.
+// flushing on stream end so the logs survive the pod. The stream also ends when
+// the control plane shuts down (SetShutdown), so the flush runs before exit.
 func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err error) {
 	id, ierr := s.identify(stream.Context())
 	if ierr != nil {
@@ -485,7 +499,7 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 			}
 		}
 	}
-	return writeLines(w, stream.Recv, publish)
+	return writeLines(s.shutdown, w, stream.Recv, publish)
 }
 
 // logLevelString maps the protobuf log level onto the lowercase level name the
@@ -503,36 +517,78 @@ func logLevelString(level agentv1.LogLevel) string {
 	}
 }
 
-// writeLines drains log lines from recv into the writer until the stream ends,
-// also publishing each line for live tailing.
-func writeLines(w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish func(string)) error {
+// receivedLine is one Recv result handed from the receiver goroutine to the
+// writer loop.
+type receivedLine struct {
+	line *agentv1.LogLine
+	err  error
+}
+
+// writeLines drains log lines from recv into the writer until the stream ends
+// or shutdown fires, also publishing each line for live tailing. recv blocks for
+// as long as the agent keeps the stream open (the whole task), so it runs on its
+// own goroutine and the loop selects between the next line and the shutdown
+// signal; on shutdown it returns Unavailable so the caller's deferred writer
+// Close (the final flush) runs while the process is still alive. A nil shutdown
+// channel never fires. The receiver goroutine exits once recv returns, which
+// gRPC guarantees after the handler returns and the stream context is canceled.
+func writeLines(shutdown <-chan struct{}, w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish func(string)) error {
+	lines := make(chan receivedLine)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			line, err := recv()
+			select {
+			case lines <- receivedLine{line: line, err: err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 	for {
-		line, err := recv()
-		if errors.Is(err, io.EOF) {
+		var rl receivedLine
+		select {
+		case rl = <-lines:
+		case <-shutdown:
+			return status.Error(codes.Unavailable, "control plane shutting down; log stream closed")
+		}
+		if errors.Is(rl.err, io.EOF) {
 			return nil
 		}
-		if err != nil {
-			return status.Errorf(codes.Internal, "receiving log line: %v", err)
+		if rl.err != nil {
+			return status.Errorf(codes.Internal, "receiving log line: %v", rl.err)
 		}
-		msg := line.GetMessage()
-		// The agent derives the wire level from the source stream (stdout=info,
-		// stderr=error), which mis-colors an error printed to stdout or an info
-		// line written to stderr (e.g. Python logging). Refine it from the line's
-		// own text when that carries a clear level token; otherwise the
-		// stream-derived level stands. The Event shape and stream are unchanged.
-		ev := logs.Event{
-			Time:    line.GetTime().AsTime(),
-			Level:   logs.RefineLevel(msg, logLevelString(line.GetLevel())),
-			Stream:  line.GetStream(),
-			Message: msg,
+		if werr := writeLine(w, rl.line, publish); werr != nil {
+			return werr
 		}
-		if werr := w.WriteEvent(ev); werr != nil {
-			return status.Errorf(codes.Internal, "writing log line: %v", werr)
-		}
-		// Publish the full event (level/stream/ts), not just the text, so a live
-		// NDJSON follower can color lines exactly like the stored drill-down.
-		publish(logs.EncodeLine(ev))
 	}
+}
+
+// writeLine stores one received line and publishes it for live tailing.
+func writeLine(w logs.LogWriter, line *agentv1.LogLine, publish func(string)) error {
+	msg := line.GetMessage()
+	// The agent derives the wire level from the source stream (stdout=info,
+	// stderr=error), which mis-colors an error printed to stdout or an info
+	// line written to stderr (e.g. Python logging). Refine it from the line's
+	// own text when that carries a clear level token; otherwise the
+	// stream-derived level stands. The Event shape and stream are unchanged.
+	ev := logs.Event{
+		Time:    line.GetTime().AsTime(),
+		Level:   logs.RefineLevel(msg, logLevelString(line.GetLevel())),
+		Stream:  line.GetStream(),
+		Message: msg,
+	}
+	if werr := w.WriteEvent(ev); werr != nil {
+		return status.Errorf(codes.Internal, "writing log line: %v", werr)
+	}
+	// Publish the full event (level/stream/ts), not just the text, so a live
+	// NDJSON follower can color lines exactly like the stored drill-down.
+	publish(logs.EncodeLine(ev))
+	return nil
 }
 
 // xcomKey builds the XCom key for a task within the caller's tenant/dag/run.

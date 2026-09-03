@@ -129,6 +129,53 @@ func TestSetConnectionCommandPasswordStdin(t *testing.T) {
 	}
 }
 
+// TestSetConnectionCommandPasswordClearVsOmit locks the tri-state password flag
+// (#887): an explicit empty --password sends an empty string (clear), while
+// omitting --password sends no password field at all (nil, so the control plane
+// preserves the stored, unreadable password). Gating on non-empty would make an
+// empty --password a silent no-op, inconsistent with an empty --login clearing.
+func TestSetConnectionCommandPasswordClearVsOmit(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"connection_id":"pg","conn_type":"postgres"}`)
+	}))
+	defer srv.Close()
+	cfg := seedSessionConfig(t, srv.URL, "tok")
+
+	// --password '' → an empty (clearing) password is sent.
+	if _, _, err := run(t, "connections", "set", "pg",
+		"--config", cfg, "--conn-type", "postgres", "--password", ""); err != nil {
+		t.Fatalf("connections set --password '': %v", err)
+	}
+	var sent apiclient.ConnectionBody
+	if uerr := json.Unmarshal([]byte(gotBody), &sent); uerr != nil {
+		t.Fatalf("request body not JSON: %v (%s)", uerr, gotBody)
+	}
+	if sent.Password == nil {
+		t.Errorf("--password '' must send an (empty) password to clear it: %s", gotBody)
+	} else if *sent.Password != "" {
+		t.Errorf("--password '' should send an empty string, got %q", *sent.Password)
+	}
+
+	// Omitting --password → no password field is sent (preserve).
+	gotBody = ""
+	if _, _, err := run(t, "connections", "set", "pg",
+		"--config", cfg, "--conn-type", "postgres", "--host", "db2"); err != nil {
+		t.Fatalf("connections set (no --password): %v", err)
+	}
+	sent = apiclient.ConnectionBody{}
+	if uerr := json.Unmarshal([]byte(gotBody), &sent); uerr != nil {
+		t.Fatalf("request body not JSON: %v (%s)", uerr, gotBody)
+	}
+	if sent.Password != nil {
+		t.Errorf("omitting --password must not send a password field: %s", gotBody)
+	}
+}
+
 func TestSetConnectionCommandRequiresConnType(t *testing.T) {
 	cfg := seedSessionConfig(t, "http://127.0.0.1:0", "tok")
 	if _, _, err := run(t, "connections", "set", "pg", "--config", cfg); err == nil {

@@ -132,7 +132,12 @@ func connectionBodyFromFlags(cmd *cobra.Command, connID string, f connectionSetF
 	if cmd.Flags().Changed("login") {
 		body.Login = &f.login
 	}
-	if password != "" {
+	// Send the password only when it was actually supplied — via --password
+	// (including an explicit empty string, which clears it) or --password-stdin.
+	// Omitting both leaves it absent (nil), so the control plane preserves the
+	// stored, unreadable password. Gating on non-empty would make --password ''
+	// a silent no-op, inconsistent with --login '' clearing.
+	if cmd.Flags().Changed("password") || cmd.Flags().Changed("password-stdin") {
 		body.Password = &password
 	}
 	if cmd.Flags().Changed("schema") {

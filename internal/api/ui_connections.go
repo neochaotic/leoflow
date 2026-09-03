@@ -190,7 +190,7 @@ func unmaskExtra(incoming, stored string) (result string, preserve bool) {
 	if err := json.Unmarshal([]byte(stored), &st); err != nil {
 		st = nil // stored may be "" or a non-object → merge against an empty map
 	}
-	unmaskMap(in, st)
+	unmaskMap(in, st, true)
 	if containsMask(in) {
 		return "", true // a mask we could not resolve remains → preserve, fail closed
 	}
@@ -202,25 +202,72 @@ func unmaskExtra(incoming, stored string) (result string, preserve bool) {
 }
 
 // unmaskMap replaces, in place, every masked value in in with the value at the
-// same key in stored, recursing into nested objects (mirroring redactMap). A
-// masked key absent from stored is deleted — never persisted as a literal mask.
-func unmaskMap(in, stored map[string]any) {
+// same key in stored, recursing into nested objects AND arrays (mirroring
+// redactMap/redactAny, which mask secrets nested under arrays too). topLevel
+// governs what happens to a masked string with no stored counterpart: at the top
+// level it is deleted (a spurious masked key is dropped, never persisted as a
+// literal mask), but deeper it is LEFT in place so containsMask forces the whole
+// field to be preserved (fail closed) rather than silently editing a nested
+// structure whose secret we cannot restore.
+func unmaskMap(in, stored map[string]any, topLevel bool) {
 	for k, v := range in {
 		switch tv := v.(type) {
 		case string:
 			if tv == secretMask {
 				if sv, ok := stored[k]; ok {
 					in[k] = sv
-				} else {
+				} else if topLevel {
 					delete(in, k)
 				}
+				// deeper: leave the mask → containsMask preserves the whole field
 			}
 		case map[string]any:
 			var sub map[string]any
 			if sv, ok := stored[k].(map[string]any); ok {
 				sub = sv
 			}
-			unmaskMap(tv, sub)
+			unmaskMap(tv, sub, false)
+		case []any:
+			var sub []any
+			if sv, ok := stored[k].([]any); ok {
+				sub = sv
+			}
+			unmaskSlice(tv, sub)
+		}
+	}
+}
+
+// unmaskSlice restores masked values inside an array by aligning with the stored
+// array by index, mirroring redactAny's array recursion. A masked string element
+// is restored from the stored element at the same index when present; map and
+// nested-array elements are recursed. Anything a mask cannot be resolved from
+// (a shorter/absent stored array, a type mismatch) is left as the mask, so
+// containsMask forces the whole field to be preserved — never a silent drop that
+// would shift array indices.
+func unmaskSlice(in, stored []any) {
+	for i, v := range in {
+		var s any
+		if i < len(stored) {
+			s = stored[i]
+		}
+		switch tv := v.(type) {
+		case string:
+			if tv == secretMask && s != nil {
+				in[i] = s
+			}
+			// else leave the mask → containsMask fails closed
+		case map[string]any:
+			var sub map[string]any
+			if sm, ok := s.(map[string]any); ok {
+				sub = sm
+			}
+			unmaskMap(tv, sub, false)
+		case []any:
+			var sub []any
+			if ss, ok := s.([]any); ok {
+				sub = ss
+			}
+			unmaskSlice(tv, sub)
 		}
 	}
 }

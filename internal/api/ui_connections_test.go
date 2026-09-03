@@ -340,6 +340,38 @@ func TestConnectionUpdateExtraUnmask(t *testing.T) {
 			t.Errorf("explicit empty extra did not clear: %q", got)
 		}
 	})
+
+	t.Run("secret nested in an array is restored, top-level edit lands", func(t *testing.T) {
+		store := &fakeConnStore{conns: map[string]domain.Connection{
+			"wh": {
+				ConnID: "wh", ConnType: "databricks",
+				// A secret buried in an array-of-objects (redactExtra masks these too).
+				Extra: `{"account":"acme","hosts":[{"password":"arr-REAL"}]}`,
+			},
+		}}
+		srv := connServer(store)
+		// UI GET'd it (array password shown as ***) and edited the top-level account.
+		rec := authGet(srv, http.MethodPatch, "/api/v2/connections/wh",
+			`{"conn_type":"databricks","extra":"{\"account\":\"beta\",\"hosts\":[{\"password\":\"***\"}]}"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch = %d (%s)", rec.Code, rec.Body.String())
+		}
+		var ex map[string]any
+		if err := json.Unmarshal([]byte(store.conns["wh"].Extra), &ex); err != nil {
+			t.Fatalf("stored extra not json: %v (%q)", err, store.conns["wh"].Extra)
+		}
+		if ex["account"] != "beta" {
+			t.Errorf("top-level edit was dropped (whole field force-preserved?): %v", ex["account"])
+		}
+		hosts, _ := ex["hosts"].([]any)
+		if len(hosts) != 1 {
+			t.Fatalf("array shape changed: %v", ex)
+		}
+		first, _ := hosts[0].(map[string]any)
+		if first["password"] != "arr-REAL" {
+			t.Errorf("array-nested secret overwritten by the mask: %v", first)
+		}
+	})
 }
 
 // TestConnectionUpsertPOSTMaskedRoundTrip locks that the POST upsert path (what
@@ -407,9 +439,32 @@ func TestUnmaskExtra(t *testing.T) {
 		t.Errorf("unresolvable mask must be dropped, not persisted: %v", m)
 	}
 
-	// A mask buried in an array (stored cannot supply it) fails closed to preserve.
-	if _, preserve = unmaskExtra(`{"opts":["***"]}`, stored); !preserve {
-		t.Error("an unresolvable array mask must fail closed to preserve")
+	// A secret nested inside an array-of-objects is restored from the stored array
+	// (aligned by index), and a co-edited plain key at the top level still lands —
+	// the whole field must NOT be force-preserved.
+	arrStored := `{"region":"us-east","items":[{"token":"real-arr","note":"n"}]}`
+	got, preserve = unmaskExtra(`{"region":"eu-west","items":[{"token":"***","note":"n"}]}`, arrStored)
+	if preserve {
+		t.Fatal("a restorable array-nested mask must not force wholesale preserve")
+	}
+	_ = json.Unmarshal([]byte(got), &m)
+	if m["region"] != "eu-west" {
+		t.Errorf("top-level co-edit lost when a mask sat in an array: %v", m)
+	}
+	if items, _ := m["items"].([]any); len(items) != 1 {
+		t.Fatalf("array shape changed: %v", m)
+	} else if first, _ := items[0].(map[string]any); first["token"] != "real-arr" {
+		t.Errorf("array-nested secret not restored from stored: %v", m)
+	}
+
+	// A masked array element the stored side cannot supply (shorter/empty array)
+	// fails closed to preserve — never a silent drop that shifts indices.
+	if _, preserve = unmaskExtra(`{"items":[{"token":"***"}]}`, `{"items":[]}`); !preserve {
+		t.Error("an unresolvable array-nested mask must fail closed to preserve")
+	}
+	// A bare masked string in an array with no stored counterpart also fails closed.
+	if _, preserve = unmaskExtra(`{"opts":["***"]}`, `{"opts":[]}`); !preserve {
+		t.Error("an unresolvable bare array mask must fail closed to preserve")
 	}
 
 	// An explicit empty extra clears (not the mask, not an object).

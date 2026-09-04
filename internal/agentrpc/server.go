@@ -185,7 +185,12 @@ type Server struct {
 	// StreamLogs is a bidi stream held open for the whole task; without this signal
 	// its receive loop blocked on Recv until the agent finished, so a graceful stop
 	// waited on every running task and the pod was SIGKILLed with its log writers
-	// never Closed. nil (the default) keeps streams open until the agent ends them.
+	// never Closed. AwaitAssignment is the same bug class from the other side: an
+	// idle warm worker holds one open with nothing arriving on it at all, so with
+	// warm pools on the graceful stop exhausted its bound on EVERY shutdown and the
+	// forced fallback became the normal path. Every handler that can block
+	// indefinitely on a peer must select on this. nil (the default) keeps streams
+	// open until the peer ends them.
 	shutdown <-chan struct{}
 }
 
@@ -207,10 +212,12 @@ func (s *Server) SetTokenRenewal(renewer AgentTokenRenewer, renewalTTL, maxAttem
 }
 
 // SetShutdown wires the control plane's shutdown context: once ctx ends, every
-// open StreamLogs returns Unavailable after closing (flushing) its log writer,
-// so the gRPC graceful stop that follows completes instead of waiting for the
-// tasks themselves to finish. The agent treats the closed stream as best-effort
-// log delivery and keeps running its task.
+// long-lived stream returns Unavailable, so the gRPC graceful stop that follows
+// completes instead of waiting for the tasks themselves to finish. An open
+// StreamLogs first closes (flushes) its log writer; the agent treats the closed
+// stream as best-effort log delivery and keeps running its task. An open
+// AwaitAssignment ends too — an idle warm worker holds one open indefinitely, so
+// leaving it out would make the forced stop the normal shutdown path.
 func (s *Server) SetShutdown(ctx context.Context) { s.shutdown = ctx.Done() }
 
 // SetLogSink attaches the log sink that StreamLogs writes to. Without it,

@@ -37,7 +37,7 @@ Package executor runs task instances via Kubernetes, Docker, or a subprocess.
   - [func \(e \*KubernetesExecutor\) Execute\(ctx context.Context, req Request\) \(Disposition, error\)](<#KubernetesExecutor.Execute>)
   - [func \(e \*KubernetesExecutor\) GCStagingClaims\(ctx context.Context, ttl time.Duration\) error](<#KubernetesExecutor.GCStagingClaims>)
   - [func \(e \*KubernetesExecutor\) SetStagingStore\(s StagingStore\)](<#KubernetesExecutor.SetStagingStore>)
-  - [func \(e \*KubernetesExecutor\) TaskPodActive\(ctx context.Context, runID, taskID string, tryNumber int\) \(bool, error\)](<#KubernetesExecutor.TaskPodActive>)
+  - [func \(e \*KubernetesExecutor\) TaskPodPresence\(ctx context.Context, runID, taskID string, tryNumber int\) \(PodPresence, error\)](<#KubernetesExecutor.TaskPodPresence>)
 - [type KubernetesWarmPods](<#KubernetesWarmPods>)
   - [func NewKubernetesWarmPods\(cs kubernetes.Interface, namespace string, newSpec WarmPodSpecFunc\) \*KubernetesWarmPods](<#NewKubernetesWarmPods>)
   - [func \(k \*KubernetesWarmPods\) CreateWarmPod\(ctx context.Context, t WarmTarget, anchorName, anchorUID string\) error](<#KubernetesWarmPods.CreateWarmPod>)
@@ -59,6 +59,8 @@ Package executor runs task instances via Kubernetes, Docker, or a subprocess.
 - [type PodLostCandidate](<#PodLostCandidate>)
 - [type PodLostReapStore](<#PodLostReapStore>)
 - [type PodManager](<#PodManager>)
+- [type PodPresence](<#PodPresence>)
+  - [func \(p PodPresence\) String\(\) string](<#PodPresence.String>)
 - [type PodPresenceCache](<#PodPresenceCache>)
 - [type PodSecurity](<#PodSecurity>)
 - [type PodSnapshotter](<#PodSnapshotter>)
@@ -431,14 +433,16 @@ func (e *KubernetesExecutor) SetStagingStore(s StagingStore)
 
 SetStagingStore wires the metadatabase\-backed staging\-volume lifecycle store \(ADR 0022\). With no store set, provisioning is not recorded and GC is a no\-op.
 
-<a name="KubernetesExecutor.TaskPodActive"></a>
-### func \(\*KubernetesExecutor\) [TaskPodActive](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_terminate.go#L85>)
+<a name="KubernetesExecutor.TaskPodPresence"></a>
+### func \(\*KubernetesExecutor\) [TaskPodPresence](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_terminate.go#L91>)
 
 ```go
-func (e *KubernetesExecutor) TaskPodActive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error)
+func (e *KubernetesExecutor) TaskPodPresence(ctx context.Context, runID, taskID string, tryNumber int) (PodPresence, error)
 ```
 
-TaskPodActive reports whether a pod for exactly the \(run, task, try\) attempt exists and is still Pending or Running. The dispatch\-lost and pod\-lost reapers consult this before failing a TI: a live pod means the dispatch actually landed and the node is merely slow to pull the image \(\#461\), so the reaper must DEFER. No pod, or only terminal \(Failed/Succeeded/Unknown\) pods, means the attempt is genuinely lost and the reaper may proceed.
+TaskPodPresence reports what the apiserver holds for exactly the \(run, task, try\) attempt: a live pod \(Pending/Running\), a present\-but\-finished pod, or no pod at all. The dispatch\-lost and pod\-lost reapers consult this before failing a TI: a live pod means the dispatch actually landed and the node is merely slow to pull the image \(\#461\), so the reaper must DEFER.
+
+A present\-but\-finished pod is reported apart from an absence on purpose. The pod object still carries the attempt's outcome \(the termination log the reconciler recovers a durable result from\), so it is the reconciler's to settle and no reaper may delete it; only a genuine absence means the attempt is lost with nothing left to recover. Any live pod for the attempt wins over a lingering finished sibling, since work may still be running.
 
 Try\-number is pinned — the same invariant guard as DeleteTaskPod above. The retry rail resets up\_for\_retry \-\> none with try\_number\+1 and the planner re\-queues the TI \(storage/queries/runs.sql\), so a \`queued\`/\`running\` TI can be on try 2 while try 1's pod still lingers Pending after a failed best\-effort delete. Selecting on \(run, task\) alone would match that stale older pod and false\-defer the reap of the current attempt forever \(\#723\). Asking about the attempt the reaper is about to fail is the correct liveness question.
 
@@ -550,7 +554,7 @@ ParseAgentIdentity decodes the AgentIdentityAnnotation payload. It is the read s
 
 PodInformer is a shared\-informer read\-path over task pods, scoped by namespace and the leoflow.io/run\-id label \(ADR 0002 pods\). It replaces the reapers' per\-running\-TI\-per\-second apiserver LIST storm and the reconciler's 30s LIST with one long\-lived watch feeding a local cache.
 
-Its readings are trusted only in the safe direction \(\#461\): CachedPodActive is consulted ONLY to DEFER a reap when a pod is present and Pending/Running — a cache "absent" reading is never authoritative and callers MUST fall through to the live TaskPodActive \(quorum\) read before any destructive action. Cache lag can therefore only ever delay a reap by a tick, never cause a false\-positive one. SnapshotTaskPods is safe for the reconciler because presence of a terminal pod is monotonic and every settle is attempt/state\-guarded \(ADR 0052\).
+Its readings are trusted only in the safe direction \(\#461\): CachedPodActive is consulted ONLY to DEFER a reap when a pod is present and Pending/Running — a cache "absent" reading is never authoritative and callers MUST fall through to the live TaskPodPresence \(quorum\) read before any destructive action. Cache lag can therefore only ever delay a reap by a tick, never cause a false\-positive one. SnapshotTaskPods is safe for the reconciler because presence of a terminal pod is monotonic and every settle is attempt/state\-guarded \(ADR 0052\).
 
 It is constructed only in the scheduler/all role \(ADR 0049\), never api\-only, and is nil in Lite/subprocess \(no pods\), where consumers keep their live paths.
 
@@ -576,7 +580,7 @@ NewPodInformer builds a shared pod informer over the given cluster, scoped to na
 func (p *PodInformer) CachedPodActive(runID, taskID string, tryNumber int) bool
 ```
 
-CachedPodActive reports whether the cache holds a pod for exactly the \(run, task, try\) attempt that is Pending or Running — the exact predicate TaskPodActive uses, pinned to the same attempt \(\#723\). It is the safe direction of the asymmetric\-trust contract: a true return may DEFER a reap; a false return is NEVER authoritative and the caller must fall through to the live read. Before the cache has synced it returns false, so a cold cache degrades to the live path rather than misreporting absence.
+CachedPodActive reports whether the cache holds a pod for exactly the \(run, task, try\) attempt that is Pending or Running — the exact predicate TaskPodPresence uses, pinned to the same attempt \(\#723\). It is the safe direction of the asymmetric\-trust contract: a true return may DEFER a reap; a false return is NEVER authoritative and the caller must fall through to the live read. Before the cache has synced it returns false, so a cold cache degrades to the live path rather than misreporting absence.
 
 <a name="PodInformer.HasSynced"></a>
 ### func \(\*PodInformer\) [HasSynced](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L110>)
@@ -662,7 +666,7 @@ type PodLostReapStore interface {
 ```
 
 <a name="PodManager"></a>
-## type [PodManager](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L19-L35>)
+## type [PodManager](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L19-L36>)
 
 PodManager is the slice of the Kubernetes executor the reapers use to \(1\) tear down a reaped task's pod and \(2\) check whether a queued TI's pod is actually live before declaring its dispatch lost \(\#474, \#461\).
 
@@ -683,22 +687,66 @@ type PodManager interface {
     // orphan-run reaper, which abandons the whole run. The run-id is unique
     // per run, so no other run's pod can match. Tolerates missing pods.
     DeleteRunPods(ctx context.Context, runID string) error
-    // TaskPodActive reports whether a pod for exactly the (run, task, try)
-    // attempt exists and is Pending or Running. The reaper defers when it is
-    // true — the dispatch landed, the node is merely slow (#461). Try-number is
-    // pinned so a retried TI's liveness gate asks about the attempt it is about
-    // to fail, not any older attempt whose pod may still linger (#723).
-    TaskPodActive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error)
+    // TaskPodPresence reports what the apiserver holds for exactly the
+    // (run, task, try) attempt: a live pod, a present-but-finished pod, or
+    // nothing. A reaper defers on a live pod — the dispatch landed, the node is
+    // merely slow (#461). Try-number is pinned so a retried TI's liveness gate
+    // asks about the attempt it is about to fail, not any older attempt whose
+    // pod may still linger (#723).
+    TaskPodPresence(ctx context.Context, runID, taskID string, tryNumber int) (PodPresence, error)
 }
 ```
 
+<a name="PodPresence"></a>
+## type [PodPresence](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L49>)
+
+PodPresence is the three\-way answer to "what does the apiserver hold for this attempt's pod?".
+
+The distinction is load\-bearing, not cosmetic. A bare bool collapsed the last two states, and the pod\-lost reaper read that collapse as authorization to reap: for a task pod that had already finished it marked the task instance pod\_lost and then DELETED the pod — destroying the termination\-log evidence the reconciler recovers the task's durable outcome from. A finished task then reads as failed, and its run with it. Presence must be three\-valued so a reaper can defer on "present but finished" while still reaping on a genuine absence, which is the state pod\-lost exists for.
+
+```go
+type PodPresence int
+```
+
+<a name="PodPresenceLive"></a>
+
+```go
+const (
+    // PodPresenceLive means a pod for the attempt exists and is Pending or
+    // Running: work may still be happening, so every reaper must defer. It is
+    // deliberately the zero value — an unset or error-path presence then
+    // authorizes nothing destructive.
+    PodPresenceLive PodPresence = iota
+    // PodPresenceTerminal means a pod for the attempt exists but none of them is
+    // Pending or Running. Whatever happened to that attempt is recorded on the
+    // pod object, so settling it belongs to the reconciler and no reaper may
+    // delete it. Phase Unknown counts here as well: the pod object is still
+    // there, the reconciler still watches it, and it is not an absence.
+    PodPresenceTerminal
+    // PodPresenceAbsent means the apiserver holds no pod for the attempt at all
+    // — the attempt's pod is genuinely gone (deleted, evicted, lost with its
+    // node) and there is nothing left to settle from. This is the only presence
+    // that authorizes a pod-lost reap.
+    PodPresenceAbsent
+)
+```
+
+<a name="PodPresence.String"></a>
+### func \(PodPresence\) [String](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L71>)
+
+```go
+func (p PodPresence) String() string
+```
+
+String names the presence for logs.
+
 <a name="PodPresenceCache"></a>
-## type [PodPresenceCache](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L53-L60>)
+## type [PodPresenceCache](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L100-L107>)
 
 PodPresenceCache is an optional read\-through cache of pod presence — backed by a shared informer \(PR\-10\) — that the pod\-lost and dispatch\-lost reapers consult ONLY to DEFER a reap, never to authorize one. Its trust is asymmetric \(\#461\):
 
 - CachedPodActive == true =\> a pod is present and Pending/Running; the reaper may skip the live LIST and defer, because presence is monotonic\-safe against cache lag \(a pod the cache still shows as live cannot have been gone longer than the lag, and deferring one tick is harmless\).
-- CachedPodActive == false =\> NOT authoritative. The reaper MUST fall through to the live TaskPodActive \(quorum\) read before any destructive action, so a lagged/cold cache can only ever delay a reap by a tick, never cause a false\-positive one.
+- CachedPodActive == false =\> NOT authoritative. The reaper MUST fall through to the live TaskPodPresence \(quorum\) read before any destructive action, so a lagged/cold cache can only ever delay a reap by a tick, never cause a false\-positive one.
 
 It exists to remove the O\(running\-TIs\)/sec apiserver LIST storm from the read path while keeping the kill decision on the live read. Nil in Lite/subprocess and before the informer warms: every candidate then uses the live path.
 
@@ -809,7 +857,7 @@ NewReaper constructs the reapers and wires their pod\-teardown / liveness capabi
 warmPods is the live warm\-pod seam \(ADR 0058 N1d\-a2\), threaded to the two warm consumers exactly the way pods/cache are threaded: the warm\-worker\-lost reaper \(which recovers a dead worker's attempts\) and the dispatch\-lost reaper's H3 defer. Nil \(warm pools off / not wired\) makes the warm reaper a no\-op and the dispatch\-lost warm defer inert — with the flag off no TI ever carries a warm\_worker\_id either, so both warm paths are doubly inert, byte\-for\-byte today.
 
 <a name="Reaper.ReapOnce"></a>
-### func \(\*Reaper\) [ReapOnce](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L360>)
+### func \(\*Reaper\) [ReapOnce](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L378>)
 
 ```go
 func (r *Reaper) ReapOnce(ctx context.Context) error
@@ -1155,7 +1203,7 @@ type StaleQueuedCandidate struct {
     // set AND the worker is in the live warm-pod set, the dispatch-lost reaper
     // DEFERS: the warm worker holds this attempt and is merely slow to transition
     // queued->running, so failing it would double-run the task (review finding
-    // H3). A warm attempt has no task pod, so the existing TaskPodActive gate
+    // H3). A warm attempt has no task pod, so the existing pod-presence gate
     // cannot protect it — this warm check is what does.
     WarmWorkerID string
 }

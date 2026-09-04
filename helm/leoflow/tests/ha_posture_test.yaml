@@ -355,6 +355,43 @@ tests:
       - failedTemplate:
           errorMessage: "deployment.preStopSleepSeconds=45 does not fit the effective termination grace of 30s (Kubernetes' own default, because the chart ships terminationGracePeriodSeconds unset): Kubernetes validates the preStop sleep as 0 < seconds <= terminationGracePeriodSeconds, so the apiserver REJECTS this pod spec and the install fails even though the render looked fine. The grace also has to cover the shutdown work that runs AFTER the sleep (HTTP <=10s + dispatch drain <=15s + gRPC stop <=10s), so leave it real headroom rather than a second. Raise terminationGracePeriodSeconds (the HA profile ships 60) or lower deployment.preStopSleepSeconds."
 
+  # The guard has to model the RENDERED spec, not the raw value. The renderer
+  # uses `with`, which omits terminationGracePeriodSeconds for nil, 0 and ""
+  # alike, so on all three the apiserver applies its own 30 and a 5s sleep is
+  # legal. A bare `terminationGracePeriodSeconds:` key in a layered values file
+  # and Helm's documented `--set terminationGracePeriodSeconds=null` both
+  # produce nil, and a guard that treats nil as "grace is 0" refuses a legal
+  # install with a reason the spec never had (#918).
+  - it: accepts the preStop sleep when terminationGracePeriodSeconds is null, where the apiserver's 30 applies
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      terminationGracePeriodSeconds: null
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - isNull:
+          path: spec.template.spec.terminationGracePeriodSeconds
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+
+  - it: accepts the preStop sleep when terminationGracePeriodSeconds is an explicit 0, where the apiserver's 30 applies
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      terminationGracePeriodSeconds: 0
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - isNull:
+          path: spec.template.spec.terminationGracePeriodSeconds
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+
   - it: refuses a preStop sleep equal to an explicitly set grace
     template: deployment.yaml
     set:

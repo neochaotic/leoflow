@@ -97,7 +97,18 @@ telling them now beats a rejected install on their next control-plane upgrade.
 {{- if gt $preStopSleep 0 -}}
 {{- $grace := 30 -}}
 {{- $graceNote := "Kubernetes' own default, because the chart ships terminationGracePeriodSeconds unset" -}}
-{{- if ne (toString .Values.terminationGracePeriodSeconds) "" -}}
+{{- /* Model the RENDERED spec, not the raw value. _controlplane-deployment.tpl
+     emits the field under `{{ with .Values.terminationGracePeriodSeconds }}`,
+     which omits it for nil, 0 and "" alike — so on all three the pod spec
+     carries no grace and the apiserver applies its own 30, which is what the
+     guard has to reason about. Matching `with`'s truthiness here by
+     construction is what keeps the two from disagreeing: a bare
+     `terminationGracePeriodSeconds:` key in a layered values file and Helm's
+     documented `--set terminationGracePeriodSeconds=null` both produce nil, and
+     reading nil as "the grace is 0" refused a legal install for a reason the
+     rendered spec never had (#918). An explicit 0 lands the same way on
+     purpose: the renderer omits it, so 30 applies. */ -}}
+{{- if .Values.terminationGracePeriodSeconds -}}
 {{- $grace = int .Values.terminationGracePeriodSeconds -}}
 {{- $graceNote = "the terminationGracePeriodSeconds this install sets" -}}
 {{- end -}}

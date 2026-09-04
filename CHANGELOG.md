@@ -93,6 +93,31 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The pod-lost reaper no longer reaps a task whose pod is still there,
+  finished.** Its liveness question returned one bool for two different states —
+  "no pod for this attempt at all" and "a pod that exists in a terminal phase" —
+  and it read either as authorization to reap: it marked the task instance
+  `pod_lost` and then deleted the pod, destroying the termination log the
+  reconciler recovers the attempt's durable outcome from (so a task that had
+  SUCCEEDED read as failed, and its run with it). Pod liveness is now
+  three-valued and pod-lost defers on a present-but-finished pod, metering a
+  `pod_lost_terminal_pod_defer` decision, reaping only when the apiserver holds
+  no pod for the attempt. This holds independently of the leader-settling gate,
+  its grace and the reconciler cadence: an absence is a state no timing can
+  manufacture, so the settling gate's liveness valve — which opens after 2 ×
+  grace precisely so a broken reconciler sweep cannot wedge the reapers — can no
+  longer surface the reap it was narrowing. Behavior on an unreadable apiserver
+  is unchanged and now locked by a test: pod-lost defers with
+  `pod_lost_pod_query_error`, which is also the reason the valve is safe to open
+  (the reconciler's pod LIST and the reaper's own hit the same apiserver, so
+  whatever stops the sweep also denies the reaper its authorization). The
+  dispatch-lost reaper's behavior is unchanged in this fix, and that reaper can
+  still delete a terminal pod's outcome record: a queued attempt's finished pod
+  CAN carry an outcome (the settle statements admit `queued`, and a dispatch can
+  stamp a row that already reached `running` back to `queued`). Tracked as
+  [#928](https://github.com/neochaotic/leoflow/issues/928), with the underlying
+  unguarded transition as [#929](https://github.com/neochaotic/leoflow/issues/929).
+
 - **A control-plane restart no longer marks a succeeded task failed, and no
   longer condemns the rest of its run.** A production drill (kill the
   control-plane pod mid-run) turned a dbt task that had SUCCEEDED into `failed`

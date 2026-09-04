@@ -293,6 +293,35 @@ type settlingVerdict struct {
 // exist to prevent. By then the reconciler has had at least four cycles, so the
 // diagnosis "the sweep is broken" is real, not a scheduling artifact.
 //
+// Why opening it is safe — the argument the valve rests on. The dominant reason
+// a sweep never completes is that the apiserver cannot be read: unreachable,
+// unauthorized, throttled. The reconciler's pod LIST and the reapers' own
+// pod-presence LIST hit that same apiserver, so that failure usually denies
+// every pod-dependent reaper its authorization too: pod-lost and dispatch-lost
+// defer on a query error, and the warm-worker-lost reaper aborts its tick with
+// zero marks. They fail closed on their own, without the gate.
+//
+// But the two reads CAN diverge, and pretending otherwise is how this gate
+// would grow a false reputation. RBAC cannot split them (one rule, one verb,
+// one resource, and Kubernetes RBAC has no field or label granularity), yet a
+// broad namespace-wide LIST can time out where a narrow server-side-filtered
+// one succeeds — which is exactly the trigger this whole class was reported
+// under — an informer that never syncs needs `watch` where the reapers need
+// only `list`, and API Priority and Fairness can starve the heavy request while
+// the cheap one gets through. That divergence is precisely why the valve must
+// not be the only guard, and why pod-lost reaps on absence alone.
+//
+// The gate covers the remaining case — the apiserver answers but no sweep has
+// yet run under this leadership — and the valve trades that window for not
+// wedging the reapers forever.
+//
+// The valve must therefore never be the only thing standing between a
+// recoverable pod and a destructive reap, because it is designed to open. That
+// is why the pod-lost reaper reaps only when the attempt has NO pod object at
+// all: a pod that is present but finished stays the reconciler's to settle from
+// its termination log, valve open or shut. A reap authorized by presence alone
+// cannot be manufactured by any grace, cadence or election timing.
+//
 // The warm-worker-lost reaper is gated too although its signal (a warm pod's
 // own liveness, read by a live LIST that fails closed) is not one a restart
 // manufactures: delaying it by the grace is harmless — a dead worker's attempts

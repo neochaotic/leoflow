@@ -18,7 +18,11 @@ type fakePodManager struct {
 	// that attempt; absent key is false. Keying by try mirrors the real
 	// executor's try-pinned selector (#723).
 	active map[string]bool
-	// activeCalls counts TaskPodActive invocations, so a test can assert the live
+	// terminal maps "runID/taskID/try" -> whether a present-but-finished pod
+	// exists for that attempt. A key in neither map is a genuine absence, which
+	// is what most tests want, so they need not mention this one.
+	terminal map[string]bool
+	// activeCalls counts TaskPodPresence invocations, so a test can assert the live
 	// (quorum) read was skipped when the presence cache already deferred.
 	activeCalls int
 	activeErr   error
@@ -48,12 +52,24 @@ func (f *fakePodManager) DeleteRunPods(_ context.Context, runID string) error {
 	return nil
 }
 
-func (f *fakePodManager) TaskPodActive(_ context.Context, runID, taskID string, try int) (bool, error) {
+// TaskPodPresence reports absence for a key in neither map, because most
+// fixtures here are about a pod that is gone. Absence is the one presence that
+// AUTHORIZES a reap, so a test about deferral must populate `active` or
+// `terminal` explicitly rather than rely on the zero-configuration default.
+func (f *fakePodManager) TaskPodPresence(_ context.Context, runID, taskID string, try int) (PodPresence, error) {
 	f.activeCalls++
 	if f.activeErr != nil {
-		return false, f.activeErr
+		return PodPresenceLive, f.activeErr
 	}
-	return f.active[fmt.Sprintf("%s/%s/%d", runID, taskID, try)], nil
+	key := fmt.Sprintf("%s/%s/%d", runID, taskID, try)
+	switch {
+	case f.active[key]:
+		return PodPresenceLive, nil
+	case f.terminal[key]:
+		return PodPresenceTerminal, nil
+	default:
+		return PodPresenceAbsent, nil
+	}
 }
 
 // --- Dispatch-lost reaper: K8s-aware deferral (part C) ---------------------

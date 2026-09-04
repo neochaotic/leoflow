@@ -16,7 +16,7 @@ import (
 )
 
 // Pod label keys the informer selects and filters on. They mirror exactly the
-// keys BuildPod stamps and TaskPodActive selects, sanitizeLabel-transformed —
+// keys BuildPod stamps and TaskPodPresence selects, sanitizeLabel-transformed —
 // reusing the same transform is load-bearing: a lookup built from a different key
 // would silently miss every pod and quietly return the storm PR-10 removes.
 const (
@@ -39,7 +39,7 @@ var errCacheNotSynced = errors.New("pod informer cache not synced")
 // Its readings are trusted only in the safe direction (#461): CachedPodActive is
 // consulted ONLY to DEFER a reap when a pod is present and Pending/Running — a
 // cache "absent" reading is never authoritative and callers MUST fall through to
-// the live TaskPodActive (quorum) read before any destructive action. Cache lag
+// the live TaskPodPresence (quorum) read before any destructive action. Cache lag
 // can therefore only ever delay a reap by a tick, never cause a false-positive
 // one. SnapshotTaskPods is safe for the reconciler because presence of a terminal
 // pod is monotonic and every settle is attempt/state-guarded (ADR 0052).
@@ -120,7 +120,7 @@ func (p *PodInformer) Shutdown() {
 
 // CachedPodActive reports whether the cache holds a pod for exactly the
 // (run, task, try) attempt that is Pending or Running — the exact predicate
-// TaskPodActive uses, pinned to the same attempt (#723). It is the safe
+// TaskPodPresence uses, pinned to the same attempt (#723). It is the safe
 // direction of the asymmetric-trust contract: a true return may DEFER a reap; a
 // false return is NEVER authoritative and the caller must fall through to the live
 // read. Before the cache has synced it returns false, so a cold cache degrades to

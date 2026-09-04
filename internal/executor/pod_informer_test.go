@@ -45,9 +45,9 @@ func waitFor(t *testing.T, cond func() bool) bool {
 
 // TestPodInformer_SeesAddAndDelete verifies the cache reflects the live pod set
 // through the initial LIST and subsequent watch events, applies the same
-// sanitizeLabel transform BuildPod/TaskPodActive use (so a raw run-id lookup hits
+// sanitizeLabel transform BuildPod/TaskPodPresence use (so a raw run-id lookup hits
 // the sanitized label), and treats only Pending/Running as active — the identical
-// predicate to TaskPodActive. A Succeeded pod is not active.
+// predicate to TaskPodPresence. A Succeeded pod is not active.
 func TestPodInformer_SeesAddAndDelete(t *testing.T) {
 	// Uppercase/underscore run-id proves the lookup sanitizes before matching.
 	cs := fake.NewClientset(
@@ -91,7 +91,7 @@ func TestPodInformer_SeesAddAndDelete(t *testing.T) {
 
 // TestPodInformer_BeforeSync_ReturnsFalse locks the safety gate: until the cache
 // has synced, CachedPodActive returns false so every candidate falls through to
-// the live TaskPodActive read (today's behavior). A cold cache is never wrong,
+// the live TaskPodPresence read (today's behavior). A cold cache is never wrong,
 // only "no speedup yet" — leader-failover safe.
 func TestPodInformer_BeforeSync_ReturnsFalse(t *testing.T) {
 	cs := fake.NewClientset(informerPod("p-run", "r1", "t1", corev1.PodRunning))

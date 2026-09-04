@@ -26,12 +26,65 @@ type PodManager interface {
 	// orphan-run reaper, which abandons the whole run. The run-id is unique
 	// per run, so no other run's pod can match. Tolerates missing pods.
 	DeleteRunPods(ctx context.Context, runID string) error
-	// TaskPodActive reports whether a pod for exactly the (run, task, try)
-	// attempt exists and is Pending or Running. The reaper defers when it is
-	// true — the dispatch landed, the node is merely slow (#461). Try-number is
-	// pinned so a retried TI's liveness gate asks about the attempt it is about
-	// to fail, not any older attempt whose pod may still linger (#723).
-	TaskPodActive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error)
+	// TaskPodPresence reports what the apiserver holds for exactly the
+	// (run, task, try) attempt: a live pod, a present-but-finished pod, or
+	// nothing. A reaper defers on a live pod — the dispatch landed, the node is
+	// merely slow (#461). Try-number is pinned so a retried TI's liveness gate
+	// asks about the attempt it is about to fail, not any older attempt whose
+	// pod may still linger (#723).
+	TaskPodPresence(ctx context.Context, runID, taskID string, tryNumber int) (PodPresence, error)
+}
+
+// PodPresence is the three-way answer to "what does the apiserver hold for this
+// attempt's pod?".
+//
+// The distinction is load-bearing, not cosmetic. A bare bool collapsed the last
+// two states, and the pod-lost reaper read that collapse as authorization to
+// reap: for a task pod that had already finished it marked the task instance
+// pod_lost and then DELETED the pod — destroying the termination-log evidence
+// the reconciler recovers the task's durable outcome from. A finished task then
+// reads as failed, and its run with it. Presence must be three-valued so a
+// reaper can defer on "present but finished" while still reaping on a genuine
+// absence, which is the state pod-lost exists for.
+type PodPresence int
+
+const (
+	// PodPresenceLive means a pod for the attempt exists and is Pending or
+	// Running: work may still be happening, so every reaper must defer. It is
+	// deliberately the zero value — an unset or error-path presence then
+	// authorizes nothing destructive.
+	PodPresenceLive PodPresence = iota
+	// PodPresenceTerminal means a pod for the attempt exists but none of them is
+	// Pending or Running. Whatever happened to that attempt is recorded on the
+	// pod object, so settling it belongs to the reconciler and no reaper may
+	// delete it. Phase Unknown counts here as well: the pod object is still
+	// there and it is not an absence. Note the backstop for a pod stuck in
+	// Unknown is NOT the reconciler — classifyPod groups Unknown with
+	// Pending/Running, so the reconciler neither settles nor collects it — but
+	// the agent-lost reaper (heartbeats stop when a node goes unreachable) and
+	// the orphan-run reaper. The phase has not been set by kubelet since 2015
+	// and is deprecated upstream, so the practical exposure is nil; classifying
+	// it as presence is the conservative direction.
+	PodPresenceTerminal
+	// PodPresenceAbsent means the apiserver holds no pod for the attempt at all
+	// — the attempt's pod is genuinely gone (deleted, evicted, lost with its
+	// node) and there is nothing left to settle from. This is the only presence
+	// that authorizes a pod-lost reap.
+	PodPresenceAbsent
+)
+
+// String names the presence for logs.
+func (p PodPresence) String() string {
+	switch p {
+	case PodPresenceLive:
+		return "live"
+	case PodPresenceTerminal:
+		return "terminal"
+	case PodPresenceAbsent:
+		return "absent"
+	default:
+		return "invalid"
+	}
 }
 
 // PodPresenceCache is an optional read-through cache of pod presence — backed by
@@ -43,7 +96,7 @@ type PodManager interface {
 //     cache lag (a pod the cache still shows as live cannot have been gone longer
 //     than the lag, and deferring one tick is harmless).
 //   - CachedPodActive == false => NOT authoritative. The reaper MUST fall through
-//     to the live TaskPodActive (quorum) read before any destructive action, so a
+//     to the live TaskPodPresence (quorum) read before any destructive action, so a
 //     lagged/cold cache can only ever delay a reap by a tick, never cause a
 //     false-positive one.
 //

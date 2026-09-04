@@ -84,7 +84,7 @@ type podLostReaper struct {
 	// cache is an optional informer-backed presence cache (PR-10) consulted ONLY
 	// to DEFER a reap: a cached Pending/Running pod skips the live LIST. A cache
 	// miss is never authoritative — the reaper falls through to the live
-	// TaskPodActive read below, so cache lag can only delay a reap, never cause a
+	// TaskPodPresence read below, so cache lag can only delay a reap, never cause a
 	// false-positive one (#461). Nil keeps every candidate on the live path.
 	cache PodPresenceCache
 	// gate is re-checked before every destructive call (see destructiveGate).
@@ -95,9 +95,11 @@ func newPodLostReaper(store PodLostReapStore, logger *slog.Logger, grace time.Du
 	return &podLostReaper{store: store, logger: logger, grace: grace, recorder: rec}
 }
 
-// run lists every running TI, checks pod liveness for the ones past the grace
-// period, and fails those with no live pod as pod_lost. Per-TI failures are
-// isolated; a panic anywhere is recovered so the scheduler tick stays alive.
+// run lists every running TI, checks pod presence for the ones past the grace
+// period, and fails as pod_lost only those whose attempt has no pod at all. A
+// pod that is present — live or finished — is somebody else's to resolve.
+// Per-TI failures are isolated; a panic anywhere is recovered so the scheduler
+// tick stays alive.
 func (r *podLostReaper) run(ctx context.Context) error {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -115,8 +117,14 @@ func (r *podLostReaper) run(ctx context.Context) error {
 	// look lost: its container exited, yet its TI is still `running` because the
 	// terminal report found no server. Only the reconciler's sweep can recover
 	// that pod's durable outcome; Reaper.settling holds the whole tick until one
-	// has completed under this leadership, so by the time run is reached a
-	// `running` TI with no live pod is genuinely lost.
+	// has completed under this leadership.
+	//
+	// That gate is a timing argument, so it cannot be the only defense: it holds
+	// on facts about the leader, and its liveness valve deliberately opens after
+	// 2 × grace when those facts never arrive. The reap authorization below is
+	// therefore narrowed to a state no timing can fake — no pod object for the
+	// attempt at all. A finished pod is still a present pod, and stays the
+	// reconciler's, valve open or shut.
 	candidates, err := r.store.ListRunningTasks(ctx)
 	if err != nil {
 		return err
@@ -133,27 +141,46 @@ func (r *podLostReaper) run(ctx context.Context) error {
 			continue
 		}
 		// Consult the pod before failing:
-		//   * query failed     -> liveness unknown; DEFER ("do no harm").
+		//   * query failed        -> liveness unknown; DEFER ("do no harm"). The
+		//                            live read is the only authorization there is,
+		//                            so an unreachable or forbidden apiserver
+		//                            fails this reaper closed (see Reaper.settling).
 		//   * pod Pending/Running -> a pod exists; not lost. Silence, if any, is
 		//                            the agent-lost reaper's job.
-		//   * no live pod       -> the pod is genuinely gone; fail as pod_lost.
-		active, perr := r.pods.TaskPodActive(ctx, c.DagRunID, c.TaskID, c.TryNumber)
+		//   * pod present but done -> the attempt's outcome is on that pod object;
+		//                            settling it is the reconciler's job. DEFER.
+		//   * no pod at all       -> the pod is genuinely gone; fail as pod_lost.
+		presence, perr := r.pods.TaskPodPresence(ctx, c.DagRunID, c.TaskID, c.TryNumber)
 		if perr != nil {
 			r.logger.Warn("pod-lost: pod liveness unknown; deferring",
 				"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "error", perr)
 			r.record("pod_lost_pod_query_error")
 			continue
 		}
-		if active {
+		switch presence {
+		case PodPresenceLive:
 			continue
+		case PodPresenceTerminal:
+			// A terminal-but-present pod is NOT a lost pod, and treating it as one
+			// is destructive twice over: the mark makes a finished attempt read as
+			// pod_lost, and the teardown then deletes the pod whose termination log
+			// is the durable evidence of what the attempt actually did. Only the
+			// reconciler may settle it. Deferring costs at most one reconcile
+			// interval; reaping costs the outcome permanently.
+			r.logger.Info("pod-lost: pod is present in a terminal phase; leaving it for the reconciler",
+				"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "try", c.TryNumber)
+			r.record("pod_lost_terminal_pod_defer")
+			continue
+		case PodPresenceAbsent:
+			r.reapOne(ctx, c)
 		}
-		r.reapOne(ctx, c)
 	}
 	return nil
 }
 
-// reapOne fails one TI whose pod is gone and sweeps any lingering pod,
-// re-checking the destructive gate immediately before each write.
+// reapOne fails one TI whose pod is gone and sweeps any pod that appears for the
+// attempt after all, re-checking the destructive gate immediately before each
+// write. It must only ever be called for PodPresenceAbsent.
 func (r *podLostReaper) reapOne(ctx context.Context, c PodLostCandidate) {
 	if !gateOpen(r.gate, ctx) {
 		r.record("pod_lost_gate_skip")
@@ -176,8 +203,9 @@ func (r *podLostReaper) reapOne(ctx context.Context, c PodLostCandidate) {
 	r.logger.Warn("running task has no live pod past grace; failing as pod_lost",
 		"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "running_since", c.RunningSince)
 	r.record("pod_lost")
-	// Best-effort teardown pinned to (run, task, try). TaskPodActive said no
-	// live pod, so this only sweeps a lingering terminal pod at most; a
+	// Best-effort teardown pinned to (run, task, try). The presence read said
+	// there is no pod for this attempt at all, so this normally deletes nothing
+	// and exists to catch a pod that materialized between the read and here; a
 	// retry's newer pod has a different try-number label and is never touched.
 	if !gateOpen(r.gate, ctx) {
 		r.record("pod_lost_teardown_gate_skip")

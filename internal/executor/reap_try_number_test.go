@@ -25,7 +25,7 @@ import (
 // than a hand-rolled fake predicate.
 
 // TestDispatchLostReaper_TryNumberPinned_LiveRead is the #723 lock on the
-// dispatch-lost/queued path via the live TaskPodActive read: a try-1 pod lingers
+// dispatch-lost/queued path via the live TaskPodPresence read: a try-1 pod lingers
 // Pending, but the dispatch-lost candidate is on try 2. Try 2's dispatch is
 // genuinely lost, so the reaper MUST fail it as dispatch_lost — it must not defer
 // on the stale try-1 pod.

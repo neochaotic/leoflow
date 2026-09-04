@@ -10,7 +10,7 @@ import (
 // fakePresenceCache is a PodPresenceCache whose readings a test controls. It is
 // the safe-direction seam (#461): a true reading may DEFER a reap; a false
 // reading is never authoritative and the reaper must fall through to the live
-// TaskPodActive read.
+// TaskPodPresence read.
 type fakePresenceCache struct {
 	active map[string]bool // "runID/taskID/try" -> cached Pending/Running
 }
@@ -23,7 +23,7 @@ func (c *fakePresenceCache) CachedPodActive(runID, taskID string, try int) bool 
 
 // TestPodLostReaper_CacheAbsentButLiveRunning_DoesNotReap is the #461 regression
 // lock, mechanized. The cache says the pod is ABSENT (a lagged/cold read), but the
-// live TaskPodActive read says it is Running. The reaper MUST fall through to the
+// live TaskPodPresence read says it is Running. The reaper MUST fall through to the
 // live read and DEFER — cache absence is never authoritative, so cache lag can
 // only delay a reap, never cause a false-positive one. Reaping here would kill a
 // live task.
@@ -53,7 +53,7 @@ func TestPodLostReaper_CacheAbsentButLiveRunning_DoesNotReap(t *testing.T) {
 
 // TestPodLostReaper_CacheActive_SkipsLiveList: a cache-present Pending/Running pod
 // defers the reap without touching the apiserver — the whole point of PR-10. The
-// live TaskPodActive read must not be called.
+// live TaskPodPresence read must not be called.
 func TestPodLostReaper_CacheActive_SkipsLiveList(t *testing.T) {
 	past := time.Now().UTC().Add(-2 * time.Minute)
 	store := &fakePodLostStore{candidates: []PodLostCandidate{

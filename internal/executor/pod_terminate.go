@@ -68,12 +68,18 @@ func (e *KubernetesExecutor) deletePodsBySelector(ctx context.Context, selector 
 	return errors.Join(errs...)
 }
 
-// TaskPodActive reports whether a pod for exactly the (run, task, try) attempt
-// exists and is still Pending or Running. The dispatch-lost and pod-lost reapers
-// consult this before failing a TI: a live pod means the dispatch actually landed
-// and the node is merely slow to pull the image (#461), so the reaper must DEFER.
-// No pod, or only terminal (Failed/Succeeded/Unknown) pods, means the attempt is
-// genuinely lost and the reaper may proceed.
+// TaskPodPresence reports what the apiserver holds for exactly the
+// (run, task, try) attempt: a live pod (Pending/Running), a present-but-finished
+// pod, or no pod at all. The dispatch-lost and pod-lost reapers consult this
+// before failing a TI: a live pod means the dispatch actually landed and the node
+// is merely slow to pull the image (#461), so the reaper must DEFER.
+//
+// A present-but-finished pod is reported apart from an absence on purpose. The
+// pod object still carries the attempt's outcome (the termination log the
+// reconciler recovers a durable result from), so it is the reconciler's to settle
+// and no reaper may delete it; only a genuine absence means the attempt is lost
+// with nothing left to recover. Any live pod for the attempt wins over a
+// lingering finished sibling, since work may still be running.
 //
 // Try-number is pinned — the same invariant guard as DeleteTaskPod above. The
 // retry rail resets up_for_retry -> none with try_number+1 and the planner
@@ -82,17 +88,22 @@ func (e *KubernetesExecutor) deletePodsBySelector(ctx context.Context, selector 
 // delete. Selecting on (run, task) alone would match that stale older pod and
 // false-defer the reap of the current attempt forever (#723). Asking about the
 // attempt the reaper is about to fail is the correct liveness question.
-func (e *KubernetesExecutor) TaskPodActive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error) {
+func (e *KubernetesExecutor) TaskPodPresence(ctx context.Context, runID, taskID string, tryNumber int) (PodPresence, error) {
 	selector := fmt.Sprintf("leoflow.io/run-id=%s,leoflow.io/task-id=%s,leoflow.io/try-number=%s",
 		sanitizeLabel(runID), sanitizeLabel(taskID), strconv.Itoa(tryNumber))
 	pods, err := e.clientset.CoreV1().Pods(e.namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		return false, fmt.Errorf("listing pods for liveness (%s): %w", selector, err)
+		// PodPresenceLive is the zero value on purpose: a caller that drops the
+		// error still holds the presence that authorizes nothing.
+		return PodPresenceLive, fmt.Errorf("listing pods for liveness (%s): %w", selector, err)
+	}
+	if len(pods.Items) == 0 {
+		return PodPresenceAbsent, nil
 	}
 	for i := range pods.Items {
 		if phase := pods.Items[i].Status.Phase; phase == corev1.PodPending || phase == corev1.PodRunning {
-			return true, nil
+			return PodPresenceLive, nil
 		}
 	}
-	return false, nil
+	return PodPresenceTerminal, nil
 }

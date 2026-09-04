@@ -118,7 +118,7 @@ func TestReapDispatchLost_PerTIErrorIsolated(t *testing.T) {
 // N1d-a2, review finding H3). A warm attempt can sit in `queued` past the
 // dispatch threshold while its serving warm worker is alive and merely slow to
 // transition queued->running. A warm attempt has NO task pod, so the existing
-// TaskPodActive gate cannot protect it — the pure time threshold would fail it,
+// TaskPodPresence gate cannot protect it — the pure time threshold would fail it,
 // and once the live worker DOES transition the attempt, the task runs twice.
 //
 // The fix: if the candidate's WarmWorkerID is in the live warm-pod set, DEFER.

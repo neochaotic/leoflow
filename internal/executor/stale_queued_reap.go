@@ -29,7 +29,7 @@ type StaleQueuedCandidate struct {
 	// set AND the worker is in the live warm-pod set, the dispatch-lost reaper
 	// DEFERS: the warm worker holds this attempt and is merely slow to transition
 	// queued->running, so failing it would double-run the task (review finding
-	// H3). A warm attempt has no task pod, so the existing TaskPodActive gate
+	// H3). A warm attempt has no task pod, so the existing pod-presence gate
 	// cannot protect it — this warm check is what does.
 	WarmWorkerID string
 }
@@ -78,12 +78,12 @@ type dispatchLostReaper struct {
 	// cache is an optional informer-backed presence cache (PR-10) consulted ONLY
 	// to DEFER a reap: a cached Pending/Running pod skips the live LIST. A cache
 	// miss is never authoritative — the reaper falls through to the live
-	// TaskPodActive read, so cache lag can only delay a reap, never cause a
+	// TaskPodPresence read, so cache lag can only delay a reap, never cause a
 	// false-positive one (#461, the queued path). Nil keeps the live path.
 	cache PodPresenceCache
 	// warmPods is the live warm-pod seam (ADR 0058 N1d-a2), consulted ONLY to
 	// DEFER a reap of a warm-bound queued TI: a warm attempt has no task pod, so
-	// TaskPodActive cannot tell a slow queued->running transition from a lost
+	// TaskPodPresence cannot tell a slow queued->running transition from a lost
 	// dispatch. Before failing a candidate whose WarmWorkerID is set, the reaper
 	// checks whether that worker is still live; if so it defers (the worker holds
 	// the attempt — failing it would double-run, review finding H3). Nil (warm
@@ -124,7 +124,7 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 		// Warm-liveness gate (ADR 0058 N1d-a2, review finding H3): a warm attempt
 		// can sit in `queued` past the threshold while its serving warm worker is
 		// alive and merely slow to transition queued->running. A warm attempt has
-		// no task pod, so the TaskPodActive gate below cannot protect it; failing
+		// no task pod, so the pod-presence gate below cannot protect it; failing
 		// it would double-run the task once the live worker does transition it.
 		// If this candidate is bound to a warm worker that is still live, DEFER.
 		if c.WarmWorkerID != "" && liveWarm[c.WarmWorkerID] {
@@ -151,14 +151,18 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 			continue
 		}
 		if r.pods != nil {
-			active, perr := r.pods.TaskPodActive(ctx, c.DagRunID, c.TaskID, c.TryNumber)
+			presence, perr := r.pods.TaskPodPresence(ctx, c.DagRunID, c.TaskID, c.TryNumber)
 			if perr != nil {
 				r.logger.Warn("dispatch-lost: pod liveness unknown; deferring",
 					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "error", perr)
 				r.record("dispatch_lost_pod_query_error")
 				continue
 			}
-			if active {
+			// Only a LIVE pod defers here. A queued TI whose pod already finished
+			// never transitioned to `running`, so there is no outcome the
+			// reconciler could settle from that pod — the dispatch is lost either
+			// way and this reaper proceeds.
+			if presence == PodPresenceLive {
 				r.logger.Info("dispatch-lost: pod is live (slow start); deferring",
 					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID)
 				r.record("dispatch_lost_deferred")
@@ -188,7 +192,7 @@ func (r *dispatchLostReaper) reapOne(ctx context.Context, c StaleQueuedCandidate
 		"queued_at", c.QueuedAt)
 	r.record("dispatch_lost")
 	// Best-effort teardown of any lingering pod for this attempt (#474). By
-	// here TaskPodActive said no live pod exists (or pods is nil), so this
+	// here the pod presence said no live pod exists (or pods is nil), so this
 	// only cleans up a terminal/failed pod; pinned to (run, task, try).
 	if r.pods == nil {
 		return

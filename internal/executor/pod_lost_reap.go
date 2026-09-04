@@ -84,7 +84,7 @@ type podLostReaper struct {
 	// cache is an optional informer-backed presence cache (PR-10) consulted ONLY
 	// to DEFER a reap: a cached Pending/Running pod skips the live LIST. A cache
 	// miss is never authoritative — the reaper falls through to the live
-	// TaskPodActive read below, so cache lag can only delay a reap, never cause a
+	// TaskPodPresence read below, so cache lag can only delay a reap, never cause a
 	// false-positive one (#461). Nil keeps every candidate on the live path.
 	cache PodPresenceCache
 	// gate is re-checked before every destructive call (see destructiveGate).
@@ -137,14 +137,14 @@ func (r *podLostReaper) run(ctx context.Context) error {
 		//   * pod Pending/Running -> a pod exists; not lost. Silence, if any, is
 		//                            the agent-lost reaper's job.
 		//   * no live pod       -> the pod is genuinely gone; fail as pod_lost.
-		active, perr := r.pods.TaskPodActive(ctx, c.DagRunID, c.TaskID, c.TryNumber)
+		presence, perr := r.pods.TaskPodPresence(ctx, c.DagRunID, c.TaskID, c.TryNumber)
 		if perr != nil {
 			r.logger.Warn("pod-lost: pod liveness unknown; deferring",
 				"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID, "error", perr)
 			r.record("pod_lost_pod_query_error")
 			continue
 		}
-		if active {
+		if presence == PodPresenceLive {
 			continue
 		}
 		r.reapOne(ctx, c)
@@ -176,7 +176,7 @@ func (r *podLostReaper) reapOne(ctx context.Context, c PodLostCandidate) {
 	r.logger.Warn("running task has no live pod past grace; failing as pod_lost",
 		"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID, "running_since", c.RunningSince)
 	r.record("pod_lost")
-	// Best-effort teardown pinned to (run, task, try). TaskPodActive said no
+	// Best-effort teardown pinned to (run, task, try). TaskPodPresence said no
 	// live pod, so this only sweeps a lingering terminal pod at most; a
 	// retry's newer pod has a different try-number label and is never touched.
 	if !gateOpen(r.gate, ctx) {

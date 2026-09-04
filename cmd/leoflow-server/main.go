@@ -1601,7 +1601,7 @@ func setupK8sDispatch(ctx context.Context, cfg *config.ServerConfig, sched *sche
 	sched.SetDispatcher(disp)
 	// Shared informer read-path (PR-10): one long-lived watch replaces the
 	// reapers' per-running-TI LIST storm and the reconciler's 30s LIST. Consulted
-	// only to DEFER a reap; the live TaskPodActive kill path is unchanged (#461).
+	// only to DEFER a reap; the live TaskPodPresence kill path is unchanged (#461).
 	// A typed-nil pointer would defeat the reconciler's / reaper's nil check, so
 	// the interfaces are only populated when the informer actually built.
 	podInformer := buildPodInformer(ctx, cfg, cs, logger)

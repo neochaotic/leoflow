@@ -110,71 +110,95 @@ func TestDeleteRunPods_DeletesAllOfTheRunOnly(t *testing.T) {
 	}
 }
 
-// TestTaskPodActive covers the dispatch-lost deferral signal (#461): a pod that
-// exists and is Pending/Running means the dispatch landed and the node is just
-// slow, so the reaper must DEFER. A gone/failed/absent pod means the dispatch is
-// truly lost and the reaper may proceed.
-func TestTaskPodActive(t *testing.T) {
+// TestTaskPodPresence covers the three-way liveness answer the reapers act on.
+// A Pending/Running pod means the dispatch landed and the node is just slow
+// (#461), so every reaper DEFERS. A pod that is present but no longer running is
+// the reconciler's to settle from its termination log, so it must be
+// distinguishable from a genuine absence — collapsing those two into one "not
+// active" bool is what let the pod-lost reaper delete a finished pod and destroy
+// the evidence of its outcome.
+func TestTaskPodPresence(t *testing.T) {
 	tests := []struct {
 		name  string
 		phase corev1.PodPhase
-		want  bool
+		want  PodPresence
 	}{
-		{"pending pod is active (defer)", corev1.PodPending, true},
-		{"running pod is active (defer)", corev1.PodRunning, true},
-		{"failed pod is not active (reap)", corev1.PodFailed, false},
-		{"succeeded pod is not active (reap)", corev1.PodSucceeded, false},
+		{"pending pod is live (defer)", corev1.PodPending, PodPresenceLive},
+		{"running pod is live (defer)", corev1.PodRunning, PodPresenceLive},
+		{"failed pod is present-but-terminal", corev1.PodFailed, PodPresenceTerminal},
+		{"succeeded pod is present-but-terminal", corev1.PodSucceeded, PodPresenceTerminal},
+		{"unknown-phase pod is present, so not absent", corev1.PodUnknown, PodPresenceTerminal},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cs := fake.NewSimpleClientset(taskPod("p", "run-a", "extract", 1, tc.phase))
 			e := NewKubernetesExecutor(cs, "leoflow")
-			active, err := e.TaskPodActive(context.Background(), "run-a", "extract", 1)
+			got, err := e.TaskPodPresence(context.Background(), "run-a", "extract", 1)
 			if err != nil {
-				t.Fatalf("TaskPodActive: %v", err)
+				t.Fatalf("TaskPodPresence: %v", err)
 			}
-			if active != tc.want {
-				t.Errorf("TaskPodActive(phase=%s) = %v, want %v", tc.phase, active, tc.want)
+			if got != tc.want {
+				t.Errorf("TaskPodPresence(phase=%s) = %v, want %v", tc.phase, got, tc.want)
 			}
 		})
 	}
 }
 
-// TestTaskPodActive_PinsTryNumber is the #723 selector lock: a try-1 pod lingers
-// Pending, but a liveness query for try 2 must NOT match it. Asking whether the
-// attempt the reaper is about to fail (try 2) is live must return false, so the
-// reaper does not false-defer on a stale older attempt's pod.
-func TestTaskPodActive_PinsTryNumber(t *testing.T) {
-	cs := fake.NewSimpleClientset(taskPod("try1", "run-a", "extract", 1, corev1.PodPending))
+// TestTaskPodPresence_LiveWinsOverTerminalSibling: a lingering terminal pod must
+// never mask a live one for the same attempt — presence answers about the
+// attempt, and any live pod for it means work may still be running.
+func TestTaskPodPresence_LiveWinsOverTerminalSibling(t *testing.T) {
+	cs := fake.NewSimpleClientset(
+		taskPod("dead", "run-a", "extract", 1, corev1.PodFailed),
+		taskPod("live", "run-a", "extract", 1, corev1.PodRunning),
+	)
 	e := NewKubernetesExecutor(cs, "leoflow")
-
-	active, err := e.TaskPodActive(context.Background(), "run-a", "extract", 2)
+	got, err := e.TaskPodPresence(context.Background(), "run-a", "extract", 1)
 	if err != nil {
-		t.Fatalf("TaskPodActive: %v", err)
+		t.Fatalf("TaskPodPresence: %v", err)
 	}
-	if active {
-		t.Errorf("#723: a try-2 liveness query matched a lingering try-1 pod; try-number must be pinned")
-	}
-	// Sanity: the same query for the attempt that DOES have a Pending pod is active.
-	active, err = e.TaskPodActive(context.Background(), "run-a", "extract", 1)
-	if err != nil {
-		t.Fatalf("TaskPodActive(try1): %v", err)
-	}
-	if !active {
-		t.Errorf("try-1's own Pending pod must read as active")
+	if got != PodPresenceLive {
+		t.Errorf("TaskPodPresence = %v, want %v", got, PodPresenceLive)
 	}
 }
 
-// TestTaskPodActive_AbsentIsNotActive: no pod at all means the dispatch never
-// landed — not active, so the reaper proceeds.
-func TestTaskPodActive_AbsentIsNotActive(t *testing.T) {
+// TestTaskPodPresence_PinsTryNumber is the #723 selector lock: a try-1 pod
+// lingers Pending, but a liveness query for try 2 must NOT match it. Asking
+// about the attempt the reaper is about to fail (try 2) must report an absence,
+// so the reaper neither false-defers on a stale older attempt's pod nor mistakes
+// it for that attempt's own outcome.
+func TestTaskPodPresence_PinsTryNumber(t *testing.T) {
+	cs := fake.NewSimpleClientset(taskPod("try1", "run-a", "extract", 1, corev1.PodPending))
+	e := NewKubernetesExecutor(cs, "leoflow")
+
+	got, err := e.TaskPodPresence(context.Background(), "run-a", "extract", 2)
+	if err != nil {
+		t.Fatalf("TaskPodPresence: %v", err)
+	}
+	if got != PodPresenceAbsent {
+		t.Errorf("#723: a try-2 liveness query saw %v; try-number must be pinned so try 1's pod is invisible", got)
+	}
+	// Sanity: the same query for the attempt that DOES have a Pending pod is live.
+	got, err = e.TaskPodPresence(context.Background(), "run-a", "extract", 1)
+	if err != nil {
+		t.Fatalf("TaskPodPresence(try1): %v", err)
+	}
+	if got != PodPresenceLive {
+		t.Errorf("try-1's own Pending pod read as %v, want %v", got, PodPresenceLive)
+	}
+}
+
+// TestTaskPodPresence_AbsentIsNotTerminal: no pod at all is a genuine absence —
+// the state that authorizes a pod-lost reap — and must not be reported as a
+// present-but-terminal pod.
+func TestTaskPodPresence_AbsentIsNotTerminal(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	e := NewKubernetesExecutor(cs, "leoflow")
-	active, err := e.TaskPodActive(context.Background(), "run-a", "extract", 1)
+	got, err := e.TaskPodPresence(context.Background(), "run-a", "extract", 1)
 	if err != nil {
-		t.Fatalf("TaskPodActive: %v", err)
+		t.Fatalf("TaskPodPresence: %v", err)
 	}
-	if active {
-		t.Errorf("TaskPodActive with no pods = true, want false")
+	if got != PodPresenceAbsent {
+		t.Errorf("TaskPodPresence with no pods = %v, want %v", got, PodPresenceAbsent)
 	}
 }

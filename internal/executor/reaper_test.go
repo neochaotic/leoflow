@@ -406,3 +406,52 @@ func TestReapersHonorGateAtTeardown(t *testing.T) {
 		}
 	})
 }
+
+// leadingOpenThenClosed returns a leadership predicate (the SetLeading shape)
+// that reports leading for the first n consultations and not-leading after. It
+// models a leadership loss that lands after ReapOnce's entry check and before
+// the reapers reach their writes.
+func leadingOpenThenClosed(n int) func() bool {
+	calls := 0
+	return func() bool {
+		calls++
+		return calls <= n
+	}
+}
+
+// TestNewReaperWiresGateIntoEveryReaper: the destructive gate is only a
+// guarantee if NewReaper hands it to all five reapers. TestReapersHonorGateMidTick
+// drives each reaper with its own gate, so it cannot notice a dropped
+// assignment in NewReaper — a reaper with a nil gate is unconditionally open.
+// Here the whole Reaper is driven through ReapOnce with a leadership predicate
+// that is open exactly once: the entry check consumes that one, so every
+// reaper's own pre-write check finds it closed. Nothing may be destroyed and each
+// reaper must meter its own gate skip exactly once — a reaper whose gate was
+// not wired would write instead. The settling gate is open (no leadership
+// stamp), so it does not stand between the entry check and the reapers.
+func TestNewReaperWiresGateIntoEveryReaper(t *testing.T) {
+	store := staleEverythingStore()
+	pods := &fakePodManager{active: map[string]bool{}}
+	rec := &capturingRecorder{}
+	r := NewReaper(store, pods, nil, &fakeWarmLister{}, rec, reapTestLogger(), DefaultReaperConfig(), nil)
+	r.SetLeading(leadingOpenThenClosed(1))
+
+	if err := r.ReapOnce(context.Background()); err != nil {
+		t.Fatalf("ReapOnce: %v", err)
+	}
+	assertNothingDestroyed(t, store, pods)
+	if got := rec.count("reap_gate_skip"); got != 0 {
+		t.Errorf("the entry check must pass (it consumed the open consultation), reap_gate_skip = %d", got)
+	}
+	for _, skip := range []string{
+		"orphan_gate_skip",
+		"agent_lost_gate_skip",
+		"dispatch_lost_gate_skip",
+		"pod_lost_gate_skip",
+		"warm_worker_lost_gate_skip",
+	} {
+		if got := rec.count(skip); got != 1 {
+			t.Errorf("%s = %d, want exactly 1 (is that reaper's gate wired in NewReaper?)", skip, got)
+		}
+	}
+}

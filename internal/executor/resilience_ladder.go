@@ -145,3 +145,22 @@ func ValidateResilienceLadder(l ResilienceLadder) error {
 	}
 	return nil
 }
+
+// ResilienceLadderWarnings reports the ladder settings that are valid but
+// remove a resilience backstop, so the server can surface them as boot WARNs.
+// ValidateResilienceLadder deliberately accepts a non-positive credential
+// ceiling — it is the operator's documented "no ceiling" setting — but that one
+// value disables two guarantees at once: heartbeat renewal of an attempt's
+// bearer becomes unbounded, and a task pod whose DAG declares no execution
+// timeout gets no ActiveDeadlineSeconds floor, so a total control-plane outage
+// can leave it Running indefinitely. Neither loss is an error; both are
+// invisible without this signal. Pure, like the validator: the server calls it
+// once at boot after the logger exists.
+func ResilienceLadderWarnings(l ResilienceLadder) []string {
+	var warnings []string
+	if l.MaxAttemptCredentialLifetime <= 0 {
+		warnings = append(warnings, fmt.Sprintf("%s is disabled (%v): heartbeat renewal of an attempt's credential is unbounded AND task pods with no declared execution_timeout get no activeDeadlineSeconds floor, so a total control-plane outage can leave them Running indefinitely",
+			maxAttemptCredentialLifetimeKey, l.MaxAttemptCredentialLifetime))
+	}
+	return warnings
+}

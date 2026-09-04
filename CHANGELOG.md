@@ -195,12 +195,38 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   best-effort); and the gRPC graceful stop is bounded at 5 s with a forced-stop
   fallback that still lets the remaining handlers finish their flushes, so a
   normal shutdown completes in well under a second instead of ending in
-  `SIGKILL` (the bounded worst case is ~35 s; set the grace to 45–60 s when
+  `SIGKILL` (the bounded worst case is ~40 s; set the grace to 45–60 s when
   running the object sink at scale — the HA profile ships 60). The final flush runs on a context detached from the server's
   lifecycle, which `SIGTERM` cancels at exactly that moment. The disk sink (Lite,
   RWX PVC) is unchanged. Known gap, documented: the agent does not re-open a log
   stream its control plane closed, so lines a task prints after its control
   plane went away are not shipped by that task.
+
+- **A shutdown with warm pools enabled no longer always ends in a forced gRPC
+  stop, and a failed log flush is no longer invisible.** Follow-ups to the fix
+  above. An idle warm worker holds its assignment stream open indefinitely by
+  design, and that handler did not watch the shutdown signal, so with
+  `execution.warm_pools_enabled` the bounded graceful stop exhausted its whole
+  budget on *every* shutdown: the forced fallback became the normal path and the
+  `agent grpc graceful stop exceeded its bound` warning fired every time, which
+  is exactly how a warning stops being read. The assignment stream now ends at
+  `SIGTERM` with the same `Unavailable` the log stream uses — the code the forced
+  transport close already produced, so a worker's own handling is unchanged. The
+  object sink's retry warning for a failed incremental flush went to Go's default
+  `slog` handler rather than the configured one, landing as plain text on stderr
+  outside the server's log format and level, where nothing collecting the control
+  plane's logs would see it; the sink now takes the configured logger at
+  construction. The bounded stop also logs how many agent handlers it left
+  running when it gives up: each log-object `Put` is bounded at 30 s while the
+  wait after the forced stop is 5 s, so abandoning one is possible — and safe,
+  since a single atomic `Put` leaves the stored object at its previous flush
+  rather than truncated — but it was silent. New chart value
+  `deployment.preStopSleepSeconds` (default 5) makes a terminating replica sleep
+  through the endpoint-propagation window before it is signalled, so task pods
+  stop opening *new* log streams against a control plane that is going away and
+  creating an empty object for each; it uses the native `sleep` hook action
+  (Kubernetes 1.29+, the image is distroless and has no shell), runs inside
+  `terminationGracePeriodSeconds`, and `0` omits the hook.
 
 ### Security
 

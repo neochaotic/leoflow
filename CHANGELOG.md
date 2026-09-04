@@ -114,9 +114,32 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dispatch-lost reaper's behavior is unchanged in this fix, and that reaper can
   still delete a terminal pod's outcome record: a queued attempt's finished pod
   CAN carry an outcome (the settle statements admit `queued`, and a dispatch can
-  stamp a row that already reached `running` back to `queued`). Tracked as
-  [#928](https://github.com/neochaotic/leoflow/issues/928), with the underlying
-  unguarded transition as [#929](https://github.com/neochaotic/leoflow/issues/929).
+  stamp a row that already reached `running` back to `queued`). Closed one level
+  down by the teardown fix below
+  ([#928](https://github.com/neochaotic/leoflow/issues/928)), with the underlying
+  unguarded transition tracked as
+  [#929](https://github.com/neochaotic/leoflow/issues/929).
+- **A reaper's pod teardown no longer deletes a task pod that already reached a
+  terminal phase.** Deleting one stops no container — there is none — and
+  destroys the durable outcome record on its termination message, the only
+  evidence the reconciler can settle the attempt from (ADR 0052). Three reapers
+  still reached that delete after the pod-lost *decision* was fixed: the
+  agent-lost reaper fires on heartbeat staleness alone at a **90 s** threshold
+  with no pod read at all (and a task that finished and stopped heartbeating is
+  precisely its candidate), the orphan-run reaper deletes every pod of a run at
+  5 minutes with no pod read, and the dispatch-lost reaper defers only on a
+  *live* pod. The guard now sits at the one delete site instead of in four
+  decision paths, so all five reapers are evidence-preserving and **no reaper's
+  mark or decision changes**; the run-scoped delete applies it per pod inside the
+  run, tearing down the run's still-live containers while its finished pods keep
+  their records. Collecting a terminal pod is the reconciler's job — it settles
+  each one and garbage-collects it past the 10-minute grace — and a skip is
+  logged at INFO by pod name and phase, so an operator separates "left for the
+  reconciler" from the `*_pod_delete_error` a failed delete already meters. A pod
+  in phase `Unknown` is still deleted: it may yet be running a container, which
+  is what teardown exists for, and the reconciler treats `Unknown` as
+  non-terminal, so nothing else would collect it.
+  ([#928](https://github.com/neochaotic/leoflow/issues/928))
 
 - **A control-plane restart no longer marks a succeeded task failed, and no
   longer condemns the rest of its run.** A production drill (kill the

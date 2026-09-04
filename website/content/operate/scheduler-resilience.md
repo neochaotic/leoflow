@@ -40,10 +40,15 @@ orphan-run reaper picks up the now-no-active-TI run on a later cycle.
 
 ### Who enforces `execution_timeout` — and why the pod outlives it
 
-A task that declares `execution_timeout_seconds` has **two** clocks that could
-kill it, and only one of them can explain itself. The **agent** owns the
-semantic timeout: it interrupts the user process at the declared boundary and
-reports `execution_timeout: task exceeded Ns limit`. The task pod's
+A task that declares `execution_timeout_seconds` and runs in its **own** pod has
+**two** clocks that could kill it, and only one of them can explain itself. (A
+task served by a **warm pool** has only the agent's: warm pods carry no
+`activeDeadlineSeconds` at all, and their per-attempt wall-clock bound is the
+warm worker's attempt watchdog, derived from
+`auth.max_attempt_credential_lifetime` — so everything below about the kubelet
+racing the agent does not apply to them.) The **agent** owns the semantic
+timeout: it interrupts the user process at the declared boundary and reports
+`execution_timeout: task exceeded Ns limit`. The task pod's
 `activeDeadlineSeconds` is only the **backstop** for an agent that can no
 longer enforce anything (crashed, wedged, partitioned); when the kubelet gets
 there first, the pod is gone and the failure reason degrades to what Kubernetes

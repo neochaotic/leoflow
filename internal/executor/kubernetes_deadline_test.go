@@ -169,9 +169,7 @@ func TestPodDeadlineLetsTheAgentTimeoutFirst(t *testing.T) {
 // one outcome-record write and one report RPC.
 func TestBuildPodDeadlineCapsTerminationGraceTerm(t *testing.T) {
 	headroom := int64(defaultDispatchLostThreshold / time.Second)
-	// The cap the grace term must respect, asserted here as the bare number the
-	// invariant is stated in; the production const is maxDeadlineGraceTerm.
-	const graceCap = int64(60)
+	const graceCap = int64(maxDeadlineGraceTerm)
 	for _, tc := range []struct {
 		name  string
 		grace *int64

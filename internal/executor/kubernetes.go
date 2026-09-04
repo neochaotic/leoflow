@@ -212,7 +212,7 @@ const podStartupHeadroom = defaultDispatchLostThreshold
 // before its first report attempt, so no result is lost, only a stuck pod.
 func podActiveDeadline(req Request) int64 {
 	if req.TimeoutSeconds > 0 {
-		return int64(req.TimeoutSeconds) + int64(podStartupHeadroom/time.Second) + podTerminationGrace(req)
+		return int64(req.TimeoutSeconds) + int64(podStartupHeadroom/time.Second) + podDeadlineGraceTerm(req)
 	}
 	if req.AttemptLifetimeCeilingSeconds > 0 {
 		return req.AttemptLifetimeCeilingSeconds
@@ -220,16 +220,43 @@ func podActiveDeadline(req Request) int64 {
 	return 0
 }
 
-// podTerminationGrace is the shutdown allowance the kubelet will grant this pod:
-// what the DAG declared, else the Kubernetes default applied to a pod that
-// declares none. The deadline budgets the same tail the kubelet does, so the
-// window the agent has to stop the child and deliver its report is the window it
-// actually gets.
-func podTerminationGrace(req Request) int64 {
-	if g := req.Execution.TerminationGracePeriodSeconds; g != nil && *g > 0 {
-		return *g
+// maxDeadlineGraceTerm caps how much of a declared terminationGracePeriodSeconds
+// the pod deadline will budget (#910).
+//
+// The declaration is unvalidated — domain.Execution carries it as a bare *int64
+// with no bound anywhere — so a DAG may ask for 3600. Added verbatim that puts
+// the deadline an hour past the declared execution_timeout, and the kubelet then
+// grants that same hour of SIGTERM grace again on top of the deadline, so the
+// pod can outlive the timeout its author declared by about two hours. The
+// backstop has to stay a backstop.
+//
+// The term is capped rather than dropped because the tail it budgets is real:
+// once the agent's own clock fires it still has to stop the child, write the
+// durable outcome record and land one report RPC, and the kubelet must not
+// preempt that. But the tail is not proportional to the declared grace. The
+// agent does not pass the declaration on to the child: internal/agent/exec.go
+// runs it under exec.CommandContext with the default cancel, an immediate
+// SIGKILL whatever the DAG asked for. So what is left after the kill is one
+// record write and one RPC, and a minute covers that on any cluster.
+const maxDeadlineGraceTerm = 60
+
+// podDeadlineGraceTerm is the shutdown tail the pod deadline budgets for the
+// agent: what the DAG declared, capped at maxDeadlineGraceTerm, else the
+// Kubernetes default the kubelet applies to a pod that declares none. It is the
+// deadline's grace TERM, not the pod's grace — the pod spec carries the
+// declaration verbatim (see BuildPod); only the arithmetic here is bounded.
+//
+// The default fallback covers a declared 0 as well as an absent declaration. A
+// grace-0 pod is SIGKILLed the instant the kubelet decides to stop it, so it has
+// no post-deadline tail to size from the declaration at all; falling back keeps
+// one arithmetic for every pod whose declaration says nothing usable, and the
+// extra seconds cost nothing on a bound that only fires when the agent is dead.
+func podDeadlineGraceTerm(req Request) int64 {
+	g := req.Execution.TerminationGracePeriodSeconds
+	if g == nil || *g <= 0 {
+		return corev1.DefaultTerminationGracePeriodSeconds
 	}
-	return corev1.DefaultTerminationGracePeriodSeconds
+	return min(*g, maxDeadlineGraceTerm)
 }
 
 // Agent-token transport (ADR 0055 Fix #3). The env-var transport keeps the

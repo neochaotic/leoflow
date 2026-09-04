@@ -452,6 +452,44 @@ tests:
           path: spec.template.metadata.annotations["karpenter.sh/do-not-disrupt"]
           value: "true"
 
+  # An operator who sets the value on a cluster below 1.30 gets nothing, and the
+  # render is the only place that knows it. NOTES.txt already carries four
+  # warnings of exactly this shape, so say it there rather than leaving the omit
+  # silent. Both the renderer and this warning ask the same helper whether the
+  # hook is supported, so the two cannot drift apart (#918).
+  - it: NOTES warn that the preStop sleep is dropped on a 1.29 apiserver
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 29
+    set:
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: deployment.preStopSleepSeconds=5 is set, but this apiserver"
+
+  - it: NOTES stay quiet about the preStop sleep on a 1.30 apiserver, where it renders
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: deployment.preStopSleepSeconds"
+
+  - it: NOTES stay quiet about the preStop sleep when it is off, even below 1.30
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 29
+    set:
+      deployment.preStopSleepSeconds: 0
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: deployment.preStopSleepSeconds"
+
   # ─── NOTES: say the trap out loud ────────────────────────────────────────
   - it: NOTES warn when a PDB is forced onto a single replica
     template: NOTES.txt

@@ -374,19 +374,15 @@ spec:
             periodSeconds: {{ .ctx.Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .ctx.Values.probes.liveness.timeoutSeconds }}
             failureThreshold: {{ .ctx.Values.probes.liveness.failureThreshold }}
-          {{- /* The native `sleep` hook action is gated on PodLifecycleSleepAction:
-               BETA and on by default from 1.30, ALPHA and OFF in 1.29, and not
-               present at all before that. Below 1.30 the apiserver nils the field
-               and its own validation then rejects the empty `preStop: {}` with
-               "must specify a handler type" — so rendering the hook onto an older
-               cluster REJECTS the Deployment and hard-fails `helm install`; it is
-               not silently dropped. The project's floor is 1.27, so gate the render
-               on the capability rather than declaring kubeVersion in Chart.yaml,
-               which would refuse to install on 1.27-1.29 outright. Below 1.30 the
-               install therefore succeeds and simply keeps the pre-hook behavior
-               (#918). No `exec` fallback: the image is distroless, so a command
+          {{- /* leoflow.preStopSleepHookSupported holds the capability test and the
+               reasoning behind it: the native `sleep` action is gated on
+               PodLifecycleSleepAction, and below 1.30 rendering the hook REJECTS
+               the Deployment rather than being silently dropped, so the render is
+               gated instead of Chart.yaml's kubeVersion (#918). NOTES.txt asks the
+               same helper, so what it warns about and what this renders can never
+               disagree. No `exec` fallback: the image is distroless, so a command
                hook has no shell and no sleep binary to call. */ -}}
-          {{- $sleepHookSupported := semverCompare ">=1.30.0-0" .ctx.Capabilities.KubeVersion.Version }}
+          {{- $sleepHookSupported := eq (include "leoflow.preStopSleepHookSupported" .ctx) "true" }}
           {{- if and (gt (int .ctx.Values.deployment.preStopSleepSeconds) 0) $sleepHookSupported }}
           # Endpoint removal is asynchronous. From the moment this replica starts
           # terminating, kube-proxy and every already-connected client still hold

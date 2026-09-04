@@ -83,6 +83,30 @@ shape gets a NOTES warning instead of a refusal.
 {{- end -}}
 
 {{- /*
+Kubernetes validates the preStop sleep as 0 < seconds <= terminationGracePeriodSeconds
+and REJECTS the pod spec otherwise, so an oversized deployment.preStopSleepSeconds
+renders cleanly and then fails the install at the apiserver — the same shape as
+every other combination this file refuses at render time. Checked against the
+EFFECTIVE grace: the chart ships terminationGracePeriodSeconds unset, which means
+the apiserver's own default of 30, not "no limit". Deliberately NOT gated on the
+apiserver version the way the hook itself is (#918): below 1.30 the hook does not
+render, but the value pair is still a contradiction the operator asked for, and
+telling them now beats a rejected install on their next control-plane upgrade.
+*/ -}}
+{{- $preStopSleep := int .Values.deployment.preStopSleepSeconds -}}
+{{- if gt $preStopSleep 0 -}}
+{{- $grace := 30 -}}
+{{- $graceNote := "Kubernetes' own default, because the chart ships terminationGracePeriodSeconds unset" -}}
+{{- if ne (toString .Values.terminationGracePeriodSeconds) "" -}}
+{{- $grace = int .Values.terminationGracePeriodSeconds -}}
+{{- $graceNote = "the terminationGracePeriodSeconds this install sets" -}}
+{{- end -}}
+{{- if ge $preStopSleep $grace -}}
+{{- fail (printf "deployment.preStopSleepSeconds=%d does not fit the effective termination grace of %ds (%s): Kubernetes validates the preStop sleep as 0 < seconds <= terminationGracePeriodSeconds, so the apiserver REJECTS this pod spec and the install fails even though the render looked fine. The grace also has to cover the shutdown work that runs AFTER the sleep (HTTP <=10s + dispatch drain <=15s + gRPC stop <=10s), so leave it real headroom rather than a second. Raise terminationGracePeriodSeconds (the HA profile ships 60) or lower deployment.preStopSleepSeconds." $preStopSleep $grace $graceNote) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 Warm worker pools reuse ONE pod — holding ONE live credential — across many
 attempts, so per-attempt identity is the only thing that stops a superseded
 attempt from still resolving secrets. That identity exists only when the agent

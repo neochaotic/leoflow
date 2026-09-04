@@ -311,6 +311,42 @@ tests:
       - isNull:
           path: spec.template.spec.containers[0].lifecycle
 
+  # Kubernetes validates the sleep as 0 < seconds <= terminationGracePeriodSeconds.
+  # The chart ships the grace unset (the apiserver applies its own 30) and used to
+  # accept any preStopSleepSeconds, so `--set deployment.preStopSleepSeconds=45`
+  # rendered happily and the apiserver then rejected the pod spec — a failure the
+  # chart can see at render time, like every other impossible combination it
+  # already refuses.
+  - it: refuses a preStop sleep that does not fit the apiserver's default grace
+    template: deployment.yaml
+    set:
+      deployment.preStopSleepSeconds: 45
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.preStopSleepSeconds=45 does not fit the effective termination grace of 30s (Kubernetes' own default, because the chart ships terminationGracePeriodSeconds unset): Kubernetes validates the preStop sleep as 0 < seconds <= terminationGracePeriodSeconds, so the apiserver REJECTS this pod spec and the install fails even though the render looked fine. The grace also has to cover the shutdown work that runs AFTER the sleep (HTTP <=10s + dispatch drain <=15s + gRPC stop <=10s), so leave it real headroom rather than a second. Raise terminationGracePeriodSeconds (the HA profile ships 60) or lower deployment.preStopSleepSeconds."
+
+  - it: refuses a preStop sleep equal to an explicitly set grace
+    template: deployment.yaml
+    set:
+      terminationGracePeriodSeconds: 60
+      deployment.preStopSleepSeconds: 60
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.preStopSleepSeconds=60 does not fit the effective termination grace of 60s (the terminationGracePeriodSeconds this install sets): Kubernetes validates the preStop sleep as 0 < seconds <= terminationGracePeriodSeconds, so the apiserver REJECTS this pod spec and the install fails even though the render looked fine. The grace also has to cover the shutdown work that runs AFTER the sleep (HTTP <=10s + dispatch drain <=15s + gRPC stop <=10s), so leave it real headroom rather than a second. Raise terminationGracePeriodSeconds (the HA profile ships 60) or lower deployment.preStopSleepSeconds."
+
+  - it: accepts a preStop sleep that fits inside a raised grace
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      terminationGracePeriodSeconds: 60
+      deployment.preStopSleepSeconds: 20
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 20
+
   - it: renders the preStop sleep on both split Deployments
     template: deployment.yaml
     capabilities:

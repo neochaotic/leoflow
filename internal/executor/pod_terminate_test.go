@@ -243,6 +243,42 @@ func TestDeleteTaskPod_PreservesTerminalPodCarryingOutcomeRecord(t *testing.T) {
 // classifyPod groups Unknown with Pending/Running, so the reconciler neither
 // settles nor collects it — skipping it here would leak it with nothing to stop
 // the container it may still be running.
+// TestDeleteTaskPod_PreservesARecordBearingPodWhateverItsPhase pins the
+// invariant the guard exists for — never destroy an outcome record — rather than
+// the phase that stands in for it. Phase is only a sound proxy while a task pod
+// has one container and RestartPolicy Never, which makes "the task container
+// terminated" imply "the phase is terminal". Add a second container and the
+// implication breaks: a service mesh injects a sidecar (reachable by an author
+// through execution annotations), the task container terminates and writes its
+// record, the sidecar keeps running, and the phase stays Running forever. That
+// is the one case where the record is the ONLY settle path, so it is the worst
+// possible pod to delete.
+func TestDeleteTaskPod_PreservesARecordBearingPodWhateverItsPhase(t *testing.T) {
+	t.Parallel()
+
+	rec, err := taskoutcome.Succeeded().Encode()
+	if err != nil {
+		t.Fatalf("encoding the outcome record: %v", err)
+	}
+	pod := taskPod("sidecar", "sidecar-run", "work", 1, corev1.PodRunning)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  taskContainerName,
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: rec}},
+	}, {
+		Name:  "istio-proxy",
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}
+
+	cs := fake.NewSimpleClientset(pod)
+	e := &KubernetesExecutor{clientset: cs, namespace: "leoflow"}
+	if derr := e.DeleteTaskPod(context.Background(), "sidecar-run", "work", 1); derr != nil {
+		t.Fatalf("DeleteTaskPod: %v", derr)
+	}
+	if _, gerr := cs.CoreV1().Pods("leoflow").Get(context.Background(), pod.Name, metav1.GetOptions{}); gerr != nil {
+		t.Fatalf("#928: a pod carrying a decodable outcome record was deleted despite the record being the only settle path: %v", gerr)
+	}
+}
+
 func TestDeleteTaskPod_PhaseDecidesTheTeardown(t *testing.T) {
 	tests := []struct {
 		name    string

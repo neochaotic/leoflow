@@ -1287,7 +1287,13 @@ func warmBootstrapTokenTTL(cfg *config.ServerConfig) time.Duration {
 // data). A SUCCEEDED run's volume is freed immediately, regardless of the TTL.
 const (
 	stagingGCInterval = time.Minute // frequent so a succeeded run's volume is freed ~at DAG end
-	stagingTTL        = 24 * time.Hour
+	// stagingTTL must stay well above the reconciler's finished-pod grace. A pod
+	// preserved by a reaper teardown (#928) still holds kubernetes.io/pvc-protection
+	// on the run's staging claim — upstream only skips terminated pods on the newer
+	// unused-since path, not on the deletion path — so if this TTL ever dropped near
+	// that grace, the GC would mark a claim deleted while a pod it cannot see is
+	// still keeping the finalizer on. Today the margin is 24h against 10 minutes.
+	stagingTTL = 24 * time.Hour
 )
 
 // startStagingGC periodically reclaims per-run staging PVCs from the

@@ -51,7 +51,16 @@ func (e *KubernetesExecutor) DeleteTaskPod(ctx context.Context, runID, taskID st
 // different run's live pod. The terminal-phase skip applies per pod inside the
 // run, not just to the per-attempt delete above (#928): this reaper reads no
 // presence at all, so a run abandoned at the 5-minute threshold would otherwise
-// take every finished task's outcome record with it. Tolerates NotFound.
+// take every finished task's outcome record with it. A mixed set is safe because
+// each settle is guarded on the pod's own try-number, ReapRun has already flipped
+// the run and every still-active task instance in one transaction before this
+// runs, and pod names carry a random suffix so a preserved pod can never collide
+// with a redispatch. The subtlest cell is a reschedule poke pod, which the
+// reconciler collects immediately rather than on age because a reschedule reuses
+// the same try-number: preserving one delays that collect by up to a cycle, which
+// is harmless because up_for_reschedule is not an active state for any reaper, so
+// a reaper only ever preserves a poke pod for an attempt it has just made
+// terminal. Tolerates NotFound.
 func (e *KubernetesExecutor) DeleteRunPods(ctx context.Context, runID string) error {
 	selector := fmt.Sprintf("leoflow.io/run-id=%s", sanitizeLabel(runID))
 	return e.deletePodsBySelector(ctx, selector)
@@ -82,7 +91,7 @@ func (e *KubernetesExecutor) deletePodsBySelector(ctx context.Context, selector 
 	var errs []error
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		if terminalForTeardown(pod.Status.Phase) {
+		if terminalForTeardown(pod) {
 			slog.InfoContext(ctx, "reap teardown: task pod is already in a terminal phase; leaving it for the reconciler",
 				"pod", pod.Name, "phase", pod.Status.Phase, "selector", selector)
 			continue
@@ -104,10 +113,27 @@ func (e *KubernetesExecutor) deletePodsBySelector(ctx context.Context, selector 
 // on age, which is the "reconciler-as-deleter" the RBAC comment names
 // (helm/leoflow/templates/rbac.yaml).
 //
-// The phase set here is exactly classifyPod's terminal-by-phase set, and that
-// alignment is the invariant: the teardown skips precisely the pods the
-// reconciler will settle and collect, and deletes precisely the ones it will
-// not. Hence Unknown is deleted, even though TaskPodPresence classifies it as
+// The invariant is ONE-DIRECTIONAL, and stating it as an equality would be
+// false: everything this preserves, classifyPod will settle and collect, so
+// nothing preserved can leak. The converse does not hold and does not need to —
+// classifyPod also treats a Pending or Running pod with an unrecoverable
+// waiting reason (an unpullable image, a missing config) as terminal, and the
+// teardown still deletes those. That costs nothing, because such a container
+// never started and so left no record behind, and it is REQUIRED, because a
+// Pending pod can still start and run the task, which is #474's exact chain.
+//
+// The record test comes first on purpose, and it is not redundant with the
+// phase test. Phase is only a sound proxy for "the record is safe" while a task
+// pod has one container and RestartPolicy Never, which is what makes "the task
+// container terminated" imply "the phase is terminal" — a property of BuildPod,
+// not of this function. Add a second container and the implication breaks: a
+// service mesh injects a sidecar (an author can ask for that through the
+// execution annotations BuildPod merges), the task container terminates and
+// writes its record, the sidecar keeps running, and the phase stays Running for
+// good. That is the one case where the record is the ONLY settle path, so it is
+// the worst possible pod to delete.
+//
+// Hence Unknown is deleted, even though TaskPodPresence classifies it as
 // present-but-terminal — those two answer different questions. Presence asks
 // "is this an absence?", where Unknown is conservatively a presence; teardown
 // asks "is there a container to stop, and will anything else collect this?",
@@ -115,8 +141,11 @@ func (e *KubernetesExecutor) deletePodsBySelector(ctx context.Context, selector 
 // Unknown with Pending/Running, so the reconciler neither settles nor collects
 // it. Skipping it would leave a pod that may still be running the very work
 // #474 exists to stop, with nothing to stop it.
-func terminalForTeardown(phase corev1.PodPhase) bool {
-	return phase == corev1.PodSucceeded || phase == corev1.PodFailed
+func terminalForTeardown(pod *corev1.Pod) bool {
+	if _, ok := outcomeRecord(pod); ok {
+		return true
+	}
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 }
 
 // TaskPodPresence reports what the apiserver holds for exactly the

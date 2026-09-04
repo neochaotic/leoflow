@@ -54,12 +54,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Boot `WARN` when `auth.max_attempt_credential_lifetime` is disabled.** A
   non-positive value is a documented setting the boot-time ladder check
-  accepts, but it now removes two backstops at once: heartbeat renewal of an
-  attempt's credential becomes unbounded, and task pods with no declared
-  `execution_timeout` get no `activeDeadlineSeconds` floor. The server logs one
-  `WARN` naming the key and both consequences; boot proceeds. The field's godoc
-  and the agent-credential-transport operator page now state both roles of the
-  knob.
+  accepts, but it removes every wall-clock bound the ceiling carries: heartbeat
+  renewal of an attempt's credential becomes unbounded, task pods with no
+  declared `execution_timeout` get no `activeDeadlineSeconds` floor, and with
+  warm pools enabled the per-attempt watchdog is off — a wedged task then has no
+  bound of its own even with a healthy control plane. The server logs one
+  `WARN` naming the key and the consequences; boot proceeds. The field's godoc
+  and the agent-credential-transport and warm-pools operator pages now state
+  every role of the knob.
 
 ### Changed
 

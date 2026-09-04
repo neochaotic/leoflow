@@ -150,16 +150,21 @@ func ValidateResilienceLadder(l ResilienceLadder) error {
 // remove a resilience backstop, so the server can surface them as boot WARNs.
 // ValidateResilienceLadder deliberately accepts a non-positive credential
 // ceiling — it is the operator's documented "no ceiling" setting — but that one
-// value disables two guarantees at once: heartbeat renewal of an attempt's
-// bearer becomes unbounded, and a task pod whose DAG declares no execution
-// timeout gets no ActiveDeadlineSeconds floor, so a total control-plane outage
-// can leave it Running indefinitely. Neither loss is an error; both are
-// invisible without this signal. Pure, like the validator: the server calls it
-// once at boot after the logger exists.
+// value disables every wall-clock bound the ceiling carries: heartbeat renewal
+// of an attempt's bearer becomes unbounded; a dedicated task pod whose DAG
+// declares no execution timeout gets no ActiveDeadlineSeconds floor; and, with
+// warm pools enabled, the per-attempt watchdog that keeps a wedged attempt from
+// pinning a warm slot is off too (a warm pod has no pod-level deadline at all,
+// and the worker lifetime cap drains between attempts, never mid-attempt). A
+// task that wedges while still heartbeating then has no bound of its own even
+// with a healthy control plane: the orphan-run reaper skips a run with a live
+// task instance and agent-lost never fires on a live agent. None of these
+// losses is an error; all are invisible without this signal. Pure, like the
+// validator: the server calls it once at boot after the logger exists.
 func ResilienceLadderWarnings(l ResilienceLadder) []string {
 	var warnings []string
 	if l.MaxAttemptCredentialLifetime <= 0 {
-		warnings = append(warnings, fmt.Sprintf("%s is disabled (%v): heartbeat renewal of an attempt's credential is unbounded AND task pods with no declared execution_timeout get no activeDeadlineSeconds floor, so a total control-plane outage can leave them Running indefinitely",
+		warnings = append(warnings, fmt.Sprintf("%s is disabled (%v): heartbeat renewal of an attempt's credential is unbounded, task pods with no declared execution_timeout get no activeDeadlineSeconds floor, and with warm pools enabled the per-attempt watchdog is off — a wedged or partitioned task pod has no wall-clock bound of its own",
 			maxAttemptCredentialLifetimeKey, l.MaxAttemptCredentialLifetime))
 	}
 	return warnings

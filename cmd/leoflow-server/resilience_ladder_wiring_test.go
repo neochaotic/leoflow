@@ -88,4 +88,15 @@ func TestResilienceLadderWiringWarnsWhenCredentialCeilingDisabled(t *testing.T) 
 	if out := warn(24 * time.Hour); out != "" {
 		t.Errorf("a set ceiling must log nothing at boot, got %q", out)
 	}
+	// Both guarantees live on the scheduler side (token renewal in the agent
+	// gRPC server, the pod deadline floor in the dispatcher), so an api-only
+	// process in a split install must not warn about behavior it does not
+	// implement — a WARN operators learn to ignore is worse than none.
+	var buf bytes.Buffer
+	cfg := &config.ServerConfig{}
+	cfg.Server.Role = "api"
+	warnStartup(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
+	if buf.Len() != 0 {
+		t.Errorf("an api-only role must not emit the credential-ceiling WARN, got %q", buf.String())
+	}
 }

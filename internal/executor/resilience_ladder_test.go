@@ -168,7 +168,7 @@ func TestResilienceLadderWarningsDisabledCredentialCeiling(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("ceiling %v: want exactly one warning, got %q", d, got)
 		}
-		for _, want := range []string{"auth.max_attempt_credential_lifetime", "disabled", "renewal", "activeDeadlineSeconds"} {
+		for _, want := range []string{"auth.max_attempt_credential_lifetime", "disabled", "renewal", "activeDeadlineSeconds", "watchdog", "wedged"} {
 			if !strings.Contains(got[0], want) {
 				t.Errorf("ceiling %v: warning %q must mention %q", d, got[0], want)
 			}

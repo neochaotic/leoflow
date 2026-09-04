@@ -321,7 +321,8 @@ in-flight attempt on its own renewed credential before recycling. (There is
 therefore **no** `max_worker_lifetime ≥ max_attempt_credential_lifetime` boot guard —
 the real "credential lapses mid-attempt" bound is per-attempt, enforced on the
 execution path via the attempt watchdog, not by an ordering rule between these two
-knobs.)
+knobs. The watchdog is derived from `max_attempt_credential_lifetime`, so a
+non-positive ceiling disables it too — boot logs a `WARN`.)
 
 ### Losing a worker
 

@@ -418,8 +418,12 @@ type AuthSection struct {
 	// forever (a declared timeout is never shortened). Generous by default (24h)
 	// so no normal task regresses. Bind via
 	// LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME as a duration (e.g. "24h",
-	// "90m"). A non-positive value disables BOTH the renewal ceiling and the pod
-	// deadline floor; boot logs a WARN so the loss is visible.
+	// "90m"). With warm pools enabled it is also the per-attempt watchdog that
+	// keeps a wedged attempt from pinning a warm slot (a warm pod has no pod-level
+	// deadline; the worker lifetime cap drains between attempts, never
+	// mid-attempt). A non-positive value disables the renewal ceiling, the pod
+	// deadline floor and that watchdog together — a wedged task then has no
+	// wall-clock bound of its own — so boot logs a WARN naming the key.
 	MaxAttemptCredentialLifetime time.Duration `mapstructure:"max_attempt_credential_lifetime"`
 	// AgentTokenTransport selects how the in-pod agent obtains its control-plane
 	// bearer credential (ADR 0055 Fix #3): "envvar" (the default) sets the token as
@@ -614,8 +618,9 @@ var serverDefaults = map[string]any{
 	// flip to it is a separate operator decision after real-cluster e2e.
 	"auth.agent_token_transport": "envvar",
 	// Hard ceiling on an attempt's total renewed credential lifetime (ADR 0055
-	// Fix #4) and the activeDeadlineSeconds floor of a task pod with no declared
-	// execution_timeout. Generous by default so nothing regresses; the short
+	// Fix #4), the activeDeadlineSeconds floor of a task pod with no declared
+	// execution_timeout, and the warm-pool per-attempt watchdog. Generous by
+	// default so nothing regresses; the short
 	// per-attempt TTL is what bounds a stolen token. Parsed as a duration by
 	// viper's decode hook.
 	"auth.max_attempt_credential_lifetime": "24h",

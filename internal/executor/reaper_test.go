@@ -443,6 +443,13 @@ func TestNewReaperWiresGateIntoEveryReaper(t *testing.T) {
 	if got := rec.count("reap_gate_skip"); got != 0 {
 		t.Errorf("the entry check must pass (it consumed the open consultation), reap_gate_skip = %d", got)
 	}
+	// Guard against a false accusation: if the settling gate ever stood between
+	// the entry check and the reapers here, every count below would read 0 and
+	// the message would blame the wiring. Nil predicates and no leadership stamp
+	// must keep settling open in this test.
+	if got := rec.count("reap_settling_skip"); got != 0 {
+		t.Fatalf("settling must not stand between the entry check and the reapers in this test (candidates come from staleEverythingStore, one per reaper), reap_settling_skip = %d", got)
+	}
 	for _, skip := range []string{
 		"orphan_gate_skip",
 		"agent_lost_gate_skip",

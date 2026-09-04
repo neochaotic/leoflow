@@ -28,7 +28,7 @@ pods, so no pod-based reaper applies and the loop is not started.
 | **Task code wedged past its declared `execution_timeout_seconds`** | **Agent itself** ([#194](https://github.com/neochaotic/leoflow/issues/194)) | **`execution_timeout_seconds`** (per-task) | **TI failed with `execution_timeout: task exceeded N`. Retries kick in if budget remains.** |
 | Agent process crashed mid-task (TI in `running`, no heartbeat) | TI heartbeat reaper ([#128](https://github.com/neochaotic/leoflow/issues/128)) | **90 s** | TI failed with `agent_lost`; the TI's pod is deleted so a partitioned-but-alive container stops. Retries kick in if budget remains. |
 | Scheduler crashed before dispatching (TI stuck in `queued`) | Dispatch-lost reaper ([#202](https://github.com/neochaotic/leoflow/issues/202)) | **3 min** | TI failed with `dispatch_lost` — but only if no live pod for it exists (see below); the pod is torn down. Frees the run for the orphan reaper on the next maintenance cycle. |
-| Task pod vanished (TI in `running`, no Pending/Running pod for its attempt) | Pod-lost reaper | **60 s** after the running transition, then a live pod read | TI failed with `pod_lost`. Only after the reconciler has had its chance to recover the pod's durable outcome (see the settling gate below). |
+| Task pod vanished (TI in `running`, no pod at all for its attempt) | Pod-lost reaper | **60 s** after the running transition, then a live pod read | TI failed with `pod_lost`. Only when the apiserver holds no pod for the attempt: a pod that is still there in a terminal phase is left for the reconciler to settle from its termination log (`pod_lost_terminal_pod_defer`). |
 | Warm worker died holding attempts (warm pools only) | Warm-worker-lost reaper | next maintenance cycle | Each attempt bound to the dead worker is failed `pod_lost`; refill of the pool is the warm-pool reconciler's job, not the reaper's. |
 | Run stuck `running` with no active TIs (post-crash limbo) | Orphan-run reaper ([#120](https://github.com/neochaotic/leoflow/issues/120)) | **5 min** | Run failed with `orphaned`; any remaining active TIs flipped to `failed` and every pod of the run is deleted. |
 
@@ -88,6 +88,18 @@ reconciler cannot list pods, the informer never syncs — the reapers proceed
 anyway, with a `WARN` log and a `reap_settling_valve_open` decision on every
 cycle the valve stays open. By then the reconciler has had at least four cycles,
 so a valve that opens means the sweep really is broken; treat it as an alert.
+
+**Why opening it is safe.** The usual reason a sweep never completes is an
+apiserver that cannot be read — unreachable, unauthorized, throttled. The
+reconciler's pod LIST and each reaper's own pod-presence LIST hit that same
+apiserver, so the failure that shuts the gate also denies every pod-dependent
+reaper its authorization: pod-lost and dispatch-lost defer
+(`pod_lost_pod_query_error`, `dispatch_lost_pod_query_error`) and the
+warm-worker-lost reaper aborts its cycle with zero marks. They fail closed on
+their own, valve or no valve. And because the valve is *designed* to open, it is
+never the only guard: the pod-lost reaper fails a task only when the attempt has
+**no pod object at all**, a state no grace, cadence or election timing can
+manufacture. A finished pod is a present pod, and stays the reconciler's.
 
 The server validates the timing ladder these depend on at boot and refuses to
 start if a constant was moved out of order:
@@ -192,7 +204,8 @@ your Prometheus dashboard:
 | `agent_lost` | TI failed by the heartbeat reaper |
 | `dispatch_lost` | TI failed by the dispatch-lost reaper |
 | `dispatch_lost_deferred` | Dispatch-lost skipped because the TI's pod is live (slow start, [#461](https://github.com/neochaotic/leoflow/issues/461)) — a healthy signal, not a fault |
-| `pod_lost` | TI failed by the pod-lost reaper (no live pod for the attempt) |
+| `pod_lost` | TI failed by the pod-lost reaper (no pod at all for the attempt) |
+| `pod_lost_terminal_pod_defer` | Pod-lost skipped because the attempt's pod is still there in a terminal phase — the reconciler settles it from its termination log; reaping would delete that evidence. A healthy signal, not a fault |
 | `warm_worker_lost` | TI failed by the warm-worker-lost reaper (its warm worker is gone) |
 | `orphan_reaped` | Run failed by the orphan-run reaper |
 | `reap_settling_skip` | The whole reaper pass was held because the leader has not settled yet (grace, informer sync, or a post-leadership reconciler sweep still pending) — expected for ~3 min after every (re-)election |

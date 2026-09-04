@@ -215,7 +215,11 @@ func (s *Server) SetTokenRenewal(renewer AgentTokenRenewer, renewalTTL, maxAttem
 // long-lived stream returns Unavailable, so the gRPC graceful stop that follows
 // completes instead of waiting for the tasks themselves to finish. An open
 // StreamLogs first closes (flushes) its log writer; the agent treats the closed
-// stream as best-effort log delivery and keeps running its task. An open
+// stream as best-effort log delivery and keeps running its task. A StreamLogs
+// that arrives AFTER the signal is refused before its writer is opened — the
+// listener keeps accepting for the rest of the shutdown, and an opened-then-
+// abandoned writer Puts an empty object over an attempt that is logging
+// elsewhere. An open
 // AwaitAssignment ends too — an idle warm worker holds one open indefinitely, so
 // leaving it out would make the forced stop the normal shutdown path.
 func (s *Server) SetShutdown(ctx context.Context) { s.shutdown = ctx.Done() }
@@ -469,7 +473,9 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 
 // StreamLogs receives the task's log lines and writes them through the sink,
 // flushing on stream end so the logs survive the pod. The stream also ends when
-// the control plane shuts down (SetShutdown), so the flush runs before exit.
+// the control plane shuts down (SetShutdown), so the flush runs before exit —
+// and a stream that ARRIVES after that signal is refused before any writer is
+// opened, so it leaves no empty object behind.
 func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err error) {
 	id, ierr := s.identify(stream.Context())
 	if ierr != nil {
@@ -480,6 +486,19 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 	}
 	if s.logs == nil {
 		return status.Error(codes.Unimplemented, "log shipping is not configured")
+	}
+	// Refuse BEFORE a writer exists. The gRPC listener is the last thing the
+	// process stops, so it keeps ACCEPTING new log streams for the whole of the
+	// HTTP shutdown plus the dispatch drain after SIGTERM. Opening a writer for
+	// one of those and only then noticing the shutdown left a deferred Close that
+	// Put an EMPTY object — and an empty object means "the attempt ran and was
+	// silent" to every reader of this sink, which is a lie about an attempt whose
+	// lines are going to a live replica instead. A nil channel never fires, so an
+	// unwired server (tests, embedders) is unaffected (#918).
+	select {
+	case <-s.shutdown:
+		return status.Error(codes.Unavailable, "control plane shutting down; log stream not accepted")
+	default:
 	}
 	w, oerr := s.logs.Open(logs.Ref{
 		TenantID: id.TenantID, DagID: id.DagID, RunID: id.RunID, TaskID: id.TaskID, TryNumber: id.TryNumber,

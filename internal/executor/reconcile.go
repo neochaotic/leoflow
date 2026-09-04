@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -268,6 +269,11 @@ type Reconciler struct {
 	// (PR-10). Nil keeps the live LIST (Lite/subprocess, or before the informer
 	// is wired). GC deletes still go straight to the apiserver.
 	snapshot PodSnapshotter
+	// lastSweepCompleted is the unix-nano stamp of the last sweep that listed
+	// the task-pod set and visited every pod; 0 = none yet. Read by the reaper's
+	// leader-settling gate (see LastSweepCompletedAt) from another goroutine
+	// than the one that writes it at the end of Reconcile, hence atomic.
+	lastSweepCompleted atomic.Int64
 }
 
 // NewReconciler builds a Reconciler over the given cluster and outcome reporter.
@@ -280,9 +286,29 @@ func NewReconciler(clientset kubernetes.Interface, namespace string, reporter Ou
 // (PR-10). Left unset, the reconciler keeps the live LIST — today's behavior.
 func (r *Reconciler) SetPodSnapshotter(s PodSnapshotter) { r.snapshot = s }
 
+// LastSweepCompletedAt reports when the last COMPLETED sweep finished: the
+// task-pod set was listed and every pod visited, so every terminal pod present
+// at that moment had its chance to settle its task instance. Zero means no
+// sweep has completed yet. It is the record the reaper's leader-settling gate
+// compares against the leadership stamp — the reapers act on signals a
+// control-plane restart manufactures (a task pod that exited during the outage
+// looks lost), and only a sweep completed under the new leader separates
+// "finished during the outage, outcome recoverable" from "genuinely lost".
+//
+// A sweep that could not list pods records nothing. A sweep whose individual
+// settle failed on a DB error still counts: that pod is retried next sweep, and
+// the gate's grace leaves room for the retry before any reaper may act.
+func (r *Reconciler) LastSweepCompletedAt() time.Time {
+	ns := r.lastSweepCompleted.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
 // Reconcile lists managed task pods, records each terminal one's outcome against
 // its task instance, and garbage-collects finished pods older than the grace
-// period.
+// period. A completed sweep is stamped for LastSweepCompletedAt.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	pods, err := r.listTaskPods(ctx)
 	if err != nil {
@@ -318,6 +344,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 			r.collect(ctx, pod)
 		}
 	}
+	r.lastSweepCompleted.Store(r.now().UnixNano())
 	return nil
 }
 

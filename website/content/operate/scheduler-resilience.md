@@ -10,14 +10,16 @@ description: "How the scheduler survives restarts, leader loss and partial failu
 
 How Leoflow keeps the scheduler honest when something goes wrong: a process
 dies, an agent goes silent, a dispatch is lost in flight. The control plane
-ships **three reapers** — small, single-purpose loops that turn stuck state
+ships **five reapers** — small, single-purpose backstops that turn stuck state
 back into observable terminal state, so the dashboard never lies about what's
 actually running.
 
 This applies to **both editions**: Lite (single-process) and Pro
 (multi-replica with [leader election](/project/adrs/0009-leader-election/)). The
 reapers run only on the leader — reaping writes state, and we want one writer
-across the fleet.
+across the fleet. On Kubernetes they run from the leader's **maintenance loop**
+(every 30 s, after the pod reconciler's sweep — see below); in Lite there are no
+pods, so no pod-based reaper applies and the loop is not started.
 
 ## Recovery SLAs
 
@@ -25,28 +27,86 @@ across the fleet.
 |---|---|---|---|
 | **Task code wedged past its declared `execution_timeout_seconds`** | **Agent itself** ([#194](https://github.com/neochaotic/leoflow/issues/194)) | **`execution_timeout_seconds`** (per-task) | **TI failed with `execution_timeout: task exceeded N`. Retries kick in if budget remains.** |
 | Agent process crashed mid-task (TI in `running`, no heartbeat) | TI heartbeat reaper ([#128](https://github.com/neochaotic/leoflow/issues/128)) | **90 s** | TI failed with `agent_lost`; the TI's pod is deleted so a partitioned-but-alive container stops. Retries kick in if budget remains. |
-| Scheduler crashed before dispatching (TI stuck in `queued`) | Dispatch-lost reaper ([#202](https://github.com/neochaotic/leoflow/issues/202)) | **3 min** | TI failed with `dispatch_lost` — but only if no live pod for it exists (see below); the pod is torn down. Frees the run for the orphan reaper on the next tick. |
+| Scheduler crashed before dispatching (TI stuck in `queued`) | Dispatch-lost reaper ([#202](https://github.com/neochaotic/leoflow/issues/202)) | **3 min** | TI failed with `dispatch_lost` — but only if no live pod for it exists (see below); the pod is torn down. Frees the run for the orphan reaper on the next maintenance cycle. |
+| Task pod vanished (TI in `running`, no Pending/Running pod for its attempt) | Pod-lost reaper | **60 s** after the running transition, then a live pod read | TI failed with `pod_lost`. Only after the reconciler has had its chance to recover the pod's durable outcome (see the settling gate below). |
+| Warm worker died holding attempts (warm pools only) | Warm-worker-lost reaper | next maintenance cycle | Each attempt bound to the dead worker is failed `pod_lost`; refill of the pool is the warm-pool reconciler's job, not the reaper's. |
 | Run stuck `running` with no active TIs (post-crash limbo) | Orphan-run reaper ([#120](https://github.com/neochaotic/leoflow/issues/120)) | **5 min** | Run failed with `orphaned`; any remaining active TIs flipped to `failed` and every pod of the run is deleted. |
 
-Worst case end-to-end: a mid-tick scheduler crash that leaves TIs queued is
-fully reaped within **`max(3 min, 5 min) = 5 min`** — the dispatch-lost reaper
-runs first, then the orphan-run reaper picks up the now-no-active-TI run on
-the next tick.
+Every SLA above is a floor: the reapers run every **30 s**, so detection lands
+up to one cycle after the threshold elapses. Worst case end-to-end: a mid-tick
+scheduler crash that leaves TIs queued is fully reaped within
+**`max(3 min, 5 min) + 30 s`** — the dispatch-lost reaper runs first, then the
+orphan-run reaper picks up the now-no-active-TI run on a later cycle.
+
+## Cadence: reconcile, then reap
+
+The reapers do **not** run from the scheduler's 1 s tick. They run from the
+leader's maintenance loop, which every 30 s performs **one ordered cycle**:
+
+1. the **pod reconciler** sweeps the task pods, recovers each finished pod's
+   durable outcome record (a success whose report was lost during an outage is
+   recorded as a success — [ADR 0052](/project/adrs/0052-durable-task-outcome/)),
+   and garbage-collects old finished pods;
+2. **then** the five reapers run.
+
+Each phase runs under its own budget of one interval (30 s): a sweep hung on a
+slow apiserver cannot starve the reap, and a reap pass over a large namespace
+cannot starve the sweep it depends on. Overrunning a budget is a load signal,
+logged at `WARN` with the budget, not an error; a cycle can take up to two
+intervals and the ticker coalesces the ticks it overruns.
+
+The order is structural, not a matter of timers lining up. Before this, the
+reapers ticked at 1 s and the reconciler at 30 s on an independent clock, so a
+pod-lost verdict could land on a pod the reconciler would have recovered as
+succeeded at its next sweep. The cost is up to 30 s of extra detection latency
+on top of thresholds of 60 s–5 min; reaping is a backstop, never the primary
+path, so that trade is the right one.
+
+### The leader-settling gate
+
+A control-plane restart manufactures the very signals the reapers act on:
+every in-flight heartbeat looks stale (the receiver was down), a task pod that
+finished during the outage looks lost (its terminal report found no server), a
+run looks quiet. So after this instance acquires leadership **no reaper fires**
+until the leader has **settled** — all three of:
+
+- the **settling grace** (180 s, twice the agent-lost threshold) has elapsed
+  since leadership, giving the whole fleet time to re-heartbeat;
+- the **pod informer cache has synced**, so the fleet view is complete;
+- **a reconciler sweep has completed under this leadership**, so every finished
+  pod's true outcome has been recovered before anything is declared lost.
+
+One gate, at the entry of the reaper pass, covers all five reapers (the
+warm-worker-lost reaper too: delaying it by the grace only postpones recovering
+a dead worker's attempts; pool refill is a separate loop and is not held).
+Measured from leadership acquisition, so a re-election resets it. While it
+holds, every cycle records `reap_settling_skip`.
+
+**Liveness valve.** A gate that could hold forever would trade "reap wrong" for
+"never reap". If the leader has not settled after **2 × grace (360 s)** — the
+reconciler cannot list pods, the informer never syncs — the reapers proceed
+anyway, with a `WARN` log and a `reap_settling_valve_open` decision on every
+cycle the valve stays open. By then the reconciler has had at least four cycles,
+so a valve that opens means the sweep really is broken; treat it as an alert.
+
+The server validates the timing ladder these depend on at boot and refuses to
+start if a constant was moved out of order:
+`heartbeat (15 s) < agent-lost threshold (90 s) < settling grace (180 s) < attempt token TTL (10 min)`,
+and `2 × maintenance interval (60 s) < settling grace`, so at least two whole
+reconcile-then-reap cycles complete inside the grace.
 
 ## Tuning the thresholds
 
-Defaults are conservative. For tighter recovery on a fast-failing workload,
-override via the scheduler interfaces:
+The thresholds and the settling grace are **build-time constants**
+(`executor.DefaultReaperConfig`), not operator knobs: they sit on the ladder
+above, and the boot-time validator exists precisely because moving one out of
+order turns a restart into a false reap. The one operator-tunable rung is
+`auth.max_attempt_credential_lifetime`, which must stay above the attempt token
+TTL; boot fails naming the key if it does not.
 
-```go
-sched.SetAgentLostThreshold(30 * time.Second)
-sched.SetDispatchLostThreshold(1 * time.Minute)
-sched.SetOrphanThreshold(2 * time.Minute)
-```
-
-For most users the defaults are correct: too-tight thresholds risk reaping a
-legitimately slow dispatch (Kubernetes pod-pull latency under contention) or
-a busy agent.
+The defaults are conservative on purpose: too-tight thresholds risk reaping a
+legitimately slow dispatch (Kubernetes pod-pull latency under contention) or a
+busy agent.
 
 ## The "do no harm" rule
 
@@ -63,10 +123,19 @@ anything:
   positive, [#461](https://github.com/neochaotic/leoflow/issues/461)) — the
   reaper defers. If pod liveness can't be determined (K8s API error), it also
   defers. A TI without a `queued_at` stamp is too poorly observed to reap.
+- **Pod-lost reaper** — requires a `running` TI past its 60 s liveness floor
+  AND a live read confirming no Pending/Running pod exists for exactly that
+  attempt. A cached "pod present" defers without an API call; a cache miss is
+  never trusted and falls through to the live read; a read error defers. And,
+  like every reaper, it waits for the leader-settling gate — so a pod that
+  finished during an outage is recovered by the reconciler, not failed.
+- **Warm-worker-lost reaper** — requires a live LIST of the warm pods (not the
+  cache) showing the bound worker gone; a LIST error aborts the pass with zero
+  marks. It never deletes a pod: a warm worker outlives its attempts.
 - **Orphan-run reaper** — requires `state = 'running'` AND no active TI on
   the run. A run with any TI in `scheduled`/`queued`/`running` is left alone
   (the dispatch-lost reaper unblocks this case by failing the stuck queued
-  TIs first, so the next tick sees no active TIs).
+  TIs first, so a later cycle sees no active TIs).
 
 ## Tearing down the reaped task's pod
 
@@ -120,10 +189,15 @@ your Prometheus dashboard:
 | `agent_lost` | TI failed by the heartbeat reaper |
 | `dispatch_lost` | TI failed by the dispatch-lost reaper |
 | `dispatch_lost_deferred` | Dispatch-lost skipped because the TI's pod is live (slow start, [#461](https://github.com/neochaotic/leoflow/issues/461)) — a healthy signal, not a fault |
+| `pod_lost` | TI failed by the pod-lost reaper (no live pod for the attempt) |
+| `warm_worker_lost` | TI failed by the warm-worker-lost reaper (its warm worker is gone) |
 | `orphan_reaped` | Run failed by the orphan-run reaper |
-| `agent_lost_list_error`, `dispatch_lost_list_error`, `orphan_list_error` | Reaper's list query failed; next tick will retry |
-| `dispatch_lost_pod_query_error` | Pod liveness could not be read (K8s API error); the reaper deferred rather than risk a false positive |
-| `agent_lost_pod_delete_error`, `dispatch_lost_pod_delete_error`, `orphan_pod_delete_error` | Pod teardown after a reap failed; the DB reap stands and the pod's `activeDeadlineSeconds`/GC are backstops |
+| `reap_settling_skip` | The whole reaper pass was held because the leader has not settled yet (grace, informer sync, or a post-leadership reconciler sweep still pending) — expected for ~3 min after every (re-)election |
+| `reap_settling_valve_open` | The leader never settled within 2 × grace and the reapers ran anyway; the reconciler sweep or the pod informer is broken — **alert on this** |
+| `reap_gate_skip` | The pass was skipped because this instance is stepping down, no longer leads, or is shutting down — a healthy signal during rollouts |
+| `agent_lost_list_error`, `dispatch_lost_list_error`, `orphan_list_error`, `pod_lost_list_error`, `warm_worker_lost_list_error` | Reaper's list query failed; the next cycle will retry |
+| `dispatch_lost_pod_query_error`, `pod_lost_pod_query_error` | Pod liveness could not be read (K8s API error); the reaper deferred rather than risk a false positive |
+| `agent_lost_pod_delete_error`, `dispatch_lost_pod_delete_error`, `orphan_pod_delete_error`, `pod_lost_pod_delete_error` | Pod teardown after a reap failed; the DB reap stands and the pod's `activeDeadlineSeconds`/GC are backstops |
 
 A sustained non-zero rate on any of these is worth investigating — reapers
 are backstops, not the primary path; if they fire often, something upstream

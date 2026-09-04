@@ -219,49 +219,6 @@ func TestReapAgentLost_MarkerErrorDoesNotBlockReap(t *testing.T) {
 	}
 }
 
-// TestReapAgentLost_GraceAfterLeadership: after a control-plane restart, the new
-// leader must NOT immediately reap TIs whose heartbeats went stale DURING the
-// outage — the silence was manufactured by the control plane being down, not by
-// a dead agent (#858). A post-leadership grace window suppresses reaping until
-// the fleet has had time to re-heartbeat; past the grace, a still-silent TI is
-// reaped normally.
-func TestReapAgentLost_GraceAfterLeadership(t *testing.T) {
-	now := time.Now().UTC()
-	newStore := func() *fakeHeartbeatStore {
-		return &fakeHeartbeatStore{candidates: []AgentLostCandidate{
-			{TaskInstanceID: "stale", DagRunID: "r", TaskID: "t", TryNumber: 1, LastHeartbeat: now.Add(-2 * time.Minute)},
-		}}
-	}
-
-	// Just became leader (10s ago) — within the 180s grace — must NOT reap.
-	within := newStore()
-	rec := &capturingRecorder{}
-	r := newAgentLostReaper(within, reapTestLogger(), 90*time.Second, rec)
-	r.grace = 180 * time.Second
-	r.leaderSince = func() time.Time { return now.Add(-10 * time.Second) }
-	if err := r.run(context.Background()); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if len(within.failed) != 0 {
-		t.Errorf("must not reap within the post-leadership grace, failed=%v", within.failed)
-	}
-	if rec.count("agent_lost_grace_skip") != 1 {
-		t.Errorf("agent_lost_grace_skip = %d, want 1", rec.count("agent_lost_grace_skip"))
-	}
-
-	// Leader well past the grace — a still-stale TI is reaped.
-	past := newStore()
-	r2 := newAgentLostReaper(past, reapTestLogger(), 90*time.Second, &capturingRecorder{})
-	r2.grace = 180 * time.Second
-	r2.leaderSince = func() time.Time { return now.Add(-10 * time.Minute) }
-	if err := r2.run(context.Background()); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if len(past.failed) != 1 || past.failed[0] != "stale" {
-		t.Errorf("must reap after the grace elapses, failed=%v", past.failed)
-	}
-}
-
 // TestReapAgentLost_ListErrorSurfaces: a list failure is returned so the
 // caller can log it (the scheduler's reapHeartbeatLossesIfLeader treats this
 // as a "next tick will try again" condition). It must NEVER panic.

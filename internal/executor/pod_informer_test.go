@@ -127,3 +127,25 @@ func TestPodInformer_SnapshotTaskPods(t *testing.T) {
 		t.Errorf("snapshot should hold both managed pods, got %d", len(pods))
 	}
 }
+
+// TestPodInformer_HasSynced exposes the cache's sync state as a predicate the
+// reaper's leader-settling gate can poll: false until the initial LIST has
+// populated the cache, true after. A gate that read a one-shot boot-time value
+// would never see a late sync (a watch that recovered after RBAC drift was fixed).
+func TestPodInformer_HasSynced(t *testing.T) {
+	cs := fake.NewClientset()
+	pi := NewPodInformer(cs, "leoflow")
+	if pi.HasSynced() {
+		t.Fatal("HasSynced must be false before the informer starts")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pi.Start(ctx)
+	defer pi.Shutdown()
+	if !pi.WaitForCacheSync(ctx) {
+		t.Fatal("cache did not sync")
+	}
+	if !pi.HasSynced() {
+		t.Error("HasSynced must be true once the cache synced")
+	}
+}

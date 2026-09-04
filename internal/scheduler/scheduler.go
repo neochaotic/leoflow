@@ -277,16 +277,15 @@ type Scheduler struct {
 	// buffered channel used as a counting semaphore; a saturated slot drops the
 	// alert (best-effort) rather than blocking the tick.
 	alertSem chan struct{}
-	// executionReaper is the execution-side backstop that fails stuck runs and
-	// task instances (the four reapers, #120/#128/#202/#527). It lives in the
-	// executor package because reaping tears down pods and gates on pod liveness;
-	// the scheduler only drives it once per leader tick through this seam. Nil
-	// leaves the tick with no reaping (e.g. a load harness that opts out).
-	executionReaper ExecutionReaper
-	lastTick        atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
-	leading         atomic.Bool  // true only while this instance holds leadership and ticks
-	leaderSince     atomic.Int64 // unix-nano when leadership was last acquired; 0 = not leading. Drives the agent-lost reaper's post-recovery grace (#858)
-	steppingDown    atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
+	// The execution reapers are NOT driven from the tick. They run from the
+	// leader's maintenance loop, after the pod reconciler's sweep, at that loop's
+	// cadence: a reaper judging state at 1s that a 30s reconciler had not yet
+	// recovered was the race a restart turned into a false failure. The
+	// scheduler exposes LeaderSince/IsLeading/SteppingDown for that loop's gate.
+	lastTick     atomic.Int64 // unix-nano of the last loop iteration; 0 = not yet ticked
+	leading      atomic.Bool  // true only while this instance holds leadership and ticks
+	leaderSince  atomic.Int64 // unix-nano when leadership was last acquired; 0 = not leading. Drives the execution reaper's leader-settling gate
+	steppingDown atomic.Bool  // true only during a leader step-down — the campaign loop sets it before canceling the run-context so the expected cancel-fanout logs at WARN, not ERROR (#311 tripwire preserved when it's false)
 	// warnedSchedules dedupes the "unparseable schedule" warning per DAG (keyed by
 	// the offending expression) so a bad cron logs once, not every tick. Accessed
 	// only from the single-threaded tick (createDueRuns), so it needs no lock.
@@ -312,22 +311,6 @@ func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Sch
 	}
 }
 
-// ExecutionReaper is the execution-side backstop the scheduler drives once per
-// leader tick to fail stuck runs and task instances. It is the seam between the
-// scheduler (which owns the leader gate and the tick) and the executor package
-// (which owns pod teardown and pod-liveness). executor.Reaper satisfies it.
-type ExecutionReaper interface {
-	// ReapOnce runs every reaper once. Implementations isolate per-reaper and
-	// per-candidate failures internally and log/meter list errors, so the
-	// scheduler ignores the return today; the error is kept for the seam.
-	ReapOnce(ctx context.Context) error
-}
-
-// SetExecutionReaper wires the execution-side reaper the scheduler drives on the
-// leader tick. Left unset (e.g. a load harness, or a Lite path that opts out of
-// reaping), the tick simply reaps nothing.
-func (s *Scheduler) SetExecutionReaper(r ExecutionReaper) { s.executionReaper = r }
-
 // defaultStepTimeout bounds how long one scheduling tick may run before it is
 // canceled so the loop can recover, rather than hang forever on a stuck query.
 // It is generous (well above a healthy tick) to avoid aborting legitimate work.
@@ -349,9 +332,9 @@ func (s *Scheduler) SetStepTimeout(d time.Duration) { s.stepTimeout = d }
 func (s *Scheduler) SetLeading(on bool) {
 	if on {
 		s.lastTick.Store(0)
-		// Stamp when leadership was acquired so the agent-lost reaper measures its
-		// post-recovery grace from now, not from wall-clock (#858). Clear it on
-		// loss so a non-leader reports no leadership window.
+		// Stamp when leadership was acquired so the execution reaper's settling
+		// gate measures from now, not from wall-clock. Clear it on loss so a
+		// non-leader reports no leadership window.
 		s.leaderSince.Store(time.Now().UnixNano())
 	} else {
 		s.leaderSince.Store(0)
@@ -527,7 +510,7 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	// read or write scheduler state. The lastTick.Store above keeps the
 	// follower's heartbeat live so the orchestrator can prove the instance
 	// is alive without granting it the writer role. Lifting the gate here
-	// (instead of only inside reapOrphansIfLeader) removes the wasted reads,
+	// (instead of only around individual phases) removes the wasted reads,
 	// the duplicate ApplyTransition / CreateScheduledRun attempts that ON
 	// CONFLICT used to swallow, and the "what does a follower's count drift
 	// mean?" puzzle.
@@ -568,31 +551,7 @@ func (s *Scheduler) Step(ctx context.Context) error {
 			poolOccupied[k] += n
 		}
 	}
-	createErr := s.createDueRuns(ctx, activeByDAG)
-	s.reapOrphansIfLeader(ctx)
-	return createErr
-}
-
-// reapOrphansIfLeader drives the execution-side reaper exactly once per tick,
-// only on the leader: reaping writes state and we want one writer at a time
-// across the fleet. The reaper (executor.Reaper) isolates per-reaper and
-// per-candidate failures internally and logs/meters its own list errors, so the
-// tick neither returns nor stalls on a reap error — the reapers are backstops,
-// not on the critical path. Nil executionReaper (a harness that opts out, or a
-// role that does no reaping) makes this a no-op.
-func (s *Scheduler) reapOrphansIfLeader(ctx context.Context) {
-	if !s.leading.Load() {
-		return
-	}
-	if s.executionReaper == nil {
-		return
-	}
-	// ReapOnce isolates and logs its own per-reaper failures and returns nil
-	// today; the guarded log keeps the scheduler honest if the seam ever grows a
-	// hard-failure return, matching how the tick logs (never returns) reap errors.
-	if err := s.executionReaper.ReapOnce(ctx); err != nil {
-		logSchedulerError(s.logger, "execution reaper", err, s.steppingDown.Load())
-	}
+	return s.createDueRuns(ctx, activeByDAG)
 }
 
 // activeTaskCounts tallies, per DAG, the task instances that already occupy a

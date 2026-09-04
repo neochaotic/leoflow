@@ -66,12 +66,13 @@ type PodLostReapStore interface {
 //
 // Warm-pool attempts are out of this reaper's scope: a warm attempt has no
 // per-task pod, so it never appears live here; the warm-worker-lost reaper
-// recovers those from the warm pod's own liveness. That reaper carries no
-// leadership grace because its liveness signal is not one a control-plane
-// restart can manufacture: ListWarmPods is a live apiserver LIST (not an
-// informer-backed cache that could be cold or stale after a restart), and a
-// LIST error aborts its tick with zero marks, so a fresh leader either sees the
-// real warm fleet or marks nothing.
+// recovers those from the warm pod's own liveness. That signal is one a
+// control-plane restart cannot manufacture — ListWarmPods is a live apiserver
+// LIST (not an informer-backed cache that could be cold or stale after a
+// restart), and a LIST error aborts its tick with zero marks, so a fresh leader
+// either sees the real warm fleet or marks nothing — yet the reaper is held by
+// the same leader-settling gate as every other one: the delay is harmless and
+// one uniform gate is the point.
 type podLostReaper struct {
 	store    PodLostReapStore
 	logger   *slog.Logger
@@ -86,19 +87,6 @@ type podLostReaper struct {
 	// TaskPodActive read below, so cache lag can only delay a reap, never cause a
 	// false-positive one (#461). Nil keeps every candidate on the live path.
 	cache PodPresenceCache
-	// leaderGrace suppresses reaping for this long after leadership is
-	// (re-)acquired, ADDITIVE to the per-task grace above. A control-plane
-	// restart makes a task pod that finished during the outage look lost (its
-	// container exited; its TI is still `running` because the terminal report
-	// found no server), while the pod's durable outcome record is still waiting
-	// for the reconciler's slower sweep. Without this window the pod-lost mark
-	// wins that race and a succeeded task is recorded failed. Zero disables it.
-	leaderGrace time.Duration
-	// leaderSince reports when this instance last acquired scheduler leadership,
-	// so leaderGrace is measured from recovery, not wall-clock. Nil (Lite/tests
-	// without leadership) disables the leadership grace; the per-task grace and
-	// the liveness read are unchanged.
-	leaderSince func() time.Time
 	// gate is re-checked before every destructive call (see destructiveGate).
 	gate destructiveGate
 }
@@ -123,13 +111,12 @@ func (r *podLostReaper) run(ctx context.Context) error {
 		return nil
 	}
 	now := time.Now().UTC()
-	// Post-leadership grace: let the reconciler recover durable outcomes of pods
-	// that finished during the outage before declaring any of them lost. Checked
-	// before the list so a grace tick does no query at all.
-	if inLeaderGrace(r.leaderSince, r.leaderGrace, now) {
-		r.record("pod_lost_grace_skip")
-		return nil
-	}
+	// A control-plane restart makes a task pod that finished during the outage
+	// look lost: its container exited, yet its TI is still `running` because the
+	// terminal report found no server. Only the reconciler's sweep can recover
+	// that pod's durable outcome; Reaper.settling holds the whole tick until one
+	// has completed under this leadership, so by the time run is reached a
+	// `running` TI with no live pod is genuinely lost.
 	candidates, err := r.store.ListRunningTasks(ctx)
 	if err != nil {
 		return err

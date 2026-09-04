@@ -11,27 +11,30 @@ import (
 // for its own reason, so nothing but this type states that they must line up.
 // The invariants:
 //
-//	heartbeat interval  <  agent-lost threshold  <  agent-lost grace  <  attempt token TTL
-//	2 × reconcile interval  <  agent-lost grace
-//	2 × reconcile interval  <  pod-lost leader grace
+//	heartbeat interval  <  agent-lost threshold  <  settling grace  <  attempt token TTL
+//	2 × maintenance interval  <  settling grace
 //	longest infra re-place delay  <  orphan threshold
 //	attempt token TTL  <  max attempt credential lifetime   (when the ceiling is enabled)
 //
 // Why each rung matters:
 //   - heartbeat < threshold: a healthy agent must beat well inside the silence
 //     window or the agent-lost reaper fails live tasks.
-//   - threshold < agent-lost grace: after a (re-)election the reaper waits
-//     longer than the silence it punishes, so the whole fleet can re-heartbeat.
-//   - agent-lost grace < token TTL: the grace ends while a re-heartbeat can still
+//   - threshold < settling grace: after a (re-)election the reapers wait longer
+//     than the silence they punish, so the whole fleet can re-heartbeat.
+//   - settling grace < token TTL: the grace ends while a re-heartbeat can still
 //     authenticate and renew the bearer; otherwise the fleet is unreapable AND
 //     unable to report — every in-flight task is lost.
-//   - 2×reconcile < agent-lost grace, 2×reconcile < pod-lost leader grace: the
-//     reconciler gets at least two full sweeps under the new leader before any
-//     reaper may fail a task whose pod finished during the outage, so the
-//     durable outcome record is recovered as the truth before a reaper guesses.
-//     A single sweep is not enough: the first tick under a new leader may land
-//     anywhere in the interval, so "one interval below the grace" can mean zero
-//     completed sweeps.
+//   - 2×maintenance < settling grace: the leader's maintenance loop runs the
+//     reconciler's sweep and then the reapers as ONE ordered cycle, so a reap
+//     structurally follows a completed sweep — the settling gate additionally
+//     requires that a sweep completed under the new leader. This rung is what
+//     makes the grace meaningful on top of that ordering: at least two whole
+//     cycles fit inside it, so a settle that failed transiently on the first
+//     sweep (a DB hiccup) is retried before the gate can open, and the liveness
+//     valve at 2×grace has seen at least four cycles before it declares the
+//     sweep broken. A single cycle is not enough: the first tick under a new
+//     leader may land anywhere in the interval, so "one interval below the
+//     grace" can mean zero completed cycles.
 //   - infra re-place delay < orphan threshold: a run whose only live task is
 //     parked in its longest infra re-place backoff has no activity to show the
 //     orphan-run reaper; the threshold must outlast that parking or the reaper
@@ -49,10 +52,13 @@ import (
 type ResilienceLadder struct {
 	HeartbeatInterval  time.Duration
 	AgentLostThreshold time.Duration
-	AgentLostGrace     time.Duration
-	PodLostLeaderGrace time.Duration
-	AttemptTokenTTL    time.Duration
-	ReconcileInterval  time.Duration
+	// SettlingGrace is the post-leadership window during which no reaper fires
+	// (ReaperConfig.SettlingGrace); the one grace every reaper shares.
+	SettlingGrace   time.Duration
+	AttemptTokenTTL time.Duration
+	// ReconcileInterval is the period of the leader's maintenance loop: one
+	// reconciler sweep followed by one reaper pass per cycle.
+	ReconcileInterval time.Duration
 	// OrphanThreshold is how long a running dag run may sit with no activity
 	// before the orphan-run reaper fails it (ReaperConfig.OrphanThreshold).
 	OrphanThreshold time.Duration
@@ -100,25 +106,23 @@ type ladderRelation struct {
 func ValidateResilienceLadder(l ResilienceLadder) error {
 	hb := ladderRung{"heartbeat interval", l.HeartbeatInterval}
 	thr := ladderRung{"agent-lost threshold", l.AgentLostThreshold}
-	agrace := ladderRung{"agent-lost grace", l.AgentLostGrace}
-	pgrace := ladderRung{"pod-lost leader grace", l.PodLostLeaderGrace}
+	grace := ladderRung{"settling grace", l.SettlingGrace}
 	ttl := ladderRung{"attempt token TTL", l.AttemptTokenTTL}
-	rec := ladderRung{"reconcile interval", l.ReconcileInterval}
+	rec := ladderRung{"maintenance interval", l.ReconcileInterval}
 	orphan := ladderRung{"orphan threshold", l.OrphanThreshold}
 	replace := ladderRung{"longest infra re-place delay", l.InfraReplaceMaxDelay}
 
-	for _, r := range []ladderRung{hb, thr, agrace, pgrace, ttl, rec, orphan, replace} {
+	for _, r := range []ladderRung{hb, thr, grace, ttl, rec, orphan, replace} {
 		if r.d <= 0 {
 			return fmt.Errorf("resilience ladder: %s (%v) must be positive", r.name, r.d)
 		}
 	}
-	twoRec := ladderRung{"2 × reconcile interval", 2 * l.ReconcileInterval}
+	twoRec := ladderRung{"2 × maintenance interval", 2 * l.ReconcileInterval}
 	relations := []ladderRelation{
 		{lo: hb, hi: thr, why: "a live agent must heartbeat well inside the agent-lost silence window"},
-		{lo: thr, hi: agrace, why: "the post-leadership grace must outlast the silence it forgives so the fleet can re-heartbeat"},
-		{lo: agrace, hi: ttl, why: "a re-heartbeat must still authenticate and renew the bearer when the grace ends"},
-		{lo: twoRec, hi: agrace, why: "the reconciler must complete at least two sweeps under a new leader before agent-lost may reap"},
-		{lo: twoRec, hi: pgrace, why: "the reconciler must complete at least two sweeps to recover durable pod outcomes before pod-lost may reap"},
+		{lo: thr, hi: grace, why: "the post-leadership settling grace must outlast the silence it forgives so the fleet can re-heartbeat"},
+		{lo: grace, hi: ttl, why: "a re-heartbeat must still authenticate and renew the bearer when the grace ends"},
+		{lo: twoRec, hi: grace, why: "at least two reconcile-then-reap cycles must complete under a new leader before the settling gate may open, so a transiently failed settle is retried before any reaper acts"},
 		{lo: replace, hi: orphan, why: "a run parked in its longest infra re-place backoff must not be reaped as orphaned while it is still recovering"},
 	}
 	if l.MaxAttemptCredentialLifetime > 0 {

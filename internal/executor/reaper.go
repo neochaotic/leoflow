@@ -15,9 +15,9 @@ type DecisionRecorder interface {
 	RecordSchedulerDecision(decisionType string)
 }
 
-// ReaperStore is the full store surface the four reapers need, composed from
+// ReaperStore is the full store surface the five reapers need, composed from
 // each reaper's own slice. The metadatabase-backed SchedulerStore satisfies all
-// four, so production wires through one type; a unit test fakes just the slice
+// five, so production wires through one type; a unit test fakes just the slice
 // its reaper touches.
 type ReaperStore interface {
 	ReapStore
@@ -44,40 +44,32 @@ const (
 	defaultAgentLostThreshold    = 90 * time.Second
 	defaultDispatchLostThreshold = 3 * time.Minute
 	defaultPodLostGrace          = 60 * time.Second
-	// defaultAgentLostGrace is the post-leadership window during which the
-	// agent-lost reaper does not fire (#858). Set to 2× the agent-lost threshold
-	// so a single control-plane restart + re-election (whose recorded silence can
-	// approach the threshold) cannot trip a mass false reap, while staying well
-	// under the 10-minute agent token TTL so a re-heartbeat still authenticates.
-	// Ladder: heartbeat(15s) < threshold(90s) < grace(180s) < tokenTTL(600s).
-	defaultAgentLostGrace = 2 * defaultAgentLostThreshold
-	// defaultPodLostLeaderGrace is the post-leadership window during which the
-	// pod-lost reaper does not fire. The same control-plane restart that makes
-	// heartbeats look stale also makes a task pod that FINISHED during the outage
-	// look lost: its container exited, so it is no longer Pending/Running, yet its
-	// TI is still `running` because the terminal report never reached a server.
-	// The pod's durable outcome record (termination log) is recovered by the
-	// reconciler on its own, slower sweep; if the pod-lost reaper fires first it
-	// marks a succeeded task failed and the reconciler then finds a settled row.
-	// Reusing the agent-lost grace keeps one ladder value for "one restart fault"
-	// and leaves the reconciler (30s sweep) several passes to recover the true
-	// outcome before this reaper may act. It is additive to PodLostGrace, which
-	// is a per-task liveness floor measured from the TI's running transition.
-	defaultPodLostLeaderGrace = defaultAgentLostGrace
+	// defaultSettlingGrace is the post-leadership window during which NO reaper
+	// fires (see Reaper.settling). Set to 2× the agent-lost threshold so a single
+	// control-plane restart + re-election (whose recorded silence can approach
+	// the threshold) cannot trip a mass false reap, while staying well under the
+	// 10-minute agent token TTL so a re-heartbeat still authenticates.
+	// Ladder: heartbeat(15s) < threshold(90s) < grace(180s) < tokenTTL(600s);
+	// 2 × maintenance interval (60s) < grace, so at least two reconcile sweeps
+	// complete before the gate can open.
+	defaultSettlingGrace = 2 * defaultAgentLostThreshold
 )
 
-// ReaperConfig holds the idle thresholds and post-leadership graces the reapers
-// apply. Zero values are legal but reap aggressively; callers pass
+// ReaperConfig holds the idle thresholds and the post-leadership settling grace
+// the reapers apply. Zero values are legal but reap aggressively; callers pass
 // DefaultReaperConfig unless a test or load harness deliberately overrides them.
 type ReaperConfig struct {
 	OrphanThreshold       time.Duration
 	AgentLostThreshold    time.Duration
-	AgentLostGrace        time.Duration
 	DispatchLostThreshold time.Duration
-	PodLostGrace          time.Duration
-	// PodLostLeaderGrace suppresses pod-lost reaping for this long after this
-	// instance acquires leadership. See defaultPodLostLeaderGrace.
-	PodLostLeaderGrace time.Duration
+	// PodLostGrace is the per-task liveness floor measured from the TI's running
+	// transition, below which the pod-lost reaper does not consult pod liveness.
+	PodLostGrace time.Duration
+	// SettlingGrace is the minimum time after this instance acquires leadership
+	// before ANY reaper may act — one rung of the leader-settling gate, which
+	// also requires a synced pod informer and a completed reconciler sweep. See
+	// defaultSettlingGrace and Reaper.settling. Zero disables the whole gate.
+	SettlingGrace time.Duration
 }
 
 // DefaultReaperConfig returns the production thresholds — the exact values the
@@ -86,33 +78,10 @@ func DefaultReaperConfig() ReaperConfig {
 	return ReaperConfig{
 		OrphanThreshold:       defaultOrphanThreshold,
 		AgentLostThreshold:    defaultAgentLostThreshold,
-		AgentLostGrace:        defaultAgentLostGrace,
 		DispatchLostThreshold: defaultDispatchLostThreshold,
 		PodLostGrace:          defaultPodLostGrace,
-		PodLostLeaderGrace:    defaultPodLostLeaderGrace,
+		SettlingGrace:         defaultSettlingGrace,
 	}
-}
-
-// inLeaderGrace reports whether now falls within the post-leadership grace: a
-// leaderSince accessor is wired, the grace is positive, leadership is currently
-// held (non-zero stamp), and less than grace has elapsed since it was acquired.
-// A nil accessor (Lite / no leadership) or a zero grace disables the check.
-//
-// It is the single definition of the leader-settling gate the reapers share. A
-// control-plane restart manufactures the signals several reapers act on (a stale
-// heartbeat, a task pod that exited during the outage), so a freshly elected
-// leader must let the fleet re-heartbeat and the reconciler recover durable
-// outcomes before any of them fires; a genuinely lost task stays stale past the
-// grace and is reaped on a later tick. Measured from leadership acquisition, not
-// process start, so a re-election also resets it. If leadership flaps with a
-// period shorter than the grace the stamp keeps moving and the gated reapers
-// never fire — the orphan-run reaper is the backstop for that pathological case.
-func inLeaderGrace(leaderSince func() time.Time, grace time.Duration, now time.Time) bool {
-	if leaderSince == nil || grace <= 0 {
-		return false
-	}
-	ls := leaderSince()
-	return !ls.IsZero() && now.Sub(ls) < grace
 }
 
 // destructiveGate reports whether a reaper may take a destructive action — mark
@@ -123,9 +92,9 @@ func inLeaderGrace(leaderSince func() time.Time, grace time.Duration, now time.T
 //
 // The invariant: a leader that is terminating or stepping down must not mark or
 // delete. Its context is being canceled, its view of the fleet is about to go
-// stale, and the successor redoes every reap under its own post-leadership
-// grace — so a destructive write on the way out is at best redundant and at
-// worst the false reap the grace exists to prevent.
+// stale, and the successor redoes every reap under its own settling gate — so
+// a destructive write on the way out is at best redundant and at worst the
+// false reap the gate exists to prevent.
 type destructiveGate func(ctx context.Context) bool
 
 // gateOpen evaluates a possibly-nil destructiveGate.
@@ -135,9 +104,9 @@ func gateOpen(g destructiveGate, ctx context.Context) bool {
 
 // Reaper is the execution-side backstop that fails stuck runs and task instances
 // the scheduler dispatched but that then went dark. It bundles the five
-// independent reapers behind one ReapOnce entrypoint the scheduler drives once
-// per leader tick, so the scheduler depends on a single capability rather than
-// wiring each reaper itself.
+// independent reapers behind one ReapOnce entrypoint the leader's maintenance
+// loop drives once per cycle, after the pod reconciler's sweep, so the caller
+// depends on a single capability rather than wiring each reaper itself.
 type Reaper struct {
 	orphan         *orphanReaper
 	agentLost      *agentLostReaper
@@ -148,14 +117,25 @@ type Reaper struct {
 	rec            DecisionRecorder
 	// inStepDown reports whether the scheduler is in a graceful leader step-down.
 	// It downgrades an expected context-cancel fanout of the run-context to WARN
-	// (#311) and, with ctx and leading, closes the destructive gate: a leader
-	// stepping down must not mark or delete. Nil is tolerated ("not stepping
-	// down").
+	// and, with ctx and leading, closes the destructive gate: a leader stepping
+	// down must not mark or delete. Nil is tolerated ("not stepping down").
 	inStepDown func() bool
 	// leading reports whether this instance currently holds scheduler leadership;
 	// part of the destructive gate. Nil is tolerated ("leading") so Lite and
 	// tests without an election are unaffected.
 	leading func() bool
+	// now is the clock the settling gate reads; time.Now in production, injected
+	// by tests so the gate's three conditions can be driven deterministically.
+	now func() time.Time
+	// settlingGrace is ReaperConfig.SettlingGrace.
+	settlingGrace time.Duration
+	// leaderSince, informerSynced and lastSweepCompleted are the three inputs of
+	// the leader-settling gate (see settling). Each is nil when its subsystem is
+	// not wired — Lite has no leadership, informer or reconciler — and a nil
+	// input is "satisfied", so an unwired reaper is never held.
+	leaderSince        func() time.Time
+	informerSynced     func() bool
+	lastSweepCompleted func() time.Time
 }
 
 // NewReaper constructs the reapers and wires their pod-teardown / liveness
@@ -177,7 +157,6 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 
 	agentLost := newAgentLostReaper(store, logger, cfg.AgentLostThreshold, rec)
 	agentLost.pods = pods
-	agentLost.grace = cfg.AgentLostGrace
 
 	dispatchLost := newDispatchLostReaper(store, logger, cfg.DispatchLostThreshold, rec)
 	dispatchLost.pods = pods
@@ -187,7 +166,6 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 	podLost := newPodLostReaper(store, logger, cfg.PodLostGrace, rec)
 	podLost.pods = pods
 	podLost.cache = cache
-	podLost.leaderGrace = cfg.PodLostLeaderGrace
 
 	warmWorkerLost := newWarmWorkerLostReaper(store, logger, rec)
 	warmWorkerLost.warmPods = warmPods
@@ -201,6 +179,8 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 		logger:         logger,
 		rec:            rec,
 		inStepDown:     inStepDown,
+		now:            time.Now,
+		settlingGrace:  cfg.SettlingGrace,
 	}
 	// One destructive gate, shared by every reaper: each re-checks it right before
 	// a mark or delete, so a cancel/step-down that lands mid-tick still stops the
@@ -216,9 +196,9 @@ func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmP
 
 // SetLeading wires the leadership predicate into the destructive gate, so a
 // reaper tick on an instance that no longer holds leadership marks and deletes
-// nothing. The scheduler already drives ReapOnce only while leading; this is the
-// defensive re-check at the point of the write. Nil leaves the gate on ctx and
-// step-down alone.
+// nothing. The maintenance loop already drives ReapOnce only while leading;
+// this is the defensive re-check at the point of the write. Nil leaves the gate
+// on ctx and step-down alone.
 func (r *Reaper) SetLeading(fn func() bool) {
 	r.leading = fn
 }
@@ -239,30 +219,124 @@ func (r *Reaper) mayReap(ctx context.Context) bool {
 }
 
 // SetLogSink wires the sink the agent-lost reaper uses to append a final
-// "killed: agent_lost" marker to a reaped attempt's log stream (#861), so a
-// killed task's log ends with the reason instead of a silent truncation. Any
-// logs.Sink satisfies the parameter; nil (Lite / unwired) leaves markers off.
+// "killed: agent_lost" marker to a reaped attempt's log stream, so a killed
+// task's log ends with the reason instead of a silent truncation. Any logs.Sink
+// satisfies the parameter; nil (Lite / unwired) leaves markers off.
 func (r *Reaper) SetLogSink(s logSink) {
 	r.agentLost.sink = s
 }
 
-// SetLeaderSince wires the accessor the leadership-gated reapers use to measure
-// their post-leadership grace — the window after a (re-)election during which a
-// stale heartbeat or a vanished task pod is assumed to be the outage's doing, not
-// a dead agent or a lost pod, and is not reaped (see inLeaderGrace). It reaches
-// every reaper that acts on a restart-manufactured signal: agent-lost and
-// pod-lost. Nil (Lite / no leadership) leaves the grace off. The warm-worker-lost
-// reaper is deliberately not gated: its signal is the warm pod's own liveness
-// read by a live apiserver LIST (ListWarmPods, not an informer cache that a
-// restart could leave cold), and a LIST error aborts its tick with zero marks —
-// so a fresh leader either sees the real warm fleet or marks nothing, and there
-// is no restart-manufactured false signal for a grace to absorb.
+// SetLeaderSince wires the accessor the settling gate measures its grace from:
+// when this instance last acquired scheduler leadership (zero while not
+// leading). Measured from leadership acquisition, not process start, so a
+// re-election also resets the gate. Nil (Lite / no leadership) disables the
+// gate entirely — the other two inputs are only meaningful under a leader.
 func (r *Reaper) SetLeaderSince(fn func() time.Time) {
-	r.agentLost.leaderSince = fn
-	r.podLost.leaderSince = fn
+	r.leaderSince = fn
 }
 
-// ReapOnce runs the five reapers once, in the same order the scheduler drove
+// SetInformerSynced wires the pod informer's sync predicate into the settling
+// gate. Until the cache has synced, the reapers' presence reads fall back to
+// live LISTs (safe, but the fleet view a fresh leader is about to judge from is
+// still being assembled), so the gate waits. Nil (no informer: Lite, or a
+// non-Kubernetes executor) leaves this condition satisfied.
+func (r *Reaper) SetInformerSynced(fn func() bool) {
+	r.informerSynced = fn
+}
+
+// SetLastSweepCompleted wires the reconciler's last-completed-sweep record into
+// the settling gate: the gate holds until a sweep has COMPLETED at or after
+// leadership was acquired, because that sweep is what recovers the durable
+// outcome of a task pod that finished during the outage; before it, "no live
+// pod" and "no recent heartbeat" are indistinguishable from a lost task. Nil
+// (no reconciler: Lite) leaves this condition satisfied.
+func (r *Reaper) SetLastSweepCompleted(fn func() time.Time) {
+	r.lastSweepCompleted = fn
+}
+
+// settlingVerdict is the settling gate's answer for one tick.
+type settlingVerdict struct {
+	// hold is true while the leader has not settled and the valve is shut: the
+	// tick must do nothing.
+	hold bool
+	// valve is true when the leader has not settled but the liveness valve has
+	// opened: the tick proceeds, loudly.
+	valve bool
+	// pending names the unsatisfied condition (grace, informer, sweep), for logs.
+	pending string
+	// elapsed is how long this instance has led.
+	elapsed time.Duration
+}
+
+// settling is the uniform leader-settling gate: after a (re-)election NO reaper
+// may act until the leader has settled, meaning all of
+//
+//	elapsed since leadership >= SettlingGrace
+//	pod informer cache synced          (when wired)
+//	a reconciler sweep completed at or after leadership was acquired (when wired)
+//
+// A control-plane restart manufactures the very signals the reapers act on: a
+// stale heartbeat (the receiver was down), a task pod that exited during the
+// outage (its terminal report found no server), a run with no recent activity.
+// Each reaper used to carry its own post-leadership grace; that closes the race
+// per reaper and leaves the class open — the reaper cadence and the reconciler
+// cadence were independent clocks, so a grace tuned against one sweep interval
+// still allowed zero completed sweeps. One gate over the observable facts (the
+// sweep DID complete; the cache IS synced; the fleet HAD a grace to re-heartbeat)
+// closes the class for every present and future reaper.
+//
+// Liveness valve: if the leader has not settled after 2 × SettlingGrace (the
+// reconciler cannot list pods, the informer never syncs) the gate opens anyway,
+// warning and metering reap_settling_valve_open on every cycle it stays open.
+// A permanently held gate would trade "reap wrong" for "never reap": stuck runs
+// and lost tasks would accumulate silently, which is the failure the reapers
+// exist to prevent. By then the reconciler has had at least four cycles, so the
+// diagnosis "the sweep is broken" is real, not a scheduling artifact.
+//
+// The warm-worker-lost reaper is gated too although its signal (a warm pod's
+// own liveness, read by a live LIST that fails closed) is not one a restart
+// manufactures: delaying it by the grace is harmless — a dead worker's attempts
+// are recovered a little later, and warm-pool REFILL is a separate loop that
+// is not gated — and one uniform gate is the point.
+//
+// Nil inputs are satisfied conditions: Lite wires none of them and must behave
+// exactly as before. A zero leadership stamp (not leading) also opens the gate
+// here — the destructive gate mayReap owns the not-leading case.
+func (r *Reaper) settling(now time.Time) settlingVerdict {
+	if r.leaderSince == nil || r.settlingGrace <= 0 {
+		return settlingVerdict{}
+	}
+	since := r.leaderSince()
+	if since.IsZero() {
+		return settlingVerdict{}
+	}
+	elapsed := now.Sub(since)
+	pending := r.settlingPending(since, elapsed)
+	if pending == "" {
+		return settlingVerdict{elapsed: elapsed}
+	}
+	if elapsed >= 2*r.settlingGrace {
+		return settlingVerdict{valve: true, pending: pending, elapsed: elapsed}
+	}
+	return settlingVerdict{hold: true, pending: pending, elapsed: elapsed}
+}
+
+// settlingPending names the first unsatisfied settling condition, or "" when
+// the leader has settled. Order is cheapest-first; only the name differs.
+func (r *Reaper) settlingPending(since time.Time, elapsed time.Duration) string {
+	if elapsed < r.settlingGrace {
+		return "grace"
+	}
+	if r.informerSynced != nil && !r.informerSynced() {
+		return "informer_unsynced"
+	}
+	if r.lastSweepCompleted != nil && r.lastSweepCompleted().Before(since) {
+		return "no_sweep_since_leadership"
+	}
+	return ""
+}
+
+// ReapOnce runs the five reapers once, in the order the scheduler used to drive
 // them: orphan-run, then agent-lost, then dispatch-lost, then pod-lost, then
 // warm-worker-lost. The dispatch-lost reaper runs AFTER the orphan-run reaper so
 // a clean stuck-queued -> failed -> orphan-run-failed chain can complete in a
@@ -270,20 +344,32 @@ func (r *Reaper) SetLeaderSince(fn func() time.Time) {
 //
 // The whole tick is skipped — and the skip metered as reap_gate_skip — when the
 // destructive gate is closed on entry: a canceled context (SIGTERM drain, the
-// step-down cancel fan-out), a scheduler in step-down, or a lost leadership. The
-// reapers also re-check the gate before each individual write, so this early
-// return is the cheap common case, not the only defense.
+// step-down cancel fan-out), a scheduler in step-down, or a lost leadership. It
+// is likewise skipped, metered as reap_settling_skip, while the leader has not
+// settled (see settling); once settling has lasted 2× the grace the liveness
+// valve opens and the tick proceeds with a WARN and reap_settling_valve_open.
+// The reapers also re-check the destructive gate before each individual write,
+// so the early return is the cheap common case, not the only defense.
 //
 // Each reaper's infra-level list error is logged and metered but never returned:
 // the reapers are independent backstops, so one's failure must not block the
-// others, and a list error must not stall the scheduler tick. Per-candidate
+// others, and a list error must not stall the caller's cycle. Per-candidate
 // failures are already isolated inside each reaper's run. ReapOnce therefore
 // always returns nil today; the error return is kept for the seam so a future
-// hard-failure mode need not change the scheduler.
+// hard-failure mode need not change the caller.
 func (r *Reaper) ReapOnce(ctx context.Context) error {
 	if !r.mayReap(ctx) {
 		r.record("reap_gate_skip")
 		return nil
+	}
+	if v := r.settling(r.now()); v.hold {
+		r.record("reap_settling_skip")
+		r.logger.Info("reapers holding until the leader settles", "pending", v.pending, "since_leadership", v.elapsed, "grace", r.settlingGrace)
+		return nil
+	} else if v.valve {
+		r.record("reap_settling_valve_open")
+		r.logger.Warn("reaper settling valve open: leader never settled, reaping anyway",
+			"pending", v.pending, "since_leadership", v.elapsed, "valve_after", 2*r.settlingGrace)
 	}
 	if err := r.orphan.run(ctx); err != nil {
 		r.logError("orphan reaper", err)
@@ -312,7 +398,7 @@ func (r *Reaper) ReapOnce(ctx context.Context) error {
 // to WARN only when it wraps context.Canceled AND the scheduler is currently in a
 // graceful leader step-down (the run-context is canceled as the leader releases
 // the advisory lock, and every in-flight reaper returns "context canceled"
-// milliseconds later — a non-event, #311). Any other error, or a cancel outside a
+// milliseconds later — a non-event). Any other error, or a cancel outside a
 // known step-down, stays ERROR: the tripwire that catches an unexpected cancel.
 func (r *Reaper) logError(msg string, err error) {
 	if r.inStepDown != nil && r.inStepDown() && errors.Is(err, context.Canceled) {

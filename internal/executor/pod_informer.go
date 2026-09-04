@@ -102,6 +102,15 @@ func (p *PodInformer) WaitForCacheSync(ctx context.Context) bool {
 	return cache.WaitForCacheSync(ctx.Done(), p.informer.HasSynced)
 }
 
+// HasSynced reports whether the initial LIST has populated the cache. It is the
+// live form of WaitForCacheSync's one-shot answer, for a caller that must keep
+// asking — the reaper's leader-settling gate — so a cache that synced late (a
+// watch recovered after an RBAC fix) is seen, and one that never synced is not
+// mistaken for an empty cluster.
+func (p *PodInformer) HasSynced() bool {
+	return p.informer.HasSynced()
+}
+
 // Shutdown stops the watch and waits for the informer goroutines to exit. Safe to
 // call more than once (Start's ctx-cancel path and an explicit caller may race).
 func (p *PodInformer) Shutdown() {

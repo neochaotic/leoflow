@@ -116,13 +116,22 @@ func (o *ObjectSink) Read(ref Ref) (io.ReadCloser, error) {
 //
 // Read-modify-write with no locking, which is safe because of WHEN it runs, not
 // because nothing else can write the key: a live attempt's writer does flush the
-// same object incrementally. The only caller is the agent-lost reaper, and it
-// marks an attempt whose agent has been silent past the heartbeat threshold —
-// minutes after that writer's last flush, and after the stream (and usually the
-// pod) is gone. The two windows are that far apart, so the race is not reachable
-// from here; a caller that ran while an attempt was still streaming WOULD race,
-// and would lose or clobber whole flushes, since each side Puts the entire
-// object it last read.
+// same object incrementally. The only caller is the agent-lost reaper, and what
+// separates the two writers is the agent-lost threshold — 90s of heartbeat
+// silence (executor.defaultAgentLostThreshold), not "minutes" and not the life
+// of the pod. Normally that is enough, because an agent that has stopped
+// heartbeating for 90s has stopped streaming too.
+//
+// The exception, and it IS reachable: heartbeats can be refused while the log
+// stream survives. An attempt past max_attempt_credential_lifetime stops getting
+// its token renewed, so its heartbeats start failing authentication, while
+// StreamLogs — authenticated once at Open and never re-checked — keeps receiving
+// lines and flushing them. Agent-lost then fires at the 90s mark, this function
+// appends the marker, and the live writer's very next flush Puts its own buffer
+// straight over it. Each side Puts the whole object it last read, so the loser
+// loses whole flushes, not one line. Anything that shortens the gap between the
+// two writers — a lower threshold, a caller that is not the reaper — widens this
+// from an exception into the normal case (#918).
 func (o *ObjectSink) AppendEvent(ref Ref, ev Event) error {
 	if err := ref.validate(); err != nil {
 		return err

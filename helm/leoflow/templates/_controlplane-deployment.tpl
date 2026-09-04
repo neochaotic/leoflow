@@ -66,12 +66,12 @@ spec:
       # are closed and flushed at SIGTERM and the gRPC stop is bounded (5s
       # graceful, then up to 5s for handlers after the forced stop), so a normal
       # shutdown completes in well under a second. A shutdown that hits every
-      # bound (preStop 5s + HTTP 10s + drain 15s + gRPC up to 10s) exceeds the
-      # default 30s; set 45-60 when running the object log sink at scale (the HA
-      # profile ships 60). deployment.preStopSleepSeconds runs inside this grace,
-      # ahead of SIGTERM, so it counts against the same budget. Omitted when
-      # unset so a default install's pod spec is unchanged (Kubernetes applies
-      # its own 30s).
+      # bound (HTTP 10s + drain 15s + gRPC up to 10s) is ~35s and exceeds the
+      # default 30s. deployment.preStopSleepSeconds runs inside this same grace
+      # but BEFORE SIGTERM, so the grace has to hold both: size it as that sleep
+      # plus ~35s, with headroom, when running the object log sink at scale (the
+      # HA profile ships 60 alongside a 5s sleep). Omitted when unset so a
+      # default install's pod spec is unchanged (Kubernetes applies its own 30s).
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
       {{- with .ctx.Values.imagePullSecrets }}

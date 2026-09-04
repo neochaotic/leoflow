@@ -552,9 +552,13 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 // grace: the HTTP shutdown (10 s) and the dispatch drain (15 s, configurable)
 // run before it, and stopGRPCWithin spends up to 2 × this timeout (graceful,
 // then the wait for handlers after the forced stop), so a shutdown that hits
-// every bound takes ~35 s plus the telemetry flush. The default grace covers the
-// normal shutdown; an installation running the object log sink at scale should
-// set terminationGracePeriodSeconds to 45-60 s (the HA profile ships 60).
+// every bound takes ~35 s plus the telemetry flush. That is the PROCESS bound,
+// measured from SIGTERM; the pod's termination clock can be longer, because the
+// chart's optional preStop sleep (deployment.preStopSleepSeconds, off by
+// default, 5 in the HA profile) runs inside the same grace but BEFORE the signal
+// — so the grace an operator needs is that sleep plus this bound. The default
+// grace covers the normal shutdown; an installation running the object log sink
+// at scale should raise terminationGracePeriodSeconds (the HA profile ships 60).
 const grpcStopTimeout = 5 * time.Second
 
 // grpcStopper is the subset of *grpc.Server the bounded stop needs; a fake

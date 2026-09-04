@@ -195,8 +195,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   best-effort); and the gRPC graceful stop is bounded at 5 s with a forced-stop
   fallback that still lets the remaining handlers finish their flushes, so a
   normal shutdown completes in well under a second instead of ending in
-  `SIGKILL` (the bounded worst case is ~40 s; set the grace to 45–60 s when
-  running the object sink at scale — the HA profile ships 60). The final flush runs on a context detached from the server's
+  `SIGKILL` (the bounded worst case, measured from `SIGTERM`, is ~35 s: raise the
+  grace above that plus any `deployment.preStopSleepSeconds`, which runs inside
+  the same grace but before the signal, when running the object sink at scale —
+  the HA profile ships 60). The final flush runs on a context detached from the server's
   lifecycle, which `SIGTERM` cancels at exactly that moment. The disk sink (Lite,
   RWX PVC) is unchanged. Known gap, documented: the agent does not re-open a log
   stream its control plane closed, so lines a task prints after its control

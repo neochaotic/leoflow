@@ -118,6 +118,30 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [#928](https://github.com/neochaotic/leoflow/issues/928), with the underlying
   unguarded transition as [#929](https://github.com/neochaotic/leoflow/issues/929).
 
+- **A task pod is no longer killed by the kubelet before its own
+  `execution_timeout` can fire, mislabelling the failure.** A task that declared
+  `execution_timeout_seconds` got a pod `activeDeadlineSeconds` equal to that
+  value — but the kubelet counts it from the pod's `status.startTime`, stamped
+  before the image pull, while the agent starts its own timeout clock only after
+  the `RUNNING` pre-flight report, the source staging and the venv resolution.
+  The kubelet therefore won by the entire startup cost, on **every** timing-out
+  task rather than as an occasional race, and the task settled with a generic
+  "the task container terminated…" reason instead of `execution_timeout: task
+  exceeded Ns limit`. The pod deadline is now the declared timeout **plus** a
+  3-minute startup headroom (the dispatch-lost threshold — already the window in
+  which the control plane treats a task as healthily starting up) **plus** the
+  pod's `terminationGracePeriodSeconds` (30 s when undeclared), so the agent
+  always fires first and its diagnosis is what the operator sees. The grace is
+  added on top of the headroom rather than instead of it: it covers the shutdown
+  tail, not the startup head. A pod whose agent is dead can now outlive its
+  declared timeout by those few minutes — that is the backstop, and the reapers
+  still settle the task instance on their own schedule — and a pathological
+  image pull can still exceed any fixed headroom, in which case the kubelet's
+  generic reason returns. Unchanged: a declared timeout still wins over the
+  `auth.max_attempt_credential_lifetime` floor, and that floor (for tasks that
+  declare no timeout) takes no headroom, because nothing inside the pod races it.
+  The *Scheduler resilience* page now spells out which clock owns the timeout.
+
 - **A control-plane restart no longer marks a succeeded task failed, and no
   longer condemns the rest of its run.** A production drill (kill the
   control-plane pod mid-run) turned a dbt task that had SUCCEEDED into `failed`

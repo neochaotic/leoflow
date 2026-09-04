@@ -338,7 +338,12 @@ because it is not leadership:
   window in a `preStop` sleep before the process is signalled. It runs *inside*
   `terminationGracePeriodSeconds`, ahead of everything below, so count it in the
   budget; set `0` to drop the hook if a single-replica `Recreate` upgrade's
-  latency matters more than a few empty objects.
+  latency matters more than a few empty objects. The hook needs Kubernetes
+  **1.30**, where the native `sleep` action is beta and on by default; it is
+  alpha and *off* in 1.29, and an apiserver without it rejects the empty
+  `preStop: {}` it is left with instead of ignoring it. So the chart renders the
+  hook only on 1.30+ and silently omits it below — a 1.27–1.29 install keeps
+  working, with the pre-hook behavior.
 - **With tasks running, the stop is bounded.** Open agent log streams are
   closed and flushed the moment `SIGTERM` arrives (the agent keeps running its
   task; log shipping is best-effort), idle warm-worker assignment streams end

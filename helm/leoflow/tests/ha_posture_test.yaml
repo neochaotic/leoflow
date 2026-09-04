@@ -256,8 +256,33 @@ tests:
   # replica that will still be there to flush them. The native `sleep` action is
   # used deliberately: the image is distroless, so an `exec` hook has no shell
   # and no sleep binary to call.
-  - it: renders the preStop sleep hook by default
+  # The `sleep` hook action is gated on PodLifecycleSleepAction, which is beta and
+  # ON only from 1.30. On 1.29 the feature gate is alpha and OFF, so the apiserver
+  # nils the field and its own validation then rejects the resulting empty
+  # `preStop: {}` with "must specify a handler type" — the Deployment create is
+  # REJECTED and `helm install` hard-fails, the hook is NOT silently dropped.
+  # Before 1.27 the field is pruned at decode and the same empty handler is what
+  # validation sees. The project's floor is 1.27 (see the installation page), so
+  # the render has to be gated on the capability; a `kubeVersion` in Chart.yaml
+  # would instead refuse to install on 1.27-1.29 at all.
+  - it: omits the preStop hook on a 1.29 apiserver, where the sleep action is alpha and off
     template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 29
+    set:
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].lifecycle
+
+  - it: renders the preStop sleep hook when asked for on a 1.30 apiserver
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      deployment.preStopSleepSeconds: 5
     asserts:
       - equal:
           path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
@@ -265,6 +290,9 @@ tests:
 
   - it: honors an overridden preStop sleep
     template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
     set:
       deployment.preStopSleepSeconds: 15
     asserts:
@@ -274,6 +302,9 @@ tests:
 
   - it: omits the lifecycle block entirely when the preStop sleep is disabled with 0
     template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
     set:
       deployment.preStopSleepSeconds: 0
     asserts:
@@ -282,9 +313,13 @@ tests:
 
   - it: renders the preStop sleep on both split Deployments
     template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
     set:
       split.enabled: true
       logs.persistence.accessMode: ReadWriteMany
+      deployment.preStopSleepSeconds: 5
     asserts:
       - hasDocuments:
           count: 2

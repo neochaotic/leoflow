@@ -224,9 +224,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `deployment.preStopSleepSeconds` (default 5) makes a terminating replica sleep
   through the endpoint-propagation window before it is signalled, so task pods
   stop opening *new* log streams against a control plane that is going away and
-  creating an empty object for each; it uses the native `sleep` hook action
-  (Kubernetes 1.29+, the image is distroless and has no shell), runs inside
-  `terminationGracePeriodSeconds`, and `0` omits the hook.
+  creating an empty object for each; it uses the native `sleep` hook action (the
+  image is distroless, so an `exec` hook has no shell to call), runs inside
+  `terminationGracePeriodSeconds`, and `0` omits the hook. That hook action is
+  beta and on by default only from Kubernetes **1.30** — alpha and off in 1.29 —
+  and an older apiserver rejects the empty `preStop: {}` it is left with rather
+  than ignoring it, so the chart renders the hook only on 1.30+ and a 1.27-1.29
+  install is unaffected.
 
 ### Security
 

@@ -374,7 +374,20 @@ spec:
             periodSeconds: {{ .ctx.Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .ctx.Values.probes.liveness.timeoutSeconds }}
             failureThreshold: {{ .ctx.Values.probes.liveness.failureThreshold }}
-          {{- if gt (int .ctx.Values.deployment.preStopSleepSeconds) 0 }}
+          {{- /* The native `sleep` hook action is gated on PodLifecycleSleepAction:
+               BETA and on by default from 1.30, ALPHA and OFF in 1.29, and not
+               present at all before that. Below 1.30 the apiserver nils the field
+               and its own validation then rejects the empty `preStop: {}` with
+               "must specify a handler type" — so rendering the hook onto an older
+               cluster REJECTS the Deployment and hard-fails `helm install`; it is
+               not silently dropped. The project's floor is 1.27, so gate the render
+               on the capability rather than declaring kubeVersion in Chart.yaml,
+               which would refuse to install on 1.27-1.29 outright. Below 1.30 the
+               install therefore succeeds and simply keeps the pre-hook behavior
+               (#918). No `exec` fallback: the image is distroless, so a command
+               hook has no shell and no sleep binary to call. */ -}}
+          {{- $sleepHookSupported := semverCompare ">=1.30.0-0" .ctx.Capabilities.KubeVersion.Version }}
+          {{- if and (gt (int .ctx.Values.deployment.preStopSleepSeconds) 0) $sleepHookSupported }}
           # Endpoint removal is asynchronous. From the moment this replica starts
           # terminating, kube-proxy and every already-connected client still hold
           # it in their endpoint set for a propagation window, so task pods keep
@@ -385,8 +398,6 @@ spec:
           # replica that will still be alive to flush them. The sleep runs INSIDE
           # terminationGracePeriodSeconds, ahead of SIGTERM, so it adds to the
           # shutdown budget; keep the grace above preStop + the drain bounds.
-          # The native `sleep` action, not an `exec`: the image is distroless, so
-          # there is no shell and no sleep binary for a command hook to call.
           lifecycle:
             preStop:
               sleep:

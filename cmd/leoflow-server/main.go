@@ -501,7 +501,11 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if cfg.Scheduler.Enabled {
 		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, warmReg, logSink, logger, metrics)
 		if serr != nil {
-			grpcSrv.GracefulStop()
+			// Bounded, like every other stop of this server. At boot no stream is
+			// open yet, so the unbounded form could not actually hang here — but a
+			// second way to stop the same server is a way for the two to drift, and
+			// the one that cannot exhaust the pod's grace is the one to keep.
+			stopGRPCWithin(grpcSrv, grpcStopTimeout, logger, inflight.Count)
 			return nil, false, nil, serr
 		}
 		// Warm-pool Hole B: gate the assignment stream to the scheduler LEADER. This

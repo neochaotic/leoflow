@@ -350,13 +350,6 @@ setup_recoverdag() {
 build:
   platforms:
     - ${HOST_PLATFORM}
-tasks:
-  quick:
-    # The agent runs the task to success and writes the durable outcome record to
-    # the termination message, then exits 137 WITHOUT delivering the report —
-    # simulating a pod killed mid-report (OOM/eviction). Test-only seam (ADR 0052).
-    env:
-      LEOFLOW_CHAOS_DIE_BEFORE_REPORT: TASK_STATE_SUCCESS
 YAML
   cat > "$WORKDIR/$RECOVER_DAG_ID/dag.py" <<'PY'
 """recoverdag — the task succeeds; the agent is told to die mid-report, so the
@@ -374,10 +367,17 @@ def quick() -> str:
 with DAG("recoverdag", schedule=None, catchup=False, tags=["chaos"]):
     quick()
 PY
+  # The fault seam rides in the IMAGE, not in leoflow.yaml's task env: dispatch
+  # strips every LEOFLOW_-prefixed key an author declares (#828/#829, so a DAG
+  # cannot redirect the agent's credential exchange), and the agent reads this
+  # one with os.Getenv at startup. A task-env seam is silently dropped — which is
+  # how this scenario quietly lost its fault injection when that fix landed. The
+  # image's own ENV survives, because nothing in the pod spec overrides it.
   cat > "$WORKDIR/$RECOVER_DAG_ID/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
 COPY dag.py /home/leoflow/dag.py
 ENV PYTHONPATH=/home/leoflow
+ENV LEOFLOW_CHAOS_DIE_BEFORE_REPORT=TASK_STATE_SUCCESS
 DOCKER
   "$ROOT/bin/leoflow" compile "$WORKDIR/$RECOVER_DAG_ID" --image "$RECOVER_DAG_IMAGE" --build --dockerfile Dockerfile -o "$WORKDIR/$RECOVER_DAG_ID/dag.json" >/dev/null
   k3d_import "$CLUSTER" "$RECOVER_DAG_IMAGE" || fatal "C: k3d import of recoverdag failed"
@@ -503,16 +503,6 @@ setup_outagedag() {
 build:
   platforms:
     - ${HOST_PLATFORM}
-tasks:
-  alpha:
-    env:
-      LEOFLOW_CHAOS_DIE_BEFORE_REPORT: TASK_STATE_SUCCESS
-  bravo:
-    env:
-      LEOFLOW_CHAOS_DIE_BEFORE_REPORT: TASK_STATE_SUCCESS
-  charlie:
-    env:
-      LEOFLOW_CHAOS_DIE_BEFORE_REPORT: TASK_STATE_SUCCESS
 YAML
   cat > "$WORKDIR/$OUTAGE_DAG_ID/dag.py" <<'PY'
 """outagedag — three independent tasks, each of which succeeds and then loses its
@@ -562,10 +552,13 @@ with DAG("outagedag", schedule=None, catchup=False, tags=["chaos"]):
     bravo()
     charlie()
 PY
+  # The seam rides in the image; see setup_recoverdag for why a task-env seam is
+  # stripped before it reaches the pod.
   cat > "$WORKDIR/$OUTAGE_DAG_ID/Dockerfile" <<DOCKER
 FROM ${BASE_IMAGE}
 COPY dag.py /home/leoflow/dag.py
 ENV PYTHONPATH=/home/leoflow
+ENV LEOFLOW_CHAOS_DIE_BEFORE_REPORT=TASK_STATE_SUCCESS
 DOCKER
   "$ROOT/bin/leoflow" compile "$WORKDIR/$OUTAGE_DAG_ID" --image "$OUTAGE_DAG_IMAGE" --build --dockerfile Dockerfile -o "$WORKDIR/$OUTAGE_DAG_ID/dag.json" >/dev/null
   k3d_import "$CLUSTER" "$OUTAGE_DAG_IMAGE" || fatal "D: k3d import of outagedag failed"
@@ -620,14 +613,26 @@ scenario_outage_recovery() {
   deadline=$(( $(date +%s) + 150 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -qE 'outagedag-.*(Completed|Succeeded)'; then
-      bad "D: an outagedag pod ended Completed/Succeeded (exit 0) — the fault-injection seam did NOT fire (stale agent image?). Refusing to pass on the ordinary report path."
+      bad "D: an outagedag pod ended Completed/Succeeded (exit 0) — the fault-injection seam did NOT fire. Either the base image predates the seam, or the ENV is not reaching the agent (it must come from the DAG image: dispatch strips LEOFLOW_-prefixed task env). Refusing to pass on the ordinary report path."
       dump_pods; return
     fi
     terminal="$(kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -cE 'outagedag-(alpha|bravo|charlie)-.*(Error|Failed)' || true)"
     [ "${terminal:-0}" -ge 3 ] && break
     sleep 3
   done
-  [ "${terminal:-0}" -ge 3 ] || { bad "D: only ${terminal:-0}/3 pods terminated during the outage. Pods still Running means an agent is blocked on a control-plane call BEFORE the durable record — check that no task returns a value (the XCom push precedes the record and has no deadline)"; dump_pods; return; }
+  if [ "${terminal:-0}" -lt 3 ]; then
+    bad "D: only ${terminal:-0}/3 pods terminated during the outage. A pod still Running means its agent is blocked on a control-plane call BEFORE the durable outcome record — the agent log below names the last thing it tried"
+    dump_pods
+    # The agent's own last lines are the diagnosis: everything between the user
+    # process exiting and BeforeReport is a control-plane round trip (the log
+    # sink's Close, the return-value push, extra links, custom XComs), and any
+    # one of them blocking keeps the pod alive through the outage.
+    for pod in $(kubectl get pods -n leoflow --no-headers -o custom-columns=:metadata.name 2>/dev/null | grep 'outagedag-'); do
+      printf '\n---- agent log: %s ----\n' "$pod" >&2
+      kubectl logs -n leoflow "$pod" --tail=25 >&2 2>&1 || true
+    done
+    return
+  fi
   ok "D: all three pods terminated during the outage, records written, no report delivered"
 
   # Fail-closed: with the scheduler dead nothing may have settled these attempts.

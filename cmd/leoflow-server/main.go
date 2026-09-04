@@ -121,6 +121,7 @@ func run() error {
 		return fmt.Errorf("observability setup: %w", err)
 	}
 	defer shutdownTel()
+	warnStartup(cfg, tel.Logger)
 
 	pg, err := openVerifiedPostgres(ctx, cfg.Database)
 	if err != nil {
@@ -351,6 +352,26 @@ func validateStartup(cfg *config.ServerConfig) error {
 		return err
 	}
 	return executor.ValidateResilienceLadder(resilienceLadder(cfg))
+}
+
+// warnStartup surfaces the boot-time settings validateStartup accepts but that
+// remove a resilience backstop — today the disabled credential ceiling, which
+// unbounds heartbeat renewal, drops the task pod deadline floor and switches
+// off the warm-pool attempt watchdog. They are documented settings, not errors,
+// so boot proceeds; the WARN is the only operator-visible signal that those
+// guarantees are off. It runs after the logger exists, right after validation
+// has passed. Only a process that serves the scheduler warns: token renewal
+// lives in the agent gRPC server and the pod deadline floor in the dispatcher,
+// both scheduler-side, so an api-only replica in a split install would be
+// warning about behavior it does not implement — and a WARN operators learn to
+// ignore is worse than none.
+func warnStartup(cfg *config.ServerConfig, logger *slog.Logger) {
+	if !cfg.Server.ServesScheduler() {
+		return
+	}
+	for _, w := range executor.ResilienceLadderWarnings(resilienceLadder(cfg)) {
+		logger.Warn(w)
+	}
 }
 
 // resilienceLadder assembles the effective timing knobs the control-plane

@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/internal/executor.html
-# --- end AUTO redirect aliases ---
 title: "internal/executor"
 linkTitle: "internal/executor"
 weight: 3
@@ -23,7 +19,9 @@ Package executor runs task instances via Kubernetes, Docker, or a subprocess.
 - [func IsDispatchLost\(c StaleQueuedCandidate, threshold time.Duration, now time.Time\) bool](<#IsDispatchLost>)
 - [func IsOrphaned\(c ReapCandidate, threshold time.Duration, now time.Time\) bool](<#IsOrphaned>)
 - [func IsPodLostCandidate\(c PodLostCandidate, grace time.Duration, now time.Time\) bool](<#IsPodLostCandidate>)
+- [func ResilienceLadderWarnings\(l ResilienceLadder\) \[\]string](<#ResilienceLadderWarnings>)
 - [func StagingClaimName\(dagID, runID string\) string](<#StagingClaimName>)
+- [func ValidateResilienceLadder\(l ResilienceLadder\) error](<#ValidateResilienceLadder>)
 - [type AgentLostCandidate](<#AgentLostCandidate>)
 - [type BusyWarmWorkerSource](<#BusyWarmWorkerSource>)
 - [type DecisionRecorder](<#DecisionRecorder>)
@@ -39,7 +37,7 @@ Package executor runs task instances via Kubernetes, Docker, or a subprocess.
   - [func \(e \*KubernetesExecutor\) Execute\(ctx context.Context, req Request\) \(Disposition, error\)](<#KubernetesExecutor.Execute>)
   - [func \(e \*KubernetesExecutor\) GCStagingClaims\(ctx context.Context, ttl time.Duration\) error](<#KubernetesExecutor.GCStagingClaims>)
   - [func \(e \*KubernetesExecutor\) SetStagingStore\(s StagingStore\)](<#KubernetesExecutor.SetStagingStore>)
-  - [func \(e \*KubernetesExecutor\) TaskPodActive\(ctx context.Context, runID, taskID string\) \(bool, error\)](<#KubernetesExecutor.TaskPodActive>)
+  - [func \(e \*KubernetesExecutor\) TaskPodActive\(ctx context.Context, runID, taskID string, tryNumber int\) \(bool, error\)](<#KubernetesExecutor.TaskPodActive>)
 - [type KubernetesWarmPods](<#KubernetesWarmPods>)
   - [func NewKubernetesWarmPods\(cs kubernetes.Interface, namespace string, newSpec WarmPodSpecFunc\) \*KubernetesWarmPods](<#NewKubernetesWarmPods>)
   - [func \(k \*KubernetesWarmPods\) CreateWarmPod\(ctx context.Context, t WarmTarget, anchorName, anchorUID string\) error](<#KubernetesWarmPods.CreateWarmPod>)
@@ -52,7 +50,8 @@ Package executor runs task instances via Kubernetes, Docker, or a subprocess.
   - [func ParseAgentIdentity\(raw string\) \(PodIdentity, error\)](<#ParseAgentIdentity>)
 - [type PodInformer](<#PodInformer>)
   - [func NewPodInformer\(clientset kubernetes.Interface, namespace string\) \*PodInformer](<#NewPodInformer>)
-  - [func \(p \*PodInformer\) CachedPodActive\(runID, taskID string\) bool](<#PodInformer.CachedPodActive>)
+  - [func \(p \*PodInformer\) CachedPodActive\(runID, taskID string, tryNumber int\) bool](<#PodInformer.CachedPodActive>)
+  - [func \(p \*PodInformer\) HasSynced\(\) bool](<#PodInformer.HasSynced>)
   - [func \(p \*PodInformer\) Shutdown\(\)](<#PodInformer.Shutdown>)
   - [func \(p \*PodInformer\) SnapshotTaskPods\(\) \(\[\]\*corev1.Pod, error\)](<#PodInformer.SnapshotTaskPods>)
   - [func \(p \*PodInformer\) Start\(ctx context.Context\)](<#PodInformer.Start>)
@@ -68,14 +67,21 @@ Package executor runs task instances via Kubernetes, Docker, or a subprocess.
 - [type Reaper](<#Reaper>)
   - [func NewReaper\(store ReaperStore, pods PodManager, cache PodPresenceCache, warmPods WarmPodLister, rec DecisionRecorder, logger \*slog.Logger, cfg ReaperConfig, inStepDown func\(\) bool\) \*Reaper](<#NewReaper>)
   - [func \(r \*Reaper\) ReapOnce\(ctx context.Context\) error](<#Reaper.ReapOnce>)
+  - [func \(r \*Reaper\) SetInformerSynced\(fn func\(\) bool\)](<#Reaper.SetInformerSynced>)
+  - [func \(r \*Reaper\) SetLastSweepCompleted\(fn func\(\) time.Time\)](<#Reaper.SetLastSweepCompleted>)
+  - [func \(r \*Reaper\) SetLeaderSince\(fn func\(\) time.Time\)](<#Reaper.SetLeaderSince>)
+  - [func \(r \*Reaper\) SetLeading\(fn func\(\) bool\)](<#Reaper.SetLeading>)
+  - [func \(r \*Reaper\) SetLogSink\(s logSink\)](<#Reaper.SetLogSink>)
 - [type ReaperConfig](<#ReaperConfig>)
   - [func DefaultReaperConfig\(\) ReaperConfig](<#DefaultReaperConfig>)
 - [type ReaperStore](<#ReaperStore>)
 - [type Reconciler](<#Reconciler>)
   - [func NewReconciler\(clientset kubernetes.Interface, namespace string, reporter OutcomeReporter\) \*Reconciler](<#NewReconciler>)
+  - [func \(r \*Reconciler\) LastSweepCompletedAt\(\) time.Time](<#Reconciler.LastSweepCompletedAt>)
   - [func \(r \*Reconciler\) Reconcile\(ctx context.Context\) error](<#Reconciler.Reconcile>)
   - [func \(r \*Reconciler\) SetPodSnapshotter\(s PodSnapshotter\)](<#Reconciler.SetPodSnapshotter>)
 - [type Request](<#Request>)
+- [type ResilienceLadder](<#ResilienceLadder>)
 - [type StagingStore](<#StagingStore>)
 - [type StaleQueuedCandidate](<#StaleQueuedCandidate>)
 - [type SubprocessExecutor](<#SubprocessExecutor>)
@@ -144,7 +150,7 @@ func BuildPod(req Request) *corev1.Pod
 BuildPod constructs the pod spec for a task instance. It is pure \(modulo the random name suffix\) and unit\-tested independently of any cluster.
 
 <a name="BuildWarmPod"></a>
-## func [BuildWarmPod](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/warmpod.go#L148>)
+## func [BuildWarmPod](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/warmpod.go#L156>)
 
 ```go
 func BuildWarmPod(spec WarmPodSpec) *corev1.Pod
@@ -159,7 +165,7 @@ BuildWarmPod constructs the pod spec for one warm worker. It reuses BuildPod's m
 It is pure \(modulo the random name suffix\) and unit\-tested independently of any cluster. It bakes NO task token in. When the spec carries a GC anchor \(D11\) it stamps an ownerReference to that anchor ConfigMap so the pod is cascade\-GC'd on external teardown; without an anchor it builds a bare pod, unchanged.
 
 <a name="IsAgentLost"></a>
-## func [IsAgentLost](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/heartbeat_reap.go#L35>)
+## func [IsAgentLost](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/heartbeat_reap.go#L51>)
 
 ```go
 func IsAgentLost(c AgentLostCandidate, threshold time.Duration, now time.Time) bool
@@ -194,6 +200,15 @@ func IsPodLostCandidate(c PodLostCandidate, grace time.Duration, now time.Time) 
 
 IsPodLostCandidate reports whether a running TI has been running long enough to warrant a pod\-liveness check. A zero RunningSince is treated as alive \(too poorly observed to reap — the "do no harm" rule of ADR 0031\), and a future RunningSince \(clock skew\) is treated as alive. This gate is purely about elapsed time; the actual lost\-vs\-alive decision is the pod\-liveness check.
 
+<a name="ResilienceLadderWarnings"></a>
+## func [ResilienceLadderWarnings](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/resilience_ladder.go#L164>)
+
+```go
+func ResilienceLadderWarnings(l ResilienceLadder) []string
+```
+
+ResilienceLadderWarnings reports the ladder settings that are valid but remove a resilience backstop, so the server can surface them as boot WARNs. ValidateResilienceLadder deliberately accepts a non\-positive credential ceiling — it is the operator's documented "no ceiling" setting — but that one value disables every wall\-clock bound the ceiling carries: heartbeat renewal of an attempt's bearer becomes unbounded; a dedicated task pod whose DAG declares no execution timeout gets no ActiveDeadlineSeconds floor; and, with warm pools enabled, the per\-attempt watchdog that keeps a wedged attempt from pinning a warm slot is off too \(a warm pod has no pod\-level deadline at all, and the worker lifetime cap drains between attempts, never mid\-attempt\). A task that wedges while still heartbeating then has no bound of its own even with a healthy control plane: the orphan\-run reaper skips a run with a live task instance and agent\-lost never fires on a live agent. None of these losses is an error; all are invisible without this signal. Pure, like the validator: the server calls it once at boot after the logger exists.
+
 <a name="StagingClaimName"></a>
 ## func [StagingClaimName](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/staging.go#L45>)
 
@@ -203,14 +218,24 @@ func StagingClaimName(dagID, runID string) string
 
 StagingClaimName is the deterministic PVC name for a run's staging volume. It must be stable across retries and clear\+re\-run so the same PVC is re\-attached \(ADR 0022\), and DNS\-safe.
 
+<a name="ValidateResilienceLadder"></a>
+## func [ValidateResilienceLadder](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/resilience_ladder.go#L106>)
+
+```go
+func ValidateResilienceLadder(l ResilienceLadder) error
+```
+
+ValidateResilienceLadder checks the orderings the restart recovery depends on \(see ResilienceLadder\) and reports the first violated relation, naming both sides with their values. A relation between build\-time constants can only be broken by a code change, so its error says so and asks for a bug report; the one relation involving an operator knob names the config key. All build\-time rungs must be positive. It is pure — the server calls it once at boot and refuses to start on an error, turning what used to be a comment\-level convention into an enforced invariant.
+
 <a name="AgentLostCandidate"></a>
-## type [AgentLostCandidate](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/heartbeat_reap.go#L15-L27>)
+## type [AgentLostCandidate](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/heartbeat_reap.go#L30-L43>)
 
 AgentLostCandidate is one task instance in \`running\` whose agent may have gone silent, with the timestamp of its most recent heartbeat. The reaper compares the gap from this stamp to "now" against a stall threshold; a non\-zero gap larger than the threshold means the agent is presumed gone and the TI is failed with reason "agent\_lost".
 
 ```go
 type AgentLostCandidate struct {
     TaskInstanceID string
+    TenantID       string
     DagRunID       string
     DagID          string
     TaskID         string
@@ -310,7 +335,7 @@ func (d Disposition) String() string
 String renders the disposition for logs and error notes.
 
 <a name="Executor"></a>
-## type [Executor](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/executor.go#L124-L126>)
+## type [Executor](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/executor.go#L145-L147>)
 
 Executor runs or dispatches a task. For asynchronous executors \(Kubernetes/Docker/subprocess\) the return reflects dispatch only, and the agent reports the final state over gRPC. The Disposition tells the scheduler WHY a dispatch failed — transient cluster Backpressure vs a permanent Rejected — so the orchestration layer never has to inspect runtime\-specific error types itself \(ADR 0051 Phase 4\). A successful dispatch returns \(Dispatched, nil\); a failure returns the classified disposition alongside the non\-nil cause \(its text feeds the scheduler's note/log\).
 
@@ -321,7 +346,7 @@ type Executor interface {
 ```
 
 <a name="HeartbeatReapStore"></a>
-## type [HeartbeatReapStore](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/heartbeat_reap.go#L45-L57>)
+## type [HeartbeatReapStore](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/heartbeat_reap.go#L61-L73>)
 
 HeartbeatReapStore is the slice of scheduler.Store the TI heartbeat reaper needs. The full scheduler.Store embeds this interface so production wires through one type; unit tests fake just this surface.
 
@@ -407,13 +432,15 @@ func (e *KubernetesExecutor) SetStagingStore(s StagingStore)
 SetStagingStore wires the metadatabase\-backed staging\-volume lifecycle store \(ADR 0022\). With no store set, provisioning is not recorded and GC is a no\-op.
 
 <a name="KubernetesExecutor.TaskPodActive"></a>
-### func \(\*KubernetesExecutor\) [TaskPodActive](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_terminate.go#L80>)
+### func \(\*KubernetesExecutor\) [TaskPodActive](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_terminate.go#L85>)
 
 ```go
-func (e *KubernetesExecutor) TaskPodActive(ctx context.Context, runID, taskID string) (bool, error)
+func (e *KubernetesExecutor) TaskPodActive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error)
 ```
 
-TaskPodActive reports whether a pod for the given \(run, task\) exists and is still Pending or Running. The dispatch\-lost reaper consults this before failing a \`queued\` TI: a live pod means the dispatch actually landed and the node is merely slow to pull the image \(\#461\), so the reaper must DEFER. No pod, or only terminal \(Failed/Succeeded/Unknown\) pods, means the dispatch is genuinely lost and the reaper may proceed. Try\-number is deliberately NOT pinned here: a \`queued\` TI has not been retried, so run\-id\+task\-id already identifies its single pod, and matching any live pod for the task is the safer \(more deferring\) choice.
+TaskPodActive reports whether a pod for exactly the \(run, task, try\) attempt exists and is still Pending or Running. The dispatch\-lost and pod\-lost reapers consult this before failing a TI: a live pod means the dispatch actually landed and the node is merely slow to pull the image \(\#461\), so the reaper must DEFER. No pod, or only terminal \(Failed/Succeeded/Unknown\) pods, means the attempt is genuinely lost and the reaper may proceed.
+
+Try\-number is pinned — the same invariant guard as DeleteTaskPod above. The retry rail resets up\_for\_retry \-\> none with try\_number\+1 and the planner re\-queues the TI \(storage/queries/runs.sql\), so a \`queued\`/\`running\` TI can be on try 2 while try 1's pod still lingers Pending after a failed best\-effort delete. Selecting on \(run, task\) alone would match that stale older pod and false\-defer the reap of the current attempt forever \(\#723\). Asking about the attempt the reaper is about to fail is the correct liveness question.
 
 <a name="KubernetesWarmPods"></a>
 ## type [KubernetesWarmPods](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/warmpool_k8s.go#L25-L29>)
@@ -481,7 +508,7 @@ func (k *KubernetesWarmPods) ListWarmPods(ctx context.Context) ([]WarmPodInfo, e
 ListWarmPods returns every warm\-worker pod in the namespace, tagged with the dag\_version it serves \(from its label\).
 
 <a name="OutcomeReporter"></a>
-## type [OutcomeReporter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L208-L212>)
+## type [OutcomeReporter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L227-L231>)
 
 OutcomeReporter records a terminal task\-instance outcome the reconciler recovered from a pod \(its durable outcome record, or its phase\). Every method is guarded by the attempt \(try\_number\) so a stale reconciler acting on a previous attempt's pod never clobbers a live retry, and is idempotent: a settle on an already\-terminal instance is a no\-op, not an error.
 
@@ -494,7 +521,7 @@ type OutcomeReporter interface {
 ```
 
 <a name="PodIdentity"></a>
-## type [PodIdentity](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/kubernetes.go#L174-L181>)
+## type [PodIdentity](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/kubernetes.go#L198-L205>)
 
 PodIdentity is the JSON payload of AgentIdentityAnnotation: the full task\-instance identity the control plane mints the exchanged JWT for.
 
@@ -510,7 +537,7 @@ type PodIdentity struct {
 ```
 
 <a name="ParseAgentIdentity"></a>
-### func [ParseAgentIdentity](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/kubernetes.go#L186>)
+### func [ParseAgentIdentity](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/kubernetes.go#L210>)
 
 ```go
 func ParseAgentIdentity(raw string) (PodIdentity, error)
@@ -519,7 +546,7 @@ func ParseAgentIdentity(raw string) (PodIdentity, error)
 ParseAgentIdentity decodes the AgentIdentityAnnotation payload. It is the read side of the identity contract mountAgentToken writes, used by the pod → task\-instance resolver on the exchange path.
 
 <a name="PodInformer"></a>
-## type [PodInformer](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L47-L54>)
+## type [PodInformer](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L49-L56>)
 
 PodInformer is a shared\-informer read\-path over task pods, scoped by namespace and the leoflow.io/run\-id label \(ADR 0002 pods\). It replaces the reapers' per\-running\-TI\-per\-second apiserver LIST storm and the reconciler's 30s LIST with one long\-lived watch feeding a local cache.
 
@@ -534,7 +561,7 @@ type PodInformer struct {
 ```
 
 <a name="NewPodInformer"></a>
-### func [NewPodInformer](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L60>)
+### func [NewPodInformer](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L62>)
 
 ```go
 func NewPodInformer(clientset kubernetes.Interface, namespace string) *PodInformer
@@ -543,16 +570,25 @@ func NewPodInformer(clientset kubernetes.Interface, namespace string) *PodInform
 NewPodInformer builds a shared pod informer over the given cluster, scoped to namespace and to pods carrying the leoflow.io/run\-id label \(managed task pods\). Resync is 0: reads are level\-triggered on demand, so there are no logic\-bearing handlers to re\-fire. It does not start watching until Start is called.
 
 <a name="PodInformer.CachedPodActive"></a>
-### func \(\*PodInformer\) [CachedPodActive](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L116>)
+### func \(\*PodInformer\) [CachedPodActive](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L128>)
 
 ```go
-func (p *PodInformer) CachedPodActive(runID, taskID string) bool
+func (p *PodInformer) CachedPodActive(runID, taskID string, tryNumber int) bool
 ```
 
-CachedPodActive reports whether the cache holds a pod for \(run, task\) that is Pending or Running — the exact predicate TaskPodActive uses. It is the safe direction of the asymmetric\-trust contract: a true return may DEFER a reap; a false return is NEVER authoritative and the caller must fall through to the live read. Before the cache has synced it returns false, so a cold cache degrades to the live path rather than misreporting absence.
+CachedPodActive reports whether the cache holds a pod for exactly the \(run, task, try\) attempt that is Pending or Running — the exact predicate TaskPodActive uses, pinned to the same attempt \(\#723\). It is the safe direction of the asymmetric\-trust contract: a true return may DEFER a reap; a false return is NEVER authoritative and the caller must fall through to the live read. Before the cache has synced it returns false, so a cold cache degrades to the live path rather than misreporting absence.
+
+<a name="PodInformer.HasSynced"></a>
+### func \(\*PodInformer\) [HasSynced](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L110>)
+
+```go
+func (p *PodInformer) HasSynced() bool
+```
+
+HasSynced reports whether the initial LIST has populated the cache. It is the live form of WaitForCacheSync's one\-shot answer, for a caller that must keep asking — the reaper's leader\-settling gate — so a cache that synced late \(a watch recovered after an RBAC fix\) is seen, and one that never synced is not mistaken for an empty cluster.
 
 <a name="PodInformer.Shutdown"></a>
-### func \(\*PodInformer\) [Shutdown](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L105>)
+### func \(\*PodInformer\) [Shutdown](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L116>)
 
 ```go
 func (p *PodInformer) Shutdown()
@@ -561,7 +597,7 @@ func (p *PodInformer) Shutdown()
 Shutdown stops the watch and waits for the informer goroutines to exit. Safe to call more than once \(Start's ctx\-cancel path and an explicit caller may race\).
 
 <a name="PodInformer.SnapshotTaskPods"></a>
-### func \(\*PodInformer\) [SnapshotTaskPods](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L140>)
+### func \(\*PodInformer\) [SnapshotTaskPods](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L153>)
 
 ```go
 func (p *PodInformer) SnapshotTaskPods() ([]*corev1.Pod, error)
@@ -570,7 +606,7 @@ func (p *PodInformer) SnapshotTaskPods() ([]*corev1.Pod, error)
 SnapshotTaskPods returns the managed task pods currently in the cache — the reconciler's read replacement for its 30s LIST. It errors \(errCacheNotSynced\) before the initial sync so the reconciler retries next tick instead of acting on a cold cache that looks empty.
 
 <a name="PodInformer.Start"></a>
-### func \(\*PodInformer\) [Start](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L87>)
+### func \(\*PodInformer\) [Start](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L89>)
 
 ```go
 func (p *PodInformer) Start(ctx context.Context)
@@ -579,7 +615,7 @@ func (p *PodInformer) Start(ctx context.Context)
 Start begins the watch in the background and stops it when ctx is canceled, so the informer is always\-on for the process lifetime \(warming the cache before leadership\). It is idempotent\-safe to call once per informer.
 
 <a name="PodInformer.WaitForCacheSync"></a>
-### func \(\*PodInformer\) [WaitForCacheSync](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L99>)
+### func \(\*PodInformer\) [WaitForCacheSync](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_informer.go#L101>)
 
 ```go
 func (p *PodInformer) WaitForCacheSync(ctx context.Context) bool
@@ -626,7 +662,7 @@ type PodLostReapStore interface {
 ```
 
 <a name="PodManager"></a>
-## type [PodManager](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L19-L33>)
+## type [PodManager](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L19-L35>)
 
 PodManager is the slice of the Kubernetes executor the reapers use to \(1\) tear down a reaped task's pod and \(2\) check whether a queued TI's pod is actually live before declaring its dispatch lost \(\#474, \#461\).
 
@@ -647,15 +683,17 @@ type PodManager interface {
     // orphan-run reaper, which abandons the whole run. The run-id is unique
     // per run, so no other run's pod can match. Tolerates missing pods.
     DeleteRunPods(ctx context.Context, runID string) error
-    // TaskPodActive reports whether a pod for (run, task) exists and is
-    // Pending or Running. The dispatch-lost reaper defers when it is true —
-    // the dispatch landed, the node is merely slow (#461).
-    TaskPodActive(ctx context.Context, runID, taskID string) (bool, error)
+    // TaskPodActive reports whether a pod for exactly the (run, task, try)
+    // attempt exists and is Pending or Running. The reaper defers when it is
+    // true — the dispatch landed, the node is merely slow (#461). Try-number is
+    // pinned so a retried TI's liveness gate asks about the attempt it is about
+    // to fail, not any older attempt whose pod may still linger (#723).
+    TaskPodActive(ctx context.Context, runID, taskID string, tryNumber int) (bool, error)
 }
 ```
 
 <a name="PodPresenceCache"></a>
-## type [PodPresenceCache](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L51-L56>)
+## type [PodPresenceCache](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/pod_manager.go#L53-L60>)
 
 PodPresenceCache is an optional read\-through cache of pod presence — backed by a shared informer \(PR\-10\) — that the pod\-lost and dispatch\-lost reapers consult ONLY to DEFER a reap, never to authorize one. Its trust is asymmetric \(\#461\):
 
@@ -667,9 +705,11 @@ It exists to remove the O\(running\-TIs\)/sec apiserver LIST storm from the read
 ```go
 type PodPresenceCache interface {
     // CachedPodActive reports whether the cache holds a Pending/Running pod for
-    // (run, task). Only a true return is trusted (to defer); false is a "no
-    // speedup" signal that must not drive a reap.
-    CachedPodActive(runID, taskID string) bool
+    // exactly the (run, task, try) attempt. Only a true return is trusted (to
+    // defer); false is a "no speedup" signal that must not drive a reap.
+    // Try-number is pinned so the cache gate cannot defer on an older attempt's
+    // lingering pod (#723).
+    CachedPodActive(runID, taskID string, tryNumber int) bool
 }
 ```
 
@@ -701,7 +741,7 @@ type PodSecurity struct {
 ```
 
 <a name="PodSnapshotter"></a>
-## type [PodSnapshotter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L220-L225>)
+## type [PodSnapshotter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L239-L244>)
 
 PodSnapshotter supplies the reconciler's task\-pod set from a local cache instead of a live LIST every tick \(PR\-10\). It is safe here without a live confirm: the signal the reconciler acts on is presence of a terminal pod, which is monotonic \(a pod that reached Failed/Succeeded stays terminal\), and every settle is attempt\- and state\-guarded \(ADR 0052\), so at worst cache lag delays a settle by a tick. A nil snapshotter \(Lite/subprocess, or a cold start\) keeps the live LIST.
 
@@ -747,9 +787,9 @@ type ReapStore interface {
 ```
 
 <a name="Reaper"></a>
-## type [Reaper](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L75-L87>)
+## type [Reaper](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L110-L139>)
 
-Reaper is the execution\-side backstop that fails stuck runs and task instances the scheduler dispatched but that then went dark. It bundles the four independent reapers behind one ReapOnce entrypoint the scheduler drives once per leader tick, so the scheduler depends on a single capability rather than wiring each reaper itself.
+Reaper is the execution\-side backstop that fails stuck runs and task instances the scheduler dispatched but that then went dark. It bundles the five independent reapers behind one ReapOnce entrypoint the leader's maintenance loop drives once per cycle, after the pod reconciler's sweep, so the caller depends on a single capability rather than wiring each reaper itself.
 
 ```go
 type Reaper struct {
@@ -758,7 +798,7 @@ type Reaper struct {
 ```
 
 <a name="NewReaper"></a>
-### func [NewReaper](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L102>)
+### func [NewReaper](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L154>)
 
 ```go
 func NewReaper(store ReaperStore, pods PodManager, cache PodPresenceCache, warmPods WarmPodLister, rec DecisionRecorder, logger *slog.Logger, cfg ReaperConfig, inStepDown func() bool) *Reaper
@@ -769,32 +809,86 @@ NewReaper constructs the reapers and wires their pod\-teardown / liveness capabi
 warmPods is the live warm\-pod seam \(ADR 0058 N1d\-a2\), threaded to the two warm consumers exactly the way pods/cache are threaded: the warm\-worker\-lost reaper \(which recovers a dead worker's attempts\) and the dispatch\-lost reaper's H3 defer. Nil \(warm pools off / not wired\) makes the warm reaper a no\-op and the dispatch\-lost warm defer inert — with the flag off no TI ever carries a warm\_worker\_id either, so both warm paths are doubly inert, byte\-for\-byte today.
 
 <a name="Reaper.ReapOnce"></a>
-### func \(\*Reaper\) [ReapOnce](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L145>)
+### func \(\*Reaper\) [ReapOnce](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L360>)
 
 ```go
 func (r *Reaper) ReapOnce(ctx context.Context) error
 ```
 
-ReapOnce runs the four reapers once, in the same order the scheduler drove them: orphan\-run, then agent\-lost, then dispatch\-lost, then pod\-lost. The dispatch\-lost reaper runs AFTER the orphan\-run reaper so a clean stuck\-queued \-\> failed \-\> orphan\-run\-failed chain can complete in a single tick once the thresholds elapse.
+ReapOnce runs the five reapers once, in the order the scheduler used to drive them: orphan\-run, then agent\-lost, then dispatch\-lost, then pod\-lost, then warm\-worker\-lost. The dispatch\-lost reaper runs AFTER the orphan\-run reaper so a clean stuck\-queued \-\> failed \-\> orphan\-run\-failed chain can complete in a single tick once the thresholds elapse.
 
-Each reaper's infra\-level list error is logged and metered but never returned: the reapers are independent backstops, so one's failure must not block the others, and a list error must not stall the scheduler tick. Per\-candidate failures are already isolated inside each reaper's run. ReapOnce therefore always returns nil today; the error return is kept for the seam so a future hard\-failure mode need not change the scheduler.
+The whole tick is skipped — and the skip metered as reap\_gate\_skip — when the destructive gate is closed on entry: a canceled context \(SIGTERM drain, the step\-down cancel fan\-out\), a scheduler in step\-down, or a lost leadership. It is likewise skipped, metered as reap\_settling\_skip, while the leader has not settled \(see settling\); once settling has lasted 2× the grace the liveness valve opens and the tick proceeds with a WARN and reap\_settling\_valve\_open. The reapers also re\-check the destructive gate before each individual write, so the early return is the cheap common case, not the only defense.
+
+Each reaper's infra\-level list error is logged and metered but never returned: the reapers are independent backstops, so one's failure must not block the others, and a list error must not stall the caller's cycle. Per\-candidate failures are already isolated inside each reaper's run. ReapOnce therefore always returns nil today; the error return is kept for the seam so a future hard\-failure mode need not change the caller.
+
+<a name="Reaper.SetInformerSynced"></a>
+### func \(\*Reaper\) [SetInformerSynced](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L243>)
+
+```go
+func (r *Reaper) SetInformerSynced(fn func() bool)
+```
+
+SetInformerSynced wires the pod informer's sync predicate into the settling gate. Until the cache has synced, the reapers' presence reads fall back to live LISTs \(safe, but the fleet view a fresh leader is about to judge from is still being assembled\), so the gate waits. Nil \(no informer: Lite, or a non\-Kubernetes executor\) leaves this condition satisfied.
+
+<a name="Reaper.SetLastSweepCompleted"></a>
+### func \(\*Reaper\) [SetLastSweepCompleted](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L253>)
+
+```go
+func (r *Reaper) SetLastSweepCompleted(fn func() time.Time)
+```
+
+SetLastSweepCompleted wires the reconciler's last\-completed\-sweep record into the settling gate: the gate holds until a sweep has COMPLETED at or after leadership was acquired, because that sweep is what recovers the durable outcome of a task pod that finished during the outage; before it, "no live pod" and "no recent heartbeat" are indistinguishable from a lost task. Nil \(no reconciler: Lite\) leaves this condition satisfied.
+
+<a name="Reaper.SetLeaderSince"></a>
+### func \(\*Reaper\) [SetLeaderSince](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L234>)
+
+```go
+func (r *Reaper) SetLeaderSince(fn func() time.Time)
+```
+
+SetLeaderSince wires the accessor the settling gate measures its grace from: when this instance last acquired scheduler leadership \(zero while not leading\). Measured from leadership acquisition, not process start, so a re\-election also resets the gate. Nil \(Lite / no leadership\) disables the gate entirely — the other two inputs are only meaningful under a leader.
+
+<a name="Reaper.SetLeading"></a>
+### func \(\*Reaper\) [SetLeading](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L202>)
+
+```go
+func (r *Reaper) SetLeading(fn func() bool)
+```
+
+SetLeading wires the leadership predicate into the destructive gate, so a reaper tick on an instance that no longer holds leadership marks and deletes nothing. The maintenance loop already drives ReapOnce only while leading; this is the defensive re\-check at the point of the write. Nil leaves the gate on ctx and step\-down alone.
+
+<a name="Reaper.SetLogSink"></a>
+### func \(\*Reaper\) [SetLogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L225>)
+
+```go
+func (r *Reaper) SetLogSink(s logSink)
+```
+
+SetLogSink wires the sink the agent\-lost reaper uses to append a final "killed: agent\_lost" marker to a reaped attempt's log stream, so a killed task's log ends with the reason instead of a silent truncation. Any logs.Sink satisfies the parameter; nil \(Lite / unwired\) leaves markers off.
 
 <a name="ReaperConfig"></a>
-## type [ReaperConfig](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L52-L57>)
+## type [ReaperConfig](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L61-L73>)
 
-ReaperConfig holds the four idle thresholds the reapers apply. Zero values are legal but reap aggressively; callers pass DefaultReaperConfig unless a test or load harness deliberately overrides them.
+ReaperConfig holds the idle thresholds and the post\-leadership settling grace the reapers apply. Zero values are legal but reap aggressively; callers pass DefaultReaperConfig unless a test or load harness deliberately overrides them.
 
 ```go
 type ReaperConfig struct {
     OrphanThreshold       time.Duration
     AgentLostThreshold    time.Duration
     DispatchLostThreshold time.Duration
-    PodLostGrace          time.Duration
+    // PodLostGrace is the per-task liveness floor measured from the TI's running
+    // transition, below which the pod-lost reaper does not consult pod liveness.
+    PodLostGrace time.Duration
+    // SettlingGrace is the minimum time after this instance acquires leadership
+    // before ANY reaper may act — one rung of the leader-settling gate, which
+    // also requires a synced pod informer and a completed reconciler sweep. See
+    // defaultSettlingGrace and Reaper.settling. Zero disables the whole gate.
+    SettlingGrace time.Duration
 }
 ```
 
 <a name="DefaultReaperConfig"></a>
-### func [DefaultReaperConfig](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L61>)
+### func [DefaultReaperConfig](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L77>)
 
 ```go
 func DefaultReaperConfig() ReaperConfig
@@ -805,7 +899,7 @@ DefaultReaperConfig returns the production thresholds — the exact values the s
 <a name="ReaperStore"></a>
 ## type [ReaperStore](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reaper.go#L22-L28>)
 
-ReaperStore is the full store surface the four reapers need, composed from each reaper's own slice. The metadatabase\-backed SchedulerStore satisfies all four, so production wires through one type; a unit test fakes just the slice its reaper touches.
+ReaperStore is the full store surface the five reapers need, composed from each reaper's own slice. The metadatabase\-backed SchedulerStore satisfies all five, so production wires through one type; a unit test fakes just the slice its reaper touches.
 
 ```go
 type ReaperStore interface {
@@ -818,7 +912,7 @@ type ReaperStore interface {
 ```
 
 <a name="Reconciler"></a>
-## type [Reconciler](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L243-L253>)
+## type [Reconciler](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L262-L277>)
 
 Reconciler detects task pods whose task instance was never settled by the agent \(a pod killed before or during its report\) and records the true outcome — from the pod's durable outcome record where present, else its phase — so retries and run finalization proceed instead of stranding the task. It also garbage\-collects finished pods once they age out.
 
@@ -831,7 +925,7 @@ type Reconciler struct {
 ```
 
 <a name="NewReconciler"></a>
-### func [NewReconciler](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L256>)
+### func [NewReconciler](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L280>)
 
 ```go
 func NewReconciler(clientset kubernetes.Interface, namespace string, reporter OutcomeReporter) *Reconciler
@@ -839,17 +933,28 @@ func NewReconciler(clientset kubernetes.Interface, namespace string, reporter Ou
 
 NewReconciler builds a Reconciler over the given cluster and outcome reporter.
 
+<a name="Reconciler.LastSweepCompletedAt"></a>
+### func \(\*Reconciler\) [LastSweepCompletedAt](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L301>)
+
+```go
+func (r *Reconciler) LastSweepCompletedAt() time.Time
+```
+
+LastSweepCompletedAt reports when the last COMPLETED sweep finished: the task\-pod set was listed and every pod visited, so every terminal pod present at that moment had its chance to settle its task instance. Zero means no sweep has completed yet. It is the record the reaper's leader\-settling gate compares against the leadership stamp — the reapers act on signals a control\-plane restart manufactures \(a task pod that exited during the outage looks lost\), and only a sweep completed under the new leader separates "finished during the outage, outcome recoverable" from "genuinely lost".
+
+A sweep that could not list pods records nothing. A sweep whose individual settle failed on a DB error still counts: that pod is retried next sweep, and the gate's grace leaves room for the retry before any reaper may act.
+
 <a name="Reconciler.Reconcile"></a>
-### func \(\*Reconciler\) [Reconcile](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L268>)
+### func \(\*Reconciler\) [Reconcile](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L312>)
 
 ```go
 func (r *Reconciler) Reconcile(ctx context.Context) error
 ```
 
-Reconcile lists managed task pods, records each terminal one's outcome against its task instance, and garbage\-collects finished pods older than the grace period.
+Reconcile lists managed task pods, records each terminal one's outcome against its task instance, and garbage\-collects finished pods older than the grace period. A completed sweep is stamped for LastSweepCompletedAt.
 
 <a name="Reconciler.SetPodSnapshotter"></a>
-### func \(\*Reconciler\) [SetPodSnapshotter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L263>)
+### func \(\*Reconciler\) [SetPodSnapshotter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L287>)
 
 ```go
 func (r *Reconciler) SetPodSnapshotter(s PodSnapshotter)
@@ -858,7 +963,7 @@ func (r *Reconciler) SetPodSnapshotter(s PodSnapshotter)
 SetPodSnapshotter wires a cache\-backed pod source so Reconcile reads its task\-pod set from the shared informer instead of a live LIST every tick \(PR\-10\). Left unset, the reconciler keeps the live LIST — today's behavior.
 
 <a name="Request"></a>
-## type [Request](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/executor.go#L35-L114>)
+## type [Request](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/executor.go#L35-L135>)
 
 Request bundles everything an executor needs to run a single task instance.
 
@@ -879,6 +984,19 @@ type Request struct {
     Resources       domain.Resources
     Execution       domain.Execution
     TimeoutSeconds  int
+    // AttemptLifetimeCeilingSeconds is the operator's attempt credential ceiling
+    // (auth.max_attempt_credential_lifetime) in whole seconds. The Kubernetes
+    // executor floors the task pod's ActiveDeadlineSeconds with it when the task
+    // declares no TimeoutSeconds, so no task pod is immortal: the agent's reports
+    // retry for as long as the control plane is unreachable, and without a floor
+    // a total control-plane outage would leave every such pod Running forever,
+    // holding its requests and blocking node scale-down. Past the ceiling the pod
+    // can do nothing useful — heartbeat renewal stops and its bearer lapses. A
+    // user-declared TimeoutSeconds always wins, even when longer. Non-positive
+    // means "no ceiling" (the same convention as the warm worker's attempt
+    // watchdog for the same knob) and applies no floor. Ignored by the subprocess
+    // executor, which has no pod.
+    AttemptLifetimeCeilingSeconds int64
 
     // PodSecurity carries the two hardening choices that can change how a task
     // runs. Everything else BuildPod applies is unconditional, because dropping
@@ -942,6 +1060,65 @@ type Request struct {
     // the key in the cluster's secret store rather than in Leoflow (ADR 0035).
     TaskSecretName      string
     TaskSecretMountPath string
+
+    // SecretsBackend / SecretsBackendKwargs, when set, are the operator's external
+    // secrets backend (ADR 0060): the provider class the in-pod resolver drives and
+    // its raw kwargs JSON. Injected as LEOFLOW_SECRETS_BACKEND[_KWARGS] pod env, in
+    // the leoflow-owned group (operator-sourced — an author's task env cannot set
+    // LEOFLOW_ keys, #828). Empty = no external backend (chain stays vault-only).
+    SecretsBackend       string
+    SecretsBackendKwargs string
+}
+```
+
+<a name="ResilienceLadder"></a>
+## type [ResilienceLadder](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/resilience_ladder.go#L52-L76>)
+
+ResilienceLadder is the set of timing knobs whose relative ORDER the control\-plane\-restart recovery depends on. Each is owned by a different package \(agent, executor, scheduler, server main, operator config\) and tuned for its own reason, so nothing but this type states that they must line up. The invariants:
+
+```
+heartbeat interval  <  agent-lost threshold  <  settling grace  <  attempt token TTL
+2 × maintenance interval  <  settling grace
+longest infra re-place delay  <  orphan threshold
+attempt token TTL  <  max attempt credential lifetime   (when the ceiling is enabled)
+```
+
+Why each rung matters:
+
+- heartbeat \< threshold: a healthy agent must beat well inside the silence window or the agent\-lost reaper fails live tasks.
+- threshold \< settling grace: after a \(re\-\)election the reapers wait longer than the silence they punish, so the whole fleet can re\-heartbeat.
+- settling grace \< token TTL: the grace ends while a re\-heartbeat can still authenticate and renew the bearer; otherwise the fleet is unreapable AND unable to report — every in\-flight task is lost.
+- 2×maintenance \< settling grace: the leader's maintenance loop runs the reconciler's sweep and then the reapers as ONE ordered cycle, so a reap structurally follows a completed sweep — the settling gate additionally requires that a sweep completed under the new leader. This rung is what makes the grace meaningful on top of that ordering: at least two whole cycles fit inside it, so a settle that failed transiently on the first sweep \(a DB hiccup\) is retried before the gate can open, and the liveness valve at 2×grace has seen at least four cycles before it declares the sweep broken. A single cycle is not enough: the first tick under a new leader may land anywhere in the interval, so "one interval below the grace" can mean zero completed cycles.
+- infra re\-place delay \< orphan threshold: a run whose only live task is parked in its longest infra re\-place backoff has no activity to show the orphan\-run reaper; the threshold must outlast that parking or the reaper eats a run that is still recovering from the very fault being retried.
+- token TTL \< credential lifetime: heartbeat renewal keeps an attempt's bearer alive only while the attempt is younger than the ceiling. A ceiling below the TTL means the first renewal is already refused, the bearer lapses at the TTL, and every task longer than one TTL is unreapable AND unable to report — the restart recovery is silently disabled. This is the ONLY operator\-tunable rung; every other value is a build\-time constant.
+
+Warm pools share the same ladder: a warm worker's per\-attempt bearer is renewed by the same heartbeat under the same ceiling, and the warm\-worker\-lost reaper reuses the pod\-lost mark, so no warm\-specific rung exists.
+
+```go
+type ResilienceLadder struct {
+    HeartbeatInterval  time.Duration
+    AgentLostThreshold time.Duration
+    // SettlingGrace is the post-leadership window during which no reaper fires
+    // (ReaperConfig.SettlingGrace); the one grace every reaper shares.
+    SettlingGrace   time.Duration
+    AttemptTokenTTL time.Duration
+    // ReconcileInterval is the period of the leader's maintenance loop: one
+    // reconciler sweep followed by one reaper pass per cycle.
+    ReconcileInterval time.Duration
+    // OrphanThreshold is how long a running dag run may sit with no activity
+    // before the orphan-run reaper fails it (ReaperConfig.OrphanThreshold).
+    OrphanThreshold time.Duration
+    // InfraReplaceMaxDelay is the longest the scheduler may park an infra-failed
+    // task before re-placing it: the backoff before the final permitted re-place
+    // plus the whole de-synchronizing jitter window. The scheduler owns and
+    // computes it; it is passed in because the scheduler package depends on this
+    // one, so the validator cannot read it directly.
+    InfraReplaceMaxDelay time.Duration
+    // MaxAttemptCredentialLifetime is the operator's auth.max_attempt_credential_lifetime:
+    // the ceiling on how long heartbeat renewal keeps an attempt's bearer alive.
+    // A non-positive value is the documented "no ceiling" setting; the rung that
+    // depends on it is then trivially satisfied and skipped.
+    MaxAttemptCredentialLifetime time.Duration
 }
 ```
 
@@ -1005,7 +1182,7 @@ func NewSubprocessExecutor(agentPath string, logger *slog.Logger) *SubprocessExe
 NewSubprocessExecutor builds a SubprocessExecutor running the given agent binary. It warns that user code runs unsandboxed. The per\-DAG venv root is read from LEOFLOW\_LITE\_VENVS\_ROOT at construction time so the executor can pick the right Python for each task without a follow\-up call.
 
 <a name="SubprocessExecutor.Execute"></a>
-### func \(\*SubprocessExecutor\) [Execute](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/subprocess.go#L141>)
+### func \(\*SubprocessExecutor\) [Execute](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/subprocess.go#L154>)
 
 ```go
 func (e *SubprocessExecutor) Execute(ctx context.Context, req Request) (Disposition, error)
@@ -1084,7 +1261,7 @@ type WarmPodLister interface {
 ```
 
 <a name="WarmPodSpec"></a>
-## type [WarmPodSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/warmpod.go#L60-L124>)
+## type [WarmPodSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/warmpod.go#L60-L132>)
 
 WarmPodSpec is everything BuildWarmPod needs to build one long\-lived warm\-worker pod: which dag\_version pool it serves, the image \(the DAG's image — a warm worker runs the agent in warm mode and forks a child per attempt\), the control\-plane connection, and how its BOOTSTRAP credential reaches it \(the same transport a task pod uses\). It carries NO task instance: the per\-attempt token and task identity arrive in\-band over AwaitAssignment, never on this spec.
 
@@ -1106,6 +1283,14 @@ type WarmPodSpec struct {
     // cert against. Reused verbatim so a warm worker connects exactly as a task pod.
     ControlPlaneAddr    string
     AgentTLSCAConfigMap string
+
+    // ServiceAccount is the ServiceAccount the warm pod runs as — the operator's
+    // default task ServiceAccount (executor.task_service_account). A warm worker is
+    // pre-created and generic, so it can only carry the operator-wide default, not a
+    // per-DAG execution.service_account; empty leaves it on the namespace default SA.
+    // Without this a task placed on a warm worker runs as the default SA and keyless
+    // secret resolution breaks (#2, warm-pool path).
+    ServiceAccount string
 
     // Bootstrap-credential transport (ADR 0055 Fix #3), mirroring Request's token
     // fields: BootstrapToken rides plaintext on the env-var default; the exchange

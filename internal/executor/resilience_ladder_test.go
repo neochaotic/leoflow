@@ -152,3 +152,29 @@ func TestValidateResilienceLadderRejectsEachViolation(t *testing.T) {
 		})
 	}
 }
+
+// TestResilienceLadderWarningsDisabledCredentialCeiling: a non-positive
+// credential ceiling is a documented setting the validator tolerates, but it
+// silently removes TWO backstops at once — heartbeat renewal becomes unbounded
+// and a task pod with no declared execution timeout gets no ActiveDeadlineSeconds
+// floor. The operator's only signal is the boot WARN, so the warnings must name
+// the key and both consequences for zero and for negative values, and must be
+// empty when the ceiling is set.
+func TestResilienceLadderWarningsDisabledCredentialCeiling(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		l := defaultLadder()
+		l.MaxAttemptCredentialLifetime = d
+		got := ResilienceLadderWarnings(l)
+		if len(got) != 1 {
+			t.Fatalf("ceiling %v: want exactly one warning, got %q", d, got)
+		}
+		for _, want := range []string{"auth.max_attempt_credential_lifetime", "disabled", "renewal", "activeDeadlineSeconds", "watchdog", "wedged"} {
+			if !strings.Contains(got[0], want) {
+				t.Errorf("ceiling %v: warning %q must mention %q", d, got[0], want)
+			}
+		}
+	}
+	if got := ResilienceLadderWarnings(defaultLadder()); len(got) != 0 {
+		t.Errorf("a set ceiling must produce no warning, got %q", got)
+	}
+}

@@ -52,6 +52,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The shipped default stays `replicaCount: 1`: flipping it would
   Multi-Attach-break every existing install on upgrade.
 
+- **Boot `WARN` when `auth.max_attempt_credential_lifetime` is disabled.** A
+  non-positive value is a documented setting the boot-time ladder check
+  accepts, but it removes every wall-clock bound the ceiling carries: heartbeat
+  renewal of an attempt's credential becomes unbounded, task pods with no
+  declared `execution_timeout` get no `activeDeadlineSeconds` floor, and with
+  warm pools enabled the per-attempt watchdog is off — a wedged task then has no
+  bound of its own even with a healthy control plane. The server logs one
+  `WARN` naming the key and the consequences; boot proceeds. The field's godoc
+  and the agent-credential-transport and warm-pools operator pages now state
+  every role of the knob.
+
 ### Changed
 
 - **The reapers now run from a 30 s leader maintenance loop, ordered after the
@@ -98,8 +109,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     pod also gets an `activeDeadlineSeconds` floor when its DAG declares no
     execution timeout — derived from `auth.max_attempt_credential_lifetime`,
     past which the pod cannot renew its credential — so no task pod is left
-    Running forever after a total control-plane outage. A user-declared timeout
-    is never shortened.
+    Running forever after a total control-plane outage (unless the ceiling is
+    disabled, which also disables this floor). A user-declared timeout is
+    never shortened. The floor is load-bearing only when the control plane
+    never returns: if it comes back after the token has lapsed, the rejected
+    bearer already makes the agent exit promptly. It makes explicit a bound
+    that held in practice before — the ceiling was a de-facto attempt-lifetime
+    cap of roughly ceiling + token TTL + the agent-lost threshold.
   - The pod-lost reaper (every scheduler tick) raced the reconciler (every 30s)
     for a pod that finished during the outage, and won — marking it `pod_lost`
     before the reconciler could recover the pod's durable outcome record. It now

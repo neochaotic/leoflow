@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/internal/domain.html
-# --- end AUTO redirect aliases ---
 title: "internal/domain"
 linkTitle: "internal/domain"
 weight: 1
@@ -27,6 +23,7 @@ Package domain defines the core Leoflow types \(DAG, Task, project config\) and 
 - [type BuildConfig](<#BuildConfig>)
 - [type ConfigDefaults](<#ConfigDefaults>)
 - [type Connection](<#Connection>)
+- [type ConnectionPatch](<#ConnectionPatch>)
 - [type DAG](<#DAG>)
 - [type DAGSpec](<#DAGSpec>)
   - [func \(d \*DAGSpec\) CanonicalHash\(\) \(string, error\)](<#DAGSpec.CanonicalHash>)
@@ -40,6 +37,7 @@ Package domain defines the core Leoflow types \(DAG, Task, project config\) and 
 - [type DbtConfig](<#DbtConfig>)
 - [type DefaultArgs](<#DefaultArgs>)
 - [type DefaultResources](<#DefaultResources>)
+  - [func \(d \*DefaultResources\) AsResources\(\) \*Resources](<#DefaultResources.AsResources>)
 - [type Execution](<#Execution>)
 - [type ExecutionMode](<#ExecutionMode>)
 - [type HistoricalMetrics](<#HistoricalMetrics>)
@@ -48,6 +46,7 @@ Package domain defines the core Leoflow types \(DAG, Task, project config\) and 
   - [func \(c \*LeoflowConfig\) ApplyDefaults\(\)](<#LeoflowConfig.ApplyDefaults>)
   - [func \(c \*LeoflowConfig\) EffectiveDependencies\(\) \(\[\]string, error\)](<#LeoflowConfig.EffectiveDependencies>)
   - [func \(c \*LeoflowConfig\) Validate\(\) error](<#LeoflowConfig.Validate>)
+- [type ParamSpec](<#ParamSpec>)
 - [type Pool](<#Pool>)
 - [type PoolUsage](<#PoolUsage>)
 - [type RegistryConfig](<#RegistryConfig>)
@@ -65,6 +64,7 @@ Package domain defines the core Leoflow types \(DAG, Task, project config\) and 
 - [type TriggerRule](<#TriggerRule>)
 - [type User](<#User>)
 - [type Variable](<#Variable>)
+- [type VariablePatch](<#VariablePatch>)
 - [type XComEntryMeta](<#XComEntryMeta>)
 
 
@@ -222,7 +222,7 @@ type BuildConfig struct {
 ```
 
 <a name="ConfigDefaults"></a>
-## type [ConfigDefaults](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L143-L148>)
+## type [ConfigDefaults](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L143-L153>)
 
 ConfigDefaults holds task defaults applied to every task generated from the project at compile time.
 
@@ -232,6 +232,11 @@ type ConfigDefaults struct {
     RetryDelaySeconds       int               `json:"retry_delay_seconds,omitempty" yaml:"retry_delay_seconds,omitempty"`
     ExecutionTimeoutSeconds int               `json:"execution_timeout_seconds,omitempty" yaml:"execution_timeout_seconds,omitempty"`
     Resources               *DefaultResources `json:"resources,omitempty" yaml:"resources,omitempty"`
+    // NodeSelector is the DAG-wide pod placement fallback applied to every task
+    // that declares no execution.node_selector of its own. Like Resources it is a
+    // default, so the most-specific per-task value always wins. Consumed at
+    // compile time by the overlay, which bakes it onto each task in dag.json.
+    NodeSelector map[string]string `json:"node_selector,omitempty" yaml:"node_selector,omitempty"`
 }
 ```
 
@@ -254,8 +259,33 @@ type Connection struct {
 }
 ```
 
+<a name="ConnectionPatch"></a>
+## type [ConnectionPatch](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/connection.go#L31-L41>)
+
+ConnectionPatch is a tri\-state write to a Connection \(\#887\). Each nullable field is one of three states the write path must keep distinct:
+
+- nil pointer \-\> absent: preserve the stored value \(the upsert passes NULL and COALESCE keeps the current column\).
+- non\-nil "" \-\> present and empty: clear the field to empty.
+- non\-nil value \-\> present: set the field.
+
+A plain string cannot carry "absent" vs "present and empty", which is why the safe\-merge upsert alone \(v0.4.4\) could neither clear a field nor stop a round\-tripped mask from overwriting a secret. ConnType is always written \(required on every upsert\). Secret\-mask handling \(the mask means "unchanged"\) is resolved by the caller before it builds the patch, so the repository only ever sees the three states above.
+
+```go
+type ConnectionPatch struct {
+    ConnID      string
+    ConnType    string
+    Host        *string
+    Schema      *string
+    Login       *string
+    Password    *string
+    Port        *int
+    Extra       *string
+    Description *string
+}
+```
+
 <a name="DAG"></a>
-## type [DAG](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/run.go#L7-L20>)
+## type [DAG](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/run.go#L10-L23>)
 
 DAG is a registered DAG with its scheduling metadata \(distinct from DAGSpec, which is the compiled artifact\).
 
@@ -277,7 +307,7 @@ type DAG struct {
 ```
 
 <a name="DAGSpec"></a>
-## type [DAGSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L60-L113>)
+## type [DAGSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L61-L128>)
 
 DAGSpec is the canonical serialized representation of a DAG consumed by the control plane. It mirrors docs/api/dag\-schema.json.
 
@@ -302,16 +332,22 @@ type DAGSpec struct {
     // exactly as before. The scheduler enforces it in PlanRun's scheduled→queued
     // admission gate.
     MaxActiveTasks int `json:"max_active_tasks,omitempty"`
-    // MinIdleWorkers is the number of warm workers the DAG AUTHOR wants kept ready
-    // for this DAG version so its tasks skip cold-pod startup (ADR 0058 N1b2b,
-    // warm pools model A2). It mirrors MaxActiveTasks as a per-DAG author-declared
-    // spec field: zero (the default) means no warmth, and a DAG that never sets it
-    // — and all of Lite — behaves exactly as before. It is only a REQUEST: the
-    // operator caps it at execution.max_pool_size, floors an unset value at
-    // execution.min_idle_workers, and the whole thing is inert unless the operator
-    // enabled execution.warm_pools_enabled (see config.ExecutionSection.
-    // EffectiveMinIdle). Whether a pod may be reused across attempts stays the
-    // operator's security decision; this field only tunes how many.
+    // MinIdleWorkers is a DORMANT seam for per-DAG author-declared warmth: the
+    // number of warm workers an author would want kept ready for this DAG version
+    // so its tasks skip cold-pod startup (ADR 0058, warm pools model A2). It is NOT
+    // author-settable today. There is no author entry point: the field is absent
+    // from the authoring schema (leoflow-yaml-schema.json, which is
+    // additionalProperties:false) and the parser never emits it, so after the
+    // parse→compile path this value is ALWAYS 0. The intended split is that the
+    // operator gates IF warmth happens at all (execution.warm_pools_enabled) while
+    // the author would only tune HOW MANY, with the operator clamping the request;
+    // whether a pod may be reused across attempts stays the operator's security
+    // decision. The downstream is intentionally pre-wired around this field —
+    // config.ExecutionSection.EffectiveMinIdle already clamps it and the scheduler
+    // store already reads it — so exposing it to authors later is a schema+parser
+    // change only (add the key to the authoring schema and have the parser emit
+    // it), with no domain/scheduler rework. Until then it stays 0 and every DAG,
+    // and all of Lite, behaves exactly as before.
     MinIdleWorkers int          `json:"min_idle_workers,omitempty"`
     Catchup        bool         `json:"catchup,omitempty"`
     DefaultArgs    *DefaultArgs `json:"default_args,omitempty"`
@@ -328,9 +364,17 @@ type DAGSpec struct {
     // valid and means the DAG declares nothing — the additive, back-compatible
     // default. These carry the declaration only; secret delivery still ships the
     // whole tenant vault until enforcement lands on a later increment.
-    Variables   []string   `json:"variables,omitempty"`
-    Connections []string   `json:"connections,omitempty"`
-    Tasks       []TaskSpec `json:"tasks"`
+    Variables   []string `json:"variables,omitempty"`
+    Connections []string `json:"connections,omitempty"`
+    // Params are the DAG's author-declared run parameters (Airflow's params=),
+    // keyed by name. Each carries a Default (materialized into a run's conf when
+    // the trigger omits that key) and an optional JSON Schema the trigger-time
+    // conf value is validated against. Absent (empty) means the DAG declares no
+    // params — the additive, back-compatible default, so the compiled shape of a
+    // param-free DAG is unchanged. Part of the immutable spec (CanonicalHash), so
+    // changing a default or schema produces a new DAG version.
+    Params map[string]ParamSpec `json:"params,omitempty"`
+    Tasks  []TaskSpec           `json:"tasks"`
     // Source is the original dag.py text, captured at compile time so the UI's
     // Code tab can show the Python a human wrote (not the compiled spec). It is
     // part of the artifact: changing it produces a new version.
@@ -348,7 +392,7 @@ func (d *DAGSpec) CanonicalHash() (string, error)
 CanonicalHash returns the SHA\-256 of the spec's canonical JSON encoding. Go's struct marshaling is deterministic \(fixed field order, sorted map keys\), so identical specs hash identically — used to deduplicate DAG versions.
 
 <a name="DAGSpec.Validate"></a>
-### func \(\*DAGSpec\) [Validate](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L259>)
+### func \(\*DAGSpec\) [Validate](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L287>)
 
 ```go
 func (d *DAGSpec) Validate() error
@@ -366,7 +410,7 @@ func (d *DAGSpec) ValidateSchedule() error
 ValidateSchedule checks that a DAG's cron schedule is parseable. An empty or absent schedule \(manual\-only\) and the recognized non\-cron Airflow schedules \(@once, @continuous\) are valid. A malformed cron expression — a 4\-field cron, a typo — is rejected here so it fails loudly at compile time; otherwise the scheduler silently can't parse it and the DAG simply never runs, with no error surfaced anywhere \(the worst failure mode\). The parser is robfig/cron's ParseStandard, the same one the scheduler uses, so what validates here is exactly what the scheduler can run \(see scheduler/cron.go\).
 
 <a name="DagRun"></a>
-## type [DagRun](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/run.go#L35-L45>)
+## type [DagRun](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/run.go#L38-L52>)
 
 DagRun is an execution of a DAG, identified by dag\_id \+ run\_id.
 
@@ -381,6 +425,10 @@ type DagRun struct {
     StartedAt   *time.Time
     EndedAt     *time.Time
     Note        string
+    // Conf is the run's configuration as a JSON object, supplied at trigger time
+    // and exposed to tasks as params. Empty means no configuration; storage
+    // persists the empty-object default so downstream readers never see NULL.
+    Conf json.RawMessage
 }
 ```
 
@@ -432,7 +480,7 @@ type DagStats struct {
 ```
 
 <a name="DagVersion"></a>
-## type [DagVersion](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/run.go#L24-L32>)
+## type [DagVersion](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/run.go#L27-L35>)
 
 DagVersion is a registered version of a DAG. VersionNumber is the 1\-based ordinal the UI uses \(the stored version label is free\-form\).
 
@@ -478,7 +526,7 @@ type DbtConfig struct {
 ```
 
 <a name="DefaultArgs"></a>
-## type [DefaultArgs](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L125-L129>)
+## type [DefaultArgs](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L153-L157>)
 
 DefaultArgs holds retry and timeout defaults applied to every task in a DAG.
 
@@ -491,7 +539,7 @@ type DefaultArgs struct {
 ```
 
 <a name="DefaultResources"></a>
-## type [DefaultResources](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L151-L154>)
+## type [DefaultResources](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L156-L159>)
 
 DefaultResources expresses default CPU and memory for generated tasks.
 
@@ -502,8 +550,19 @@ type DefaultResources struct {
 }
 ```
 
+<a name="DefaultResources.AsResources"></a>
+### func \(\*DefaultResources\) [AsResources](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L171>)
+
+```go
+func (d *DefaultResources) AsResources() *Resources
+```
+
+AsResources expands the simplified default cpu/memory into a full Resources with requests == limits \(the QoS story of \#725\). This mirrors how the per\-cluster platform default is built at dispatch. Returns nil when the receiver is nil or declares no quantity, so callers can treat a missing default as "leave the task untouched".
+
+Guaranteed QoS is reached only when BOTH cpu and memory are set \(and thus equal across requests and limits\). A partial default — only cpu, or only memory — leaves the other dimension unset, so Kubernetes classifies the pod as Burstable, not Guaranteed.
+
 <a name="Execution"></a>
-## type [Execution](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L209-L246>)
+## type [Execution](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L237-L274>)
 
 Execution carries executor\-specific placement and scheduling hints for a task. Every field beyond NodeSelector/Tolerations/ServiceAccount is applied only by the Kubernetes executor; Lite \(subprocess, no pods\) ignores them.
 
@@ -549,7 +608,7 @@ type Execution struct {
 ```
 
 <a name="ExecutionMode"></a>
-## type [ExecutionMode](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L33>)
+## type [ExecutionMode](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L34>)
 
 ExecutionMode selects how a task runs. Every task runs inside a worker pod; the field is retained for forward compatibility and defaults to pod.
 
@@ -652,7 +711,7 @@ type LeoflowConfig struct {
 ```
 
 <a name="LeoflowConfig.ApplyDefaults"></a>
-### func \(\*LeoflowConfig\) [ApplyDefaults](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L166>)
+### func \(\*LeoflowConfig\) [ApplyDefaults](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L191>)
 
 ```go
 func (c *LeoflowConfig) ApplyDefaults()
@@ -663,7 +722,7 @@ ApplyDefaults fills zero\-valued fields with the defaults declared in the canoni
 Centralizing defaults here \(instead of scattered \`if x == ""\` fallbacks at each consumer\) is what lets the multi\-DAG workspace synthesize a working config when a subdir ships no leoflow.yaml, while keeping the resolved values debuggable from one place.
 
 <a name="LeoflowConfig.EffectiveDependencies"></a>
-### func \(\*LeoflowConfig\) [EffectiveDependencies](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L212>)
+### func \(\*LeoflowConfig\) [EffectiveDependencies](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L237>)
 
 ```go
 func (c *LeoflowConfig) EffectiveDependencies() ([]string, error)
@@ -674,13 +733,28 @@ EffectiveDependencies resolves the full pip install list the image/venv needs: t
 An unknown connector name is a compile error, not a silent drop: a typo that slipped through would otherwise surface as a ModuleNotFoundError inside the task pod, far from its cause. The message names the offender, lists the known types, and points at the dependencies: escape hatch.
 
 <a name="LeoflowConfig.Validate"></a>
-### func \(\*LeoflowConfig\) [Validate](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L233>)
+### func \(\*LeoflowConfig\) [Validate](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/config.go#L258>)
 
 ```go
 func (c *LeoflowConfig) Validate() error
 ```
 
 Validate checks the LeoflowConfig against the canonical leoflow.yaml schema and returns a joined error describing every violation, or nil when valid.
+
+<a name="ParamSpec"></a>
+## type [ParamSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L135-L141>)
+
+ParamSpec is one author\-declared DAG\-run parameter: a default value and the JSON Schema its trigger\-time conf value is validated against. Both are carried as raw JSON so an arbitrary default and an arbitrary schema round\-trip verbatim. Schema is \{\} \(or absent\) when the author declared a bare default with no constraints, in which case any conf value for that key is accepted.
+
+```go
+type ParamSpec struct {
+    // Default is the value merged into a run's conf when the trigger omits this
+    // key. Absent (omitempty, len 0) means the param is REQUIRED — the trigger
+    // must supply it — as distinct from an explicit JSON null default.
+    Default json.RawMessage `json:"default,omitempty"`
+    Schema  json.RawMessage `json:"schema,omitempty"`
+}
+```
 
 <a name="Pool"></a>
 ## type [Pool](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/pool.go#L8-L13>)
@@ -725,7 +799,7 @@ type RegistryConfig struct {
 ```
 
 <a name="ResourceQuantity"></a>
-## type [ResourceQuantity](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L196-L204>)
+## type [ResourceQuantity](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L224-L232>)
 
 ResourceQuantity expresses CPU, memory, and ephemeral\-storage in Kubernetes notation.
 
@@ -742,7 +816,7 @@ type ResourceQuantity struct {
 ```
 
 <a name="Resources"></a>
-## type [Resources](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L182-L192>)
+## type [Resources](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L210-L220>)
 
 Resources holds Kubernetes\-style resource requests and limits for a task.
 
@@ -761,7 +835,7 @@ type Resources struct {
 ```
 
 <a name="StagingConfig"></a>
-## type [StagingConfig](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L118-L122>)
+## type [StagingConfig](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L146-L150>)
 
 StagingConfig is the opt\-in per\-DAG\-run shared staging volume \(ADR 0022\). Size is a Kubernetes quantity \(e.g. "5Gi"\); StorageClass empty uses the cluster default RWX class.
 
@@ -816,7 +890,7 @@ type TaskConfig struct {
 ```
 
 <a name="TaskInstance"></a>
-## type [TaskInstance](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/run.go#L48-L80>)
+## type [TaskInstance](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/run.go#L55-L87>)
 
 TaskInstance is an execution of a task within a DagRun.
 
@@ -857,7 +931,7 @@ type TaskInstance struct {
 ```
 
 <a name="TaskSpec"></a>
-## type [TaskSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L132-L179>)
+## type [TaskSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L160-L207>)
 
 TaskSpec describes a single unit of work within a DAG.
 
@@ -913,7 +987,7 @@ type TaskSpec struct {
 ```
 
 <a name="TaskSpec.EffectiveExecutionMode"></a>
-### func \(TaskSpec\) [EffectiveExecutionMode](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L250>)
+### func \(TaskSpec\) [EffectiveExecutionMode](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L278>)
 
 ```go
 func (t TaskSpec) EffectiveExecutionMode() ExecutionMode
@@ -969,7 +1043,7 @@ func (s TaskState) IsTerminal() bool
 IsTerminal reports whether the task state is final \(no further automatic transitions occur from it\).
 
 <a name="TaskType"></a>
-## type [TaskType](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L12>)
+## type [TaskType](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L13>)
 
 TaskType enumerates the kinds of work a task can perform.
 
@@ -998,7 +1072,7 @@ const (
 ```
 
 <a name="TriggerRule"></a>
-## type [TriggerRule](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L42>)
+## type [TriggerRule](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/dag.go#L43>)
 
 TriggerRule decides whether a task runs based on its upstreams' states.
 
@@ -1048,6 +1122,19 @@ type Variable struct {
     Key         string
     Value       string
     Description string
+}
+```
+
+<a name="VariablePatch"></a>
+## type [VariablePatch](<https://github.com/neochaotic/leoflow/blob/main/internal/domain/variable.go#L18-L22>)
+
+VariablePatch is a tri\-state write to a Variable \(\#887\). Description mirrors domain.ConnectionPatch: nil preserves the stored value \(COALESCE\), non\-nil "" clears, and a value sets. Value is subtly different because the \`value\` column is NOT NULL: the caller resolves an omitted or masked \("\*\*\*" for a sensitive key\) value to the stored value BEFORE building the patch, so Value is expected non\-nil here — a non\-nil "" still clears. Key is always written.
+
+```go
+type VariablePatch struct {
+    Key         string
+    Value       *string
+    Description *string
 }
 ```
 

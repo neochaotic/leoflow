@@ -102,7 +102,10 @@ The thresholds and the settling grace are **build-time constants**
 above, and the boot-time validator exists precisely because moving one out of
 order turns a restart into a false reap. The one operator-tunable rung is
 `auth.max_attempt_credential_lifetime`, which must stay above the attempt token
-TTL; boot fails naming the key if it does not.
+TTL; boot fails naming the key if it does not. Setting it non-positive is
+accepted but disables the renewal ceiling, the task-pod `activeDeadlineSeconds`
+floor and the warm-pool attempt watchdog together, so boot logs a `WARN` naming
+the key.
 
 The defaults are conservative on purpose: too-tight thresholds risk reaping a
 legitimately slow dispatch (Kubernetes pod-pull latency under contention) or a

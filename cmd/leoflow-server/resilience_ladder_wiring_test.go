@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -12,13 +14,19 @@ import (
 
 // TestResilienceLadderWiringValidates pins that the ladder the server actually
 // boots with — agent heartbeat/TTL, default reaper config, reconcile interval,
-// the scheduler's infra re-place ceiling and the default credential-lifetime
-// ceiling — satisfies every ordering the restart recovery depends on. A change
-// to any one of those constants that breaks the order fails this test before it
-// fails a deployment at boot.
+// the scheduler's infra re-place ceiling and the SHIPPED default
+// credential-lifetime ceiling — satisfies every ordering the restart recovery
+// depends on. The ceiling is read from the config defaults rather than
+// hardcoded, so a change to the shipped default that breaks the order fails
+// this test too, not only a change to a build-time constant.
 func TestResilienceLadderWiringValidates(t *testing.T) {
-	cfg := &config.ServerConfig{}
-	cfg.Auth.MaxAttemptCredentialLifetime = 24 * time.Hour
+	cfg, err := config.LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer with shipped defaults: %v", err)
+	}
+	if cfg.Auth.MaxAttemptCredentialLifetime <= 0 {
+		t.Fatalf("the shipped default credential ceiling must be set, got %v", cfg.Auth.MaxAttemptCredentialLifetime)
+	}
 	l := resilienceLadder(cfg)
 	if err := executor.ValidateResilienceLadder(l); err != nil {
 		t.Fatalf("server ladder %+v must validate: %v", l, err)
@@ -32,8 +40,8 @@ func TestResilienceLadderWiringValidates(t *testing.T) {
 	if l.OrphanThreshold != executor.DefaultReaperConfig().OrphanThreshold {
 		t.Errorf("ladder must carry the orphan threshold, got %v", l.OrphanThreshold)
 	}
-	if l.MaxAttemptCredentialLifetime != 24*time.Hour {
-		t.Errorf("ladder must carry the configured credential ceiling, got %v", l.MaxAttemptCredentialLifetime)
+	if l.MaxAttemptCredentialLifetime != cfg.Auth.MaxAttemptCredentialLifetime {
+		t.Errorf("ladder must carry the shipped default credential ceiling %v, got %v", cfg.Auth.MaxAttemptCredentialLifetime, l.MaxAttemptCredentialLifetime)
 	}
 }
 
@@ -50,5 +58,45 @@ func TestResilienceLadderWiringFailsOnShortCredentialCeiling(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "auth.max_attempt_credential_lifetime") {
 		t.Errorf("error %q must name the config key the operator has to move", err)
+	}
+}
+
+// TestResilienceLadderWiringWarnsWhenCredentialCeilingDisabled: a non-positive
+// auth.max_attempt_credential_lifetime passes validation (it is the documented
+// "no ceiling" setting) yet silently removes two backstops — unbounded heartbeat
+// renewal and no activeDeadlineSeconds floor on task pods without a declared
+// execution_timeout. The boot WARN is the operator's only signal, so the boot
+// path must emit exactly one WARN naming the key when the ceiling is disabled,
+// and none when it is set.
+func TestResilienceLadderWiringWarnsWhenCredentialCeilingDisabled(t *testing.T) {
+	warn := func(d time.Duration) string {
+		var buf bytes.Buffer
+		cfg := &config.ServerConfig{}
+		cfg.Auth.MaxAttemptCredentialLifetime = d
+		warnStartup(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
+		return buf.String()
+	}
+	for _, d := range []time.Duration{0, -time.Minute} {
+		out := warn(d)
+		if strings.Count(out, "level=WARN") != 1 {
+			t.Errorf("ceiling %v: want exactly one WARN, got %q", d, out)
+		}
+		if !strings.Contains(out, "auth.max_attempt_credential_lifetime") || !strings.Contains(out, "activeDeadlineSeconds") {
+			t.Errorf("ceiling %v: WARN must name the key and the lost pod deadline floor, got %q", d, out)
+		}
+	}
+	if out := warn(24 * time.Hour); out != "" {
+		t.Errorf("a set ceiling must log nothing at boot, got %q", out)
+	}
+	// Both guarantees live on the scheduler side (token renewal in the agent
+	// gRPC server, the pod deadline floor in the dispatcher), so an api-only
+	// process in a split install must not warn about behavior it does not
+	// implement — a WARN operators learn to ignore is worse than none.
+	var buf bytes.Buffer
+	cfg := &config.ServerConfig{}
+	cfg.Server.Role = "api"
+	warnStartup(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
+	if buf.Len() != 0 {
+		t.Errorf("an api-only role must not emit the credential-ceiling WARN, got %q", buf.String())
 	}
 }

@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/internal/scheduler.html
-# --- end AUTO redirect aliases ---
 title: "internal/scheduler"
 linkTitle: "internal/scheduler"
 weight: 2
@@ -20,10 +16,10 @@ Package scheduler implements the Leoflow scheduling state machine and loop.
 - [func CanTransition\(from, to domain.TaskState\) bool](<#CanTransition>)
 - [func CanTransitionDagRun\(from, to domain.DagRunState\) bool](<#CanTransitionDagRun>)
 - [func FinalizeRun\(run RunState\) \(domain.DagRunState, bool\)](<#FinalizeRun>)
+- [func InfraReplaceMaxDelay\(\) time.Duration](<#InfraReplaceMaxDelay>)
 - [func PoolKey\(tenant, pool string\) string](<#PoolKey>)
 - [type Alerter](<#Alerter>)
 - [type Dispatcher](<#Dispatcher>)
-- [type ExecutionReaper](<#ExecutionReaper>)
 - [type Leader](<#Leader>)
   - [func NewLeader\(pool \*pgxpool.Pool\) \*Leader](<#NewLeader>)
   - [func \(l \*Leader\) HoldsLock\(ctx context.Context\) \(bool, error\)](<#Leader.HoldsLock>)
@@ -43,13 +39,13 @@ Package scheduler implements the Leoflow scheduling state machine and loop.
   - [func \(s \*Scheduler\) EnablePools\(\)](<#Scheduler.EnablePools>)
   - [func \(s \*Scheduler\) Heartbeat\(\) \(bool, time.Time\)](<#Scheduler.Heartbeat>)
   - [func \(s \*Scheduler\) IsLeading\(\) bool](<#Scheduler.IsLeading>)
+  - [func \(s \*Scheduler\) LeaderSince\(\) time.Time](<#Scheduler.LeaderSince>)
   - [func \(s \*Scheduler\) MarkSteppingDown\(reason string\)](<#Scheduler.MarkSteppingDown>)
   - [func \(s \*Scheduler\) RecordReacquireSince\(stepDownAt time.Time\)](<#Scheduler.RecordReacquireSince>)
   - [func \(s \*Scheduler\) Run\(ctx context.Context\) error](<#Scheduler.Run>)
   - [func \(s \*Scheduler\) SetAlertConcurrency\(n int\)](<#Scheduler.SetAlertConcurrency>)
   - [func \(s \*Scheduler\) SetAlerter\(a Alerter\)](<#Scheduler.SetAlerter>)
   - [func \(s \*Scheduler\) SetDispatcher\(d Dispatcher\)](<#Scheduler.SetDispatcher>)
-  - [func \(s \*Scheduler\) SetExecutionReaper\(r ExecutionReaper\)](<#Scheduler.SetExecutionReaper>)
   - [func \(s \*Scheduler\) SetLeading\(on bool\)](<#Scheduler.SetLeading>)
   - [func \(s \*Scheduler\) SetRecorder\(r Recorder\)](<#Scheduler.SetRecorder>)
   - [func \(s \*Scheduler\) SetStepTimeout\(d time.Duration\)](<#Scheduler.SetStepTimeout>)
@@ -87,7 +83,7 @@ func CanTransitionDagRun(from, to domain.DagRunState) bool
 CanTransitionDagRun reports whether a dag run may move from one state to another.
 
 <a name="FinalizeRun"></a>
-## func [FinalizeRun](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/plan.go#L315>)
+## func [FinalizeRun](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/plan.go#L367>)
 
 ```go
 func FinalizeRun(run RunState) (domain.DagRunState, bool)
@@ -95,8 +91,17 @@ func FinalizeRun(run RunState) (domain.DagRunState, bool)
 
 FinalizeRun reports the terminal dag\-run state once every task is terminal. A failed task that still has retry budget \(or an infra re\-place budget\) counts as non\-terminal, so the run keeps running until it resolves. The boolean is false while any task is still non\-terminal.
 
+<a name="InfraReplaceMaxDelay"></a>
+## func [InfraReplaceMaxDelay](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/dispatch_backoff.go#L52>)
+
+```go
+func InfraReplaceMaxDelay() time.Duration
+```
+
+InfraReplaceMaxDelay is the longest the planner may park an infra\-failed task before re\-placing it: the backoff before the last permitted re\-place \(attempt infraMaxAttempts\) plus the full de\-synchronizing jitter window. It is the upper bound on how long a run whose only live task is infra\-parked shows no activity, so the executor's orphan\-run threshold must sit above it or the orphan reaper fails a run that is still recovering. The two values live in packages that depend in one direction only \(the scheduler imports the executor\), so this is exported for the server to hand to the executor's boot\-time resilience ladder rather than read from there.
+
 <a name="PoolKey"></a>
-## func [PoolKey](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/plan.go#L99>)
+## func [PoolKey](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/plan.go#L103>)
 
 ```go
 func PoolKey(tenant, pool string) string
@@ -105,7 +110,7 @@ func PoolKey(tenant, pool string) string
 PoolKey composes the cross\-DAG admission\-budget key for a \(tenant, pool\) pair. Pools are tenant\-scoped, so a pool name is only meaningful within its tenant; the key namespaces the pool budget and occupancy maps by tenant. The NUL separator cannot occur in a tenant UUID or an Airflow pool name, so the join is unambiguous. The scheduler store builds its budget map with the same key.
 
 <a name="Alerter"></a>
-## type [Alerter](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L433-L438>)
+## type [Alerter](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L434-L439>)
 
 Alerter dispatches a DAG's on\-failure alert rules for a run that finalized in the failed state. Implementations resolve each rule's managed connection to an endpoint and send \(Slack/webhook\). The scheduler calls it from a detached goroutine, so an implementation may block on network I/O without stalling the tick; it MUST treat every send as best\-effort — a delivery failure is logged, never propagated, so alerting can never fail a run.
 
@@ -126,20 +131,6 @@ Dispatcher launches a task instance for execution. The scheduler dispatches a ta
 ```go
 type Dispatcher interface {
     Dispatch(ctx context.Context, runID, dagID, dagVersionID string, task domain.TaskSpec) (executor.Disposition, error)
-}
-```
-
-<a name="ExecutionReaper"></a>
-## type [ExecutionReaper](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L318-L323>)
-
-ExecutionReaper is the execution\-side backstop the scheduler drives once per leader tick to fail stuck runs and task instances. It is the seam between the scheduler \(which owns the leader gate and the tick\) and the executor package \(which owns pod teardown and pod\-liveness\). executor.Reaper satisfies it.
-
-```go
-type ExecutionReaper interface {
-    // ReapOnce runs every reaper once. Implementations isolate per-reaper and
-    // per-candidate failures internally and log/meter list errors, so the
-    // scheduler ignores the return today; the error is kept for the seam.
-    ReapOnce(ctx context.Context) error
 }
 ```
 
@@ -222,7 +213,7 @@ func (r *LeaderHealthReader) Heartbeat() (healthy bool, last time.Time)
 Heartbeat implements api.Heartbeater. healthy is true iff some live session holds the scheduler leadership lock. The timestamp is best\-effort "now" when healthy \(the reader has no cross\-process tick time\); it is unused by the handler when the status is unhealthy.
 
 <a name="PlannedTransition"></a>
-## type [PlannedTransition](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/plan.go#L11-L14>)
+## type [PlannedTransition](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/plan.go#L12-L15>)
 
 PlannedTransition is a decided state change for a task instance within a run.
 
@@ -234,13 +225,13 @@ type PlannedTransition struct {
 ```
 
 <a name="PlanRun"></a>
-### func [PlanRun](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/plan.go#L23>)
+### func [PlanRun](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/plan.go#L27>)
 
 ```go
 func PlanRun(run RunState) []PlannedTransition
 ```
 
-PlanRun computes the task transitions for one dag run. It first handles retries — a failed task with retry budget moves to up\_for\_retry, and an up\_for\_retry task resets \(none, try\_number\+1\) — then plans the rest off the resulting effective states: none \-\> scheduled \(or skipped / upstream\_failed per the trigger rule\) and scheduled \-\> queued. A retriable failed task is treated as still active, so downstream tasks wait rather than seeing a failure. The result is deterministic: identical inputs yield identical output.
+PlanRun computes the task transitions for one dag run. It first handles retries — a failed task with retry budget moves to up\_for\_retry, and an up\_for\_retry task resets \(none, try\_number\+1\) — then plans the rest off the resulting effective states: none \-\> scheduled \(or skipped / upstream\_failed per the trigger rule\) and scheduled \-\> queued. A failed task that can still recover — app\-retriable, or infra\-failed with re\-place budget left \(even while parked in its re\-place backoff\) — is treated as still active, so downstream tasks wait rather than seeing a failure; a downstream is condemned to upstream\_failed only once its upstream is terminally failed. The result is deterministic: identical inputs yield identical output.
 
 <a name="Recorder"></a>
 ## type [Recorder](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L226-L243>)
@@ -415,7 +406,7 @@ func NewScheduler(store Store, logger *slog.Logger, interval time.Duration) *Sch
 NewScheduler builds a Scheduler over the given store, ticking every interval.
 
 <a name="Scheduler.ClearSteppingDown"></a>
-### func \(\*Scheduler\) [ClearSteppingDown](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L380>)
+### func \(\*Scheduler\) [ClearSteppingDown](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L381>)
 
 ```go
 func (s *Scheduler) ClearSteppingDown()
@@ -424,7 +415,7 @@ func (s *Scheduler) ClearSteppingDown()
 ClearSteppingDown ends the step\-down window opened by MarkSteppingDown. Idempotent — calling it when no step\-down is active is a no\-op.
 
 <a name="Scheduler.EnablePools"></a>
-### func \(\*Scheduler\) [EnablePools](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L411>)
+### func \(\*Scheduler\) [EnablePools](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L412>)
 
 ```go
 func (s *Scheduler) EnablePools()
@@ -433,7 +424,7 @@ func (s *Scheduler) EnablePools()
 EnablePools turns on the cross\-DAG named\-pool admission gate \(ADR 0053 Stage 3\). It is Pro\-only: main calls it exactly when the edition is "pro". Left unset in Lite/non\-Pro, where the pool gate stays a no\-op and the tick never queries pool budgets, so Lite plans byte\-identically. Call once before the scheduler starts ticking.
 
 <a name="Scheduler.Heartbeat"></a>
-### func \(\*Scheduler\) [Heartbeat](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L486>)
+### func \(\*Scheduler\) [Heartbeat](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L487>)
 
 ```go
 func (s *Scheduler) Heartbeat() (bool, time.Time)
@@ -442,7 +433,7 @@ func (s *Scheduler) Heartbeat() (bool, time.Time)
 Heartbeat reports whether the scheduling loop is live and when it last ticked. Only a leader is expected to tick, so a non\-leader \(a follower, or an instance that stepped down after losing the lock\) reports healthy without ticking — it is correctly idle, not stalled. A leader is healthy during the startup grace \(before its first tick\) and while ticks stay within a small multiple of the loop interval; a stalled leader goes unhealthy so the UI/monitor surfaces it.
 
 <a name="Scheduler.IsLeading"></a>
-### func \(\*Scheduler\) [IsLeading](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L359>)
+### func \(\*Scheduler\) [IsLeading](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L360>)
 
 ```go
 func (s *Scheduler) IsLeading() bool
@@ -450,8 +441,17 @@ func (s *Scheduler) IsLeading() bool
 
 IsLeading reports whether this instance currently holds scheduler leadership. Background sweeps that mutate cluster state — the pod reconciler and the staging\-volume GC — gate on this so that at replicaCount\>1 only the leader sweeps; otherwise every replica would reconcile and delete the same pods.
 
+<a name="Scheduler.LeaderSince"></a>
+### func \(\*Scheduler\) [LeaderSince](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L348>)
+
+```go
+func (s *Scheduler) LeaderSince() time.Time
+```
+
+LeaderSince reports when this instance last acquired scheduler leadership, or the zero time if it is not currently leading. The agent\-lost reaper uses it to suppress reaping within a grace window after a \(re\-\)election \(\#858\).
+
 <a name="Scheduler.MarkSteppingDown"></a>
-### func \(\*Scheduler\) [MarkSteppingDown](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L371>)
+### func \(\*Scheduler\) [MarkSteppingDown](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L372>)
 
 ```go
 func (s *Scheduler) MarkSteppingDown(reason string)
@@ -460,7 +460,7 @@ func (s *Scheduler) MarkSteppingDown(reason string)
 MarkSteppingDown records that a graceful step\-down has begun. The campaign loop calls this BEFORE canceling the scheduler's run\-context, so any in\-flight reaper/Step that returns "context canceled" inside the window logs at WARN \(expected\) instead of ERROR. It also increments the step\-down counter labeled by reason, so operators can alert on the \*rate\* of churn \(rate\(...\[5m\]\)\) instead of grep'ing log content. ClearSteppingDown closes the window; outside it, context.Canceled stays ERROR — the tripwire that catches an unexpected cancel a flat downgrade would silently swallow.
 
 <a name="Scheduler.RecordReacquireSince"></a>
-### func \(\*Scheduler\) [RecordReacquireSince](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L386>)
+### func \(\*Scheduler\) [RecordReacquireSince](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L387>)
 
 ```go
 func (s *Scheduler) RecordReacquireSince(stepDownAt time.Time)
@@ -469,7 +469,7 @@ func (s *Scheduler) RecordReacquireSince(stepDownAt time.Time)
 RecordReacquireSince records the time spent stepped down \(\#311\). It is called by the campaign loop immediately after a successful re\-acquire, with the timestamp captured at the moment of step\-down. A zero stepDownAt \(no prior step\-down — first acquisition at boot\) is ignored.
 
 <a name="Scheduler.Run"></a>
-### func \(\*Scheduler\) [Run](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L443>)
+### func \(\*Scheduler\) [Run](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L444>)
 
 ```go
 func (s *Scheduler) Run(ctx context.Context) error
@@ -478,7 +478,7 @@ func (s *Scheduler) Run(ctx context.Context) error
 Run drives the scheduling loop until ctx is canceled. The loop is crash\-proof: a panic or error in a tick is recovered and logged, so the scheduler keeps ticking — it may fall behind, but it never dies \(the critical invariant\).
 
 <a name="Scheduler.SetAlertConcurrency"></a>
-### func \(\*Scheduler\) [SetAlertConcurrency](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L420>)
+### func \(\*Scheduler\) [SetAlertConcurrency](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L421>)
 
 ```go
 func (s *Scheduler) SetAlertConcurrency(n int)
@@ -487,7 +487,7 @@ func (s *Scheduler) SetAlertConcurrency(n int)
 SetAlertConcurrency caps how many on\-failure alert dispatches may run at once \(\#424\). n \< 1 is treated as 1. Mainly a config/test seam; the default is defaultAlertConcurrency.
 
 <a name="Scheduler.SetAlerter"></a>
-### func \(\*Scheduler\) [SetAlerter](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L415>)
+### func \(\*Scheduler\) [SetAlerter](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L416>)
 
 ```go
 func (s *Scheduler) SetAlerter(a Alerter)
@@ -496,7 +496,7 @@ func (s *Scheduler) SetAlerter(a Alerter)
 SetAlerter attaches the on\-failure alerter \(optional; \#424\). Without it, or for a DAG with no alert rules, the scheduler finalizes failures silently.
 
 <a name="Scheduler.SetDispatcher"></a>
-### func \(\*Scheduler\) [SetDispatcher](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L404>)
+### func \(\*Scheduler\) [SetDispatcher](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L405>)
 
 ```go
 func (s *Scheduler) SetDispatcher(d Dispatcher)
@@ -504,17 +504,8 @@ func (s *Scheduler) SetDispatcher(d Dispatcher)
 
 SetDispatcher attaches the executor dispatcher \(optional; without it the scheduler advances state only and launches nothing\).
 
-<a name="Scheduler.SetExecutionReaper"></a>
-### func \(\*Scheduler\) [SetExecutionReaper](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L328>)
-
-```go
-func (s *Scheduler) SetExecutionReaper(r ExecutionReaper)
-```
-
-SetExecutionReaper wires the execution\-side reaper the scheduler drives on the leader tick. Left unset \(e.g. a load harness, or a Lite path that opts out of reaping\), the tick simply reaps nothing.
-
 <a name="Scheduler.SetLeading"></a>
-### func \(\*Scheduler\) [SetLeading](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L348>)
+### func \(\*Scheduler\) [SetLeading](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L332>)
 
 ```go
 func (s *Scheduler) SetLeading(on bool)
@@ -523,7 +514,7 @@ func (s *Scheduler) SetLeading(on bool)
 SetLeading marks whether this instance currently holds scheduler leadership. The leadership manager sets it true while the loop runs and false when it steps down \(lost lock\) or stops. Becoming leader resets the tick clock so the startup grace applies afresh and a stale pre\-step\-down heartbeat is not mistaken for a stall. It governs Heartbeat: only a leader is expected to tick.
 
 <a name="Scheduler.SetRecorder"></a>
-### func \(\*Scheduler\) [SetRecorder](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L400>)
+### func \(\*Scheduler\) [SetRecorder](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L401>)
 
 ```go
 func (s *Scheduler) SetRecorder(r Recorder)
@@ -532,7 +523,7 @@ func (s *Scheduler) SetRecorder(r Recorder)
 SetRecorder attaches a metrics recorder \(optional\).
 
 <a name="Scheduler.SetStepTimeout"></a>
-### func \(\*Scheduler\) [SetStepTimeout](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L341>)
+### func \(\*Scheduler\) [SetStepTimeout](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L325>)
 
 ```go
 func (s *Scheduler) SetStepTimeout(d time.Duration)
@@ -541,7 +532,7 @@ func (s *Scheduler) SetStepTimeout(d time.Duration)
 SetStepTimeout overrides the per\-tick timeout \(optional; mainly for tests\).
 
 <a name="Scheduler.Step"></a>
-### func \(\*Scheduler\) [Step](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L506>)
+### func \(\*Scheduler\) [Step](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L507>)
 
 ```go
 func (s *Scheduler) Step(ctx context.Context) error
@@ -550,7 +541,7 @@ func (s *Scheduler) Step(ctx context.Context) error
 Step runs one deterministic scheduling iteration over every active run. Each run is advanced in isolation \(see advanceSafely\): a panic or error in one run is contained, so it never blocks the other runs or new\-run creation. The reaper runs independently of createDueRuns success — they share no dependency, and silencing the reaper when scheduling has a hiccup would let orphans accumulate exactly when the operator is most likely to notice the counter is wrong. The first non\-nil infra\-level error is returned \(logged by the caller\); the later phases still execute.
 
 <a name="Scheduler.SteppingDown"></a>
-### func \(\*Scheduler\) [SteppingDown](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L397>)
+### func \(\*Scheduler\) [SteppingDown](<https://github.com/neochaotic/leoflow/blob/main/internal/scheduler/scheduler.go#L398>)
 
 ```go
 func (s *Scheduler) SteppingDown() bool

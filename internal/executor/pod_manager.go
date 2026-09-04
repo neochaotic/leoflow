@@ -21,10 +21,19 @@ type PodManager interface {
 	// the (run, task, try) tuple. Pinning try-number guarantees a newer live
 	// attempt (dispatched with a new try-number) is never deleted. Tolerates
 	// a missing pod.
+	//
+	// A pod already in a terminal phase is SKIPPED, not deleted (#928): the
+	// teardown exists to stop a running container, a terminal pod has none, and
+	// its termination message is the outcome record the reconciler settles the
+	// attempt from (ADR 0052). That is why a reaper may call this unconditionally
+	// after its mark without reading presence first — the guard is at the delete
+	// site, so it holds for every reaper including the ones (agent-lost,
+	// orphan-run) that read no presence at all.
 	DeleteTaskPod(ctx context.Context, runID, taskID string, tryNumber int) error
 	// DeleteRunPods deletes every task pod of one reaped run. Used by the
 	// orphan-run reaper, which abandons the whole run. The run-id is unique
-	// per run, so no other run's pod can match. Tolerates missing pods.
+	// per run, so no other run's pod can match. Tolerates missing pods. The
+	// terminal-phase skip above applies per pod within the run (#928).
 	DeleteRunPods(ctx context.Context, runID string) error
 	// TaskPodPresence reports what the apiserver holds for exactly the
 	// (run, task, try) attempt: a live pod, a present-but-finished pod, or
@@ -64,7 +73,11 @@ const (
 	// the agent-lost reaper (heartbeats stop when a node goes unreachable) and
 	// the orphan-run reaper. The phase has not been set by kubelet since 2015
 	// and is deprecated upstream, so the practical exposure is nil; classifying
-	// it as presence is the conservative direction.
+	// it as presence is the conservative direction. Note this is deliberately
+	// WIDER than terminalForTeardown, which the pod teardown uses: presence asks
+	// "is this an absence?" (Unknown is not), teardown asks "is there a container
+	// to stop, and will anything else collect this?" (for Unknown, possibly yes
+	// and no) — so Unknown defers a reap here and is still deleted there (#928).
 	PodPresenceTerminal
 	// PodPresenceAbsent means the apiserver holds no pod for the attempt at all
 	// — the attempt's pod is genuinely gone (deleted, evicted, lost with its

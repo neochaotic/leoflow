@@ -109,6 +109,11 @@ func (r *orphanReaper) reapOne(ctx context.Context, c ReapCandidate) {
 	// run-id is unique, so this can only ever hit this run's pods. Best-effort:
 	// a delete failure is logged but does not undo the DB reap — the pod's own
 	// ActiveDeadline and the reconciler's GC remain backstops.
+	//
+	// "Its pods" is narrower than every pod of the run: this reaper reads no pod
+	// presence, so DeleteRunPods applies the terminal-phase skip per pod (#928).
+	// A finished task's pod keeps the outcome record the reconciler settles from;
+	// only the run's still-live containers are stopped.
 	if r.pods == nil {
 		return
 	}

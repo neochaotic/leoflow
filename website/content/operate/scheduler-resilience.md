@@ -26,11 +26,11 @@ pods, so no pod-based reaper applies and the loop is not started.
 | Failure mode | Detected by | Default SLA | What happens |
 |---|---|---|---|
 | **Task code wedged past its declared `execution_timeout_seconds`** | **Agent itself** ([#194](https://github.com/neochaotic/leoflow/issues/194)) | **`execution_timeout_seconds`** (per-task) | **TI failed with `execution_timeout: task exceeded N`. Retries kick in if budget remains.** |
-| Agent process crashed mid-task (TI in `running`, no heartbeat) | TI heartbeat reaper ([#128](https://github.com/neochaotic/leoflow/issues/128)) | **90 s** | TI failed with `agent_lost`; the TI's pod is deleted so a partitioned-but-alive container stops. Retries kick in if budget remains. |
-| Scheduler crashed before dispatching (TI stuck in `queued`) | Dispatch-lost reaper ([#202](https://github.com/neochaotic/leoflow/issues/202)) | **3 min** | TI failed with `dispatch_lost` — but only if no live pod for it exists (see below); the pod is torn down. Frees the run for the orphan reaper on the next maintenance cycle. |
+| Agent process crashed mid-task (TI in `running`, no heartbeat) | TI heartbeat reaper ([#128](https://github.com/neochaotic/leoflow/issues/128)) | **90 s** | TI failed with `agent_lost`; the TI's pod is deleted so a partitioned-but-alive container stops — unless it has already reached a terminal phase, in which case it is left for the reconciler (see teardown below). Retries kick in if budget remains. |
+| Scheduler crashed before dispatching (TI stuck in `queued`) | Dispatch-lost reaper ([#202](https://github.com/neochaotic/leoflow/issues/202)) | **3 min** | TI failed with `dispatch_lost` — but only if no live pod for it exists (see below); any pod still Pending/Running for the attempt is torn down, a finished one is left for the reconciler. Frees the run for the orphan reaper on the next maintenance cycle. |
 | Task pod vanished (TI in `running`, no pod at all for its attempt) | Pod-lost reaper | **60 s** after the running transition, then a live pod read | TI failed with `pod_lost`. Only when the apiserver holds no pod for the attempt: a pod that is still there in a terminal phase is left for the reconciler to settle from its termination log (`pod_lost_terminal_pod_defer`). |
 | Warm worker died holding attempts (warm pools only) | Warm-worker-lost reaper | next maintenance cycle | Each attempt bound to the dead worker is failed `pod_lost`; refill of the pool is the warm-pool reconciler's job, not the reaper's. |
-| Run stuck `running` with no active TIs (post-crash limbo) | Orphan-run reaper ([#120](https://github.com/neochaotic/leoflow/issues/120)) | **5 min** | Run failed with `orphaned`; any remaining active TIs flipped to `failed` and every pod of the run is deleted. |
+| Run stuck `running` with no active TIs (post-crash limbo) | Orphan-run reaper ([#120](https://github.com/neochaotic/leoflow/issues/120)) | **5 min** | Run failed with `orphaned`; any remaining active TIs flipped to `failed` and every still-live pod of the run is deleted (its finished pods keep their outcome records for the reconciler). |
 
 Every SLA above is a floor: the reapers run every **30 s**, so detection lands
 up to one cycle after the threshold elapses. Worst case end-to-end: a mid-tick
@@ -238,6 +238,24 @@ durable DB transition, each reaper tears the pod down:
   never be the one deleted.
 - The **orphan-run** reaper deletes every pod of the abandoned run (the
   run-id is unique per run, so no other run's pod can match).
+- **A pod that already reached a terminal phase (`Succeeded`/`Failed`) is
+  skipped, not deleted** ([#928](https://github.com/neochaotic/leoflow/issues/928)).
+  It has no container left to stop, so deleting it would buy nothing and cost
+  the durable outcome record on its termination message — the only evidence the
+  reconciler can settle the attempt from
+  ([ADR 0052](/project/adrs/0052-durable-task-outcome/)). Collecting those pods
+  is the reconciler's job: it settles each one, then garbage-collects it once it
+  ages past the 10-minute grace. The skip is enforced once, at the teardown
+  itself, so it holds for every reaper — including the heartbeat reaper, which
+  fires on heartbeat staleness alone at 90 s and reads no pod state, and the
+  orphan-run reaper, which applies it per pod inside the run. No reaper's
+  decision changes: a TI the reaper marked stays marked. Look for
+  `reap teardown: task pod is already in a terminal phase` at INFO to see which
+  pods were left behind; a failed *delete* is the `*_pod_delete_error` decision
+  below, which is a different thing.
+- A pod in phase `Unknown` **is** deleted. It may still be running a container,
+  which is the case teardown exists for, and the reconciler treats `Unknown` as
+  non-terminal — it neither settles nor collects it — so nothing else would.
 - Belt and suspenders: the control plane also answers a **stale** agent
   `ReportState`/`Heartbeat` — one whose attempt no longer matches the live
   row — with `should_terminate`, so a reaped-but-still-alive pod that we
@@ -253,15 +271,28 @@ failure is logged and metered but never undoes the DB reap, and the pod's own
 (subprocess executor) there are no pods, so only the DB transition and the
 `should_terminate` signal apply.
 
+A terminal pod the teardown skips is collected by the reconciler, so a
+reconciler that is not sweeping leaves those pod objects behind. That is not a
+new dependency: every normally-finished task pod has always been the
+reconciler's to collect, and the reap-time delete only ever covered the subset
+belonging to a reaped TI or run. A terminated pod holds no node CPU or memory —
+it costs an API object and a slot against any `count/pods` quota — and
+Kubernetes' own terminated-pod GC (`--terminated-pod-gc-threshold`, 12500 by
+default) is the cluster-level floor under it. A reconciler stuck for longer
+than that shows up first as `reap_settling_valve_open`, which is the label to
+alert on.
+
 ## The load-bearing invariant
 
 Recovery is bounded by the slowest reaper that applies, not the fastest —
 usually fine, sometimes worth tuning
 (ADR [0031](/project/adrs/0031-scheduler-architecture/)). The invariant that governs
 every reap decision is **never fail or tear down the live current attempt —
-only one that is genuinely stale or lost**. It is preserved end-to-end: the DB
+only one that is genuinely stale or lost**, and **never destroy the evidence of
+one that already finished**. It is preserved end-to-end: the DB
 transitions are guarded on source state (`WHERE state IN (...)`), pod deletes
-are pinned to the exact `(run, task, try)` reaped, the dispatch-lost reaper
+are pinned to the exact `(run, task, try)` reaped and skip a pod already in a
+terminal phase, the dispatch-lost reaper
 defers whenever a pod is live or its liveness is unknown, and the
 `should_terminate` signal fires only when the reporting attempt has provably
 moved on. When in doubt, a reaper defers rather than reap.

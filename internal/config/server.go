@@ -411,9 +411,15 @@ type AuthSection struct {
 	// Fix #4). Past this age since first dispatch, the control plane stops renewing
 	// the token on heartbeat and lets it lapse, bounding a runaway attempt. The
 	// short per-attempt TTL still bounds a stolen/finished token independently;
-	// this only caps the total renewed lifetime. Generous by default (24h) so no
-	// normal task regresses. Bind via LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME
-	// as a duration (e.g. "24h", "90m"); a non-positive value disables the ceiling.
+	// this caps the total renewed lifetime. It governs a second guarantee too: the
+	// Kubernetes executor floors a task pod's activeDeadlineSeconds with it when
+	// the DAG declares no execution_timeout, so a pod whose agent keeps retrying
+	// its report through a total control-plane outage is not left Running
+	// forever (a declared timeout is never shortened). Generous by default (24h)
+	// so no normal task regresses. Bind via
+	// LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME as a duration (e.g. "24h",
+	// "90m"). A non-positive value disables BOTH the renewal ceiling and the pod
+	// deadline floor; boot logs a WARN so the loss is visible.
 	MaxAttemptCredentialLifetime time.Duration `mapstructure:"max_attempt_credential_lifetime"`
 	// AgentTokenTransport selects how the in-pod agent obtains its control-plane
 	// bearer credential (ADR 0055 Fix #3): "envvar" (the default) sets the token as
@@ -608,8 +614,10 @@ var serverDefaults = map[string]any{
 	// flip to it is a separate operator decision after real-cluster e2e.
 	"auth.agent_token_transport": "envvar",
 	// Hard ceiling on an attempt's total renewed credential lifetime (ADR 0055
-	// Fix #4). Generous by default so nothing regresses; the short per-attempt TTL
-	// is what bounds a stolen token. Parsed as a duration by viper's decode hook.
+	// Fix #4) and the activeDeadlineSeconds floor of a task pod with no declared
+	// execution_timeout. Generous by default so nothing regresses; the short
+	// per-attempt TTL is what bounds a stolen token. Parsed as a duration by
+	// viper's decode hook.
 	"auth.max_attempt_credential_lifetime": "24h",
 	// OIDC leaves. Every leaf is registered so viper's AutomaticEnv binds the
 	// scalar LEOFLOW_AUTH_OIDC_* env vars (notably the client secret). The slice

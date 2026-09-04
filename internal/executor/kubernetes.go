@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -212,13 +213,27 @@ const podStartupHeadroom = defaultDispatchLostThreshold
 // before its first report attempt, so no result is lost, only a stuck pod.
 func podActiveDeadline(req Request) int64 {
 	if req.TimeoutSeconds > 0 {
-		return int64(req.TimeoutSeconds) + int64(podStartupHeadroom/time.Second) + podDeadlineGraceTerm(req)
+		return min(int64(req.TimeoutSeconds)+int64(podStartupHeadroom/time.Second)+podDeadlineGraceTerm(req), maxPodActiveDeadline)
 	}
 	if req.AttemptLifetimeCeilingSeconds > 0 {
-		return req.AttemptLifetimeCeilingSeconds
+		return min(req.AttemptLifetimeCeilingSeconds, maxPodActiveDeadline)
 	}
 	return 0
 }
+
+// maxPodActiveDeadline is the largest activeDeadlineSeconds the apiserver will
+// accept: it validates the field into [1, math.MaxInt32] at pod CREATE (#910).
+//
+// The clamp matters because the deadline is no longer the user's value but a
+// SUM of it with the startup headroom and the grace term. A declared timeout
+// near MaxInt32 is absurd on its face — 68 years, so a typo or a generated
+// spec — but before the sum it still produced a valid pod, one whose deadline
+// nothing would ever reach; with the sum it breaches the bound and the pod is
+// rejected at CREATE, turning an absurd-but-harmless declaration into a
+// permanently Rejected dispatch. Clamping keeps the harmless outcome. The
+// credential-ceiling branch is clamped too: it is an operator-configured int64
+// and can breach the bound without any sum at all.
+const maxPodActiveDeadline = math.MaxInt32
 
 // maxDeadlineGraceTerm caps how much of a declared terminationGracePeriodSeconds
 // the pod deadline will budget (#910).

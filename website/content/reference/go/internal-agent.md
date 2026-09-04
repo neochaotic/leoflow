@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/internal/agent.html
-# --- end AUTO redirect aliases ---
 title: "internal/agent"
 linkTitle: "internal/agent"
 weight: 5
@@ -26,6 +22,7 @@ Package agent contains the worker\-side logic that runs inside the task containe
 - [func ReadReturnValue\(path string\) \(value \[\]byte, ok bool, err error\)](<#ReadReturnValue>)
 - [func ReadTokenFile\(path string\) \(string, error\)](<#ReadTokenFile>)
 - [func ReportBootstrapFailure\(path string, stage BootstrapStage, err error\)](<#ReportBootstrapFailure>)
+- [func ResolverFromEnv\(getenv func\(string\) string\) \(secretsource.SecretResolver, secretsource.Backend, error\)](<#ResolverFromEnv>)
 - [func XComEnvVar\(name string, value \[\]byte\) string](<#XComEnvVar>)
 - [type BootstrapStage](<#BootstrapStage>)
 - [type CommandRunner](<#CommandRunner>)
@@ -141,6 +138,15 @@ ReportBootstrapFailure records a classified pre\-registration failure on the con
 
 It is best\-effort and never fails the caller: the agent is already exiting, and a lost diagnostic must not change the exit path. An empty path \(outside a pod\) is a no\-op.
 
+<a name="ResolverFromEnv"></a>
+## func [ResolverFromEnv](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/secret_resolver.go#L67>)
+
+```go
+func ResolverFromEnv(getenv func(string) string) (secretsource.SecretResolver, secretsource.Backend, error)
+```
+
+ResolverFromEnv builds the external\-secrets resolver \+ its routing Backend from the operator\-injected LEOFLOW\_SECRETS\_\* pod env \(operator\-only: the dispatch filter, \#828, keeps an author's task env from setting LEOFLOW\_ keys\). It returns a nil resolver when no backend is configured — the chain then stays vault\-only, byte\-identical to the pre\-0060 env\-export. A malformed config fails closed \(returned error\) rather than silently disabling external secrets.
+
 <a name="XComEnvVar"></a>
 ## func [XComEnvVar](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/command.go#L86>)
 
@@ -173,7 +179,7 @@ const (
 ```
 
 <a name="CommandRunner"></a>
-## type [CommandRunner](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L27-L29>)
+## type [CommandRunner](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L28-L30>)
 
 CommandRunner executes the user task process, writing its stdout and stderr to the supplied writers and returning the process exit code.
 
@@ -193,7 +199,7 @@ func NewExecRunner() CommandRunner
 NewExecRunner returns a CommandRunner that executes tasks as child processes.
 
 <a name="LogSink"></a>
-## type [LogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L38-L41>)
+## type [LogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L39-L42>)
 
 LogSink receives log lines produced by the user task. Sends are best\-effort.
 
@@ -214,7 +220,7 @@ func OpenLogSink(ctx context.Context, client agentv1.AgentServiceClient) (LogSin
 OpenLogSink starts the StreamLogs RPC and returns a sink that forwards lines to it. It is the agent's first RPC, so it uses WaitForReady: with the lazy connection of grpc.NewClient the channel may not be established yet, and without this the stream would fail fast on a cold connection \(the "opening log stream" EOF in \#36\) rather than waiting for the control plane to be reachable.
 
 <a name="NoopLogSink"></a>
-## type [NoopLogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L46>)
+## type [NoopLogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L47>)
 
 NoopLogSink discards log lines. The agent falls back to it when the control plane log stream is unavailable \(e.g. StreamLogs not yet implemented\), so a task still runs even though its logs are not shipped this run.
 
@@ -223,7 +229,7 @@ type NoopLogSink struct{}
 ```
 
 <a name="NoopLogSink.Close"></a>
-### func \(NoopLogSink\) [Close](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L52>)
+### func \(NoopLogSink\) [Close](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L53>)
 
 ```go
 func (NoopLogSink) Close() error
@@ -232,7 +238,7 @@ func (NoopLogSink) Close() error
 Close is a no\-op.
 
 <a name="NoopLogSink.Send"></a>
-### func \(NoopLogSink\) [Send](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L49>)
+### func \(NoopLogSink\) [Send](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L50>)
 
 ```go
 func (NoopLogSink) Send(*agentv1.LogLine) error
@@ -241,7 +247,7 @@ func (NoopLogSink) Send(*agentv1.LogLine) error
 Send discards the line.
 
 <a name="Runner"></a>
-## type [Runner](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L58-L95>)
+## type [Runner](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L59-L111>)
 
 Runner orchestrates a single task execution inside the worker container: it registers with the control plane, fetches the task spec and XCom inputs, runs the user process while streaming logs, pushes the return value, and reports the terminal state.
 
@@ -259,6 +265,14 @@ type Runner struct {
     // ReschedulePath is the file a reschedule-mode sensor writes its next-poke time
     // to before exiting with rescheduleExitCode; empty disables reschedule (#380).
     ReschedulePath string
+    // TmpDir, when set, is exported to the task as TMPDIR so the child's temp files
+    // land in a per-attempt directory the caller wipes between attempts, instead of
+    // the pod's real /tmp. The warm worker points this at a subdir of its scratch
+    // (reset before every attempt) so no attempt observes another attempt's temp
+    // files — a token cache, a dbt profile, ~/.aws-style credentials (#728). Empty
+    // leaves TMPDIR untouched: a single-shot pod is already destroyed per task, so
+    // its /tmp needs no in-process reset.
+    TmpDir string
     // TerminationLogPath is where the agent writes its durable outcome record just
     // before delivering the report, so a pod killed mid-report still leaves the
     // task's true result behind for the reconciler to recover (ADR 0052). Empty
@@ -280,12 +294,20 @@ type Runner struct {
     // binary wires it, from an env var, to exit the process, simulating a pod
     // killed mid-report with the record already on disk. Nil in production.
     BeforeReport func(agentv1.TaskState)
+
+    // Resolver resolves a declared secret name from an external backend, pod-side
+    // (ADR 0060). Nil = no external backend configured: the resolution chain is the
+    // vault only, byte-identical to the pre-0060 env-export. SecretBackend is the
+    // operator-configured routing (which kinds/names are externally sourced); its
+    // zero value covers nothing, so a nil-or-zero pair never calls the resolver.
+    Resolver      secretsource.SecretResolver
+    SecretBackend secretsource.Backend
     // contains filtered or unexported fields
 }
 ```
 
 <a name="Runner.Run"></a>
-### func \(\*Runner\) [Run](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L110>)
+### func \(\*Runner\) [Run](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/runner.go#L126>)
 
 ```go
 func (r *Runner) Run(ctx context.Context) error

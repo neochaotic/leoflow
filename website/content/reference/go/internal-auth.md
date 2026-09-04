@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/internal/auth.html
-# --- end AUTO redirect aliases ---
 title: "internal/auth"
 linkTitle: "internal/auth"
 weight: 8
@@ -31,6 +27,7 @@ Package auth provides JWT authentication, password hashing, the RBAC permission 
   - [func \(a \*JWTAuthenticator\) IssueAgentToken\(id AgentIdentity, ttl time.Duration\) \(string, error\)](<#JWTAuthenticator.IssueAgentToken>)
   - [func \(a \*JWTAuthenticator\) IssueToken\(ctx context.Context, creds Credentials\) \(string, error\)](<#JWTAuthenticator.IssueToken>)
   - [func \(a \*JWTAuthenticator\) RenewAgentToken\(token string, ttl, maxLifetime time.Duration\) \(renewed string, ok bool, err error\)](<#JWTAuthenticator.RenewAgentToken>)
+  - [func \(a \*JWTAuthenticator\) RenewUserToken\(token string, ttl, maxLifetime time.Duration\) \(renewed string, ok bool, err error\)](<#JWTAuthenticator.RenewUserToken>)
 - [type Permission](<#Permission>)
 - [type RateLimiter](<#RateLimiter>)
   - [func NewRateLimiter\(limit int, window time.Duration\) \*RateLimiter](<#NewRateLimiter>)
@@ -85,7 +82,7 @@ func HashPassword(password string) (string, error)
 HashPassword hashes a plaintext password with bcrypt.
 
 <a name="MintUserToken"></a>
-## func [MintUserToken](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L62>)
+## func [MintUserToken](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L69>)
 
 ```go
 func MintUserToken(secret string, ttl time.Duration, user User) (string, error)
@@ -155,7 +152,7 @@ type Credentials struct {
 ```
 
 <a name="JWTAuthenticator"></a>
-## type [JWTAuthenticator](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L32-L40>)
+## type [JWTAuthenticator](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L39-L47>)
 
 JWTAuthenticator issues and validates HS256 JWTs against a UserStore.
 
@@ -166,7 +163,7 @@ type JWTAuthenticator struct {
 ```
 
 <a name="NewJWTAuthenticator"></a>
-### func [NewJWTAuthenticator](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L44>)
+### func [NewJWTAuthenticator](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L51>)
 
 ```go
 func NewJWTAuthenticator(store UserStore, secret string, ttl time.Duration) *JWTAuthenticator
@@ -175,7 +172,7 @@ func NewJWTAuthenticator(store UserStore, secret string, ttl time.Duration) *JWT
 NewJWTAuthenticator builds a JWTAuthenticator with the given user store, HS256 secret, and token lifetime.
 
 <a name="JWTAuthenticator.Authenticate"></a>
-### func \(\*JWTAuthenticator\) [Authenticate](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L92>)
+### func \(\*JWTAuthenticator\) [Authenticate](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L103>)
 
 ```go
 func (a *JWTAuthenticator) Authenticate(ctx context.Context, token string) (*User, error)
@@ -206,7 +203,7 @@ IssueAgentToken mints a signed token that identifies a single task instance, val
 The token's origin \(oiat\) is set to the mint time — this is a fresh dispatch. Renewal \(RenewAgentToken\) preserves that origin instead of resetting it.
 
 <a name="JWTAuthenticator.IssueToken"></a>
-### func \(\*JWTAuthenticator\) [IssueToken](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L68>)
+### func \(\*JWTAuthenticator\) [IssueToken](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L75>)
 
 ```go
 func (a *JWTAuthenticator) IssueToken(ctx context.Context, creds Credentials) (string, error)
@@ -226,6 +223,19 @@ RenewAgentToken validates an in\-flight agent bearer token and re\-mints it for 
 The attempt's original dispatch time is preserved across every renewal \(the oiat claim\). maxLifetime is a hard ceiling on that total age: once the attempt has been alive longer than maxLifetime since first dispatch, renewal is refused \(ok=false, empty token\) so a runaway attempt's credential lapses instead of being kept alive forever. A non\-positive maxLifetime disables the ceiling. exp is always now\+ttl — never accumulated onto the previous exp.
 
 An invalid incoming token \(bad signature, wrong audience, expired\) returns an error and is never re\-minted.
+
+<a name="JWTAuthenticator.RenewUserToken"></a>
+### func \(\*JWTAuthenticator\) [RenewUserToken](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/jwt.go#L185>)
+
+```go
+func (a *JWTAuthenticator) RenewUserToken(token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error)
+```
+
+RenewUserToken validates a still\-valid user bearer token and re\-mints it for the SAME principal \(subject, tenant, email, roles\) with a fresh short TTL, without ever changing what Authenticate verifies \(signature, issuer, leoflow\-user audience, HS256\). It is the server half of transparent CLI token renewal \(EKS validation aresta \#5\): the short access\-token TTL still bounds a stolen token, while renewal keeps a genuinely live session working so a long dev session never has to \`leoflow auth login\` again on the hour. It is modeled directly on RenewAgentToken.
+
+The session's original login time is preserved across every renewal \(the oiat claim, falling back to iat for a token minted before that claim existed\). maxLifetime is a hard ceiling on that total age: once the session has been alive longer than maxLifetime since first login, renewal is refused \(ok=false, empty token, no error\) so the user must re\-authenticate. A non\-positive maxLifetime disables the ceiling. exp is always now\+ttl — never accumulated.
+
+An invalid incoming token \(bad signature, wrong audience, expired\) returns an error and is never re\-minted. Roles are copied from the incoming token, exactly as they were signed; Authenticate still reloads authorization from the store on every request, so a renewed token confers no more than the original did.
 
 <a name="Permission"></a>
 ## type [Permission](<https://github.com/neochaotic/leoflow/blob/main/internal/auth/auth.go#L23-L26>)

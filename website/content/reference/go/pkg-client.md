@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/pkg/client.html
-# --- end AUTO redirect aliases ---
 title: "pkg/client"
 linkTitle: "pkg/client"
 weight: 12
@@ -24,8 +20,15 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
 
 - [func NewClearTaskInstancesRequest\(server string, dagId DagID, body ClearTaskInstancesJSONRequestBody\) \(\*http.Request, error\)](<#NewClearTaskInstancesRequest>)
 - [func NewClearTaskInstancesRequestWithBody\(server string, dagId DagID, contentType string, body io.Reader\) \(\*http.Request, error\)](<#NewClearTaskInstancesRequestWithBody>)
+- [func NewCreateConnectionRequest\(server string, body CreateConnectionJSONRequestBody\) \(\*http.Request, error\)](<#NewCreateConnectionRequest>)
+- [func NewCreateConnectionRequestWithBody\(server string, contentType string, body io.Reader\) \(\*http.Request, error\)](<#NewCreateConnectionRequestWithBody>)
 - [func NewCreateUserRequest\(server string, body CreateUserJSONRequestBody\) \(\*http.Request, error\)](<#NewCreateUserRequest>)
 - [func NewCreateUserRequestWithBody\(server string, contentType string, body io.Reader\) \(\*http.Request, error\)](<#NewCreateUserRequestWithBody>)
+- [func NewCreateVariableRequest\(server string, body CreateVariableJSONRequestBody\) \(\*http.Request, error\)](<#NewCreateVariableRequest>)
+- [func NewCreateVariableRequestWithBody\(server string, contentType string, body io.Reader\) \(\*http.Request, error\)](<#NewCreateVariableRequestWithBody>)
+- [func NewDeleteConnectionRequest\(server string, connectionId ConnectionID\) \(\*http.Request, error\)](<#NewDeleteConnectionRequest>)
+- [func NewDeleteVariableRequest\(server string, variableKey VariableKey\) \(\*http.Request, error\)](<#NewDeleteVariableRequest>)
+- [func NewGetConnectionRequest\(server string, connectionId ConnectionID\) \(\*http.Request, error\)](<#NewGetConnectionRequest>)
 - [func NewGetDagRequest\(server string, dagId DagID\) \(\*http.Request, error\)](<#NewGetDagRequest>)
 - [func NewGetDagRunRequest\(server string, dagId DagID, dagRunId DagRunID\) \(\*http.Request, error\)](<#NewGetDagRunRequest>)
 - [func NewGetDagSourceRequest\(server string, dagId DagID\) \(\*http.Request, error\)](<#NewGetDagSourceRequest>)
@@ -37,17 +40,23 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
 - [func NewGetReadyzRequest\(server string\) \(\*http.Request, error\)](<#NewGetReadyzRequest>)
 - [func NewGetTaskInstanceRequest\(server string, dagId DagID, dagRunId DagRunID, taskId TaskID\) \(\*http.Request, error\)](<#NewGetTaskInstanceRequest>)
 - [func NewGetTaskLogsRequest\(server string, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int\) \(\*http.Request, error\)](<#NewGetTaskLogsRequest>)
+- [func NewGetVariableRequest\(server string, variableKey VariableKey\) \(\*http.Request, error\)](<#NewGetVariableRequest>)
 - [func NewGetVersionRequest\(server string\) \(\*http.Request, error\)](<#NewGetVersionRequest>)
 - [func NewGetXcomEntryRequest\(server string, dagId DagID, dagRunId DagRunID, taskId TaskID, key string\) \(\*http.Request, error\)](<#NewGetXcomEntryRequest>)
 - [func NewIssueTokenRequest\(server string, body IssueTokenJSONRequestBody\) \(\*http.Request, error\)](<#NewIssueTokenRequest>)
 - [func NewIssueTokenRequestWithBody\(server string, contentType string, body io.Reader\) \(\*http.Request, error\)](<#NewIssueTokenRequestWithBody>)
+- [func NewListConnectionsRequest\(server string, params \*ListConnectionsParams\) \(\*http.Request, error\)](<#NewListConnectionsRequest>)
 - [func NewListDagRunsRequest\(server string, dagId DagID, params \*ListDagRunsParams\) \(\*http.Request, error\)](<#NewListDagRunsRequest>)
 - [func NewListDagVersionsRequest\(server string, dagId DagID\) \(\*http.Request, error\)](<#NewListDagVersionsRequest>)
 - [func NewListDagsRequest\(server string, params \*ListDagsParams\) \(\*http.Request, error\)](<#NewListDagsRequest>)
 - [func NewListTaskInstancesRequest\(server string, dagId DagID, dagRunId DagRunID\) \(\*http.Request, error\)](<#NewListTaskInstancesRequest>)
 - [func NewListUsersRequest\(server string, params \*ListUsersParams\) \(\*http.Request, error\)](<#NewListUsersRequest>)
+- [func NewListVariablesRequest\(server string, params \*ListVariablesParams\) \(\*http.Request, error\)](<#NewListVariablesRequest>)
+- [func NewRenewTokenRequest\(server string\) \(\*http.Request, error\)](<#NewRenewTokenRequest>)
 - [func NewTriggerDagRunRequest\(server string, dagId DagID, body TriggerDagRunJSONRequestBody\) \(\*http.Request, error\)](<#NewTriggerDagRunRequest>)
 - [func NewTriggerDagRunRequestWithBody\(server string, dagId DagID, contentType string, body io.Reader\) \(\*http.Request, error\)](<#NewTriggerDagRunRequestWithBody>)
+- [func NewUpdateConnectionRequest\(server string, connectionId ConnectionID, body UpdateConnectionJSONRequestBody\) \(\*http.Request, error\)](<#NewUpdateConnectionRequest>)
+- [func NewUpdateConnectionRequestWithBody\(server string, connectionId ConnectionID, contentType string, body io.Reader\) \(\*http.Request, error\)](<#NewUpdateConnectionRequestWithBody>)
 - [func NewUpdateDagRequest\(server string, dagId DagID, body UpdateDagJSONRequestBody\) \(\*http.Request, error\)](<#NewUpdateDagRequest>)
 - [func NewUpdateDagRequestWithBody\(server string, dagId DagID, contentType string, body io.Reader\) \(\*http.Request, error\)](<#NewUpdateDagRequestWithBody>)
 - [type ClearTaskInstancesJSONRequestBody](<#ClearTaskInstancesJSONRequestBody>)
@@ -63,8 +72,15 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func NewClient\(server string, opts ...ClientOption\) \(\*Client, error\)](<#NewClient>)
   - [func \(c \*Client\) ClearTaskInstances\(ctx context.Context, dagId DagID, body ClearTaskInstancesJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ClearTaskInstances>)
   - [func \(c \*Client\) ClearTaskInstancesWithBody\(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ClearTaskInstancesWithBody>)
+  - [func \(c \*Client\) CreateConnection\(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.CreateConnection>)
+  - [func \(c \*Client\) CreateConnectionWithBody\(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.CreateConnectionWithBody>)
   - [func \(c \*Client\) CreateUser\(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.CreateUser>)
   - [func \(c \*Client\) CreateUserWithBody\(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.CreateUserWithBody>)
+  - [func \(c \*Client\) CreateVariable\(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.CreateVariable>)
+  - [func \(c \*Client\) CreateVariableWithBody\(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.CreateVariableWithBody>)
+  - [func \(c \*Client\) DeleteConnection\(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.DeleteConnection>)
+  - [func \(c \*Client\) DeleteVariable\(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.DeleteVariable>)
+  - [func \(c \*Client\) GetConnection\(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetConnection>)
   - [func \(c \*Client\) GetDag\(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetDag>)
   - [func \(c \*Client\) GetDagRun\(ctx context.Context, dagId DagID, dagRunId DagRunID, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetDagRun>)
   - [func \(c \*Client\) GetDagSource\(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetDagSource>)
@@ -76,17 +92,23 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func \(c \*Client\) GetReadyz\(ctx context.Context, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetReadyz>)
   - [func \(c \*Client\) GetTaskInstance\(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetTaskInstance>)
   - [func \(c \*Client\) GetTaskLogs\(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetTaskLogs>)
+  - [func \(c \*Client\) GetVariable\(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetVariable>)
   - [func \(c \*Client\) GetVersion\(ctx context.Context, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetVersion>)
   - [func \(c \*Client\) GetXcomEntry\(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, key string, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.GetXcomEntry>)
   - [func \(c \*Client\) IssueToken\(ctx context.Context, body IssueTokenJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.IssueToken>)
   - [func \(c \*Client\) IssueTokenWithBody\(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.IssueTokenWithBody>)
+  - [func \(c \*Client\) ListConnections\(ctx context.Context, params \*ListConnectionsParams, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ListConnections>)
   - [func \(c \*Client\) ListDagRuns\(ctx context.Context, dagId DagID, params \*ListDagRunsParams, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ListDagRuns>)
   - [func \(c \*Client\) ListDagVersions\(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ListDagVersions>)
   - [func \(c \*Client\) ListDags\(ctx context.Context, params \*ListDagsParams, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ListDags>)
   - [func \(c \*Client\) ListTaskInstances\(ctx context.Context, dagId DagID, dagRunId DagRunID, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ListTaskInstances>)
   - [func \(c \*Client\) ListUsers\(ctx context.Context, params \*ListUsersParams, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ListUsers>)
+  - [func \(c \*Client\) ListVariables\(ctx context.Context, params \*ListVariablesParams, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.ListVariables>)
+  - [func \(c \*Client\) RenewToken\(ctx context.Context, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.RenewToken>)
   - [func \(c \*Client\) TriggerDagRun\(ctx context.Context, dagId DagID, body TriggerDagRunJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.TriggerDagRun>)
   - [func \(c \*Client\) TriggerDagRunWithBody\(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.TriggerDagRunWithBody>)
+  - [func \(c \*Client\) UpdateConnection\(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.UpdateConnection>)
+  - [func \(c \*Client\) UpdateConnectionWithBody\(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.UpdateConnectionWithBody>)
   - [func \(c \*Client\) UpdateDag\(ctx context.Context, dagId DagID, body UpdateDagJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.UpdateDag>)
   - [func \(c \*Client\) UpdateDagWithBody\(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*http.Response, error\)](<#Client.UpdateDagWithBody>)
 - [type ClientInterface](<#ClientInterface>)
@@ -99,8 +121,15 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func NewClientWithResponses\(server string, opts ...ClientOption\) \(\*ClientWithResponses, error\)](<#NewClientWithResponses>)
   - [func \(c \*ClientWithResponses\) ClearTaskInstancesWithBodyWithResponse\(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*ClearTaskInstancesResponse, error\)](<#ClientWithResponses.ClearTaskInstancesWithBodyWithResponse>)
   - [func \(c \*ClientWithResponses\) ClearTaskInstancesWithResponse\(ctx context.Context, dagId DagID, body ClearTaskInstancesJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*ClearTaskInstancesResponse, error\)](<#ClientWithResponses.ClearTaskInstancesWithResponse>)
+  - [func \(c \*ClientWithResponses\) CreateConnectionWithBodyWithResponse\(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*CreateConnectionResponse, error\)](<#ClientWithResponses.CreateConnectionWithBodyWithResponse>)
+  - [func \(c \*ClientWithResponses\) CreateConnectionWithResponse\(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*CreateConnectionResponse, error\)](<#ClientWithResponses.CreateConnectionWithResponse>)
   - [func \(c \*ClientWithResponses\) CreateUserWithBodyWithResponse\(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*CreateUserResponse, error\)](<#ClientWithResponses.CreateUserWithBodyWithResponse>)
   - [func \(c \*ClientWithResponses\) CreateUserWithResponse\(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*CreateUserResponse, error\)](<#ClientWithResponses.CreateUserWithResponse>)
+  - [func \(c \*ClientWithResponses\) CreateVariableWithBodyWithResponse\(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*CreateVariableResponse, error\)](<#ClientWithResponses.CreateVariableWithBodyWithResponse>)
+  - [func \(c \*ClientWithResponses\) CreateVariableWithResponse\(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*CreateVariableResponse, error\)](<#ClientWithResponses.CreateVariableWithResponse>)
+  - [func \(c \*ClientWithResponses\) DeleteConnectionWithResponse\(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn\) \(\*DeleteConnectionResponse, error\)](<#ClientWithResponses.DeleteConnectionWithResponse>)
+  - [func \(c \*ClientWithResponses\) DeleteVariableWithResponse\(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn\) \(\*DeleteVariableResponse, error\)](<#ClientWithResponses.DeleteVariableWithResponse>)
+  - [func \(c \*ClientWithResponses\) GetConnectionWithResponse\(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn\) \(\*GetConnectionResponse, error\)](<#ClientWithResponses.GetConnectionWithResponse>)
   - [func \(c \*ClientWithResponses\) GetDagRunWithResponse\(ctx context.Context, dagId DagID, dagRunId DagRunID, reqEditors ...RequestEditorFn\) \(\*GetDagRunResponse, error\)](<#ClientWithResponses.GetDagRunWithResponse>)
   - [func \(c \*ClientWithResponses\) GetDagSourceWithResponse\(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn\) \(\*GetDagSourceResponse, error\)](<#ClientWithResponses.GetDagSourceWithResponse>)
   - [func \(c \*ClientWithResponses\) GetDagSpecWithResponse\(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn\) \(\*GetDagSpecResponse, error\)](<#ClientWithResponses.GetDagSpecWithResponse>)
@@ -112,21 +141,42 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func \(c \*ClientWithResponses\) GetReadyzWithResponse\(ctx context.Context, reqEditors ...RequestEditorFn\) \(\*GetReadyzResponse, error\)](<#ClientWithResponses.GetReadyzWithResponse>)
   - [func \(c \*ClientWithResponses\) GetTaskInstanceWithResponse\(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, reqEditors ...RequestEditorFn\) \(\*GetTaskInstanceResponse, error\)](<#ClientWithResponses.GetTaskInstanceWithResponse>)
   - [func \(c \*ClientWithResponses\) GetTaskLogsWithResponse\(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int, reqEditors ...RequestEditorFn\) \(\*GetTaskLogsResponse, error\)](<#ClientWithResponses.GetTaskLogsWithResponse>)
+  - [func \(c \*ClientWithResponses\) GetVariableWithResponse\(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn\) \(\*GetVariableResponse, error\)](<#ClientWithResponses.GetVariableWithResponse>)
   - [func \(c \*ClientWithResponses\) GetVersionWithResponse\(ctx context.Context, reqEditors ...RequestEditorFn\) \(\*GetVersionResponse, error\)](<#ClientWithResponses.GetVersionWithResponse>)
   - [func \(c \*ClientWithResponses\) GetXcomEntryWithResponse\(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, key string, reqEditors ...RequestEditorFn\) \(\*GetXcomEntryResponse, error\)](<#ClientWithResponses.GetXcomEntryWithResponse>)
   - [func \(c \*ClientWithResponses\) IssueTokenWithBodyWithResponse\(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*IssueTokenResponse, error\)](<#ClientWithResponses.IssueTokenWithBodyWithResponse>)
   - [func \(c \*ClientWithResponses\) IssueTokenWithResponse\(ctx context.Context, body IssueTokenJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*IssueTokenResponse, error\)](<#ClientWithResponses.IssueTokenWithResponse>)
+  - [func \(c \*ClientWithResponses\) ListConnectionsWithResponse\(ctx context.Context, params \*ListConnectionsParams, reqEditors ...RequestEditorFn\) \(\*ListConnectionsResponse, error\)](<#ClientWithResponses.ListConnectionsWithResponse>)
   - [func \(c \*ClientWithResponses\) ListDagRunsWithResponse\(ctx context.Context, dagId DagID, params \*ListDagRunsParams, reqEditors ...RequestEditorFn\) \(\*ListDagRunsResponse, error\)](<#ClientWithResponses.ListDagRunsWithResponse>)
   - [func \(c \*ClientWithResponses\) ListDagVersionsWithResponse\(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn\) \(\*ListDagVersionsResponse, error\)](<#ClientWithResponses.ListDagVersionsWithResponse>)
   - [func \(c \*ClientWithResponses\) ListDagsWithResponse\(ctx context.Context, params \*ListDagsParams, reqEditors ...RequestEditorFn\) \(\*ListDagsResponse, error\)](<#ClientWithResponses.ListDagsWithResponse>)
   - [func \(c \*ClientWithResponses\) ListTaskInstancesWithResponse\(ctx context.Context, dagId DagID, dagRunId DagRunID, reqEditors ...RequestEditorFn\) \(\*ListTaskInstancesResponse, error\)](<#ClientWithResponses.ListTaskInstancesWithResponse>)
   - [func \(c \*ClientWithResponses\) ListUsersWithResponse\(ctx context.Context, params \*ListUsersParams, reqEditors ...RequestEditorFn\) \(\*ListUsersResponse, error\)](<#ClientWithResponses.ListUsersWithResponse>)
+  - [func \(c \*ClientWithResponses\) ListVariablesWithResponse\(ctx context.Context, params \*ListVariablesParams, reqEditors ...RequestEditorFn\) \(\*ListVariablesResponse, error\)](<#ClientWithResponses.ListVariablesWithResponse>)
+  - [func \(c \*ClientWithResponses\) RenewTokenWithResponse\(ctx context.Context, reqEditors ...RequestEditorFn\) \(\*RenewTokenResponse, error\)](<#ClientWithResponses.RenewTokenWithResponse>)
   - [func \(c \*ClientWithResponses\) TriggerDagRunWithBodyWithResponse\(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*TriggerDagRunResponse, error\)](<#ClientWithResponses.TriggerDagRunWithBodyWithResponse>)
   - [func \(c \*ClientWithResponses\) TriggerDagRunWithResponse\(ctx context.Context, dagId DagID, body TriggerDagRunJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*TriggerDagRunResponse, error\)](<#ClientWithResponses.TriggerDagRunWithResponse>)
+  - [func \(c \*ClientWithResponses\) UpdateConnectionWithBodyWithResponse\(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*UpdateConnectionResponse, error\)](<#ClientWithResponses.UpdateConnectionWithBodyWithResponse>)
+  - [func \(c \*ClientWithResponses\) UpdateConnectionWithResponse\(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*UpdateConnectionResponse, error\)](<#ClientWithResponses.UpdateConnectionWithResponse>)
   - [func \(c \*ClientWithResponses\) UpdateDagWithBodyWithResponse\(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn\) \(\*UpdateDagResponse, error\)](<#ClientWithResponses.UpdateDagWithBodyWithResponse>)
   - [func \(c \*ClientWithResponses\) UpdateDagWithResponse\(ctx context.Context, dagId DagID, body UpdateDagJSONRequestBody, reqEditors ...RequestEditorFn\) \(\*UpdateDagResponse, error\)](<#ClientWithResponses.UpdateDagWithResponse>)
 - [type ClientWithResponsesInterface](<#ClientWithResponsesInterface>)
 - [type ComponentHealth](<#ComponentHealth>)
+- [type Connection](<#Connection>)
+- [type ConnectionBody](<#ConnectionBody>)
+- [type ConnectionCollection](<#ConnectionCollection>)
+- [type ConnectionID](<#ConnectionID>)
+- [type CreateConnectionJSONRequestBody](<#CreateConnectionJSONRequestBody>)
+- [type CreateConnectionResponse](<#CreateConnectionResponse>)
+  - [func ParseCreateConnectionResponse\(rsp \*http.Response\) \(\*CreateConnectionResponse, error\)](<#ParseCreateConnectionResponse>)
+  - [func \(r CreateConnectionResponse\) ContentType\(\) string](<#CreateConnectionResponse.ContentType>)
+  - [func \(r CreateConnectionResponse\) GetBody\(\) \[\]byte](<#CreateConnectionResponse.GetBody>)
+  - [func \(r CreateConnectionResponse\) GetJSON201\(\) \*Connection](<#CreateConnectionResponse.GetJSON201>)
+  - [func \(r CreateConnectionResponse\) GetJSON400\(\) \*Error](<#CreateConnectionResponse.GetJSON400>)
+  - [func \(r CreateConnectionResponse\) GetJSON401\(\) \*Unauthorized](<#CreateConnectionResponse.GetJSON401>)
+  - [func \(r CreateConnectionResponse\) GetJSON503\(\) \*EncryptionUnavailable](<#CreateConnectionResponse.GetJSON503>)
+  - [func \(r CreateConnectionResponse\) Status\(\) string](<#CreateConnectionResponse.Status>)
+  - [func \(r CreateConnectionResponse\) StatusCode\(\) int](<#CreateConnectionResponse.StatusCode>)
 - [type CreateUserJSONRequestBody](<#CreateUserJSONRequestBody>)
 - [type CreateUserRequest](<#CreateUserRequest>)
 - [type CreateUserResponse](<#CreateUserResponse>)
@@ -139,6 +189,16 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func \(r CreateUserResponse\) GetJSON409\(\) \*Error](<#CreateUserResponse.GetJSON409>)
   - [func \(r CreateUserResponse\) Status\(\) string](<#CreateUserResponse.Status>)
   - [func \(r CreateUserResponse\) StatusCode\(\) int](<#CreateUserResponse.StatusCode>)
+- [type CreateVariableJSONRequestBody](<#CreateVariableJSONRequestBody>)
+- [type CreateVariableResponse](<#CreateVariableResponse>)
+  - [func ParseCreateVariableResponse\(rsp \*http.Response\) \(\*CreateVariableResponse, error\)](<#ParseCreateVariableResponse>)
+  - [func \(r CreateVariableResponse\) ContentType\(\) string](<#CreateVariableResponse.ContentType>)
+  - [func \(r CreateVariableResponse\) GetBody\(\) \[\]byte](<#CreateVariableResponse.GetBody>)
+  - [func \(r CreateVariableResponse\) GetJSON201\(\) \*Variable](<#CreateVariableResponse.GetJSON201>)
+  - [func \(r CreateVariableResponse\) GetJSON400\(\) \*Error](<#CreateVariableResponse.GetJSON400>)
+  - [func \(r CreateVariableResponse\) GetJSON401\(\) \*Unauthorized](<#CreateVariableResponse.GetJSON401>)
+  - [func \(r CreateVariableResponse\) Status\(\) string](<#CreateVariableResponse.Status>)
+  - [func \(r CreateVariableResponse\) StatusCode\(\) int](<#CreateVariableResponse.StatusCode>)
 - [type DAG](<#DAG>)
 - [type DAGCollection](<#DAGCollection>)
 - [type DAGRun](<#DAGRun>)
@@ -154,8 +214,34 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
 - [type DagSource](<#DagSource>)
 - [type DagVersion](<#DagVersion>)
 - [type DagVersionCollection](<#DagVersionCollection>)
+- [type DeleteConnectionResponse](<#DeleteConnectionResponse>)
+  - [func ParseDeleteConnectionResponse\(rsp \*http.Response\) \(\*DeleteConnectionResponse, error\)](<#ParseDeleteConnectionResponse>)
+  - [func \(r DeleteConnectionResponse\) ContentType\(\) string](<#DeleteConnectionResponse.ContentType>)
+  - [func \(r DeleteConnectionResponse\) GetBody\(\) \[\]byte](<#DeleteConnectionResponse.GetBody>)
+  - [func \(r DeleteConnectionResponse\) GetJSON401\(\) \*Unauthorized](<#DeleteConnectionResponse.GetJSON401>)
+  - [func \(r DeleteConnectionResponse\) GetJSON404\(\) \*NotFound](<#DeleteConnectionResponse.GetJSON404>)
+  - [func \(r DeleteConnectionResponse\) Status\(\) string](<#DeleteConnectionResponse.Status>)
+  - [func \(r DeleteConnectionResponse\) StatusCode\(\) int](<#DeleteConnectionResponse.StatusCode>)
+- [type DeleteVariableResponse](<#DeleteVariableResponse>)
+  - [func ParseDeleteVariableResponse\(rsp \*http.Response\) \(\*DeleteVariableResponse, error\)](<#ParseDeleteVariableResponse>)
+  - [func \(r DeleteVariableResponse\) ContentType\(\) string](<#DeleteVariableResponse.ContentType>)
+  - [func \(r DeleteVariableResponse\) GetBody\(\) \[\]byte](<#DeleteVariableResponse.GetBody>)
+  - [func \(r DeleteVariableResponse\) GetJSON401\(\) \*Unauthorized](<#DeleteVariableResponse.GetJSON401>)
+  - [func \(r DeleteVariableResponse\) GetJSON404\(\) \*NotFound](<#DeleteVariableResponse.GetJSON404>)
+  - [func \(r DeleteVariableResponse\) Status\(\) string](<#DeleteVariableResponse.Status>)
+  - [func \(r DeleteVariableResponse\) StatusCode\(\) int](<#DeleteVariableResponse.StatusCode>)
+- [type EncryptionUnavailable](<#EncryptionUnavailable>)
 - [type Error](<#Error>)
 - [type ExecutorInfo](<#ExecutorInfo>)
+- [type GetConnectionResponse](<#GetConnectionResponse>)
+  - [func ParseGetConnectionResponse\(rsp \*http.Response\) \(\*GetConnectionResponse, error\)](<#ParseGetConnectionResponse>)
+  - [func \(r GetConnectionResponse\) ContentType\(\) string](<#GetConnectionResponse.ContentType>)
+  - [func \(r GetConnectionResponse\) GetBody\(\) \[\]byte](<#GetConnectionResponse.GetBody>)
+  - [func \(r GetConnectionResponse\) GetJSON200\(\) \*Connection](<#GetConnectionResponse.GetJSON200>)
+  - [func \(r GetConnectionResponse\) GetJSON401\(\) \*Unauthorized](<#GetConnectionResponse.GetJSON401>)
+  - [func \(r GetConnectionResponse\) GetJSON404\(\) \*NotFound](<#GetConnectionResponse.GetJSON404>)
+  - [func \(r GetConnectionResponse\) Status\(\) string](<#GetConnectionResponse.Status>)
+  - [func \(r GetConnectionResponse\) StatusCode\(\) int](<#GetConnectionResponse.StatusCode>)
 - [type GetDagResponse](<#GetDagResponse>)
   - [func ParseGetDagResponse\(rsp \*http.Response\) \(\*GetDagResponse, error\)](<#ParseGetDagResponse>)
   - [func \(r GetDagResponse\) ContentType\(\) string](<#GetDagResponse.ContentType>)
@@ -235,6 +321,15 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func \(r GetTaskLogsResponse\) GetBody\(\) \[\]byte](<#GetTaskLogsResponse.GetBody>)
   - [func \(r GetTaskLogsResponse\) Status\(\) string](<#GetTaskLogsResponse.Status>)
   - [func \(r GetTaskLogsResponse\) StatusCode\(\) int](<#GetTaskLogsResponse.StatusCode>)
+- [type GetVariableResponse](<#GetVariableResponse>)
+  - [func ParseGetVariableResponse\(rsp \*http.Response\) \(\*GetVariableResponse, error\)](<#ParseGetVariableResponse>)
+  - [func \(r GetVariableResponse\) ContentType\(\) string](<#GetVariableResponse.ContentType>)
+  - [func \(r GetVariableResponse\) GetBody\(\) \[\]byte](<#GetVariableResponse.GetBody>)
+  - [func \(r GetVariableResponse\) GetJSON200\(\) \*Variable](<#GetVariableResponse.GetJSON200>)
+  - [func \(r GetVariableResponse\) GetJSON401\(\) \*Unauthorized](<#GetVariableResponse.GetJSON401>)
+  - [func \(r GetVariableResponse\) GetJSON404\(\) \*NotFound](<#GetVariableResponse.GetJSON404>)
+  - [func \(r GetVariableResponse\) Status\(\) string](<#GetVariableResponse.Status>)
+  - [func \(r GetVariableResponse\) StatusCode\(\) int](<#GetVariableResponse.StatusCode>)
 - [type GetVersionResponse](<#GetVersionResponse>)
   - [func ParseGetVersionResponse\(rsp \*http.Response\) \(\*GetVersionResponse, error\)](<#ParseGetVersionResponse>)
   - [func \(r GetVersionResponse\) ContentType\(\) string](<#GetVersionResponse.ContentType>)
@@ -262,6 +357,15 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func \(r IssueTokenResponse\) Status\(\) string](<#IssueTokenResponse.Status>)
   - [func \(r IssueTokenResponse\) StatusCode\(\) int](<#IssueTokenResponse.StatusCode>)
 - [type Limit](<#Limit>)
+- [type ListConnectionsParams](<#ListConnectionsParams>)
+- [type ListConnectionsResponse](<#ListConnectionsResponse>)
+  - [func ParseListConnectionsResponse\(rsp \*http.Response\) \(\*ListConnectionsResponse, error\)](<#ParseListConnectionsResponse>)
+  - [func \(r ListConnectionsResponse\) ContentType\(\) string](<#ListConnectionsResponse.ContentType>)
+  - [func \(r ListConnectionsResponse\) GetBody\(\) \[\]byte](<#ListConnectionsResponse.GetBody>)
+  - [func \(r ListConnectionsResponse\) GetJSON200\(\) \*ConnectionCollection](<#ListConnectionsResponse.GetJSON200>)
+  - [func \(r ListConnectionsResponse\) GetJSON401\(\) \*Unauthorized](<#ListConnectionsResponse.GetJSON401>)
+  - [func \(r ListConnectionsResponse\) Status\(\) string](<#ListConnectionsResponse.Status>)
+  - [func \(r ListConnectionsResponse\) StatusCode\(\) int](<#ListConnectionsResponse.StatusCode>)
 - [type ListDagRunsParams](<#ListDagRunsParams>)
 - [type ListDagRunsParamsState](<#ListDagRunsParamsState>)
   - [func \(e ListDagRunsParamsState\) Valid\(\) bool](<#ListDagRunsParamsState.Valid>)
@@ -303,8 +407,25 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func \(r ListUsersResponse\) GetJSON401\(\) \*Unauthorized](<#ListUsersResponse.GetJSON401>)
   - [func \(r ListUsersResponse\) Status\(\) string](<#ListUsersResponse.Status>)
   - [func \(r ListUsersResponse\) StatusCode\(\) int](<#ListUsersResponse.StatusCode>)
+- [type ListVariablesParams](<#ListVariablesParams>)
+- [type ListVariablesResponse](<#ListVariablesResponse>)
+  - [func ParseListVariablesResponse\(rsp \*http.Response\) \(\*ListVariablesResponse, error\)](<#ParseListVariablesResponse>)
+  - [func \(r ListVariablesResponse\) ContentType\(\) string](<#ListVariablesResponse.ContentType>)
+  - [func \(r ListVariablesResponse\) GetBody\(\) \[\]byte](<#ListVariablesResponse.GetBody>)
+  - [func \(r ListVariablesResponse\) GetJSON200\(\) \*VariableCollection](<#ListVariablesResponse.GetJSON200>)
+  - [func \(r ListVariablesResponse\) GetJSON401\(\) \*Unauthorized](<#ListVariablesResponse.GetJSON401>)
+  - [func \(r ListVariablesResponse\) Status\(\) string](<#ListVariablesResponse.Status>)
+  - [func \(r ListVariablesResponse\) StatusCode\(\) int](<#ListVariablesResponse.StatusCode>)
 - [type NotFound](<#NotFound>)
 - [type Offset](<#Offset>)
+- [type RenewTokenResponse](<#RenewTokenResponse>)
+  - [func ParseRenewTokenResponse\(rsp \*http.Response\) \(\*RenewTokenResponse, error\)](<#ParseRenewTokenResponse>)
+  - [func \(r RenewTokenResponse\) ContentType\(\) string](<#RenewTokenResponse.ContentType>)
+  - [func \(r RenewTokenResponse\) GetBody\(\) \[\]byte](<#RenewTokenResponse.GetBody>)
+  - [func \(r RenewTokenResponse\) GetJSON200\(\) \*TokenResponse](<#RenewTokenResponse.GetJSON200>)
+  - [func \(r RenewTokenResponse\) GetJSON401\(\) \*Unauthorized](<#RenewTokenResponse.GetJSON401>)
+  - [func \(r RenewTokenResponse\) Status\(\) string](<#RenewTokenResponse.Status>)
+  - [func \(r RenewTokenResponse\) StatusCode\(\) int](<#RenewTokenResponse.StatusCode>)
 - [type RequestEditorFn](<#RequestEditorFn>)
 - [type TaskID](<#TaskID>)
 - [type TaskInstance](<#TaskInstance>)
@@ -322,6 +443,18 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
   - [func \(r TriggerDagRunResponse\) Status\(\) string](<#TriggerDagRunResponse.Status>)
   - [func \(r TriggerDagRunResponse\) StatusCode\(\) int](<#TriggerDagRunResponse.StatusCode>)
 - [type Unauthorized](<#Unauthorized>)
+- [type UpdateConnectionJSONRequestBody](<#UpdateConnectionJSONRequestBody>)
+- [type UpdateConnectionResponse](<#UpdateConnectionResponse>)
+  - [func ParseUpdateConnectionResponse\(rsp \*http.Response\) \(\*UpdateConnectionResponse, error\)](<#ParseUpdateConnectionResponse>)
+  - [func \(r UpdateConnectionResponse\) ContentType\(\) string](<#UpdateConnectionResponse.ContentType>)
+  - [func \(r UpdateConnectionResponse\) GetBody\(\) \[\]byte](<#UpdateConnectionResponse.GetBody>)
+  - [func \(r UpdateConnectionResponse\) GetJSON200\(\) \*Connection](<#UpdateConnectionResponse.GetJSON200>)
+  - [func \(r UpdateConnectionResponse\) GetJSON400\(\) \*Error](<#UpdateConnectionResponse.GetJSON400>)
+  - [func \(r UpdateConnectionResponse\) GetJSON401\(\) \*Unauthorized](<#UpdateConnectionResponse.GetJSON401>)
+  - [func \(r UpdateConnectionResponse\) GetJSON404\(\) \*NotFound](<#UpdateConnectionResponse.GetJSON404>)
+  - [func \(r UpdateConnectionResponse\) GetJSON503\(\) \*EncryptionUnavailable](<#UpdateConnectionResponse.GetJSON503>)
+  - [func \(r UpdateConnectionResponse\) Status\(\) string](<#UpdateConnectionResponse.Status>)
+  - [func \(r UpdateConnectionResponse\) StatusCode\(\) int](<#UpdateConnectionResponse.StatusCode>)
 - [type UpdateDagJSONRequestBody](<#UpdateDagJSONRequestBody>)
 - [type UpdateDagResponse](<#UpdateDagResponse>)
   - [func ParseUpdateDagResponse\(rsp \*http.Response\) \(\*UpdateDagResponse, error\)](<#ParseUpdateDagResponse>)
@@ -333,12 +466,16 @@ client.gen.go is generated from docs/api/openapi.yaml. Do not edit it by hand; r
 - [type User](<#User>)
 - [type UserCollection](<#UserCollection>)
 - [type UserListItem](<#UserListItem>)
+- [type Variable](<#Variable>)
+- [type VariableBody](<#VariableBody>)
+- [type VariableCollection](<#VariableCollection>)
+- [type VariableKey](<#VariableKey>)
 - [type VersionInfo](<#VersionInfo>)
 - [type XComEntry](<#XComEntry>)
 
 
 <a name="NewClearTaskInstancesRequest"></a>
-## func [NewClearTaskInstancesRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1345>)
+## func [NewClearTaskInstancesRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2006>)
 
 ```go
 func NewClearTaskInstancesRequest(server string, dagId DagID, body ClearTaskInstancesJSONRequestBody) (*http.Request, error)
@@ -347,7 +484,7 @@ func NewClearTaskInstancesRequest(server string, dagId DagID, body ClearTaskInst
 NewClearTaskInstancesRequest calls the generic ClearTaskInstances builder with application/json body
 
 <a name="NewClearTaskInstancesRequestWithBody"></a>
-## func [NewClearTaskInstancesRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1356>)
+## func [NewClearTaskInstancesRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2017>)
 
 ```go
 func NewClearTaskInstancesRequestWithBody(server string, dagId DagID, contentType string, body io.Reader) (*http.Request, error)
@@ -355,8 +492,26 @@ func NewClearTaskInstancesRequestWithBody(server string, dagId DagID, contentTyp
 
 NewClearTaskInstancesRequestWithBody constructs an http.Request for the ClearTaskInstances method, with any body, and a specified content type
 
+<a name="NewCreateConnectionRequest"></a>
+## func [NewCreateConnectionRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1634>)
+
+```go
+func NewCreateConnectionRequest(server string, body CreateConnectionJSONRequestBody) (*http.Request, error)
+```
+
+NewCreateConnectionRequest calls the generic CreateConnection builder with application/json body
+
+<a name="NewCreateConnectionRequestWithBody"></a>
+## func [NewCreateConnectionRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1645>)
+
+```go
+func NewCreateConnectionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error)
+```
+
+NewCreateConnectionRequestWithBody constructs an http.Request for the CreateConnection method, with any body, and a specified content type
+
 <a name="NewCreateUserRequest"></a>
-## func [NewCreateUserRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1938>)
+## func [NewCreateUserRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2599>)
 
 ```go
 func NewCreateUserRequest(server string, body CreateUserJSONRequestBody) (*http.Request, error)
@@ -365,7 +520,7 @@ func NewCreateUserRequest(server string, body CreateUserJSONRequestBody) (*http.
 NewCreateUserRequest calls the generic CreateUser builder with application/json body
 
 <a name="NewCreateUserRequestWithBody"></a>
-## func [NewCreateUserRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1949>)
+## func [NewCreateUserRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2610>)
 
 ```go
 func NewCreateUserRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error)
@@ -373,8 +528,53 @@ func NewCreateUserRequestWithBody(server string, contentType string, body io.Rea
 
 NewCreateUserRequestWithBody constructs an http.Request for the CreateUser method, with any body, and a specified content type
 
+<a name="NewCreateVariableRequest"></a>
+## func [NewCreateVariableRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2705>)
+
+```go
+func NewCreateVariableRequest(server string, body CreateVariableJSONRequestBody) (*http.Request, error)
+```
+
+NewCreateVariableRequest calls the generic CreateVariable builder with application/json body
+
+<a name="NewCreateVariableRequestWithBody"></a>
+## func [NewCreateVariableRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2716>)
+
+```go
+func NewCreateVariableRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error)
+```
+
+NewCreateVariableRequestWithBody constructs an http.Request for the CreateVariable method, with any body, and a specified content type
+
+<a name="NewDeleteConnectionRequest"></a>
+## func [NewDeleteConnectionRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1674>)
+
+```go
+func NewDeleteConnectionRequest(server string, connectionId ConnectionID) (*http.Request, error)
+```
+
+NewDeleteConnectionRequest constructs an http.Request for the DeleteConnection method
+
+<a name="NewDeleteVariableRequest"></a>
+## func [NewDeleteVariableRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2745>)
+
+```go
+func NewDeleteVariableRequest(server string, variableKey VariableKey) (*http.Request, error)
+```
+
+NewDeleteVariableRequest constructs an http.Request for the DeleteVariable method
+
+<a name="NewGetConnectionRequest"></a>
+## func [NewGetConnectionRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1708>)
+
+```go
+func NewGetConnectionRequest(server string, connectionId ConnectionID) (*http.Request, error)
+```
+
+NewGetConnectionRequest constructs an http.Request for the GetConnection method
+
 <a name="NewGetDagRequest"></a>
-## func [NewGetDagRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1264>)
+## func [NewGetDagRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1925>)
 
 ```go
 func NewGetDagRequest(server string, dagId DagID) (*http.Request, error)
@@ -383,7 +583,7 @@ func NewGetDagRequest(server string, dagId DagID) (*http.Request, error)
 NewGetDagRequest constructs an http.Request for the GetDag method
 
 <a name="NewGetDagRunRequest"></a>
-## func [NewGetDagRunRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1524>)
+## func [NewGetDagRunRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2185>)
 
 ```go
 func NewGetDagRunRequest(server string, dagId DagID, dagRunId DagRunID) (*http.Request, error)
@@ -392,7 +592,7 @@ func NewGetDagRunRequest(server string, dagId DagID, dagRunId DagRunID) (*http.R
 NewGetDagRunRequest constructs an http.Request for the GetDagRun method
 
 <a name="NewGetDagSourceRequest"></a>
-## func [NewGetDagSourceRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1128>)
+## func [NewGetDagSourceRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1789>)
 
 ```go
 func NewGetDagSourceRequest(server string, dagId DagID) (*http.Request, error)
@@ -401,7 +601,7 @@ func NewGetDagSourceRequest(server string, dagId DagID) (*http.Request, error)
 NewGetDagSourceRequest constructs an http.Request for the GetDagSource method
 
 <a name="NewGetDagSpecRequest"></a>
-## func [NewGetDagSpecRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1784>)
+## func [NewGetDagSpecRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2445>)
 
 ```go
 func NewGetDagSpecRequest(server string, dagId DagID) (*http.Request, error)
@@ -410,7 +610,7 @@ func NewGetDagSpecRequest(server string, dagId DagID) (*http.Request, error)
 NewGetDagSpecRequest constructs an http.Request for the GetDagSpec method
 
 <a name="NewGetDagVersionRequest"></a>
-## func [NewGetDagVersionRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1743>)
+## func [NewGetDagVersionRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2404>)
 
 ```go
 func NewGetDagVersionRequest(server string, dagId DagID, versionNumber int) (*http.Request, error)
@@ -419,7 +619,7 @@ func NewGetDagVersionRequest(server string, dagId DagID, versionNumber int) (*ht
 NewGetDagVersionRequest constructs an http.Request for the GetDagVersion method
 
 <a name="NewGetHealthzRequest"></a>
-## func [NewGetHealthzRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2100>)
+## func [NewGetHealthzRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2935>)
 
 ```go
 func NewGetHealthzRequest(server string) (*http.Request, error)
@@ -428,7 +628,7 @@ func NewGetHealthzRequest(server string) (*http.Request, error)
 NewGetHealthzRequest constructs an http.Request for the GetHealthz method
 
 <a name="NewGetMonitorExecutorRequest"></a>
-## func [NewGetMonitorExecutorRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1818>)
+## func [NewGetMonitorExecutorRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2479>)
 
 ```go
 func NewGetMonitorExecutorRequest(server string) (*http.Request, error)
@@ -437,7 +637,7 @@ func NewGetMonitorExecutorRequest(server string) (*http.Request, error)
 NewGetMonitorExecutorRequest constructs an http.Request for the GetMonitorExecutor method
 
 <a name="NewGetMonitorHealthRequest"></a>
-## func [NewGetMonitorHealthRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1845>)
+## func [NewGetMonitorHealthRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2506>)
 
 ```go
 func NewGetMonitorHealthRequest(server string) (*http.Request, error)
@@ -446,7 +646,7 @@ func NewGetMonitorHealthRequest(server string) (*http.Request, error)
 NewGetMonitorHealthRequest constructs an http.Request for the GetMonitorHealth method
 
 <a name="NewGetReadyzRequest"></a>
-## func [NewGetReadyzRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2127>)
+## func [NewGetReadyzRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2962>)
 
 ```go
 func NewGetReadyzRequest(server string) (*http.Request, error)
@@ -455,7 +655,7 @@ func NewGetReadyzRequest(server string) (*http.Request, error)
 NewGetReadyzRequest constructs an http.Request for the GetReadyz method
 
 <a name="NewGetTaskInstanceRequest"></a>
-## func [NewGetTaskInstanceRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1606>)
+## func [NewGetTaskInstanceRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2267>)
 
 ```go
 func NewGetTaskInstanceRequest(server string, dagId DagID, dagRunId DagRunID, taskId TaskID) (*http.Request, error)
@@ -464,7 +664,7 @@ func NewGetTaskInstanceRequest(server string, dagId DagID, dagRunId DagRunID, ta
 NewGetTaskInstanceRequest constructs an http.Request for the GetTaskInstance method
 
 <a name="NewGetTaskLogsRequest"></a>
-## func [NewGetTaskLogsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1654>)
+## func [NewGetTaskLogsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2315>)
 
 ```go
 func NewGetTaskLogsRequest(server string, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int) (*http.Request, error)
@@ -472,8 +672,17 @@ func NewGetTaskLogsRequest(server string, dagId DagID, dagRunId DagRunID, taskId
 
 NewGetTaskLogsRequest constructs an http.Request for the GetTaskLogs method
 
+<a name="NewGetVariableRequest"></a>
+## func [NewGetVariableRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2779>)
+
+```go
+func NewGetVariableRequest(server string, variableKey VariableKey) (*http.Request, error)
+```
+
+NewGetVariableRequest constructs an http.Request for the GetVariable method
+
 <a name="NewGetVersionRequest"></a>
-## func [NewGetVersionRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1978>)
+## func [NewGetVersionRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2813>)
 
 ```go
 func NewGetVersionRequest(server string) (*http.Request, error)
@@ -482,7 +691,7 @@ func NewGetVersionRequest(server string) (*http.Request, error)
 NewGetVersionRequest constructs an http.Request for the GetVersion method
 
 <a name="NewGetXcomEntryRequest"></a>
-## func [NewGetXcomEntryRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2005>)
+## func [NewGetXcomEntryRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2840>)
 
 ```go
 func NewGetXcomEntryRequest(server string, dagId DagID, dagRunId DagRunID, taskId TaskID, key string) (*http.Request, error)
@@ -491,7 +700,7 @@ func NewGetXcomEntryRequest(server string, dagId DagID, dagRunId DagRunID, taskI
 NewGetXcomEntryRequest constructs an http.Request for the GetXcomEntry method
 
 <a name="NewIssueTokenRequest"></a>
-## func [NewIssueTokenRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2060>)
+## func [NewIssueTokenRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2895>)
 
 ```go
 func NewIssueTokenRequest(server string, body IssueTokenJSONRequestBody) (*http.Request, error)
@@ -500,7 +709,7 @@ func NewIssueTokenRequest(server string, body IssueTokenJSONRequestBody) (*http.
 NewIssueTokenRequest calls the generic IssueToken builder with application/json body
 
 <a name="NewIssueTokenRequestWithBody"></a>
-## func [NewIssueTokenRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2071>)
+## func [NewIssueTokenRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2906>)
 
 ```go
 func NewIssueTokenRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error)
@@ -508,8 +717,17 @@ func NewIssueTokenRequestWithBody(server string, contentType string, body io.Rea
 
 NewIssueTokenRequestWithBody constructs an http.Request for the IssueToken method, with any body, and a specified content type
 
+<a name="NewListConnectionsRequest"></a>
+## func [NewListConnectionsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1568>)
+
+```go
+func NewListConnectionsRequest(server string, params *ListConnectionsParams) (*http.Request, error)
+```
+
+NewListConnectionsRequest constructs an http.Request for the ListConnections method
+
 <a name="NewListDagRunsRequest"></a>
-## func [NewListDagRunsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1392>)
+## func [NewListDagRunsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2053>)
 
 ```go
 func NewListDagRunsRequest(server string, dagId DagID, params *ListDagRunsParams) (*http.Request, error)
@@ -518,7 +736,7 @@ func NewListDagRunsRequest(server string, dagId DagID, params *ListDagRunsParams
 NewListDagRunsRequest constructs an http.Request for the ListDagRuns method
 
 <a name="NewListDagVersionsRequest"></a>
-## func [NewListDagVersionsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1709>)
+## func [NewListDagVersionsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2370>)
 
 ```go
 func NewListDagVersionsRequest(server string, dagId DagID) (*http.Request, error)
@@ -527,7 +745,7 @@ func NewListDagVersionsRequest(server string, dagId DagID) (*http.Request, error
 NewListDagVersionsRequest constructs an http.Request for the ListDagVersions method
 
 <a name="NewListDagsRequest"></a>
-## func [NewListDagsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1162>)
+## func [NewListDagsRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1823>)
 
 ```go
 func NewListDagsRequest(server string, params *ListDagsParams) (*http.Request, error)
@@ -536,7 +754,7 @@ func NewListDagsRequest(server string, params *ListDagsParams) (*http.Request, e
 NewListDagsRequest constructs an http.Request for the ListDags method
 
 <a name="NewListTaskInstancesRequest"></a>
-## func [NewListTaskInstancesRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1565>)
+## func [NewListTaskInstancesRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2226>)
 
 ```go
 func NewListTaskInstancesRequest(server string, dagId DagID, dagRunId DagRunID) (*http.Request, error)
@@ -545,7 +763,7 @@ func NewListTaskInstancesRequest(server string, dagId DagID, dagRunId DagRunID) 
 NewListTaskInstancesRequest constructs an http.Request for the ListTaskInstances method
 
 <a name="NewListUsersRequest"></a>
-## func [NewListUsersRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1872>)
+## func [NewListUsersRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2533>)
 
 ```go
 func NewListUsersRequest(server string, params *ListUsersParams) (*http.Request, error)
@@ -553,8 +771,26 @@ func NewListUsersRequest(server string, params *ListUsersParams) (*http.Request,
 
 NewListUsersRequest constructs an http.Request for the ListUsers method
 
+<a name="NewListVariablesRequest"></a>
+## func [NewListVariablesRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2639>)
+
+```go
+func NewListVariablesRequest(server string, params *ListVariablesParams) (*http.Request, error)
+```
+
+NewListVariablesRequest constructs an http.Request for the ListVariables method
+
+<a name="NewRenewTokenRequest"></a>
+## func [NewRenewTokenRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1541>)
+
+```go
+func NewRenewTokenRequest(server string) (*http.Request, error)
+```
+
+NewRenewTokenRequest constructs an http.Request for the RenewToken method
+
 <a name="NewTriggerDagRunRequest"></a>
-## func [NewTriggerDagRunRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1477>)
+## func [NewTriggerDagRunRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2138>)
 
 ```go
 func NewTriggerDagRunRequest(server string, dagId DagID, body TriggerDagRunJSONRequestBody) (*http.Request, error)
@@ -563,7 +799,7 @@ func NewTriggerDagRunRequest(server string, dagId DagID, body TriggerDagRunJSONR
 NewTriggerDagRunRequest calls the generic TriggerDagRun builder with application/json body
 
 <a name="NewTriggerDagRunRequestWithBody"></a>
-## func [NewTriggerDagRunRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1488>)
+## func [NewTriggerDagRunRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2149>)
 
 ```go
 func NewTriggerDagRunRequestWithBody(server string, dagId DagID, contentType string, body io.Reader) (*http.Request, error)
@@ -571,8 +807,26 @@ func NewTriggerDagRunRequestWithBody(server string, dagId DagID, contentType str
 
 NewTriggerDagRunRequestWithBody constructs an http.Request for the TriggerDagRun method, with any body, and a specified content type
 
+<a name="NewUpdateConnectionRequest"></a>
+## func [NewUpdateConnectionRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1742>)
+
+```go
+func NewUpdateConnectionRequest(server string, connectionId ConnectionID, body UpdateConnectionJSONRequestBody) (*http.Request, error)
+```
+
+NewUpdateConnectionRequest calls the generic UpdateConnection builder with application/json body
+
+<a name="NewUpdateConnectionRequestWithBody"></a>
+## func [NewUpdateConnectionRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1753>)
+
+```go
+func NewUpdateConnectionRequestWithBody(server string, connectionId ConnectionID, contentType string, body io.Reader) (*http.Request, error)
+```
+
+NewUpdateConnectionRequestWithBody constructs an http.Request for the UpdateConnection method, with any body, and a specified content type
+
 <a name="NewUpdateDagRequest"></a>
-## func [NewUpdateDagRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1298>)
+## func [NewUpdateDagRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1959>)
 
 ```go
 func NewUpdateDagRequest(server string, dagId DagID, body UpdateDagJSONRequestBody) (*http.Request, error)
@@ -581,7 +835,7 @@ func NewUpdateDagRequest(server string, dagId DagID, body UpdateDagJSONRequestBo
 NewUpdateDagRequest calls the generic UpdateDag builder with application/json body
 
 <a name="NewUpdateDagRequestWithBody"></a>
-## func [NewUpdateDagRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1309>)
+## func [NewUpdateDagRequestWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1970>)
 
 ```go
 func NewUpdateDagRequestWithBody(server string, dagId DagID, contentType string, body io.Reader) (*http.Request, error)
@@ -590,7 +844,7 @@ func NewUpdateDagRequestWithBody(server string, dagId DagID, contentType string,
 NewUpdateDagRequestWithBody constructs an http.Request for the UpdateDag method, with any body, and a specified content type
 
 <a name="ClearTaskInstancesJSONRequestBody"></a>
-## type [ClearTaskInstancesJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L417>)
+## type [ClearTaskInstancesJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L497>)
 
 ClearTaskInstancesJSONRequestBody defines body for ClearTaskInstances for application/json ContentType.
 
@@ -614,7 +868,7 @@ type ClearTaskInstancesRequest struct {
 ```
 
 <a name="ClearTaskInstancesResponse"></a>
-## type [ClearTaskInstancesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2584-L2589>)
+## type [ClearTaskInstancesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3863-L3868>)
 
 
 
@@ -628,7 +882,7 @@ type ClearTaskInstancesResponse struct {
 ```
 
 <a name="ParseClearTaskInstancesResponse"></a>
-### func [ParseClearTaskInstancesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3900>)
+### func [ParseClearTaskInstancesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5820>)
 
 ```go
 func ParseClearTaskInstancesResponse(rsp *http.Response) (*ClearTaskInstancesResponse, error)
@@ -637,7 +891,7 @@ func ParseClearTaskInstancesResponse(rsp *http.Response) (*ClearTaskInstancesRes
 ParseClearTaskInstancesResponse parses an HTTP response from a ClearTaskInstancesWithResponse call
 
 <a name="ClearTaskInstancesResponse.ContentType"></a>
-### func \(ClearTaskInstancesResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2618>)
+### func \(ClearTaskInstancesResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3897>)
 
 ```go
 func (r ClearTaskInstancesResponse) ContentType() string
@@ -646,7 +900,7 @@ func (r ClearTaskInstancesResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="ClearTaskInstancesResponse.GetBody"></a>
-### func \(ClearTaskInstancesResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2597>)
+### func \(ClearTaskInstancesResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3876>)
 
 ```go
 func (r ClearTaskInstancesResponse) GetBody() []byte
@@ -655,7 +909,7 @@ func (r ClearTaskInstancesResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="ClearTaskInstancesResponse.GetJSON200"></a>
-### func \(ClearTaskInstancesResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2592>)
+### func \(ClearTaskInstancesResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3871>)
 
 ```go
 func (r ClearTaskInstancesResponse) GetJSON200() *TaskInstanceCollection
@@ -664,7 +918,7 @@ func (r ClearTaskInstancesResponse) GetJSON200() *TaskInstanceCollection
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="ClearTaskInstancesResponse.Status"></a>
-### func \(ClearTaskInstancesResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2602>)
+### func \(ClearTaskInstancesResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3881>)
 
 ```go
 func (r ClearTaskInstancesResponse) Status() string
@@ -673,7 +927,7 @@ func (r ClearTaskInstancesResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="ClearTaskInstancesResponse.StatusCode"></a>
-### func \(ClearTaskInstancesResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2610>)
+### func \(ClearTaskInstancesResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3889>)
 
 ```go
 func (r ClearTaskInstancesResponse) StatusCode() int
@@ -682,7 +936,7 @@ func (r ClearTaskInstancesResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="Client"></a>
-## type [Client](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L439-L453>)
+## type [Client](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L522-L536>)
 
 Client which conforms to the OpenAPI3 specification for this service.
 
@@ -705,7 +959,7 @@ type Client struct {
 ```
 
 <a name="NewClient"></a>
-### func [NewClient](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L459>)
+### func [NewClient](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L542>)
 
 ```go
 func NewClient(server string, opts ...ClientOption) (*Client, error)
@@ -714,7 +968,7 @@ func NewClient(server string, opts ...ClientOption) (*Client, error)
 Creates a new Client, with reasonable defaults
 
 <a name="Client.ClearTaskInstances"></a>
-### func \(\*Client\) [ClearTaskInstances](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L776>)
+### func \(\*Client\) [ClearTaskInstances](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1101>)
 
 ```go
 func (c *Client) ClearTaskInstances(ctx context.Context, dagId DagID, body ClearTaskInstancesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -727,7 +981,7 @@ Takes a body of the \`application/json\` content type.
 Corresponds with POST /api/v2/dags/\{dag\_id\}/clearTaskInstances \(the \`ClearTaskInstances\` operationId\).
 
 <a name="Client.ClearTaskInstancesWithBody"></a>
-### func \(\*Client\) [ClearTaskInstancesWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L759>)
+### func \(\*Client\) [ClearTaskInstancesWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1084>)
 
 ```go
 func (c *Client) ClearTaskInstancesWithBody(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -739,8 +993,38 @@ Takes any type of body and a specified content type.
 
 Corresponds with POST /api/v2/dags/\{dag\_id\}/clearTaskInstances \(the \`ClearTaskInstances\` operationId\).
 
+<a name="Client.CreateConnection"></a>
+### func \(\*Client\) [CreateConnection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L924>)
+
+```go
+func (c *Client) CreateConnection(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+CreateConnection Create or replace a connection \(upsert\)
+
+Upserts a connection: creates it, or replaces an existing one with the same connection\_id. The password is write\-only and never returned. Requires the write:connection permission and a configured encryption key.
+
+Takes a body of the \`application/json\` content type.
+
+Corresponds with POST /api/v2/connections \(the \`CreateConnection\` operationId\).
+
+<a name="Client.CreateConnectionWithBody"></a>
+### func \(\*Client\) [CreateConnectionWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L903>)
+
+```go
+func (c *Client) CreateConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+CreateConnectionWithBody Create or replace a connection \(upsert\)
+
+Upserts a connection: creates it, or replaces an existing one with the same connection\_id. The password is write\-only and never returned. Requires the write:connection permission and a configured encryption key.
+
+Takes any type of body and a specified content type.
+
+Corresponds with POST /api/v2/connections \(the \`CreateConnection\` operationId\).
+
 <a name="Client.CreateUser"></a>
-### func \(\*Client\) [CreateUser](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1021>)
+### func \(\*Client\) [CreateUser](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1346>)
 
 ```go
 func (c *Client) CreateUser(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -755,7 +1039,7 @@ Takes a body of the \`application/json\` content type.
 Corresponds with POST /api/v2/users \(the \`CreateUser\` operationId\).
 
 <a name="Client.CreateUserWithBody"></a>
-### func \(\*Client\) [CreateUserWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1000>)
+### func \(\*Client\) [CreateUserWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1325>)
 
 ```go
 func (c *Client) CreateUserWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -769,8 +1053,71 @@ Takes any type of body and a specified content type.
 
 Corresponds with POST /api/v2/users \(the \`CreateUser\` operationId\).
 
+<a name="Client.CreateVariable"></a>
+### func \(\*Client\) [CreateVariable](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1404>)
+
+```go
+func (c *Client) CreateVariable(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+CreateVariable Create or replace a variable \(upsert\)
+
+Upserts a variable: creates it, or replaces an existing one with the same key. Requires the write:variable permission.
+
+Takes a body of the \`application/json\` content type.
+
+Corresponds with POST /api/v2/variables \(the \`CreateVariable\` operationId\).
+
+<a name="Client.CreateVariableWithBody"></a>
+### func \(\*Client\) [CreateVariableWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1384>)
+
+```go
+func (c *Client) CreateVariableWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+CreateVariableWithBody Create or replace a variable \(upsert\)
+
+Upserts a variable: creates it, or replaces an existing one with the same key. Requires the write:variable permission.
+
+Takes any type of body and a specified content type.
+
+Corresponds with POST /api/v2/variables \(the \`CreateVariable\` operationId\).
+
+<a name="Client.DeleteConnection"></a>
+### func \(\*Client\) [DeleteConnection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L939>)
+
+```go
+func (c *Client) DeleteConnection(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+DeleteConnection Delete a connection
+
+Corresponds with DELETE /api/v2/connections/\{connection\_id\} \(the \`DeleteConnection\` operationId\).
+
+<a name="Client.DeleteVariable"></a>
+### func \(\*Client\) [DeleteVariable](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1419>)
+
+```go
+func (c *Client) DeleteVariable(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+DeleteVariable Delete a variable
+
+Corresponds with DELETE /api/v2/variables/\{variable\_key\} \(the \`DeleteVariable\` operationId\).
+
+<a name="Client.GetConnection"></a>
+### func \(\*Client\) [GetConnection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L954>)
+
+```go
+func (c *Client) GetConnection(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+GetConnection Get a connection
+
+Corresponds with GET /api/v2/connections/\{connection\_id\} \(the \`GetConnection\` operationId\).
+
 <a name="Client.GetDag"></a>
-### func \(\*Client\) [GetDag](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L708>)
+### func \(\*Client\) [GetDag](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1033>)
 
 ```go
 func (c *Client) GetDag(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -781,7 +1128,7 @@ GetDag Get a DAG
 Corresponds with GET /api/v2/dags/\{dag\_id\} \(the \`GetDag\` operationId\).
 
 <a name="Client.GetDagRun"></a>
-### func \(\*Client\) [GetDagRun](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L840>)
+### func \(\*Client\) [GetDagRun](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1165>)
 
 ```go
 func (c *Client) GetDagRun(ctx context.Context, dagId DagID, dagRunId DagRunID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -792,7 +1139,7 @@ GetDagRun Get a DAG run
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns/\{dag\_run\_id\} \(the \`GetDagRun\` operationId\).
 
 <a name="Client.GetDagSource"></a>
-### func \(\*Client\) [GetDagSource](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L678>)
+### func \(\*Client\) [GetDagSource](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1003>)
 
 ```go
 func (c *Client) GetDagSource(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -803,7 +1150,7 @@ GetDagSource Get a DAG's source \(the dag.py text\)
 Corresponds with GET /api/v2/dagSources/\{dag\_id\} \(the \`GetDagSource\` operationId\).
 
 <a name="Client.GetDagSpec"></a>
-### func \(\*Client\) [GetDagSpec](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L930>)
+### func \(\*Client\) [GetDagSpec](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1255>)
 
 ```go
 func (c *Client) GetDagSpec(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -814,7 +1161,7 @@ GetDagSpec Get a DAG's compiled spec \(the dag.json artifact\)
 Corresponds with GET /api/v2/dags/\{dag\_id\}/spec \(the \`GetDagSpec\` operationId\).
 
 <a name="Client.GetDagVersion"></a>
-### func \(\*Client\) [GetDagVersion](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L915>)
+### func \(\*Client\) [GetDagVersion](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1240>)
 
 ```go
 func (c *Client) GetDagVersion(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -825,7 +1172,7 @@ GetDagVersion Get a specific registered DAG version
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagVersions/\{version\_number\} \(the \`GetDagVersion\` operationId\).
 
 <a name="Client.GetHealthz"></a>
-### func \(\*Client\) [GetHealthz](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1100>)
+### func \(\*Client\) [GetHealthz](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1513>)
 
 ```go
 func (c *Client) GetHealthz(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -836,7 +1183,7 @@ GetHealthz Liveness probe
 Corresponds with GET /healthz \(the \`GetHealthz\` operationId\).
 
 <a name="Client.GetMonitorExecutor"></a>
-### func \(\*Client\) [GetMonitorExecutor](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L945>)
+### func \(\*Client\) [GetMonitorExecutor](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1270>)
 
 ```go
 func (c *Client) GetMonitorExecutor(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -847,7 +1194,7 @@ GetMonitorExecutor Executor capability and configuration
 Corresponds with GET /api/v2/monitor/executor \(the \`GetMonitorExecutor\` operationId\).
 
 <a name="Client.GetMonitorHealth"></a>
-### func \(\*Client\) [GetMonitorHealth](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L960>)
+### func \(\*Client\) [GetMonitorHealth](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1285>)
 
 ```go
 func (c *Client) GetMonitorHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -858,7 +1205,7 @@ GetMonitorHealth Control\-plane health \(Airflow HealthInfoResponse shape\)
 Corresponds with GET /api/v2/monitor/health \(the \`GetMonitorHealth\` operationId\).
 
 <a name="Client.GetReadyz"></a>
-### func \(\*Client\) [GetReadyz](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1115>)
+### func \(\*Client\) [GetReadyz](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1528>)
 
 ```go
 func (c *Client) GetReadyz(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -869,7 +1216,7 @@ GetReadyz Readiness probe
 Corresponds with GET /readyz \(the \`GetReadyz\` operationId\).
 
 <a name="Client.GetTaskInstance"></a>
-### func \(\*Client\) [GetTaskInstance](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L870>)
+### func \(\*Client\) [GetTaskInstance](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1195>)
 
 ```go
 func (c *Client) GetTaskInstance(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -880,7 +1227,7 @@ GetTaskInstance Get a task instance
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns/\{dag\_run\_id\}/taskInstances/\{task\_id\} \(the \`GetTaskInstance\` operationId\).
 
 <a name="Client.GetTaskLogs"></a>
-### func \(\*Client\) [GetTaskLogs](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L885>)
+### func \(\*Client\) [GetTaskLogs](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1210>)
 
 ```go
 func (c *Client) GetTaskLogs(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -890,8 +1237,19 @@ GetTaskLogs Get task logs
 
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns/\{dag\_run\_id\}/taskInstances/\{task\_id\}/logs/\{try\_number\} \(the \`GetTaskLogs\` operationId\).
 
+<a name="Client.GetVariable"></a>
+### func \(\*Client\) [GetVariable](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1434>)
+
+```go
+func (c *Client) GetVariable(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+GetVariable Get a variable
+
+Corresponds with GET /api/v2/variables/\{variable\_key\} \(the \`GetVariable\` operationId\).
+
 <a name="Client.GetVersion"></a>
-### func \(\*Client\) [GetVersion](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1036>)
+### func \(\*Client\) [GetVersion](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1449>)
 
 ```go
 func (c *Client) GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -902,7 +1260,7 @@ GetVersion Control\-plane version \(Airflow VersionInfo shape\)
 Corresponds with GET /api/v2/version \(the \`GetVersion\` operationId\).
 
 <a name="Client.GetXcomEntry"></a>
-### func \(\*Client\) [GetXcomEntry](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1051>)
+### func \(\*Client\) [GetXcomEntry](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1464>)
 
 ```go
 func (c *Client) GetXcomEntry(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, key string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -913,7 +1271,7 @@ GetXcomEntry Read XCom value \(read\-only proxy for the Redis backend\)
 Corresponds with GET /api/v2/xcoms/\{dag\_id\}/\{dag\_run\_id\}/\{task\_id\}/\{key\} \(the \`GetXcomEntry\` operationId\).
 
 <a name="Client.IssueToken"></a>
-### func \(\*Client\) [IssueToken](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1085>)
+### func \(\*Client\) [IssueToken](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1498>)
 
 ```go
 func (c *Client) IssueToken(ctx context.Context, body IssueTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -926,7 +1284,7 @@ Takes a body of the \`application/json\` content type.
 Corresponds with POST /auth/token \(the \`IssueToken\` operationId\).
 
 <a name="Client.IssueTokenWithBody"></a>
-### func \(\*Client\) [IssueTokenWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1068>)
+### func \(\*Client\) [IssueTokenWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1481>)
 
 ```go
 func (c *Client) IssueTokenWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -938,8 +1296,21 @@ Takes any type of body and a specified content type.
 
 Corresponds with POST /auth/token \(the \`IssueToken\` operationId\).
 
+<a name="Client.ListConnections"></a>
+### func \(\*Client\) [ListConnections](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L882>)
+
+```go
+func (c *Client) ListConnections(ctx context.Context, params *ListConnectionsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+ListConnections List connections
+
+Lists the tenant's Airflow\-style connections. Passwords are write\-only and never returned; secret\-bearing keys inside \`extra\` are masked server\-side. Requires the read:connection permission.
+
+Corresponds with GET /api/v2/connections \(the \`ListConnections\` operationId\).
+
 <a name="Client.ListDagRuns"></a>
-### func \(\*Client\) [ListDagRuns](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L791>)
+### func \(\*Client\) [ListDagRuns](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1116>)
 
 ```go
 func (c *Client) ListDagRuns(ctx context.Context, dagId DagID, params *ListDagRunsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -950,7 +1321,7 @@ ListDagRuns List DAG runs
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns \(the \`ListDagRuns\` operationId\).
 
 <a name="Client.ListDagVersions"></a>
-### func \(\*Client\) [ListDagVersions](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L900>)
+### func \(\*Client\) [ListDagVersions](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1225>)
 
 ```go
 func (c *Client) ListDagVersions(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -961,7 +1332,7 @@ ListDagVersions List a DAG's registered versions
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagVersions \(the \`ListDagVersions\` operationId\).
 
 <a name="Client.ListDags"></a>
-### func \(\*Client\) [ListDags](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L693>)
+### func \(\*Client\) [ListDags](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1018>)
 
 ```go
 func (c *Client) ListDags(ctx context.Context, params *ListDagsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -972,7 +1343,7 @@ ListDags List DAGs
 Corresponds with GET /api/v2/dags \(the \`ListDags\` operationId\).
 
 <a name="Client.ListTaskInstances"></a>
-### func \(\*Client\) [ListTaskInstances](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L855>)
+### func \(\*Client\) [ListTaskInstances](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1180>)
 
 ```go
 func (c *Client) ListTaskInstances(ctx context.Context, dagId DagID, dagRunId DagRunID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -983,7 +1354,7 @@ ListTaskInstances List task instances of a DAG run
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns/\{dag\_run\_id\}/taskInstances \(the \`ListTaskInstances\` operationId\).
 
 <a name="Client.ListUsers"></a>
-### func \(\*Client\) [ListUsers](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L979>)
+### func \(\*Client\) [ListUsers](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1304>)
 
 ```go
 func (c *Client) ListUsers(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -995,8 +1366,34 @@ Lists the tenant's control\-plane accounts, newest first. Each entry carries the
 
 Corresponds with GET /api/v2/users \(the \`ListUsers\` operationId\).
 
+<a name="Client.ListVariables"></a>
+### func \(\*Client\) [ListVariables](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1364>)
+
+```go
+func (c *Client) ListVariables(ctx context.Context, params *ListVariablesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+ListVariables List variables
+
+Lists the tenant's Airflow\-style variables. Values of secret\-ish keys are masked server\-side. Requires the read:variable permission.
+
+Corresponds with GET /api/v2/variables \(the \`ListVariables\` operationId\).
+
+<a name="Client.RenewToken"></a>
+### func \(\*Client\) [RenewToken](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L863>)
+
+```go
+func (c *Client) RenewToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+RenewToken Renew a still\-valid JWT into a fresh short\-lived token
+
+Transparent renewal: given a still\-valid user bearer, re\-mints the same identity with a fresh short TTL, bounded by a server\-side max\_lifetime measured from first login. Lets a long CLI/dev session avoid re\-logging in every token TTL while keeping the access token short\-lived. Returns 401 when the presented token is invalid, expired, or past max\_lifetime, in which case the client must log in again.
+
+Corresponds with POST /api/v2/auth/token/renew \(the \`RenewToken\` operationId\).
+
 <a name="Client.TriggerDagRun"></a>
-### func \(\*Client\) [TriggerDagRun](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L825>)
+### func \(\*Client\) [TriggerDagRun](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1150>)
 
 ```go
 func (c *Client) TriggerDagRun(ctx context.Context, dagId DagID, body TriggerDagRunJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1009,7 +1406,7 @@ Takes a body of the \`application/json\` content type.
 Corresponds with POST /api/v2/dags/\{dag\_id\}/dagRuns \(the \`TriggerDagRun\` operationId\).
 
 <a name="Client.TriggerDagRunWithBody"></a>
-### func \(\*Client\) [TriggerDagRunWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L808>)
+### func \(\*Client\) [TriggerDagRunWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1133>)
 
 ```go
 func (c *Client) TriggerDagRunWithBody(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1021,8 +1418,34 @@ Takes any type of body and a specified content type.
 
 Corresponds with POST /api/v2/dags/\{dag\_id\}/dagRuns \(the \`TriggerDagRun\` operationId\).
 
+<a name="Client.UpdateConnection"></a>
+### func \(\*Client\) [UpdateConnection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L988>)
+
+```go
+func (c *Client) UpdateConnection(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+UpdateConnection Update a connection
+
+Takes a body of the \`application/json\` content type.
+
+Corresponds with PATCH /api/v2/connections/\{connection\_id\} \(the \`UpdateConnection\` operationId\).
+
+<a name="Client.UpdateConnectionWithBody"></a>
+### func \(\*Client\) [UpdateConnectionWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L971>)
+
+```go
+func (c *Client) UpdateConnectionWithBody(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+```
+
+UpdateConnectionWithBody Update a connection
+
+Takes any type of body and a specified content type.
+
+Corresponds with PATCH /api/v2/connections/\{connection\_id\} \(the \`UpdateConnection\` operationId\).
+
 <a name="Client.UpdateDag"></a>
-### func \(\*Client\) [UpdateDag](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L742>)
+### func \(\*Client\) [UpdateDag](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1067>)
 
 ```go
 func (c *Client) UpdateDag(ctx context.Context, dagId DagID, body UpdateDagJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1035,7 +1458,7 @@ Takes a body of the \`application/json\` content type.
 Corresponds with PATCH /api/v2/dags/\{dag\_id\} \(the \`UpdateDag\` operationId\).
 
 <a name="Client.UpdateDagWithBody"></a>
-### func \(\*Client\) [UpdateDagWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L725>)
+### func \(\*Client\) [UpdateDagWithBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L1050>)
 
 ```go
 func (c *Client) UpdateDagWithBody(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1048,12 +1471,74 @@ Takes any type of body and a specified content type.
 Corresponds with PATCH /api/v2/dags/\{dag\_id\} \(the \`UpdateDag\` operationId\).
 
 <a name="ClientInterface"></a>
-## type [ClientInterface](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L500-L673>)
+## type [ClientInterface](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L583-L856>)
 
 The interface specification for the client above.
 
 ```go
 type ClientInterface interface {
+
+    // RenewToken Renew a still-valid JWT into a fresh short-lived token
+    //
+    // Transparent renewal: given a still-valid user bearer, re-mints the same identity with a fresh short TTL, bounded by a server-side max_lifetime measured from first login. Lets a long CLI/dev session avoid re-logging in every token TTL while keeping the access token short-lived. Returns 401 when the presented token is invalid, expired, or past max_lifetime, in which case the client must log in again.
+    //
+    // Corresponds with POST /api/v2/auth/token/renew (the `RenewToken` operationId).
+    RenewToken(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // ListConnections List connections
+    //
+    // Lists the tenant's Airflow-style connections. Passwords are write-only and
+    // never returned; secret-bearing keys inside `extra` are masked server-side.
+    // Requires the read:connection permission.
+    //
+    // Corresponds with GET /api/v2/connections (the `ListConnections` operationId).
+    ListConnections(ctx context.Context, params *ListConnectionsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // CreateConnectionWithBody Create or replace a connection (upsert)
+    //
+    // Upserts a connection: creates it, or replaces an existing one with the same
+    // connection_id. The password is write-only and never returned. Requires the
+    // write:connection permission and a configured encryption key.
+    //
+    // Takes any type of body and a specified content type.
+    //
+    // Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+    CreateConnectionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // CreateConnection Create or replace a connection (upsert)
+    //
+    // Upserts a connection: creates it, or replaces an existing one with the same
+    // connection_id. The password is write-only and never returned. Requires the
+    // write:connection permission and a configured encryption key.
+    //
+    // Takes a body of the `application/json` content type.
+    //
+    // Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+    CreateConnection(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // DeleteConnection Delete a connection
+    //
+    // Corresponds with DELETE /api/v2/connections/{connection_id} (the `DeleteConnection` operationId).
+    DeleteConnection(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // GetConnection Get a connection
+    //
+    // Corresponds with GET /api/v2/connections/{connection_id} (the `GetConnection` operationId).
+    GetConnection(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // UpdateConnectionWithBody Update a connection
+    //
+    // Takes any type of body and a specified content type.
+    //
+    // Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+    UpdateConnectionWithBody(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // UpdateConnection Update a connection
+    //
+    // Takes a body of the `application/json` content type.
+    //
+    // Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+    UpdateConnection(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
     // GetDagSource Get a DAG's source (the dag.py text)
     //
@@ -1193,6 +1678,44 @@ type ClientInterface interface {
     // Corresponds with POST /api/v2/users (the `CreateUser` operationId).
     CreateUser(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+    // ListVariables List variables
+    //
+    // Lists the tenant's Airflow-style variables. Values of secret-ish keys are
+    // masked server-side. Requires the read:variable permission.
+    //
+    // Corresponds with GET /api/v2/variables (the `ListVariables` operationId).
+    ListVariables(ctx context.Context, params *ListVariablesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // CreateVariableWithBody Create or replace a variable (upsert)
+    //
+    // Upserts a variable: creates it, or replaces an existing one with the same
+    // key. Requires the write:variable permission.
+    //
+    // Takes any type of body and a specified content type.
+    //
+    // Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+    CreateVariableWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // CreateVariable Create or replace a variable (upsert)
+    //
+    // Upserts a variable: creates it, or replaces an existing one with the same
+    // key. Requires the write:variable permission.
+    //
+    // Takes a body of the `application/json` content type.
+    //
+    // Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+    CreateVariable(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // DeleteVariable Delete a variable
+    //
+    // Corresponds with DELETE /api/v2/variables/{variable_key} (the `DeleteVariable` operationId).
+    DeleteVariable(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+    // GetVariable Get a variable
+    //
+    // Corresponds with GET /api/v2/variables/{variable_key} (the `GetVariable` operationId).
+    GetVariable(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*http.Response, error)
+
     // GetVersion Control-plane version (Airflow VersionInfo shape)
     //
     // Corresponds with GET /api/v2/version (the `GetVersion` operationId).
@@ -1230,7 +1753,7 @@ type ClientInterface interface {
 ```
 
 <a name="ClientOption"></a>
-## type [ClientOption](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L456>)
+## type [ClientOption](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L539>)
 
 ClientOption allows setting custom parameters during construction
 
@@ -1239,7 +1762,7 @@ type ClientOption func(*Client) error
 ```
 
 <a name="WithBaseURL"></a>
-### func [WithBaseURL](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2183>)
+### func [WithBaseURL](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3018>)
 
 ```go
 func WithBaseURL(baseURL string) ClientOption
@@ -1248,7 +1771,7 @@ func WithBaseURL(baseURL string) ClientOption
 WithBaseURL overrides the baseURL.
 
 <a name="WithHTTPClient"></a>
-### func [WithHTTPClient](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L483>)
+### func [WithHTTPClient](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L566>)
 
 ```go
 func WithHTTPClient(doer HttpRequestDoer) ClientOption
@@ -1257,7 +1780,7 @@ func WithHTTPClient(doer HttpRequestDoer) ClientOption
 WithHTTPClient allows overriding the default Doer, which is automatically created using http.Client. This is useful for tests.
 
 <a name="WithRequestEditorFn"></a>
-### func [WithRequestEditorFn](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L492>)
+### func [WithRequestEditorFn](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L575>)
 
 ```go
 func WithRequestEditorFn(fn RequestEditorFn) ClientOption
@@ -1266,7 +1789,7 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption
 WithRequestEditorFn allows setting up a callback function, which will be called right before sending the request. This can be used to mutate the request.
 
 <a name="ClientWithResponses"></a>
-## type [ClientWithResponses](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2168-L2170>)
+## type [ClientWithResponses](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3003-L3005>)
 
 ClientWithResponses builds on ClientInterface to offer response payloads
 
@@ -1286,7 +1809,7 @@ func New(baseURL, token string, opts ...ClientOption) (*ClientWithResponses, err
 New builds a typed /api/v2 client for the control plane at baseURL \(an origin such as "http://localhost:8080", with or without a trailing slash\). When token is non\-empty every request carries "Authorization: Bearer \<token\>"; the MCP and CLI pass the caller's JWT through unchanged and never mint one \(ADR 0050 D9\). An empty token leaves requests unauthenticated, for dev/loopback use. Extra ClientOptions \(e.g. WithHTTPClient\) are applied after the auth editor.
 
 <a name="NewClientWithResponses"></a>
-### func [NewClientWithResponses](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2174>)
+### func [NewClientWithResponses](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3009>)
 
 ```go
 func NewClientWithResponses(server string, opts ...ClientOption) (*ClientWithResponses, error)
@@ -1295,7 +1818,7 @@ func NewClientWithResponses(server string, opts ...ClientOption) (*ClientWithRes
 NewClientWithResponses creates a new ClientWithResponses, which wraps Client with return type handling
 
 <a name="ClientWithResponses.ClearTaskInstancesWithBodyWithResponse"></a>
-### func \(\*ClientWithResponses\) [ClearTaskInstancesWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3475>)
+### func \(\*ClientWithResponses\) [ClearTaskInstancesWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5078>)
 
 ```go
 func (c *ClientWithResponses) ClearTaskInstancesWithBodyWithResponse(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClearTaskInstancesResponse, error)
@@ -1308,7 +1831,7 @@ Takes any type of body and a specified content type, and returns a wrapper objec
 Corresponds with POST /api/v2/dags/\{dag\_id\}/clearTaskInstances \(the \`ClearTaskInstances\` operationId\).
 
 <a name="ClientWithResponses.ClearTaskInstancesWithResponse"></a>
-### func \(\*ClientWithResponses\) [ClearTaskInstancesWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3488>)
+### func \(\*ClientWithResponses\) [ClearTaskInstancesWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5091>)
 
 ```go
 func (c *ClientWithResponses) ClearTaskInstancesWithResponse(ctx context.Context, dagId DagID, body ClearTaskInstancesJSONRequestBody, reqEditors ...RequestEditorFn) (*ClearTaskInstancesResponse, error)
@@ -1320,8 +1843,38 @@ Takes a body of the \`application/json\` content type, and returns a wrapper obj
 
 Corresponds with POST /api/v2/dags/\{dag\_id\}/clearTaskInstances \(the \`ClearTaskInstances\` operationId\).
 
+<a name="ClientWithResponses.CreateConnectionWithBodyWithResponse"></a>
+### func \(\*ClientWithResponses\) [CreateConnectionWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4931>)
+
+```go
+func (c *ClientWithResponses) CreateConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateConnectionResponse, error)
+```
+
+CreateConnectionWithBodyWithResponse Create or replace a connection \(upsert\)
+
+Upserts a connection: creates it, or replaces an existing one with the same connection\_id. The password is write\-only and never returned. Requires the write:connection permission and a configured encryption key.
+
+Takes any type of body and a specified content type, and returns a wrapper object for the known response body format\(s\).
+
+Corresponds with POST /api/v2/connections \(the \`CreateConnection\` operationId\).
+
+<a name="ClientWithResponses.CreateConnectionWithResponse"></a>
+### func \(\*ClientWithResponses\) [CreateConnectionWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4948>)
+
+```go
+func (c *ClientWithResponses) CreateConnectionWithResponse(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateConnectionResponse, error)
+```
+
+CreateConnectionWithResponse Create or replace a connection \(upsert\)
+
+Upserts a connection: creates it, or replaces an existing one with the same connection\_id. The password is write\-only and never returned. Requires the write:connection permission and a configured encryption key.
+
+Takes a body of the \`application/json\` content type, and returns a wrapper object for the known response body format\(s\).
+
+Corresponds with POST /api/v2/connections \(the \`CreateConnection\` operationId\).
+
 <a name="ClientWithResponses.CreateUserWithBodyWithResponse"></a>
-### func \(\*ClientWithResponses\) [CreateUserWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3678>)
+### func \(\*ClientWithResponses\) [CreateUserWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5281>)
 
 ```go
 func (c *ClientWithResponses) CreateUserWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateUserResponse, error)
@@ -1336,7 +1889,7 @@ Takes any type of body and a specified content type, and returns a wrapper objec
 Corresponds with POST /api/v2/users \(the \`CreateUser\` operationId\).
 
 <a name="ClientWithResponses.CreateUserWithResponse"></a>
-### func \(\*ClientWithResponses\) [CreateUserWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3695>)
+### func \(\*ClientWithResponses\) [CreateUserWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5298>)
 
 ```go
 func (c *ClientWithResponses) CreateUserWithResponse(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateUserResponse, error)
@@ -1350,8 +1903,77 @@ Takes a body of the \`application/json\` content type, and returns a wrapper obj
 
 Corresponds with POST /api/v2/users \(the \`CreateUser\` operationId\).
 
+<a name="ClientWithResponses.CreateVariableWithBodyWithResponse"></a>
+### func \(\*ClientWithResponses\) [CreateVariableWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5330>)
+
+```go
+func (c *ClientWithResponses) CreateVariableWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateVariableResponse, error)
+```
+
+CreateVariableWithBodyWithResponse Create or replace a variable \(upsert\)
+
+Upserts a variable: creates it, or replaces an existing one with the same key. Requires the write:variable permission.
+
+Takes any type of body and a specified content type, and returns a wrapper object for the known response body format\(s\).
+
+Corresponds with POST /api/v2/variables \(the \`CreateVariable\` operationId\).
+
+<a name="ClientWithResponses.CreateVariableWithResponse"></a>
+### func \(\*ClientWithResponses\) [CreateVariableWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5346>)
+
+```go
+func (c *ClientWithResponses) CreateVariableWithResponse(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateVariableResponse, error)
+```
+
+CreateVariableWithResponse Create or replace a variable \(upsert\)
+
+Upserts a variable: creates it, or replaces an existing one with the same key. Requires the write:variable permission.
+
+Takes a body of the \`application/json\` content type, and returns a wrapper object for the known response body format\(s\).
+
+Corresponds with POST /api/v2/variables \(the \`CreateVariable\` operationId\).
+
+<a name="ClientWithResponses.DeleteConnectionWithResponse"></a>
+### func \(\*ClientWithResponses\) [DeleteConnectionWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4961>)
+
+```go
+func (c *ClientWithResponses) DeleteConnectionWithResponse(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*DeleteConnectionResponse, error)
+```
+
+DeleteConnectionWithResponse Delete a connection
+
+Returns a wrapper object for the known response body format\(s\).
+
+Corresponds with DELETE /api/v2/connections/\{connection\_id\} \(the \`DeleteConnection\` operationId\).
+
+<a name="ClientWithResponses.DeleteVariableWithResponse"></a>
+### func \(\*ClientWithResponses\) [DeleteVariableWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5359>)
+
+```go
+func (c *ClientWithResponses) DeleteVariableWithResponse(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*DeleteVariableResponse, error)
+```
+
+DeleteVariableWithResponse Delete a variable
+
+Returns a wrapper object for the known response body format\(s\).
+
+Corresponds with DELETE /api/v2/variables/\{variable\_key\} \(the \`DeleteVariable\` operationId\).
+
+<a name="ClientWithResponses.GetConnectionWithResponse"></a>
+### func \(\*ClientWithResponses\) [GetConnectionWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4974>)
+
+```go
+func (c *ClientWithResponses) GetConnectionWithResponse(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*GetConnectionResponse, error)
+```
+
+GetConnectionWithResponse Get a connection
+
+Returns a wrapper object for the known response body format\(s\).
+
+Corresponds with GET /api/v2/connections/\{connection\_id\} \(the \`GetConnection\` operationId\).
+
 <a name="ClientWithResponses.GetDagRunWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetDagRunWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3540>)
+### func \(\*ClientWithResponses\) [GetDagRunWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5143>)
 
 ```go
 func (c *ClientWithResponses) GetDagRunWithResponse(ctx context.Context, dagId DagID, dagRunId DagRunID, reqEditors ...RequestEditorFn) (*GetDagRunResponse, error)
@@ -1364,7 +1986,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns/\{dag\_run\_id\} \(the \`GetDagRun\` operationId\).
 
 <a name="ClientWithResponses.GetDagSourceWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetDagSourceWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3410>)
+### func \(\*ClientWithResponses\) [GetDagSourceWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5013>)
 
 ```go
 func (c *ClientWithResponses) GetDagSourceWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*GetDagSourceResponse, error)
@@ -1377,7 +1999,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dagSources/\{dag\_id\} \(the \`GetDagSource\` operationId\).
 
 <a name="ClientWithResponses.GetDagSpecWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetDagSpecWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3618>)
+### func \(\*ClientWithResponses\) [GetDagSpecWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5221>)
 
 ```go
 func (c *ClientWithResponses) GetDagSpecWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*GetDagSpecResponse, error)
@@ -1390,7 +2012,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags/\{dag\_id\}/spec \(the \`GetDagSpec\` operationId\).
 
 <a name="ClientWithResponses.GetDagVersionWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetDagVersionWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3605>)
+### func \(\*ClientWithResponses\) [GetDagVersionWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5208>)
 
 ```go
 func (c *ClientWithResponses) GetDagVersionWithResponse(ctx context.Context, dagId DagID, versionNumber int, reqEditors ...RequestEditorFn) (*GetDagVersionResponse, error)
@@ -1403,7 +2025,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagVersions/\{version\_number\} \(the \`GetDagVersion\` operationId\).
 
 <a name="ClientWithResponses.GetDagWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetDagWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3436>)
+### func \(\*ClientWithResponses\) [GetDagWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5039>)
 
 ```go
 func (c *ClientWithResponses) GetDagWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*GetDagResponse, error)
@@ -1416,7 +2038,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags/\{dag\_id\} \(the \`GetDag\` operationId\).
 
 <a name="ClientWithResponses.GetHealthzWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetHealthzWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3760>)
+### func \(\*ClientWithResponses\) [GetHealthzWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5437>)
 
 ```go
 func (c *ClientWithResponses) GetHealthzWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthzResponse, error)
@@ -1429,7 +2051,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /healthz \(the \`GetHealthz\` operationId\).
 
 <a name="ClientWithResponses.GetMonitorExecutorWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetMonitorExecutorWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3631>)
+### func \(\*ClientWithResponses\) [GetMonitorExecutorWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5234>)
 
 ```go
 func (c *ClientWithResponses) GetMonitorExecutorWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMonitorExecutorResponse, error)
@@ -1442,7 +2064,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/monitor/executor \(the \`GetMonitorExecutor\` operationId\).
 
 <a name="ClientWithResponses.GetMonitorHealthWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetMonitorHealthWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3644>)
+### func \(\*ClientWithResponses\) [GetMonitorHealthWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5247>)
 
 ```go
 func (c *ClientWithResponses) GetMonitorHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMonitorHealthResponse, error)
@@ -1455,7 +2077,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/monitor/health \(the \`GetMonitorHealth\` operationId\).
 
 <a name="ClientWithResponses.GetReadyzWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetReadyzWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3773>)
+### func \(\*ClientWithResponses\) [GetReadyzWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5450>)
 
 ```go
 func (c *ClientWithResponses) GetReadyzWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetReadyzResponse, error)
@@ -1468,7 +2090,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /readyz \(the \`GetReadyz\` operationId\).
 
 <a name="ClientWithResponses.GetTaskInstanceWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetTaskInstanceWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3566>)
+### func \(\*ClientWithResponses\) [GetTaskInstanceWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5169>)
 
 ```go
 func (c *ClientWithResponses) GetTaskInstanceWithResponse(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, reqEditors ...RequestEditorFn) (*GetTaskInstanceResponse, error)
@@ -1481,7 +2103,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns/\{dag\_run\_id\}/taskInstances/\{task\_id\} \(the \`GetTaskInstance\` operationId\).
 
 <a name="ClientWithResponses.GetTaskLogsWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetTaskLogsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3579>)
+### func \(\*ClientWithResponses\) [GetTaskLogsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5182>)
 
 ```go
 func (c *ClientWithResponses) GetTaskLogsWithResponse(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, tryNumber int, reqEditors ...RequestEditorFn) (*GetTaskLogsResponse, error)
@@ -1493,8 +2115,21 @@ Returns a wrapper object for the known response body format\(s\).
 
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns/\{dag\_run\_id\}/taskInstances/\{task\_id\}/logs/\{try\_number\} \(the \`GetTaskLogs\` operationId\).
 
+<a name="ClientWithResponses.GetVariableWithResponse"></a>
+### func \(\*ClientWithResponses\) [GetVariableWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5372>)
+
+```go
+func (c *ClientWithResponses) GetVariableWithResponse(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*GetVariableResponse, error)
+```
+
+GetVariableWithResponse Get a variable
+
+Returns a wrapper object for the known response body format\(s\).
+
+Corresponds with GET /api/v2/variables/\{variable\_key\} \(the \`GetVariable\` operationId\).
+
 <a name="ClientWithResponses.GetVersionWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetVersionWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3708>)
+### func \(\*ClientWithResponses\) [GetVersionWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5385>)
 
 ```go
 func (c *ClientWithResponses) GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error)
@@ -1507,7 +2142,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/version \(the \`GetVersion\` operationId\).
 
 <a name="ClientWithResponses.GetXcomEntryWithResponse"></a>
-### func \(\*ClientWithResponses\) [GetXcomEntryWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3721>)
+### func \(\*ClientWithResponses\) [GetXcomEntryWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5398>)
 
 ```go
 func (c *ClientWithResponses) GetXcomEntryWithResponse(ctx context.Context, dagId DagID, dagRunId DagRunID, taskId TaskID, key string, reqEditors ...RequestEditorFn) (*GetXcomEntryResponse, error)
@@ -1520,7 +2155,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/xcoms/\{dag\_id\}/\{dag\_run\_id\}/\{task\_id\}/\{key\} \(the \`GetXcomEntry\` operationId\).
 
 <a name="ClientWithResponses.IssueTokenWithBodyWithResponse"></a>
-### func \(\*ClientWithResponses\) [IssueTokenWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3734>)
+### func \(\*ClientWithResponses\) [IssueTokenWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5411>)
 
 ```go
 func (c *ClientWithResponses) IssueTokenWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*IssueTokenResponse, error)
@@ -1533,7 +2168,7 @@ Takes any type of body and a specified content type, and returns a wrapper objec
 Corresponds with POST /auth/token \(the \`IssueToken\` operationId\).
 
 <a name="ClientWithResponses.IssueTokenWithResponse"></a>
-### func \(\*ClientWithResponses\) [IssueTokenWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3747>)
+### func \(\*ClientWithResponses\) [IssueTokenWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5424>)
 
 ```go
 func (c *ClientWithResponses) IssueTokenWithResponse(ctx context.Context, body IssueTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*IssueTokenResponse, error)
@@ -1545,8 +2180,23 @@ Takes a body of the \`application/json\` content type, and returns a wrapper obj
 
 Corresponds with POST /auth/token \(the \`IssueToken\` operationId\).
 
+<a name="ClientWithResponses.ListConnectionsWithResponse"></a>
+### func \(\*ClientWithResponses\) [ListConnectionsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4914>)
+
+```go
+func (c *ClientWithResponses) ListConnectionsWithResponse(ctx context.Context, params *ListConnectionsParams, reqEditors ...RequestEditorFn) (*ListConnectionsResponse, error)
+```
+
+ListConnectionsWithResponse List connections
+
+Lists the tenant's Airflow\-style connections. Passwords are write\-only and never returned; secret\-bearing keys inside \`extra\` are masked server\-side. Requires the read:connection permission.
+
+Returns a wrapper object for the known response body format\(s\).
+
+Corresponds with GET /api/v2/connections \(the \`ListConnections\` operationId\).
+
 <a name="ClientWithResponses.ListDagRunsWithResponse"></a>
-### func \(\*ClientWithResponses\) [ListDagRunsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3501>)
+### func \(\*ClientWithResponses\) [ListDagRunsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5104>)
 
 ```go
 func (c *ClientWithResponses) ListDagRunsWithResponse(ctx context.Context, dagId DagID, params *ListDagRunsParams, reqEditors ...RequestEditorFn) (*ListDagRunsResponse, error)
@@ -1559,7 +2209,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns \(the \`ListDagRuns\` operationId\).
 
 <a name="ClientWithResponses.ListDagVersionsWithResponse"></a>
-### func \(\*ClientWithResponses\) [ListDagVersionsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3592>)
+### func \(\*ClientWithResponses\) [ListDagVersionsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5195>)
 
 ```go
 func (c *ClientWithResponses) ListDagVersionsWithResponse(ctx context.Context, dagId DagID, reqEditors ...RequestEditorFn) (*ListDagVersionsResponse, error)
@@ -1572,7 +2222,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagVersions \(the \`ListDagVersions\` operationId\).
 
 <a name="ClientWithResponses.ListDagsWithResponse"></a>
-### func \(\*ClientWithResponses\) [ListDagsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3423>)
+### func \(\*ClientWithResponses\) [ListDagsWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5026>)
 
 ```go
 func (c *ClientWithResponses) ListDagsWithResponse(ctx context.Context, params *ListDagsParams, reqEditors ...RequestEditorFn) (*ListDagsResponse, error)
@@ -1585,7 +2235,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags \(the \`ListDags\` operationId\).
 
 <a name="ClientWithResponses.ListTaskInstancesWithResponse"></a>
-### func \(\*ClientWithResponses\) [ListTaskInstancesWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3553>)
+### func \(\*ClientWithResponses\) [ListTaskInstancesWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5156>)
 
 ```go
 func (c *ClientWithResponses) ListTaskInstancesWithResponse(ctx context.Context, dagId DagID, dagRunId DagRunID, reqEditors ...RequestEditorFn) (*ListTaskInstancesResponse, error)
@@ -1598,7 +2248,7 @@ Returns a wrapper object for the known response body format\(s\).
 Corresponds with GET /api/v2/dags/\{dag\_id\}/dagRuns/\{dag\_run\_id\}/taskInstances \(the \`ListTaskInstances\` operationId\).
 
 <a name="ClientWithResponses.ListUsersWithResponse"></a>
-### func \(\*ClientWithResponses\) [ListUsersWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3661>)
+### func \(\*ClientWithResponses\) [ListUsersWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5264>)
 
 ```go
 func (c *ClientWithResponses) ListUsersWithResponse(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*ListUsersResponse, error)
@@ -1612,8 +2262,38 @@ Returns a wrapper object for the known response body format\(s\).
 
 Corresponds with GET /api/v2/users \(the \`ListUsers\` operationId\).
 
+<a name="ClientWithResponses.ListVariablesWithResponse"></a>
+### func \(\*ClientWithResponses\) [ListVariablesWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5314>)
+
+```go
+func (c *ClientWithResponses) ListVariablesWithResponse(ctx context.Context, params *ListVariablesParams, reqEditors ...RequestEditorFn) (*ListVariablesResponse, error)
+```
+
+ListVariablesWithResponse List variables
+
+Lists the tenant's Airflow\-style variables. Values of secret\-ish keys are masked server\-side. Requires the read:variable permission.
+
+Returns a wrapper object for the known response body format\(s\).
+
+Corresponds with GET /api/v2/variables \(the \`ListVariables\` operationId\).
+
+<a name="ClientWithResponses.RenewTokenWithResponse"></a>
+### func \(\*ClientWithResponses\) [RenewTokenWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4897>)
+
+```go
+func (c *ClientWithResponses) RenewTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*RenewTokenResponse, error)
+```
+
+RenewTokenWithResponse Renew a still\-valid JWT into a fresh short\-lived token
+
+Transparent renewal: given a still\-valid user bearer, re\-mints the same identity with a fresh short TTL, bounded by a server\-side max\_lifetime measured from first login. Lets a long CLI/dev session avoid re\-logging in every token TTL while keeping the access token short\-lived. Returns 401 when the presented token is invalid, expired, or past max\_lifetime, in which case the client must log in again.
+
+Returns a wrapper object for the known response body format\(s\).
+
+Corresponds with POST /api/v2/auth/token/renew \(the \`RenewToken\` operationId\).
+
 <a name="ClientWithResponses.TriggerDagRunWithBodyWithResponse"></a>
-### func \(\*ClientWithResponses\) [TriggerDagRunWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3514>)
+### func \(\*ClientWithResponses\) [TriggerDagRunWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5117>)
 
 ```go
 func (c *ClientWithResponses) TriggerDagRunWithBodyWithResponse(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*TriggerDagRunResponse, error)
@@ -1626,7 +2306,7 @@ Takes any type of body and a specified content type, and returns a wrapper objec
 Corresponds with POST /api/v2/dags/\{dag\_id\}/dagRuns \(the \`TriggerDagRun\` operationId\).
 
 <a name="ClientWithResponses.TriggerDagRunWithResponse"></a>
-### func \(\*ClientWithResponses\) [TriggerDagRunWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3527>)
+### func \(\*ClientWithResponses\) [TriggerDagRunWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5130>)
 
 ```go
 func (c *ClientWithResponses) TriggerDagRunWithResponse(ctx context.Context, dagId DagID, body TriggerDagRunJSONRequestBody, reqEditors ...RequestEditorFn) (*TriggerDagRunResponse, error)
@@ -1638,8 +2318,34 @@ Takes a body of the \`application/json\` content type, and returns a wrapper obj
 
 Corresponds with POST /api/v2/dags/\{dag\_id\}/dagRuns \(the \`TriggerDagRun\` operationId\).
 
+<a name="ClientWithResponses.UpdateConnectionWithBodyWithResponse"></a>
+### func \(\*ClientWithResponses\) [UpdateConnectionWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4987>)
+
+```go
+func (c *ClientWithResponses) UpdateConnectionWithBodyWithResponse(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateConnectionResponse, error)
+```
+
+UpdateConnectionWithBodyWithResponse Update a connection
+
+Takes any type of body and a specified content type, and returns a wrapper object for the known response body format\(s\).
+
+Corresponds with PATCH /api/v2/connections/\{connection\_id\} \(the \`UpdateConnection\` operationId\).
+
+<a name="ClientWithResponses.UpdateConnectionWithResponse"></a>
+### func \(\*ClientWithResponses\) [UpdateConnectionWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5000>)
+
+```go
+func (c *ClientWithResponses) UpdateConnectionWithResponse(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateConnectionResponse, error)
+```
+
+UpdateConnectionWithResponse Update a connection
+
+Takes a body of the \`application/json\` content type, and returns a wrapper object for the known response body format\(s\).
+
+Corresponds with PATCH /api/v2/connections/\{connection\_id\} \(the \`UpdateConnection\` operationId\).
+
 <a name="ClientWithResponses.UpdateDagWithBodyWithResponse"></a>
-### func \(\*ClientWithResponses\) [UpdateDagWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3449>)
+### func \(\*ClientWithResponses\) [UpdateDagWithBodyWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5052>)
 
 ```go
 func (c *ClientWithResponses) UpdateDagWithBodyWithResponse(ctx context.Context, dagId DagID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateDagResponse, error)
@@ -1652,7 +2358,7 @@ Takes any type of body and a specified content type, and returns a wrapper objec
 Corresponds with PATCH /api/v2/dags/\{dag\_id\} \(the \`UpdateDag\` operationId\).
 
 <a name="ClientWithResponses.UpdateDagWithResponse"></a>
-### func \(\*ClientWithResponses\) [UpdateDagWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3462>)
+### func \(\*ClientWithResponses\) [UpdateDagWithResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5065>)
 
 ```go
 func (c *ClientWithResponses) UpdateDagWithResponse(ctx context.Context, dagId DagID, body UpdateDagJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateDagResponse, error)
@@ -1665,12 +2371,82 @@ Takes a body of the \`application/json\` content type, and returns a wrapper obj
 Corresponds with PATCH /api/v2/dags/\{dag\_id\} \(the \`UpdateDag\` operationId\).
 
 <a name="ClientWithResponsesInterface"></a>
-## type [ClientWithResponsesInterface](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2195-L2404>)
+## type [ClientWithResponsesInterface](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3030-L3353>)
 
 ClientWithResponsesInterface is the interface specification for the client with responses above.
 
 ```go
 type ClientWithResponsesInterface interface {
+
+    // RenewTokenWithResponse Renew a still-valid JWT into a fresh short-lived token
+    //
+    // Transparent renewal: given a still-valid user bearer, re-mints the same identity with a fresh short TTL, bounded by a server-side max_lifetime measured from first login. Lets a long CLI/dev session avoid re-logging in every token TTL while keeping the access token short-lived. Returns 401 when the presented token is invalid, expired, or past max_lifetime, in which case the client must log in again.
+    //
+    // Returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with POST /api/v2/auth/token/renew (the `RenewToken` operationId).
+    RenewTokenWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*RenewTokenResponse, error)
+
+    // ListConnectionsWithResponse List connections
+    //
+    // Lists the tenant's Airflow-style connections. Passwords are write-only and
+    // never returned; secret-bearing keys inside `extra` are masked server-side.
+    // Requires the read:connection permission.
+    //
+    // Returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with GET /api/v2/connections (the `ListConnections` operationId).
+    ListConnectionsWithResponse(ctx context.Context, params *ListConnectionsParams, reqEditors ...RequestEditorFn) (*ListConnectionsResponse, error)
+
+    // CreateConnectionWithBodyWithResponse Create or replace a connection (upsert)
+    //
+    // Upserts a connection: creates it, or replaces an existing one with the same
+    // connection_id. The password is write-only and never returned. Requires the
+    // write:connection permission and a configured encryption key.
+    //
+    // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+    CreateConnectionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateConnectionResponse, error)
+
+    // CreateConnectionWithResponse Create or replace a connection (upsert)
+    //
+    // Upserts a connection: creates it, or replaces an existing one with the same
+    // connection_id. The password is write-only and never returned. Requires the
+    // write:connection permission and a configured encryption key.
+    //
+    // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with POST /api/v2/connections (the `CreateConnection` operationId).
+    CreateConnectionWithResponse(ctx context.Context, body CreateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateConnectionResponse, error)
+
+    // DeleteConnectionWithResponse Delete a connection
+    //
+    // Returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with DELETE /api/v2/connections/{connection_id} (the `DeleteConnection` operationId).
+    DeleteConnectionWithResponse(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*DeleteConnectionResponse, error)
+
+    // GetConnectionWithResponse Get a connection
+    //
+    // Returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with GET /api/v2/connections/{connection_id} (the `GetConnection` operationId).
+    GetConnectionWithResponse(ctx context.Context, connectionId ConnectionID, reqEditors ...RequestEditorFn) (*GetConnectionResponse, error)
+
+    // UpdateConnectionWithBodyWithResponse Update a connection
+    //
+    // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+    UpdateConnectionWithBodyWithResponse(ctx context.Context, connectionId ConnectionID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateConnectionResponse, error)
+
+    // UpdateConnectionWithResponse Update a connection
+    //
+    // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with PATCH /api/v2/connections/{connection_id} (the `UpdateConnection` operationId).
+    UpdateConnectionWithResponse(ctx context.Context, connectionId ConnectionID, body UpdateConnectionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateConnectionResponse, error)
 
     // GetDagSourceWithResponse Get a DAG's source (the dag.py text)
     //
@@ -1838,6 +2614,50 @@ type ClientWithResponsesInterface interface {
     // Corresponds with POST /api/v2/users (the `CreateUser` operationId).
     CreateUserWithResponse(ctx context.Context, body CreateUserJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateUserResponse, error)
 
+    // ListVariablesWithResponse List variables
+    //
+    // Lists the tenant's Airflow-style variables. Values of secret-ish keys are
+    // masked server-side. Requires the read:variable permission.
+    //
+    // Returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with GET /api/v2/variables (the `ListVariables` operationId).
+    ListVariablesWithResponse(ctx context.Context, params *ListVariablesParams, reqEditors ...RequestEditorFn) (*ListVariablesResponse, error)
+
+    // CreateVariableWithBodyWithResponse Create or replace a variable (upsert)
+    //
+    // Upserts a variable: creates it, or replaces an existing one with the same
+    // key. Requires the write:variable permission.
+    //
+    // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+    CreateVariableWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateVariableResponse, error)
+
+    // CreateVariableWithResponse Create or replace a variable (upsert)
+    //
+    // Upserts a variable: creates it, or replaces an existing one with the same
+    // key. Requires the write:variable permission.
+    //
+    // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with POST /api/v2/variables (the `CreateVariable` operationId).
+    CreateVariableWithResponse(ctx context.Context, body CreateVariableJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateVariableResponse, error)
+
+    // DeleteVariableWithResponse Delete a variable
+    //
+    // Returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with DELETE /api/v2/variables/{variable_key} (the `DeleteVariable` operationId).
+    DeleteVariableWithResponse(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*DeleteVariableResponse, error)
+
+    // GetVariableWithResponse Get a variable
+    //
+    // Returns a wrapper object for the known response body format(s).
+    //
+    // Corresponds with GET /api/v2/variables/{variable_key} (the `GetVariable` operationId).
+    GetVariableWithResponse(ctx context.Context, variableKey VariableKey, reqEditors ...RequestEditorFn) (*GetVariableResponse, error)
+
     // GetVersionWithResponse Control-plane version (Airflow VersionInfo shape)
     //
     // Returns a wrapper object for the known response body format(s).
@@ -1896,8 +2716,176 @@ type ComponentHealth struct {
 }
 ```
 
+<a name="Connection"></a>
+## type [Connection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L149-L158>)
+
+Connection An Airflow\-style connection. The password is write\-only and never returned; secret\-bearing keys inside \`extra\` are masked server\-side.
+
+```go
+type Connection struct {
+    ConnType     string  `json:"conn_type"`
+    ConnectionId string  `json:"connection_id"`
+    Description  *string `json:"description,omitempty"`
+    Extra        *string `json:"extra,omitempty"`
+    Host         *string `json:"host,omitempty"`
+    Login        *string `json:"login,omitempty"`
+    Port         *int    `json:"port,omitempty"`
+    Schema       *string `json:"schema,omitempty"`
+}
+```
+
+<a name="ConnectionBody"></a>
+## type [ConnectionBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L161-L171>)
+
+ConnectionBody Connection create/replace payload. connection\_id is required on POST \(taken from the path on PATCH\). password and extra are write\-only. Every optional field is tri\-state: omit the key to preserve the stored value \(a partial write never wipes a field it does not mention, so the unreadable password survives a \`\-\-host\`\-only edit\), send an empty string to clear the field, or send a value to set it. A password equal to the mask \`\*\*\*\`, and any key inside \`extra\` whose value is exactly \`\*\*\*\`, is treated as "unchanged" — so re\-submitting a connection read back from GET \(whose secrets are masked\) never overwrites the real secret with the mask.
+
+```go
+type ConnectionBody struct {
+    ConnType     string  `json:"conn_type"`
+    ConnectionId *string `json:"connection_id,omitempty"`
+    Description  *string `json:"description,omitempty"`
+    Extra        *string `json:"extra,omitempty"`
+    Host         *string `json:"host,omitempty"`
+    Login        *string `json:"login,omitempty"`
+    Password     *string `json:"password,omitempty"`
+    Port         *int    `json:"port,omitempty"`
+    Schema       *string `json:"schema,omitempty"`
+}
+```
+
+<a name="ConnectionCollection"></a>
+## type [ConnectionCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L174-L177>)
+
+ConnectionCollection defines model for ConnectionCollection.
+
+```go
+type ConnectionCollection struct {
+    Connections  *[]Connection `json:"connections,omitempty"`
+    TotalEntries *int          `json:"total_entries,omitempty"`
+}
+```
+
+<a name="ConnectionID"></a>
+## type [ConnectionID](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L421>)
+
+ConnectionID defines model for ConnectionID.
+
+```go
+type ConnectionID = string
+```
+
+<a name="CreateConnectionJSONRequestBody"></a>
+## type [CreateConnectionJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L488>)
+
+CreateConnectionJSONRequestBody defines body for CreateConnection for application/json ContentType.
+
+```go
+type CreateConnectionJSONRequestBody = ConnectionBody
+```
+
+<a name="CreateConnectionResponse"></a>
+## type [CreateConnectionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3451-L3462>)
+
+
+
+```go
+type CreateConnectionResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON201 the response for an HTTP 201 `application/json` response
+    JSON201 *Connection
+    // JSON400 the response for an HTTP 400 `application/json` response
+    JSON400 *Error
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+    // JSON503 the response for an HTTP 503 `application/json` response
+    JSON503 *EncryptionUnavailable
+}
+```
+
+<a name="ParseCreateConnectionResponse"></a>
+### func [ParseCreateConnectionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5525>)
+
+```go
+func ParseCreateConnectionResponse(rsp *http.Response) (*CreateConnectionResponse, error)
+```
+
+ParseCreateConnectionResponse parses an HTTP response from a CreateConnectionWithResponse call
+
+<a name="CreateConnectionResponse.ContentType"></a>
+### func \(CreateConnectionResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3506>)
+
+```go
+func (r CreateConnectionResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="CreateConnectionResponse.GetBody"></a>
+### func \(CreateConnectionResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3485>)
+
+```go
+func (r CreateConnectionResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="CreateConnectionResponse.GetJSON201"></a>
+### func \(CreateConnectionResponse\) [GetJSON201](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3465>)
+
+```go
+func (r CreateConnectionResponse) GetJSON201() *Connection
+```
+
+GetJSON201 returns the response for an HTTP 201 \`application/json\` response
+
+<a name="CreateConnectionResponse.GetJSON400"></a>
+### func \(CreateConnectionResponse\) [GetJSON400](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3470>)
+
+```go
+func (r CreateConnectionResponse) GetJSON400() *Error
+```
+
+GetJSON400 returns the response for an HTTP 400 \`application/json\` response
+
+<a name="CreateConnectionResponse.GetJSON401"></a>
+### func \(CreateConnectionResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3475>)
+
+```go
+func (r CreateConnectionResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="CreateConnectionResponse.GetJSON503"></a>
+### func \(CreateConnectionResponse\) [GetJSON503](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3480>)
+
+```go
+func (r CreateConnectionResponse) GetJSON503() *EncryptionUnavailable
+```
+
+GetJSON503 returns the response for an HTTP 503 \`application/json\` response
+
+<a name="CreateConnectionResponse.Status"></a>
+### func \(CreateConnectionResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3490>)
+
+```go
+func (r CreateConnectionResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="CreateConnectionResponse.StatusCode"></a>
+### func \(CreateConnectionResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3498>)
+
+```go
+func (r CreateConnectionResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
 <a name="CreateUserJSONRequestBody"></a>
-## type [CreateUserJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L423>)
+## type [CreateUserJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L503>)
 
 CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 
@@ -1906,7 +2894,7 @@ type CreateUserJSONRequestBody = CreateUserRequest
 ```
 
 <a name="CreateUserRequest"></a>
-## type [CreateUserRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L149-L158>)
+## type [CreateUserRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L180-L189>)
 
 CreateUserRequest defines model for CreateUserRequest.
 
@@ -1924,7 +2912,7 @@ type CreateUserRequest struct {
 ```
 
 <a name="CreateUserResponse"></a>
-## type [CreateUserResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3138-L3149>)
+## type [CreateUserResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4417-L4428>)
 
 
 
@@ -1944,7 +2932,7 @@ type CreateUserResponse struct {
 ```
 
 <a name="ParseCreateUserResponse"></a>
-### func [ParseCreateUserResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4256>)
+### func [ParseCreateUserResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6176>)
 
 ```go
 func ParseCreateUserResponse(rsp *http.Response) (*CreateUserResponse, error)
@@ -1953,7 +2941,7 @@ func ParseCreateUserResponse(rsp *http.Response) (*CreateUserResponse, error)
 ParseCreateUserResponse parses an HTTP response from a CreateUserWithResponse call
 
 <a name="CreateUserResponse.ContentType"></a>
-### func \(CreateUserResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3193>)
+### func \(CreateUserResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4472>)
 
 ```go
 func (r CreateUserResponse) ContentType() string
@@ -1962,7 +2950,7 @@ func (r CreateUserResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="CreateUserResponse.GetBody"></a>
-### func \(CreateUserResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3172>)
+### func \(CreateUserResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4451>)
 
 ```go
 func (r CreateUserResponse) GetBody() []byte
@@ -1971,7 +2959,7 @@ func (r CreateUserResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="CreateUserResponse.GetJSON201"></a>
-### func \(CreateUserResponse\) [GetJSON201](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3152>)
+### func \(CreateUserResponse\) [GetJSON201](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4431>)
 
 ```go
 func (r CreateUserResponse) GetJSON201() *User
@@ -1980,7 +2968,7 @@ func (r CreateUserResponse) GetJSON201() *User
 GetJSON201 returns the response for an HTTP 201 \`application/json\` response
 
 <a name="CreateUserResponse.GetJSON400"></a>
-### func \(CreateUserResponse\) [GetJSON400](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3157>)
+### func \(CreateUserResponse\) [GetJSON400](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4436>)
 
 ```go
 func (r CreateUserResponse) GetJSON400() *Error
@@ -1989,7 +2977,7 @@ func (r CreateUserResponse) GetJSON400() *Error
 GetJSON400 returns the response for an HTTP 400 \`application/json\` response
 
 <a name="CreateUserResponse.GetJSON401"></a>
-### func \(CreateUserResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3162>)
+### func \(CreateUserResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4441>)
 
 ```go
 func (r CreateUserResponse) GetJSON401() *Unauthorized
@@ -1998,7 +2986,7 @@ func (r CreateUserResponse) GetJSON401() *Unauthorized
 GetJSON401 returns the response for an HTTP 401 \`application/json\` response
 
 <a name="CreateUserResponse.GetJSON409"></a>
-### func \(CreateUserResponse\) [GetJSON409](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3167>)
+### func \(CreateUserResponse\) [GetJSON409](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4446>)
 
 ```go
 func (r CreateUserResponse) GetJSON409() *Error
@@ -2007,7 +2995,7 @@ func (r CreateUserResponse) GetJSON409() *Error
 GetJSON409 returns the response for an HTTP 409 \`application/json\` response
 
 <a name="CreateUserResponse.Status"></a>
-### func \(CreateUserResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3177>)
+### func \(CreateUserResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4456>)
 
 ```go
 func (r CreateUserResponse) Status() string
@@ -2016,7 +3004,7 @@ func (r CreateUserResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="CreateUserResponse.StatusCode"></a>
-### func \(CreateUserResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3185>)
+### func \(CreateUserResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4464>)
 
 ```go
 func (r CreateUserResponse) StatusCode() int
@@ -2024,8 +3012,107 @@ func (r CreateUserResponse) StatusCode() int
 
 StatusCode returns HTTPResponse.StatusCode
 
+<a name="CreateVariableJSONRequestBody"></a>
+## type [CreateVariableJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L506>)
+
+CreateVariableJSONRequestBody defines body for CreateVariable for application/json ContentType.
+
+```go
+type CreateVariableJSONRequestBody = VariableBody
+```
+
+<a name="CreateVariableResponse"></a>
+## type [CreateVariableResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4527-L4536>)
+
+
+
+```go
+type CreateVariableResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON201 the response for an HTTP 201 `application/json` response
+    JSON201 *Variable
+    // JSON400 the response for an HTTP 400 `application/json` response
+    JSON400 *Error
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+}
+```
+
+<a name="ParseCreateVariableResponse"></a>
+### func [ParseCreateVariableResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6256>)
+
+```go
+func ParseCreateVariableResponse(rsp *http.Response) (*CreateVariableResponse, error)
+```
+
+ParseCreateVariableResponse parses an HTTP response from a CreateVariableWithResponse call
+
+<a name="CreateVariableResponse.ContentType"></a>
+### func \(CreateVariableResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4575>)
+
+```go
+func (r CreateVariableResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="CreateVariableResponse.GetBody"></a>
+### func \(CreateVariableResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4554>)
+
+```go
+func (r CreateVariableResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="CreateVariableResponse.GetJSON201"></a>
+### func \(CreateVariableResponse\) [GetJSON201](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4539>)
+
+```go
+func (r CreateVariableResponse) GetJSON201() *Variable
+```
+
+GetJSON201 returns the response for an HTTP 201 \`application/json\` response
+
+<a name="CreateVariableResponse.GetJSON400"></a>
+### func \(CreateVariableResponse\) [GetJSON400](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4544>)
+
+```go
+func (r CreateVariableResponse) GetJSON400() *Error
+```
+
+GetJSON400 returns the response for an HTTP 400 \`application/json\` response
+
+<a name="CreateVariableResponse.GetJSON401"></a>
+### func \(CreateVariableResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4549>)
+
+```go
+func (r CreateVariableResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="CreateVariableResponse.Status"></a>
+### func \(CreateVariableResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4559>)
+
+```go
+func (r CreateVariableResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="CreateVariableResponse.StatusCode"></a>
+### func \(CreateVariableResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4567>)
+
+```go
+func (r CreateVariableResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
 <a name="DAG"></a>
-## type [DAG](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L161-L178>)
+## type [DAG](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L192-L209>)
 
 DAG defines model for DAG.
 
@@ -2051,7 +3138,7 @@ type DAG struct {
 ```
 
 <a name="DAGCollection"></a>
-## type [DAGCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L181-L184>)
+## type [DAGCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L212-L215>)
 
 DAGCollection defines model for DAGCollection.
 
@@ -2063,7 +3150,7 @@ type DAGCollection struct {
 ```
 
 <a name="DAGRun"></a>
-## type [DAGRun](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L187-L200>)
+## type [DAGRun](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L218-L231>)
 
 DAGRun defines model for DAGRun.
 
@@ -2085,7 +3172,7 @@ type DAGRun struct {
 ```
 
 <a name="DAGRunCollection"></a>
-## type [DAGRunCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L209-L212>)
+## type [DAGRunCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L240-L243>)
 
 DAGRunCollection defines model for DAGRunCollection.
 
@@ -2097,7 +3184,7 @@ type DAGRunCollection struct {
 ```
 
 <a name="DAGRunCreate"></a>
-## type [DAGRunCreate](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L215-L220>)
+## type [DAGRunCreate](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L246-L251>)
 
 DAGRunCreate defines model for DAGRunCreate.
 
@@ -2111,7 +3198,7 @@ type DAGRunCreate struct {
 ```
 
 <a name="DAGRunRunType"></a>
-## type [DAGRunRunType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L203>)
+## type [DAGRunRunType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L234>)
 
 DAGRunRunType defines model for DAGRun.RunType.
 
@@ -2140,7 +3227,7 @@ func (e DAGRunRunType) Valid() bool
 Valid indicates whether the value is a known member of the DAGRunRunType enum.
 
 <a name="DAGRunState"></a>
-## type [DAGRunState](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L206>)
+## type [DAGRunState](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L237>)
 
 DAGRunState defines model for DAGRun.State.
 
@@ -2169,7 +3256,7 @@ func (e DAGRunState) Valid() bool
 Valid indicates whether the value is a known member of the DAGRunState enum.
 
 <a name="DAGUpdate"></a>
-## type [DAGUpdate](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L223-L225>)
+## type [DAGUpdate](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L254-L256>)
 
 DAGUpdate defines model for DAGUpdate.
 
@@ -2180,7 +3267,7 @@ type DAGUpdate struct {
 ```
 
 <a name="DagID"></a>
-## type [DagID](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L368>)
+## type [DagID](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L424>)
 
 DagID defines model for DagID.
 
@@ -2189,7 +3276,7 @@ type DagID = string
 ```
 
 <a name="DagRunID"></a>
-## type [DagRunID](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L371>)
+## type [DagRunID](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L427>)
 
 DagRunID defines model for DagRunID.
 
@@ -2198,7 +3285,7 @@ type DagRunID = string
 ```
 
 <a name="DagSource"></a>
-## type [DagSource](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L228-L234>)
+## type [DagSource](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L259-L265>)
 
 DagSource defines model for DagSource.
 
@@ -2213,7 +3300,7 @@ type DagSource struct {
 ```
 
 <a name="DagVersion"></a>
-## type [DagVersion](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L237-L246>)
+## type [DagVersion](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L268-L277>)
 
 DagVersion defines model for DagVersion.
 
@@ -2231,7 +3318,7 @@ type DagVersion struct {
 ```
 
 <a name="DagVersionCollection"></a>
-## type [DagVersionCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L249-L252>)
+## type [DagVersionCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L280-L283>)
 
 DagVersionCollection defines model for DagVersionCollection.
 
@@ -2242,8 +3329,175 @@ type DagVersionCollection struct {
 }
 ```
 
+<a name="DeleteConnectionResponse"></a>
+## type [DeleteConnectionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3513-L3520>)
+
+
+
+```go
+type DeleteConnectionResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+    // JSON404 the response for an HTTP 404 `application/json` response
+    JSON404 *NotFound
+}
+```
+
+<a name="ParseDeleteConnectionResponse"></a>
+### func [ParseDeleteConnectionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5572>)
+
+```go
+func ParseDeleteConnectionResponse(rsp *http.Response) (*DeleteConnectionResponse, error)
+```
+
+ParseDeleteConnectionResponse parses an HTTP response from a DeleteConnectionWithResponse call
+
+<a name="DeleteConnectionResponse.ContentType"></a>
+### func \(DeleteConnectionResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3554>)
+
+```go
+func (r DeleteConnectionResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="DeleteConnectionResponse.GetBody"></a>
+### func \(DeleteConnectionResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3533>)
+
+```go
+func (r DeleteConnectionResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="DeleteConnectionResponse.GetJSON401"></a>
+### func \(DeleteConnectionResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3523>)
+
+```go
+func (r DeleteConnectionResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="DeleteConnectionResponse.GetJSON404"></a>
+### func \(DeleteConnectionResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3528>)
+
+```go
+func (r DeleteConnectionResponse) GetJSON404() *NotFound
+```
+
+GetJSON404 returns the response for an HTTP 404 \`application/json\` response
+
+<a name="DeleteConnectionResponse.Status"></a>
+### func \(DeleteConnectionResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3538>)
+
+```go
+func (r DeleteConnectionResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="DeleteConnectionResponse.StatusCode"></a>
+### func \(DeleteConnectionResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3546>)
+
+```go
+func (r DeleteConnectionResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
+<a name="DeleteVariableResponse"></a>
+## type [DeleteVariableResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4582-L4589>)
+
+
+
+```go
+type DeleteVariableResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+    // JSON404 the response for an HTTP 404 `application/json` response
+    JSON404 *NotFound
+}
+```
+
+<a name="ParseDeleteVariableResponse"></a>
+### func [ParseDeleteVariableResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6296>)
+
+```go
+func ParseDeleteVariableResponse(rsp *http.Response) (*DeleteVariableResponse, error)
+```
+
+ParseDeleteVariableResponse parses an HTTP response from a DeleteVariableWithResponse call
+
+<a name="DeleteVariableResponse.ContentType"></a>
+### func \(DeleteVariableResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4623>)
+
+```go
+func (r DeleteVariableResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="DeleteVariableResponse.GetBody"></a>
+### func \(DeleteVariableResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4602>)
+
+```go
+func (r DeleteVariableResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="DeleteVariableResponse.GetJSON401"></a>
+### func \(DeleteVariableResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4592>)
+
+```go
+func (r DeleteVariableResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="DeleteVariableResponse.GetJSON404"></a>
+### func \(DeleteVariableResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4597>)
+
+```go
+func (r DeleteVariableResponse) GetJSON404() *NotFound
+```
+
+GetJSON404 returns the response for an HTTP 404 \`application/json\` response
+
+<a name="DeleteVariableResponse.Status"></a>
+### func \(DeleteVariableResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4607>)
+
+```go
+func (r DeleteVariableResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="DeleteVariableResponse.StatusCode"></a>
+### func \(DeleteVariableResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4615>)
+
+```go
+func (r DeleteVariableResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
+<a name="EncryptionUnavailable"></a>
+## type [EncryptionUnavailable](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L442>)
+
+EncryptionUnavailable defines model for EncryptionUnavailable.
+
+```go
+type EncryptionUnavailable = Error
+```
+
 <a name="Error"></a>
-## type [Error](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L255-L261>)
+## type [Error](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L286-L292>)
 
 Error defines model for Error.
 
@@ -2258,7 +3512,7 @@ type Error struct {
 ```
 
 <a name="ExecutorInfo"></a>
-## type [ExecutorInfo](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L264-L269>)
+## type [ExecutorInfo](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L295-L300>)
 
 ExecutorInfo defines model for ExecutorInfo.
 
@@ -2271,8 +3525,98 @@ type ExecutorInfo struct {
 }
 ```
 
+<a name="GetConnectionResponse"></a>
+## type [GetConnectionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3561-L3570>)
+
+
+
+```go
+type GetConnectionResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON200 the response for an HTTP 200 `application/json` response
+    JSON200 *Connection
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+    // JSON404 the response for an HTTP 404 `application/json` response
+    JSON404 *NotFound
+}
+```
+
+<a name="ParseGetConnectionResponse"></a>
+### func [ParseGetConnectionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5608>)
+
+```go
+func ParseGetConnectionResponse(rsp *http.Response) (*GetConnectionResponse, error)
+```
+
+ParseGetConnectionResponse parses an HTTP response from a GetConnectionWithResponse call
+
+<a name="GetConnectionResponse.ContentType"></a>
+### func \(GetConnectionResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3609>)
+
+```go
+func (r GetConnectionResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="GetConnectionResponse.GetBody"></a>
+### func \(GetConnectionResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3588>)
+
+```go
+func (r GetConnectionResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="GetConnectionResponse.GetJSON200"></a>
+### func \(GetConnectionResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3573>)
+
+```go
+func (r GetConnectionResponse) GetJSON200() *Connection
+```
+
+GetJSON200 returns the response for an HTTP 200 \`application/json\` response
+
+<a name="GetConnectionResponse.GetJSON401"></a>
+### func \(GetConnectionResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3578>)
+
+```go
+func (r GetConnectionResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="GetConnectionResponse.GetJSON404"></a>
+### func \(GetConnectionResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3583>)
+
+```go
+func (r GetConnectionResponse) GetJSON404() *NotFound
+```
+
+GetJSON404 returns the response for an HTTP 404 \`application/json\` response
+
+<a name="GetConnectionResponse.Status"></a>
+### func \(GetConnectionResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3593>)
+
+```go
+func (r GetConnectionResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="GetConnectionResponse.StatusCode"></a>
+### func \(GetConnectionResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3601>)
+
+```go
+func (r GetConnectionResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
 <a name="GetDagResponse"></a>
-## type [GetDagResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2495-L2502>)
+## type [GetDagResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3774-L3781>)
 
 
 
@@ -2288,7 +3632,7 @@ type GetDagResponse struct {
 ```
 
 <a name="ParseGetDagResponse"></a>
-### func [ParseGetDagResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3841>)
+### func [ParseGetDagResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5761>)
 
 ```go
 func ParseGetDagResponse(rsp *http.Response) (*GetDagResponse, error)
@@ -2297,7 +3641,7 @@ func ParseGetDagResponse(rsp *http.Response) (*GetDagResponse, error)
 ParseGetDagResponse parses an HTTP response from a GetDagWithResponse call
 
 <a name="GetDagResponse.ContentType"></a>
-### func \(GetDagResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2536>)
+### func \(GetDagResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3815>)
 
 ```go
 func (r GetDagResponse) ContentType() string
@@ -2306,7 +3650,7 @@ func (r GetDagResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetDagResponse.GetBody"></a>
-### func \(GetDagResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2515>)
+### func \(GetDagResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3794>)
 
 ```go
 func (r GetDagResponse) GetBody() []byte
@@ -2315,7 +3659,7 @@ func (r GetDagResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetDagResponse.GetJSON200"></a>
-### func \(GetDagResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2505>)
+### func \(GetDagResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3784>)
 
 ```go
 func (r GetDagResponse) GetJSON200() *DAG
@@ -2324,7 +3668,7 @@ func (r GetDagResponse) GetJSON200() *DAG
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetDagResponse.GetJSON404"></a>
-### func \(GetDagResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2510>)
+### func \(GetDagResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3789>)
 
 ```go
 func (r GetDagResponse) GetJSON404() *NotFound
@@ -2333,7 +3677,7 @@ func (r GetDagResponse) GetJSON404() *NotFound
 GetJSON404 returns the response for an HTTP 404 \`application/json\` response
 
 <a name="GetDagResponse.Status"></a>
-### func \(GetDagResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2520>)
+### func \(GetDagResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3799>)
 
 ```go
 func (r GetDagResponse) Status() string
@@ -2342,7 +3686,7 @@ func (r GetDagResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetDagResponse.StatusCode"></a>
-### func \(GetDagResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2528>)
+### func \(GetDagResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3807>)
 
 ```go
 func (r GetDagResponse) StatusCode() int
@@ -2351,7 +3695,7 @@ func (r GetDagResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetDagRunResponse"></a>
-## type [GetDagRunResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2707-L2714>)
+## type [GetDagRunResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3986-L3993>)
 
 
 
@@ -2367,7 +3711,7 @@ type GetDagRunResponse struct {
 ```
 
 <a name="ParseGetDagRunResponse"></a>
-### func [ParseGetDagRunResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3978>)
+### func [ParseGetDagRunResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5898>)
 
 ```go
 func ParseGetDagRunResponse(rsp *http.Response) (*GetDagRunResponse, error)
@@ -2376,7 +3720,7 @@ func ParseGetDagRunResponse(rsp *http.Response) (*GetDagRunResponse, error)
 ParseGetDagRunResponse parses an HTTP response from a GetDagRunWithResponse call
 
 <a name="GetDagRunResponse.ContentType"></a>
-### func \(GetDagRunResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2748>)
+### func \(GetDagRunResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4027>)
 
 ```go
 func (r GetDagRunResponse) ContentType() string
@@ -2385,7 +3729,7 @@ func (r GetDagRunResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetDagRunResponse.GetBody"></a>
-### func \(GetDagRunResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2727>)
+### func \(GetDagRunResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4006>)
 
 ```go
 func (r GetDagRunResponse) GetBody() []byte
@@ -2394,7 +3738,7 @@ func (r GetDagRunResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetDagRunResponse.GetJSON200"></a>
-### func \(GetDagRunResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2717>)
+### func \(GetDagRunResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3996>)
 
 ```go
 func (r GetDagRunResponse) GetJSON200() *DAGRun
@@ -2403,7 +3747,7 @@ func (r GetDagRunResponse) GetJSON200() *DAGRun
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetDagRunResponse.GetJSON404"></a>
-### func \(GetDagRunResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2722>)
+### func \(GetDagRunResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4001>)
 
 ```go
 func (r GetDagRunResponse) GetJSON404() *NotFound
@@ -2412,7 +3756,7 @@ func (r GetDagRunResponse) GetJSON404() *NotFound
 GetJSON404 returns the response for an HTTP 404 \`application/json\` response
 
 <a name="GetDagRunResponse.Status"></a>
-### func \(GetDagRunResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2732>)
+### func \(GetDagRunResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4011>)
 
 ```go
 func (r GetDagRunResponse) Status() string
@@ -2421,7 +3765,7 @@ func (r GetDagRunResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetDagRunResponse.StatusCode"></a>
-### func \(GetDagRunResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2740>)
+### func \(GetDagRunResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4019>)
 
 ```go
 func (r GetDagRunResponse) StatusCode() int
@@ -2430,7 +3774,7 @@ func (r GetDagRunResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetDagSourceResponse"></a>
-## type [GetDagSourceResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2406-L2413>)
+## type [GetDagSourceResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3685-L3692>)
 
 
 
@@ -2446,7 +3790,7 @@ type GetDagSourceResponse struct {
 ```
 
 <a name="ParseGetDagSourceResponse"></a>
-### func [ParseGetDagSourceResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3782>)
+### func [ParseGetDagSourceResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5702>)
 
 ```go
 func ParseGetDagSourceResponse(rsp *http.Response) (*GetDagSourceResponse, error)
@@ -2455,7 +3799,7 @@ func ParseGetDagSourceResponse(rsp *http.Response) (*GetDagSourceResponse, error
 ParseGetDagSourceResponse parses an HTTP response from a GetDagSourceWithResponse call
 
 <a name="GetDagSourceResponse.ContentType"></a>
-### func \(GetDagSourceResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2447>)
+### func \(GetDagSourceResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3726>)
 
 ```go
 func (r GetDagSourceResponse) ContentType() string
@@ -2464,7 +3808,7 @@ func (r GetDagSourceResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetDagSourceResponse.GetBody"></a>
-### func \(GetDagSourceResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2426>)
+### func \(GetDagSourceResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3705>)
 
 ```go
 func (r GetDagSourceResponse) GetBody() []byte
@@ -2473,7 +3817,7 @@ func (r GetDagSourceResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetDagSourceResponse.GetJSON200"></a>
-### func \(GetDagSourceResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2416>)
+### func \(GetDagSourceResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3695>)
 
 ```go
 func (r GetDagSourceResponse) GetJSON200() *DagSource
@@ -2482,7 +3826,7 @@ func (r GetDagSourceResponse) GetJSON200() *DagSource
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetDagSourceResponse.GetJSON404"></a>
-### func \(GetDagSourceResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2421>)
+### func \(GetDagSourceResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3700>)
 
 ```go
 func (r GetDagSourceResponse) GetJSON404() *NotFound
@@ -2491,7 +3835,7 @@ func (r GetDagSourceResponse) GetJSON404() *NotFound
 GetJSON404 returns the response for an HTTP 404 \`application/json\` response
 
 <a name="GetDagSourceResponse.Status"></a>
-### func \(GetDagSourceResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2431>)
+### func \(GetDagSourceResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3710>)
 
 ```go
 func (r GetDagSourceResponse) Status() string
@@ -2500,7 +3844,7 @@ func (r GetDagSourceResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetDagSourceResponse.StatusCode"></a>
-### func \(GetDagSourceResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2439>)
+### func \(GetDagSourceResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3718>)
 
 ```go
 func (r GetDagSourceResponse) StatusCode() int
@@ -2509,7 +3853,7 @@ func (r GetDagSourceResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetDagSpecResponse"></a>
-## type [GetDagSpecResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2960-L2967>)
+## type [GetDagSpecResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4239-L4246>)
 
 
 
@@ -2525,7 +3869,7 @@ type GetDagSpecResponse struct {
 ```
 
 <a name="ParseGetDagSpecResponse"></a>
-### func [ParseGetDagSpecResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4138>)
+### func [ParseGetDagSpecResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6058>)
 
 ```go
 func ParseGetDagSpecResponse(rsp *http.Response) (*GetDagSpecResponse, error)
@@ -2534,7 +3878,7 @@ func ParseGetDagSpecResponse(rsp *http.Response) (*GetDagSpecResponse, error)
 ParseGetDagSpecResponse parses an HTTP response from a GetDagSpecWithResponse call
 
 <a name="GetDagSpecResponse.ContentType"></a>
-### func \(GetDagSpecResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3001>)
+### func \(GetDagSpecResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4280>)
 
 ```go
 func (r GetDagSpecResponse) ContentType() string
@@ -2543,7 +3887,7 @@ func (r GetDagSpecResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetDagSpecResponse.GetBody"></a>
-### func \(GetDagSpecResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2980>)
+### func \(GetDagSpecResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4259>)
 
 ```go
 func (r GetDagSpecResponse) GetBody() []byte
@@ -2552,7 +3896,7 @@ func (r GetDagSpecResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetDagSpecResponse.GetJSON200"></a>
-### func \(GetDagSpecResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2970>)
+### func \(GetDagSpecResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4249>)
 
 ```go
 func (r GetDagSpecResponse) GetJSON200() *map[string]interface{}
@@ -2561,7 +3905,7 @@ func (r GetDagSpecResponse) GetJSON200() *map[string]interface{}
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetDagSpecResponse.GetJSON404"></a>
-### func \(GetDagSpecResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2975>)
+### func \(GetDagSpecResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4254>)
 
 ```go
 func (r GetDagSpecResponse) GetJSON404() *NotFound
@@ -2570,7 +3914,7 @@ func (r GetDagSpecResponse) GetJSON404() *NotFound
 GetJSON404 returns the response for an HTTP 404 \`application/json\` response
 
 <a name="GetDagSpecResponse.Status"></a>
-### func \(GetDagSpecResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2985>)
+### func \(GetDagSpecResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4264>)
 
 ```go
 func (r GetDagSpecResponse) Status() string
@@ -2579,7 +3923,7 @@ func (r GetDagSpecResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetDagSpecResponse.StatusCode"></a>
-### func \(GetDagSpecResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2993>)
+### func \(GetDagSpecResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4272>)
 
 ```go
 func (r GetDagSpecResponse) StatusCode() int
@@ -2588,7 +3932,7 @@ func (r GetDagSpecResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetDagVersionResponse"></a>
-## type [GetDagVersionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2912-L2919>)
+## type [GetDagVersionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4191-L4198>)
 
 
 
@@ -2604,7 +3948,7 @@ type GetDagVersionResponse struct {
 ```
 
 <a name="ParseGetDagVersionResponse"></a>
-### func [ParseGetDagVersionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4105>)
+### func [ParseGetDagVersionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6025>)
 
 ```go
 func ParseGetDagVersionResponse(rsp *http.Response) (*GetDagVersionResponse, error)
@@ -2613,7 +3957,7 @@ func ParseGetDagVersionResponse(rsp *http.Response) (*GetDagVersionResponse, err
 ParseGetDagVersionResponse parses an HTTP response from a GetDagVersionWithResponse call
 
 <a name="GetDagVersionResponse.ContentType"></a>
-### func \(GetDagVersionResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2953>)
+### func \(GetDagVersionResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4232>)
 
 ```go
 func (r GetDagVersionResponse) ContentType() string
@@ -2622,7 +3966,7 @@ func (r GetDagVersionResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetDagVersionResponse.GetBody"></a>
-### func \(GetDagVersionResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2932>)
+### func \(GetDagVersionResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4211>)
 
 ```go
 func (r GetDagVersionResponse) GetBody() []byte
@@ -2631,7 +3975,7 @@ func (r GetDagVersionResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetDagVersionResponse.GetJSON200"></a>
-### func \(GetDagVersionResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2922>)
+### func \(GetDagVersionResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4201>)
 
 ```go
 func (r GetDagVersionResponse) GetJSON200() *DagVersion
@@ -2640,7 +3984,7 @@ func (r GetDagVersionResponse) GetJSON200() *DagVersion
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetDagVersionResponse.GetJSON404"></a>
-### func \(GetDagVersionResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2927>)
+### func \(GetDagVersionResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4206>)
 
 ```go
 func (r GetDagVersionResponse) GetJSON404() *NotFound
@@ -2649,7 +3993,7 @@ func (r GetDagVersionResponse) GetJSON404() *NotFound
 GetJSON404 returns the response for an HTTP 404 \`application/json\` response
 
 <a name="GetDagVersionResponse.Status"></a>
-### func \(GetDagVersionResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2937>)
+### func \(GetDagVersionResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4216>)
 
 ```go
 func (r GetDagVersionResponse) Status() string
@@ -2658,7 +4002,7 @@ func (r GetDagVersionResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetDagVersionResponse.StatusCode"></a>
-### func \(GetDagVersionResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2945>)
+### func \(GetDagVersionResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4224>)
 
 ```go
 func (r GetDagVersionResponse) StatusCode() int
@@ -2667,7 +4011,7 @@ func (r GetDagVersionResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetHealthzResponse"></a>
-## type [GetHealthzResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3337-L3340>)
+## type [GetHealthzResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4822-L4825>)
 
 
 
@@ -2679,7 +4023,7 @@ type GetHealthzResponse struct {
 ```
 
 <a name="ParseGetHealthzResponse"></a>
-### func [ParseGetHealthzResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4395>)
+### func [ParseGetHealthzResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6464>)
 
 ```go
 func ParseGetHealthzResponse(rsp *http.Response) (*GetHealthzResponse, error)
@@ -2688,7 +4032,7 @@ func ParseGetHealthzResponse(rsp *http.Response) (*GetHealthzResponse, error)
 ParseGetHealthzResponse parses an HTTP response from a GetHealthzWithResponse call
 
 <a name="GetHealthzResponse.ContentType"></a>
-### func \(GetHealthzResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3364>)
+### func \(GetHealthzResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4849>)
 
 ```go
 func (r GetHealthzResponse) ContentType() string
@@ -2697,7 +4041,7 @@ func (r GetHealthzResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetHealthzResponse.GetBody"></a>
-### func \(GetHealthzResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3343>)
+### func \(GetHealthzResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4828>)
 
 ```go
 func (r GetHealthzResponse) GetBody() []byte
@@ -2706,7 +4050,7 @@ func (r GetHealthzResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetHealthzResponse.Status"></a>
-### func \(GetHealthzResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3348>)
+### func \(GetHealthzResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4833>)
 
 ```go
 func (r GetHealthzResponse) Status() string
@@ -2715,7 +4059,7 @@ func (r GetHealthzResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetHealthzResponse.StatusCode"></a>
-### func \(GetHealthzResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3356>)
+### func \(GetHealthzResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4841>)
 
 ```go
 func (r GetHealthzResponse) StatusCode() int
@@ -2724,7 +4068,7 @@ func (r GetHealthzResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetMonitorExecutorResponse"></a>
-## type [GetMonitorExecutorResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3008-L3013>)
+## type [GetMonitorExecutorResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4287-L4292>)
 
 
 
@@ -2738,7 +4082,7 @@ type GetMonitorExecutorResponse struct {
 ```
 
 <a name="ParseGetMonitorExecutorResponse"></a>
-### func [ParseGetMonitorExecutorResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4171>)
+### func [ParseGetMonitorExecutorResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6091>)
 
 ```go
 func ParseGetMonitorExecutorResponse(rsp *http.Response) (*GetMonitorExecutorResponse, error)
@@ -2747,7 +4091,7 @@ func ParseGetMonitorExecutorResponse(rsp *http.Response) (*GetMonitorExecutorRes
 ParseGetMonitorExecutorResponse parses an HTTP response from a GetMonitorExecutorWithResponse call
 
 <a name="GetMonitorExecutorResponse.ContentType"></a>
-### func \(GetMonitorExecutorResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3042>)
+### func \(GetMonitorExecutorResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4321>)
 
 ```go
 func (r GetMonitorExecutorResponse) ContentType() string
@@ -2756,7 +4100,7 @@ func (r GetMonitorExecutorResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetMonitorExecutorResponse.GetBody"></a>
-### func \(GetMonitorExecutorResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3021>)
+### func \(GetMonitorExecutorResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4300>)
 
 ```go
 func (r GetMonitorExecutorResponse) GetBody() []byte
@@ -2765,7 +4109,7 @@ func (r GetMonitorExecutorResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetMonitorExecutorResponse.GetJSON200"></a>
-### func \(GetMonitorExecutorResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3016>)
+### func \(GetMonitorExecutorResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4295>)
 
 ```go
 func (r GetMonitorExecutorResponse) GetJSON200() *ExecutorInfo
@@ -2774,7 +4118,7 @@ func (r GetMonitorExecutorResponse) GetJSON200() *ExecutorInfo
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetMonitorExecutorResponse.Status"></a>
-### func \(GetMonitorExecutorResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3026>)
+### func \(GetMonitorExecutorResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4305>)
 
 ```go
 func (r GetMonitorExecutorResponse) Status() string
@@ -2783,7 +4127,7 @@ func (r GetMonitorExecutorResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetMonitorExecutorResponse.StatusCode"></a>
-### func \(GetMonitorExecutorResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3034>)
+### func \(GetMonitorExecutorResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4313>)
 
 ```go
 func (r GetMonitorExecutorResponse) StatusCode() int
@@ -2792,7 +4136,7 @@ func (r GetMonitorExecutorResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetMonitorHealthResponse"></a>
-## type [GetMonitorHealthResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3049-L3054>)
+## type [GetMonitorHealthResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4328-L4333>)
 
 
 
@@ -2806,7 +4150,7 @@ type GetMonitorHealthResponse struct {
 ```
 
 <a name="ParseGetMonitorHealthResponse"></a>
-### func [ParseGetMonitorHealthResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4197>)
+### func [ParseGetMonitorHealthResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6117>)
 
 ```go
 func ParseGetMonitorHealthResponse(rsp *http.Response) (*GetMonitorHealthResponse, error)
@@ -2815,7 +4159,7 @@ func ParseGetMonitorHealthResponse(rsp *http.Response) (*GetMonitorHealthRespons
 ParseGetMonitorHealthResponse parses an HTTP response from a GetMonitorHealthWithResponse call
 
 <a name="GetMonitorHealthResponse.ContentType"></a>
-### func \(GetMonitorHealthResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3083>)
+### func \(GetMonitorHealthResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4362>)
 
 ```go
 func (r GetMonitorHealthResponse) ContentType() string
@@ -2824,7 +4168,7 @@ func (r GetMonitorHealthResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetMonitorHealthResponse.GetBody"></a>
-### func \(GetMonitorHealthResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3062>)
+### func \(GetMonitorHealthResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4341>)
 
 ```go
 func (r GetMonitorHealthResponse) GetBody() []byte
@@ -2833,7 +4177,7 @@ func (r GetMonitorHealthResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetMonitorHealthResponse.GetJSON200"></a>
-### func \(GetMonitorHealthResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3057>)
+### func \(GetMonitorHealthResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4336>)
 
 ```go
 func (r GetMonitorHealthResponse) GetJSON200() *HealthInfo
@@ -2842,7 +4186,7 @@ func (r GetMonitorHealthResponse) GetJSON200() *HealthInfo
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetMonitorHealthResponse.Status"></a>
-### func \(GetMonitorHealthResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3067>)
+### func \(GetMonitorHealthResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4346>)
 
 ```go
 func (r GetMonitorHealthResponse) Status() string
@@ -2851,7 +4195,7 @@ func (r GetMonitorHealthResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetMonitorHealthResponse.StatusCode"></a>
-### func \(GetMonitorHealthResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3075>)
+### func \(GetMonitorHealthResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4354>)
 
 ```go
 func (r GetMonitorHealthResponse) StatusCode() int
@@ -2860,7 +4204,7 @@ func (r GetMonitorHealthResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetReadyzResponse"></a>
-## type [GetReadyzResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3371-L3374>)
+## type [GetReadyzResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4856-L4859>)
 
 
 
@@ -2872,7 +4216,7 @@ type GetReadyzResponse struct {
 ```
 
 <a name="ParseGetReadyzResponse"></a>
-### func [ParseGetReadyzResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4411>)
+### func [ParseGetReadyzResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6480>)
 
 ```go
 func ParseGetReadyzResponse(rsp *http.Response) (*GetReadyzResponse, error)
@@ -2881,7 +4225,7 @@ func ParseGetReadyzResponse(rsp *http.Response) (*GetReadyzResponse, error)
 ParseGetReadyzResponse parses an HTTP response from a GetReadyzWithResponse call
 
 <a name="GetReadyzResponse.ContentType"></a>
-### func \(GetReadyzResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3398>)
+### func \(GetReadyzResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4883>)
 
 ```go
 func (r GetReadyzResponse) ContentType() string
@@ -2890,7 +4234,7 @@ func (r GetReadyzResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetReadyzResponse.GetBody"></a>
-### func \(GetReadyzResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3377>)
+### func \(GetReadyzResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4862>)
 
 ```go
 func (r GetReadyzResponse) GetBody() []byte
@@ -2899,7 +4243,7 @@ func (r GetReadyzResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetReadyzResponse.Status"></a>
-### func \(GetReadyzResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3382>)
+### func \(GetReadyzResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4867>)
 
 ```go
 func (r GetReadyzResponse) Status() string
@@ -2908,7 +4252,7 @@ func (r GetReadyzResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetReadyzResponse.StatusCode"></a>
-### func \(GetReadyzResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3390>)
+### func \(GetReadyzResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4875>)
 
 ```go
 func (r GetReadyzResponse) StatusCode() int
@@ -2917,7 +4261,7 @@ func (r GetReadyzResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetTaskInstanceResponse"></a>
-## type [GetTaskInstanceResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2796-L2801>)
+## type [GetTaskInstanceResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4075-L4080>)
 
 
 
@@ -2931,7 +4275,7 @@ type GetTaskInstanceResponse struct {
 ```
 
 <a name="ParseGetTaskInstanceResponse"></a>
-### func [ParseGetTaskInstanceResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4037>)
+### func [ParseGetTaskInstanceResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5957>)
 
 ```go
 func ParseGetTaskInstanceResponse(rsp *http.Response) (*GetTaskInstanceResponse, error)
@@ -2940,7 +4284,7 @@ func ParseGetTaskInstanceResponse(rsp *http.Response) (*GetTaskInstanceResponse,
 ParseGetTaskInstanceResponse parses an HTTP response from a GetTaskInstanceWithResponse call
 
 <a name="GetTaskInstanceResponse.ContentType"></a>
-### func \(GetTaskInstanceResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2830>)
+### func \(GetTaskInstanceResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4109>)
 
 ```go
 func (r GetTaskInstanceResponse) ContentType() string
@@ -2949,7 +4293,7 @@ func (r GetTaskInstanceResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetTaskInstanceResponse.GetBody"></a>
-### func \(GetTaskInstanceResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2809>)
+### func \(GetTaskInstanceResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4088>)
 
 ```go
 func (r GetTaskInstanceResponse) GetBody() []byte
@@ -2958,7 +4302,7 @@ func (r GetTaskInstanceResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetTaskInstanceResponse.GetJSON200"></a>
-### func \(GetTaskInstanceResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2804>)
+### func \(GetTaskInstanceResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4083>)
 
 ```go
 func (r GetTaskInstanceResponse) GetJSON200() *TaskInstance
@@ -2967,7 +4311,7 @@ func (r GetTaskInstanceResponse) GetJSON200() *TaskInstance
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetTaskInstanceResponse.Status"></a>
-### func \(GetTaskInstanceResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2814>)
+### func \(GetTaskInstanceResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4093>)
 
 ```go
 func (r GetTaskInstanceResponse) Status() string
@@ -2976,7 +4320,7 @@ func (r GetTaskInstanceResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetTaskInstanceResponse.StatusCode"></a>
-### func \(GetTaskInstanceResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2822>)
+### func \(GetTaskInstanceResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4101>)
 
 ```go
 func (r GetTaskInstanceResponse) StatusCode() int
@@ -2985,7 +4329,7 @@ func (r GetTaskInstanceResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetTaskLogsResponse"></a>
-## type [GetTaskLogsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2837-L2840>)
+## type [GetTaskLogsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4116-L4119>)
 
 
 
@@ -2997,7 +4341,7 @@ type GetTaskLogsResponse struct {
 ```
 
 <a name="ParseGetTaskLogsResponse"></a>
-### func [ParseGetTaskLogsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4063>)
+### func [ParseGetTaskLogsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5983>)
 
 ```go
 func ParseGetTaskLogsResponse(rsp *http.Response) (*GetTaskLogsResponse, error)
@@ -3006,7 +4350,7 @@ func ParseGetTaskLogsResponse(rsp *http.Response) (*GetTaskLogsResponse, error)
 ParseGetTaskLogsResponse parses an HTTP response from a GetTaskLogsWithResponse call
 
 <a name="GetTaskLogsResponse.ContentType"></a>
-### func \(GetTaskLogsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2864>)
+### func \(GetTaskLogsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4143>)
 
 ```go
 func (r GetTaskLogsResponse) ContentType() string
@@ -3015,7 +4359,7 @@ func (r GetTaskLogsResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetTaskLogsResponse.GetBody"></a>
-### func \(GetTaskLogsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2843>)
+### func \(GetTaskLogsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4122>)
 
 ```go
 func (r GetTaskLogsResponse) GetBody() []byte
@@ -3024,7 +4368,7 @@ func (r GetTaskLogsResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetTaskLogsResponse.Status"></a>
-### func \(GetTaskLogsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2848>)
+### func \(GetTaskLogsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4127>)
 
 ```go
 func (r GetTaskLogsResponse) Status() string
@@ -3033,7 +4377,7 @@ func (r GetTaskLogsResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetTaskLogsResponse.StatusCode"></a>
-### func \(GetTaskLogsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2856>)
+### func \(GetTaskLogsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4135>)
 
 ```go
 func (r GetTaskLogsResponse) StatusCode() int
@@ -3041,8 +4385,98 @@ func (r GetTaskLogsResponse) StatusCode() int
 
 StatusCode returns HTTPResponse.StatusCode
 
+<a name="GetVariableResponse"></a>
+## type [GetVariableResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4630-L4639>)
+
+
+
+```go
+type GetVariableResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON200 the response for an HTTP 200 `application/json` response
+    JSON200 *Variable
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+    // JSON404 the response for an HTTP 404 `application/json` response
+    JSON404 *NotFound
+}
+```
+
+<a name="ParseGetVariableResponse"></a>
+### func [ParseGetVariableResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6332>)
+
+```go
+func ParseGetVariableResponse(rsp *http.Response) (*GetVariableResponse, error)
+```
+
+ParseGetVariableResponse parses an HTTP response from a GetVariableWithResponse call
+
+<a name="GetVariableResponse.ContentType"></a>
+### func \(GetVariableResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4678>)
+
+```go
+func (r GetVariableResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="GetVariableResponse.GetBody"></a>
+### func \(GetVariableResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4657>)
+
+```go
+func (r GetVariableResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="GetVariableResponse.GetJSON200"></a>
+### func \(GetVariableResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4642>)
+
+```go
+func (r GetVariableResponse) GetJSON200() *Variable
+```
+
+GetJSON200 returns the response for an HTTP 200 \`application/json\` response
+
+<a name="GetVariableResponse.GetJSON401"></a>
+### func \(GetVariableResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4647>)
+
+```go
+func (r GetVariableResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="GetVariableResponse.GetJSON404"></a>
+### func \(GetVariableResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4652>)
+
+```go
+func (r GetVariableResponse) GetJSON404() *NotFound
+```
+
+GetJSON404 returns the response for an HTTP 404 \`application/json\` response
+
+<a name="GetVariableResponse.Status"></a>
+### func \(GetVariableResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4662>)
+
+```go
+func (r GetVariableResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="GetVariableResponse.StatusCode"></a>
+### func \(GetVariableResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4670>)
+
+```go
+func (r GetVariableResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
 <a name="GetVersionResponse"></a>
-## type [GetVersionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3200-L3205>)
+## type [GetVersionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4685-L4690>)
 
 
 
@@ -3056,7 +4490,7 @@ type GetVersionResponse struct {
 ```
 
 <a name="ParseGetVersionResponse"></a>
-### func [ParseGetVersionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4303>)
+### func [ParseGetVersionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6372>)
 
 ```go
 func ParseGetVersionResponse(rsp *http.Response) (*GetVersionResponse, error)
@@ -3065,7 +4499,7 @@ func ParseGetVersionResponse(rsp *http.Response) (*GetVersionResponse, error)
 ParseGetVersionResponse parses an HTTP response from a GetVersionWithResponse call
 
 <a name="GetVersionResponse.ContentType"></a>
-### func \(GetVersionResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3234>)
+### func \(GetVersionResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4719>)
 
 ```go
 func (r GetVersionResponse) ContentType() string
@@ -3074,7 +4508,7 @@ func (r GetVersionResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetVersionResponse.GetBody"></a>
-### func \(GetVersionResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3213>)
+### func \(GetVersionResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4698>)
 
 ```go
 func (r GetVersionResponse) GetBody() []byte
@@ -3083,7 +4517,7 @@ func (r GetVersionResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetVersionResponse.GetJSON200"></a>
-### func \(GetVersionResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3208>)
+### func \(GetVersionResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4693>)
 
 ```go
 func (r GetVersionResponse) GetJSON200() *VersionInfo
@@ -3092,7 +4526,7 @@ func (r GetVersionResponse) GetJSON200() *VersionInfo
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetVersionResponse.Status"></a>
-### func \(GetVersionResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3218>)
+### func \(GetVersionResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4703>)
 
 ```go
 func (r GetVersionResponse) Status() string
@@ -3101,7 +4535,7 @@ func (r GetVersionResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetVersionResponse.StatusCode"></a>
-### func \(GetVersionResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3226>)
+### func \(GetVersionResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4711>)
 
 ```go
 func (r GetVersionResponse) StatusCode() int
@@ -3110,7 +4544,7 @@ func (r GetVersionResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="GetXcomEntryResponse"></a>
-## type [GetXcomEntryResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3241-L3248>)
+## type [GetXcomEntryResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4726-L4733>)
 
 
 
@@ -3126,7 +4560,7 @@ type GetXcomEntryResponse struct {
 ```
 
 <a name="ParseGetXcomEntryResponse"></a>
-### func [ParseGetXcomEntryResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4329>)
+### func [ParseGetXcomEntryResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6398>)
 
 ```go
 func ParseGetXcomEntryResponse(rsp *http.Response) (*GetXcomEntryResponse, error)
@@ -3135,7 +4569,7 @@ func ParseGetXcomEntryResponse(rsp *http.Response) (*GetXcomEntryResponse, error
 ParseGetXcomEntryResponse parses an HTTP response from a GetXcomEntryWithResponse call
 
 <a name="GetXcomEntryResponse.ContentType"></a>
-### func \(GetXcomEntryResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3282>)
+### func \(GetXcomEntryResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4767>)
 
 ```go
 func (r GetXcomEntryResponse) ContentType() string
@@ -3144,7 +4578,7 @@ func (r GetXcomEntryResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="GetXcomEntryResponse.GetBody"></a>
-### func \(GetXcomEntryResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3261>)
+### func \(GetXcomEntryResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4746>)
 
 ```go
 func (r GetXcomEntryResponse) GetBody() []byte
@@ -3153,7 +4587,7 @@ func (r GetXcomEntryResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="GetXcomEntryResponse.GetJSON200"></a>
-### func \(GetXcomEntryResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3251>)
+### func \(GetXcomEntryResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4736>)
 
 ```go
 func (r GetXcomEntryResponse) GetJSON200() *XComEntry
@@ -3162,7 +4596,7 @@ func (r GetXcomEntryResponse) GetJSON200() *XComEntry
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="GetXcomEntryResponse.GetJSON404"></a>
-### func \(GetXcomEntryResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3256>)
+### func \(GetXcomEntryResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4741>)
 
 ```go
 func (r GetXcomEntryResponse) GetJSON404() *NotFound
@@ -3171,7 +4605,7 @@ func (r GetXcomEntryResponse) GetJSON404() *NotFound
 GetJSON404 returns the response for an HTTP 404 \`application/json\` response
 
 <a name="GetXcomEntryResponse.Status"></a>
-### func \(GetXcomEntryResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3266>)
+### func \(GetXcomEntryResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4751>)
 
 ```go
 func (r GetXcomEntryResponse) Status() string
@@ -3180,7 +4614,7 @@ func (r GetXcomEntryResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="GetXcomEntryResponse.StatusCode"></a>
-### func \(GetXcomEntryResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3274>)
+### func \(GetXcomEntryResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4759>)
 
 ```go
 func (r GetXcomEntryResponse) StatusCode() int
@@ -3189,7 +4623,7 @@ func (r GetXcomEntryResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="HealthInfo"></a>
-## type [HealthInfo](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L272-L277>)
+## type [HealthInfo](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L303-L308>)
 
 HealthInfo defines model for HealthInfo.
 
@@ -3203,7 +4637,7 @@ type HealthInfo struct {
 ```
 
 <a name="HttpRequestDoer"></a>
-## type [HttpRequestDoer](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L434-L436>)
+## type [HttpRequestDoer](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L517-L519>)
 
 Doer performs HTTP requests.
 
@@ -3216,7 +4650,7 @@ type HttpRequestDoer interface {
 ```
 
 <a name="IssueTokenJSONRequestBody"></a>
-## type [IssueTokenJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L426>)
+## type [IssueTokenJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L509>)
 
 IssueTokenJSONRequestBody defines body for IssueToken for application/json ContentType.
 
@@ -3225,7 +4659,7 @@ type IssueTokenJSONRequestBody = TokenRequest
 ```
 
 <a name="IssueTokenResponse"></a>
-## type [IssueTokenResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3289-L3296>)
+## type [IssueTokenResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4774-L4781>)
 
 
 
@@ -3241,7 +4675,7 @@ type IssueTokenResponse struct {
 ```
 
 <a name="ParseIssueTokenResponse"></a>
-### func [ParseIssueTokenResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4362>)
+### func [ParseIssueTokenResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6431>)
 
 ```go
 func ParseIssueTokenResponse(rsp *http.Response) (*IssueTokenResponse, error)
@@ -3250,7 +4684,7 @@ func ParseIssueTokenResponse(rsp *http.Response) (*IssueTokenResponse, error)
 ParseIssueTokenResponse parses an HTTP response from a IssueTokenWithResponse call
 
 <a name="IssueTokenResponse.ContentType"></a>
-### func \(IssueTokenResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3330>)
+### func \(IssueTokenResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4815>)
 
 ```go
 func (r IssueTokenResponse) ContentType() string
@@ -3259,7 +4693,7 @@ func (r IssueTokenResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="IssueTokenResponse.GetBody"></a>
-### func \(IssueTokenResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3309>)
+### func \(IssueTokenResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4794>)
 
 ```go
 func (r IssueTokenResponse) GetBody() []byte
@@ -3268,7 +4702,7 @@ func (r IssueTokenResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="IssueTokenResponse.GetJSON200"></a>
-### func \(IssueTokenResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3299>)
+### func \(IssueTokenResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4784>)
 
 ```go
 func (r IssueTokenResponse) GetJSON200() *TokenResponse
@@ -3277,7 +4711,7 @@ func (r IssueTokenResponse) GetJSON200() *TokenResponse
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="IssueTokenResponse.GetJSON401"></a>
-### func \(IssueTokenResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3304>)
+### func \(IssueTokenResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4789>)
 
 ```go
 func (r IssueTokenResponse) GetJSON401() *Unauthorized
@@ -3286,7 +4720,7 @@ func (r IssueTokenResponse) GetJSON401() *Unauthorized
 GetJSON401 returns the response for an HTTP 401 \`application/json\` response
 
 <a name="IssueTokenResponse.Status"></a>
-### func \(IssueTokenResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3314>)
+### func \(IssueTokenResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4799>)
 
 ```go
 func (r IssueTokenResponse) Status() string
@@ -3295,7 +4729,7 @@ func (r IssueTokenResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="IssueTokenResponse.StatusCode"></a>
-### func \(IssueTokenResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3322>)
+### func \(IssueTokenResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4807>)
 
 ```go
 func (r IssueTokenResponse) StatusCode() int
@@ -3304,7 +4738,7 @@ func (r IssueTokenResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="Limit"></a>
-## type [Limit](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L374>)
+## type [Limit](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L430>)
 
 Limit defines model for Limit.
 
@@ -3312,8 +4746,99 @@ Limit defines model for Limit.
 type Limit = int
 ```
 
+<a name="ListConnectionsParams"></a>
+## type [ListConnectionsParams](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L451-L454>)
+
+ListConnectionsParams defines parameters for ListConnections.
+
+```go
+type ListConnectionsParams struct {
+    Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+    Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
+```
+
+<a name="ListConnectionsResponse"></a>
+## type [ListConnectionsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3403-L3410>)
+
+
+
+```go
+type ListConnectionsResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON200 the response for an HTTP 200 `application/json` response
+    JSON200 *ConnectionCollection
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+}
+```
+
+<a name="ParseListConnectionsResponse"></a>
+### func [ParseListConnectionsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5492>)
+
+```go
+func ParseListConnectionsResponse(rsp *http.Response) (*ListConnectionsResponse, error)
+```
+
+ParseListConnectionsResponse parses an HTTP response from a ListConnectionsWithResponse call
+
+<a name="ListConnectionsResponse.ContentType"></a>
+### func \(ListConnectionsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3444>)
+
+```go
+func (r ListConnectionsResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="ListConnectionsResponse.GetBody"></a>
+### func \(ListConnectionsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3423>)
+
+```go
+func (r ListConnectionsResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="ListConnectionsResponse.GetJSON200"></a>
+### func \(ListConnectionsResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3413>)
+
+```go
+func (r ListConnectionsResponse) GetJSON200() *ConnectionCollection
+```
+
+GetJSON200 returns the response for an HTTP 200 \`application/json\` response
+
+<a name="ListConnectionsResponse.GetJSON401"></a>
+### func \(ListConnectionsResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3418>)
+
+```go
+func (r ListConnectionsResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="ListConnectionsResponse.Status"></a>
+### func \(ListConnectionsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3428>)
+
+```go
+func (r ListConnectionsResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="ListConnectionsResponse.StatusCode"></a>
+### func \(ListConnectionsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3436>)
+
+```go
+func (r ListConnectionsResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
 <a name="ListDagRunsParams"></a>
-## type [ListDagRunsParams](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L398-L402>)
+## type [ListDagRunsParams](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L466-L470>)
 
 ListDagRunsParams defines parameters for ListDagRuns.
 
@@ -3326,7 +4851,7 @@ type ListDagRunsParams struct {
 ```
 
 <a name="ListDagRunsParamsState"></a>
-## type [ListDagRunsParamsState](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L405>)
+## type [ListDagRunsParamsState](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L473>)
 
 ListDagRunsParamsState defines parameters for ListDagRuns.
 
@@ -3355,7 +4880,7 @@ func (e ListDagRunsParamsState) Valid() bool
 Valid indicates whether the value is a known member of the ListDagRunsParamsState enum.
 
 <a name="ListDagRunsResponse"></a>
-## type [ListDagRunsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2625-L2630>)
+## type [ListDagRunsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3904-L3909>)
 
 
 
@@ -3369,7 +4894,7 @@ type ListDagRunsResponse struct {
 ```
 
 <a name="ParseListDagRunsResponse"></a>
-### func [ParseListDagRunsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3926>)
+### func [ParseListDagRunsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5846>)
 
 ```go
 func ParseListDagRunsResponse(rsp *http.Response) (*ListDagRunsResponse, error)
@@ -3378,7 +4903,7 @@ func ParseListDagRunsResponse(rsp *http.Response) (*ListDagRunsResponse, error)
 ParseListDagRunsResponse parses an HTTP response from a ListDagRunsWithResponse call
 
 <a name="ListDagRunsResponse.ContentType"></a>
-### func \(ListDagRunsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2659>)
+### func \(ListDagRunsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3938>)
 
 ```go
 func (r ListDagRunsResponse) ContentType() string
@@ -3387,7 +4912,7 @@ func (r ListDagRunsResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="ListDagRunsResponse.GetBody"></a>
-### func \(ListDagRunsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2638>)
+### func \(ListDagRunsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3917>)
 
 ```go
 func (r ListDagRunsResponse) GetBody() []byte
@@ -3396,7 +4921,7 @@ func (r ListDagRunsResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="ListDagRunsResponse.GetJSON200"></a>
-### func \(ListDagRunsResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2633>)
+### func \(ListDagRunsResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3912>)
 
 ```go
 func (r ListDagRunsResponse) GetJSON200() *DAGRunCollection
@@ -3405,7 +4930,7 @@ func (r ListDagRunsResponse) GetJSON200() *DAGRunCollection
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="ListDagRunsResponse.Status"></a>
-### func \(ListDagRunsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2643>)
+### func \(ListDagRunsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3922>)
 
 ```go
 func (r ListDagRunsResponse) Status() string
@@ -3414,7 +4939,7 @@ func (r ListDagRunsResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="ListDagRunsResponse.StatusCode"></a>
-### func \(ListDagRunsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2651>)
+### func \(ListDagRunsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3930>)
 
 ```go
 func (r ListDagRunsResponse) StatusCode() int
@@ -3423,7 +4948,7 @@ func (r ListDagRunsResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="ListDagVersionsResponse"></a>
-## type [ListDagVersionsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2871-L2876>)
+## type [ListDagVersionsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4150-L4155>)
 
 
 
@@ -3437,7 +4962,7 @@ type ListDagVersionsResponse struct {
 ```
 
 <a name="ParseListDagVersionsResponse"></a>
-### func [ParseListDagVersionsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4079>)
+### func [ParseListDagVersionsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5999>)
 
 ```go
 func ParseListDagVersionsResponse(rsp *http.Response) (*ListDagVersionsResponse, error)
@@ -3446,7 +4971,7 @@ func ParseListDagVersionsResponse(rsp *http.Response) (*ListDagVersionsResponse,
 ParseListDagVersionsResponse parses an HTTP response from a ListDagVersionsWithResponse call
 
 <a name="ListDagVersionsResponse.ContentType"></a>
-### func \(ListDagVersionsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2905>)
+### func \(ListDagVersionsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4184>)
 
 ```go
 func (r ListDagVersionsResponse) ContentType() string
@@ -3455,7 +4980,7 @@ func (r ListDagVersionsResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="ListDagVersionsResponse.GetBody"></a>
-### func \(ListDagVersionsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2884>)
+### func \(ListDagVersionsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4163>)
 
 ```go
 func (r ListDagVersionsResponse) GetBody() []byte
@@ -3464,7 +4989,7 @@ func (r ListDagVersionsResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="ListDagVersionsResponse.GetJSON200"></a>
-### func \(ListDagVersionsResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2879>)
+### func \(ListDagVersionsResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4158>)
 
 ```go
 func (r ListDagVersionsResponse) GetJSON200() *DagVersionCollection
@@ -3473,7 +4998,7 @@ func (r ListDagVersionsResponse) GetJSON200() *DagVersionCollection
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="ListDagVersionsResponse.Status"></a>
-### func \(ListDagVersionsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2889>)
+### func \(ListDagVersionsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4168>)
 
 ```go
 func (r ListDagVersionsResponse) Status() string
@@ -3482,7 +5007,7 @@ func (r ListDagVersionsResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="ListDagVersionsResponse.StatusCode"></a>
-### func \(ListDagVersionsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2897>)
+### func \(ListDagVersionsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4176>)
 
 ```go
 func (r ListDagVersionsResponse) StatusCode() int
@@ -3491,7 +5016,7 @@ func (r ListDagVersionsResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="ListDagsParams"></a>
-## type [ListDagsParams](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L389-L395>)
+## type [ListDagsParams](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L457-L463>)
 
 ListDagsParams defines parameters for ListDags.
 
@@ -3506,7 +5031,7 @@ type ListDagsParams struct {
 ```
 
 <a name="ListDagsResponse"></a>
-## type [ListDagsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2454-L2459>)
+## type [ListDagsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3733-L3738>)
 
 
 
@@ -3520,7 +5045,7 @@ type ListDagsResponse struct {
 ```
 
 <a name="ParseListDagsResponse"></a>
-### func [ParseListDagsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3815>)
+### func [ParseListDagsResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5735>)
 
 ```go
 func ParseListDagsResponse(rsp *http.Response) (*ListDagsResponse, error)
@@ -3529,7 +5054,7 @@ func ParseListDagsResponse(rsp *http.Response) (*ListDagsResponse, error)
 ParseListDagsResponse parses an HTTP response from a ListDagsWithResponse call
 
 <a name="ListDagsResponse.ContentType"></a>
-### func \(ListDagsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2488>)
+### func \(ListDagsResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3767>)
 
 ```go
 func (r ListDagsResponse) ContentType() string
@@ -3538,7 +5063,7 @@ func (r ListDagsResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="ListDagsResponse.GetBody"></a>
-### func \(ListDagsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2467>)
+### func \(ListDagsResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3746>)
 
 ```go
 func (r ListDagsResponse) GetBody() []byte
@@ -3547,7 +5072,7 @@ func (r ListDagsResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="ListDagsResponse.GetJSON200"></a>
-### func \(ListDagsResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2462>)
+### func \(ListDagsResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3741>)
 
 ```go
 func (r ListDagsResponse) GetJSON200() *DAGCollection
@@ -3556,7 +5081,7 @@ func (r ListDagsResponse) GetJSON200() *DAGCollection
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="ListDagsResponse.Status"></a>
-### func \(ListDagsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2472>)
+### func \(ListDagsResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3751>)
 
 ```go
 func (r ListDagsResponse) Status() string
@@ -3565,7 +5090,7 @@ func (r ListDagsResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="ListDagsResponse.StatusCode"></a>
-### func \(ListDagsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2480>)
+### func \(ListDagsResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3759>)
 
 ```go
 func (r ListDagsResponse) StatusCode() int
@@ -3574,7 +5099,7 @@ func (r ListDagsResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="ListTaskInstancesResponse"></a>
-## type [ListTaskInstancesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2755-L2760>)
+## type [ListTaskInstancesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4034-L4039>)
 
 
 
@@ -3588,7 +5113,7 @@ type ListTaskInstancesResponse struct {
 ```
 
 <a name="ParseListTaskInstancesResponse"></a>
-### func [ParseListTaskInstancesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4011>)
+### func [ParseListTaskInstancesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5931>)
 
 ```go
 func ParseListTaskInstancesResponse(rsp *http.Response) (*ListTaskInstancesResponse, error)
@@ -3597,7 +5122,7 @@ func ParseListTaskInstancesResponse(rsp *http.Response) (*ListTaskInstancesRespo
 ParseListTaskInstancesResponse parses an HTTP response from a ListTaskInstancesWithResponse call
 
 <a name="ListTaskInstancesResponse.ContentType"></a>
-### func \(ListTaskInstancesResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2789>)
+### func \(ListTaskInstancesResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4068>)
 
 ```go
 func (r ListTaskInstancesResponse) ContentType() string
@@ -3606,7 +5131,7 @@ func (r ListTaskInstancesResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="ListTaskInstancesResponse.GetBody"></a>
-### func \(ListTaskInstancesResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2768>)
+### func \(ListTaskInstancesResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4047>)
 
 ```go
 func (r ListTaskInstancesResponse) GetBody() []byte
@@ -3615,7 +5140,7 @@ func (r ListTaskInstancesResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="ListTaskInstancesResponse.GetJSON200"></a>
-### func \(ListTaskInstancesResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2763>)
+### func \(ListTaskInstancesResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4042>)
 
 ```go
 func (r ListTaskInstancesResponse) GetJSON200() *TaskInstanceCollection
@@ -3624,7 +5149,7 @@ func (r ListTaskInstancesResponse) GetJSON200() *TaskInstanceCollection
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="ListTaskInstancesResponse.Status"></a>
-### func \(ListTaskInstancesResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2773>)
+### func \(ListTaskInstancesResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4052>)
 
 ```go
 func (r ListTaskInstancesResponse) Status() string
@@ -3633,7 +5158,7 @@ func (r ListTaskInstancesResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="ListTaskInstancesResponse.StatusCode"></a>
-### func \(ListTaskInstancesResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2781>)
+### func \(ListTaskInstancesResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4060>)
 
 ```go
 func (r ListTaskInstancesResponse) StatusCode() int
@@ -3642,7 +5167,7 @@ func (r ListTaskInstancesResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="ListUsersParams"></a>
-## type [ListUsersParams](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L408-L411>)
+## type [ListUsersParams](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L476-L479>)
 
 ListUsersParams defines parameters for ListUsers.
 
@@ -3654,7 +5179,7 @@ type ListUsersParams struct {
 ```
 
 <a name="ListUsersResponse"></a>
-## type [ListUsersResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3090-L3097>)
+## type [ListUsersResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4369-L4376>)
 
 
 
@@ -3670,7 +5195,7 @@ type ListUsersResponse struct {
 ```
 
 <a name="ParseListUsersResponse"></a>
-### func [ParseListUsersResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4223>)
+### func [ParseListUsersResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6143>)
 
 ```go
 func ParseListUsersResponse(rsp *http.Response) (*ListUsersResponse, error)
@@ -3679,7 +5204,7 @@ func ParseListUsersResponse(rsp *http.Response) (*ListUsersResponse, error)
 ParseListUsersResponse parses an HTTP response from a ListUsersWithResponse call
 
 <a name="ListUsersResponse.ContentType"></a>
-### func \(ListUsersResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3131>)
+### func \(ListUsersResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4410>)
 
 ```go
 func (r ListUsersResponse) ContentType() string
@@ -3688,7 +5213,7 @@ func (r ListUsersResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="ListUsersResponse.GetBody"></a>
-### func \(ListUsersResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3110>)
+### func \(ListUsersResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4389>)
 
 ```go
 func (r ListUsersResponse) GetBody() []byte
@@ -3697,7 +5222,7 @@ func (r ListUsersResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="ListUsersResponse.GetJSON200"></a>
-### func \(ListUsersResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3100>)
+### func \(ListUsersResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4379>)
 
 ```go
 func (r ListUsersResponse) GetJSON200() *UserCollection
@@ -3706,7 +5231,7 @@ func (r ListUsersResponse) GetJSON200() *UserCollection
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="ListUsersResponse.GetJSON401"></a>
-### func \(ListUsersResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3105>)
+### func \(ListUsersResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4384>)
 
 ```go
 func (r ListUsersResponse) GetJSON401() *Unauthorized
@@ -3715,7 +5240,7 @@ func (r ListUsersResponse) GetJSON401() *Unauthorized
 GetJSON401 returns the response for an HTTP 401 \`application/json\` response
 
 <a name="ListUsersResponse.Status"></a>
-### func \(ListUsersResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3115>)
+### func \(ListUsersResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4394>)
 
 ```go
 func (r ListUsersResponse) Status() string
@@ -3724,7 +5249,7 @@ func (r ListUsersResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="ListUsersResponse.StatusCode"></a>
-### func \(ListUsersResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3123>)
+### func \(ListUsersResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4402>)
 
 ```go
 func (r ListUsersResponse) StatusCode() int
@@ -3732,8 +5257,99 @@ func (r ListUsersResponse) StatusCode() int
 
 StatusCode returns HTTPResponse.StatusCode
 
+<a name="ListVariablesParams"></a>
+## type [ListVariablesParams](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L482-L485>)
+
+ListVariablesParams defines parameters for ListVariables.
+
+```go
+type ListVariablesParams struct {
+    Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+    Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
+```
+
+<a name="ListVariablesResponse"></a>
+## type [ListVariablesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4479-L4486>)
+
+
+
+```go
+type ListVariablesResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON200 the response for an HTTP 200 `application/json` response
+    JSON200 *VariableCollection
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+}
+```
+
+<a name="ParseListVariablesResponse"></a>
+### func [ParseListVariablesResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L6223>)
+
+```go
+func ParseListVariablesResponse(rsp *http.Response) (*ListVariablesResponse, error)
+```
+
+ParseListVariablesResponse parses an HTTP response from a ListVariablesWithResponse call
+
+<a name="ListVariablesResponse.ContentType"></a>
+### func \(ListVariablesResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4520>)
+
+```go
+func (r ListVariablesResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="ListVariablesResponse.GetBody"></a>
+### func \(ListVariablesResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4499>)
+
+```go
+func (r ListVariablesResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="ListVariablesResponse.GetJSON200"></a>
+### func \(ListVariablesResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4489>)
+
+```go
+func (r ListVariablesResponse) GetJSON200() *VariableCollection
+```
+
+GetJSON200 returns the response for an HTTP 200 \`application/json\` response
+
+<a name="ListVariablesResponse.GetJSON401"></a>
+### func \(ListVariablesResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4494>)
+
+```go
+func (r ListVariablesResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="ListVariablesResponse.Status"></a>
+### func \(ListVariablesResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4504>)
+
+```go
+func (r ListVariablesResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="ListVariablesResponse.StatusCode"></a>
+### func \(ListVariablesResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L4512>)
+
+```go
+func (r ListVariablesResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
 <a name="NotFound"></a>
-## type [NotFound](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L383>)
+## type [NotFound](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L445>)
 
 NotFound defines model for NotFound.
 
@@ -3742,7 +5358,7 @@ type NotFound = Error
 ```
 
 <a name="Offset"></a>
-## type [Offset](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L377>)
+## type [Offset](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L433>)
 
 Offset defines model for Offset.
 
@@ -3750,8 +5366,87 @@ Offset defines model for Offset.
 type Offset = int
 ```
 
+<a name="RenewTokenResponse"></a>
+## type [RenewTokenResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3355-L3362>)
+
+
+
+```go
+type RenewTokenResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON200 the response for an HTTP 200 `application/json` response
+    JSON200 *TokenResponse
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+}
+```
+
+<a name="ParseRenewTokenResponse"></a>
+### func [ParseRenewTokenResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5459>)
+
+```go
+func ParseRenewTokenResponse(rsp *http.Response) (*RenewTokenResponse, error)
+```
+
+ParseRenewTokenResponse parses an HTTP response from a RenewTokenWithResponse call
+
+<a name="RenewTokenResponse.ContentType"></a>
+### func \(RenewTokenResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3396>)
+
+```go
+func (r RenewTokenResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="RenewTokenResponse.GetBody"></a>
+### func \(RenewTokenResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3375>)
+
+```go
+func (r RenewTokenResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="RenewTokenResponse.GetJSON200"></a>
+### func \(RenewTokenResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3365>)
+
+```go
+func (r RenewTokenResponse) GetJSON200() *TokenResponse
+```
+
+GetJSON200 returns the response for an HTTP 200 \`application/json\` response
+
+<a name="RenewTokenResponse.GetJSON401"></a>
+### func \(RenewTokenResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3370>)
+
+```go
+func (r RenewTokenResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="RenewTokenResponse.Status"></a>
+### func \(RenewTokenResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3380>)
+
+```go
+func (r RenewTokenResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="RenewTokenResponse.StatusCode"></a>
+### func \(RenewTokenResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3388>)
+
+```go
+func (r RenewTokenResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
 <a name="RequestEditorFn"></a>
-## type [RequestEditorFn](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L429>)
+## type [RequestEditorFn](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L512>)
 
 RequestEditorFn is the function signature for the RequestEditor callback function
 
@@ -3760,7 +5455,7 @@ type RequestEditorFn func(ctx context.Context, req *http.Request) error
 ```
 
 <a name="TaskID"></a>
-## type [TaskID](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L380>)
+## type [TaskID](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L436>)
 
 TaskID defines model for TaskID.
 
@@ -3769,7 +5464,7 @@ type TaskID = string
 ```
 
 <a name="TaskInstance"></a>
-## type [TaskInstance](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L280-L299>)
+## type [TaskInstance](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L311-L330>)
 
 TaskInstance defines model for TaskInstance.
 
@@ -3797,7 +5492,7 @@ type TaskInstance struct {
 ```
 
 <a name="TaskInstanceCollection"></a>
-## type [TaskInstanceCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L305-L308>)
+## type [TaskInstanceCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L336-L339>)
 
 TaskInstanceCollection defines model for TaskInstanceCollection.
 
@@ -3809,7 +5504,7 @@ type TaskInstanceCollection struct {
 ```
 
 <a name="TaskInstanceState"></a>
-## type [TaskInstanceState](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L302>)
+## type [TaskInstanceState](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L333>)
 
 TaskInstanceState defines model for TaskInstance.State.
 
@@ -3843,7 +5538,7 @@ func (e TaskInstanceState) Valid() bool
 Valid indicates whether the value is a known member of the TaskInstanceState enum.
 
 <a name="TokenRequest"></a>
-## type [TokenRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L311-L314>)
+## type [TokenRequest](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L342-L345>)
 
 TokenRequest defines model for TokenRequest.
 
@@ -3855,7 +5550,7 @@ type TokenRequest struct {
 ```
 
 <a name="TokenResponse"></a>
-## type [TokenResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L317-L325>)
+## type [TokenResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L348-L356>)
 
 TokenResponse defines model for TokenResponse.
 
@@ -3872,7 +5567,7 @@ type TokenResponse struct {
 ```
 
 <a name="TriggerDagRunJSONRequestBody"></a>
-## type [TriggerDagRunJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L420>)
+## type [TriggerDagRunJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L500>)
 
 TriggerDagRunJSONRequestBody defines body for TriggerDagRun for application/json ContentType.
 
@@ -3881,7 +5576,7 @@ type TriggerDagRunJSONRequestBody = DAGRunCreate
 ```
 
 <a name="TriggerDagRunResponse"></a>
-## type [TriggerDagRunResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2666-L2671>)
+## type [TriggerDagRunResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3945-L3950>)
 
 
 
@@ -3895,7 +5590,7 @@ type TriggerDagRunResponse struct {
 ```
 
 <a name="ParseTriggerDagRunResponse"></a>
-### func [ParseTriggerDagRunResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3952>)
+### func [ParseTriggerDagRunResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5872>)
 
 ```go
 func ParseTriggerDagRunResponse(rsp *http.Response) (*TriggerDagRunResponse, error)
@@ -3904,7 +5599,7 @@ func ParseTriggerDagRunResponse(rsp *http.Response) (*TriggerDagRunResponse, err
 ParseTriggerDagRunResponse parses an HTTP response from a TriggerDagRunWithResponse call
 
 <a name="TriggerDagRunResponse.ContentType"></a>
-### func \(TriggerDagRunResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2700>)
+### func \(TriggerDagRunResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3979>)
 
 ```go
 func (r TriggerDagRunResponse) ContentType() string
@@ -3913,7 +5608,7 @@ func (r TriggerDagRunResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="TriggerDagRunResponse.GetBody"></a>
-### func \(TriggerDagRunResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2679>)
+### func \(TriggerDagRunResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3958>)
 
 ```go
 func (r TriggerDagRunResponse) GetBody() []byte
@@ -3922,7 +5617,7 @@ func (r TriggerDagRunResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="TriggerDagRunResponse.GetJSON200"></a>
-### func \(TriggerDagRunResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2674>)
+### func \(TriggerDagRunResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3953>)
 
 ```go
 func (r TriggerDagRunResponse) GetJSON200() *DAGRun
@@ -3931,7 +5626,7 @@ func (r TriggerDagRunResponse) GetJSON200() *DAGRun
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="TriggerDagRunResponse.Status"></a>
-### func \(TriggerDagRunResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2684>)
+### func \(TriggerDagRunResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3963>)
 
 ```go
 func (r TriggerDagRunResponse) Status() string
@@ -3940,7 +5635,7 @@ func (r TriggerDagRunResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="TriggerDagRunResponse.StatusCode"></a>
-### func \(TriggerDagRunResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2692>)
+### func \(TriggerDagRunResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3971>)
 
 ```go
 func (r TriggerDagRunResponse) StatusCode() int
@@ -3949,7 +5644,7 @@ func (r TriggerDagRunResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="Unauthorized"></a>
-## type [Unauthorized](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L386>)
+## type [Unauthorized](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L448>)
 
 Unauthorized defines model for Unauthorized.
 
@@ -3957,8 +5652,129 @@ Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 ```
 
+<a name="UpdateConnectionJSONRequestBody"></a>
+## type [UpdateConnectionJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L491>)
+
+UpdateConnectionJSONRequestBody defines body for UpdateConnection for application/json ContentType.
+
+```go
+type UpdateConnectionJSONRequestBody = ConnectionBody
+```
+
+<a name="UpdateConnectionResponse"></a>
+## type [UpdateConnectionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3616-L3629>)
+
+
+
+```go
+type UpdateConnectionResponse struct {
+    Body         []byte
+    HTTPResponse *http.Response
+    // JSON200 the response for an HTTP 200 `application/json` response
+    JSON200 *Connection
+    // JSON400 the response for an HTTP 400 `application/json` response
+    JSON400 *Error
+    // JSON401 the response for an HTTP 401 `application/json` response
+    JSON401 *Unauthorized
+    // JSON404 the response for an HTTP 404 `application/json` response
+    JSON404 *NotFound
+    // JSON503 the response for an HTTP 503 `application/json` response
+    JSON503 *EncryptionUnavailable
+}
+```
+
+<a name="ParseUpdateConnectionResponse"></a>
+### func [ParseUpdateConnectionResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5648>)
+
+```go
+func ParseUpdateConnectionResponse(rsp *http.Response) (*UpdateConnectionResponse, error)
+```
+
+ParseUpdateConnectionResponse parses an HTTP response from a UpdateConnectionWithResponse call
+
+<a name="UpdateConnectionResponse.ContentType"></a>
+### func \(UpdateConnectionResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3678>)
+
+```go
+func (r UpdateConnectionResponse) ContentType() string
+```
+
+ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
+
+<a name="UpdateConnectionResponse.GetBody"></a>
+### func \(UpdateConnectionResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3657>)
+
+```go
+func (r UpdateConnectionResponse) GetBody() []byte
+```
+
+GetBody returns the raw response body bytes
+
+<a name="UpdateConnectionResponse.GetJSON200"></a>
+### func \(UpdateConnectionResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3632>)
+
+```go
+func (r UpdateConnectionResponse) GetJSON200() *Connection
+```
+
+GetJSON200 returns the response for an HTTP 200 \`application/json\` response
+
+<a name="UpdateConnectionResponse.GetJSON400"></a>
+### func \(UpdateConnectionResponse\) [GetJSON400](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3637>)
+
+```go
+func (r UpdateConnectionResponse) GetJSON400() *Error
+```
+
+GetJSON400 returns the response for an HTTP 400 \`application/json\` response
+
+<a name="UpdateConnectionResponse.GetJSON401"></a>
+### func \(UpdateConnectionResponse\) [GetJSON401](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3642>)
+
+```go
+func (r UpdateConnectionResponse) GetJSON401() *Unauthorized
+```
+
+GetJSON401 returns the response for an HTTP 401 \`application/json\` response
+
+<a name="UpdateConnectionResponse.GetJSON404"></a>
+### func \(UpdateConnectionResponse\) [GetJSON404](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3647>)
+
+```go
+func (r UpdateConnectionResponse) GetJSON404() *NotFound
+```
+
+GetJSON404 returns the response for an HTTP 404 \`application/json\` response
+
+<a name="UpdateConnectionResponse.GetJSON503"></a>
+### func \(UpdateConnectionResponse\) [GetJSON503](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3652>)
+
+```go
+func (r UpdateConnectionResponse) GetJSON503() *EncryptionUnavailable
+```
+
+GetJSON503 returns the response for an HTTP 503 \`application/json\` response
+
+<a name="UpdateConnectionResponse.Status"></a>
+### func \(UpdateConnectionResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3662>)
+
+```go
+func (r UpdateConnectionResponse) Status() string
+```
+
+Status returns HTTPResponse.Status
+
+<a name="UpdateConnectionResponse.StatusCode"></a>
+### func \(UpdateConnectionResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3670>)
+
+```go
+func (r UpdateConnectionResponse) StatusCode() int
+```
+
+StatusCode returns HTTPResponse.StatusCode
+
 <a name="UpdateDagJSONRequestBody"></a>
-## type [UpdateDagJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L414>)
+## type [UpdateDagJSONRequestBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L494>)
 
 UpdateDagJSONRequestBody defines body for UpdateDag for application/json ContentType.
 
@@ -3967,7 +5783,7 @@ type UpdateDagJSONRequestBody = DAGUpdate
 ```
 
 <a name="UpdateDagResponse"></a>
-## type [UpdateDagResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2543-L2548>)
+## type [UpdateDagResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3822-L3827>)
 
 
 
@@ -3981,7 +5797,7 @@ type UpdateDagResponse struct {
 ```
 
 <a name="ParseUpdateDagResponse"></a>
-### func [ParseUpdateDagResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3874>)
+### func [ParseUpdateDagResponse](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L5794>)
 
 ```go
 func ParseUpdateDagResponse(rsp *http.Response) (*UpdateDagResponse, error)
@@ -3990,7 +5806,7 @@ func ParseUpdateDagResponse(rsp *http.Response) (*UpdateDagResponse, error)
 ParseUpdateDagResponse parses an HTTP response from a UpdateDagWithResponse call
 
 <a name="UpdateDagResponse.ContentType"></a>
-### func \(UpdateDagResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2577>)
+### func \(UpdateDagResponse\) [ContentType](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3856>)
 
 ```go
 func (r UpdateDagResponse) ContentType() string
@@ -3999,7 +5815,7 @@ func (r UpdateDagResponse) ContentType() string
 ContentType is a convenience method to retrieve the Content\-Type value from the HTTP response headers
 
 <a name="UpdateDagResponse.GetBody"></a>
-### func \(UpdateDagResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2556>)
+### func \(UpdateDagResponse\) [GetBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3835>)
 
 ```go
 func (r UpdateDagResponse) GetBody() []byte
@@ -4008,7 +5824,7 @@ func (r UpdateDagResponse) GetBody() []byte
 GetBody returns the raw response body bytes
 
 <a name="UpdateDagResponse.GetJSON200"></a>
-### func \(UpdateDagResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2551>)
+### func \(UpdateDagResponse\) [GetJSON200](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3830>)
 
 ```go
 func (r UpdateDagResponse) GetJSON200() *DAG
@@ -4017,7 +5833,7 @@ func (r UpdateDagResponse) GetJSON200() *DAG
 GetJSON200 returns the response for an HTTP 200 \`application/json\` response
 
 <a name="UpdateDagResponse.Status"></a>
-### func \(UpdateDagResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2561>)
+### func \(UpdateDagResponse\) [Status](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3840>)
 
 ```go
 func (r UpdateDagResponse) Status() string
@@ -4026,7 +5842,7 @@ func (r UpdateDagResponse) Status() string
 Status returns HTTPResponse.Status
 
 <a name="UpdateDagResponse.StatusCode"></a>
-### func \(UpdateDagResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L2569>)
+### func \(UpdateDagResponse\) [StatusCode](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L3848>)
 
 ```go
 func (r UpdateDagResponse) StatusCode() int
@@ -4035,7 +5851,7 @@ func (r UpdateDagResponse) StatusCode() int
 StatusCode returns HTTPResponse.StatusCode
 
 <a name="User"></a>
-## type [User](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L328-L334>)
+## type [User](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L359-L365>)
 
 User defines model for User.
 
@@ -4050,7 +5866,7 @@ type User struct {
 ```
 
 <a name="UserCollection"></a>
-## type [UserCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L337-L340>)
+## type [UserCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L368-L371>)
 
 UserCollection defines model for UserCollection.
 
@@ -4062,7 +5878,7 @@ type UserCollection struct {
 ```
 
 <a name="UserListItem"></a>
-## type [UserListItem](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L343-L349>)
+## type [UserListItem](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L374-L380>)
 
 UserListItem One account in the user list. Leoflow accounts are email\-keyed and carry a set of RBAC roles, so this diverges from the Airflow FAB users API \(username\-keyed with first\_name/last\_name\).
 
@@ -4076,8 +5892,57 @@ type UserListItem struct {
 }
 ```
 
+<a name="Variable"></a>
+## type [Variable](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L383-L389>)
+
+Variable An Airflow\-style variable. The value is masked server\-side when the key looks sensitive \(secret/password/token/...\).
+
+```go
+type Variable struct {
+    Description *string `json:"description,omitempty"`
+    IsEncrypted bool    `json:"is_encrypted"`
+    Key         string  `json:"key"`
+    TeamName    *string `json:"team_name,omitempty"`
+    Value       string  `json:"value"`
+}
+```
+
+<a name="VariableBody"></a>
+## type [VariableBody](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L392-L396>)
+
+VariableBody Variable create/replace payload. value and description are tri\-state: omit the key to preserve the stored value, send an empty string to clear it, or send a value to set it. A value equal to the mask \`\*\*\*\` for a sensitive\-looking key \(secret/password/token/...\) is treated as "unchanged", so re\-submitting a variable read back from GET \(whose sensitive value is masked\) never overwrites the real value with the mask.
+
+```go
+type VariableBody struct {
+    Description *string `json:"description,omitempty"`
+    Key         string  `json:"key"`
+    Value       *string `json:"value,omitempty"`
+}
+```
+
+<a name="VariableCollection"></a>
+## type [VariableCollection](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L399-L402>)
+
+VariableCollection defines model for VariableCollection.
+
+```go
+type VariableCollection struct {
+    TotalEntries *int        `json:"total_entries,omitempty"`
+    Variables    *[]Variable `json:"variables,omitempty"`
+}
+```
+
+<a name="VariableKey"></a>
+## type [VariableKey](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L439>)
+
+VariableKey defines model for VariableKey.
+
+```go
+type VariableKey = string
+```
+
 <a name="VersionInfo"></a>
-## type [VersionInfo](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L352-L355>)
+## type [VersionInfo](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L405-L408>)
 
 VersionInfo defines model for VersionInfo.
 
@@ -4089,7 +5954,7 @@ type VersionInfo struct {
 ```
 
 <a name="XComEntry"></a>
-## type [XComEntry](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L358-L365>)
+## type [XComEntry](<https://github.com/neochaotic/leoflow/blob/main/pkg/client/client.gen.go#L411-L418>)
 
 XComEntry defines model for XComEntry.
 

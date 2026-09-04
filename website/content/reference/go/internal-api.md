@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/internal/api.html
-# --- end AUTO redirect aliases ---
 title: "internal/api"
 linkTitle: "internal/api"
 weight: 11
@@ -55,6 +51,7 @@ Package api implements the Airflow\-compatible HTTP control plane \(ADR 0007\).
 - [type Problem](<#Problem>)
 - [type TaskInstanceRepository](<#TaskInstanceRepository>)
 - [type TaskSummaryReader](<#TaskSummaryReader>)
+- [type TokenRenewer](<#TokenRenewer>)
 - [type UIServer](<#UIServer>)
 - [type UserAuditWriter](<#UserAuditWriter>)
 - [type UserStore](<#UserStore>)
@@ -116,7 +113,7 @@ func JWTAuth(authn auth.Authenticator) gin.HandlerFunc
 JWTAuth validates the bearer token on protected routes and stores the user.
 
 <a name="NewServer"></a>
-## func [NewServer](<https://github.com/neochaotic/leoflow/blob/main/internal/api/server.go#L127>)
+## func [NewServer](<https://github.com/neochaotic/leoflow/blob/main/internal/api/server.go#L140>)
 
 ```go
 func NewServer(deps Dependencies) *gin.Engine
@@ -209,7 +206,7 @@ type AuditLogReader interface {
 ```
 
 <a name="AuditWriter"></a>
-## type [AuditWriter](<https://github.com/neochaotic/leoflow/blob/main/internal/api/resources.go#L55-L57>)
+## type [AuditWriter](<https://github.com/neochaotic/leoflow/blob/main/internal/api/resources.go#L57-L59>)
 
 AuditWriter records task\-level actions \(clear, mark state\) for the Audit Log view, with the acting user and the run/task in the entry.
 
@@ -231,7 +228,7 @@ type AuthAuditWriter interface {
 ```
 
 <a name="ConnectionStore"></a>
-## type [ConnectionStore](<https://github.com/neochaotic/leoflow/blob/main/internal/api/ui_connections.go#L14-L19>)
+## type [ConnectionStore](<https://github.com/neochaotic/leoflow/blob/main/internal/api/ui_connections.go#L76-L81>)
 
 ConnectionStore reads and writes Airflow\-style Connections for the Admin UI. Password is encrypted at rest by the store \(ADR 0019\) and never returned.
 
@@ -239,7 +236,7 @@ ConnectionStore reads and writes Airflow\-style Connections for the Admin UI. Pa
 type ConnectionStore interface {
     ListConnections(ctx context.Context, tenant string, limit, offset int) ([]domain.Connection, int, error)
     GetConnection(ctx context.Context, tenant, connID string) (domain.Connection, error)
-    SetConnection(ctx context.Context, tenant string, c domain.Connection) error
+    SetConnectionPatch(ctx context.Context, tenant string, p domain.ConnectionPatch) error
     DeleteConnection(ctx context.Context, tenant, connID string) error
 }
 ```
@@ -267,7 +264,7 @@ type DagLatestRunsReader interface {
 ```
 
 <a name="DagRepository"></a>
-## type [DagRepository](<https://github.com/neochaotic/leoflow/blob/main/internal/api/resources.go#L23-L30>)
+## type [DagRepository](<https://github.com/neochaotic/leoflow/blob/main/internal/api/resources.go#L25-L32>)
 
 DagRepository reads, updates, and deletes registered DAGs.
 
@@ -283,7 +280,7 @@ type DagRepository interface {
 ```
 
 <a name="DagRunRepository"></a>
-## type [DagRunRepository](<https://github.com/neochaotic/leoflow/blob/main/internal/api/resources.go#L33-L39>)
+## type [DagRunRepository](<https://github.com/neochaotic/leoflow/blob/main/internal/api/resources.go#L35-L41>)
 
 DagRunRepository reads and creates DAG runs.
 
@@ -346,7 +343,7 @@ type DashboardStatsReader interface {
 ```
 
 <a name="Dependencies"></a>
-## type [Dependencies](<https://github.com/neochaotic/leoflow/blob/main/internal/api/server.go#L29-L123>)
+## type [Dependencies](<https://github.com/neochaotic/leoflow/blob/main/internal/api/server.go#L29-L136>)
 
 Dependencies bundles everything the HTTP server needs.
 
@@ -367,6 +364,15 @@ type Dependencies struct {
     // CIDR so per-client rate-limiting and audit see the real client.
     TrustedProxies []string
     TokenTTLSecs   int
+    // TokenRenewer re-mints a still-valid user bearer with a fresh short TTL so a
+    // long CLI/dev session need not re-login every TokenTTLSecs (aresta #5). Nil
+    // leaves the renew route unregistered (renewal simply unavailable). In practice
+    // it is the same *auth.JWTAuthenticator as Authenticator.
+    TokenRenewer TokenRenewer
+    // TokenMaxLifetimeSecs is the hard ceiling on a renewed session's total age
+    // since first login; past it, renewal is refused and the user must
+    // re-authenticate. Non-positive disables the ceiling.
+    TokenMaxLifetimeSecs int
     // InstanceName is shown in the UI navbar (Airflow's instance_name). Empty
     // falls back to "Leoflow"; `leoflow dev` sets it to mark the DEV environment.
     InstanceName string
@@ -435,6 +441,10 @@ type Dependencies struct {
     // OIDCFlow is the discovered Authorization Code + PKCE flow; nil in JWT mode,
     // in which case the /api/v2/auth/oidc/* routes are not registered.
     OIDCFlow *oidc.Flow
+    // OIDCEnabled is true when auth.provider is "oidc". It makes the credential
+    // path break-glass-only: with OIDC on, an empty break-glass allowlist means
+    // SSO-only (every password login rejected), NOT ungated — the secure default.
+    OIDCEnabled bool
     // OIDCSettings carries the role mappings, JIT policy, default_role, and
     // break-glass allowlist the login flow and the credential gate read.
     OIDCSettings config.OIDCSection
@@ -586,7 +596,7 @@ type Problem struct {
 ```
 
 <a name="TaskInstanceRepository"></a>
-## type [TaskInstanceRepository](<https://github.com/neochaotic/leoflow/blob/main/internal/api/resources.go#L43-L51>)
+## type [TaskInstanceRepository](<https://github.com/neochaotic/leoflow/blob/main/internal/api/resources.go#L45-L53>)
 
 TaskInstanceRepository reads task instances, clears them for re\-run, and sets their state directly \(the UI's mark\-success/failed actions\).
 
@@ -610,6 +620,17 @@ TaskSummaryReader fetches task instances across a set of runs of a DAG, the sour
 ```go
 type TaskSummaryReader interface {
     TaskInstancesForRuns(ctx context.Context, tenant, dagID string, runIDs []string) ([]domain.TaskInstance, error)
+}
+```
+
+<a name="TokenRenewer"></a>
+## type [TokenRenewer](<https://github.com/neochaotic/leoflow/blob/main/internal/api/auth_handler.go#L18-L20>)
+
+TokenRenewer re\-mints a still\-valid user bearer with a fresh short TTL, bounded by max\_lifetime since first login. \*auth.JWTAuthenticator implements it via RenewUserToken; the handler depends on this narrow interface so the renew route can be tested without a real signing key.
+
+```go
+type TokenRenewer interface {
+    RenewUserToken(token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error)
 }
 ```
 
@@ -649,7 +670,7 @@ type UserStore interface {
 ```
 
 <a name="VariableStore"></a>
-## type [VariableStore](<https://github.com/neochaotic/leoflow/blob/main/internal/api/ui_variables.go#L14-L19>)
+## type [VariableStore](<https://github.com/neochaotic/leoflow/blob/main/internal/api/ui_variables.go#L15-L20>)
 
 VariableStore reads and writes Airflow\-style Variables for the Admin UI.
 
@@ -657,7 +678,7 @@ VariableStore reads and writes Airflow\-style Variables for the Admin UI.
 type VariableStore interface {
     ListVariables(ctx context.Context, tenant string, limit, offset int) ([]domain.Variable, int, error)
     GetVariable(ctx context.Context, tenant, key string) (domain.Variable, error)
-    SetVariable(ctx context.Context, tenant string, v domain.Variable) error
+    SetVariablePatch(ctx context.Context, tenant string, p domain.VariablePatch) error
     DeleteVariable(ctx context.Context, tenant, key string) error
 }
 ```

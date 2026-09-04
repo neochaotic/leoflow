@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/internal/agentrpc.html
-# --- end AUTO redirect aliases ---
 title: "internal/agentrpc"
 linkTitle: "internal/agentrpc"
 weight: 6
@@ -53,6 +49,7 @@ Package agentrpc implements the control\-plane side of the agent gRPC protocol: 
   - [func \(s \*Server\) SetSecretScopeAuditor\(a SecretScopeAuditor\)](<#Server.SetSecretScopeAuditor>)
   - [func \(s \*Server\) SetSecretScoping\(policy string\)](<#Server.SetSecretScoping>)
   - [func \(s \*Server\) SetSecrets\(store SecretsStore, allowInsecure bool\)](<#Server.SetSecrets>)
+  - [func \(s \*Server\) SetShutdown\(ctx context.Context\)](<#Server.SetShutdown>)
   - [func \(s \*Server\) SetTokenExchange\(reviewer TokenReviewer, resolver PodTaskResolver, minter AgentTokenMinter, ttl time.Duration, allowInsecure bool\)](<#Server.SetTokenExchange>)
   - [func \(s \*Server\) SetTokenRenewal\(renewer AgentTokenRenewer, renewalTTL, maxAttemptLifetime time.Duration\)](<#Server.SetTokenRenewal>)
   - [func \(s \*Server\) SetWarmPools\(reg \*WorkerRegistry\)](<#Server.SetWarmPools>)
@@ -256,24 +253,28 @@ type ReviewedPod struct {
 ```
 
 <a name="SecretLivenessAuditor"></a>
-## type [SecretLivenessAuditor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L83-L85>)
+## type [SecretLivenessAuditor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L85-L89>)
 
 SecretLivenessAuditor records a structured audit event when the secret\-path liveness gate fires: a would\-have\-denied in observe mode, or a denial in enforce mode \(ADR 0055\). It carries identity \+ kind \+ mode only, never secret names or values. Optional and best\-effort: a nil auditor or a write error only skips the row; it never changes the gate's decision.
 
 ```go
 type SecretLivenessAuditor interface {
-    RecordSecretLivenessDenial(ctx context.Context, tenant, dagID, runID, taskID string, tryNumber int, kind, mode string) error
+    // tenantID is the tenant UUID the agent token carries (AgentIdentity.TenantID),
+    // not the tenant name.
+    RecordSecretLivenessDenial(ctx context.Context, tenantID, dagID, runID, taskID string, tryNumber int, kind, mode string) error
 }
 ```
 
 <a name="SecretScopeAuditor"></a>
-## type [SecretScopeAuditor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L51-L53>)
+## type [SecretScopeAuditor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L51-L55>)
 
 SecretScopeAuditor records a structured audit event when a task receives the full tenant secret set despite declaring only a subset of it — the visibility half of the warn\-before\-enforce arc \(ADR 0045 §Settled \#3, ADR 0055\). It carries counts only, never secret names or values. It is optional and best\-effort: a nil auditor or a write error only skips the audit row; it never changes what is delivered.
 
 ```go
 type SecretScopeAuditor interface {
-    RecordSecretScopeWarning(ctx context.Context, tenant, dagID, runID, taskID, kind string, declared, total int) error
+    // tenantID is the tenant UUID the agent token carries (AgentIdentity.TenantID),
+    // not the tenant name.
+    RecordSecretScopeWarning(ctx context.Context, tenantID, dagID, runID, taskID, kind string, declared, total int) error
 }
 ```
 
@@ -294,7 +295,7 @@ type SecretsStore interface {
 ```
 
 <a name="Server"></a>
-## type [Server](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L145-L184>)
+## type [Server](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L145-L190>)
 
 Server implements agentv1.AgentServiceServer over a Store and Authenticator.
 
@@ -306,7 +307,7 @@ type Server struct {
 ```
 
 <a name="NewServer"></a>
-### func [NewServer](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L188>)
+### func [NewServer](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L194>)
 
 ```go
 func NewServer(authn Authenticator, store Store, xcomSvc XComService) *Server
@@ -350,7 +351,7 @@ ExchangeToken validates the agent's projected ServiceAccount token \(bootstrap b
 It fails closed at every step: Unimplemented when the exchange is not wired, PermissionDenied on an insecure channel, Unauthenticated on a missing or rejected projected token, and Internal when the reviewed pod cannot be resolved to an attempt \(never mint an unscoped or misattributed token\). The minted token and the presented projected token are never logged.
 
 <a name="Server.FetchXCom"></a>
-### func \(\*Server\) [FetchXCom](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L413>)
+### func \(\*Server\) [FetchXCom](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L428>)
 
 ```go
 func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (*agentv1.FetchXComResponse, error)
@@ -359,7 +360,7 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 FetchXCom returns an upstream task's value, but only from a task the caller declared as an XCom input within the same run \(and, by construction, the same tenant\), enforcing cross\-tenant and cross\-run isolation.
 
 <a name="Server.GetConnections"></a>
-### func \(\*Server\) [GetConnections](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L254>)
+### func \(\*Server\) [GetConnections](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L258>)
 
 ```go
 func (s *Server) GetConnections(ctx context.Context, _ *agentv1.GetConnectionsRequest) (*agentv1.GetConnectionsResponse, error)
@@ -368,7 +369,7 @@ func (s *Server) GetConnections(ctx context.Context, _ *agentv1.GetConnectionsRe
 GetConnections returns the calling task's tenant Connections as Airflow URIs for the agent to export as AIRFLOW\_CONN\_\<CONN\_ID\>.
 
 <a name="Server.GetTaskSpec"></a>
-### func \(\*Server\) [GetTaskSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L224>)
+### func \(\*Server\) [GetTaskSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L237>)
 
 ```go
 func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest) (*agentv1.TaskSpec, error)
@@ -377,7 +378,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 GetTaskSpec returns the execution spec for the calling task instance.
 
 <a name="Server.GetVariables"></a>
-### func \(\*Server\) [GetVariables](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L216>)
+### func \(\*Server\) [GetVariables](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L220>)
 
 ```go
 func (s *Server) GetVariables(ctx context.Context, _ *agentv1.GetVariablesRequest) (*agentv1.GetVariablesResponse, error)
@@ -386,7 +387,7 @@ func (s *Server) GetVariables(ctx context.Context, _ *agentv1.GetVariablesReques
 GetVariables returns the calling task's tenant Variables for the agent to export as AIRFLOW\_VAR\_\<KEY\>.
 
 <a name="Server.Heartbeat"></a>
-### func \(\*Server\) [Heartbeat](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L313>)
+### func \(\*Server\) [Heartbeat](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L328>)
 
 ```go
 func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*agentv1.HeartbeatResponse, error)
@@ -395,7 +396,7 @@ func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*a
 Heartbeat stamps the per\-TI liveness signal \(\#128\) and returns the server clock so the agent can detect skew. A storage error stamping the heartbeat is logged but does not fail the RPC — failing the call would risk the agent terminating itself unnecessarily on a transient DB blip. The scheduler reaper would, in the worst case, fail the TI as agent\_lost on the next tick; correct under "do no harm" \(ADR 0031\).
 
 <a name="Server.PushXCom"></a>
-### func \(\*Server\) [PushXCom](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L385>)
+### func \(\*Server\) [PushXCom](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L400>)
 
 ```go
 func (s *Server) PushXCom(ctx context.Context, req *agentv1.PushXComRequest) (*agentv1.PushXComResponse, error)
@@ -404,7 +405,7 @@ func (s *Server) PushXCom(ctx context.Context, req *agentv1.PushXComRequest) (*a
 PushXCom stores a value the task produced, keyed by the caller's identity. Size/schema violations are returned as a rejection, not a transport error, so the agent can fail the task with a clear reason.
 
 <a name="Server.Register"></a>
-### func \(\*Server\) [Register](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L212>)
+### func \(\*Server\) [Register](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L225>)
 
 ```go
 func (s *Server) Register(ctx context.Context, _ *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error)
@@ -413,7 +414,7 @@ func (s *Server) Register(ctx context.Context, _ *agentv1.RegisterRequest) (*age
 Register acknowledges an agent's startup and returns the server clock.
 
 <a name="Server.ReportState"></a>
-### func \(\*Server\) [ReportState](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L263>)
+### func \(\*Server\) [ReportState](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L278>)
 
 ```go
 func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateRequest) (*agentv1.ReportStateResponse, error)
@@ -431,7 +432,7 @@ func (s *Server) SetLeaderCheck(fn func() bool)
 SetLeaderCheck gates AwaitAssignment to the scheduler leader \(warm\-pool Hole B\). Each scheduler replica wires its OWN leadership predicate, so a follower refuses the stream \(FailedPrecondition\) and only the leader — whose leader\-only placer consults the same in\-memory registry the worker registers into — serves it. A nil predicate \(the default\) leaves the handler unchecked, so a single\-node or unwired deployment serves exactly as before.
 
 <a name="Server.SetLivenessGate"></a>
-### func \(\*Server\) [SetLivenessGate](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L103>)
+### func \(\*Server\) [SetLivenessGate](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L107>)
 
 ```go
 func (s *Server) SetLivenessGate(checker TaskLivenessChecker, mode string)
@@ -440,7 +441,7 @@ func (s *Server) SetLivenessGate(checker TaskLivenessChecker, mode string)
 SetLivenessGate attaches the read\-only task\-instance liveness predicate the secret path consults, in the given mode \("observe" | "enforce", ADR 0055 E2\). An unrecognized mode falls back to observe — the safe, non\-denying default. A nil checker leaves the gate off \(delivery unchanged\), so the gate is opt\-in.
 
 <a name="Server.SetLogPublisher"></a>
-### func \(\*Server\) [SetLogPublisher](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L209>)
+### func \(\*Server\) [SetLogPublisher](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L222>)
 
 ```go
 func (s *Server) SetLogPublisher(p LogPublisher)
@@ -449,7 +450,7 @@ func (s *Server) SetLogPublisher(p LogPublisher)
 SetLogPublisher attaches the live\-tail publisher \(optional\). When set, StreamLogs publishes each line for the UI's live tail.
 
 <a name="Server.SetLogSink"></a>
-### func \(\*Server\) [SetLogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L205>)
+### func \(\*Server\) [SetLogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L218>)
 
 ```go
 func (s *Server) SetLogSink(sink LogSink)
@@ -458,7 +459,7 @@ func (s *Server) SetLogSink(sink LogSink)
 SetLogSink attaches the log sink that StreamLogs writes to. Without it, StreamLogs reports Unimplemented.
 
 <a name="Server.SetSecretLivenessAuditor"></a>
-### func \(\*Server\) [SetSecretLivenessAuditor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L115>)
+### func \(\*Server\) [SetSecretLivenessAuditor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L119>)
 
 ```go
 func (s *Server) SetSecretLivenessAuditor(a SecretLivenessAuditor)
@@ -467,7 +468,7 @@ func (s *Server) SetSecretLivenessAuditor(a SecretLivenessAuditor)
 SetSecretLivenessAuditor attaches the sink for secret\-path liveness events \(optional\). Without it, a would\-have\-denied / denial still produces the WARN log but no audit row.
 
 <a name="Server.SetSecretScopeAuditor"></a>
-### func \(\*Server\) [SetSecretScopeAuditor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L97>)
+### func \(\*Server\) [SetSecretScopeAuditor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L101>)
 
 ```go
 func (s *Server) SetSecretScopeAuditor(a SecretScopeAuditor)
@@ -476,7 +477,7 @@ func (s *Server) SetSecretScopeAuditor(a SecretScopeAuditor)
 SetSecretScopeAuditor attaches the sink for secret\-scope warning events \(optional\). Without it, a narrowing declaration still produces the WARN log but no audit row.
 
 <a name="Server.SetSecretScoping"></a>
-### func \(\*Server\) [SetSecretScoping](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L121>)
+### func \(\*Server\) [SetSecretScoping](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L125>)
 
 ```go
 func (s *Server) SetSecretScoping(policy string)
@@ -485,13 +486,22 @@ func (s *Server) SetSecretScoping(policy string)
 SetSecretScoping sets the operator scope\-by\-declaration policy \(ADR 0055 D9\): "enforce" | "permissive" | "off". An unrecognized value falls back to permissive — the safe, non\-denying default — so a misconfiguration never silently denies. The policy is operator\-scoped, never author\-settable.
 
 <a name="Server.SetSecrets"></a>
-### func \(\*Server\) [SetSecrets](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L90>)
+### func \(\*Server\) [SetSecrets](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L94>)
 
 ```go
 func (s *Server) SetSecrets(store SecretsStore, allowInsecure bool)
 ```
 
 SetSecrets attaches the secrets store. allowInsecure permits serving secrets over a non\-TLS channel — for local/dev only; production must use TLS \(the handlers fail closed otherwise\). See ADR 0021 / issue \#58.
+
+<a name="Server.SetShutdown"></a>
+### func \(\*Server\) [SetShutdown](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L214>)
+
+```go
+func (s *Server) SetShutdown(ctx context.Context)
+```
+
+SetShutdown wires the control plane's shutdown context: once ctx ends, every open StreamLogs returns Unavailable after closing \(flushing\) its log writer, so the gRPC graceful stop that follows completes instead of waiting for the tasks themselves to finish. The agent treats the closed stream as best\-effort log delivery and keeps running its task.
 
 <a name="Server.SetTokenExchange"></a>
 ### func \(\*Server\) [SetTokenExchange](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/exchange.go#L69>)
@@ -503,7 +513,7 @@ func (s *Server) SetTokenExchange(reviewer TokenReviewer, resolver PodTaskResolv
 SetTokenExchange wires the projected\-SA\-token exchange \(ADR 0055 Fix \#3\): the TokenReview client, the pod→task\-instance resolver, the JWT minter, and the TTL of the minted task\-scoped token. allowInsecure permits running the exchange over a non\-TLS channel \(dev only\); production must use TLS \(ExchangeToken fails closed otherwise, like the secret path\). A nil reviewer leaves the exchange OFF — ExchangeToken then reports Unimplemented — which is the default \(env\-var\) transport, so a deployment that does not opt in is byte\-identical to today.
 
 <a name="Server.SetTokenRenewal"></a>
-### func \(\*Server\) [SetTokenRenewal](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L199>)
+### func \(\*Server\) [SetTokenRenewal](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L205>)
 
 ```go
 func (s *Server) SetTokenRenewal(renewer AgentTokenRenewer, renewalTTL, maxAttemptLifetime time.Duration)
@@ -521,13 +531,13 @@ func (s *Server) SetWarmPools(reg *WorkerRegistry)
 SetWarmPools wires a prebuilt warm\-worker assignment registry \(ADR 0058 N1b\). A nil registry \(the default\) leaves AwaitAssignment inert — it returns FailedPrecondition — so with execution.warm\_pools\_enabled off the transport is completely dormant and no running path changes. Used by tests to inject a registry with a deterministic lease; callers wire it via EnableWarmPools.
 
 <a name="Server.StreamLogs"></a>
-### func \(\*Server\) [StreamLogs](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L450>)
+### func \(\*Server\) [StreamLogs](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L466>)
 
 ```go
 func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err error)
 ```
 
-StreamLogs receives the task's log lines and writes them through the sink, flushing on stream end so the logs survive the pod.
+StreamLogs receives the task's log lines and writes them through the sink, flushing on stream end so the logs survive the pod. The stream also ends when the control plane shuts down \(SetShutdown\), so the flush runs before exit.
 
 <a name="Store"></a>
 ## type [Store](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L107-L126>)
@@ -558,7 +568,7 @@ type Store interface {
 ```
 
 <a name="TaskLivenessChecker"></a>
-## type [TaskLivenessChecker](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L74-L76>)
+## type [TaskLivenessChecker](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/secrets.go#L76-L78>)
 
 TaskLivenessChecker reports whether a task\-instance attempt is still live — present and in an active \(non\-terminal\) state for the given \(run, task, try\). It is the read\-only revocation signal the secret path consults \(ADR 0055 D3\): a terminal, superseded, or reaped attempt is not live, so its token stops resolving secrets. The predicate derives ONLY from \(run, task, try\) \+ active state — never run recency — so a clear\-and\-rerun of an old run stays live.
 

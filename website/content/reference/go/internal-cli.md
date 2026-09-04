@@ -1,8 +1,4 @@
 ---
-# --- AUTO redirect aliases (build_redirects.py) — do not edit by hand ---
-aliases:
-  - /go/internal/cli.html
-# --- end AUTO redirect aliases ---
 title: "internal/cli"
 linkTitle: "internal/cli"
 weight: 10

@@ -105,8 +105,17 @@ func (o *ObjectSink) Read(ref Ref) (io.ReadCloser, error) {
 // it. Object stores have no append, so a plain Open+Close would Put a
 // marker-only object over the agent's streamed log; instead this reads the
 // existing object (tolerating a not-yet-written one), appends the event as a
-// JSONL line, and Puts the combined object back (#861). Best-effort read-modify-
-// write: a lost task's agent is silent, so there is no concurrent writer to race.
+// JSONL line, and Puts the combined object back (#861).
+//
+// Read-modify-write with no locking, which is safe because of WHEN it runs, not
+// because nothing else can write the key: a live attempt's writer does flush the
+// same object incrementally. The only caller is the agent-lost reaper, and it
+// marks an attempt whose agent has been silent past the heartbeat threshold —
+// minutes after that writer's last flush, and after the stream (and usually the
+// pod) is gone. The two windows are that far apart, so the race is not reachable
+// from here; a caller that ran while an attempt was still streaming WOULD race,
+// and would lose or clobber whole flushes, since each side Puts the entire
+// object it last read.
 func (o *ObjectSink) AppendEvent(ref Ref, ev Event) error {
 	if err := ref.validate(); err != nil {
 		return err

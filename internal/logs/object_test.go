@@ -60,12 +60,18 @@ func (m *memStore) putCount() int {
 	return len(m.puts)
 }
 
+// Get reads under the same lock Put takes, and the WHOLE body is inside it —
+// getErr included. A writer's flusher goroutine Puts concurrently with the
+// test's own reads, so a field left outside the lock makes the fake itself the
+// source of a race report, pointing the detector at the wrong file. This is
+// also what lets a future failure case flip getErr mid-test the way setPutErr
+// already does.
 func (m *memStore) Get(_ context.Context, key string) (io.ReadCloser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	b, ok := m.objs[key]
 	if !ok {
 		return nil, ErrObjectNotFound

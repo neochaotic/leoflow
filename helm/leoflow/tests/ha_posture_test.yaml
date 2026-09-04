@@ -291,8 +291,10 @@ tests:
   # nils the field and its own validation then rejects the resulting empty
   # `preStop: {}` with "must specify a handler type" — the Deployment create is
   # REJECTED and `helm install` hard-fails, the hook is NOT silently dropped.
-  # Before 1.27 the field is pruned at decode and the same empty handler is what
-  # validation sees. The project's floor is 1.27 (see the installation page), so
+  # Before 1.29 the field does not exist in the API types at all, so it is pruned
+  # at decode and the same empty handler is what validation sees — 1.27 and 1.28
+  # behave exactly like 1.26 here, and 1.29 is the only release where the field
+  # exists and the gate is off. The project's floor is 1.27 (see the installation page), so
   # the render has to be gated on the capability; a `kubeVersion` in Chart.yaml
   # would instead refuse to install on 1.27-1.29 at all.
   - it: omits the preStop hook on a 1.29 apiserver, where the sleep action is alpha and off

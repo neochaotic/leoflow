@@ -17,6 +17,16 @@
 #      to exit mid-report AFTER writing the durable outcome record; assert the
 #      reconciler recovers the SUCCESS from the record (the pod is Failed and no
 #      report ever landed), settling the run success instead of failing/retrying.
+#   D) control-plane outage across termination (the field drill) — C's fault on
+#      THREE parallel tasks with the scheduler SIGKILLed before they finish, so
+#      the restarted leader wakes to task instances that are `running` with stale
+#      heartbeats and pods that are terminal, exactly the signals an outage
+#      manufactures. Assert the reconciler settles all three from their records
+#      INSIDE the leader-settling grace, that the gate was actually engaged, that
+#      the liveness valve never opened, and that no reaper fired at all.
+#
+# Select a subset with LEOFLOW_CHAOS_ONLY (e.g. LEOFLOW_CHAOS_ONLY=D, or "BD");
+# the shared setup always runs, so any scenario works on its own.
 #
 # NOT a `go test`; destructive; not gated in CI (slow). It mirrors the proven
 # host-process split harness (split-two-process.sh) and reuses the k3d_import
@@ -38,6 +48,8 @@ DAG_IMAGE="leoflow-chaos-dag:dev"
 DAG_ID="chaosdag"
 RECOVER_DAG_IMAGE="leoflow-recover-dag:dev"
 RECOVER_DAG_ID="recoverdag"
+OUTAGE_DAG_IMAGE="leoflow-outage-dag:dev"
+OUTAGE_DAG_ID="outagedag"
 
 API_HTTP_PORT="${LEOFLOW_E2E_API_HTTP_PORT:-8080}"
 API_METRICS_PORT="9090"
@@ -404,9 +416,270 @@ scenario_durable_outcome_recovery() {
   fi
 }
 
-scenario_scheduler_crash
-scenario_task_pod_kill
-scenario_durable_outcome_recovery
+# ─────────────────────────────────────────────────────────────────────────────
+# Scenario D — a control-plane outage that spans a task's termination
+#
+# The field shape (EKS Auto Mode, leoflow 0.4.4): the control plane is evicted
+# while tasks run; their pods finish DURING the outage and no report can land;
+# the restarted leader then sees task instances that are `running` with stale
+# heartbeats and pods that are gone-or-terminal — signals the outage itself
+# manufactured — and a reaper that judges them before the reconciler has read
+# their durable outcome records turns a SUCCEEDED task into a failed one and the
+# run unrecoverable.
+#
+# Scenario C proves the recovery path with the control plane UP. This proves the
+# ORDERING under an outage, which is what actually broke: the leader-settling
+# gate must hold every reaper while the reconciler settles all three attempts
+# from their records, and the run must reach success WITHOUT any reap and
+# WITHOUT a retry. Three parallel tasks, not one, because the field failure was
+# a fleet-wide mass-reap, not a single unlucky attempt.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# decision_count reports how many times the RESTARTED scheduler recorded a given
+# scheduler decision, or 0 when the counter has no sample yet (a Prometheus
+# counter with labels is absent until first incremented, which is itself the
+# assertion "this never happened"). Reading the fresh process is deliberate: the
+# restart resets the counters, so every sample below belongs to the recovery
+# window and nothing from scenarios A-C can leak into it.
+decision_count() {
+  local want="$1" line
+  line="$(curl -fsS "http://localhost:${SCHED_METRICS_PORT}/metrics" 2>/dev/null \
+    | awk -v d="$want" '$0 ~ "^leoflow_scheduler_decisions_total\\{decision_type=\"" d "\"\\}" {print $2; exit}')"
+  printf '%s' "${line:-0}"
+}
+
+# outage_states prints one state per task instance of the outage run.
+outage_states() {
+  curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$OUTAGE_DAG_ID/dagRuns/$1/taskInstances" 2>/dev/null \
+    | jq -r '.task_instances[].state'
+}
+
+outage_run_state() {
+  curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$OUTAGE_DAG_ID/dagRuns/$1" 2>/dev/null | jq -r '.state // "unknown"'
+}
+
+setup_outagedag() {
+  log "D-setup: scaffolding outagedag (three parallel tasks; each agent dies after writing its record)"
+  "$ROOT/bin/leoflow" init "$WORKDIR/$OUTAGE_DAG_ID" >/dev/null
+  cat >> "$WORKDIR/$OUTAGE_DAG_ID/leoflow.yaml" <<YAML
+build:
+  platforms:
+    - ${HOST_PLATFORM}
+tasks:
+  alpha:
+    env:
+      LEOFLOW_CHAOS_DIE_BEFORE_REPORT: TASK_STATE_SUCCESS
+  bravo:
+    env:
+      LEOFLOW_CHAOS_DIE_BEFORE_REPORT: TASK_STATE_SUCCESS
+  charlie:
+    env:
+      LEOFLOW_CHAOS_DIE_BEFORE_REPORT: TASK_STATE_SUCCESS
+YAML
+  cat > "$WORKDIR/$OUTAGE_DAG_ID/dag.py" <<'PY'
+"""outagedag — three independent tasks, each of which succeeds and then loses its
+report because the control plane is down. The sleep is sized so every agent emits
+at least one heartbeat before it terminates: a task instance that never heartbeat
+is skipped by the agent-lost reaper's zero-heartbeat guard, and this scenario is
+worthless unless that reaper is actually armed against all three."""
+from __future__ import annotations
+import time
+from airflow.sdk import DAG, task
+
+
+def _work(name: str) -> str:
+    print(f"outage: {name} START", flush=True)
+    time.sleep(50)
+    print(f"outage: {name} DONE", flush=True)
+    return name
+
+
+@task
+def alpha() -> str:
+    return _work("alpha")
+
+
+@task
+def bravo() -> str:
+    return _work("bravo")
+
+
+@task
+def charlie() -> str:
+    return _work("charlie")
+
+
+with DAG("outagedag", schedule=None, catchup=False, tags=["chaos"]):
+    alpha()
+    bravo()
+    charlie()
+PY
+  cat > "$WORKDIR/$OUTAGE_DAG_ID/Dockerfile" <<DOCKER
+FROM ${BASE_IMAGE}
+COPY dag.py /home/leoflow/dag.py
+ENV PYTHONPATH=/home/leoflow
+DOCKER
+  "$ROOT/bin/leoflow" compile "$WORKDIR/$OUTAGE_DAG_ID" --image "$OUTAGE_DAG_IMAGE" --build --dockerfile Dockerfile -o "$WORKDIR/$OUTAGE_DAG_ID/dag.json" >/dev/null
+  k3d_import "$CLUSTER" "$OUTAGE_DAG_IMAGE" || fatal "D: k3d import of outagedag failed"
+  "$ROOT/bin/leoflow" push "$WORKDIR/$OUTAGE_DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null
+}
+
+scenario_outage_recovery() {
+  log "SCENARIO D — control plane down across three tasks' termination; the restarted leader recovers all three without reaping"
+  setup_outagedag
+
+  # Nothing else may be in flight: the counter assertions below say "no reaper
+  # fired at all", so a leftover running attempt from an earlier scenario could
+  # be reaped inside the recovery window and read as this scenario's failure.
+  local leftover
+  leftover="$(kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -c 'Running' || true)"
+  [ "${leftover:-0}" -eq 0 ] || log "D: note — $leftover task pod(s) still Running from an earlier scenario; a reaper decision below may not be ours"
+
+  local run
+  run="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{}' "$API/api/v2/dags/$OUTAGE_DAG_ID/dagRuns" | jq -r '.dag_run_id')"
+  [ -n "$run" ] && [ "$run" != "null" ] || { bad "D: no run id"; return; }
+
+  # All three must be Running before the kill, or the outage lands on dispatch
+  # (a different, already-covered failure) instead of on the report.
+  local deadline running=0
+  deadline=$(( $(date +%s) + 120 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    running="$(kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -cE 'outagedag-(alpha|bravo|charlie)-.*Running' || true)"
+    [ "${running:-0}" -ge 3 ] && break
+    sleep 3
+  done
+  [ "${running:-0}" -ge 3 ] || { bad "D: only ${running:-0}/3 task pods reached Running before the kill window"; dump_pods; return; }
+  ok "D: all three task pods are Running"
+
+  # One heartbeat interval (15s) plus margin, so every attempt has a non-null
+  # last_heartbeat and the agent-lost reaper is armed against all three. Without
+  # this the scenario would pass on the zero-heartbeat guard, not on the gate.
+  log "D: letting every agent heartbeat once before the outage"
+  sleep 20
+
+  log "D: killing the scheduler (SIGKILL — an eviction gives no graceful stop)"
+  kill -9 "$SCHED_PID" 2>/dev/null; wait "$SCHED_PID" 2>/dev/null; SCHED_PID=""
+
+  # The tasks must now finish INSIDE the outage. Each agent writes its durable
+  # outcome record and exits without delivering the report, so the pods end in a
+  # failed phase while their records say success. A pod that ends Completed
+  # (exit 0) means the fault-injection seam did not fire, so the recovery path
+  # was never exercised — fail loudly rather than pass on the ordinary path.
+  local terminal=0
+  deadline=$(( $(date +%s) + 150 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -qE 'outagedag-.*(Completed|Succeeded)'; then
+      bad "D: an outagedag pod ended Completed/Succeeded (exit 0) — the fault-injection seam did NOT fire (stale agent image?). Refusing to pass on the ordinary report path."
+      dump_pods; return
+    fi
+    terminal="$(kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -cE 'outagedag-(alpha|bravo|charlie)-.*(Error|Failed)' || true)"
+    [ "${terminal:-0}" -ge 3 ] && break
+    sleep 3
+  done
+  [ "${terminal:-0}" -ge 3 ] || { bad "D: only ${terminal:-0}/3 pods terminated during the outage — the outage did not span their termination"; dump_pods; return; }
+  ok "D: all three pods terminated during the outage, records written, no report delivered"
+
+  # Fail-closed: with the scheduler dead nothing may have settled these attempts.
+  # A task instance already `success` here means the control plane was reachable
+  # when it mattered, so the scenario proves nothing about the recovery ordering.
+  local states_before
+  states_before="$(outage_states "$run" | sort | uniq -c | tr '\n' ' ')"
+  if outage_states "$run" | grep -q 'success'; then
+    bad "D: a task instance reached success while the scheduler was down (states: $states_before) — the outage did not cover the report window"
+    return
+  fi
+  ok "D: all three attempts are still unsettled during the outage (states: $states_before)"
+
+  log "D: restarting the scheduler; the new leader must recover all three before any reaper may act"
+  local restart_epoch; restart_epoch=$(date +%s)
+  start_scheduler
+
+  # The reconciler runs in the maintenance loop's reconcile phase (30s cadence),
+  # while every reaper stays shut for the settling grace (180s from leadership).
+  # So the recovery must land in the FIRST cycles, well inside the grace — that
+  # ordering, not the absence of a reap in one lucky window, is the guarantee.
+  local settling_grace=180 state="" elapsed=0
+  deadline=$(( restart_epoch + 150 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    state="$(outage_run_state "$run")"
+    [ "$state" = success ] && break
+    if [ "$state" = failed ]; then
+      bad "D: run FAILED after the outage — something settled an attempt as failed instead of recovering its record"
+      outage_states "$run" | sort | uniq -c >&2
+      return
+    fi
+    sleep 5
+  done
+  elapsed=$(( $(date +%s) - restart_epoch ))
+  if [ "$state" != success ]; then
+    bad "D: run did not reach success within 150s of the restart (state=$state, states: $(outage_states "$run" | sort | uniq -c | tr '\n' ' '))"
+    return
+  fi
+  ok "D: run recovered to SUCCESS ${elapsed}s after the restart, all three attempts settled from their durable records"
+
+  if [ "$elapsed" -lt "$settling_grace" ]; then
+    ok "D: recovery (${elapsed}s) beat the settling grace (${settling_grace}s) — the reconciler settled the attempts before any reaper was even allowed to judge them"
+  else
+    bad "D: recovery took ${elapsed}s, at or past the ${settling_grace}s settling grace — the gate, not the ordering, is what saved the run; the margin the design relies on is gone"
+  fi
+
+  # Recovery is a settle, not a retry: three attempts, one try each.
+  local tries
+  tries="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$OUTAGE_DAG_ID/dagRuns/$run/taskInstances" 2>/dev/null \
+    | jq -r '[.task_instances[].try_number] | max')"
+  if [ "$tries" = "1" ]; then
+    ok "D: every attempt settled in place (max try_number=1) — no task re-ran work it had already finished"
+  else
+    bad "D: expected one attempt per task (recovery is a settle, not a retry), got max try_number=$tries"
+  fi
+
+  # The gate must have been ENGAGED, not vacuously satisfied: a leader that
+  # reaped nothing because it was asked to reap nothing proves nothing. At least
+  # one settling skip must have been recorded while the grace held.
+  local skips valve lost_pod lost_agent
+  skips="$(decision_count reap_settling_skip)"
+  valve="$(decision_count reap_settling_valve_open)"
+  lost_pod="$(decision_count pod_lost)"
+  lost_agent="$(decision_count agent_lost)"
+  if [ "${skips%.*}" -ge 1 ] 2>/dev/null; then
+    ok "D: the settling gate actually held the reapers (reap_settling_skip=$skips)"
+  else
+    bad "D: no reap_settling_skip recorded — the maintenance loop never ran while the gate was shut, so this scenario did not exercise the gate (false green)"
+  fi
+  if [ "${valve%.*}" = "0" ]; then
+    ok "D: the liveness valve never opened (reap_settling_valve_open=0)"
+  else
+    bad "D: the liveness valve opened ($valve) — the reconciler sweep or the informer was broken during recovery"
+  fi
+  if [ "${lost_pod%.*}" = "0" ] && [ "${lost_agent%.*}" = "0" ]; then
+    ok "D: no reaper fired at all during recovery (pod_lost=0, agent_lost=0) — the field failure cannot reproduce"
+  else
+    bad "D: a reaper fired during recovery (pod_lost=$lost_pod, agent_lost=$lost_agent) — this is the field failure; check whether the decision belongs to this run"
+    kubectl get pods -n leoflow -o wide >&2 2>&1 || true
+  fi
+}
+
+# run_scenario runs one scenario unless LEOFLOW_CHAOS_ONLY names a subset that
+# excludes its letter. The shared setup above is unconditional, so a single
+# scenario can be iterated on without paying for the others' sleeps.
+ONLY="${LEOFLOW_CHAOS_ONLY:-}"
+run_scenario() {
+  local letter="$1"; shift
+  case "$ONLY" in
+    "") "$@" ;;
+    *"$letter"*) "$@" ;;
+    *) log "skipping scenario $letter (LEOFLOW_CHAOS_ONLY=$ONLY)" ;;
+  esac
+}
+
+run_scenario A scenario_scheduler_crash
+run_scenario B scenario_task_pod_kill
+run_scenario C scenario_durable_outcome_recovery
+run_scenario D scenario_outage_recovery
 
 printf '\n\033[1m===== chaos-runtime summary =====\033[0m\n'
 if [ "$FAILED" -ne 0 ]; then

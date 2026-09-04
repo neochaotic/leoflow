@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -196,6 +197,49 @@ func TestBuildPodDeadlineCapsTerminationGraceTerm(t *testing.T) {
 				t.Errorf("activeDeadlineSeconds = %d, must not exceed %d (timeout %d + headroom %d + capped grace %d); "+
 					"an unvalidated declared grace must not extend the pod's overshoot without bound",
 					*got, ceiling, req.TimeoutSeconds, headroom, graceCap)
+			}
+			if *got != tc.want {
+				t.Errorf("activeDeadlineSeconds = %d, want %d", *got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildPodDeadlineClampsToApiserverMax keeps an absurd declaration a merely
+// absurd deadline instead of an unschedulable pod (#910 review F6).
+//
+// The apiserver validates activeDeadlineSeconds into [1, math.MaxInt32] at pod
+// CREATE. Since the deadline is now the declared timeout PLUS the startup
+// headroom and the grace term, a declared timeout near MaxInt32 — 68 years, so
+// only ever a typo or a generated spec — flips the pod from "created with a
+// deadline nothing will ever reach" to "create rejected", which the executor
+// surfaces as a permanently Rejected dispatch. The sum is clamped instead, on
+// the credential-ceiling branch too: that value is an operator-configured
+// int64, so it can exceed the same bound on its own.
+func TestBuildPodDeadlineClampsToApiserverMax(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout int
+		ceiling int64
+		want    int64
+	}{
+		// Without the clamp the sum is MaxInt32+200, which the apiserver rejects.
+		{"declared timeout just under the bound", math.MaxInt32 - 10, 0, math.MaxInt32},
+		{"declared timeout at the bound", math.MaxInt32, 0, math.MaxInt32},
+		{"credential ceiling over the bound", 0, math.MaxInt32 + 1000, math.MaxInt32},
+		{"ordinary values are untouched", 600, 86400, 600 + 180 + corev1.DefaultTerminationGracePeriodSeconds},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := sampleReq()
+			req.TimeoutSeconds = tc.timeout
+			req.AttemptLifetimeCeilingSeconds = tc.ceiling
+			got := BuildPod(req).Spec.ActiveDeadlineSeconds
+			if got == nil {
+				t.Fatal("a declared timeout or ceiling must produce a pod deadline")
+			}
+			if *got > math.MaxInt32 {
+				t.Errorf("activeDeadlineSeconds = %d exceeds the apiserver's MaxInt32 bound; "+
+					"the pod would be rejected at CREATE and the dispatch permanently Rejected", *got)
 			}
 			if *got != tc.want {
 				t.Errorf("activeDeadlineSeconds = %d, want %d", *got, tc.want)

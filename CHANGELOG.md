@@ -118,6 +118,43 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [#928](https://github.com/neochaotic/leoflow/issues/928), with the underlying
   unguarded transition as [#929](https://github.com/neochaotic/leoflow/issues/929).
 
+- **A task pod is no longer killed by the kubelet before its own
+  `execution_timeout` can fire, mislabelling the failure.** A task that declared
+  `execution_timeout_seconds` got a pod `activeDeadlineSeconds` equal to that
+  value — but the kubelet counts it from the pod's `status.startTime`, stamped
+  before the image pull, while the agent starts its own timeout clock only inside
+  its execute step: after the image pull, the volume attach and mount, container
+  start, its token bootstrap and exchange, the gRPC dial, `Register`,
+  `GetTaskSpec`, the environment build (XCom fan-in and secret resolution) and
+  its `RUNNING` report, whose retry has no budget of its own. The kubelet
+  therefore won by that entire startup cost — image pull first among them — on
+  **every** timing-out task rather than as an occasional race, and the task
+  settled with a generic "the task container terminated…" reason instead of
+  `execution_timeout: task exceeded Ns limit`. The pod deadline is now the
+  declared timeout **plus** a 3-minute startup headroom (the dispatch-lost
+  threshold — the window in which the control plane still presumes healthy
+  startup and defers reaping) **plus** up to 60 s of the pod's
+  `terminationGracePeriodSeconds` (30 s when undeclared), so the agent always
+  fires first and its diagnosis is what the operator sees. The grace is added on
+  top of the headroom rather than instead of it: it covers the shutdown tail, not
+  the startup head. It is capped because the declaration is unvalidated — adding
+  an hour of declared grace verbatim would put the deadline an hour past the
+  declared timeout while the kubelet grants that same hour of `SIGTERM` grace
+  again on top; the pod spec still carries the declared value verbatim. The sum
+  is clamped to `math.MaxInt32`, the largest `activeDeadlineSeconds` the
+  apiserver accepts, so a declared timeout near that bound is still a pod whose
+  deadline is never reached rather than one rejected at `CREATE`. A pod whose
+  agent is dead can now outlive its declared timeout by those few minutes — that
+  is the backstop, and the reapers still settle the task instance on their own
+  schedule — and a pathological image pull can still exceed any fixed headroom,
+  in which case the kubelet's generic reason returns. Unchanged: a declared
+  timeout still wins over the `auth.max_attempt_credential_lifetime` floor, and
+  that floor (for tasks that declare no timeout) takes no headroom, because
+  nothing inside the pod races it; warm-pool tasks are unaffected either way,
+  since warm pods carry no `activeDeadlineSeconds` and are bounded per attempt by
+  the warm worker's attempt watchdog. The *Scheduler resilience* page now spells
+  out which clock owns the timeout.
+
 - **A control-plane restart no longer marks a succeeded task failed, and no
   longer condemns the rest of its run.** A production drill (kill the
   control-plane pod mid-run) turned a dbt task that had SUCCEEDED into `failed`

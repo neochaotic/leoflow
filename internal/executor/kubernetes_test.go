@@ -39,8 +39,13 @@ func TestBuildPod(t *testing.T) {
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("restartPolicy = %v, want Never", pod.Spec.RestartPolicy)
 	}
-	if pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 600 {
-		t.Errorf("activeDeadlineSeconds = %v, want 600", pod.Spec.ActiveDeadlineSeconds)
+	// The declared 600s timeout plus the startup headroom and termination grace
+	// that keep the agent — not the kubelet — the enforcer of the timeout.
+	wantDeadline := int64(600 + 180 + corev1.DefaultTerminationGracePeriodSeconds)
+	if pod.Spec.ActiveDeadlineSeconds == nil {
+		t.Errorf("activeDeadlineSeconds = nil, want %d", wantDeadline)
+	} else if *pod.Spec.ActiveDeadlineSeconds != wantDeadline {
+		t.Errorf("activeDeadlineSeconds = %d, want %d", *pod.Spec.ActiveDeadlineSeconds, wantDeadline)
 	}
 	if pod.Spec.NodeSelector["disktype"] != "ssd" || pod.Spec.ServiceAccountName != "sa" {
 		t.Errorf("placement: nodeSelector=%v sa=%q", pod.Spec.NodeSelector, pod.Spec.ServiceAccountName)

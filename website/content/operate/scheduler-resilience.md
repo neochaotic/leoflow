@@ -38,6 +38,74 @@ scheduler crash that leaves TIs queued is fully reaped within
 **`max(3 min, 5 min) + 30 s`** — the dispatch-lost reaper runs first, then the
 orphan-run reaper picks up the now-no-active-TI run on a later cycle.
 
+### Who enforces `execution_timeout` — and why the pod outlives it
+
+A task that declares `execution_timeout_seconds` and runs in its **own** pod has
+**two** clocks that could kill it, and only one of them can explain itself. (A
+task served by a **warm pool** has only the agent's: warm pods carry no
+`activeDeadlineSeconds` at all, and their per-attempt wall-clock bound is the
+warm worker's attempt watchdog, derived from
+`auth.max_attempt_credential_lifetime` — so everything below about the kubelet
+racing the agent does not apply to them.) The **agent** owns the semantic
+timeout: it interrupts the user process at the declared boundary and reports
+`execution_timeout: task exceeded Ns limit`. The task pod's
+`activeDeadlineSeconds` is only the **backstop** for an agent that can no
+longer enforce anything (crashed, wedged, partitioned); when the kubelet gets
+there first, the pod is gone and the failure reason degrades to what Kubernetes
+saw from outside, which cannot name a timeout.
+
+The two clocks do not start together. The kubelet counts from the pod's
+`status.startTime`, stamped **before** the image pull. The agent's own clock
+starts much later, inside its execute step — after the image pull, the volume
+attach and mount, container start, its token bootstrap and exchange, the gRPC
+dial, `Register`, `GetTaskSpec`, the environment build (XCom fan-in and secret
+resolution, possibly over calls to an external secret backend) and its `RUNNING`
+report, whose retry has no budget of its own. On a cold node the image pull
+dominates all of it. So the pod deadline is deliberately set **longer** than the
+declared timeout:
+
+```text
+activeDeadlineSeconds = execution_timeout_seconds
+                      + 3 min   (startup headroom = the dispatch-lost threshold)
+                      + the pod's terminationGracePeriodSeconds
+                        (default 30 s, and capped at 60 s here)
+```
+
+The headroom is the dispatch-lost threshold on purpose: that is the window in
+which the control plane still presumes healthy startup and defers reaping, so
+the kubelet should not be spending the author's execution budget inside it. Note
+what the threshold is **not** — a bound on how long startup may take. The
+dispatch-lost reaper checks the pod before failing anything and defers while it
+is `Pending` or `Running`, so a pod pulling an image for twenty minutes is never
+reaped for being slow; the threshold is where the control plane stops assuming a
+dispatch landed and starts looking.
+
+The termination grace is added on top rather than folded in — it covers the
+shutdown tail (stopping the child, delivering the report), not the startup head.
+Only up to 60 s of it is added, however much the DAG declares:
+`termination_grace_period_seconds` is unvalidated, and adding an hour of it
+verbatim would put the pod's deadline an hour past the declared timeout while
+the kubelet grants that same hour of `SIGTERM` grace again on top. The pod spec
+still carries the declared value verbatim; only this arithmetic is capped. The
+sum is also clamped to `2147483647` (`math.MaxInt32`), the largest
+`activeDeadlineSeconds` the apiserver accepts — otherwise a declared timeout
+near that bound would be rejected at pod `CREATE` rather than merely never
+reached.
+
+Two consequences worth knowing. A pod may outlive its declared timeout by a few
+minutes when its agent is dead — that is the backstop doing its job, and the
+reapers above still settle the task instance on their own schedule. And a
+**pathological** startup (a cold node pulling a multi-gigabyte image, a
+throttling registry, or a control-plane outage spanning the `RUNNING`
+pre-flight) can still exceed any fixed headroom; the task then fails with the
+kubelet's generic reason rather than the timeout diagnosis. If you see that,
+the image pull is the thing to fix — and it is worth measuring
+`status.startTime` → the agent's `task started` log line on a cold node.
+
+The pod deadline of a task that declares **no** `execution_timeout` is a
+different mechanism: a floor derived from `auth.max_attempt_credential_lifetime`
+(see below), which takes no headroom because no clock inside the pod races it.
+
 ## Cadence: reconcile, then reap
 
 The reapers do **not** run from the scheduler's 1 s tick. They run from the

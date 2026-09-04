@@ -100,7 +100,7 @@ rejected install on their next control-plane upgrade.
 {{- $preStopSleep := int .Values.deployment.preStopSleepSeconds -}}
 {{- if gt $preStopSleep 0 -}}
 {{- $grace := 30 -}}
-{{- $graceNote := "Kubernetes' own default, because the chart ships terminationGracePeriodSeconds unset" -}}
+{{- $graceNote := "Kubernetes' own default, because the rendered pod spec carries no terminationGracePeriodSeconds" -}}
 {{- /* Model the RENDERED spec, not the raw value. _controlplane-deployment.tpl
      emits the field under `{{ with .Values.terminationGracePeriodSeconds }}`,
      which omits it for nil, 0 and "" alike — so on all three the pod spec

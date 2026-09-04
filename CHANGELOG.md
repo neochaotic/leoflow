@@ -211,7 +211,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `agent grpc graceful stop exceeded its bound` warning fired every time, which
   is exactly how a warning stops being read. The assignment stream now ends at
   `SIGTERM` with the same `Unavailable` the log stream uses — the code the forced
-  transport close already produced, so a worker's own handling is unchanged. The
+  transport close already produced — and an **idle** warm worker now treats that
+  as a clean recycle (exit 0) instead of a fatal receive error, so a control-plane
+  restart no longer leaves one `Failed` pod and one ERROR line per warm worker
+  behind. Only the idle receive path accepts it: an attempt that dies mid-flight,
+  or a genuine outage, still surfaces as a failure. The
   object sink's retry warning for a failed incremental flush went to Go's default
   `slog` handler rather than the configured one, landing as plain text on stderr
   outside the server's log format and level, where nothing collecting the control

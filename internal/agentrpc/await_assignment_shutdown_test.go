@@ -18,8 +18,14 @@ import (
 // becomes the normal path and the "graceful stop exceeded its bound" warning
 // fires every time, which destroys its value as a signal. The handler must end
 // the stream itself when the control plane starts shutting down, with the same
-// Unavailable the log stream uses so the worker treats it as a transient stream
-// end and reconnects toward the surviving replica.
+// Unavailable the log stream uses.
+//
+// What the worker does with it: its assignment-RECEIVE branch treats Unavailable
+// as a clean end and the process exits 0, so the reconciler recreates the pod
+// against whichever replica survives. It does NOT reconnect in place — only a
+// not-leader FailedPrecondition does that, and this code is deliberately not
+// that one, because a replica on its way out must not pull a worker's bounded
+// reconnect budget back to itself.
 func TestAwaitAssignmentEndsOnShutdown(t *testing.T) {
 	srv, a, reg := newWarmServer(t, nil)
 	shutdownCtx, shutdown := context.WithCancel(context.Background())

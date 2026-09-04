@@ -197,7 +197,8 @@ func (w *WarmRunner) Run(ctx context.Context, dagVersionID string) error {
 
 // serve runs one connection's worth of the warm lifecycle: register the worker,
 // open the assignment stream, and serve assignments until the stream ends (server
-// close / drain) or ctx is canceled — returning nil in both those cases. It
+// close / drain, or the control plane's own shutdown while this worker sits idle)
+// or ctx is canceled — returning nil in all those cases. It
 // returns a non-nil error only on a registration failure, a stream transport
 // failure, or a failure to guarantee a clean scratch (isolation is fail-closed). A
 // FailedPrecondition-coded error is the not-leader rejection Run reconnects on. A
@@ -218,15 +219,30 @@ func (w *WarmRunner) serve(ctx context.Context, dagVersionID string) error {
 		assignment, rerr := w.recvAssignment(ctx, stream)
 		if rerr != nil {
 			// D6 idle-recycle: no assignment arrived within IdleTTL, so recycle this
-			// worker for freshness / scale-down. A closed / drained stream (EOF), or a
-			// parent shutdown (SIGTERM, surfaced on the stream as codes.Canceled), also
+			// worker for freshness / scale-down. A closed / drained stream (EOF), a
+			// parent shutdown (SIGTERM, surfaced on the stream as codes.Canceled), and
+			// the control plane ending the stream at ITS shutdown (Unavailable) also
 			// mean "stop serving" — all exit cleanly. Anything else is a real transport
 			// failure worth surfacing.
+			//
+			// Unavailable is accepted HERE ONLY. This branch is the idle worker: it has
+			// nothing in flight, so a control plane that went away is a clean recycle
+			// and the reconciler brings the pod back against whichever replica
+			// survives. Treated as an error it cost one Failed pod and one ERROR line
+			// per warm worker per control-plane restart, which is the same signal-
+			// burning the shutdown fix set out to remove, relocated from the server's
+			// warnings to the workers' exit codes. It is deliberately NOT accepted in
+			// serveAssignment's branch below, nor at Run's top level: an attempt dying
+			// mid-flight, and a real outage, must both still surface as failures (#918).
 			if errors.Is(rerr, errIdleRecycle) {
 				slog.Info("warm worker idle-recycle: no assignment within idle TTL", "idle_ttl", w.IdleTTL)
 				return nil
 			}
 			if errors.Is(rerr, io.EOF) || status.Code(rerr) == codes.Canceled {
+				return nil
+			}
+			if status.Code(rerr) == codes.Unavailable {
+				slog.Info("warm worker recycling: the control plane ended the assignment stream while this worker was idle", "error", rerr)
 				return nil
 			}
 			return fmt.Errorf("receiving assignment: %w", rerr)

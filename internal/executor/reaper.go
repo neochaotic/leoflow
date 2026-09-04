@@ -293,6 +293,24 @@ type settlingVerdict struct {
 // exist to prevent. By then the reconciler has had at least four cycles, so the
 // diagnosis "the sweep is broken" is real, not a scheduling artifact.
 //
+// Why opening it is safe — the argument the valve rests on. The dominant reason
+// a sweep never completes is that the apiserver cannot be read: unreachable,
+// unauthorized, throttled. The reconciler's pod LIST and the reapers' own
+// pod-presence LIST hit that same apiserver, so the failure that shuts the gate
+// also denies every pod-dependent reaper its authorization: pod-lost and
+// dispatch-lost defer on a query error, and the warm-worker-lost reaper aborts
+// its tick with zero marks. They fail closed on their own, without the gate.
+// The gate covers the remaining case — the apiserver answers but no sweep has
+// yet run under this leadership — and the valve trades that narrow window for
+// not wedging the reapers forever.
+//
+// The valve must therefore never be the only thing standing between a
+// recoverable pod and a destructive reap, because it is designed to open. That
+// is why the pod-lost reaper reaps only when the attempt has NO pod object at
+// all: a pod that is present but finished stays the reconciler's to settle from
+// its termination log, valve open or shut. A reap authorized by presence alone
+// cannot be manufactured by any grace, cadence or election timing.
+//
 // The warm-worker-lost reaper is gated too although its signal (a warm pod's
 // own liveness, read by a live LIST that fails closed) is not one a restart
 // manufactures: delaying it by the grace is harmless — a dead worker's attempts

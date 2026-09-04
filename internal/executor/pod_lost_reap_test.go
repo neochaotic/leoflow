@@ -233,3 +233,56 @@ func TestPodLostReaper_TerminalPodIsTheReconcilersToSettle(t *testing.T) {
 		})
 	}
 }
+
+// TestPodLostReaper_UnreadableApiserverFailsClosed locks the safety argument the
+// leader-settling gate's liveness valve rests on (see Reaper.settling): the
+// reconciler's broad pod LIST and this reaper's narrow one talk to the same
+// apiserver, so whatever stops the sweep from completing — unreachable,
+// unauthorized, throttled — also denies pod-lost its only authorization to reap.
+// The valve may therefore open on a broken sweep without pod-lost turning that
+// into a false reap. If this reaper ever reaps on a query error, the valve stops
+// being safe and this test must fail.
+//
+// The cache is wired with a MISS in the second case: a fall-through from a cold
+// or lagged cache lands on the same failing live read, so it authorizes nothing
+// either.
+func TestPodLostReaper_UnreadableApiserverFailsClosed(t *testing.T) {
+	const grace = 60 * time.Second
+	past := time.Now().UTC().Add(-2 * time.Minute)
+
+	cases := []struct {
+		name  string
+		cache PodPresenceCache
+	}{
+		{"no cache wired: the live read is the only authorization", nil},
+		{"cache miss falls through to the same failing read", &fakePresenceCache{active: map[string]bool{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakePodLostStore{candidates: []PodLostCandidate{
+				{TaskInstanceID: "unreadable", DagRunID: "run-a", TaskID: "work", TryNumber: 1, RunningSince: past},
+			}}
+			pods := &fakePodManager{activeErr: errors.New("Get \"https://10.0.0.1:443/api/v1/pods\": dial tcp: i/o timeout")}
+			rec := &capturingRecorder{}
+			r := newPodLostReaper(store, reapTestLogger(), grace, rec)
+			r.pods = pods
+			r.cache = tc.cache
+
+			if err := r.run(context.Background()); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if len(store.marked) != 0 {
+				t.Errorf("reaped on an unreadable apiserver: %v", store.marked)
+			}
+			if len(pods.deletedTasks) != 0 {
+				t.Errorf("deleted a pod on an unreadable apiserver: %v", pods.deletedTasks)
+			}
+			if got := rec.count("pod_lost_pod_query_error"); got != 1 {
+				t.Errorf("pod_lost_pod_query_error metered %d times, want 1", got)
+			}
+			if got := rec.count("pod_lost"); got != 0 {
+				t.Errorf("pod_lost metered %d times, want 0", got)
+			}
+		})
+	}
+}

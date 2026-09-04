@@ -77,6 +77,36 @@ func TestObjectSinkFlushFailureUsesInjectedLogger(t *testing.T) {
 	}
 }
 
+// TestNewDurableSinkCarriesTheLoggerToTheObjectSink pins the PRODUCTION hand-off,
+// which is the only place the injection actually has to happen: leoflow-server
+// never calls NewObjectSink itself, it calls NewDurableSink. Every other test in
+// this package passes nil, so dropping the logger on the way through
+// NewDurableSink — NewObjectSink(ctx, store, prefix, nil) — kept the whole
+// package green while putting the warning straight back on Go's default handler,
+// which is the bug the injection exists to fix. Assert on the injected buffer,
+// reached only through the constructor the server uses.
+func TestNewDurableSinkCarriesTheLoggerToTheObjectSink(t *testing.T) {
+	setFlushTuning(t, 8, time.Hour)
+	logger, buf := testLogger()
+	sink, err := NewDurableSink(context.Background(), "s3", "", newFailingStore("503 slow down"), "", logger)
+	if err != nil {
+		t.Fatalf("NewDurableSink(s3) error = %v", err)
+	}
+	w, err := sink.Open(sampleRef())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	if werr := w.WriteEvent(Event{Message: "a line long enough to trip the flush threshold"}); werr != nil {
+		t.Fatalf("WriteEvent() error = %v; an incremental flush failure must not end the stream", werr)
+	}
+
+	if got := buf.String(); !strings.Contains(got, "incremental log object flush failed") {
+		t.Fatalf("a sink built through NewDurableSink logged %q into the injected logger; want the incremental-flush warning, or the server's logger is being dropped on the way to the object sink", got)
+	}
+}
+
 // TestObjectSinkNilLoggerFallsBackToDefault: a nil logger is legal and means
 // "use the package default", so an embedder (or a test) that does not care
 // about log routing keeps working instead of panicking on the first failed

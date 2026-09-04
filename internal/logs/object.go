@@ -64,7 +64,12 @@ type ObjectSink struct {
 // slog.Default() because a process that configures its own handler (format,
 // level, destination) without calling slog.SetDefault would otherwise emit
 // these warnings outside its own logging contract, where nothing collects
-// them. nil falls back to slog.Default().
+// them. nil falls back to slog.Default(), deliberately: making the parameter
+// mandatory would not pin the production hand-off, it would just move the trap
+// from "warnings go somewhere unwatched" to "nil dereference on a flush path
+// that only runs while the process is already shutting down". What pins the
+// hand-off is a test that reaches this constructor the way the server does, via
+// NewDurableSink (#918).
 func NewObjectSink(ctx context.Context, store ObjectStore, prefix string, logger *slog.Logger) *ObjectSink {
 	if logger == nil {
 		logger = slog.Default()

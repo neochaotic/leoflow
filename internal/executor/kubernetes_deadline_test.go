@@ -153,3 +153,55 @@ func TestPodDeadlineLetsTheAgentTimeoutFirst(t *testing.T) {
 			"which is why it must never fire first", reason)
 	}
 }
+
+// TestBuildPodDeadlineCapsTerminationGraceTerm bounds the overshoot a DAG can
+// buy itself through the grace term (#910 review F2).
+//
+// Execution.TerminationGracePeriodSeconds is unvalidated — a bare *int64 in
+// internal/domain — so a DAG may declare 3600. Added verbatim, that pushes the
+// pod's deadline an hour past the declared timeout, and the kubelet then grants
+// the same hour of SIGTERM grace again on top: the pod outlives its declared
+// execution_timeout by about two hours. The term is still right to ADD (it
+// budgets the agent's own tail after its clock fires), but it is capped, because
+// that tail is not proportional to the declared grace: internal/agent/exec.go
+// runs the child under exec.CommandContext with the default cancel, so the agent
+// SIGKILLs it immediately no matter what the DAG asked for, and what is left is
+// one outcome-record write and one report RPC.
+func TestBuildPodDeadlineCapsTerminationGraceTerm(t *testing.T) {
+	headroom := int64(defaultDispatchLostThreshold / time.Second)
+	// The cap the grace term must respect, asserted here as the bare number the
+	// invariant is stated in; the production const is maxDeadlineGraceTerm.
+	const graceCap = int64(60)
+	for _, tc := range []struct {
+		name  string
+		grace *int64
+		want  int64
+	}{
+		// The overshoot case: an hour of declared grace buys 60 s of deadline.
+		{"grace far above the cap", ptr(int64(3600)), 600 + 180 + graceCap},
+		{"grace exactly at the cap", ptr(int64(60)), 600 + 180 + 60},
+		{"grace below the cap is added verbatim", ptr(int64(45)), 600 + 180 + 45},
+		// A declared 0 gets no post-deadline tail from the kubelet at all, so
+		// there is nothing to size from the declaration: the default fallback
+		// stands, exactly as when nothing is declared.
+		{"declared zero falls back to the default", ptr(int64(0)), 600 + 180 + corev1.DefaultTerminationGracePeriodSeconds},
+		{"undeclared falls back to the default", nil, 600 + 180 + corev1.DefaultTerminationGracePeriodSeconds},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := sampleReq() // TimeoutSeconds: 600
+			req.Execution.TerminationGracePeriodSeconds = tc.grace
+			got := BuildPod(req).Spec.ActiveDeadlineSeconds
+			if got == nil {
+				t.Fatal("a declared timeout must still produce a pod deadline")
+			}
+			if ceiling := int64(req.TimeoutSeconds) + headroom + graceCap; *got > ceiling {
+				t.Errorf("activeDeadlineSeconds = %d, must not exceed %d (timeout %d + headroom %d + capped grace %d); "+
+					"an unvalidated declared grace must not extend the pod's overshoot without bound",
+					*got, ceiling, req.TimeoutSeconds, headroom, graceCap)
+			}
+			if *got != tc.want {
+				t.Errorf("activeDeadlineSeconds = %d, want %d", *got, tc.want)
+			}
+		})
+	}
+}

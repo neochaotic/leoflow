@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -142,10 +143,63 @@ func BuildPod(req Request) *corev1.Pod {
 	return pod
 }
 
+// podStartupHeadroom is how much longer than the declared execution timeout the
+// pod's deadline runs, to absorb everything that happens between the two clocks
+// that bound a task.
+//
+// The two clocks start at different moments. The kubelet counts
+// activeDeadlineSeconds from pod.Status.StartTime, which is stamped BEFORE the
+// image pull; the agent starts its own deadline inside its execute step, AFTER
+// the RUNNING pre-flight report, source staging and venv resolution. With the
+// deadline set to the timeout itself the kubelet wins by the entire startup
+// cost — systematically, on every task, not as a race.
+//
+// That inversion matters because of the layering: the AGENT owns the semantic
+// timeout. It is what interrupts the user process at the boundary the author
+// declared and reports "execution_timeout: task exceeded Xs limit", the only
+// description that tells an operator a task was killed for running too long.
+// The kubelet's deadline is only the backstop for an agent that can no longer
+// enforce anything (crashed, wedged, partitioned), so it must never fire first:
+// when it does, the pod is gone and the reason degrades to what Kubernetes
+// observed from outside (see podFailureReason), which cannot name a timeout.
+//
+// The value is the dispatch-lost threshold, which is this project's own bound on
+// how long a healthy task may take to go from queued to RUNNING: pod creation,
+// scheduling, image pull, staging-volume mount, agent boot, secret resolution
+// and the RUNNING pre-flight round trip. Below that the control plane still
+// treats the task as healthily starting up, so the kubelet must not yet be
+// spending the user's execution budget on it. Reusing the threshold keeps the
+// two judgments of "still starting" from drifting apart.
+//
+// The termination grace is added on top of this rather than folded into it: the
+// grace covers the tail (the agent shutting the child down and delivering its
+// report after its own deadline fired), the headroom covers the head. Either
+// alone leaves the kubelet able to preempt.
+//
+// A fixed headroom is not airtight, deliberately: a pathological image pull
+// (cold node, multi-gigabyte image, a throttling registry) or a control-plane
+// outage spanning the RUNNING pre-flight (which retries without a budget, by
+// design) exceeds any constant, and then the kubelet fires first again and the
+// timeout diagnosis is lost. The airtight variant is to anchor the AGENT's
+// clock at process start instead of at execute, which makes it strictly earlier
+// than the kubelet's for any non-negative headroom. That is not done here
+// because it would fold staging and venv resolution into the author's declared
+// budget, changing what execution_timeout means (it covers task execution).
+const podStartupHeadroom = defaultDispatchLostThreshold
+
 // podActiveDeadline returns the task pod's ActiveDeadlineSeconds: the user's
-// declared timeout when set, otherwise the attempt credential ceiling as a
-// floor, otherwise 0 (no deadline). The user's value is never shortened — a
-// declared timeout is the author's bound to make, even one above the ceiling.
+// declared timeout plus startup headroom and termination grace when set,
+// otherwise the attempt credential ceiling as a floor, otherwise 0 (no
+// deadline). The user's value is never shortened — a declared timeout is the
+// author's bound to make, even one above the ceiling — and it is never merely
+// matched either: the deadline outlasts it so the agent's own clock fires first
+// and the operator sees the timeout named (podStartupHeadroom).
+//
+// The floor path takes no headroom. It is not a bound the agent races: nothing
+// in the pod enforces the credential ceiling from inside, so there is no earlier
+// clock to leave room for, and extending the pod past the ceiling only buys time
+// in which its lapsed bearer can accomplish nothing.
+//
 // The floor exists because the agent's RUNNING and terminal reports retry for as
 // long as the control plane is unreachable (by design: a report that gives up is
 // how a succeeded task ends up marked failed), so a pod with no deadline of its
@@ -158,12 +212,24 @@ func BuildPod(req Request) *corev1.Pod {
 // before its first report attempt, so no result is lost, only a stuck pod.
 func podActiveDeadline(req Request) int64 {
 	if req.TimeoutSeconds > 0 {
-		return int64(req.TimeoutSeconds)
+		return int64(req.TimeoutSeconds) + int64(podStartupHeadroom/time.Second) + podTerminationGrace(req)
 	}
 	if req.AttemptLifetimeCeilingSeconds > 0 {
 		return req.AttemptLifetimeCeilingSeconds
 	}
 	return 0
+}
+
+// podTerminationGrace is the shutdown allowance the kubelet will grant this pod:
+// what the DAG declared, else the Kubernetes default applied to a pod that
+// declares none. The deadline budgets the same tail the kubelet does, so the
+// window the agent has to stop the child and deliver its report is the window it
+// actually gets.
+func podTerminationGrace(req Request) int64 {
+	if g := req.Execution.TerminationGracePeriodSeconds; g != nil && *g > 0 {
+		return *g
+	}
+	return corev1.DefaultTerminationGracePeriodSeconds
 }
 
 // Agent-token transport (ADR 0055 Fix #3). The env-var transport keeps the

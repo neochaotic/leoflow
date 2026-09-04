@@ -66,10 +66,12 @@ spec:
       # are closed and flushed at SIGTERM and the gRPC stop is bounded (5s
       # graceful, then up to 5s for handlers after the forced stop), so a normal
       # shutdown completes in well under a second. A shutdown that hits every
-      # bound (HTTP 10s + drain 15s + gRPC up to 10s) exceeds the default 30s;
-      # set 45-60 when running the object log sink at scale (the HA profile
-      # ships 60). Omitted when unset so a default install's pod spec is
-      # unchanged (Kubernetes applies its own 30s).
+      # bound (preStop 5s + HTTP 10s + drain 15s + gRPC up to 10s) exceeds the
+      # default 30s; set 45-60 when running the object log sink at scale (the HA
+      # profile ships 60). deployment.preStopSleepSeconds runs inside this grace,
+      # ahead of SIGTERM, so it counts against the same budget. Omitted when
+      # unset so a default install's pod spec is unchanged (Kubernetes applies
+      # its own 30s).
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
       {{- with .ctx.Values.imagePullSecrets }}
@@ -372,6 +374,24 @@ spec:
             periodSeconds: {{ .ctx.Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .ctx.Values.probes.liveness.timeoutSeconds }}
             failureThreshold: {{ .ctx.Values.probes.liveness.failureThreshold }}
+          {{- if gt (int .ctx.Values.deployment.preStopSleepSeconds) 0 }}
+          # Endpoint removal is asynchronous. From the moment this replica starts
+          # terminating, kube-proxy and every already-connected client still hold
+          # it in their endpoint set for a propagation window, so task pods keep
+          # OPENING new agent log streams against a control plane that is on its
+          # way out — and each one creates an empty log object for an attempt
+          # whose lines then have nowhere to land. Sleeping here spends that
+          # window before the process is signalled, so those streams land on a
+          # replica that will still be alive to flush them. The sleep runs INSIDE
+          # terminationGracePeriodSeconds, ahead of SIGTERM, so it adds to the
+          # shutdown budget; keep the grace above preStop + the drain bounds.
+          # The native `sleep` action, not an `exec`: the image is distroless, so
+          # there is no shell and no sleep binary for a command hook to call.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ int .ctx.Values.deployment.preStopSleepSeconds }}
+          {{- end }}
           resources:
             {{- toYaml .ctx.Values.resources | nindent 12 }}
           volumeMounts:

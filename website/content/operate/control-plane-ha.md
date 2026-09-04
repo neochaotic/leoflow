@@ -330,19 +330,32 @@ because it is not leadership:
   dispatches already in progress settle instead of leaving task instances stuck
   `queued`. Reapers are gated off during the step-down so nothing destructive
   fires from a dying leader.
+- **The replica stops taking new streams before it stops.** Endpoint removal is
+  asynchronous, so for a propagation window after termination begins, task pods
+  still open **new** agent log streams against the replica that is on its way
+  out — each one creating an empty log object for an attempt whose lines then
+  have nowhere to land. `deployment.preStopSleepSeconds` (default 5) spends that
+  window in a `preStop` sleep before the process is signalled. It runs *inside*
+  `terminationGracePeriodSeconds`, ahead of everything below, so count it in the
+  budget; set `0` to drop the hook if a single-replica `Recreate` upgrade's
+  latency matters more than a few empty objects.
 - **With tasks running, the stop is bounded.** Open agent log streams are
   closed and flushed the moment `SIGTERM` arrives (the agent keeps running its
-  task; log shipping is best-effort), and the gRPC graceful stop that follows is
-  bounded at 5 s before falling back to a forced stop — which still lets the
-  remaining handlers finish their deferred flushes, waited for up to another
-  5 s. A normal shutdown therefore completes in well under a second. The
-  bounded **worst case** does not fit the default 30 s: HTTP (≤10 s) + dispatch
-  drain (≤15 s, configurable) + gRPC stop (≤10 s) is ~35 s plus the telemetry
-  flush. Set `terminationGracePeriodSeconds` to 45–60 when running the object
-  log sink at scale (the HA profile ships 60). A `SIGKILL` (`exitCode: 137` on
-  the terminated container) means a stop that overran the grace — look for the
-  `agent grpc graceful stop exceeded its bound` warning first, then for a slow
-  object store. Nothing in the leadership handoff needs any of this to finish.
+  task; log shipping is best-effort), idle warm-worker assignment streams end
+  the same way, and the gRPC graceful stop that follows is bounded at 5 s before
+  falling back to a forced stop — which still lets the remaining handlers finish
+  their deferred flushes, waited for up to another 5 s. A normal shutdown
+  therefore completes in well under a second, warm pools on or off. The bounded
+  **worst case** does not fit the default 30 s: `preStop` (5 s) + HTTP (≤10 s) +
+  dispatch drain (≤15 s, configurable) + gRPC stop (≤10 s) is ~40 s plus the
+  telemetry flush. Set `terminationGracePeriodSeconds` to 45–60 when running the
+  object log sink at scale (the HA profile ships 60). A `SIGKILL`
+  (`exitCode: 137` on the terminated container) means a stop that overran the
+  grace — look for the `agent grpc graceful stop exceeded its bound` warning
+  first, then for a slow object store. That warning is meant to be rare: every
+  long-lived agent stream ends itself at `SIGTERM`, so seeing it on every
+  shutdown is a bug, not a tuning problem. Nothing in the leadership handoff
+  needs any of this to finish.
 
 The HA profile sets `60` for comfortable HTTP + dispatch drain headroom under
 load. The chart deliberately ships **no default**: a default would add up to

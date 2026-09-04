@@ -246,6 +246,57 @@ tests:
           value: 60
           documentIndex: 1
 
+  # ─── preStop: stop taking NEW streams before the process dies ────────────
+  # Endpoint removal is asynchronous: when a replica starts terminating, kube-
+  # proxy and every client still hold it in their endpoint set for a window, so
+  # task pods keep OPENING log streams against a control plane that is already
+  # shutting them down — each one creating an empty log object for an attempt
+  # whose lines then have nowhere to land. A preStop sleep spends that window
+  # doing nothing while the endpoint propagates, so the new streams land on a
+  # replica that will still be there to flush them. The native `sleep` action is
+  # used deliberately: the image is distroless, so an `exec` hook has no shell
+  # and no sleep binary to call.
+  - it: renders the preStop sleep hook by default
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+
+  - it: honors an overridden preStop sleep
+    template: deployment.yaml
+    set:
+      deployment.preStopSleepSeconds: 15
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 15
+
+  - it: omits the lifecycle block entirely when the preStop sleep is disabled with 0
+    template: deployment.yaml
+    set:
+      deployment.preStopSleepSeconds: 0
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].lifecycle
+
+  - it: renders the preStop sleep on both split Deployments
+    template: deployment.yaml
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+          documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+          documentIndex: 1
+
   - it: passes podAnnotations through to the pod template (the Karpenter do-not-disrupt opt-in path)
     template: deployment.yaml
     set:

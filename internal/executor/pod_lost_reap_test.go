@@ -234,10 +234,13 @@ func TestPodLostReaper_TerminalPodIsTheReconcilersToSettle(t *testing.T) {
 	}
 }
 
-// TestPodLostReaper_UnreadableApiserverFailsClosed locks the safety argument the
-// leader-settling gate's liveness valve rests on (see Reaper.settling): the
-// reconciler's broad pod LIST and this reaper's narrow one talk to the same
-// apiserver, so whatever stops the sweep from completing — unreachable,
+// TestPodLostReaper_UnreadableApiserverFailsClosed locks the CONSEQUENCE the
+// leader-settling gate's liveness valve leans on (see Reaper.settling), not its
+// premise: this reaper never reaps on a failed pod read. The premise — that
+// whatever stops the reconciler's broad sweep also denies this narrow read — is
+// usually but not always true (see Reaper.settling for how the two diverge), so
+// what a test can pin is the fail-closed behavior on an apiserver that is
+// unreachable,
 // unauthorized, throttled — also denies pod-lost its only authorization to reap.
 // The valve may therefore open on a broken sweep without pod-lost turning that
 // into a false reap. If this reaper ever reaps on a query error, the valve stops

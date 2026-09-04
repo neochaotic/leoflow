@@ -92,11 +92,15 @@ so a valve that opens means the sweep really is broken; treat it as an alert.
 **Why opening it is safe.** The usual reason a sweep never completes is an
 apiserver that cannot be read — unreachable, unauthorized, throttled. The
 reconciler's pod LIST and each reaper's own pod-presence LIST hit that same
-apiserver, so the failure that shuts the gate also denies every pod-dependent
-reaper its authorization: pod-lost and dispatch-lost defer
+apiserver, so that failure usually denies every pod-dependent
+reaper its authorization too: pod-lost and dispatch-lost defer
 (`pod_lost_pod_query_error`, `dispatch_lost_pod_query_error`) and the
 warm-worker-lost reaper aborts its cycle with zero marks. They fail closed on
-their own, valve or no valve. And because the valve is *designed* to open, it is
+their own, valve or no valve. The two reads can still diverge, though — a broad
+namespace-wide LIST can time out where a narrow, server-side-filtered one
+succeeds, an informer that never syncs needs `watch` where the reapers need only
+`list`, and API Priority and Fairness can starve the heavy request while the
+cheap one gets through. And because the valve is *designed* to open, it is
 never the only guard: the pod-lost reaper fails a task only when the attempt has
 **no pod object at all**, a state no grace, cadence or election timing can
 manufacture. A finished pod is a present pod, and stays the reconciler's.
@@ -205,7 +209,7 @@ your Prometheus dashboard:
 | `dispatch_lost` | TI failed by the dispatch-lost reaper |
 | `dispatch_lost_deferred` | Dispatch-lost skipped because the TI's pod is live (slow start, [#461](https://github.com/neochaotic/leoflow/issues/461)) — a healthy signal, not a fault |
 | `pod_lost` | TI failed by the pod-lost reaper (no pod at all for the attempt) |
-| `pod_lost_terminal_pod_defer` | Pod-lost skipped because the attempt's pod is still there in a terminal phase — the reconciler settles it from its termination log; reaping would delete that evidence. A healthy signal, not a fault |
+| `pod_lost_terminal_pod_defer` | Pod-lost skipped because the attempt's pod is still there in a terminal phase — the reconciler settles it from its termination log; reaping would delete that evidence. Healthy as a *transient*. Sustained past two maintenance cycles means the reconciler is not settling and those task instances are stranded `running`, not about to settle: correlate with `reap_settling_valve_open` and `pod_lost_pod_query_error` |
 | `warm_worker_lost` | TI failed by the warm-worker-lost reaper (its warm worker is gone) |
 | `orphan_reaped` | Run failed by the orphan-run reaper |
 | `reap_settling_skip` | The whole reaper pass was held because the leader has not settled yet (grace, informer sync, or a post-leadership reconciler sweep still pending) — expected for ~3 min after every (re-)election |

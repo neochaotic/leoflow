@@ -111,8 +111,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `pod_lost_pod_query_error`, which is also the reason the valve is safe to open
   (the reconciler's pod LIST and the reaper's own hit the same apiserver, so
   whatever stops the sweep also denies the reaper its authorization). The
-  dispatch-lost reaper's behavior is unchanged: a queued attempt never ran, so
-  its finished pod carries no outcome to preserve.
+  dispatch-lost reaper's behavior is unchanged in this fix, and that reaper can
+  still delete a terminal pod's outcome record: a queued attempt's finished pod
+  CAN carry an outcome (the settle statements admit `queued`, and a dispatch can
+  stamp a row that already reached `running` back to `queued`). Tracked as
+  [#928](https://github.com/neochaotic/leoflow/issues/928), with the underlying
+  unguarded transition as [#929](https://github.com/neochaotic/leoflow/issues/929).
 
 - **A control-plane restart no longer marks a succeeded task failed, and no
   longer condemns the rest of its run.** A production drill (kill the

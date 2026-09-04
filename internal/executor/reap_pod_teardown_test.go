@@ -52,6 +52,10 @@ func (f *fakePodManager) DeleteRunPods(_ context.Context, runID string) error {
 	return nil
 }
 
+// TaskPodPresence reports absence for a key in neither map, because most
+// fixtures here are about a pod that is gone. Absence is the one presence that
+// AUTHORIZES a reap, so a test about deferral must populate `active` or
+// `terminal` explicitly rather than rely on the zero-configuration default.
 func (f *fakePodManager) TaskPodPresence(_ context.Context, runID, taskID string, try int) (PodPresence, error) {
 	f.activeCalls++
 	if f.activeErr != nil {

@@ -158,10 +158,14 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 				r.record("dispatch_lost_pod_query_error")
 				continue
 			}
-			// Only a LIVE pod defers here. A queued TI whose pod already finished
-			// never transitioned to `running`, so there is no outcome the
-			// reconciler could settle from that pod — the dispatch is lost either
-			// way and this reaper proceeds.
+			// Only a LIVE pod defers here, which is NOT because a finished pod is
+			// worthless: SucceedTaskInstanceIfActive and its siblings admit
+			// `queued`, so the reconciler settles queued attempts by design, and
+			// ApplyTransition can stamp a row that already reached `running` back
+			// to `queued` (#929), so "a queued attempt never ran" is unsound. This
+			// reaper therefore still deletes an outcome record it should preserve;
+			// the fix belongs at the teardown site, where deleting a terminal pod
+			// accomplishes nothing but destroying evidence (#928).
 			if presence == PodPresenceLive {
 				r.logger.Info("dispatch-lost: pod is live (slow start); deferring",
 					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID)

@@ -58,7 +58,13 @@ const (
 	// Pending or Running. Whatever happened to that attempt is recorded on the
 	// pod object, so settling it belongs to the reconciler and no reaper may
 	// delete it. Phase Unknown counts here as well: the pod object is still
-	// there, the reconciler still watches it, and it is not an absence.
+	// there and it is not an absence. Note the backstop for a pod stuck in
+	// Unknown is NOT the reconciler — classifyPod groups Unknown with
+	// Pending/Running, so the reconciler neither settles nor collects it — but
+	// the agent-lost reaper (heartbeats stop when a node goes unreachable) and
+	// the orphan-run reaper. The phase has not been set by kubelet since 2015
+	// and is deprecated upstream, so the practical exposure is nil; classifying
+	// it as presence is the conservative direction.
 	PodPresenceTerminal
 	// PodPresenceAbsent means the apiserver holds no pod for the attempt at all
 	// — the attempt's pod is genuinely gone (deleted, evicted, lost with its

@@ -208,8 +208,9 @@ func TestStreamLogsRefusesAfterShutdownBeforeOpeningAWriter(t *testing.T) {
 
 	streamCtx, cancelStream := context.WithCancel(ctxWithToken(t, a))
 	defer cancelStream()
+	stream := &blockingStreamLogsServer{ctx: streamCtx}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.StreamLogs(&blockingStreamLogsServer{ctx: streamCtx}) }()
+	go func() { errCh <- srv.StreamLogs(stream) }()
 	select {
 	case err := <-errCh:
 		if status.Code(err) != codes.Unavailable {

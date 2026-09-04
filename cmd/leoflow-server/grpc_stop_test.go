@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,6 +39,59 @@ type promptStopper struct{ stops atomic.Int32 }
 func (p *promptStopper) GracefulStop() {}
 func (p *promptStopper) Stop()         { p.stops.Add(1) }
 
+// deadStopper models the worst case: handlers that do not return even after the
+// forced Stop cancels their stream contexts — a log writer's final Put, whose
+// own timeout (30s) outlives the post-force wait, is exactly that. Neither stop
+// unblocks GracefulStop; the test releases it on cleanup so nothing leaks.
+type deadStopper struct {
+	release chan struct{}
+	stops   atomic.Int32
+}
+
+func newDeadStopper(t *testing.T) *deadStopper {
+	t.Helper()
+	d := &deadStopper{release: make(chan struct{})}
+	t.Cleanup(func() { close(d.release) })
+	return d
+}
+
+func (d *deadStopper) GracefulStop() { <-d.release }
+func (d *deadStopper) Stop()         { d.stops.Add(1) }
+
+// TestStopGRPCWithinReportsInflightHandlersOnGiveUp: abandoning a handler is
+// SAFE — a log object is written by a single atomic Put, so an abandoned one
+// leaves the object at its previous flush rather than truncated — but it must
+// not be SILENT. Each Put is bounded at 30s while the post-force wait is 5s, so
+// the process can legitimately exit with handlers still running, and the count
+// is the only evidence of how much log tail that cost.
+func TestStopGRPCWithinReportsInflightHandlersOnGiveUp(t *testing.T) {
+	srv := newDeadStopper(t)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	if forced := stopGRPCWithin(srv, 20*time.Millisecond, logger, func() int { return 3 }); !forced {
+		t.Error("forced = false, want true: neither stop unblocked the handlers")
+	}
+	got := buf.String()
+	if !strings.Contains(got, "in_flight_handlers=3") {
+		t.Fatalf("logged %q; want the in-flight handler count so an abandoned final flush is visible", got)
+	}
+}
+
+// TestStopGRPCWithinToleratesNoInflightCounter: the counter is optional, so a
+// caller (or an embedder) that has not wired one still gets a bounded stop
+// instead of a panic on the shutdown path.
+func TestStopGRPCWithinToleratesNoInflightCounter(t *testing.T) {
+	srv := newDeadStopper(t)
+	var buf bytes.Buffer
+	if forced := stopGRPCWithin(srv, 20*time.Millisecond, slog.New(slog.NewTextHandler(&buf, nil)), nil); !forced {
+		t.Error("forced = false, want true")
+	}
+	if strings.Contains(buf.String(), "in_flight_handlers") {
+		t.Errorf("logged %q; want the count omitted when no counter is wired", buf.String())
+	}
+}
+
 // TestStopGRPCWithinForcesStopWhenGracefulHangs pins the fix for the shutdown
 // half of the eviction bug class: an unbounded GracefulStop with a task's log
 // stream open burned the whole terminationGracePeriodSeconds and the kubelet
@@ -45,7 +100,7 @@ func (p *promptStopper) Stop()         { p.stops.Add(1) }
 func TestStopGRPCWithinForcesStopWhenGracefulHangs(t *testing.T) {
 	srv := newHangingStopper()
 	start := time.Now()
-	forced := stopGRPCWithin(srv, 100*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	forced := stopGRPCWithin(srv, 100*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatalf("stopGRPCWithin took %s with a hanging GracefulStop; must complete within the bound", took)
 	}
@@ -61,7 +116,7 @@ func TestStopGRPCWithinForcesStopWhenGracefulHangs(t *testing.T) {
 // RPCs the graceful path wins and Stop is never forced.
 func TestStopGRPCWithinReturnsPromptlyWhenGracefulCompletes(t *testing.T) {
 	srv := &promptStopper{}
-	if forced := stopGRPCWithin(srv, time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil))); forced {
+	if forced := stopGRPCWithin(srv, time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)), nil); forced {
 		t.Error("forced = true, want false when GracefulStop completes on its own")
 	}
 	if srv.stops.Load() != 0 {
@@ -139,7 +194,7 @@ func TestStopGRPCWithinRealServerRunsHandlerCleanup(t *testing.T) {
 	}
 
 	start := time.Now()
-	forced := stopGRPCWithin(srv, 200*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	forced := stopGRPCWithin(srv, 200*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	if took := time.Since(start); took > 3*time.Second {
 		t.Fatalf("stopGRPCWithin took %s with an open stream; must complete within the bound", took)
 	}

@@ -484,7 +484,12 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if xerr != nil {
 		return nil, false, nil, xerr
 	}
-	grpcSrv, agentSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, xchg, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, logger)
+	// The bounded graceful stop reports how many handlers it left running, since
+	// a log writer's final Put outlasts the post-force wait and an abandoned one
+	// is otherwise silent. gRPC exposes no such number, so the counter rides on
+	// the interceptor chain and the stop func reads it.
+	inflight := agentrpc.NewInflightHandlers()
+	grpcSrv, agentSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, xchg, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, inflight, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -517,7 +522,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	}
 	stop = func() {
 		drain()
-		stopGRPCWithin(grpcSrv, grpcStopTimeout, logger)
+		stopGRPCWithin(grpcSrv, grpcStopTimeout, logger, inflight.Count)
 	}
 	return health, podDispatch, stop, nil
 }
@@ -551,7 +556,24 @@ type grpcStopper interface {
 // waiting for those handlers to return, and they return after their deferred
 // log flushes, so the wait for it is kept (bounded again) and forced reports
 // whether the fallback was taken.
-func stopGRPCWithin(srv grpcStopper, timeout time.Duration, logger *slog.Logger) (forced bool) {
+//
+// inflight (optional; nil omits the field) reports how many agent RPC handlers
+// are still executing, and is logged on both bounded paths. A log writer's
+// final Put is bounded at objectPutTimeout, which is longer than this timeout,
+// so the process can legitimately exit with handlers still running: abandoning
+// one is SAFE — a log object is written by a single atomic Put, so the stored
+// object stays at its previous flush rather than being truncated — but without
+// the count it is also silent, and nothing says how much log tail that cost.
+func stopGRPCWithin(srv grpcStopper, timeout time.Duration, logger *slog.Logger, inflight func() int) (forced bool) {
+	// inflightArgs renders the count as log attributes, or nothing when no
+	// counter is wired, so an unwired caller logs a shorter line instead of a
+	// misleading zero.
+	inflightArgs := func() []any {
+		if inflight == nil {
+			return nil
+		}
+		return []any{"in_flight_handlers", inflight()}
+	}
 	done := make(chan struct{})
 	go func() { srv.GracefulStop(); close(done) }()
 	select {
@@ -559,12 +581,14 @@ func stopGRPCWithin(srv grpcStopper, timeout time.Duration, logger *slog.Logger)
 		return false
 	case <-time.After(timeout):
 	}
-	logger.Warn("agent grpc graceful stop exceeded its bound; forcing stop so shutdown completes within the pod's grace", "timeout", timeout)
+	logger.Warn("agent grpc graceful stop exceeded its bound; forcing stop so shutdown completes within the pod's grace",
+		append([]any{"timeout", timeout}, inflightArgs()...)...)
 	srv.Stop()
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		logger.Error("agent grpc handlers did not finish after the forced stop; exiting without them", "timeout", timeout)
+		logger.Error("agent grpc handlers did not finish after the forced stop; exiting without them (an abandoned log flush leaves the object at its previous flush, not truncated)",
+			append([]any{"timeout", timeout}, inflightArgs()...)...)
 	}
 	return true
 }
@@ -714,8 +738,9 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv,
 // startAgentGRPC starts the AgentService gRPC server and returns it for graceful
 // shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
 // channel is plaintext (dev). The per-task bearer token in metadata authenticates
-// each call regardless.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger) (srv *grpc.Server, agentSrv *agentrpc.Server, err error) {
+// each call regardless. inflight (required) is installed on the interceptor
+// chain so the bounded stop can report the handlers it leaves running.
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPools *agentrpc.WorkerRegistry, inflight *agentrpc.InflightHandlers, logger *slog.Logger) (srv *grpc.Server, agentSrv *agentrpc.Server, err error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -772,9 +797,12 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 
 	// Recover panics in any agent RPC handler so a single malformed request from a
 	// worker pod cannot crash the control plane (it returns Internal instead).
+	// The in-flight counter sits INSIDE recovery so recovery stays outermost (it
+	// must cover every later interceptor), and so a panicking handler is counted
+	// out by the counter's own defer before recovery translates the panic.
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(agentrpc.RecoveryUnaryInterceptor(logger)),
-		grpc.ChainStreamInterceptor(agentrpc.RecoveryStreamInterceptor(logger)),
+		grpc.ChainUnaryInterceptor(agentrpc.RecoveryUnaryInterceptor(logger), inflight.UnaryInterceptor()),
+		grpc.ChainStreamInterceptor(agentrpc.RecoveryStreamInterceptor(logger), inflight.StreamInterceptor()),
 		// Tolerate a warm worker's keepalive pings on an otherwise idle assignment
 		// stream so gRPC does not GOAWAY it as abusive (ADR 0058 N1b). This only
 		// RELAXES the server's default client-ping enforcement (5m, streams-only),

@@ -257,11 +257,15 @@ tests:
   # used deliberately: the image is distroless, so an `exec` hook has no shell
   # and no sleep binary to call.
   #
-  # OFF by default, and the default is the assertion: the sleep only buys
-  # something when another replica is serving agent gRPC, and no shipped topology
-  # has one (replicaCount 1; split pins the scheduler, which owns the agent gRPC,
-  # to one). On those it buys nothing and adds its own seconds to every upgrade —
-  # the same reason terminationGracePeriodSeconds ships empty.
+  # OFF by default, and the default is the assertion: for AGENT LOG STREAMS the
+  # sleep only buys something when another replica is serving agent gRPC, and no
+  # shipped topology has one (replicaCount 1; split pins the scheduler, which owns
+  # the agent gRPC, to one). On those it buys nothing for those streams and adds
+  # its own seconds to every upgrade — the same reason
+  # terminationGracePeriodSeconds ships empty. It is still rendered on BOTH split
+  # Deployments on purpose (asserted below): on the api side, with
+  # split.api.replicaCount > 1, the same sleep spends the same propagation window
+  # for HTTP and UI requests, which do have a second endpoint to land on.
   - it: ships the preStop hook off, so a default install's pod spec is unchanged
     template: deployment.yaml
     capabilities:

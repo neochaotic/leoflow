@@ -339,8 +339,13 @@ because it is not leadership:
   `examples/values-ha.yaml`, because moving a stream needs somewhere to move it
   to: a single-replica install (the chart default, and the split topology's
   scheduler, which is what serves agent gRPC) has no second endpoint, so the
-  sleep buys nothing there and adds its own seconds to every upgrade. What it
-  never buys, at any replica count, is an **already-established** stream: those
+  sleep buys nothing **for agent log streams** there and adds its own seconds to
+  every upgrade. That is the scheduler-side singleton case, not the whole story:
+  the hook renders on **both** split Deployments deliberately, and on the api
+  side with `split.api.replicaCount` > 1 the same sleep spends the same
+  propagation window for HTTP and UI requests, which have a second endpoint to
+  land on. What it never buys, at any replica count, is an
+  **already-established** stream: those
   connections are pinned by conntrack and get `Unavailable` at `SIGTERM`
   regardless — only not-yet-opened streams move. The sleep runs *inside*
   `terminationGracePeriodSeconds`, ahead of everything below, so count it in the
@@ -350,8 +355,9 @@ because it is not leadership:
   where the native `sleep` action is beta and on by default; it is alpha and
   *off* in 1.29, and an apiserver without it rejects the empty `preStop: {}` it
   is left with instead of ignoring it. So the chart renders the hook only on
-  1.30+ and silently omits it below — a 1.27–1.29 install keeps working, with
-  the pre-hook behavior.
+  1.30+ and omits it below — a 1.27–1.29 install keeps working, with the
+  pre-hook behavior, and the install notes warn that the value you set had no
+  effect rather than leaving the omit silent.
 - **With tasks running, the stop is bounded.** Open agent log streams are
   closed and flushed the moment `SIGTERM` arrives (the agent keeps running its
   task; log shipping is best-effort), idle warm-worker assignment streams end

@@ -79,7 +79,7 @@ func sampleRef() Ref {
 
 func TestObjectSinkRoundTrip(t *testing.T) {
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "logs")
+	sink := NewObjectSink(context.Background(), store, "logs", nil)
 	ref := sampleRef()
 
 	w, err := sink.Open(ref)
@@ -128,7 +128,7 @@ func TestObjectSinkRoundTrip(t *testing.T) {
 // EKS/S3 path the disk-sink tests never exercise.
 func TestObjectSinkAppendEventPreservesExisting(t *testing.T) {
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "logs")
+	sink := NewObjectSink(context.Background(), store, "logs", nil)
 	ref := sampleRef()
 
 	// The agent streamed two lines and its object was Put.
@@ -172,7 +172,7 @@ func TestObjectSinkAppendEventPreservesExisting(t *testing.T) {
 // object (the agent Put nothing yet) writes a marker-only object, tolerating the
 // not-found rather than erroring.
 func TestObjectSinkAppendEventCreatesWhenAbsent(t *testing.T) {
-	sink := NewObjectSink(context.Background(), newMemStore(), "")
+	sink := NewObjectSink(context.Background(), newMemStore(), "", nil)
 	ref := sampleRef()
 	if err := sink.AppendEvent(ref, Event{Level: "error", Message: "killed: agent_lost"}); err != nil {
 		t.Fatalf("AppendEvent(absent) error = %v", err)
@@ -190,7 +190,7 @@ func TestObjectSinkAppendEventCreatesWhenAbsent(t *testing.T) {
 
 func TestObjectSinkKeyLayoutIncludesPrefix(t *testing.T) {
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "acme/logs")
+	sink := NewObjectSink(context.Background(), store, "acme/logs", nil)
 	ref := sampleRef()
 	w, err := sink.Open(ref)
 	if err != nil {
@@ -213,7 +213,7 @@ func TestObjectSinkKeyLayoutIncludesPrefix(t *testing.T) {
 }
 
 func TestObjectSinkRejectsUnsafeRef(t *testing.T) {
-	sink := NewObjectSink(context.Background(), newMemStore(), "")
+	sink := NewObjectSink(context.Background(), newMemStore(), "", nil)
 	bad := sampleRef()
 	bad.RunID = "../escape"
 	if _, err := sink.Open(bad); !errors.Is(err, ErrUnsafeRef) {
@@ -225,7 +225,7 @@ func TestObjectSinkRejectsUnsafeRef(t *testing.T) {
 }
 
 func TestObjectSinkReadMissing(t *testing.T) {
-	sink := NewObjectSink(context.Background(), newMemStore(), "")
+	sink := NewObjectSink(context.Background(), newMemStore(), "", nil)
 	if _, err := sink.Read(sampleRef()); !errors.Is(err, ErrObjectNotFound) {
 		t.Fatalf("Read(missing) error = %v, want ErrObjectNotFound", err)
 	}
@@ -234,7 +234,7 @@ func TestObjectSinkReadMissing(t *testing.T) {
 func TestObjectSinkClosePropagatesPutError(t *testing.T) {
 	store := newMemStore()
 	store.setPutErr(errors.New("network down"))
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	w, err := sink.Open(sampleRef())
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -256,7 +256,7 @@ func TestObjectWriterBufferCapFailsLoud(t *testing.T) {
 	defer func() { maxBufferedAttemptBytes = orig }()
 
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	w, err := sink.Open(sampleRef())
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -282,7 +282,7 @@ func TestDiskSinkImplementsPrunerObjectSinkDoesNot(t *testing.T) {
 	if _, ok := disk.(Pruner); !ok {
 		t.Error("DiskSink should implement Pruner")
 	}
-	var obj Sink = NewObjectSink(context.Background(), newMemStore(), "")
+	var obj Sink = NewObjectSink(context.Background(), newMemStore(), "", nil)
 	if _, ok := obj.(Pruner); ok {
 		t.Error("ObjectSink must not implement Pruner (bucket lifecycle owns retention)")
 	}
@@ -291,7 +291,7 @@ func TestDiskSinkImplementsPrunerObjectSinkDoesNot(t *testing.T) {
 func TestNewDurableSinkDefaultsToDisk(t *testing.T) {
 	dir := t.TempDir()
 	for _, backend := range []string{"", "disk"} {
-		sink, err := NewDurableSink(context.Background(), backend, dir, nil, "")
+		sink, err := NewDurableSink(context.Background(), backend, dir, nil, "", nil)
 		if err != nil {
 			t.Fatalf("NewDurableSink(%q) error = %v", backend, err)
 		}
@@ -303,7 +303,7 @@ func TestNewDurableSinkDefaultsToDisk(t *testing.T) {
 
 func TestNewDurableSinkObject(t *testing.T) {
 	for _, backend := range []string{"s3", "gcs"} {
-		sink, err := NewDurableSink(context.Background(), backend, "", newMemStore(), "p")
+		sink, err := NewDurableSink(context.Background(), backend, "", newMemStore(), "p", nil)
 		if err != nil {
 			t.Fatalf("NewDurableSink(%q) error = %v", backend, err)
 		}
@@ -315,14 +315,14 @@ func TestNewDurableSinkObject(t *testing.T) {
 
 func TestNewDurableSinkObjectRequiresStore(t *testing.T) {
 	for _, backend := range []string{"s3", "gcs"} {
-		if _, err := NewDurableSink(context.Background(), backend, "", nil, ""); err == nil {
+		if _, err := NewDurableSink(context.Background(), backend, "", nil, "", nil); err == nil {
 			t.Fatalf("NewDurableSink(%q, nil store) error = nil, want error", backend)
 		}
 	}
 }
 
 func TestNewDurableSinkUnknownBackend(t *testing.T) {
-	if _, err := NewDurableSink(context.Background(), "gopher", "", nil, ""); err == nil {
+	if _, err := NewDurableSink(context.Background(), "gopher", "", nil, "", nil); err == nil {
 		t.Fatal("NewDurableSink(unknown) error = nil, want error")
 	}
 }

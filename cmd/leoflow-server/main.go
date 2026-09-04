@@ -902,7 +902,7 @@ const lowDiskWarnBytes = 1 << 30 // 1 GiB
 func buildLogSink(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger) (logs.Sink, error) {
 	switch cfg.Logs.Backend {
 	case "", "disk":
-		return logs.NewDurableSink(ctx, cfg.Logs.Backend, cfg.Logs.Dir, nil, "")
+		return logs.NewDurableSink(ctx, cfg.Logs.Backend, cfg.Logs.Dir, nil, "", logger)
 	case "s3":
 		store, err := logs.NewS3Store(ctx, logs.S3Config{
 			Bucket:          cfg.Logs.Sink.Bucket,
@@ -917,7 +917,7 @@ func buildLogSink(ctx context.Context, cfg *config.ServerConfig, logger *slog.Lo
 		}
 		logger.Info("task logs: s3 object-store backend enabled",
 			"bucket", cfg.Logs.Sink.Bucket, "endpoint", cfg.Logs.Sink.Endpoint, "prefix", cfg.Logs.Sink.Prefix)
-		return logs.NewDurableSink(ctx, "s3", "", store, cfg.Logs.Sink.Prefix)
+		return logs.NewDurableSink(ctx, "s3", "", store, cfg.Logs.Sink.Prefix, logger)
 	case "gcs":
 		store, err := logs.NewGCSStore(ctx, logs.GCSConfig{
 			Bucket:          cfg.Logs.Sink.Bucket,
@@ -928,7 +928,7 @@ func buildLogSink(ctx context.Context, cfg *config.ServerConfig, logger *slog.Lo
 		}
 		logger.Info("task logs: gcs object-store backend enabled",
 			"bucket", cfg.Logs.Sink.Bucket, "prefix", cfg.Logs.Sink.Prefix)
-		return logs.NewDurableSink(ctx, "gcs", "", store, cfg.Logs.Sink.Prefix)
+		return logs.NewDurableSink(ctx, "gcs", "", store, cfg.Logs.Sink.Prefix, logger)
 	default:
 		return nil, fmt.Errorf("unknown logs.backend %q", cfg.Logs.Backend)
 	}

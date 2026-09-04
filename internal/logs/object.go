@@ -50,14 +50,26 @@ type ObjectSink struct {
 	ctx    context.Context
 	store  ObjectStore
 	prefix string
+	logger *slog.Logger
 }
 
 // NewObjectSink builds an ObjectSink writing to store under an optional key
 // prefix. ctx bounds the store operations issued by the writers and readers the
 // sink hands out (the Sink interface is context-free by design); pass the
 // server's lifecycle context.
-func NewObjectSink(ctx context.Context, store ObjectStore, prefix string) *ObjectSink {
-	return &ObjectSink{ctx: ctx, store: store, prefix: prefix}
+//
+// logger receives the warnings the write path cannot return — a failed
+// incremental flush is retried, not surfaced to the agent, so the log line is
+// the ONLY evidence it happened. It is injected rather than taken from
+// slog.Default() because a process that configures its own handler (format,
+// level, destination) without calling slog.SetDefault would otherwise emit
+// these warnings outside its own logging contract, where nothing collects
+// them. nil falls back to slog.Default().
+func NewObjectSink(ctx context.Context, store ObjectStore, prefix string, logger *slog.Logger) *ObjectSink {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &ObjectSink{ctx: ctx, store: store, prefix: prefix, logger: logger}
 }
 
 // key maps a Ref to its object key, mirroring DiskSink's on-disk layout so an
@@ -73,7 +85,7 @@ func (o *ObjectSink) Open(ref Ref) (LogWriter, error) {
 	if err := ref.validate(); err != nil {
 		return nil, err
 	}
-	return newObjectWriter(o.ctx, o.store, o.key(ref)), nil
+	return newObjectWriter(o.ctx, o.store, o.key(ref), o.logger), nil
 }
 
 // Read fetches the stored object for the ref. A missing object surfaces as
@@ -192,9 +204,10 @@ func shouldFlush(unflushed, flushed int, sinceLast time.Duration) bool {
 // process kill (no Close) loses at most the unflushed tail. Memory is bounded by
 // maxBufferedAttemptBytes; mu serializes the writer against the flusher.
 type objectWriter struct {
-	ctx   context.Context
-	store ObjectStore
-	key   string
+	ctx    context.Context
+	store  ObjectStore
+	key    string
+	logger *slog.Logger
 
 	mu        sync.Mutex
 	buf       bytes.Buffer
@@ -208,8 +221,8 @@ type objectWriter struct {
 }
 
 // newObjectWriter builds a writer and starts its flusher.
-func newObjectWriter(ctx context.Context, store ObjectStore, key string) *objectWriter {
-	w := &objectWriter{ctx: ctx, store: store, key: key, lastFlush: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
+func newObjectWriter(ctx context.Context, store ObjectStore, key string, logger *slog.Logger) *objectWriter {
+	w := &objectWriter{ctx: ctx, store: store, key: key, logger: logger, lastFlush: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
 	go w.runFlusher(ctx)
 	return w
 }
@@ -260,7 +273,7 @@ func (w *objectWriter) maybeFlushLocked(ctx context.Context) {
 		return
 	}
 	if err := w.flushLocked(ctx); err != nil {
-		slog.Warn("incremental log object flush failed; will retry", "key", w.key, "error", err)
+		w.logger.Warn("incremental log object flush failed; will retry", "key", w.key, "error", err)
 	}
 }
 
@@ -308,8 +321,10 @@ func (w *objectWriter) Close() error {
 // "s3" and "gcs" backends return an ObjectSink over store (which the caller
 // builds with the matching native SDK from the configured bucket/credentials)
 // and require a non-nil store. An unknown backend is rejected rather than
-// silently falling back.
-func NewDurableSink(ctx context.Context, backend, dir string, store ObjectStore, prefix string) (Sink, error) {
+// silently falling back. logger is the process's configured logger, carried to
+// the object sink so its retry warnings honor that contract (see
+// NewObjectSink); the disk sink ignores it.
+func NewDurableSink(ctx context.Context, backend, dir string, store ObjectStore, prefix string, logger *slog.Logger) (Sink, error) {
 	switch backend {
 	case "", "disk":
 		return NewDiskSink(dir), nil
@@ -317,7 +332,7 @@ func NewDurableSink(ctx context.Context, backend, dir string, store ObjectStore,
 		if store == nil {
 			return nil, fmt.Errorf("%s log backend requires an object store", backend)
 		}
-		return NewObjectSink(ctx, store, prefix), nil
+		return NewObjectSink(ctx, store, prefix, logger), nil
 	default:
 		return nil, fmt.Errorf("unknown log backend %q (want \"disk\", \"s3\" or \"gcs\")", backend)
 	}

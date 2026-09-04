@@ -244,11 +244,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `sleep` hook action (the image is distroless, so an `exec` hook has no shell to
   call), which is beta and on by default only from Kubernetes **1.30** — alpha
   and off in 1.29, where an apiserver rejects the empty `preStop: {}` it is left
-  with rather than ignoring it — so the chart renders the hook only on 1.30+ and
-  a 1.27-1.29 install is unaffected. It runs inside
+  with rather than ignoring it — so the chart renders the hook only on 1.30+;
+  below that the pod spec is unchanged and the install notes say the value had no
+  effect. It runs inside
   `terminationGracePeriodSeconds`, and the chart refuses to render a sleep that
-  does not fit the effective grace (Kubernetes validates it as
-  `0 < seconds <= terminationGracePeriodSeconds`).
+  does not fit the effective grace: the apiserver rejects a sleep above the grace
+  (it validates `0 < seconds <= terminationGracePeriodSeconds`), and the chart
+  refuses one equal to the grace too, which the apiserver would accept but which
+  leaves nothing for the shutdown that runs after the sleep.
 
 ### Security
 

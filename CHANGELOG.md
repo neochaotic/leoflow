@@ -220,17 +220,26 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   running when it gives up: each log-object `Put` is bounded at 30 s while the
   wait after the forced stop is 5 s, so abandoning one is possible — and safe,
   since a single atomic `Put` leaves the stored object at its previous flush
-  rather than truncated — but it was silent. New chart value
-  `deployment.preStopSleepSeconds` (default 5) makes a terminating replica sleep
-  through the endpoint-propagation window before it is signalled, so task pods
-  stop opening *new* log streams against a control plane that is going away and
-  creating an empty object for each; it uses the native `sleep` hook action (the
-  image is distroless, so an `exec` hook has no shell to call), runs inside
-  `terminationGracePeriodSeconds`, and `0` omits the hook. That hook action is
-  beta and on by default only from Kubernetes **1.30** — alpha and off in 1.29 —
-  and an older apiserver rejects the empty `preStop: {}` it is left with rather
-  than ignoring it, so the chart renders the hook only on 1.30+ and a 1.27-1.29
-  install is unaffected.
+  rather than truncated — but it was silent. And a log stream that
+  *arrives* after `SIGTERM` is now refused before its writer is opened: the gRPC
+  listener is the last thing the process stops, so it keeps accepting for the
+  rest of the shutdown, and a writer opened there was closed immediately —
+  storing an **empty** object, which in this sink means "the attempt ran and was
+  silent" for an attempt that was really logging to a live replica. New chart
+  value `deployment.preStopSleepSeconds` (default `0`, off) makes a terminating
+  replica sleep through the endpoint-propagation window before it is signalled,
+  so task pods open their *new* log streams against a replica that will still be
+  there to flush them. It is off by default because it needs somewhere to move
+  those streams to, and neither shipped topology has a second replica serving
+  agent gRPC; `examples/values-ha.yaml`, which does, sets `5`. It uses the native
+  `sleep` hook action (the image is distroless, so an `exec` hook has no shell to
+  call), which is beta and on by default only from Kubernetes **1.30** — alpha
+  and off in 1.29, where an apiserver rejects the empty `preStop: {}` it is left
+  with rather than ignoring it — so the chart renders the hook only on 1.30+ and
+  a 1.27-1.29 install is unaffected. It runs inside
+  `terminationGracePeriodSeconds`, and the chart refuses to render a sleep that
+  does not fit the effective grace (Kubernetes validates it as
+  `0 < seconds <= terminationGracePeriodSeconds`).
 
 ### Security
 

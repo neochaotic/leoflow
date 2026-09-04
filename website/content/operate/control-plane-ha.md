@@ -330,20 +330,28 @@ because it is not leadership:
   dispatches already in progress settle instead of leaving task instances stuck
   `queued`. Reapers are gated off during the step-down so nothing destructive
   fires from a dying leader.
-- **The replica stops taking new streams before it stops.** Endpoint removal is
-  asynchronous, so for a propagation window after termination begins, task pods
-  still open **new** agent log streams against the replica that is on its way
-  out — each one creating an empty log object for an attempt whose lines then
-  have nowhere to land. `deployment.preStopSleepSeconds` (default 5) spends that
-  window in a `preStop` sleep before the process is signalled. It runs *inside*
+- **A second replica can stop taking new streams before the first one stops.**
+  Endpoint removal is asynchronous, so for a propagation window after termination
+  begins, task pods still open **new** agent log streams against the replica that
+  is on its way out. `deployment.preStopSleepSeconds` spends that window in a
+  `preStop` sleep before the process is signalled, so those streams open against
+  the surviving replica instead. It is **off by default** and set to `5` in
+  `examples/values-ha.yaml`, because moving a stream needs somewhere to move it
+  to: a single-replica install (the chart default, and the split topology's
+  scheduler, which is what serves agent gRPC) has no second endpoint, so the
+  sleep buys nothing there and adds its own seconds to every upgrade. What it
+  never buys, at any replica count, is an **already-established** stream: those
+  connections are pinned by conntrack and get `Unavailable` at `SIGTERM`
+  regardless — only not-yet-opened streams move. The sleep runs *inside*
   `terminationGracePeriodSeconds`, ahead of everything below, so count it in the
-  budget; set `0` to drop the hook if a single-replica `Recreate` upgrade's
-  latency matters more than a few empty objects. The hook needs Kubernetes
-  **1.30**, where the native `sleep` action is beta and on by default; it is
-  alpha and *off* in 1.29, and an apiserver without it rejects the empty
-  `preStop: {}` it is left with instead of ignoring it. So the chart renders the
-  hook only on 1.30+ and silently omits it below — a 1.27–1.29 install keeps
-  working, with the pre-hook behavior.
+  budget (Kubernetes rejects the pod spec outright if the sleep alone exceeds the
+  grace, and the chart refuses to render that). 5 s is the low end; raise it when
+  a service-mesh sidecar sits in the path. The hook needs Kubernetes **1.30**,
+  where the native `sleep` action is beta and on by default; it is alpha and
+  *off* in 1.29, and an apiserver without it rejects the empty `preStop: {}` it
+  is left with instead of ignoring it. So the chart renders the hook only on
+  1.30+ and silently omits it below — a 1.27–1.29 install keeps working, with
+  the pre-hook behavior.
 - **With tasks running, the stop is bounded.** Open agent log streams are
   closed and flushed the moment `SIGTERM` arrives (the agent keeps running its
   task; log shipping is best-effort), idle warm-worker assignment streams end

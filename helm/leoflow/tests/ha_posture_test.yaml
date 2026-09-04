@@ -256,6 +256,36 @@ tests:
   # replica that will still be there to flush them. The native `sleep` action is
   # used deliberately: the image is distroless, so an `exec` hook has no shell
   # and no sleep binary to call.
+  #
+  # OFF by default, and the default is the assertion: the sleep only buys
+  # something when another replica is serving agent gRPC, and no shipped topology
+  # has one (replicaCount 1; split pins the scheduler, which owns the agent gRPC,
+  # to one). On those it buys nothing and adds its own seconds to every upgrade —
+  # the same reason terminationGracePeriodSeconds ships empty.
+  - it: ships the preStop hook off, so a default install's pod spec is unchanged
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].lifecycle
+
+  - it: turns the preStop sleep on in the HA profile, where a second replica can take the streams
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    values:
+      - ../examples/values-ha.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+      # The profile's own grace has to hold the sleep plus the drain bounds.
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 60
   # The `sleep` hook action is gated on PodLifecycleSleepAction, which is beta and
   # ON only from 1.30. On 1.29 the feature gate is alpha and OFF, so the apiserver
   # nils the field and its own validation then rejects the resulting empty

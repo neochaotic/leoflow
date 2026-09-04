@@ -22,8 +22,12 @@
 #      the restarted leader wakes to task instances that are `running` with stale
 #      heartbeats and pods that are terminal, exactly the signals an outage
 #      manufactures. Assert the reconciler settles all three from their records
-#      INSIDE the leader-settling grace, that the gate was actually engaged, that
-#      the liveness valve never opened, and that no reaper fired at all.
+#      INSIDE the leader-settling grace, that the reap pass ran and was held
+#      while the gate was shut, that the liveness valve never opened, and that
+#      no reaper fired in that window. NOTE what it does NOT prove: the gate
+#      refusing a REAL candidate (the same cycle's reconcile has already settled
+#      them by the first tick, so cycle ordering alone explains the result), the
+#      window after the grace opens, and #915's presence rule.
 #
 # Select a subset with LEOFLOW_CHAOS_ONLY (e.g. LEOFLOW_CHAOS_ONLY=D, or "BD");
 # the shared setup always runs, so any scenario works on its own.
@@ -101,7 +105,7 @@ start_scheduler() {
 
 # scheduler_health returns the status string the api reports for the scheduler.
 scheduler_health() {
-  curl -fsS -H "Authorization: Bearer $TOKEN" "$API/api/v2/monitor/health" 2>/dev/null \
+  curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" "$API/api/v2/monitor/health" 2>/dev/null \
     | jq -r '.scheduler.status // "unknown"'
 }
 
@@ -117,7 +121,7 @@ wait_scheduler_status() {
 }
 
 task_states() {
-  curl -fsS -H "Authorization: Bearer $TOKEN" \
+  curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$DAG_ID/dagRuns/$1/taskInstances" 2>/dev/null | jq -r '.task_instances[].state'
 }
 
@@ -195,7 +199,7 @@ API_PID=$!
 wait_api() {
   local deadline; deadline=$(( $(date +%s) + 45 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    curl -fsS "${API}/healthz" >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 10 "${API}/healthz" >/dev/null 2>&1 && return 0
     kill -0 "$API_PID" 2>/dev/null || return 1
     sleep 1
   done
@@ -229,7 +233,7 @@ deregister_dag "$DAG_ID"
   || fatal "pushing $DAG_ID failed — the scenarios below would all report a missing run id"
 
 trigger_run() {
-  curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     -d '{}' "$API/api/v2/dags/$DAG_ID/dagRuns" | jq -r '.dag_run_id'
 }
 
@@ -382,11 +386,12 @@ DOCKER
   "$ROOT/bin/leoflow" compile "$WORKDIR/$RECOVER_DAG_ID" --image "$RECOVER_DAG_IMAGE" --build --dockerfile Dockerfile -o "$WORKDIR/$RECOVER_DAG_ID/dag.json" >/dev/null
   k3d_import "$CLUSTER" "$RECOVER_DAG_IMAGE" || fatal "C: k3d import of recoverdag failed"
   deregister_dag "$RECOVER_DAG_ID"
-  "$ROOT/bin/leoflow" push "$WORKDIR/$RECOVER_DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null
+  "$ROOT/bin/leoflow" push "$WORKDIR/$RECOVER_DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null \
+    || fatal "C: pushing $RECOVER_DAG_ID failed"
 }
 
 recover_run_state() {  # $1=run
-  curl -fsS -H "Authorization: Bearer $TOKEN" \
+  curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$RECOVER_DAG_ID/dagRuns/$1" 2>/dev/null | jq -r '.state // "unknown"'
 }
 
@@ -395,7 +400,7 @@ scenario_durable_outcome_recovery() {
   setup_recoverdag
 
   local run
-  run="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  run="$(curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
     -d '{}' "$API/api/v2/dags/$RECOVER_DAG_ID/dagRuns" | jq -r '.dag_run_id')"
   [ -n "$run" ] && [ "$run" != "null" ] || { bad "C: no run id"; return; }
 
@@ -442,7 +447,7 @@ scenario_durable_outcome_recovery() {
   # Recovery is a SETTLE, not a retry: the durable record settles the current
   # attempt succeeded (try_number unchanged), so there is exactly one attempt.
   local tries
-  tries="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+  tries="$(curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$RECOVER_DAG_ID/dagRuns/$run/taskInstances" 2>/dev/null \
     | jq -r '[.task_instances[].try_number] | max')"
   if [ "$tries" = "1" ]; then
@@ -477,22 +482,32 @@ scenario_durable_outcome_recovery() {
 # assertion "this never happened"). Reading the fresh process is deliberate: the
 # restart resets the counters, so every sample below belongs to the recovery
 # window and nothing from scenarios A-C can leak into it.
+# decision_from reads one decision's count out of an already-scraped metrics
+# body, so the four assertions below share one snapshot and cannot skew between
+# scrapes. A counter with labels is absent until first incremented, which is
+# itself the assertion "this never happened".
+decision_from() {
+  printf '%s\n' "$1" \
+    | awk -v d="$2" '$0 ~ "^leoflow_scheduler_decisions_total\\{decision_type=\"" d "\"\\}" {print $2; exit}' \
+    | awk 'NF{print; found=1} END{if(!found) print 0}'
+}
+
 decision_count() {
   local want="$1" line
-  line="$(curl -fsS "http://localhost:${SCHED_METRICS_PORT}/metrics" 2>/dev/null \
+  line="$(curl -fsS --max-time 10 "http://localhost:${SCHED_METRICS_PORT}/metrics" 2>/dev/null \
     | awk -v d="$want" '$0 ~ "^leoflow_scheduler_decisions_total\\{decision_type=\"" d "\"\\}" {print $2; exit}')"
   printf '%s' "${line:-0}"
 }
 
 # outage_states prints one state per task instance of the outage run.
 outage_states() {
-  curl -fsS -H "Authorization: Bearer $TOKEN" \
+  curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$OUTAGE_DAG_ID/dagRuns/$1/taskInstances" 2>/dev/null \
     | jq -r '.task_instances[].state'
 }
 
 outage_run_state() {
-  curl -fsS -H "Authorization: Bearer $TOKEN" \
+  curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$OUTAGE_DAG_ID/dagRuns/$1" 2>/dev/null | jq -r '.state // "unknown"'
 }
 
@@ -579,20 +594,25 @@ scenario_outage_recovery() {
   [ "${leftover:-0}" -eq 0 ] || log "D: note — $leftover task pod(s) still Running from an earlier scenario; a reaper decision below may not be ours"
 
   local run
-  run="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  run="$(curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
     -d '{}' "$API/api/v2/dags/$OUTAGE_DAG_ID/dagRuns" | jq -r '.dag_run_id')"
   [ -n "$run" ] && [ "$run" != "null" ] || { bad "D: no run id"; return; }
 
   # All three must be Running before the kill, or the outage lands on dispatch
   # (a different, already-covered failure) instead of on the report.
+  # Count DISTINCT tasks, not lines: three pods of one task would otherwise
+  # satisfy a line count and the scenario would proceed on a single attempt.
   local deadline running=0
   deadline=$(( $(date +%s) + 120 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    running="$(kubectl get pods -n leoflow --no-headers 2>/dev/null | grep -cE 'outagedag-(alpha|bravo|charlie)-.*Running' || true)"
+    running="$(kubectl get pods -n leoflow --no-headers 2>/dev/null \
+      | awk '/outagedag-(alpha|bravo|charlie)-.*Running/ {
+              match($1, /outagedag-(alpha|bravo|charlie)/); print substr($1, RSTART, RLENGTH) }' \
+      | sort -u | wc -l | tr -d ' ')"
     [ "${running:-0}" -ge 3 ] && break
     sleep 3
   done
-  [ "${running:-0}" -ge 3 ] || { bad "D: only ${running:-0}/3 task pods reached Running before the kill window"; dump_pods; return; }
+  [ "${running:-0}" -ge 3 ] || { bad "D: only ${running:-0}/3 outagedag tasks reached Running before the kill window"; dump_pods; return; }
   ok "D: all three task pods are Running"
 
   # One heartbeat interval (15s) plus margin, so every attempt has a non-null
@@ -638,10 +658,16 @@ scenario_outage_recovery() {
   # Fail-closed: with the scheduler dead nothing may have settled these attempts.
   # A task instance already `success` here means the control plane was reachable
   # when it mattered, so the scenario proves nothing about the recovery ordering.
-  local states_before
-  states_before="$(outage_states "$run" | sort | uniq -c | tr '\n' ' ')"
-  if outage_states "$run" | grep -q 'success'; then
-    bad "D: a task instance reached success while the scheduler was down (states: $states_before) — the outage did not cover the report window"
+  # Fail CLOSED on the read itself: an api hiccup used to print nothing here, so
+  # the "no success" test was vacuously true and the precondition unverified
+  # inside an otherwise green run. Require all three attempts, each in a
+  # not-yet-settled state.
+  local states_raw states_before unsettled
+  states_raw="$(outage_states "$run")"
+  states_before="$(printf '%s\n' "$states_raw" | sort | uniq -c | tr '\n' ' ')"
+  unsettled="$(printf '%s\n' "$states_raw" | grep -cE '^(running|queued|scheduled)$' || true)"
+  if [ "$(printf '%s\n' "$states_raw" | grep -c .)" -ne 3 ] || [ "${unsettled:-0}" -ne 3 ]; then
+    bad "D: could not confirm all three attempts are unsettled during the outage (states: ${states_before:-<read failed>}) — the precondition must be READ, not assumed"
     return
   fi
   ok "D: all three attempts are still unsettled during the outage (states: $states_before)"
@@ -652,10 +678,14 @@ scenario_outage_recovery() {
 
   # The reconciler runs in the maintenance loop's reconcile phase (30s cadence),
   # while every reaper stays shut for the settling grace (180s from leadership).
-  # So the recovery must land in the FIRST cycles, well inside the grace — that
-  # ordering, not the absence of a reap in one lucky window, is the guarantee.
+  # So the recovery must land in the FIRST cycles, well inside the grace.
+  #
+  # The wait MUST outlast the grace it is compared against. It used to be 150s,
+  # shorter than the 180s grace, so a success could only ever be measured below
+  # it and the comparison below could not fail — a recovery that truly took 200s
+  # was reported as "did not reach success", never as "past the grace".
   local settling_grace=180 state="" elapsed=0
-  deadline=$(( restart_epoch + 150 ))
+  deadline=$(( restart_epoch + 2 * settling_grace ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     state="$(outage_run_state "$run")"
     [ "$state" = success ] && break
@@ -668,7 +698,7 @@ scenario_outage_recovery() {
   done
   elapsed=$(( $(date +%s) - restart_epoch ))
   if [ "$state" != success ]; then
-    bad "D: run did not reach success within 150s of the restart (state=$state, states: $(outage_states "$run" | sort | uniq -c | tr '\n' ' '))"
+    bad "D: run did not reach success within $(( 2 * settling_grace ))s of the restart (state=$state, states: $(outage_states "$run" | sort | uniq -c | tr '\n' ' '))"
     return
   fi
   ok "D: run recovered to SUCCESS ${elapsed}s after the restart, all three attempts settled from their durable records"
@@ -681,7 +711,7 @@ scenario_outage_recovery() {
 
   # Recovery is a settle, not a retry: three attempts, one try each.
   local tries
-  tries="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+  tries="$(curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" \
     "$API/api/v2/dags/$OUTAGE_DAG_ID/dagRuns/$run/taskInstances" 2>/dev/null \
     | jq -r '[.task_instances[].try_number] | max')"
   if [ "$tries" = "1" ]; then
@@ -690,18 +720,33 @@ scenario_outage_recovery() {
     bad "D: expected one attempt per task (recovery is a settle, not a retry), got max try_number=$tries"
   fi
 
-  # The gate must have been ENGAGED, not vacuously satisfied: a leader that
-  # reaped nothing because it was asked to reap nothing proves nothing. At least
-  # one settling skip must have been recorded while the grace held.
-  local skips valve lost_pod lost_agent
-  skips="$(decision_count reap_settling_skip)"
-  valve="$(decision_count reap_settling_valve_open)"
-  lost_pod="$(decision_count pod_lost)"
-  lost_agent="$(decision_count agent_lost)"
+  # What the skip proves, stated honestly. It is recorded once per maintenance
+  # tick BEFORE any candidate is listed, and the first tick lands one
+  # reconcileInterval (30s) after boot — by which time that same cycle's
+  # reconcile has already settled all three from their records. So the reap pass
+  # was held while the gate was shut, but the gate had nothing left to hold: what
+  # this scenario demonstrates is the CYCLE ORDERING (reconcile before reap),
+  # not the gate refusing a real candidate. Build the same tree with
+  # SettlingGrace 0 and every behavioural assertion here still passes; only this
+  # instrument goes red. Proving the gate itself needs a scenario that costs the
+  # reconciler a cycle, so a candidate still exists at reap time.
+  #
+  # It is still worth asserting: zero would mean the maintenance loop never ran
+  # inside the grace at all, which would make the ordering claim unverified.
+  local metrics skips valve lost_pod lost_agent
+  metrics="$(curl -fsS --max-time 10 "http://localhost:${SCHED_METRICS_PORT}/metrics" 2>/dev/null)"
+  case "$metrics" in
+    *leoflow_scheduler_decisions_total*) : ;;
+    *) bad "D: could not scrape the restarted scheduler's decisions — every counter assertion below would pass vacuously"; return ;;
+  esac
+  skips="$(decision_from "$metrics" reap_settling_skip)"
+  valve="$(decision_from "$metrics" reap_settling_valve_open)"
+  lost_pod="$(decision_from "$metrics" pod_lost)"
+  lost_agent="$(decision_from "$metrics" agent_lost)"
   if [ "${skips%.*}" -ge 1 ] 2>/dev/null; then
-    ok "D: the settling gate actually held the reapers (reap_settling_skip=$skips)"
+    ok "D: the reap pass ran inside the grace and was held (reap_settling_skip=$skips) — the cycle ordering is what settled the attempts"
   else
-    bad "D: no reap_settling_skip recorded — the maintenance loop never ran while the gate was shut, so this scenario did not exercise the gate (false green)"
+    bad "D: no reap_settling_skip recorded — the maintenance loop never ran inside the grace, so the ordering claim is unverified (false green)"
   fi
   if [ "${valve%.*}" = "0" ]; then
     ok "D: the liveness valve never opened (reap_settling_valve_open=0)"

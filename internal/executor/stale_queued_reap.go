@@ -162,10 +162,10 @@ func (r *dispatchLostReaper) run(ctx context.Context) error {
 			// worthless: SucceedTaskInstanceIfActive and its siblings admit
 			// `queued`, so the reconciler settles queued attempts by design, and
 			// ApplyTransition can stamp a row that already reached `running` back
-			// to `queued` (#929), so "a queued attempt never ran" is unsound. This
-			// reaper therefore still deletes an outcome record it should preserve;
-			// the fix belongs at the teardown site, where deleting a terminal pod
-			// accomplishes nothing but destroying evidence (#928).
+			// to `queued` (#929), so "a queued attempt never ran" is unsound. The
+			// finished pod's outcome record is nonetheless safe: the teardown below
+			// skips a pod in a terminal phase and leaves it to the reconciler
+			// (#928), so this reaper's decision can stay a pure liveness question.
 			if presence == PodPresenceLive {
 				r.logger.Info("dispatch-lost: pod is live (slow start); deferring",
 					"ti", c.TaskInstanceID, "run", c.DagRunID, "task", c.TaskID)
@@ -195,9 +195,11 @@ func (r *dispatchLostReaper) reapOne(ctx context.Context, c StaleQueuedCandidate
 		"ti", c.TaskInstanceID, "run", c.DagRunID, "dag", c.DagID, "task", c.TaskID,
 		"queued_at", c.QueuedAt)
 	r.record("dispatch_lost")
-	// Best-effort teardown of any lingering pod for this attempt (#474). By
-	// here the pod presence said no live pod exists (or pods is nil), so this
-	// only cleans up a terminal/failed pod; pinned to (run, task, try).
+	// Best-effort teardown of any lingering pod for this attempt (#474), pinned
+	// to (run, task, try). By here the presence read said no live pod exists (or
+	// pods is nil), so this normally deletes nothing: a pod that materialized
+	// since the read is stopped, and a pod in a terminal phase is skipped by the
+	// teardown itself and left for the reconciler to settle (#928).
 	if r.pods == nil {
 		return
 	}

@@ -159,6 +159,12 @@ func (r *agentLostReaper) reapOne(ctx context.Context, c AgentLostCandidate, now
 	// container stops (#474). Pinned to (run, task, try) so a retry's newer
 	// pod is never touched. Only reached after the DB mark, so we never delete
 	// a pod for a TI we did not settle. Best-effort: a delete error is logged.
+	//
+	// This reaper reads no pod presence at all — it fires on heartbeat staleness
+	// alone at a 90s threshold, and a task that finished and stopped
+	// heartbeating is precisely its candidate. The evidence guard is therefore in
+	// the teardown, not here: DeleteTaskPod skips a pod in a terminal phase and
+	// leaves its outcome record to the reconciler (#928).
 	if r.pods == nil {
 		return
 	}

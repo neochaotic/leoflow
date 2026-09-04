@@ -14,13 +14,19 @@ import (
 
 // TestResilienceLadderWiringValidates pins that the ladder the server actually
 // boots with — agent heartbeat/TTL, default reaper config, reconcile interval,
-// the scheduler's infra re-place ceiling and the default credential-lifetime
-// ceiling — satisfies every ordering the restart recovery depends on. A change
-// to any one of those constants that breaks the order fails this test before it
-// fails a deployment at boot.
+// the scheduler's infra re-place ceiling and the SHIPPED default
+// credential-lifetime ceiling — satisfies every ordering the restart recovery
+// depends on. The ceiling is read from the config defaults rather than
+// hardcoded, so a change to the shipped default that breaks the order fails
+// this test too, not only a change to a build-time constant.
 func TestResilienceLadderWiringValidates(t *testing.T) {
-	cfg := &config.ServerConfig{}
-	cfg.Auth.MaxAttemptCredentialLifetime = 24 * time.Hour
+	cfg, err := config.LoadServer("", nil)
+	if err != nil {
+		t.Fatalf("LoadServer with shipped defaults: %v", err)
+	}
+	if cfg.Auth.MaxAttemptCredentialLifetime <= 0 {
+		t.Fatalf("the shipped default credential ceiling must be set, got %v", cfg.Auth.MaxAttemptCredentialLifetime)
+	}
 	l := resilienceLadder(cfg)
 	if err := executor.ValidateResilienceLadder(l); err != nil {
 		t.Fatalf("server ladder %+v must validate: %v", l, err)
@@ -34,8 +40,8 @@ func TestResilienceLadderWiringValidates(t *testing.T) {
 	if l.OrphanThreshold != executor.DefaultReaperConfig().OrphanThreshold {
 		t.Errorf("ladder must carry the orphan threshold, got %v", l.OrphanThreshold)
 	}
-	if l.MaxAttemptCredentialLifetime != 24*time.Hour {
-		t.Errorf("ladder must carry the configured credential ceiling, got %v", l.MaxAttemptCredentialLifetime)
+	if l.MaxAttemptCredentialLifetime != cfg.Auth.MaxAttemptCredentialLifetime {
+		t.Errorf("ladder must carry the shipped default credential ceiling %v, got %v", cfg.Auth.MaxAttemptCredentialLifetime, l.MaxAttemptCredentialLifetime)
 	}
 }
 

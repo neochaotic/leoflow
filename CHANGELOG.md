@@ -133,6 +133,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stream its control plane closed, so lines a task prints after its control
   plane went away are not shipped by that task.
 
+### Security
+
+- **`golang.org/x/crypto` bumped to v0.56.0** (from v0.55.0), which fixes two
+  advisories published on 2026-09-03 (GO-2026-6354, GO-2026-6355). `govulncheck`
+  finds no reachable call path from leoflow into the affected symbols; the bump
+  keeps the dependency scan clean and the fix in place regardless.
+
 ## [0.4.4] - 2026-09-03
 
 ### Security

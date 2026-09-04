@@ -161,3 +161,75 @@ func TestPodLostReaper(t *testing.T) {
 		}
 	})
 }
+
+// TestPodLostReaper_TerminalPodIsTheReconcilersToSettle is the load-bearing
+// separation between "the pod is gone" and "the pod is finished but still
+// there". Pod-lost used to see one bool for both and reap on either: it marked
+// the task instance pod_lost and then DELETED the pod, destroying the
+// termination log the reconciler recovers the attempt's durable outcome from —
+// so a task that had SUCCEEDED read as failed, and its run with it. A pod that
+// is present in a terminal phase must therefore produce no state write, no pod
+// delete, and one metered defer; only a genuine absence authorizes the reap.
+func TestPodLostReaper_TerminalPodIsTheReconcilersToSettle(t *testing.T) {
+	const grace = 60 * time.Second
+	past := time.Now().UTC().Add(-2 * time.Minute) // comfortably past the grace
+
+	cases := []struct {
+		name string
+		// pods is the pod-manager fixture for the one candidate below.
+		pods *fakePodManager
+		// wantMarked is whether the TI is transitioned to pod_lost.
+		wantMarked bool
+		// wantDeleted is whether the attempt's pod is torn down.
+		wantDeleted bool
+		// wantDecisions is the exact count expected for each decision named.
+		wantDecisions map[string]int
+	}{
+		{
+			name:          "present terminal pod defers to the reconciler",
+			pods:          &fakePodManager{terminal: map[string]bool{"run-a/work/1": true}},
+			wantMarked:    false,
+			wantDeleted:   false,
+			wantDecisions: map[string]int{"pod_lost_terminal_pod_defer": 1, "pod_lost": 0},
+		},
+		{
+			name:          "genuine absence still reaps",
+			pods:          &fakePodManager{}, // neither live nor terminal: no pod at all
+			wantMarked:    true,
+			wantDeleted:   true,
+			wantDecisions: map[string]int{"pod_lost_terminal_pod_defer": 0, "pod_lost": 1},
+		},
+		{
+			name:          "live pod defers without a terminal decision",
+			pods:          &fakePodManager{active: map[string]bool{"run-a/work/1": true}},
+			wantMarked:    false,
+			wantDeleted:   false,
+			wantDecisions: map[string]int{"pod_lost_terminal_pod_defer": 0, "pod_lost": 0},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakePodLostStore{candidates: []PodLostCandidate{
+				{TaskInstanceID: "ti", DagRunID: "run-a", TaskID: "work", TryNumber: 1, RunningSince: past},
+			}}
+			rec := &capturingRecorder{}
+			r := newPodLostReaper(store, reapTestLogger(), grace, rec)
+			r.pods = tc.pods
+
+			if err := r.run(context.Background()); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if marked := len(store.marked) > 0; marked != tc.wantMarked {
+				t.Errorf("marked pod_lost = %v (%v), want %v", marked, store.marked, tc.wantMarked)
+			}
+			if deleted := len(tc.pods.deletedTasks) > 0; deleted != tc.wantDeleted {
+				t.Errorf("pod deleted = %v (%v), want %v", deleted, tc.pods.deletedTasks, tc.wantDeleted)
+			}
+			for decision, want := range tc.wantDecisions {
+				if got := rec.count(decision); got != want {
+					t.Errorf("decision %q metered %d times, want %d", decision, got, want)
+				}
+			}
+		})
+	}
+}

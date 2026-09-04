@@ -27,11 +27,12 @@ type fakeAssignmentStream struct {
 	idx         int
 	sent        []*agentv1.WorkerMessage
 	recvErr     error // returned once assignments are exhausted; io.EOF when nil
+	sendErr     error // when set, every Send fails with it (a stream dying mid-attempt)
 }
 
 func (s *fakeAssignmentStream) Send(m *agentv1.WorkerMessage) error {
 	s.sent = append(s.sent, m)
-	return nil
+	return s.sendErr
 }
 
 func (s *fakeAssignmentStream) Recv() (*agentv1.WorkAssignment, error) {
@@ -684,6 +685,59 @@ func TestWarmWorkerReconnectGivesUpAfterCap(t *testing.T) {
 	}
 	if redials != 3 {
 		t.Fatalf("redials = %d, want 3 (bounded to MaxReconnects)", redials)
+	}
+}
+
+// TestWarmWorkerExitsCleanWhenControlPlaneGoesAwayWhileIdle: the control plane
+// ends an idle worker's assignment stream with Unavailable at SIGTERM so its
+// bounded graceful stop does not burn its whole budget waiting on a stream that
+// by design never ends. An idle worker has nothing in flight, so that is a clean
+// recycle, not a failure: exit 0, and let the reconciler bring the pod back
+// against whichever replica survives. Treating it as an error instead produced
+// one Failed pod and one ERROR line per warm worker per control-plane restart —
+// the same "burn the signal" failure the shutdown fix set out to remove, moved
+// from the server's warnings to the workers' exit codes.
+func TestWarmWorkerExitsCleanWhenControlPlaneGoesAwayWhileIdle(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	stream := &fakeAssignmentStream{
+		ctx:     context.Background(),
+		recvErr: status.Error(codes.Unavailable, "control plane shutting down; assignment stream closed"),
+	}
+	client := &warmFake{fakeClient: &fakeClient{}, stream: stream, tokens: NewTokenSource("bootstrap")}
+	w := &WarmRunner{
+		StreamClient: client, WorkClient: client, AttemptTokens: NewTokenSource("bootstrap"),
+		Cmd:      &scratchProbeCmd{scratchDir: scratch},
+		Hostname: "warm-pod-1", Version: "test", ScratchDir: scratch,
+	}
+	if err := w.Run(context.Background(), "dagver-1"); err != nil {
+		t.Fatalf("WarmRunner.Run on an Unavailable while awaiting work = %v, want nil: the agent exits 1 and the pod goes Failed on a non-nil error", err)
+	}
+}
+
+// TestWarmWorkerSurfacesUnavailableMidAttempt is the other half, and the reason
+// the clean-exit above is scoped to the RECEIVE branch alone: an attempt that
+// dies mid-flight must still surface as an error. Blanket-accepting Unavailable
+// anywhere in the loop would make a real control-plane outage during an attempt
+// look like a graceful recycle.
+func TestWarmWorkerSurfacesUnavailableMidAttempt(t *testing.T) {
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	stream := &fakeAssignmentStream{
+		ctx:         context.Background(),
+		assignments: []*agentv1.WorkAssignment{{AssignmentId: "asg-1", AttemptToken: "tok-1"}},
+		sendErr:     status.Error(codes.Unavailable, "transport is closing"),
+	}
+	client := &warmFake{fakeClient: &fakeClient{}, stream: stream, tokens: NewTokenSource("bootstrap"), specs: warmSpecs(1)}
+	w := &WarmRunner{
+		StreamClient: client, WorkClient: client, AttemptTokens: NewTokenSource("bootstrap"),
+		Cmd:      &scratchProbeCmd{scratchDir: scratch},
+		Hostname: "warm-pod-1", Version: "test", ScratchDir: scratch,
+	}
+	err := w.Run(context.Background(), "dagver-1")
+	if err == nil {
+		t.Fatal("an Unavailable while serving an assignment must surface as an error; only the idle receive branch is a clean recycle")
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("WarmRunner.Run mid-attempt error = %v, want the Unavailable to be carried through", err)
 	}
 }
 

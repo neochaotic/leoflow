@@ -122,8 +122,28 @@ podDisruptionBudget:
 # streams are closed and flushed at SIGTERM and the gRPC stop is bounded (5s, then
 # forced), so the shutdown completes within the grace instead of being SIGKILLed.
 # 60 gives the HTTP + dispatch drain room under load without stretching every
-# rollout much further.
+# rollout much further. It also has to cover the preStop sleep below, which runs
+# inside it and ahead of everything it pays for.
 terminationGracePeriodSeconds: 60
+
+# ─── Stop taking NEW log streams before this replica stops ──────────────────
+# Endpoint removal is asynchronous: for a propagation window after termination
+# begins, kube-proxy and every client still hold this replica in their endpoint
+# set, so task pods keep OPENING new agent log streams against a control plane
+# that is on its way out. Sleeping through that window sends them to the other
+# replica instead — which is why this belongs HERE and not in the chart defaults:
+# it is worth something only when there IS another replica serving agent gRPC,
+# and replicaCount: 2 above is what provides one.
+#
+# It does not save an ALREADY-established stream: those connections are pinned by
+# conntrack and get Unavailable at SIGTERM no matter how long the sleep is. 5s is
+# the low end — raise it if a service-mesh sidecar sits in the path, and keep
+# terminationGracePeriodSeconds above the sleep plus the drain bounds (Kubernetes
+# rejects the pod spec if the sleep alone exceeds the grace). Needs Kubernetes
+# 1.30+, where the native `sleep` hook action is beta and on by default; below
+# that the chart omits the hook and this profile just installs without it.
+deployment:
+  preStopSleepSeconds: 5
 
 # ─── EKS / Karpenter only: eviction protection opt-in (NOT set by default) ──
 # `karpenter.sh/do-not-disrupt: "true"` exempts the node running this pod from

@@ -56,7 +56,7 @@ func TestObjectWriterFlushesAtSizeThreshold(t *testing.T) {
 	lineLen := len(EncodeLine(fixedEvent("line 00")) + "\n")
 	setFlushTuning(t, 3*lineLen, time.Hour)
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	ref := sampleRef()
 	w, err := sink.Open(ref)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestObjectWriterFlushesAtSizeThreshold(t *testing.T) {
 func TestObjectWriterFlushesOnInterval(t *testing.T) {
 	setFlushTuning(t, 1<<20, 10*time.Millisecond)
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	ref := sampleRef()
 	w, err := sink.Open(ref)
 	if err != nil {
@@ -132,7 +132,7 @@ func TestObjectWriterKillLeavesLastFlush(t *testing.T) {
 	lineLen := len(EncodeLine(fixedEvent("line 00")) + "\n")
 	setFlushTuning(t, 3*lineLen, time.Hour)
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	ref := sampleRef()
 	w, err := sink.Open(ref)
 	if err != nil {
@@ -165,7 +165,7 @@ func TestObjectWriterKillLeavesLastFlush(t *testing.T) {
 func TestObjectWriterCloseSkipsRedundantPut(t *testing.T) {
 	setFlushTuning(t, 8, time.Hour)
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	w, err := sink.Open(sampleRef())
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -191,7 +191,7 @@ func TestObjectWriterCloseSkipsRedundantPut(t *testing.T) {
 // object, so a reader distinguishes "ran, silent" from "never shipped".
 func TestObjectWriterEmptyAttemptStillStoresObject(t *testing.T) {
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	ref := sampleRef()
 	w, err := sink.Open(ref)
 	if err != nil {
@@ -212,7 +212,7 @@ func TestObjectWriterEmptyAttemptStillStoresObject(t *testing.T) {
 func TestObjectWriterCloseFlushesAfterSinkContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	store := newMemStore()
-	sink := NewObjectSink(ctx, store, "")
+	sink := NewObjectSink(ctx, store, "", nil)
 	ref := sampleRef()
 	w, err := sink.Open(ref)
 	if err != nil {
@@ -240,7 +240,7 @@ func TestObjectWriterIncrementalFlushErrorIsRetriedNotFatal(t *testing.T) {
 	setFlushTuning(t, 8, time.Hour)
 	store := newMemStore()
 	store.setPutErr(errors.New("503 slow down"))
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	ref := sampleRef()
 	w, err := sink.Open(ref)
 	if err != nil {
@@ -272,7 +272,7 @@ func TestObjectWriterIncrementalFlushErrorIsRetriedNotFatal(t *testing.T) {
 func TestObjectWriterCloseStopsFlusher(t *testing.T) {
 	setFlushTuning(t, 1<<20, 5*time.Millisecond)
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	w, err := sink.Open(sampleRef())
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -337,7 +337,7 @@ func TestObjectWriterConcurrentAttemptsBoundedAndRaceFree(t *testing.T) {
 	t.Cleanup(func() { maxBufferedAttemptBytes = origCap })
 
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	const attempts, perAttempt = 8, 40
 	var wg sync.WaitGroup
 	for a := 0; a < attempts; a++ {
@@ -402,7 +402,7 @@ func TestObjectWriterConcurrentAttemptsBoundedAndRaceFree(t *testing.T) {
 // tuning knobs must have no effect there.
 func TestDiskSinkPathUnchangedByObjectFlushTuning(t *testing.T) {
 	setFlushTuning(t, 1, time.Nanosecond)
-	sink, err := NewDurableSink(context.Background(), "disk", t.TempDir(), nil, "")
+	sink, err := NewDurableSink(context.Background(), "disk", t.TempDir(), nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewDurableSink(disk) error = %v", err)
 	}
@@ -455,7 +455,7 @@ func TestObjectWriterFlushesStaleTailDespiteDamping(t *testing.T) {
 	t.Cleanup(func() { objectFlushInterval = origInterval })
 
 	store := newMemStore()
-	sink := NewObjectSink(context.Background(), store, "")
+	sink := NewObjectSink(context.Background(), store, "", nil)
 	ref := sampleRef()
 	w, err := sink.Open(ref)
 	if err != nil {

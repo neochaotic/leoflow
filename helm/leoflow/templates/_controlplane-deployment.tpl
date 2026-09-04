@@ -66,10 +66,12 @@ spec:
       # are closed and flushed at SIGTERM and the gRPC stop is bounded (5s
       # graceful, then up to 5s for handlers after the forced stop), so a normal
       # shutdown completes in well under a second. A shutdown that hits every
-      # bound (HTTP 10s + drain 15s + gRPC up to 10s) exceeds the default 30s;
-      # set 45-60 when running the object log sink at scale (the HA profile
-      # ships 60). Omitted when unset so a default install's pod spec is
-      # unchanged (Kubernetes applies its own 30s).
+      # bound (HTTP 10s + drain 15s + gRPC up to 10s) is ~35s and exceeds the
+      # default 30s. deployment.preStopSleepSeconds runs inside this same grace
+      # but BEFORE SIGTERM, so the grace has to hold both: size it as that sleep
+      # plus ~35s, with headroom, when running the object log sink at scale (the
+      # HA profile ships 60 alongside a 5s sleep). Omitted when unset so a
+      # default install's pod spec is unchanged (Kubernetes applies its own 30s).
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
       {{- with .ctx.Values.imagePullSecrets }}
@@ -372,6 +374,31 @@ spec:
             periodSeconds: {{ .ctx.Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .ctx.Values.probes.liveness.timeoutSeconds }}
             failureThreshold: {{ .ctx.Values.probes.liveness.failureThreshold }}
+          {{- /* leoflow.preStopSleepHookSupported holds the capability test and the
+               reasoning behind it: the native `sleep` action is gated on
+               PodLifecycleSleepAction, and below 1.30 rendering the hook REJECTS
+               the Deployment rather than being silently dropped, so the render is
+               gated instead of Chart.yaml's kubeVersion (#918). NOTES.txt asks the
+               same helper, so what it warns about and what this renders can never
+               disagree. No `exec` fallback: the image is distroless, so a command
+               hook has no shell and no sleep binary to call. */ -}}
+          {{- $sleepHookSupported := eq (include "leoflow.preStopSleepHookSupported" .ctx) "true" }}
+          {{- if and (gt (int .ctx.Values.deployment.preStopSleepSeconds) 0) $sleepHookSupported }}
+          # Endpoint removal is asynchronous. From the moment this replica starts
+          # terminating, kube-proxy and every already-connected client still hold
+          # it in their endpoint set for a propagation window, so task pods keep
+          # OPENING new agent log streams against a control plane that is on its
+          # way out — and each one creates an empty log object for an attempt
+          # whose lines then have nowhere to land. Sleeping here spends that
+          # window before the process is signalled, so those streams land on a
+          # replica that will still be alive to flush them. The sleep runs INSIDE
+          # terminationGracePeriodSeconds, ahead of SIGTERM, so it adds to the
+          # shutdown budget; keep the grace above preStop + the drain bounds.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ int .ctx.Values.deployment.preStopSleepSeconds }}
+          {{- end }}
           resources:
             {{- toYaml .ctx.Values.resources | nindent 12 }}
           volumeMounts:

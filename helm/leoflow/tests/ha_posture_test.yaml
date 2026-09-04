@@ -246,6 +246,206 @@ tests:
           value: 60
           documentIndex: 1
 
+  # ─── preStop: stop taking NEW streams before the process dies ────────────
+  # Endpoint removal is asynchronous: when a replica starts terminating, kube-
+  # proxy and every client still hold it in their endpoint set for a window, so
+  # task pods keep OPENING log streams against a control plane that is already
+  # shutting them down — each one creating an empty log object for an attempt
+  # whose lines then have nowhere to land. A preStop sleep spends that window
+  # doing nothing while the endpoint propagates, so the new streams land on a
+  # replica that will still be there to flush them. The native `sleep` action is
+  # used deliberately: the image is distroless, so an `exec` hook has no shell
+  # and no sleep binary to call.
+  #
+  # OFF by default, and the default is the assertion: for AGENT LOG STREAMS the
+  # sleep only buys something when another replica is serving agent gRPC, and no
+  # shipped topology has one (replicaCount 1; split pins the scheduler, which owns
+  # the agent gRPC, to one). On those it buys nothing for those streams and adds
+  # its own seconds to every upgrade — the same reason
+  # terminationGracePeriodSeconds ships empty. It is still rendered on BOTH split
+  # Deployments on purpose (asserted below): on the api side, with
+  # split.api.replicaCount > 1, the same sleep spends the same propagation window
+  # for HTTP and UI requests, which do have a second endpoint to land on.
+  - it: ships the preStop hook off, so a default install's pod spec is unchanged
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].lifecycle
+
+  - it: turns the preStop sleep on in the HA profile, where a second replica can take the streams
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    values:
+      - ../examples/values-ha.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+      # The profile's own grace has to hold the sleep plus the drain bounds.
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 60
+  # The `sleep` hook action is gated on PodLifecycleSleepAction, which is beta and
+  # ON only from 1.30. On 1.29 the feature gate is alpha and OFF, so the apiserver
+  # nils the field and its own validation then rejects the resulting empty
+  # `preStop: {}` with "must specify a handler type" — the Deployment create is
+  # REJECTED and `helm install` hard-fails, the hook is NOT silently dropped.
+  # Before 1.29 the field does not exist in the API types at all, so it is pruned
+  # at decode and the same empty handler is what validation sees — 1.27 and 1.28
+  # behave exactly like 1.26 here, and 1.29 is the only release where the field
+  # exists and the gate is off. The project's floor is 1.27 (see the installation page), so
+  # the render has to be gated on the capability; a `kubeVersion` in Chart.yaml
+  # would instead refuse to install on 1.27-1.29 at all.
+  - it: omits the preStop hook on a 1.29 apiserver, where the sleep action is alpha and off
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 29
+    set:
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].lifecycle
+
+  - it: renders the preStop sleep hook when asked for on a 1.30 apiserver
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+
+  - it: honors an overridden preStop sleep
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      deployment.preStopSleepSeconds: 15
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 15
+
+  - it: omits the lifecycle block entirely when the preStop sleep is disabled with 0
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      deployment.preStopSleepSeconds: 0
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].lifecycle
+
+  # Kubernetes validates the sleep as 0 < seconds <= terminationGracePeriodSeconds.
+  # The chart ships the grace unset (the apiserver applies its own 30) and used to
+  # accept any preStopSleepSeconds, so `--set deployment.preStopSleepSeconds=45`
+  # rendered happily and the apiserver then rejected the pod spec — a failure the
+  # chart can see at render time, like every other impossible combination it
+  # already refuses.
+  - it: refuses a preStop sleep that does not fit the apiserver's default grace
+    template: deployment.yaml
+    set:
+      deployment.preStopSleepSeconds: 45
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.preStopSleepSeconds=45 does not fit the effective termination grace of 30s (Kubernetes' own default, because the rendered pod spec carries no terminationGracePeriodSeconds). Kubernetes validates the preStop sleep as 0 < seconds <= terminationGracePeriodSeconds, so a sleep ABOVE the grace is rejected by the apiserver and the install fails even though the render looked fine. A sleep EQUAL to the grace the apiserver accepts; this chart refuses it too, because the sleep runs BEFORE SIGTERM and that same grace still has to cover the shutdown that follows (HTTP <=10s + dispatch drain <=15s + gRPC stop <=10s, about 35s if every bound is hit), so spending the whole grace on the sleep guarantees a SIGKILL mid-drain. Give the shutdown real headroom rather than a second: raise terminationGracePeriodSeconds (the HA profile ships 60) or lower deployment.preStopSleepSeconds."
+
+  # The guard has to model the RENDERED spec, not the raw value. The renderer
+  # uses `with`, which omits terminationGracePeriodSeconds for nil, 0 and ""
+  # alike, so on all three the apiserver applies its own 30 and a 5s sleep is
+  # legal. A bare `terminationGracePeriodSeconds:` key in a layered values file
+  # and Helm's documented `--set terminationGracePeriodSeconds=null` both
+  # produce nil, and a guard that treats nil as "grace is 0" refuses a legal
+  # install with a reason the spec never had (#918).
+  - it: accepts the preStop sleep when terminationGracePeriodSeconds is null, where the apiserver's 30 applies
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      terminationGracePeriodSeconds: null
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - isNull:
+          path: spec.template.spec.terminationGracePeriodSeconds
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+
+  - it: accepts the preStop sleep when terminationGracePeriodSeconds is an explicit 0, where the apiserver's 30 applies
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      terminationGracePeriodSeconds: 0
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - isNull:
+          path: spec.template.spec.terminationGracePeriodSeconds
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+
+  # Upstream validation accepts seconds == grace; the refusal here is the chart's
+  # own policy, and the message says so. A sleep that eats the whole grace leaves
+  # zero budget for the shutdown that runs after it, so the pod is SIGKILLed
+  # mid-drain every time — a spec the apiserver takes and the operator does not
+  # want.
+  - it: refuses a preStop sleep equal to an explicitly set grace
+    template: deployment.yaml
+    set:
+      terminationGracePeriodSeconds: 60
+      deployment.preStopSleepSeconds: 60
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.preStopSleepSeconds=60 does not fit the effective termination grace of 60s (the terminationGracePeriodSeconds this install sets). Kubernetes validates the preStop sleep as 0 < seconds <= terminationGracePeriodSeconds, so a sleep ABOVE the grace is rejected by the apiserver and the install fails even though the render looked fine. A sleep EQUAL to the grace the apiserver accepts; this chart refuses it too, because the sleep runs BEFORE SIGTERM and that same grace still has to cover the shutdown that follows (HTTP <=10s + dispatch drain <=15s + gRPC stop <=10s, about 35s if every bound is hit), so spending the whole grace on the sleep guarantees a SIGKILL mid-drain. Give the shutdown real headroom rather than a second: raise terminationGracePeriodSeconds (the HA profile ships 60) or lower deployment.preStopSleepSeconds."
+
+  - it: accepts a preStop sleep that fits inside a raised grace
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      terminationGracePeriodSeconds: 60
+      deployment.preStopSleepSeconds: 20
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 20
+
+  - it: renders the preStop sleep on both split Deployments
+    template: deployment.yaml
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      split.enabled: true
+      logs.persistence.accessMode: ReadWriteMany
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+          documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 5
+          documentIndex: 1
+
   - it: passes podAnnotations through to the pod template (the Karpenter do-not-disrupt opt-in path)
     template: deployment.yaml
     set:
@@ -255,6 +455,44 @@ tests:
       - equal:
           path: spec.template.metadata.annotations["karpenter.sh/do-not-disrupt"]
           value: "true"
+
+  # An operator who sets the value on a cluster below 1.30 gets nothing, and the
+  # render is the only place that knows it. NOTES.txt already carries four
+  # warnings of exactly this shape, so say it there rather than leaving the omit
+  # silent. Both the renderer and this warning ask the same helper whether the
+  # hook is supported, so the two cannot drift apart (#918).
+  - it: NOTES warn that the preStop sleep is dropped on a 1.29 apiserver
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 29
+    set:
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: deployment.preStopSleepSeconds=5 is set, but this apiserver"
+
+  - it: NOTES stay quiet about the preStop sleep on a 1.30 apiserver, where it renders
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      deployment.preStopSleepSeconds: 5
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: deployment.preStopSleepSeconds"
+
+  - it: NOTES stay quiet about the preStop sleep when it is off, even below 1.30
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 29
+    set:
+      deployment.preStopSleepSeconds: 0
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: deployment.preStopSleepSeconds"
 
   # ─── NOTES: say the trap out loud ────────────────────────────────────────
   - it: NOTES warn when a PDB is forced onto a single replica

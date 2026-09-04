@@ -52,8 +52,9 @@ func (s *Server) EnableWarmPools(onReclaim func(ReclaimEvent)) {
 // WorkerMessages (acks feed the H1 lease machine, slot-free frees the worker)
 // while the main select pumps assignments from the worker's outbound channel
 // down the stream. The handler exits — deregistering the worker (defer) — on
-// context cancellation, a stream Send error, or the receive loop ending (clean
-// EOF or a transport error).
+// context cancellation, the control plane's shutdown signal (SetShutdown), a
+// stream Send error, or the receive loop ending (clean EOF or a transport
+// error).
 func (s *Server) AwaitAssignment(stream agentv1.AgentService_AwaitAssignmentServer) error {
 	if s.warmPools == nil {
 		return status.Error(codes.FailedPrecondition, "warm pools disabled")
@@ -95,6 +96,20 @@ func (s *Server) AwaitAssignment(stream agentv1.AgentService_AwaitAssignmentServ
 		select {
 		case <-ctx.Done():
 			return status.FromContextError(ctx.Err()).Err()
+		case <-s.shutdown:
+			// An idle warm worker holds this stream open indefinitely by design, so
+			// without this case the bounded graceful stop waits its full budget on
+			// every shutdown: the forced path becomes the normal path and the
+			// "exceeded its bound" warning stops meaning anything. Unavailable is
+			// the code the log stream ends with, and the same code the forced
+			// transport close already surfaces to the worker — so the worker's
+			// handling is unchanged, it just happens promptly at SIGTERM instead of
+			// after the whole stop budget burns. Deliberately NOT FailedPrecondition:
+			// that code means "not the leader, reconnect", and a replica on its way
+			// out must not pull a worker's bounded reconnect budget back to itself.
+			// A nil channel never fires, so an unwired server (tests, embedders)
+			// behaves exactly as before.
+			return status.Error(codes.Unavailable, "control plane shutting down; assignment stream closed")
 		case rerr := <-recvErr:
 			if errors.Is(rerr, io.EOF) {
 				return nil

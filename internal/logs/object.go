@@ -50,14 +50,33 @@ type ObjectSink struct {
 	ctx    context.Context
 	store  ObjectStore
 	prefix string
+	logger *slog.Logger
 }
 
 // NewObjectSink builds an ObjectSink writing to store under an optional key
 // prefix. ctx bounds the store operations issued by the writers and readers the
 // sink hands out (the Sink interface is context-free by design); pass the
 // server's lifecycle context.
-func NewObjectSink(ctx context.Context, store ObjectStore, prefix string) *ObjectSink {
-	return &ObjectSink{ctx: ctx, store: store, prefix: prefix}
+//
+// logger receives the warnings the write path cannot return — a failed
+// incremental flush is retried, not surfaced to the agent, so the log line is
+// the ONLY evidence it happened. It is injected rather than taken from
+// slog.Default() so the sink honors the handler (format, level, destination) its
+// owner configured without depending on that owner having reassigned a
+// process-wide global — leoflow-server does call slog.SetDefault, which is what
+// covers the call sites nothing injects into, but an embedder need not, and a
+// library reaching for its caller's global is the wrong seam either way.
+// nil falls back to slog.Default(), deliberately: making the parameter
+// mandatory would not pin the production hand-off, it would just move the trap
+// from "warnings go somewhere unwatched" to "nil dereference on a flush path
+// that only runs while the process is already shutting down". What pins the
+// hand-off is a test that reaches this constructor the way the server does, via
+// NewDurableSink (#918).
+func NewObjectSink(ctx context.Context, store ObjectStore, prefix string, logger *slog.Logger) *ObjectSink {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &ObjectSink{ctx: ctx, store: store, prefix: prefix, logger: logger}
 }
 
 // key maps a Ref to its object key, mirroring DiskSink's on-disk layout so an
@@ -73,7 +92,7 @@ func (o *ObjectSink) Open(ref Ref) (LogWriter, error) {
 	if err := ref.validate(); err != nil {
 		return nil, err
 	}
-	return newObjectWriter(o.ctx, o.store, o.key(ref)), nil
+	return newObjectWriter(o.ctx, o.store, o.key(ref), o.logger), nil
 }
 
 // Read fetches the stored object for the ref. A missing object surfaces as
@@ -93,8 +112,26 @@ func (o *ObjectSink) Read(ref Ref) (io.ReadCloser, error) {
 // it. Object stores have no append, so a plain Open+Close would Put a
 // marker-only object over the agent's streamed log; instead this reads the
 // existing object (tolerating a not-yet-written one), appends the event as a
-// JSONL line, and Puts the combined object back (#861). Best-effort read-modify-
-// write: a lost task's agent is silent, so there is no concurrent writer to race.
+// JSONL line, and Puts the combined object back (#861).
+//
+// Read-modify-write with no locking, which is safe because of WHEN it runs, not
+// because nothing else can write the key: a live attempt's writer does flush the
+// same object incrementally. The only caller is the agent-lost reaper, and what
+// separates the two writers is the agent-lost threshold — 90s of heartbeat
+// silence (executor.defaultAgentLostThreshold), not "minutes" and not the life
+// of the pod. Normally that is enough, because an agent that has stopped
+// heartbeating for 90s has stopped streaming too.
+//
+// The exception, and it IS reachable: heartbeats can be refused while the log
+// stream survives. An attempt past max_attempt_credential_lifetime stops getting
+// its token renewed, so its heartbeats start failing authentication, while
+// StreamLogs — authenticated once at Open and never re-checked — keeps receiving
+// lines and flushing them. Agent-lost then fires at the 90s mark, this function
+// appends the marker, and the live writer's very next flush Puts its own buffer
+// straight over it. Each side Puts the whole object it last read, so the loser
+// loses whole flushes, not one line. Anything that shortens the gap between the
+// two writers — a lower threshold, a caller that is not the reaper — widens this
+// from an exception into the normal case (#918).
 func (o *ObjectSink) AppendEvent(ref Ref, ev Event) error {
 	if err := ref.validate(); err != nil {
 		return err
@@ -192,9 +229,10 @@ func shouldFlush(unflushed, flushed int, sinceLast time.Duration) bool {
 // process kill (no Close) loses at most the unflushed tail. Memory is bounded by
 // maxBufferedAttemptBytes; mu serializes the writer against the flusher.
 type objectWriter struct {
-	ctx   context.Context
-	store ObjectStore
-	key   string
+	ctx    context.Context
+	store  ObjectStore
+	key    string
+	logger *slog.Logger
 
 	mu        sync.Mutex
 	buf       bytes.Buffer
@@ -208,8 +246,8 @@ type objectWriter struct {
 }
 
 // newObjectWriter builds a writer and starts its flusher.
-func newObjectWriter(ctx context.Context, store ObjectStore, key string) *objectWriter {
-	w := &objectWriter{ctx: ctx, store: store, key: key, lastFlush: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
+func newObjectWriter(ctx context.Context, store ObjectStore, key string, logger *slog.Logger) *objectWriter {
+	w := &objectWriter{ctx: ctx, store: store, key: key, logger: logger, lastFlush: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
 	go w.runFlusher(ctx)
 	return w
 }
@@ -260,7 +298,7 @@ func (w *objectWriter) maybeFlushLocked(ctx context.Context) {
 		return
 	}
 	if err := w.flushLocked(ctx); err != nil {
-		slog.Warn("incremental log object flush failed; will retry", "key", w.key, "error", err)
+		w.logger.Warn("incremental log object flush failed; will retry", "key", w.key, "error", err)
 	}
 }
 
@@ -308,8 +346,10 @@ func (w *objectWriter) Close() error {
 // "s3" and "gcs" backends return an ObjectSink over store (which the caller
 // builds with the matching native SDK from the configured bucket/credentials)
 // and require a non-nil store. An unknown backend is rejected rather than
-// silently falling back.
-func NewDurableSink(ctx context.Context, backend, dir string, store ObjectStore, prefix string) (Sink, error) {
+// silently falling back. logger is the process's configured logger, carried to
+// the object sink so its retry warnings honor that contract (see
+// NewObjectSink); the disk sink ignores it.
+func NewDurableSink(ctx context.Context, backend, dir string, store ObjectStore, prefix string, logger *slog.Logger) (Sink, error) {
 	switch backend {
 	case "", "disk":
 		return NewDiskSink(dir), nil
@@ -317,7 +357,7 @@ func NewDurableSink(ctx context.Context, backend, dir string, store ObjectStore,
 		if store == nil {
 			return nil, fmt.Errorf("%s log backend requires an object store", backend)
 		}
-		return NewObjectSink(ctx, store, prefix), nil
+		return NewObjectSink(ctx, store, prefix, logger), nil
 	default:
 		return nil, fmt.Errorf("unknown log backend %q (want \"disk\", \"s3\" or \"gcs\")", backend)
 	}

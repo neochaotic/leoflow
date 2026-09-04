@@ -163,6 +163,67 @@ func TestStreamLogsClosesWriterOnShutdown(t *testing.T) {
 	}
 }
 
+// openTrackingSink counts the writers StreamLogs opened. The count is the whole
+// assertion for the post-SIGTERM accept window: a writer that exists at all is
+// Put by its deferred Close, and for a stream that never received a line that
+// Put stores an EMPTY object.
+type openTrackingSink struct {
+	mu    sync.Mutex
+	opens int
+}
+
+func (o *openTrackingSink) Open(logs.Ref) (logs.LogWriter, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.opens++
+	return o, nil
+}
+
+func (o *openTrackingSink) WriteEvent(logs.Event) error { return nil }
+func (o *openTrackingSink) Close() error                { return nil }
+
+func (o *openTrackingSink) openCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.opens
+}
+
+// TestStreamLogsRefusesAfterShutdownBeforeOpeningAWriter pins the LARGER half of
+// the empty-object bug. The gRPC listener is the last thing the server stops —
+// the scheduler stop is deferred behind the HTTP shutdown — so it keeps
+// ACCEPTING new StreamLogs for up to the HTTP bound plus the dispatch drain
+// after SIGTERM, far longer than the endpoint-propagation window a preStop sleep
+// covers. Every one of those handlers used to open a writer first and consult
+// the shutdown signal only afterwards, so it returned Unavailable with a
+// deferred Close that Put an EMPTY object — which by the sink's own semantics
+// means "the attempt ran and was silent", a lie about an attempt whose lines
+// were going elsewhere. The signal has to be checked BEFORE the writer exists.
+func TestStreamLogsRefusesAfterShutdownBeforeOpeningAWriter(t *testing.T) {
+	srv, a := newServer(&fakeStore{})
+	sink := &openTrackingSink{}
+	srv.SetLogSink(sink)
+	shutdownCtx, shutdown := context.WithCancel(context.Background())
+	shutdown() // SIGTERM has already fired; the listener is still accepting.
+	srv.SetShutdown(shutdownCtx)
+
+	streamCtx, cancelStream := context.WithCancel(ctxWithToken(t, a))
+	defer cancelStream()
+	stream := &blockingStreamLogsServer{ctx: streamCtx}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.StreamLogs(stream) }()
+	select {
+	case err := <-errCh:
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("StreamLogs opened after shutdown = %v, want codes.Unavailable", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamLogs did not return within 2s although shutdown had already fired")
+	}
+	if n := sink.openCount(); n != 0 {
+		t.Fatalf("StreamLogs opened %d writer(s) after shutdown; want 0 — an opened writer's deferred Close Puts an empty object for an attempt that logged elsewhere", n)
+	}
+}
+
 // TestStreamLogsWithoutShutdownContextBehavesAsBefore: a server that never wired
 // a shutdown context (tests, embedders) keeps the pre-existing semantics — the
 // stream ends only when the agent half-closes.

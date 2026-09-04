@@ -121,6 +121,19 @@ func run() error {
 		return fmt.Errorf("observability setup: %w", err)
 	}
 	defer shutdownTel()
+	// Point Go's package-level slog at the same handler. This does NOT replace
+	// injection, and both exist deliberately: a component that needs a specific
+	// logger takes one (logs.NewDurableSink, the gRPC interceptors), because a
+	// library must honor the contract its owner configured rather than depend on
+	// its caller having reassigned a global. But injection only covers the seams
+	// that have actually been threaded, and internal/agentrpc alone still makes
+	// two dozen bare slog calls — token-review rejections, secret-liveness
+	// denials, the log stream's failed final flush — every one of which landed as
+	// plain text on stderr, outside the configured format and level, where
+	// nothing that collects the control plane's logs would see it. That is what
+	// left the eviction-log failure modes unmeasurable (#918). One line fixes
+	// every remaining site and takes nothing away from injection.
+	slog.SetDefault(tel.Logger)
 	warnStartup(cfg, tel.Logger)
 
 	pg, err := openVerifiedPostgres(ctx, cfg.Database)
@@ -484,7 +497,12 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if xerr != nil {
 		return nil, false, nil, xerr
 	}
-	grpcSrv, agentSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, xchg, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, logger)
+	// The bounded graceful stop reports how many handlers it left running, since
+	// a log writer's final Put outlasts the post-force wait and an abandoned one
+	// is otherwise silent. gRPC exposes no such number, so the counter rides on
+	// the interceptor chain and the stop func reads it.
+	inflight := agentrpc.NewInflightHandlers()
+	grpcSrv, agentSrv, gerr := startAgentGRPC(ctx, cfg.Server.GRPCAddr, authn, execStore, repo, xcomSvc, logSink, logTailer, allowInsecureSecrets, cfg.Auth.SecretScoping, cfg.Auth.SecretLivenessMode, cfg.Auth.MaxAttemptCredentialLifetime, xchg, cfg.Server.GRPCTLSCert, cfg.Server.GRPCTLSKey, warmReg, inflight, logger)
 	if gerr != nil {
 		return nil, false, nil, gerr
 	}
@@ -496,7 +514,11 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	if cfg.Scheduler.Enabled {
 		sched, dispatchOn, dispatchCloser, serr := startScheduler(ctx, cfg, pg, repo, execStore, authn, warmReg, logSink, logger, metrics)
 		if serr != nil {
-			grpcSrv.GracefulStop()
+			// Bounded, like every other stop of this server. At boot no stream is
+			// open yet, so the unbounded form could not actually hang here — but a
+			// second way to stop the same server is a way for the two to drift, and
+			// the one that cannot exhaust the pod's grace is the one to keep.
+			stopGRPCWithin(grpcSrv, grpcStopTimeout, logger, inflight.Count)
 			return nil, false, nil, serr
 		}
 		// Warm-pool Hole B: gate the assignment stream to the scheduler LEADER. This
@@ -517,7 +539,7 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 	}
 	stop = func() {
 		drain()
-		stopGRPCWithin(grpcSrv, grpcStopTimeout, logger)
+		stopGRPCWithin(grpcSrv, grpcStopTimeout, logger, inflight.Count)
 	}
 	return health, podDispatch, stop, nil
 }
@@ -530,9 +552,13 @@ func startSchedulerSide(ctx context.Context, cfg *config.ServerConfig, pg *stora
 // grace: the HTTP shutdown (10 s) and the dispatch drain (15 s, configurable)
 // run before it, and stopGRPCWithin spends up to 2 × this timeout (graceful,
 // then the wait for handlers after the forced stop), so a shutdown that hits
-// every bound takes ~35 s plus the telemetry flush. The default grace covers the
-// normal shutdown; an installation running the object log sink at scale should
-// set terminationGracePeriodSeconds to 45-60 s (the HA profile ships 60).
+// every bound takes ~35 s plus the telemetry flush. That is the PROCESS bound,
+// measured from SIGTERM; the pod's termination clock can be longer, because the
+// chart's optional preStop sleep (deployment.preStopSleepSeconds, off by
+// default, 5 in the HA profile) runs inside the same grace but BEFORE the signal
+// — so the grace an operator needs is that sleep plus this bound. The default
+// grace covers the normal shutdown; an installation running the object log sink
+// at scale should raise terminationGracePeriodSeconds (the HA profile ships 60).
 const grpcStopTimeout = 5 * time.Second
 
 // grpcStopper is the subset of *grpc.Server the bounded stop needs; a fake
@@ -551,7 +577,24 @@ type grpcStopper interface {
 // waiting for those handlers to return, and they return after their deferred
 // log flushes, so the wait for it is kept (bounded again) and forced reports
 // whether the fallback was taken.
-func stopGRPCWithin(srv grpcStopper, timeout time.Duration, logger *slog.Logger) (forced bool) {
+//
+// inflight (optional; nil omits the field) reports how many agent RPC handlers
+// are still executing, and is logged on both bounded paths. A log writer's
+// final Put is bounded at objectPutTimeout, which is longer than this timeout,
+// so the process can legitimately exit with handlers still running: abandoning
+// one is SAFE — a log object is written by a single atomic Put, so the stored
+// object stays at its previous flush rather than being truncated — but without
+// the count it is also silent, and nothing says how much log tail that cost.
+func stopGRPCWithin(srv grpcStopper, timeout time.Duration, logger *slog.Logger, inflight func() int) (forced bool) {
+	// inflightArgs renders the count as log attributes, or nothing when no
+	// counter is wired, so an unwired caller logs a shorter line instead of a
+	// misleading zero.
+	inflightArgs := func() []any {
+		if inflight == nil {
+			return nil
+		}
+		return []any{"in_flight_handlers", inflight()}
+	}
 	done := make(chan struct{})
 	go func() { srv.GracefulStop(); close(done) }()
 	select {
@@ -559,12 +602,14 @@ func stopGRPCWithin(srv grpcStopper, timeout time.Duration, logger *slog.Logger)
 		return false
 	case <-time.After(timeout):
 	}
-	logger.Warn("agent grpc graceful stop exceeded its bound; forcing stop so shutdown completes within the pod's grace", "timeout", timeout)
+	logger.Warn("agent grpc graceful stop exceeded its bound; forcing stop so shutdown completes within the pod's grace",
+		append([]any{"timeout", timeout}, inflightArgs()...)...)
 	srv.Stop()
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		logger.Error("agent grpc handlers did not finish after the forced stop; exiting without them", "timeout", timeout)
+		logger.Error("agent grpc handlers did not finish after the forced stop; exiting without them (an abandoned log flush leaves the object at its previous flush, not truncated)",
+			append([]any{"timeout", timeout}, inflightArgs()...)...)
 	}
 	return true
 }
@@ -714,8 +759,9 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, servesAPI bool, apiSrv,
 // startAgentGRPC starts the AgentService gRPC server and returns it for graceful
 // shutdown. TLS is enabled when tlsCert/tlsKey are set (issue #58); otherwise the
 // channel is plaintext (dev). The per-task bearer token in metadata authenticates
-// each call regardless.
-func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPools *agentrpc.WorkerRegistry, logger *slog.Logger) (srv *grpc.Server, agentSrv *agentrpc.Server, err error) {
+// each call regardless. inflight (required) is installed on the interceptor
+// chain so the bounded stop can report the handlers it leaves running.
+func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticator, store *storage.ExecutionStore, secretsStore agentrpc.SecretsStore, xcomSvc agentrpc.XComService, logSink agentrpc.LogSink, logTailer agentrpc.LogPublisher, allowInsecureSecrets bool, secretScoping, secretLivenessMode string, maxAttemptLifetime time.Duration, exchange *tokenExchange, tlsCert, tlsKey string, warmPools *agentrpc.WorkerRegistry, inflight *agentrpc.InflightHandlers, logger *slog.Logger) (srv *grpc.Server, agentSrv *agentrpc.Server, err error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
@@ -772,9 +818,12 @@ func startAgentGRPC(ctx context.Context, addr string, authn *auth.JWTAuthenticat
 
 	// Recover panics in any agent RPC handler so a single malformed request from a
 	// worker pod cannot crash the control plane (it returns Internal instead).
+	// The in-flight counter sits INSIDE recovery so recovery stays outermost (it
+	// must cover every later interceptor), and so a panicking handler is counted
+	// out by the counter's own defer before recovery translates the panic.
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(agentrpc.RecoveryUnaryInterceptor(logger)),
-		grpc.ChainStreamInterceptor(agentrpc.RecoveryStreamInterceptor(logger)),
+		grpc.ChainUnaryInterceptor(agentrpc.RecoveryUnaryInterceptor(logger), inflight.UnaryInterceptor()),
+		grpc.ChainStreamInterceptor(agentrpc.RecoveryStreamInterceptor(logger), inflight.StreamInterceptor()),
 		// Tolerate a warm worker's keepalive pings on an otherwise idle assignment
 		// stream so gRPC does not GOAWAY it as abusive (ADR 0058 N1b). This only
 		// RELAXES the server's default client-ping enforcement (5m, streams-only),
@@ -902,7 +951,7 @@ const lowDiskWarnBytes = 1 << 30 // 1 GiB
 func buildLogSink(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger) (logs.Sink, error) {
 	switch cfg.Logs.Backend {
 	case "", "disk":
-		return logs.NewDurableSink(ctx, cfg.Logs.Backend, cfg.Logs.Dir, nil, "")
+		return logs.NewDurableSink(ctx, cfg.Logs.Backend, cfg.Logs.Dir, nil, "", logger)
 	case "s3":
 		store, err := logs.NewS3Store(ctx, logs.S3Config{
 			Bucket:          cfg.Logs.Sink.Bucket,
@@ -917,7 +966,7 @@ func buildLogSink(ctx context.Context, cfg *config.ServerConfig, logger *slog.Lo
 		}
 		logger.Info("task logs: s3 object-store backend enabled",
 			"bucket", cfg.Logs.Sink.Bucket, "endpoint", cfg.Logs.Sink.Endpoint, "prefix", cfg.Logs.Sink.Prefix)
-		return logs.NewDurableSink(ctx, "s3", "", store, cfg.Logs.Sink.Prefix)
+		return logs.NewDurableSink(ctx, "s3", "", store, cfg.Logs.Sink.Prefix, logger)
 	case "gcs":
 		store, err := logs.NewGCSStore(ctx, logs.GCSConfig{
 			Bucket:          cfg.Logs.Sink.Bucket,
@@ -928,7 +977,7 @@ func buildLogSink(ctx context.Context, cfg *config.ServerConfig, logger *slog.Lo
 		}
 		logger.Info("task logs: gcs object-store backend enabled",
 			"bucket", cfg.Logs.Sink.Bucket, "prefix", cfg.Logs.Sink.Prefix)
-		return logs.NewDurableSink(ctx, "gcs", "", store, cfg.Logs.Sink.Prefix)
+		return logs.NewDurableSink(ctx, "gcs", "", store, cfg.Logs.Sink.Prefix, logger)
 	default:
 		return nil, fmt.Errorf("unknown logs.backend %q", cfg.Logs.Backend)
 	}

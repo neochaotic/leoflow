@@ -51,6 +51,21 @@ NOTE: this release renders a PodDisruptionBudget (auto: replica floor {{ $replic
 It keeps one control-plane replica serving through node drains and upgrades. Set
 podDisruptionBudget.enabled: false if your maintenance tooling assumed none.
 {{- end }}
+{{- $preStopSleep := int .Values.deployment.preStopSleepSeconds }}
+{{- if and (gt $preStopSleep 0) (ne (include "leoflow.preStopSleepHookSupported" .) "true") }}
+
+WARNING: deployment.preStopSleepSeconds={{ $preStopSleep }} is set, but this apiserver ({{ .Capabilities.KubeVersion.Version }})
+has no native preStop `sleep` action, so the chart rendered NO lifecycle hook and
+the value has no effect. The action is gated on PodLifecycleSleepAction: beta and
+on by default from Kubernetes 1.30, alpha and off in 1.29, absent before that.
+The hook is omitted rather than rendered because an apiserver without the action
+REJECTS the empty `preStop: {}` it is left with, which would fail this install
+instead of dropping the sleep. So the install works and keeps the pre-hook
+behavior: a terminating replica goes on accepting NEW agent log streams for the
+endpoint-propagation window, and each one creates an empty log object for an
+attempt whose lines then land nowhere. Move the control plane to 1.30+ to get the
+sleep, or set deployment.preStopSleepSeconds=0 to stop asking for it.
+{{- end }}
 {{- if not (or .Values.database.existingSecret .Values.database.url) }}
 
 WARNING: no database URL set. Provide .Values.database.url or .Values.database.existingSecret (key databaseUrl).

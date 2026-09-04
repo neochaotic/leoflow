@@ -330,19 +330,61 @@ because it is not leadership:
   dispatches already in progress settle instead of leaving task instances stuck
   `queued`. Reapers are gated off during the step-down so nothing destructive
   fires from a dying leader.
+- **A second replica can stop taking new streams before the first one stops.**
+  Endpoint removal is asynchronous, so for a propagation window after termination
+  begins, task pods still open **new** agent log streams against the replica that
+  is on its way out. `deployment.preStopSleepSeconds` spends that window in a
+  `preStop` sleep before the process is signalled, so those streams open against
+  the surviving replica instead. It is **off by default** and set to `5` in
+  `examples/values-ha.yaml`, because moving a stream needs somewhere to move it
+  to: a single-replica install (the chart default, and the split topology's
+  scheduler, which is what serves agent gRPC) has no second endpoint, so the
+  sleep buys nothing **for agent log streams** there and adds its own seconds to
+  every upgrade. That is the scheduler-side singleton case, not the whole story:
+  the hook renders on **both** split Deployments deliberately, and on the api
+  side with `split.api.replicaCount` > 1 the same sleep spends the same
+  propagation window for HTTP and UI requests, which have a second endpoint to
+  land on. What it never buys, at any replica count, is an
+  **already-established** stream: those
+  connections are pinned by conntrack and get `Unavailable` at `SIGTERM`
+  regardless — only not-yet-opened streams move. The sleep runs *inside*
+  `terminationGracePeriodSeconds`, ahead of everything below, so count it in the
+  budget (Kubernetes rejects the pod spec outright if the sleep alone exceeds the
+  grace, and the chart refuses to render that). 5 s is the low end; raise it when
+  a service-mesh sidecar sits in the path. The hook needs Kubernetes **1.30**,
+  where the native `sleep` action is beta and on by default; it is alpha and
+  *off* in 1.29, and an apiserver without it rejects the empty `preStop: {}` it
+  is left with instead of ignoring it. So the chart renders the hook only on
+  1.30+ and omits it below — a 1.27–1.29 install keeps working, with the
+  pre-hook behavior, and the install notes warn that the value you set had no
+  effect rather than leaving the omit silent.
 - **With tasks running, the stop is bounded.** Open agent log streams are
   closed and flushed the moment `SIGTERM` arrives (the agent keeps running its
-  task; log shipping is best-effort), and the gRPC graceful stop that follows is
-  bounded at 5 s before falling back to a forced stop — which still lets the
-  remaining handlers finish their deferred flushes, waited for up to another
-  5 s. A normal shutdown therefore completes in well under a second. The
-  bounded **worst case** does not fit the default 30 s: HTTP (≤10 s) + dispatch
-  drain (≤15 s, configurable) + gRPC stop (≤10 s) is ~35 s plus the telemetry
-  flush. Set `terminationGracePeriodSeconds` to 45–60 when running the object
-  log sink at scale (the HA profile ships 60). A `SIGKILL` (`exitCode: 137` on
-  the terminated container) means a stop that overran the grace — look for the
-  `agent grpc graceful stop exceeded its bound` warning first, then for a slow
-  object store. Nothing in the leadership handoff needs any of this to finish.
+  task; log shipping is best-effort), idle warm-worker assignment streams end
+  the same way, and the gRPC graceful stop that follows is bounded at 5 s before
+  falling back to a forced stop — which still lets the remaining handlers finish
+  their deferred flushes, waited for up to another 5 s.
+
+  Two different clocks, and the grace has to cover both. **Process shutdown** is
+  everything after `SIGTERM`: normally milliseconds, well under a second, warm
+  pools on or off; bounded at HTTP (≤10 s) + dispatch drain (≤15 s, configurable)
+  + gRPC stop (≤10 s) ≈ 35 s plus the telemetry flush. **Pod termination** is
+  what an operator watches, and it also includes the `preStop` sleep, which runs
+  *before* `SIGTERM` and is pure wall-clock: with the HA profile's `5` a
+  completely healthy pod takes just over 5 s to go away, and that is expected,
+  not a slow shutdown.
+
+  So size the grace by the rule, not by a number:
+  `terminationGracePeriodSeconds` ≥ `deployment.preStopSleepSeconds` + 10 s
+  (HTTP) + the dispatch drain + 10 s (gRPC), with headroom. The default 30 s
+  covers a normal shutdown but not that worst case, so an installation running
+  the object log sink at scale should raise it — the HA profile's `60` holds the
+  full bound plus its 5 s sleep. A `SIGKILL` (`exitCode: 137` on the terminated
+  container) means a stop that overran the grace — look for the `agent grpc
+  graceful stop exceeded its bound` warning first, then for a slow object store.
+  That warning is meant to be rare: every long-lived agent stream ends itself at
+  `SIGTERM`, so seeing it on every shutdown is a bug, not a tuning problem.
+  Nothing in the leadership handoff needs any of this to finish.
 
 The HA profile sets `60` for comfortable HTTP + dispatch drain headroom under
 load. The chart deliberately ships **no default**: a default would add up to

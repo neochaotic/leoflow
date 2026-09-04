@@ -249,3 +249,35 @@ diverge and agents would dial a name no Service answers to. */ -}}
 {{- printf "%s.%s.svc.cluster.local:%d" $svc .Release.Namespace (int .Values.ports.grpc) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Whether this apiserver supports the native preStop `sleep` hook action, which is
+gated on PodLifecycleSleepAction: BETA and on by default from 1.30, ALPHA and OFF
+in 1.29, and not present in the API types at all before that. Below 1.30 the
+apiserver nils the field and its own validation then rejects the empty
+`preStop: {}` it is left with ("must specify a handler type"), so rendering the
+hook onto an older cluster REJECTS the Deployment and hard-fails `helm install`
+— it is not silently dropped. The project's floor is 1.27, so this is a render
+gate rather than a `kubeVersion` in Chart.yaml, which would refuse to install on
+1.27-1.29 outright; below 1.30 the install succeeds and keeps the pre-hook
+behavior instead (#918).
+
+Returns "true" only when the hook can be rendered. Both the renderer
+(_controlplane-deployment.tpl) and the NOTES.txt warning that tells the operator
+the hook was dropped ask THIS helper, so the two can never disagree about which
+clusters get the hook.
+
+Note the limits of a semver test, both documented on
+`deployment.preStopSleepSeconds`: a `helm template | kubectl apply` pipeline on a
+helm 3 client defaults its capabilities to v1.20.0 and so omits the hook even
+against a modern cluster (safe direction — the sleep is an optimization, not a
+correctness requirement); and this is a proxy for a feature gate, so a
+self-managed 1.30+ apiserver started with
+`--feature-gates=PodLifecycleSleepAction=false` renders the hook and rejects the
+Deployment, because nothing in discovery reports gate state.
+*/}}
+{{- define "leoflow.preStopSleepHookSupported" -}}
+{{- if semverCompare ">=1.30.0-0" .Capabilities.KubeVersion.Version -}}
+true
+{{- end -}}
+{{- end -}}

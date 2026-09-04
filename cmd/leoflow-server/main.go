@@ -121,6 +121,19 @@ func run() error {
 		return fmt.Errorf("observability setup: %w", err)
 	}
 	defer shutdownTel()
+	// Point Go's package-level slog at the same handler. This does NOT replace
+	// injection, and both exist deliberately: a component that needs a specific
+	// logger takes one (logs.NewDurableSink, the gRPC interceptors), because a
+	// library must honor the contract its owner configured rather than depend on
+	// its caller having reassigned a global. But injection only covers the seams
+	// that have actually been threaded, and internal/agentrpc alone still makes
+	// two dozen bare slog calls — token-review rejections, secret-liveness
+	// denials, the log stream's failed final flush — every one of which landed as
+	// plain text on stderr, outside the configured format and level, where
+	// nothing that collects the control plane's logs would see it. That is what
+	// left the eviction-log failure modes unmeasurable (#918). One line fixes
+	// every remaining site and takes nothing away from injection.
+	slog.SetDefault(tel.Logger)
 	warnStartup(cfg, tel.Logger)
 
 	pg, err := openVerifiedPostgres(ctx, cfg.Database)

@@ -61,10 +61,12 @@ type ObjectSink struct {
 // logger receives the warnings the write path cannot return — a failed
 // incremental flush is retried, not surfaced to the agent, so the log line is
 // the ONLY evidence it happened. It is injected rather than taken from
-// slog.Default() because a process that configures its own handler (format,
-// level, destination) without calling slog.SetDefault would otherwise emit
-// these warnings outside its own logging contract, where nothing collects
-// them. nil falls back to slog.Default(), deliberately: making the parameter
+// slog.Default() so the sink honors the handler (format, level, destination) its
+// owner configured without depending on that owner having reassigned a
+// process-wide global — leoflow-server does call slog.SetDefault, which is what
+// covers the call sites nothing injects into, but an embedder need not, and a
+// library reaching for its caller's global is the wrong seam either way.
+// nil falls back to slog.Default(), deliberately: making the parameter
 // mandatory would not pin the production hand-off, it would just move the trap
 // from "warnings go somewhere unwatched" to "nil dereference on a flush path
 // that only runs while the process is already shutting down". What pins the

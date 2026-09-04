@@ -216,7 +216,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `slog` handler rather than the configured one, landing as plain text on stderr
   outside the server's log format and level, where nothing collecting the control
   plane's logs would see it; the sink now takes the configured logger at
-  construction. The bounded stop also logs how many agent handlers it left
+  construction, and the server additionally points Go's package-level `slog` at
+  the same handler, which covers the ~two dozen bare `slog` calls in the agent
+  RPC layer (token-review rejections, secret-liveness denials, a failed final
+  flush) that nothing injects into. The bounded stop also logs how many agent handlers it left
   running when it gives up: each log-object `Put` is bounded at 30 s while the
   wait after the forced stop is 5 s, so abandoning one is possible — and safe,
   since a single atomic `Put` leaves the stored object at its previous flush

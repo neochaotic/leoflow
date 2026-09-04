@@ -150,10 +150,15 @@ func BuildPod(req Request) *corev1.Pod {
 //
 // The two clocks start at different moments. The kubelet counts
 // activeDeadlineSeconds from pod.Status.StartTime, which is stamped BEFORE the
-// image pull; the agent starts its own deadline inside its execute step, AFTER
-// the RUNNING pre-flight report, source staging and venv resolution. With the
-// deadline set to the timeout itself the kubelet wins by the entire startup
-// cost — systematically, on every task, not as a race.
+// image pull. The agent starts its own deadline inside its execute step, so
+// everything between those two moments is spent on the kubelet's clock and none
+// of it on the agent's: the image pull, the volume attach and mount, container
+// start, the agent's token bootstrap and exchange, the gRPC dial, Register,
+// GetTaskSpec, buildEnv (XCom fan-in and secret resolution, possibly over RPCs
+// to an external backend) and the RUNNING report, whose retry has no budget of
+// its own. The image pull dominates on a cold node. With the deadline set to the
+// timeout itself the kubelet wins by that entire startup cost —
+// systematically, on every task, not as a race.
 //
 // That inversion matters because of the layering: the AGENT owns the semantic
 // timeout. It is what interrupts the user process at the boundary the author
@@ -164,13 +169,27 @@ func BuildPod(req Request) *corev1.Pod {
 // when it does, the pod is gone and the reason degrades to what Kubernetes
 // observed from outside (see podFailureReason), which cannot name a timeout.
 //
-// The value is the dispatch-lost threshold, which is this project's own bound on
-// how long a healthy task may take to go from queued to RUNNING: pod creation,
-// scheduling, image pull, staging-volume mount, agent boot, secret resolution
-// and the RUNNING pre-flight round trip. Below that the control plane still
-// treats the task as healthily starting up, so the kubelet must not yet be
-// spending the user's execution budget on it. Reusing the threshold keeps the
-// two judgments of "still starting" from drifting apart.
+// The value is the dispatch-lost threshold, which is the window in which the
+// control plane still presumes healthy startup and defers reaping a queued task.
+// It is deliberately NOT a bound on startup: the dispatch-lost reaper checks the
+// pod before failing anything and DEFERS while it is Pending or Running (see
+// stale_queued_reap.go, #461), so a pod pulling an image for twenty minutes is
+// never reaped for being slow. The threshold is where the control plane stops
+// assuming a dispatch landed and starts looking — a suspicion threshold. Below
+// it, nothing in this system has yet formed a view that the task is unhealthy,
+// so the kubelet should not already be spending the author's execution budget.
+// That is what makes the number the right size for the headroom, not any
+// guarantee that startup fits inside it.
+//
+// It binds the compile-time DEFAULT (defaultDispatchLostThreshold), not
+// ReaperConfig.DispatchLostThreshold, which the reaper reads at runtime. The two
+// are the same number today because that field is not operator-tunable — nothing
+// outside tests sets it — so this is a reuse of the constant, not a live
+// coupling to the reaper's configured value. If a knob for it ever lands, this
+// headroom will NOT follow it, and whether it should is a decision to make then:
+// a longer reaper threshold widens the window in which a slow-starting pod is
+// left alone, which is an argument for widening the headroom with it, but the
+// pod deadline is also the operator's protection against an immortal pod.
 //
 // The termination grace is added on top of this rather than folded into it: the
 // grace covers the tail (the agent shutting the child down and delivering its
@@ -184,8 +203,9 @@ func BuildPod(req Request) *corev1.Pod {
 // timeout diagnosis is lost. The airtight variant is to anchor the AGENT's
 // clock at process start instead of at execute, which makes it strictly earlier
 // than the kubelet's for any non-negative headroom. That is not done here
-// because it would fold staging and venv resolution into the author's declared
-// budget, changing what execution_timeout means (it covers task execution).
+// because it would fold the whole startup — the image pull above all, plus the
+// token exchange and env build — into the author's declared budget, changing
+// what execution_timeout means (it covers task execution).
 const podStartupHeadroom = defaultDispatchLostThreshold
 
 // podActiveDeadline returns the task pod's ActiveDeadlineSeconds: the user's

@@ -77,11 +77,12 @@ func TestBuildPodNoDeadlineWhenCeilingDisabled(t *testing.T) {
 // TestBuildPodDeadlineOutlastsDeclaredTimeout locks the layering that keeps the
 // agent, not the kubelet, the enforcer of a declared execution_timeout. The
 // kubelet counts activeDeadlineSeconds from pod.Status.StartTime — stamped
-// before the image pull — while the agent's own deadline starts after the
-// RUNNING pre-flight, source staging and venv resolution, so a deadline equal to
-// the declared timeout makes the kubelet win by the whole startup cost every
-// time (systematically, not as a race) and the operator gets a generic kubelet
-// reason instead of the timeout diagnosis. The deadline must therefore be
+// before the image pull — while the agent's own deadline starts only inside its
+// execute step, after the image pull, the volume mount, container start, the
+// token exchange, the gRPC dial, Register, GetTaskSpec, buildEnv and the RUNNING
+// report. So a deadline equal to the declared timeout makes the kubelet win by
+// that whole startup cost every time (systematically, not as a race) and the
+// operator gets a generic kubelet reason instead of the timeout diagnosis. The deadline must therefore be
 // strictly longer than the timeout, by the startup headroom plus the pod's own
 // termination grace (grace alone would cover the tail, not the head).
 func TestBuildPodDeadlineOutlastsDeclaredTimeout(t *testing.T) {

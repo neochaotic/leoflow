@@ -50,22 +50,42 @@ there first, the pod is gone and the failure reason degrades to what Kubernetes
 saw from outside, which cannot name a timeout.
 
 The two clocks do not start together. The kubelet counts from the pod's
-`status.startTime`, stamped **before** the image pull; the agent starts its own
-only after its `RUNNING` pre-flight report, the source staging and the venv
-resolution. So the pod deadline is deliberately set **longer** than the declared
-timeout:
+`status.startTime`, stamped **before** the image pull. The agent's own clock
+starts much later, inside its execute step — after the image pull, the volume
+attach and mount, container start, its token bootstrap and exchange, the gRPC
+dial, `Register`, `GetTaskSpec`, the environment build (XCom fan-in and secret
+resolution, possibly over calls to an external secret backend) and its `RUNNING`
+report, whose retry has no budget of its own. On a cold node the image pull
+dominates all of it. So the pod deadline is deliberately set **longer** than the
+declared timeout:
 
 ```text
 activeDeadlineSeconds = execution_timeout_seconds
                       + 3 min   (startup headroom = the dispatch-lost threshold)
-                      + the pod's terminationGracePeriodSeconds (default 30 s)
+                      + the pod's terminationGracePeriodSeconds
+                        (default 30 s, and capped at 60 s here)
 ```
 
-The headroom is the dispatch-lost threshold on purpose: that is already the
-window in which the control plane treats a task as healthily starting up, so the
-kubelet should not be spending the author's execution budget inside it. The
-termination grace is added on top rather than folded in — it covers the
+The headroom is the dispatch-lost threshold on purpose: that is the window in
+which the control plane still presumes healthy startup and defers reaping, so
+the kubelet should not be spending the author's execution budget inside it. Note
+what the threshold is **not** — a bound on how long startup may take. The
+dispatch-lost reaper checks the pod before failing anything and defers while it
+is `Pending` or `Running`, so a pod pulling an image for twenty minutes is never
+reaped for being slow; the threshold is where the control plane stops assuming a
+dispatch landed and starts looking.
+
+The termination grace is added on top rather than folded in — it covers the
 shutdown tail (stopping the child, delivering the report), not the startup head.
+Only up to 60 s of it is added, however much the DAG declares:
+`termination_grace_period_seconds` is unvalidated, and adding an hour of it
+verbatim would put the pod's deadline an hour past the declared timeout while
+the kubelet grants that same hour of `SIGTERM` grace again on top. The pod spec
+still carries the declared value verbatim; only this arithmetic is capped. The
+sum is also clamped to `2147483647` (`math.MaxInt32`), the largest
+`activeDeadlineSeconds` the apiserver accepts — otherwise a declared timeout
+near that bound would be rejected at pod `CREATE` rather than merely never
+reached.
 
 Two consequences worth knowing. A pod may outlive its declared timeout by a few
 minutes when its agent is dead — that is the backstop doing its job, and the

@@ -186,18 +186,53 @@ LEOFLOW_SERVER_HTTP_ADDR="0.0.0.0:${API_HTTP_PORT}" \
 LEOFLOW_SERVER_METRICS_ADDR="0.0.0.0:${API_METRICS_PORT}" \
   "$ROOT/bin/leoflow-server" >"${WORKDIR}/api.log" 2>&1 &
 API_PID=$!
-sleep 5
+
+# Wait for the api to actually serve, and fail HERE with both role logs if it
+# does not. A fixed sleep let a control plane that died at boot (an unmigrated
+# database, a taken port) sail past this line: the next few steps ignore their
+# own errors, so the run surfaced minutes later as the unrelated-looking "no run
+# id" from whichever scenario happened to run first.
+wait_api() {
+  local deadline; deadline=$(( $(date +%s) + 45 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    curl -fsS "${API}/healthz" >/dev/null 2>&1 && return 0
+    kill -0 "$API_PID" 2>/dev/null || return 1
+    sleep 1
+  done
+  return 1
+}
+if ! wait_api; then
+  printf '\n---- api.log ----\n' >&2; tail -20 "${WORKDIR}/api.log" >&2 2>/dev/null || true
+  printf '\n---- scheduler.log ----\n' >&2; tail -20 "${WORKDIR}/scheduler.log" >&2 2>/dev/null || true
+  fatal "the api role never served ${API}/healthz — see the role logs above (a local run needs the server's database migrated: DATABASE_URL=<dsn> bin/leoflow db migrate)"
+fi
 
 log "Compiling + importing the DAG image"
 "$ROOT/bin/leoflow" compile "$WORKDIR/$DAG_ID" --image "$DAG_IMAGE" --build --dockerfile Dockerfile -o "$WORKDIR/$DAG_ID/dag.json" >/dev/null
 k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE" || fatal "k3d import failed"
-TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)"
-"$ROOT/bin/leoflow" push "$WORKDIR/$DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null
+# deregister_dag drops a DAG left behind by an earlier run on the same database.
+# A DAG version is immutable and keyed by the repository's describe output, so
+# re-running after editing a scenario's DAG body — without a new commit — is
+# rejected with 409 "resource already exists" and, worse, would otherwise risk
+# running the PREVIOUS body under the same version. The cluster is recreated per
+# run but the control-plane database is not, so this is what makes the harness
+# re-runnable. A DAG that was never registered is not an error.
+deregister_dag() {
+  "$ROOT/bin/leoflow" dags delete "$1" --deregister --server "$API" --token "$TOKEN" >/dev/null 2>&1 || true
+}
+
+TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" --username admin@leoflow.local --password admin)" \
+  || fatal "could not mint an admin token against $API"
+[ -n "$TOKEN" ] || fatal "empty admin token from $API"
+deregister_dag "$DAG_ID"
+"$ROOT/bin/leoflow" push "$WORKDIR/$DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null \
+  || fatal "pushing $DAG_ID failed — the scenarios below would all report a missing run id"
 
 trigger_run() {
   curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     -d '{}' "$API/api/v2/dags/$DAG_ID/dagRuns" | jq -r '.dag_run_id'
 }
+
 wait_task_running() {  # $1=run
   local deadline; deadline=$(( $(date +%s) + 90 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -346,6 +381,7 @@ ENV PYTHONPATH=/home/leoflow
 DOCKER
   "$ROOT/bin/leoflow" compile "$WORKDIR/$RECOVER_DAG_ID" --image "$RECOVER_DAG_IMAGE" --build --dockerfile Dockerfile -o "$WORKDIR/$RECOVER_DAG_ID/dag.json" >/dev/null
   k3d_import "$CLUSTER" "$RECOVER_DAG_IMAGE" || fatal "C: k3d import of recoverdag failed"
+  deregister_dag "$RECOVER_DAG_ID"
   "$ROOT/bin/leoflow" push "$WORKDIR/$RECOVER_DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null
 }
 
@@ -480,35 +516,45 @@ tasks:
 YAML
   cat > "$WORKDIR/$OUTAGE_DAG_ID/dag.py" <<'PY'
 """outagedag — three independent tasks, each of which succeeds and then loses its
-report because the control plane is down. The sleep is sized so every agent emits
-at least one heartbeat before it terminates: a task instance that never heartbeat
-is skipped by the agent-lost reaper's zero-heartbeat guard, and this scenario is
-worthless unless that reaper is actually armed against all three."""
+report because the control plane is down.
+
+The sleep is sized so every agent emits at least one heartbeat before it
+terminates: a task instance that never heartbeat is skipped by the agent-lost
+reaper's zero-heartbeat guard, and this scenario is worthless unless that reaper
+is armed against all three.
+
+NOTHING IS RETURNED, deliberately. The agent pushes a task's return value to the
+control plane BEFORE it writes the durable outcome record, and that push has no
+deadline of its own, so with the control plane down an agent with a return value
+blocks in the gRPC reconnect and its pod stays Running through the whole outage —
+which is correct behaviour (the value is not lost) but the opposite of what this
+scenario needs: a pod that TERMINATES inside the outage, leaving a record and no
+report. Give a task a return value here and the scenario times out waiting for a
+termination that cannot happen."""
 from __future__ import annotations
 import time
 from airflow.sdk import DAG, task
 
 
-def _work(name: str) -> str:
+def _work(name: str) -> None:
     print(f"outage: {name} START", flush=True)
     time.sleep(50)
     print(f"outage: {name} DONE", flush=True)
-    return name
 
 
 @task
-def alpha() -> str:
-    return _work("alpha")
+def alpha() -> None:
+    _work("alpha")
 
 
 @task
-def bravo() -> str:
-    return _work("bravo")
+def bravo() -> None:
+    _work("bravo")
 
 
 @task
-def charlie() -> str:
-    return _work("charlie")
+def charlie() -> None:
+    _work("charlie")
 
 
 with DAG("outagedag", schedule=None, catchup=False, tags=["chaos"]):
@@ -523,7 +569,9 @@ ENV PYTHONPATH=/home/leoflow
 DOCKER
   "$ROOT/bin/leoflow" compile "$WORKDIR/$OUTAGE_DAG_ID" --image "$OUTAGE_DAG_IMAGE" --build --dockerfile Dockerfile -o "$WORKDIR/$OUTAGE_DAG_ID/dag.json" >/dev/null
   k3d_import "$CLUSTER" "$OUTAGE_DAG_IMAGE" || fatal "D: k3d import of outagedag failed"
-  "$ROOT/bin/leoflow" push "$WORKDIR/$OUTAGE_DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null
+  deregister_dag "$OUTAGE_DAG_ID"
+  "$ROOT/bin/leoflow" push "$WORKDIR/$OUTAGE_DAG_ID/dag.json" --server "$API" --token "$TOKEN" >/dev/null \
+    || fatal "D: pushing $OUTAGE_DAG_ID failed"
 }
 
 scenario_outage_recovery() {
@@ -579,7 +627,7 @@ scenario_outage_recovery() {
     [ "${terminal:-0}" -ge 3 ] && break
     sleep 3
   done
-  [ "${terminal:-0}" -ge 3 ] || { bad "D: only ${terminal:-0}/3 pods terminated during the outage — the outage did not span their termination"; dump_pods; return; }
+  [ "${terminal:-0}" -ge 3 ] || { bad "D: only ${terminal:-0}/3 pods terminated during the outage. Pods still Running means an agent is blocked on a control-plane call BEFORE the durable record — check that no task returns a value (the XCom push precedes the record and has no deadline)"; dump_pods; return; }
   ok "D: all three pods terminated during the outage, records written, no report delivered"
 
   # Fail-closed: with the scheduler dead nothing may have settled these attempts.

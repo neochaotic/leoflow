@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -50,5 +52,34 @@ func TestResilienceLadderWiringFailsOnShortCredentialCeiling(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "auth.max_attempt_credential_lifetime") {
 		t.Errorf("error %q must name the config key the operator has to move", err)
+	}
+}
+
+// TestResilienceLadderWiringWarnsWhenCredentialCeilingDisabled: a non-positive
+// auth.max_attempt_credential_lifetime passes validation (it is the documented
+// "no ceiling" setting) yet silently removes two backstops — unbounded heartbeat
+// renewal and no activeDeadlineSeconds floor on task pods without a declared
+// execution_timeout. The boot WARN is the operator's only signal, so the boot
+// path must emit exactly one WARN naming the key when the ceiling is disabled,
+// and none when it is set.
+func TestResilienceLadderWiringWarnsWhenCredentialCeilingDisabled(t *testing.T) {
+	warn := func(d time.Duration) string {
+		var buf bytes.Buffer
+		cfg := &config.ServerConfig{}
+		cfg.Auth.MaxAttemptCredentialLifetime = d
+		warnStartup(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
+		return buf.String()
+	}
+	for _, d := range []time.Duration{0, -time.Minute} {
+		out := warn(d)
+		if strings.Count(out, "level=WARN") != 1 {
+			t.Errorf("ceiling %v: want exactly one WARN, got %q", d, out)
+		}
+		if !strings.Contains(out, "auth.max_attempt_credential_lifetime") || !strings.Contains(out, "activeDeadlineSeconds") {
+			t.Errorf("ceiling %v: WARN must name the key and the lost pod deadline floor, got %q", d, out)
+		}
+	}
+	if out := warn(24 * time.Hour); out != "" {
+		t.Errorf("a set ceiling must log nothing at boot, got %q", out)
 	}
 }

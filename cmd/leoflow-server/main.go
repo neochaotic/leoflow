@@ -121,6 +121,7 @@ func run() error {
 		return fmt.Errorf("observability setup: %w", err)
 	}
 	defer shutdownTel()
+	warnStartup(cfg, tel.Logger)
 
 	pg, err := openVerifiedPostgres(ctx, cfg.Database)
 	if err != nil {
@@ -351,6 +352,18 @@ func validateStartup(cfg *config.ServerConfig) error {
 		return err
 	}
 	return executor.ValidateResilienceLadder(resilienceLadder(cfg))
+}
+
+// warnStartup surfaces the boot-time settings validateStartup accepts but that
+// remove a resilience backstop — today the disabled credential ceiling, which
+// unbounds heartbeat renewal AND drops the task pod deadline floor. They are
+// documented settings, not errors, so boot proceeds; the WARN is the only
+// operator-visible signal that both guarantees are off. It runs after the
+// logger exists, right after validation has passed.
+func warnStartup(cfg *config.ServerConfig, logger *slog.Logger) {
+	for _, w := range executor.ResilienceLadderWarnings(resilienceLadder(cfg)) {
+		logger.Warn(w)
+	}
 }
 
 // resilienceLadder assembles the effective timing knobs the control-plane

@@ -148,35 +148,50 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The `execution_timeout` diagnosis is no longer lost when the report cannot
   be delivered.** Making the agent's clock fire before the kubelet's produced
-  the diagnosis, but the diagnosis only reached the operator through the
-  ReportState RPC: on the timeout path the agent reported `FAILED` with
-  `execution_timeout: task exceeded Ns limit` while its **durable outcome
-  record** — the termination-message document the reconciler prefers over pod
-  phase — carried only the exit code. So when the control plane was unreachable
-  across the timeout, or the kubelet's `SIGTERM` landed mid-report-retry, the
-  report never arrived and the reconciler settled the attempt from the record,
-  rendering the generic `task failed (exit 255)` — 255 because the agent's own
-  cancel kills the child, a signal death reports exit code `-1`, and the agent
-  clamps that to 255; the durable channel existed
-  and already preferred a record's reason, it just never carried one. The record
-  now carries the classification **alongside** the exit code (new
-  `taskoutcome.FailedBecauseWith`), so the reason survives a report that never
-  lands. Scope: every failure the agent classifies **itself** — the timeout it
-  enforced, and a refused external secret backend, both of which name a cause no
-  observer of a dead pod can reconstruct. An ordinary non-zero exit deliberately
-  records no reason: its message is either a restatement of the exit code the
-  record already carries or raw error text whose detail belongs in the task
-  logs, and the record's own `task failed (exit N)` rendering is the better
-  operator string. New `test/e2e/execution-timeout-e2e.sh` locks the whole seam
-  on a real k3d cluster — the only place a real kubelet stamps
+  the diagnosis, but the diagnosis only travelled on the ReportState RPC: on
+  the timeout path the agent reported `FAILED` with `execution_timeout: task
+  exceeded Ns limit` while its **durable outcome record** — the
+  termination-message document the reconciler prefers over pod phase — carried
+  only the exit code. So when the control plane was unreachable across the
+  timeout, or the kubelet's `SIGTERM` landed mid-report-retry, the report never
+  arrived and the reconciler settled the attempt from the record, serving the
+  generic `task failed (exit 255)`. (255, not 137: the agent's own cancel kills
+  the child, a signal death reports exit code `-1`, and the agent clamps that to
+  255 — so 255 is the value to grep a timed-out attempt for.) The durable
+  channel existed and already preferred a record's reason; it just never carried
+  one. The record now carries the classification **alongside** the exit code
+  (new `taskoutcome.FailedBecauseWith`), so the reason survives a report that
+  never lands.
+
+  Scope: every failure the agent classifies **itself** and can name — the
+  timeout it enforced, a refused external secret backend, and outputs the task
+  produced but the agent could not deliver (which without a classification
+  rendered as `task failed (exit 0)`, a string that reads as a success). The
+  record's reason is a **classification**, never an error's text: the agent maps
+  a failure to one of a closed set of constants and records **no reason at all**
+  for a failure it recognizes nothing in, so an unclassified environment-build
+  error — the XCom fetch's wrapped gRPC error carries the control-plane endpoint
+  and TLS handshake text, and the per-attempt `TMPDIR` failure carries a path —
+  cannot reach a durable field that is served on the task-instance API and
+  readable by anyone with pod read access in the task namespace. An ordinary
+  non-zero exit also records no reason: the record's own `task failed (exit N)`
+  rendering is the better string. On the read side the reconciler now bounds a
+  record's reason like it already bounds every other reason it reports, because
+  the termination message is a file the task's own process can write before it
+  is killed and the kubelet's ceiling there is ~4 KiB against a 240-byte cap.
+
+  New `test/e2e/execution-timeout-e2e.sh` (`make e2e-timeout`) locks the whole
+  seam on a real k3d cluster — the only place a real kubelet stamps
   `pod.Status.StartTime` — asserting that a task declaring
   `execution_timeout_seconds: 10` whose body sleeps far past it settles with
-  `execution_timeout:` in its `error_message`, that its pod's durable record
-  carries the same diagnosis, that a pod created through the real dispatch path
-  carries `activeDeadlineSeconds` equal to the declared timeout plus the startup
-  headroom plus the effective termination grace, and that an agent frozen after
-  `RUNNING` is settled by the agent-lost reaper within ~90-120 s instead of
-  lingering to the pod deadline.
+  `execution_timeout:` in the `failure_reason` the API serves and with a pod
+  whose `status.reason` is *not* `DeadlineExceeded`, that its pod's durable
+  record carries the same diagnosis, that a pod created through the real
+  dispatch path carries `activeDeadlineSeconds` equal to the declared timeout
+  plus the startup headroom plus the effective termination grace, and that an
+  agent frozen after `RUNNING` is settled by the agent-lost reaper inside the
+  window the ladder itself implies (70-150 s) instead of lingering to the pod
+  deadline.
   ([#930](https://github.com/neochaotic/leoflow/issues/930))
 
 - **The pod-lost reaper no longer reaps a task whose pod is still there,

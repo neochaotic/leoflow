@@ -161,6 +161,10 @@ e2e: ## Run the k3d end-to-end smoke test (needs k3d, kubectl, docker, jq; run m
 chaos-runtime: ## Runtime fault-injection chaos e2e (#231 Phase 2): kill scheduler/task pod, assert at-most-once + recovery. Run inside Lima. Destructive.
 	bash test/e2e/chaos-runtime.sh
 
+.PHONY: e2e-timeout
+e2e-timeout: ## Run the k3d execution_timeout e2e (#925/#930: agent clock beats the kubelet, durable reason, agent-lost reap; needs k3d, kubectl, docker, jq, migrate; run make dev-up + make build first)
+	bash test/e2e/execution-timeout-e2e.sh
+
 .PHONY: e2e-split
 e2e-split: ## Run the k3d two-process api/scheduler split e2e (ADR 0049; needs k3d, kubectl, docker, jq; run make dev-up + make build first)
 	bash test/e2e/split-two-process.sh

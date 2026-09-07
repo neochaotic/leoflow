@@ -19,6 +19,11 @@ Package agentrpc implements the control\-plane side of the agent gRPC protocol: 
 - [type AgentTokenMinter](<#AgentTokenMinter>)
 - [type AgentTokenRenewer](<#AgentTokenRenewer>)
 - [type Authenticator](<#Authenticator>)
+- [type InflightHandlers](<#InflightHandlers>)
+  - [func NewInflightHandlers\(\) \*InflightHandlers](<#NewInflightHandlers>)
+  - [func \(c \*InflightHandlers\) Count\(\) int](<#InflightHandlers.Count>)
+  - [func \(c \*InflightHandlers\) StreamInterceptor\(\) grpc.StreamServerInterceptor](<#InflightHandlers.StreamInterceptor>)
+  - [func \(c \*InflightHandlers\) UnaryInterceptor\(\) grpc.UnaryServerInterceptor](<#InflightHandlers.UnaryInterceptor>)
 - [type LogPublisher](<#LogPublisher>)
 - [type LogSink](<#LogSink>)
 - [type PodTaskResolver](<#PodTaskResolver>)
@@ -161,6 +166,55 @@ type Authenticator interface {
 }
 ```
 
+<a name="InflightHandlers"></a>
+## type [InflightHandlers](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/inflight.go#L21-L23>)
+
+InflightHandlers counts the agent RPC handlers currently executing. gRPC exposes no such number, and the bounded graceful stop needs it: past its bound the process force\-closes the transports and waits only briefly for the handlers to return, while a log writer's final Put is bounded far longer, so the process can legitimately exit with handlers still running. Abandoning one is safe — a log object is written by a single atomic Put, so the stored object stays at its previous flush rather than being truncated — but silent, and this count is what makes it visible.
+
+The zero value is not usable; build one with NewInflightHandlers. It is safe for concurrent use.
+
+```go
+type InflightHandlers struct {
+    // contains filtered or unexported fields
+}
+```
+
+<a name="NewInflightHandlers"></a>
+### func [NewInflightHandlers](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/inflight.go#L27>)
+
+```go
+func NewInflightHandlers() *InflightHandlers
+```
+
+NewInflightHandlers returns a zeroed counter to install on a gRPC server via UnaryInterceptor and StreamInterceptor and to read with Count.
+
+<a name="InflightHandlers.Count"></a>
+### func \(\*InflightHandlers\) [Count](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/inflight.go#L30>)
+
+```go
+func (c *InflightHandlers) Count() int
+```
+
+Count reports how many handlers are executing right now.
+
+<a name="InflightHandlers.StreamInterceptor"></a>
+### func \(\*InflightHandlers\) [StreamInterceptor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/inflight.go#L49>)
+
+```go
+func (c *InflightHandlers) StreamInterceptor() grpc.StreamServerInterceptor
+```
+
+StreamInterceptor counts a streaming handler for the duration of its stream. These are the handlers the shutdown log is about: StreamLogs lives as long as its task and an idle warm worker's AwaitAssignment lives indefinitely, so they are what is still open when the bounded stop gives up.
+
+<a name="InflightHandlers.UnaryInterceptor"></a>
+### func \(\*InflightHandlers\) [UnaryInterceptor](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/inflight.go#L33>)
+
+```go
+func (c *InflightHandlers) UnaryInterceptor() grpc.UnaryServerInterceptor
+```
+
+UnaryInterceptor counts a unary handler for the duration of its call.
+
 <a name="LogPublisher"></a>
 ## type [LogPublisher](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L140-L142>)
 
@@ -295,7 +349,7 @@ type SecretsStore interface {
 ```
 
 <a name="Server"></a>
-## type [Server](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L145-L190>)
+## type [Server](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L145-L195>)
 
 Server implements agentv1.AgentServiceServer over a Store and Authenticator.
 
@@ -307,7 +361,7 @@ type Server struct {
 ```
 
 <a name="NewServer"></a>
-### func [NewServer](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L194>)
+### func [NewServer](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L199>)
 
 ```go
 func NewServer(authn Authenticator, store Store, xcomSvc XComService) *Server
@@ -316,7 +370,7 @@ func NewServer(authn Authenticator, store Store, xcomSvc XComService) *Server
 NewServer builds an AgentService server backed by the given authenticator, store, and XCom service.
 
 <a name="Server.AwaitAssignment"></a>
-### func \(\*Server\) [AwaitAssignment](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/await_assignment.go#L57>)
+### func \(\*Server\) [AwaitAssignment](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/await_assignment.go#L58>)
 
 ```go
 func (s *Server) AwaitAssignment(stream agentv1.AgentService_AwaitAssignmentServer) error
@@ -328,7 +382,7 @@ Inert\-when\-off: if warm pools are not wired the handler refuses immediately wi
 
 Identity: the registry key is the worker's AUTHENTICATED identity from the stream's bearer token \(via identify\), NOT the dag\_version\_id in the register payload — a worker cannot claim an arbitrary identity through the message. The payload's dag\_version\_id only names which pool the worker serves and must be non\-empty.
 
-After registration two flows run concurrently: the receive loop drains WorkerMessages \(acks feed the H1 lease machine, slot\-free frees the worker\) while the main select pumps assignments from the worker's outbound channel down the stream. The handler exits — deregistering the worker \(defer\) — on context cancellation, a stream Send error, or the receive loop ending \(clean EOF or a transport error\).
+After registration two flows run concurrently: the receive loop drains WorkerMessages \(acks feed the H1 lease machine, slot\-free frees the worker\) while the main select pumps assignments from the worker's outbound channel down the stream. The handler exits — deregistering the worker \(defer\) — on context cancellation, the control plane's shutdown signal \(SetShutdown\), a stream Send error, or the receive loop ending \(clean EOF or a transport error\).
 
 <a name="Server.EnableWarmPools"></a>
 ### func \(\*Server\) [EnableWarmPools](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/await_assignment.go#L33>)
@@ -351,7 +405,7 @@ ExchangeToken validates the agent's projected ServiceAccount token \(bootstrap b
 It fails closed at every step: Unimplemented when the exchange is not wired, PermissionDenied on an insecure channel, Unauthenticated on a missing or rejected projected token, and Internal when the reviewed pod cannot be resolved to an attempt \(never mint an unscoped or misattributed token\). The minted token and the presented projected token are never logged.
 
 <a name="Server.FetchXCom"></a>
-### func \(\*Server\) [FetchXCom](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L428>)
+### func \(\*Server\) [FetchXCom](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L439>)
 
 ```go
 func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (*agentv1.FetchXComResponse, error)
@@ -369,7 +423,7 @@ func (s *Server) GetConnections(ctx context.Context, _ *agentv1.GetConnectionsRe
 GetConnections returns the calling task's tenant Connections as Airflow URIs for the agent to export as AIRFLOW\_CONN\_\<CONN\_ID\>.
 
 <a name="Server.GetTaskSpec"></a>
-### func \(\*Server\) [GetTaskSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L237>)
+### func \(\*Server\) [GetTaskSpec](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L248>)
 
 ```go
 func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest) (*agentv1.TaskSpec, error)
@@ -387,7 +441,7 @@ func (s *Server) GetVariables(ctx context.Context, _ *agentv1.GetVariablesReques
 GetVariables returns the calling task's tenant Variables for the agent to export as AIRFLOW\_VAR\_\<KEY\>.
 
 <a name="Server.Heartbeat"></a>
-### func \(\*Server\) [Heartbeat](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L328>)
+### func \(\*Server\) [Heartbeat](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L339>)
 
 ```go
 func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*agentv1.HeartbeatResponse, error)
@@ -396,7 +450,7 @@ func (s *Server) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*a
 Heartbeat stamps the per\-TI liveness signal \(\#128\) and returns the server clock so the agent can detect skew. A storage error stamping the heartbeat is logged but does not fail the RPC — failing the call would risk the agent terminating itself unnecessarily on a transient DB blip. The scheduler reaper would, in the worst case, fail the TI as agent\_lost on the next tick; correct under "do no harm" \(ADR 0031\).
 
 <a name="Server.PushXCom"></a>
-### func \(\*Server\) [PushXCom](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L400>)
+### func \(\*Server\) [PushXCom](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L411>)
 
 ```go
 func (s *Server) PushXCom(ctx context.Context, req *agentv1.PushXComRequest) (*agentv1.PushXComResponse, error)
@@ -405,7 +459,7 @@ func (s *Server) PushXCom(ctx context.Context, req *agentv1.PushXComRequest) (*a
 PushXCom stores a value the task produced, keyed by the caller's identity. Size/schema violations are returned as a rejection, not a transport error, so the agent can fail the task with a clear reason.
 
 <a name="Server.Register"></a>
-### func \(\*Server\) [Register](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L225>)
+### func \(\*Server\) [Register](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L236>)
 
 ```go
 func (s *Server) Register(ctx context.Context, _ *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error)
@@ -414,7 +468,7 @@ func (s *Server) Register(ctx context.Context, _ *agentv1.RegisterRequest) (*age
 Register acknowledges an agent's startup and returns the server clock.
 
 <a name="Server.ReportState"></a>
-### func \(\*Server\) [ReportState](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L278>)
+### func \(\*Server\) [ReportState](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L289>)
 
 ```go
 func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateRequest) (*agentv1.ReportStateResponse, error)
@@ -441,7 +495,7 @@ func (s *Server) SetLivenessGate(checker TaskLivenessChecker, mode string)
 SetLivenessGate attaches the read\-only task\-instance liveness predicate the secret path consults, in the given mode \("observe" | "enforce", ADR 0055 E2\). An unrecognized mode falls back to observe — the safe, non\-denying default. A nil checker leaves the gate off \(delivery unchanged\), so the gate is opt\-in.
 
 <a name="Server.SetLogPublisher"></a>
-### func \(\*Server\) [SetLogPublisher](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L222>)
+### func \(\*Server\) [SetLogPublisher](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L233>)
 
 ```go
 func (s *Server) SetLogPublisher(p LogPublisher)
@@ -450,7 +504,7 @@ func (s *Server) SetLogPublisher(p LogPublisher)
 SetLogPublisher attaches the live\-tail publisher \(optional\). When set, StreamLogs publishes each line for the UI's live tail.
 
 <a name="Server.SetLogSink"></a>
-### func \(\*Server\) [SetLogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L218>)
+### func \(\*Server\) [SetLogSink](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L229>)
 
 ```go
 func (s *Server) SetLogSink(sink LogSink)
@@ -495,13 +549,13 @@ func (s *Server) SetSecrets(store SecretsStore, allowInsecure bool)
 SetSecrets attaches the secrets store. allowInsecure permits serving secrets over a non\-TLS channel — for local/dev only; production must use TLS \(the handlers fail closed otherwise\). See ADR 0021 / issue \#58.
 
 <a name="Server.SetShutdown"></a>
-### func \(\*Server\) [SetShutdown](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L214>)
+### func \(\*Server\) [SetShutdown](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L225>)
 
 ```go
 func (s *Server) SetShutdown(ctx context.Context)
 ```
 
-SetShutdown wires the control plane's shutdown context: once ctx ends, every open StreamLogs returns Unavailable after closing \(flushing\) its log writer, so the gRPC graceful stop that follows completes instead of waiting for the tasks themselves to finish. The agent treats the closed stream as best\-effort log delivery and keeps running its task.
+SetShutdown wires the control plane's shutdown context: once ctx ends, every long\-lived stream returns Unavailable, so the gRPC graceful stop that follows completes instead of waiting for the tasks themselves to finish. An open StreamLogs first closes \(flushes\) its log writer; the agent treats the closed stream as best\-effort log delivery and keeps running its task. A StreamLogs that arrives AFTER the signal is refused before its writer is opened — the listener keeps accepting for the rest of the shutdown, and an opened\-then\- abandoned writer Puts an empty object over an attempt that is logging elsewhere. An open AwaitAssignment ends too — an idle warm worker holds one open indefinitely, so leaving it out would make the forced stop the normal shutdown path.
 
 <a name="Server.SetTokenExchange"></a>
 ### func \(\*Server\) [SetTokenExchange](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/exchange.go#L69>)
@@ -513,7 +567,7 @@ func (s *Server) SetTokenExchange(reviewer TokenReviewer, resolver PodTaskResolv
 SetTokenExchange wires the projected\-SA\-token exchange \(ADR 0055 Fix \#3\): the TokenReview client, the pod→task\-instance resolver, the JWT minter, and the TTL of the minted task\-scoped token. allowInsecure permits running the exchange over a non\-TLS channel \(dev only\); production must use TLS \(ExchangeToken fails closed otherwise, like the secret path\). A nil reviewer leaves the exchange OFF — ExchangeToken then reports Unimplemented — which is the default \(env\-var\) transport, so a deployment that does not opt in is byte\-identical to today.
 
 <a name="Server.SetTokenRenewal"></a>
-### func \(\*Server\) [SetTokenRenewal](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L205>)
+### func \(\*Server\) [SetTokenRenewal](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L210>)
 
 ```go
 func (s *Server) SetTokenRenewal(renewer AgentTokenRenewer, renewalTTL, maxAttemptLifetime time.Duration)
@@ -531,13 +585,13 @@ func (s *Server) SetWarmPools(reg *WorkerRegistry)
 SetWarmPools wires a prebuilt warm\-worker assignment registry \(ADR 0058 N1b\). A nil registry \(the default\) leaves AwaitAssignment inert — it returns FailedPrecondition — so with execution.warm\_pools\_enabled off the transport is completely dormant and no running path changes. Used by tests to inject a registry with a deterministic lease; callers wire it via EnableWarmPools.
 
 <a name="Server.StreamLogs"></a>
-### func \(\*Server\) [StreamLogs](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L466>)
+### func \(\*Server\) [StreamLogs](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L479>)
 
 ```go
 func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err error)
 ```
 
-StreamLogs receives the task's log lines and writes them through the sink, flushing on stream end so the logs survive the pod. The stream also ends when the control plane shuts down \(SetShutdown\), so the flush runs before exit.
+StreamLogs receives the task's log lines and writes them through the sink, flushing on stream end so the logs survive the pod. The stream also ends when the control plane shuts down \(SetShutdown\), so the flush runs before exit — and a stream that ARRIVES after that signal is refused before any writer is opened, so it leaves no empty object behind.
 
 <a name="Store"></a>
 ## type [Store](<https://github.com/neochaotic/leoflow/blob/main/internal/agentrpc/server.go#L107-L126>)

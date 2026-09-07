@@ -109,6 +109,12 @@ func TestReaperReapOnceDrivesReapers(t *testing.T) {
 
 // staleEverythingStore serves one long-stale candidate to EVERY reaper, so a
 // test can prove that a gate stops all five destructive paths at once.
+//
+// If you grow this fixture, note that gateWiringStore exists precisely so the
+// "exactly one gate skip per reaper" assertion does not read these counts: that
+// test is about the wiring, and a second candidate here would have made it fail
+// while blaming the wiring instead. Add candidates freely; add them there only
+// deliberately.
 func staleEverythingStore() *fakeReaperStore {
 	past := time.Now().UTC().Add(-1 * time.Hour)
 	return &fakeReaperStore{

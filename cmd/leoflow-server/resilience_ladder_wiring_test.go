@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -15,8 +16,14 @@ import (
 
 // ceilingEnv is the env var viper's AutomaticEnv binds to
 // auth.max_attempt_credential_lifetime, the one ladder rung an operator can
-// move. It is the ONLY non-hermetic input to the wired ladder: every other rung
-// is a build-time constant, and LoadServer("", nil) reads no config file.
+// move. It is the only non-hermetic input to the wired ladder's VALUES: every
+// other rung is a build-time constant, and LoadServer("", nil) reads no config
+// file. It is not the only environment this test touches — LoadServer itself
+// still surfaces a malformed LEOFLOW_* duration — but that fails with its own
+// message naming the key, which is the opposite of the misleading failure this
+// unset exists to prevent. The unset is explicit rather than an empty string
+// because viper only treats an empty env var as unset while AllowEmptyEnv is
+// false, and this should not depend on that flag.
 const ceilingEnv = "LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME"
 
 // TestResilienceLadderWiringValidates pins that the ladder the server actually
@@ -113,6 +120,21 @@ func TestResilienceLadderWiringWarnsWhenCredentialCeilingDisabled(t *testing.T) 
 		}
 		if !strings.Contains(out, "value="+d.String()) {
 			t.Errorf("ceiling %v: WARN must carry the offending value as an attribute, got %q", d, out)
+		}
+		// The text handler renders a duration the same whether the attribute is
+		// the time.Duration or its String(), so it cannot see the difference
+		// that matters to whoever writes the alert: under the JSON handler the
+		// production one, per observability.log_format's default — a duration
+		// is a number of nanoseconds, while a string would be "0s". The godoc
+		// on LadderWarning.Value promises the numeric shape, so pin it here or
+		// a one-token change flips it invisibly.
+		var jbuf bytes.Buffer
+		cfgJSON := &config.ServerConfig{}
+		cfgJSON.Auth.MaxAttemptCredentialLifetime = d
+		warnStartup(cfgJSON, slog.New(slog.NewJSONHandler(&jbuf, nil)))
+		if got := jbuf.String(); !strings.Contains(got, `"config_key":"auth.max_attempt_credential_lifetime"`) ||
+			!strings.Contains(got, fmt.Sprintf(`"value":%d`, d.Nanoseconds())) {
+			t.Errorf("ceiling %v: the JSON WARN must carry config_key and a numeric nanosecond value, got %s", d, got)
 		}
 	}
 	if out := warn(24 * time.Hour); out != "" {

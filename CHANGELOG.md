@@ -146,6 +146,37 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and deliberately never renders a literal `0`, which would be SIGKILL with
   nothing drained.
 
+- **The `execution_timeout` diagnosis is no longer lost when the report cannot
+  be delivered.** Making the agent's clock fire before the kubelet's produced
+  the diagnosis, but the diagnosis only reached the operator through the
+  ReportState RPC: on the timeout path the agent reported `FAILED` with
+  `execution_timeout: task exceeded Ns limit` while its **durable outcome
+  record** — the termination-message document the reconciler prefers over pod
+  phase — carried only the exit code. So when the control plane was unreachable
+  across the timeout, or the kubelet's `SIGTERM` landed mid-report-retry, the
+  report never arrived and the reconciler settled the attempt from the record,
+  rendering the generic `task failed (exit 137)`; the durable channel existed
+  and already preferred a record's reason, it just never carried one. The record
+  now carries the classification **alongside** the exit code (new
+  `taskoutcome.FailedBecauseWith`), so the reason survives a report that never
+  lands. Scope: every failure the agent classifies **itself** — the timeout it
+  enforced, and a refused external secret backend, both of which name a cause no
+  observer of a dead pod can reconstruct. An ordinary non-zero exit deliberately
+  records no reason: its message is either a restatement of the exit code the
+  record already carries or raw error text whose detail belongs in the task
+  logs, and the record's own `task failed (exit N)` rendering is the better
+  operator string. New `test/e2e/execution-timeout-e2e.sh` locks the whole seam
+  on a real k3d cluster — the only place a real kubelet stamps
+  `pod.Status.StartTime` — asserting that a task declaring
+  `execution_timeout_seconds: 10` whose body sleeps far past it settles with
+  `execution_timeout:` in its `error_message`, that its pod's durable record
+  carries the same diagnosis, that a pod created through the real dispatch path
+  carries `activeDeadlineSeconds` equal to the declared timeout plus the startup
+  headroom plus the effective termination grace, and that an agent frozen after
+  `RUNNING` is settled by the agent-lost reaper within ~90-120 s instead of
+  lingering to the pod deadline.
+  ([#930](https://github.com/neochaotic/leoflow/issues/930))
+
 - **The pod-lost reaper no longer reaps a task whose pod is still there,
   finished.** Its liveness question returned one bool for two different states —
   "no pod for this attempt at all" and "a pod that exists in a terminal phase" —

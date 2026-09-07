@@ -23,14 +23,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pins that last-wins ordering so nobody reverses it. The installation guide's
   **Production hardening** section, which mentioned none of the four flips, now
   names the three `auth.*` ones with their permissive-by-default values and links
-  the table that already compares them, splits the task-pod NetworkPolicy out of
-  the control-plane bullet it was conflated with, and carries the caveat that
+  the table that already compares them, and carries the caveat that
   makes the scoping flip breaking: under `enforce` a DAG that declares **nothing**
   receives **nothing**. Relatedly, the two pages that prescribe the
   observe-then-flip arc now state what a clean scope-warning trail does *not*
-  prove — the warning fires only on a strict non-empty subset, so a DAG that
-  declares nothing never appears in the trail even though it is the population
-  the flip breaks (#800; the code half of that is still open). The RC cluster
+  prove. The warning counts only declared names that actually resolve, so two
+  populations never appear in the trail: a DAG that declares nothing, and a DAG
+  whose declared names no longer exist in the vault — an all-stale declaration
+  counts as zero, which is what secret rotation produces. Both receive the whole
+  vault today and nothing under `enforce` (#800; the code half is still open). The RC cluster
   validation runbook gains the matching assertion, so a green RC stops certifying
   past the blind spot.
 

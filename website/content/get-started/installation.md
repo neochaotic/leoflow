@@ -396,7 +396,9 @@ declare nothing and would break on the flip. Land it the way any breaking
 security change lands: leave `permissive` on while your DAGs adopt
 [declarations](/author-dags/variables-connections/#declare-what-a-task-consumes),
 then flip. Note what the observation period can and cannot tell you — the
-scope-warning trail only covers DAGs that *do* declare
+scope-warning trail covers only DAGs whose declarations still resolve, so it
+sees neither a DAG that declares nothing nor one whose declared names have since
+been deleted from the vault
 ([#800](https://github.com/neochaotic/leoflow/issues/800)).
 {{% /alert %}}
 

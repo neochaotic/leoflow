@@ -84,9 +84,13 @@ The control plane's secret-delivery policy (`auth.secret_scoping`, [ADR
   every task regardless of declaration, and only logs a warning when a task's
   declared set is narrower than what it received. An **undeclared** Variable or
   Connection still resolves — `Variable.get` does **not** return empty under
-  this default. A clean warning trail proves only that no *declaring* DAG is
-  over-served; it does **not** prove that no DAG would lose secrets under
-  `enforce`, because a DAG that declares nothing is never warned about
+  this default. A clean warning trail proves only that no DAG whose
+  declarations still *resolve* is over-served; it does **not** prove that no DAG
+  would lose secrets under `enforce`. Two populations never appear in the trail:
+  a DAG that declares nothing, and a DAG whose declared names no longer exist in
+  the vault — the warning counts only declared names that actually resolve, so an
+  all-stale declaration counts as zero. Both receive the whole vault today and
+  nothing under `enforce`
   ([#800](https://github.com/neochaotic/leoflow/issues/800)).
 - **`enforce`** delivers **only** the declared subset — an undeclared name is
   not delivered, and `Variable.get`/`BaseHook.get_connection` for it comes back

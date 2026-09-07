@@ -131,6 +131,17 @@ The rc.3 tranche (#722–#729). ✔ = also unit/helm-verified; ★ = **only a re
   receive **nothing** after the flip. Until #800's code half lands, this row is
   the reminder that a clean trail is not evidence; when it lands, this row
   inverts — the run must then produce a warning naming zero declarations.
+- **#800 stale-declaration blind spot** — the second population the trail never
+  shows, and the likelier one in practice, since secret rotation produces it. The
+  warning counts only declared names that actually *resolve*, so a DAG whose
+  declarations all point at names since deleted from the vault collapses to zero
+  declared and never warns — registration-time validation (#724) guards the
+  moment of registration, not later deletion. With `secretScoping=permissive`,
+  register a DAG declaring `conn_a`, run it, then delete `conn_a` from the vault
+  and run it again. **PASS (today's behavior):** the second run receives **every**
+  connection in the vault and `GET /api/v2/eventLogs` shows **no**
+  `secret.scope_warning` row for it. Flip that same DAG to `enforce` and confirm
+  it receives **nothing** — and that no audit row explains why.
 - **#723 reaper try-number ★** — see §4.2.
 - **#724 validation 400 ✔** — register a DAG version declaring an unknown
   connection. **PASS:** API returns **400** (not 500); message points at

@@ -15,35 +15,47 @@
 # from outside, which cannot name a timeout. A unit test can pin each half, but
 # only a kubelet can run the race.
 #
+# "Visible" throughout means SERVED on the task-instance API (`failure_reason`),
+# which is where this script reads it. The UI does not render the field, so no
+# assertion here says anything about what an operator sees on a screen.
+#
 # The scenario declares `execution_timeout_seconds: 10` on a task that sleeps
 # far past it, with the image PRE-LOADED into the cluster so the startup delta
 # is a few seconds and the run stays fast.
 #
 # What is red before #925, precisely. Assertion 3 is red UNCONDITIONALLY: the
 # pod deadline was the declared timeout itself, so 10 rather than 220, on any
-# host. Assertion 1 — the operator-visible consequence assertion 3 exists to
+# host. Assertion 1 — the API-visible consequence assertion 3 exists to
 # produce — is red wherever the startup the agent's clock does not cover
 # exceeds the kubelet's deadline-check granularity, which is every real
 # cluster (the image pull and volume mount dominate there, and the kubelet then
 # killed at 10s from StartTime while the agent would only fire at 13-15s, so
-# the operator got the generic container-terminated reason). On a warm local
-# k3d with the image already imported that startup is sub-second, so assertion
-# 1 alone is a coin flip HERE — which is exactly why assertion 3 asserts the
-# arithmetic directly rather than inferring it from the outcome.
+# the task instance's served reason was the generic container-terminated one).
+# On a warm local k3d with the image already imported that startup is
+# sub-second, so assertion 1 alone is a coin flip HERE — which is exactly why
+# assertion 3 asserts the arithmetic directly rather than inferring it from the
+# outcome.
 #
 # Four assertions:
-#   1. the timed-out task instance's error_message names `execution_timeout:`
-#      (served as `failure_reason` on the API) — the agent won the race;
-#   2. the pod's DURABLE OUTCOME RECORD carries the same diagnosis (#930), so
-#      the reason survives a report that is never delivered — the control plane
-#      unreachable across the timeout, or SIGTERM landing mid-retry;
+#   1. the timed-out task instance's `failure_reason` names `execution_timeout:`
+#      — the agent won the race — AND the sleeper pod's own `status.reason` is
+#      NOT `DeadlineExceeded`, which names the race winner directly rather than
+#      inferring it from the message. The pod-level check is strictly tighter:
+#      it also catches the agent's report landing and the kubelet then killing
+#      the pod anyway;
+#   2. the pod's DURABLE OUTCOME RECORD carries the same diagnosis (#930). This
+#      asserts the BYTES are on the pod, not that the reconciler rendered them:
+#      the report does land in this scenario, so the record is the channel a
+#      LOST report would be settled from, and the settling itself is covered by
+#      internal/executor's unit tests;
 #   3. a pod created through the REAL DISPATCH PATH carries
 #      activeDeadlineSeconds == declared timeout + startup headroom + effective
 #      termination grace — locking the seam through dispatch, not just the pod
 #      builder, which a unit test already covers;
 #   4. an agent frozen after RUNNING has its attempt settled by the AGENT-LOST
-#      REAPER within ~90-120s, instead of lingering to the pod deadline (which
-#      for a task declaring no timeout is the 24h credential ceiling).
+#      REAPER inside a window bounded by the ladder itself (75-135s after the
+#      freeze; see REAP_MIN/REAP_MAX), instead of lingering to the pod deadline
+#      (which for a task declaring no timeout is the 24h credential ceiling).
 #
 # Requirements: k3d, kubectl, docker, jq, curl, the golang-migrate CLI
 # (`migrate`), `make build`, and a running dev Postgres/Redis (`make dev-up`).
@@ -91,20 +103,31 @@ GRACE_TERM=30
 WANT_DEADLINE=$((TASK_TIMEOUT + STARTUP_HEADROOM + GRACE_TERM))
 
 # ── The agent-lost window under assertion (assertion 4) ──────────────────────
-# defaultAgentLostThreshold is 90s and the leader's maintenance loop sweeps
-# every reconcileInterval = 30s, so a reap lands 90-120s after the last
-# heartbeat (which is at most one 15s heartbeat interval before the freeze).
-# The bounds are deliberately loose on both sides: the LOWER bound catches a
-# reaper that fired before its threshold (a false reap of a live task), the
-# UPPER bound is what separates "the reaper settled it" from "it lingered to the
-# pod deadline" — 24h for a task that declares no timeout, so any minute-scale
-# ceiling proves the point.
-REAP_MIN=45
-REAP_MAX=240
+# The rungs: defaultAgentLostThreshold = 90s (reaper.go), the leader's
+# maintenance loop sweeps every reconcileInterval = 30s (leoflow-server), and
+# the agent heartbeats every DefaultHeartbeatInterval = 15s (ttl.go).
+#
+# FLOOR. The reaper measures silence from the LAST heartbeat, which is at most
+# one interval before the freeze, so the earliest LEGITIMATE reap is
+# threshold - heartbeat = 75s after the freeze. A floor below that tolerates a
+# reaper firing before its own threshold — which in production is a false reap
+# of a live task — so it is set just under 75 for clock slack, not far under.
+#
+# CEILING. Worst case the freeze lands just after a sweep, so the reap is
+# threshold + sweep + heartbeat = 135s, plus slack. The ceiling separates "the
+# reaper settled it" from "it lingered to the pod deadline" (24h for a task
+# declaring no timeout), and a tight one also makes this scenario go RED rather
+# than silently drift if a rung ever moves.
+REAP_MIN=70
+REAP_MAX=150
 # defaultSettlingGrace: NO reaper fires until this long after the process takes
 # leadership, so the freeze must not happen inside that window or assertion 4
 # would measure the gate rather than the reaper.
 SETTLING_GRACE=180
+
+# RECORD_GRACE bounds the wait for the kubelet to PUBLISH the termination
+# message after the task instance has already gone failed (see the sleeper loop).
+RECORD_GRACE=60
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 dump_pods() {
@@ -134,9 +157,18 @@ trap cleanup EXIT
 api() { curl -fsS --max-time "$CURL_MAX_TIME" -H "Authorization: Bearer $TOKEN" "$API$1"; }
 
 # task_field prints one field of one task instance in the run, or empty.
+#
+# A transient curl failure prints EMPTY instead of failing. Every caller is an
+# assignment from a command substitution, and under `set -euo pipefail` such an
+# assignment takes the substitution's exit status — so one network blip would
+# kill the run with a bare exit code and no pod dump, at whichever line happened
+# to be executing. Empty flows into the polling loops instead, whose own
+# deadlines fail by name and dump the pods, and into the two reason captures,
+# which assert on content and fail by name too.
 task_field() {
-  api "/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances" \
-    | jq -r --arg t "$1" --arg f "$2" '.task_instances[] | select(.task_id==$t) | .[$f] // ""'
+  api "/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances" 2>/dev/null \
+    | jq -r --arg t "$1" --arg f "$2" '.task_instances[] | select(.task_id==$t) | .[$f] // ""' \
+    || true
 }
 
 # task_pod prints the name of the task pod dispatched for one task_id, or empty.
@@ -195,8 +227,8 @@ from airflow.sdk import DAG, task
 @task
 def sleeper() -> None:
     # Declares execution_timeout_seconds: 10 (leoflow.yaml) and runs far past it.
-    # The agent's own clock must interrupt this, and the operator must see the
-    # timeout named.
+    # The agent's own clock must interrupt this, and the timeout must be named
+    # on the task instance the API serves.
     print("sleeper: running past the declared execution_timeout", flush=True)
     time.sleep(600)
 
@@ -281,26 +313,42 @@ RUN_ID="$(curl -fsS --max-time "$CURL_MAX_TIME" -X POST -H "Authorization: Beare
 log "Waiting for 'sleeper' to fail on its execution_timeout"
 POD_DEADLINE=""
 POD_RECORD=""
+POD_STATUS_REASON=""
+FAILED_AT=0
 deadline=$(( $(date +%s) + 300 ))
 while :; do
-  # Capture the pod's spec + durable record WHILE the pod exists: the reconciler
-  # garbage-collects a finished pod after its grace period, and these two are the
-  # only place assertions 2 and 3 can be read from.
+  # Capture the pod's spec, status reason and durable record WHILE the pod
+  # exists: the reconciler garbage-collects a finished pod after its grace
+  # period, and these are the only place assertions 1 (pod half), 2 and 3 can be
+  # read from. Each is captured once and then kept.
   pod="$(task_pod sleeper)"
   if [ -n "$pod" ]; then
     [ -n "$POD_DEADLINE" ] || POD_DEADLINE="$(kubectl get pod -n "$NS" "$pod" \
       -o jsonpath='{.spec.activeDeadlineSeconds}' 2>/dev/null || true)"
     [ -n "$POD_RECORD" ] || POD_RECORD="$(kubectl get pod -n "$NS" "$pod" \
       -o jsonpath='{range .status.containerStatuses[?(@.name=="task")]}{.state.terminated.message}{end}' 2>/dev/null || true)"
+    [ -n "$POD_STATUS_REASON" ] || POD_STATUS_REASON="$(kubectl get pod -n "$NS" "$pod" \
+      -o jsonpath='{.status.reason}' 2>/dev/null || true)"
   fi
   state="$(task_field sleeper state)"
-  echo "  sleeper=$state pod=${pod:-none} deadline=${POD_DEADLINE:-?}"
+  echo "  sleeper=$state pod=${pod:-none} deadline=${POD_DEADLINE:-?} record=${POD_RECORD:+present}"
   case "$state" in
-    failed) break ;;
     success) fail "'sleeper' succeeded — it must be interrupted by its execution_timeout" ;;
+    failed)
+      # Break on the RECORD, not on the state. The task instance flips to failed
+      # the moment the agent's report lands, which is a second or two BEFORE the
+      # kubelet reads the termination-message file and publishes it on pod
+      # status — so breaking on the state alone races assertion 2 into reading an
+      # empty string it was simply too early for. Waiting costs nothing: the
+      # finished-pod collection grace is ~10 minutes.
+      [ -n "$POD_RECORD" ] && break
+      [ "$FAILED_AT" != 0 ] || FAILED_AT="$(date +%s)"
+      [ "$(( $(date +%s) - FAILED_AT ))" -lt "$RECORD_GRACE" ] \
+        || fail "'sleeper' has been failed for ${RECORD_GRACE}s and its pod still publishes no termination message — the kubelet never surfaced the agent's durable record (pod ${pod:-gone})"
+      ;;
   esac
   [ "$(date +%s)" -lt "$deadline" ] || fail "timeout waiting for 'sleeper' to fail"
-  sleep 5
+  sleep 2
 done
 
 REASON="$(task_field sleeper failure_reason)"
@@ -310,7 +358,21 @@ case "$REASON" in
   *) fail "sleeper error_message = '${REASON}', want it to contain 'execution_timeout:' — the kubelet won the race, so the agent's diagnosis was lost (#925)" ;;
 esac
 
-log "Asserting the DURABLE outcome record carries the same diagnosis (#930)"
+log "Asserting the kubelet did NOT deadline-kill the sleeper pod"
+# The tightest statement of "the agent won the race", and tighter than the
+# message assertion above: the kubelet stamps status.reason=DeadlineExceeded when
+# its own activeDeadlineSeconds fires, so this also catches the agent reporting
+# first and the kubelet killing the pod anyway a moment later.
+case "$POD_STATUS_REASON" in
+  DeadlineExceeded) fail "the sleeper pod's status.reason is 'DeadlineExceeded' — the kubelet's activeDeadlineSeconds fired, so the kubelet was the one that ended the pod (#925)" ;;
+  *) log "sleeper pod status.reason: ${POD_STATUS_REASON:-<none, as expected>}" ;;
+esac
+
+log "Asserting the pod's DURABLE outcome record carries the same diagnosis (#930)"
+# This asserts the reason BYTES are on the pod. It does not assert that the
+# reconciler rendered them: the report does land here, so the record is the
+# channel a LOST report would be settled from, and that settling is unit-covered
+# in internal/executor.
 [ -n "$POD_RECORD" ] || fail "the sleeper pod left no termination-message record; a lost report would settle as a bare exit code"
 case "$POD_RECORD" in
   *execution_timeout*) log "durable record: $POD_RECORD" ;;
@@ -359,8 +421,23 @@ CID="${CID#*://}"
 [ -n "$CID" ] || fail "could not read the keeper pod's container id"
 AGENT_PID="$(docker exec "$NODE" crictl inspect -o json "$CID" 2>/dev/null | jq -r '.info.pid // empty')"
 [ -n "$AGENT_PID" ] || fail "could not resolve the agent's host pid for container $CID via crictl on $NODE"
+# Verify the pid IS the agent before signalling it. A stale or wrong pid would
+# otherwise be signalled harmlessly and assertion 4 would fail four minutes
+# later blaming the reaper for a freeze that never happened.
+AGENT_CMD="$(docker exec "$NODE" /bin/sh -c "tr '\0' ' ' < /proc/$AGENT_PID/cmdline" 2>/dev/null || true)"
+case "$AGENT_CMD" in
+  *leoflow-agent*) : ;;
+  *) fail "host pid $AGENT_PID is not the agent (cmdline: '${AGENT_CMD:-<unreadable>}') — refusing to signal it" ;;
+esac
 docker exec "$NODE" /bin/sh -c "kill -STOP $AGENT_PID" || fail "SIGSTOP of the agent (pid $AGENT_PID) failed"
 FROZE_AT="$(date +%s)"
+# And verify the signal TOOK. A dropped SIGSTOP leaves a heartbeating agent, and
+# assertion 4 would then time out pointing at the reaper.
+AGENT_STATE="$(docker exec "$NODE" /bin/sh -c "grep '^State:' /proc/$AGENT_PID/status" 2>/dev/null || true)"
+case "$AGENT_STATE" in
+  *T*stopped*) log "agent pid $AGENT_PID is ${AGENT_STATE#State:}" ;;
+  *) fail "SIGSTOP did not stop the agent (pid $AGENT_PID): /proc status says '${AGENT_STATE:-<unreadable>}', want the stopped state 'T (stopped)'" ;;
+esac
 log "Agent frozen (host pid $AGENT_PID); expecting the agent-lost reaper in ${REAP_MIN}-${REAP_MAX}s"
 
 deadline=$(( FROZE_AT + REAP_MAX ))
@@ -371,13 +448,13 @@ while :; do
   [ "$state" = failed ] && break
   [ "$now" -lt "$deadline" ] \
     || fail "'keeper' was still '$state' ${REAP_MAX}s after its agent stopped heartbeating — the agent-lost reaper did not settle it, so the attempt lingers to the pod deadline (the 24h credential ceiling)"
-  sleep 5
+  sleep 2
 done
 REAP_SECS=$(( $(date +%s) - FROZE_AT ))
 KEEPER_REASON="$(task_field keeper failure_reason)"
 log "keeper settled at t+${REAP_SECS}s with error_message: ${KEEPER_REASON:-<empty>}"
 [ "$REAP_SECS" -ge "$REAP_MIN" ] \
-  || fail "'keeper' was settled ${REAP_SECS}s after the freeze, under the ${REAP_MIN}s floor — a reaper firing before its threshold would also false-reap live tasks"
+  || fail "'keeper' was settled ${REAP_SECS}s after the freeze, under the ${REAP_MIN}s floor — the earliest legitimate reap is the 90s agent-lost threshold minus one 15s heartbeat interval, so anything below this is a reaper firing before its own threshold, which in production false-reaps live tasks"
 case "$KEEPER_REASON" in
   *agent_lost*) : ;;
   *) fail "keeper error_message = '${KEEPER_REASON}', want it to name agent_lost — something other than the agent-lost reaper settled the attempt" ;;

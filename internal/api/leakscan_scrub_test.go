@@ -1,6 +1,7 @@
 package api
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -33,10 +34,25 @@ func TestLeakScanTargetStillSeesARealLeak(t *testing.T) {
 		`unique constraint \"dag_versions_unique\" (SQLSTATE 23505)",` +
 		`"instance":"/api/v2/dags/` + dagID + `/versions"}`
 
+	// Assert against the tokens THIS fixture carries, not pgLeaks: iterating
+	// the shared list would require every future addition to it to appear in
+	// this hand-written body, so hardening the scan would turn the fast suite
+	// red and the obvious "fix" would be to un-harden it.
 	scrubbed := leakScanTarget(body, dagID)
-	for _, leak := range pgLeaks {
+	for _, leak := range []string{"23505", "dag_versions_unique", "SQLSTATE"} {
 		if !strings.Contains(scrubbed, leak) {
 			t.Errorf("scrubbing hid a real leak (%q) from the scan: %s", leak, scrubbed)
+		}
+	}
+}
+
+// TestPgLeaksCoversTheKnownPgInternals guards the other direction. Deleting a
+// token from pgLeaks makes every test above easier and silently weakens the
+// integration assertion that consumes it, so the floor is pinned here.
+func TestPgLeaksCoversTheKnownPgInternals(t *testing.T) {
+	for _, want := range []string{"23505", "dag_versions_unique", "SQLSTATE"} {
+		if !slices.Contains(pgLeaks, want) {
+			t.Errorf("pgLeaks no longer covers %q; the 409 leak scan is weaker than it was", want)
 		}
 	}
 }

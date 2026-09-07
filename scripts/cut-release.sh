@@ -131,6 +131,42 @@ self_test() {
     [ "$hit" = 1 ] || { echo "FAIL: FLAKE_RE alternative matches no known transient: $alt"; fail=1; }
   done < <(printf '%s' "$FLAKE_RE" | tr '|' '\n')
 
+  # run_verdict: the classification that decides whether the cut tags. Each
+  # case is a real GitHub conclusion; the cancelled ones are why this exists.
+  # Fixtures are shaped like `gh run list --json databaseId,status,conclusion`,
+  # NOT like the REST API: gh's Run.Conclusion is a Go string, so a run with no
+  # conclusion yet carries "" and never null. Modelling the API instead is how
+  # the empty-conclusion case shipped returning GREEN — every fixture used
+  # null, and null never reaches the conclusion logic because those runs are
+  # status-driven.
+  _eq "$(run_verdict '[]')" "NONE" "no runs for the sha yet"
+  _eq "$(run_verdict '[{"status":"queued","conclusion":""}]')" "PENDING" "one run still queued"
+  _eq "$(run_verdict '[{"status":"in_progress","conclusion":""}]')" "PENDING" "one run in progress"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":""}]')" "PENDING" "completed with no conclusion yet is not GREEN"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":""}]')" "PENDING" "one unconcluded run among successes"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":""},{"status":"completed","conclusion":"cancelled"}]')" "PENDING" "an empty conclusion never leaks into the BLOCKED list"
+  # A conclusion that is not a string is not a pass. These lock the exit-status
+  # guards on the two jq calls below the blank check: without them, jq errors on
+  # `join` and on `any`, both results read as "nothing bad", and the payload
+  # falls through to GREEN. Unreachable from gh, which marshals a Go string —
+  # but it is the same shape as the "" bug, and the guards had no test.
+  _eq "$(run_verdict '[{"status":"completed","conclusion":["success"]}]')" "PENDING" "an array conclusion is not a pass"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":{}}]')" "PENDING" "an object conclusion is not a pass"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"stale"}]')" "BLOCKED stale" "a stale run is never GREEN"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"action_required"}]')" "BLOCKED action_required" "action_required is never GREEN"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"success"}]')" "GREEN" "all success"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"skipped"}]')" "GREEN" "success plus a skipped gate"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"neutral"}]')" "GREEN" "neutral counts as a pass"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"failure"}]')" "FAILED" "a plain failure reaches the flake path"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"cancelled"}]')" "BLOCKED cancelled" "a cancelled run is never GREEN"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"timed_out"}]')" "BLOCKED timed_out" "a timed-out run is never GREEN"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"startup_failure"}]')" "BLOCKED startup_failure" "a startup failure is never GREEN"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"cancelled"}]')" "BLOCKED cancelled" "one cancelled among successes"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"failure"},{"status":"completed","conclusion":"cancelled"}]')" "BLOCKED cancelled" "BLOCKED outranks FAILED, so FLAKE_RE never sees it"
+  _eq "$(run_verdict '[{"status":"completed","conclusion":"cancelled"},{"status":"in_progress","conclusion":""}]')" "PENDING" "PENDING outranks BLOCKED"
+  # And the REST shape must not regress if anything ever feeds it in.
+  _eq "$(run_verdict '[{"status":"completed","conclusion":null}]')" "PENDING" "a null conclusion is treated like an empty one"
+
   # The release-prep PR must carry skip-changelog. Without it the changelog
   # guard fails the prepare PR itself — on an rc it deliberately leaves
   # [Unreleased] alone — and wait_sha_green correctly refuses to call that a
@@ -158,11 +194,65 @@ self_test() {
 
 # ---- CI waiter -------------------------------------------------------------
 
+# run_verdict <runs-json>: classify a sha's runs. Pure (jq only, no network)
+# so --self-test can table it. Echoes exactly one of:
+#
+#   NONE                    no runs for this sha yet — keep waiting
+#   PENDING                 at least one run has not completed
+#   GREEN                   every run completed in {success, skipped, neutral}
+#   FAILED                  at least one `failure`, and nothing worse
+#   BLOCKED <conclusions>   a completed run whose conclusion is neither a pass
+#                           nor a plain failure
+#
+# BLOCKED is the whole point. A cancelled run has status "completed" and a
+# conclusion that is not "failure", so it is neither pending nor failed — and
+# the old form here returned GREEN for it. On the merge commit that is the last
+# gate before `git tag`, so the cut would tag a sha whose CI never finished and
+# the "main red — NOT tagging" guard would never fire. timed_out,
+# startup_failure, stale and action_required have the same shape.
+#
+# BLOCKED outranks FAILED, and the reason is the rerun loop rather than
+# FLAKE_RE: the old `failed=` list only ever collected conclusion=="failure",
+# so a cancelled run was never a rerun candidate to begin with. What it did
+# instead was survive. One transient failure plus one cancelled run meant
+# FLAKE_RE matched the failure, the rerun ground it to success, and the next
+# iteration found an empty `failed` list with the cancelled run still sitting
+# there — so the loop laundered the sha and echoed GREEN. Ranking BLOCKED above
+# FAILED is what stops that. It also would not converge if we tried: `gh run
+# rerun --failed` has nothing to act on when a run's jobs concluded cancelled.
+#
+# PENDING outranks both — a sha still in flight is not judged at all.
+run_verdict() { # <runs-json>
+  local j="$1" n pend blank bad anyfail
+  n=$(printf '%s' "$j" | jq 'length' 2>/dev/null); [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  [ "$n" -eq 0 ] && { echo NONE; return; }
+  pend=$(printf '%s' "$j" | jq '[.[] | select(.status!="completed")] | length' 2>/dev/null)
+  [[ "$pend" =~ ^[0-9]+$ ]] || pend=1
+  # An unpopulated conclusion is a read-window artifact, not a verdict, so it
+  # counts as PENDING: the loop re-polls, and the deadline still fails it
+  # closed. It must be caught HERE and not by the `bad` line below, because
+  # gh's Run.Conclusion is a Go string — an absent conclusion marshals to ""
+  # and never to null, so jq's `//` never fires on it, and `[""] | join(",")`
+  # is "" so a non-empty test on the result cannot see it either. That is the
+  # shape that returned GREEN for a completed run with no conclusion.
+  blank=$(printf '%s' "$j" | jq '[.[] | select(.status=="completed") | select((.conclusion // "") == "")] | length' 2>/dev/null)
+  [[ "$blank" =~ ^[0-9]+$ ]] || blank=1
+  if [ "$pend" -gt 0 ] || [ "$blank" -gt 0 ]; then echo PENDING; return; fi
+  # jq's own failure must not read as "nothing bad": check the exit status
+  # rather than overloading emptiness of the result, or a malformed payload
+  # falls through to GREEN.
+  bad=$(printf '%s' "$j" | jq -r '[.[] | .conclusion | select(. != null and . != "" and . != "success" and . != "skipped" and . != "neutral" and . != "failure")] | unique | join(",")' 2>/dev/null) || { echo PENDING; return; }
+  [ -n "$bad" ] && { echo "BLOCKED $bad"; return; }
+  anyfail=$(printf '%s' "$j" | jq -r 'any(.[]; .conclusion == "failure")' 2>/dev/null) || { echo PENDING; return; }
+  [ "$anyfail" = "true" ] && { echo FAILED; return; }
+  echo GREEN
+}
+
 # wait_sha_green <sha>: block until every run for <sha> is completed; rerun only
 # transient flakes (bounded); echo GREEN or RED. Robust to the post-rerun window
 # where gh briefly reports the prior conclusion (it waits for pending==0).
 wait_sha_green() {
-  local sha="$1" reruns=0 j pend failed rid isflake start=$SECONDS
+  local sha="$1" reruns=0 j verdict failed rid isflake start=$SECONDS
   local deadline="${CUT_WAIT_DEADLINE:-5400}" # 90 min; a stuck-queued run must not hang the cut forever
   while :; do
     if [ $((SECONDS - start)) -gt "$deadline" ]; then
@@ -174,19 +264,24 @@ wait_sha_green() {
     # the changelog guard alone appears 4x per sha (its labeled/unlabeled
     # triggers), so 40 runs spans about 5 shas. Measured on this repo: the
     # release sha's 4 runs were outside the window and the query returned 0,
-    # which takes the `cnt -eq 0` branch below and spins to the deadline before
-    # dying RED on a green sha.
+    # which run_verdict reports as NONE, spinning to the deadline before dying
+    # RED on a green sha.
     j=$(gh run list --commit "$sha" --limit 100 --json databaseId,status,conclusion 2>/dev/null \
           | jq '[.[]]' 2>/dev/null)
-    # jq can emit partial output or `null` before erroring, so coerce to a real
-    # integer before any [ -eq/-gt ] (else "integer expression expected"). Safe
-    # defaults keep the loop waiting rather than falsely declaring a verdict.
-    cnt=$(printf '%s' "$j" | jq 'length' 2>/dev/null); [[ "$cnt" =~ ^[0-9]+$ ]] || cnt=0
-    [ "$cnt" -eq 0 ] && { sleep 25; continue; }
-    pend=$(printf '%s' "$j" | jq '[.[] | select(.status!="completed")] | length' 2>/dev/null); [[ "$pend" =~ ^[0-9]+$ ]] || pend=1
-    [ "$pend" -gt 0 ] && { sleep 45; continue; }
+    # run_verdict coerces jq's output itself, so a partial or `null` read keeps
+    # the loop waiting rather than declaring a verdict.
+    verdict="$(run_verdict "$j")"
+    case "$verdict" in
+      NONE)     sleep 25; continue ;;
+      PENDING)  sleep 45; continue ;;
+      GREEN)    echo GREEN; return 0 ;;
+      BLOCKED*) warn "CI for ${sha:0:8} has a run that did not finish (${verdict#BLOCKED }) — a run that was cancelled or timed out says nothing about the code, so it is not rerun-eligible; inspect: gh run list --commit $sha"
+                echo RED; return 1 ;;
+      FAILED)   ;; # falls through to the flake path below
+      *)        warn "run_verdict returned an unhandled verdict '$verdict' — failing closed"
+                echo RED; return 1 ;;
+    esac
     failed=$(echo "$j" | jq -r '.[] | select(.conclusion=="failure") | .databaseId')
-    [ -z "$failed" ] && { echo GREEN; return 0; }
     isflake=1
     for rid in $failed; do
       gh run view "$rid" --log-failed 2>/dev/null | grep -qE "$FLAKE_RE" || isflake=0
@@ -361,7 +456,7 @@ main() {
 
   log "release workflows"
   sleep 15
-  local reruns=0 j pend failed rid isflake rstart=$SECONDS
+  local reruns=0 j verdict failed rid isflake rstart=$SECONDS
   local rdeadline="${CUT_WAIT_DEADLINE:-5400}"
   while :; do
     if [ $((SECONDS - rstart)) -gt "$rdeadline" ]; then
@@ -371,13 +466,19 @@ main() {
     # --branch filters server-side, same window problem as wait_sha_green.
     j=$(gh run list --branch "$tag" --limit 100 --json databaseId,status,conclusion 2>/dev/null \
           | jq '[.[]]' 2>/dev/null)
-    # Coerce jq output to an integer before [ -eq/-gt ] (see wait_sha_green).
-    cnt=$(printf '%s' "$j" | jq 'length' 2>/dev/null); [[ "$cnt" =~ ^[0-9]+$ ]] || cnt=0
-    [ "$cnt" -eq 0 ] && { sleep 20; continue; }
-    pend=$(printf '%s' "$j" | jq '[.[] | select(.status!="completed")] | length' 2>/dev/null); [[ "$pend" =~ ^[0-9]+$ ]] || pend=1
-    [ "$pend" -gt 0 ] && { sleep 45; continue; }
+    # Same classification as wait_sha_green — see run_verdict.
+    verdict="$(run_verdict "$j")"
+    case "$verdict" in
+      NONE)     sleep 20; continue ;;
+      PENDING)  sleep 45; continue ;;
+      GREEN)    log "$tag PUBLISHED"; break ;;
+      BLOCKED*) warn "a $tag release run did not finish (${verdict#BLOCKED }) — the tag is already pushed, so inspect before announcing: gh run list --branch $tag"
+                break ;;
+      FAILED)   ;; # falls through to the flake path below
+      *)        warn "run_verdict returned an unhandled verdict '$verdict' — stopping the watch"
+                break ;;
+    esac
     failed=$(echo "$j" | jq -r '.[] | select(.conclusion=="failure") | .databaseId')
-    if [ -z "$failed" ]; then log "$tag PUBLISHED"; break; fi
     isflake=1; for rid in $failed; do gh run view "$rid" --log-failed 2>/dev/null | grep -qE "$FLAKE_RE" || isflake=0; done
     if [ "$isflake" = 1 ] && [ "$reruns" -lt 8 ]; then
       reruns=$((reruns+1)); warn "release flake -> rerun #$reruns"

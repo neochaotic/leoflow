@@ -76,11 +76,17 @@ self_test() {
 	2>&1)" || { printf '  FAIL self-test setup could not build the fixture repo\n%s\n' "$setup_log"; return 1; }
 
 	# _case <name> <want-rc> <want-substring> -- <commands run inside $tmp>
+	# GITHUB_BASE_REF is part of the gate's decision, and it is SET in the
+	# environment this suite runs in — every CI job for a pull_request has it.
+	# Cases that simulate a local or cut invocation must therefore unset it, or
+	# they inherit "a pull request is in play" from their own runner and the
+	# skip never fires. Case 6 sets it back deliberately.
 	_case() {
 		local name="$1" want_rc="$2" want_msg="$3"; shift 4
 		local out rc=0
 		out="$(
 			export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+			unset GITHUB_BASE_REF
 			cd "$tmp" || exit 1
 			"$@" >/dev/null 2>&1
 			bash scripts/check-changelog-entry.sh 2>&1
@@ -111,6 +117,21 @@ self_test() {
 	#    which differs from a non-empty head section.
 	_case "fails closed when the base ref is missing" 1 "not present" -- \
 		bash -c 'git update-ref -d refs/remotes/origin/main'
+	# 6. The pull_request_target rubber-stamp. That event checks out the BASE
+	#    branch, so HEAD is the base tip and ancestry alone would skip forever.
+	#    With a pull request in play the gate must judge, never skip.
+	local out6 rc6=0
+	out6="$(
+		export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GITHUB_BASE_REF=main
+		cd "$tmp" || exit 1
+		git checkout -q main && git update-ref refs/remotes/origin/main refs/heads/main
+		bash scripts/check-changelog-entry.sh 2>&1
+	)" || rc6=$?
+	_eq "$rc6" "1" "does not skip on the base branch when a pull request is in play (exit)"
+	case "$out6" in
+		*"does not add a CHANGELOG entry"*) echo "  ok   does not skip on the base branch when a pull request is in play (message)" ;;
+		*) printf '  FAIL pull_request_target shape was rubber-stamped\n    got: %q\n' "$out6"; fail=1 ;;
+	esac
 
 	if [ "$fail" -eq 0 ]; then echo "self-test: PASS"; return 0; else echo "self-test: FAIL"; return 1; fi
 }

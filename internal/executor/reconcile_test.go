@@ -460,8 +460,10 @@ func TestReconcileRecordsCompletedSweep(t *testing.T) {
 // the agent mid-report-retry — phase Failed, no report ever delivered.
 func TestReconcileSettlesTimeoutReasonFromRecord(t *testing.T) {
 	const reason = "execution_timeout: task exceeded 10s limit"
+	// 255, not 137: the agent's own cancel kills the child, a signal death reports
+	// exit code -1, and the agent clamps -1 to 255 before recording it.
 	pod := withRecord(managedPod("p-timeout", "ti-timeout", corev1.PodFailed),
-		taskoutcome.FailedBecauseWith(137, reason))
+		taskoutcome.FailedBecauseWith(255, reason))
 	reporter := &fakeReporter{}
 	r := NewReconciler(fake.NewClientset(pod), "leoflow", reporter)
 
@@ -480,13 +482,14 @@ func TestReconcileSettlesTimeoutReasonFromRecord(t *testing.T) {
 // TestRecordFailureReasonPrefersReasonOverExitCode pins the precedence a
 // reason-carrying failure record depends on (#930): with BOTH a reason and an
 // exit code present, the classification wins. Flipping this would silently
-// regress the timeout diagnosis back to "task failed (exit 137)".
+// regress the timeout diagnosis back to "task failed (exit 255)" (255 is the
+// production value: the agent clamps a signal death's -1).
 func TestRecordFailureReasonPrefersReasonOverExitCode(t *testing.T) {
-	rec := taskoutcome.FailedBecauseWith(137, "execution_timeout: task exceeded 10s limit")
+	rec := taskoutcome.FailedBecauseWith(255, "execution_timeout: task exceeded 10s limit")
 	if got := recordFailureReason(rec); !strings.Contains(got, "execution_timeout:") {
 		t.Errorf("recordFailureReason = %q, want the reason, not the exit code", got)
 	}
-	if rec.ExitCode == nil || *rec.ExitCode != 137 {
-		t.Errorf("exit_code = %v, want 137 kept in the record alongside the reason", rec.ExitCode)
+	if rec.ExitCode == nil || *rec.ExitCode != 255 {
+		t.Errorf("exit_code = %v, want 255 kept in the record alongside the reason", rec.ExitCode)
 	}
 }

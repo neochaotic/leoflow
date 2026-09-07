@@ -265,7 +265,9 @@ func TestRunnerTimeoutOutcomeRecordCarriesReason(t *testing.T) {
 		t.Errorf("record reason = %q, want it to name execution_timeout", rec.Reason)
 	}
 	if rec.ExitCode == nil || *rec.ExitCode != 137 {
-		t.Errorf("exit_code = %v, want the killed process's 137 kept alongside the reason", rec.ExitCode)
+		t.Errorf("exit_code = %v, want the 137 this fake command runner reported, clamped, "+
+			"kept alongside the reason. 137 is the fake's own invention, NOT the production "+
+			"value: see TestClampExitOfSignalDeathIsProduction255", rec.ExitCode)
 	}
 }
 

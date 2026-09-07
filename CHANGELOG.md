@@ -155,7 +155,9 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   phase — carried only the exit code. So when the control plane was unreachable
   across the timeout, or the kubelet's `SIGTERM` landed mid-report-retry, the
   report never arrived and the reconciler settled the attempt from the record,
-  rendering the generic `task failed (exit 137)`; the durable channel existed
+  rendering the generic `task failed (exit 255)` — 255 because the agent's own
+  cancel kills the child, a signal death reports exit code `-1`, and the agent
+  clamps that to 255; the durable channel existed
   and already preferred a record's reason, it just never carried one. The record
   now carries the classification **alongside** the exit code (new
   `taskoutcome.FailedBecauseWith`), so the reason survives a report that never

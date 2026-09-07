@@ -22,6 +22,18 @@ func TestClampExit(t *testing.T) {
 	}
 }
 
+// TestClampExitOfSignalDeathIsProduction255 writes down the exit code the
+// execution_timeout path actually reports, because nothing else does: the fakes
+// invent their own. exec.CommandContext's cancel kills the child, ProcessState
+// reports -1 for a signal death, execRunner passes that -1 through, and the clamp
+// turns it into 255. So an operator greps for 255 on a timed-out attempt — not
+// the 137 that a SIGKILL delivered from outside the process would produce.
+func TestClampExitOfSignalDeathIsProduction255(t *testing.T) {
+	if got := clampExit(-1); got != 255 {
+		t.Errorf("clampExit(-1) = %d, want 255 — the timeout path's real exit code", got)
+	}
+}
+
 func TestMergeEnvSortsSpecDeterministically(t *testing.T) {
 	got := mergeEnv(
 		[]string{"BASE=1"},

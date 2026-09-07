@@ -109,6 +109,12 @@ func TestReaperReapOnceDrivesReapers(t *testing.T) {
 
 // staleEverythingStore serves one long-stale candidate to EVERY reaper, so a
 // test can prove that a gate stops all five destructive paths at once.
+//
+// If you grow this fixture, note that gateWiringStore exists precisely so the
+// "exactly one gate skip per reaper" assertion does not read these counts: that
+// test is about the wiring, and a second candidate here would have made it fail
+// while blaming the wiring instead. Add candidates freely; add them there only
+// deliberately.
 func staleEverythingStore() *fakeReaperStore {
 	past := time.Now().UTC().Add(-1 * time.Hour)
 	return &fakeReaperStore{
@@ -429,8 +435,13 @@ func leadingOpenThenClosed(n int) func() bool {
 // reaper must meter its own gate skip exactly once — a reaper whose gate was
 // not wired would write instead. The settling gate is open (no leadership
 // stamp), so it does not stand between the entry check and the reapers.
+//
+// It uses its own gateWiringStore rather than the shared staleEverythingStore:
+// the "exactly once" assertion is a statement about the candidate count, so a
+// second candidate added to the shared fixture for another test's sake would
+// fail this one with a message accusing the wiring (#924).
 func TestNewReaperWiresGateIntoEveryReaper(t *testing.T) {
-	store := staleEverythingStore()
+	store := gateWiringStore()
 	pods := &fakePodManager{active: map[string]bool{}}
 	rec := &capturingRecorder{}
 	r := NewReaper(store, pods, nil, &fakeWarmLister{}, rec, reapTestLogger(), DefaultReaperConfig(), nil)
@@ -448,7 +459,7 @@ func TestNewReaperWiresGateIntoEveryReaper(t *testing.T) {
 	// the message would blame the wiring. Nil predicates and no leadership stamp
 	// must keep settling open in this test.
 	if got := rec.count("reap_settling_skip"); got != 0 {
-		t.Fatalf("settling must not stand between the entry check and the reapers in this test (candidates come from staleEverythingStore, one per reaper), reap_settling_skip = %d", got)
+		t.Fatalf("settling must not stand between the entry check and the reapers in this test (candidates come from gateWiringStore, one per reaper), reap_settling_skip = %d", got)
 	}
 	for _, skip := range []string{
 		"orphan_gate_skip",
@@ -458,7 +469,25 @@ func TestNewReaperWiresGateIntoEveryReaper(t *testing.T) {
 		"warm_worker_lost_gate_skip",
 	} {
 		if got := rec.count(skip); got != 1 {
-			t.Errorf("%s = %d, want exactly 1 (is that reaper's gate wired in NewReaper?)", skip, got)
+			t.Errorf("%s = %d, want exactly 1 — gateWiringStore serves exactly one candidate per reaper, so is that reaper's gate wired in NewReaper?", skip, got)
 		}
+	}
+}
+
+// gateWiringStore serves exactly ONE long-stale candidate to each of the five
+// destructive reapers, and exists solely for TestNewReaperWiresGateIntoEveryReaper:
+// that test counts one gate skip per reaper, so its assertion is only as stable
+// as the candidate count of the store behind it. The shared staleEverythingStore
+// has four other callers; growing it to serve a second candidate for one of them
+// would have failed the wiring test for a reason that has nothing to do with
+// wiring (#924).
+func gateWiringStore() *fakeReaperStore {
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	return &fakeReaperStore{
+		orphanCands:  []ReapCandidate{{RunID: "stuck-run", DagID: "etl", LastActivity: past}},
+		agentCands:   []AgentLostCandidate{{TaskInstanceID: "silent", DagRunID: "r1", TaskID: "t", TryNumber: 1, LastHeartbeat: past}},
+		queuedCands:  []StaleQueuedCandidate{{TaskInstanceID: "stuck-ti", DagRunID: "r2", TaskID: "t", TryNumber: 1, QueuedAt: past}},
+		runningCands: []PodLostCandidate{{TaskInstanceID: "gone", DagRunID: "r3", TaskID: "t", TryNumber: 1, RunningSince: past}},
+		warmBound:    []WarmBoundTI{{TaskInstanceID: "warm-orphan", DagRunID: "r4", TaskID: "t", TryNumber: 1, WarmWorkerID: "dead-worker"}},
 	}
 }

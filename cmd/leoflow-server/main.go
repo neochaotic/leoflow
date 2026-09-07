@@ -373,7 +373,10 @@ func validateStartup(cfg *config.ServerConfig) error {
 // off the warm-pool attempt watchdog. They are documented settings, not errors,
 // so boot proceeds; the WARN is the only operator-visible signal that those
 // guarantees are off. It runs after the logger exists, right after validation
-// has passed. Only a process that serves the scheduler warns: token renewal
+// has passed. Each warning is logged with the config key and the offending
+// value as attributes, so the JSON record an alert rule reads carries
+// config_key/value fields instead of only a prose message (#924).
+// Only a process that serves the scheduler warns: token renewal
 // lives in the agent gRPC server and the pod deadline floor in the dispatcher,
 // both scheduler-side, so an api-only replica in a split install would be
 // warning about behavior it does not implement — and a WARN operators learn to
@@ -383,7 +386,7 @@ func warnStartup(cfg *config.ServerConfig, logger *slog.Logger) {
 		return
 	}
 	for _, w := range executor.ResilienceLadderWarnings(resilienceLadder(cfg)) {
-		logger.Warn(w)
+		logger.Warn(w.Msg, "config_key", w.Key, "value", w.Value)
 	}
 }
 

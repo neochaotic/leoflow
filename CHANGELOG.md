@@ -200,7 +200,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     never returns: if it comes back after the token has lapsed, the rejected
     bearer already makes the agent exit promptly. It makes explicit a bound
     that held in practice before — the ceiling was a de-facto attempt-lifetime
-    cap of roughly ceiling + token TTL + the agent-lost threshold.
+    cap of about ceiling + token TTL + the agent-lost threshold + one
+    maintenance cycle (30s, since the reapers run from that loop and not from
+    the scheduler tick, and up to two intervals when a cycle overruns its
+    phase budgets), and the settling grace on top when a leader re-election
+    intervenes — up to twice that grace if the new leader never settles and
+    the liveness valve has to open.
   - The pod-lost reaper (every scheduler tick) raced the reconciler (every 30s)
     for a pod that finished during the outage, and won — marking it `pod_lost`
     before the reconciler could recover the pod's durable outcome record. It now

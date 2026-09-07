@@ -27,6 +27,9 @@ type fakeClient struct {
 	terminateAt agentv1.TaskState // state for which ReportState returns should_terminate
 	getSpecErr  error
 	pushErr     error
+	// fetchXComErr, when set, makes every FetchXCom fail with it — the
+	// environment-build failure path that is NOT a clean NotFound miss.
+	fetchXComErr error
 	// reportFailCode + reportFailTimes make the first reportFailTimes ReportState
 	// calls fail with that gRPC code, then succeed — to exercise the report retry.
 	reportFailCode  codes.Code
@@ -81,6 +84,9 @@ func (f *fakeClient) AwaitAssignment(context.Context, ...grpc.CallOption) (grpc.
 }
 
 func (f *fakeClient) FetchXCom(_ context.Context, in *agentv1.FetchXComRequest, _ ...grpc.CallOption) (*agentv1.FetchXComResponse, error) {
+	if f.fetchXComErr != nil {
+		return nil, f.fetchXComErr
+	}
 	if resp, ok := f.xcom[in.GetUpstreamTaskId()]; ok {
 		return resp, nil
 	}

@@ -10,6 +10,8 @@ import (
 
 	"github.com/neochaotic/leoflow/internal/taskoutcome"
 	agentv1 "github.com/neochaotic/leoflow/proto/agent/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // readOutcome reads and decodes the durable outcome record the agent wrote to its
@@ -284,5 +286,74 @@ func TestRunnerNonZeroExitOutcomeRecordCarriesNoReason(t *testing.T) {
 	}
 	if rec := readOutcome(t, path); rec.Reason != "" {
 		t.Errorf("reason = %q, want empty for an ordinary non-zero exit", rec.Reason)
+	}
+}
+
+// TestRunnerXComFetchErrorOutcomeRecordCarriesNoReason is the negative half of
+// the classification contract (#930). An environment-build failure the agent
+// cannot classify must leave the record's reason EMPTY rather than dumping the
+// raw error into it: the XCom fetch wraps a gRPC error that can carry the
+// control-plane endpoint and TLS handshake text, and the record is durable and
+// readable by anyone with pod read access in the task namespace.
+func TestRunnerXComFetchErrorOutcomeRecordCarriesNoReason(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "termination-log")
+	client := &fakeClient{
+		spec: &agentv1.TaskSpec{
+			Operator:   "python",
+			Entrypoint: "dag:consume",
+			XcomInputMapping: map[string]*agentv1.XComUpstreams{
+				"payload": {TaskIds: []string{"producer"}},
+			},
+		},
+		fetchXComErr: status.Error(codes.Unavailable,
+			`connection error: desc = "transport: authentication handshake failed: `+
+				`tls: failed to verify certificate for leoflow-grpc.leoflow.svc:9090"`),
+	}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.TerminationLogPath = path
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("an XCom fetch failure must fail the task")
+	}
+	rec := readOutcome(t, path)
+	if rec.Reason != "" {
+		t.Errorf("record reason = %q, want empty: an unclassified environment-build "+
+			"failure must not put raw error text on the durable record", rec.Reason)
+	}
+	if rec.Outcome != taskoutcome.Failed {
+		t.Errorf("outcome = %q, want failed", rec.Outcome)
+	}
+}
+
+// TestRunnerReturnValuePushFailureRecordDoesNotRenderBareExitCode: the user
+// process exited 0 and only the delivery of its outputs failed, so a reason-less
+// record renders (executor.recordFailureReason) as "task failed (exit 0)" — a
+// string that reads as a success and names no cause. This failure is one the
+// agent diagnoses itself, so it carries its own classification (#930).
+func TestRunnerReturnValuePushFailureRecordDoesNotRenderBareExitCode(t *testing.T) {
+	dir := t.TempDir()
+	returnPath := filepath.Join(dir, "return.json")
+	if err := os.WriteFile(returnPath, []byte(`{"x":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "termination-log")
+	client := &fakeClient{
+		spec:    &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:ok"},
+		pushErr: errors.New("xcom backend down"),
+	}
+	r := newRunner(client, &fakeCmd{exitCode: 0}, &recordingSink{})
+	r.ReturnPath = returnPath
+	r.TerminationLogPath = path
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a failed pre-report push must fail the task")
+	}
+	rec := readOutcome(t, path)
+	if rec.Reason != reasonOutputUndelivered {
+		t.Errorf("record reason = %q, want the classification constant %q — otherwise the "+
+			"reconciler renders the bare %q", rec.Reason, reasonOutputUndelivered, "task failed (exit 0)")
+	}
+	if strings.Contains(rec.Reason, "xcom backend down") {
+		t.Errorf("record reason leaks the raw push error: %q", rec.Reason)
 	}
 }

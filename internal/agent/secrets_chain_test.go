@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/neochaotic/leoflow/internal/agent/secretsource"
@@ -162,6 +163,11 @@ func TestRunnerReportsFailedOnResolverError(t *testing.T) {
 // travels in the durable outcome record too (#930): the task never ran, and if the
 // FAILED report does not land the reconciler would otherwise render a bare
 // "task failed (exit 1)" with no trace of the refused secret backend.
+//
+// The record's reason must be the CLASSIFICATION CONSTANT and nothing else. The
+// field is durable and served to end users, so echoing the provider's own error
+// text into it would turn it into an exfiltration path — the property
+// taskoutcome.Record.Reason asserts, which only a classifier can keep.
 func TestRunnerResolverErrorOutcomeRecordCarriesReason(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "termination-log")
 	client := &fakeClient{spec: &agentv1.TaskSpec{
@@ -170,13 +176,17 @@ func TestRunnerResolverErrorOutcomeRecordCarriesReason(t *testing.T) {
 	}}
 	r := newRunner(client, &fakeCmd{}, &recordingSink{})
 	r.TerminationLogPath = path
-	r.Resolver = fakeResolver{err: errors.New("access denied")}
+	r.Resolver = fakeResolver{err: errors.New("access denied by sts.example.internal")}
 	r.SecretBackend = secretsource.Backend{Variables: true}
 
 	if err := r.Run(context.Background()); err == nil {
 		t.Fatal("a hard resolver error must fail the task")
 	}
-	if rec := readOutcome(t, path); rec.Reason == "" {
-		t.Error("a resolver-error record must carry the agent's classification, not just an exit code")
+	rec := readOutcome(t, path)
+	if rec.Reason != reasonSecretUnresolved {
+		t.Errorf("record reason = %q, want the classification constant %q", rec.Reason, reasonSecretUnresolved)
+	}
+	if strings.Contains(rec.Reason, "access denied") || strings.Contains(rec.Reason, "sts.example.internal") {
+		t.Errorf("record reason leaks the provider's raw error text: %q", rec.Reason)
 	}
 }

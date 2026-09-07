@@ -80,7 +80,7 @@ serviceAccount:
   create: true
   # -- Override the ServiceAccount name. Defaults to the chart fullname when empty.
   name: ""
-  # -- ServiceAccount annotations (e.g. AWS IAM role: `eks.amazonaws.com/role-arn`).
+  # -- ServiceAccount annotations, the usual home of a cloud-identity binding for the object log sink: IRSA on EKS (`eks.amazonaws.com/role-arn`), Workload Identity on GKE (`iam.gke.io/gcp-service-account`). EKS **Pod Identity** — AWS's current recommendation — needs no annotation at all: leave this empty and create a Pod Identity association against the ServiceAccount instead. In split mode this one value is rendered onto BOTH ServiceAccounts, and both need the identity (the scheduler writes task logs, any api replica reads them back).
   annotations: {}
 
 rbac:
@@ -183,10 +183,13 @@ logs:
   # `gcs` for Google Cloud Storage (native SDK, not S3 interop). This removes the
   # need for an RWX log PVC at `replicaCount > 1`: set `logs.persistence.enabled:
   # false` and let the bucket own durability. Auth is keyless-first (ADR 0035/0056):
-  # bind THIS control-plane ServiceAccount to a cloud identity via
-  # `serviceAccount.annotations` — IRSA (`eks.amazonaws.com/role-arn`) for `s3`,
-  # Workload Identity (`iam.gke.io/gcp-service-account`) for `gcs` — and leave the
-  # credential fields empty. Retention is owned by the bucket's lifecycle policy,
+  # bind THIS control-plane ServiceAccount to a cloud identity — IRSA
+  # (`serviceAccount.annotations`: `eks.amazonaws.com/role-arn`) or EKS Pod Identity
+  # (no annotation; create a Pod Identity association against the ServiceAccount)
+  # for `s3`, Workload Identity (`iam.gke.io/gcp-service-account`) for `gcs` — and
+  # leave the credential fields empty. In split mode the annotations land on BOTH
+  # ServiceAccounts and both need the identity: the scheduler writes task logs and
+  # any api replica reads them back. Retention is owned by the bucket's lifecycle policy,
   # not the in-cluster log janitor.
   sink:
     # -- Durable task-log backend: `disk` (default — the PVC above), `s3` (AWS S3, MinIO, Ceph RGW), or `gcs` (Google Cloud Storage). Object storage is opt-in; `disk` leaves the on-disk path unchanged.

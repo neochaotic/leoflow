@@ -477,7 +477,7 @@ differ from what's committed.
 | securityContext.runAsUser | int | `65532` |  |
 | service.annotations | object | `{}` | Service annotations (e.g. cloud LB controller hints, ExternalDNS). |
 | service.type | string | `"ClusterIP"` | Service type. `ClusterIP` for internal-only; `LoadBalancer` to expose externally; `NodePort` for k3d/kind. |
-| serviceAccount.annotations | object | `{}` | ServiceAccount annotations (e.g. AWS IAM role: `eks.amazonaws.com/role-arn`). |
+| serviceAccount.annotations | object | `{}` | ServiceAccount annotations, the usual home of a cloud-identity binding for the object log sink: IRSA on EKS (`eks.amazonaws.com/role-arn`), Workload Identity on GKE (`iam.gke.io/gcp-service-account`). EKS **Pod Identity** — AWS's current recommendation — needs no annotation at all: leave this empty and create a Pod Identity association against the ServiceAccount instead. In split mode this one value is rendered onto BOTH ServiceAccounts, and both need the identity (the scheduler writes task logs, any api replica reads them back). |
 | serviceAccount.create | bool | `true` | Create a dedicated ServiceAccount for the leoflow-server. Set `false` only if you bring your own via `name`. |
 | serviceAccount.name | string | `""` | Override the ServiceAccount name. Defaults to the chart fullname when empty. |
 | split.api.replicaCount | int | `2` | API Deployment replicas (active-active; HPA-friendly). Ignored unless split.enabled. |

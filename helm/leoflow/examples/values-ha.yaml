@@ -77,10 +77,19 @@ logs:
     # [s3] Required by AWS S3; ignored by most S3-compatible stores.
     region: us-east-1
 
+# These annotations are what bind the control plane to a cloud identity for the
+# bucket above. In SPLIT mode (api/scheduler) this one value is rendered onto BOTH
+# ServiceAccounts, and both need the identity: the scheduler WRITES task logs to
+# the bucket and any api replica READS them back to serve the UI, so an identity
+# on only one role leaves half the control plane without credentials.
 serviceAccount:
   annotations: {}
     # EKS (IRSA) for `s3`:
     # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/leoflow-control-plane
+    # EKS Pod Identity for `s3` — AWS's current recommendation, and it needs NO
+    # annotation at all: leave `annotations` empty and create a Pod Identity
+    # association between this ServiceAccount and the role instead
+    # (`aws eks create-pod-identity-association`, or the EKS Pod Identity Agent addon).
     # GKE (Workload Identity) for `gcs`:
     # iam.gke.io/gcp-service-account: leoflow-control-plane@PROJECT.iam.gserviceaccount.com
 

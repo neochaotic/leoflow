@@ -103,9 +103,15 @@ It sets, and documents why:
 | `terminationGracePeriodSeconds` | `60` | headroom for the HTTP shutdown, the dispatch-pool drain and the bounded gRPC stop (see below) |
 | `podAnnotations` → `karpenter.sh/do-not-disrupt` | *commented out* | EKS/Karpenter-only opt-in, see below |
 
-Edit the `CHANGEME` datastore URLs, secrets and bucket, and annotate the
-control-plane ServiceAccount with the cloud identity that may write the bucket
-(IRSA on EKS, Workload Identity on GKE).
+Edit the `CHANGEME` datastore URLs, secrets and bucket, and bind the
+control-plane ServiceAccount to the cloud identity that may write the bucket:
+IRSA on EKS (`serviceAccount.annotations`), **EKS Pod Identity** — AWS's current
+recommendation, which needs *no* annotation and is configured as a Pod Identity
+association against the ServiceAccount instead — or Workload Identity on GKE. In
+[split mode](#split-mode-is-not-dispatch-ha) `serviceAccount.annotations` is
+rendered onto **both** ServiceAccounts and both need the identity: the scheduler
+*writes* task logs to the bucket and any api replica *reads* them back to serve
+the UI, so annotating one role leaves half the control plane without credentials.
 
 {{% alert title="Why the chart does not default to two replicas" color="info" %}}
 Because it would break every existing install on upgrade. The default install

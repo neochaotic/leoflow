@@ -27,9 +27,17 @@ CHANGELOG="$ROOT/CHANGELOG.md"
 REPO="neochaotic/leoflow"
 
 # Transient CI failures that are safe to rerun — never a code signal. Matches the
-# classes seen in practice: registry rate-limits, Go module-proxy stream resets,
-# the shallow-fetch merge-base gate, the lite cold-start /readyz timing flake.
-FLAKE_RE='toomanyrequests|Rate exceeded|TLS handshake|i/o timeout|no space left|Connection reset|context deadline|Client\.Timeout|INTERNAL_ERROR|proxy\.golang\.org|stream ID [0-9]|readyz never responded|go mod download|failed to solve|returned error: 404|reserve cache|no merge base|exit code 128'
+# classes seen in practice: registry rate-limits and 5xx, Go module-proxy stream
+# resets, the shallow-fetch merge-base gate, the lite cold-start /readyz timing
+# flake, a package index answering 5xx mid-resolve, and a k3d cluster that fails
+# to come up. Every alternative is covered by the table in self_test(); add a
+# pattern there first, with the line that motivated it, or it is not coverage.
+#
+# Deliberately absent: anything that also matches a failure of OUR OWN code. A
+# "returned error: 5xx" alternative looks like a registry pattern but is what
+# curl prints for a 5xx out of our control plane, which this harness queries
+# from 60 sites — it would rerun past the commonest real regression there is.
+FLAKE_RE='toomanyrequests|Rate exceeded|TLS handshake|i/o timeout|no space left|Connection reset|context deadline|Client\.Timeout|INTERNAL_ERROR|proxy\.golang\.org|stream ID [0-9]|readyz never responded|go mod download|failed to solve|returned error: 404|reserve cache|no merge base|exit code 128|HTTP Error 5[0-9][0-9]|Gateway Time-out|Cluster creation FAILED|failed Cluster Creation'
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$*" >&2; }
@@ -57,6 +65,72 @@ self_test() {
   if is_rc "0.4.4"; then echo "FAIL: is_rc ga"; fail=1; fi
   for v in 0.4.4 0.4.4-rc.1 10.20.30 1.2.3-rc.15; do valid_version "$v" || { echo "FAIL: valid_version $v"; fail=1; }; done
   for v in v0.4.4 0.4 0.4.4-rc 0.4.4rc1 1.2.3-alpha; do valid_version "$v" && { echo "FAIL: valid_version accepted bad $v"; fail=1; }; done
+  # FLAKE_RE decides whether a red run gets rerun or stops the cut, so both ways
+  # of getting it wrong cost something real: too broad reruns past a genuine
+  # regression, and a pattern that can never match does nothing while looking
+  # like coverage. Both shipped in the first cut of this change; only a table
+  # caught them. A positive marked [observed] is verbatim from a real failed
+  # run, [ours] from our own scripts, and the rest are fixed strings from the
+  # tool that emits them (Go net/http, http2, POSIX errno, curl, urllib, k3d).
+  local -a POS=()
+  _flake() { POS+=("$1"); printf '%s' "$1" | grep -qE "$FLAKE_RE" || { echo "FAIL: FLAKE_RE misses transient: $1"; fail=1; }; }
+  _real()  { printf '%s' "$1" | grep -qE "$FLAKE_RE" && { echo "FAIL: FLAKE_RE masks real failure: $1"; fail=1; }; }
+
+  # [observed] Docker Hub answering 500 to a manifest HEAD, 2026-09-07: five e2e
+  # jobs across four PRs died inside one window with nothing of ours involved.
+  _flake 'ERROR: failed to build: failed to solve: python:3.11-slim-bookworm: failed to resolve source metadata for docker.io/library/python:3.11-slim-bookworm: unexpected status from HEAD request to https://registry-1.docker.io/v2/library/python/manifests/3.11-slim-bookworm: 500 Internal Server Error'
+  _flake 'toomanyrequests: You have reached your pull rate limit.'
+  _flake 'net/http: TLS handshake timeout'
+  _flake 'dial tcp 140.82.121.4:443: i/o timeout'
+  _flake 'write /home/runner/work/_temp/build: no space left on device'
+  _flake 'curl: (56) Recv failure: Connection reset by peer'
+  _flake 'rpc error: code = DeadlineExceeded desc = context deadline exceeded'
+  _flake 'Get "https://proxy.golang.org/github.com/@v/list": context deadline exceeded (Client.Timeout exceeded while awaiting headers)'
+  _flake 'http2: server sent GOAWAY: stream ID 15; INTERNAL_ERROR'
+  # [ours] scripts/lite-redeploy.sh — the lite cold-start timing flake.
+  _flake '::error::/readyz never responded after 60s — boot log tail:'
+  # urllib phrasing: the index or a build backend answering 5xx mid-resolve.
+  _flake 'ERROR: HTTP Error 504: Gateway Time-out'
+  # k3d v5.7.4: cmd/cluster/clusterCreate.go and pkg/client/cluster.go.
+  _flake 'Cluster creation FAILED, all changes have been rolled back!'
+  _flake 'failed Cluster Creation: Failed Cluster Preparation'
+
+  # A 5xx out of OUR OWN control plane is the commonest shape of a real
+  # regression in this harness, which has 60 curl sites pointed at it. curl
+  # reports it as an exit-22 message, so any "returned error: 5xx" alternative
+  # is a bare non-zero exit in disguise.
+  _real 'curl: (22) The requested URL returned error: 500'
+  _real 'curl: (22) The requested URL returned error: 503'
+  # Our own pyproject.toml breaking under `pip install -e ./parser` prints
+  # metadata-generation-failed. It is the symptom of both a network fetch and a
+  # first-party defect; the network cause always arrives on its own line and is
+  # matched above, so matching the symptom only adds the false positive.
+  _real 'error: metadata-generation-failed'
+  # [observed] main, 2026-09-07 — a real test defect that must reach a human.
+  _real '--- FAIL: TestRegisterVersionDuplicateReturns409 (0.08s)'
+  _real 'versions_conflict_integration_test.go:63: 409 body leaks raw pg internals ("23505")'
+  _real 'Error: Process completed with exit code 1.'
+
+  # Every alternative must earn its place by matching one of the lines above. A
+  # pattern that matches nothing is not harmless: it is a transient class we
+  # believe is covered and is not. This is what catches a bad escape — FLAKE_RE
+  # is single-quoted, so a doubled backslash reaches grep as a literal
+  # backslash and `curl: \\(22\\)` can never match the `curl: (22)` it was
+  # written for. GRANDFATHERED lists the pre-existing alternatives that predate
+  # this table and for which no captured sample survives (#956); nothing may be
+  # added to it.
+  local GRANDFATHERED='Rate exceeded|go mod download|returned error: 404|reserve cache|no merge base|exit code 128'
+  local alt hit line
+  while IFS= read -r alt; do
+    [ -n "$alt" ] || continue
+    printf '%s' "$alt" | grep -qxE "$GRANDFATHERED" && continue
+    hit=0
+    for line in "${POS[@]}"; do
+      printf '%s' "$line" | grep -qE -- "$alt" && { hit=1; break; }
+    done
+    [ "$hit" = 1 ] || { echo "FAIL: FLAKE_RE alternative matches no known transient: $alt"; fail=1; }
+  done < <(printf '%s' "$FLAKE_RE" | tr '|' '\n')
+
   if [ "$fail" = 0 ]; then echo "self-test: PASS"; else echo "self-test: FAIL"; return 1; fi
 }
 

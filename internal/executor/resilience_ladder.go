@@ -161,11 +161,37 @@ func ValidateResilienceLadder(l ResilienceLadder) error {
 // task instance and agent-lost never fires on a live agent. None of these
 // losses is an error; all are invisible without this signal. Pure, like the
 // validator: the server calls it once at boot after the logger exists.
-func ResilienceLadderWarnings(l ResilienceLadder) []string {
-	var warnings []string
+func ResilienceLadderWarnings(l ResilienceLadder) []LadderWarning {
+	var warnings []LadderWarning
 	if l.MaxAttemptCredentialLifetime <= 0 {
-		warnings = append(warnings, fmt.Sprintf("%s is disabled (%v): heartbeat renewal of an attempt's credential is unbounded, task pods with no declared execution_timeout get no activeDeadlineSeconds floor, and with warm pools enabled the per-attempt watchdog is off — a wedged or partitioned task pod has no wall-clock bound of its own",
-			maxAttemptCredentialLifetimeKey, l.MaxAttemptCredentialLifetime))
+		warnings = append(warnings, LadderWarning{
+			Msg: fmt.Sprintf("%s is disabled (%v): heartbeat renewal of an attempt's credential is unbounded, task pods with no declared execution_timeout get no activeDeadlineSeconds floor, and with warm pools enabled the per-attempt watchdog is off — a wedged or partitioned task pod has no wall-clock bound of its own",
+				maxAttemptCredentialLifetimeKey, l.MaxAttemptCredentialLifetime),
+			Key:   maxAttemptCredentialLifetimeKey,
+			Value: l.MaxAttemptCredentialLifetime,
+		})
 	}
 	return warnings
+}
+
+// LadderWarning is one boot WARN about a ladder setting that is valid but
+// removes a resilience backstop: the operator-readable sentence plus the two
+// things a monitoring rule needs as FIELDS. Logging only a pre-formatted string
+// leaves the JSON record with nothing but msg, so the single alert an operator
+// would actually want — "some instance booted with the credential ceiling
+// disabled" — can only be written as a substring match on prose that a later
+// reword silently breaks (#924). Msg stays self-contained (it names the key and
+// the value too) so a plain-text log needs no field expansion to be read.
+// Every rung of the ladder is a duration, so Value is one.
+type LadderWarning struct {
+	// Msg is the human-readable sentence: what is off and what it costs.
+	Msg string
+	// Key is the config key an operator would set to restore the backstop —
+	// the attribute an alert rule matches on.
+	Key string
+	// Value is the offending setting as configured. slog's JSON handler renders
+	// a duration as an integer nanosecond count, so an alert rule matches it
+	// numerically (value <= 0 for a disabled ceiling), not as "0s" — that
+	// spelling is the text handler's.
+	Value time.Duration
 }

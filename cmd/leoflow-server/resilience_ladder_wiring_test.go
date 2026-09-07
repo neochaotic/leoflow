@@ -67,7 +67,9 @@ func TestResilienceLadderWiringFailsOnShortCredentialCeiling(t *testing.T) {
 // renewal and no activeDeadlineSeconds floor on task pods without a declared
 // execution_timeout. The boot WARN is the operator's only signal, so the boot
 // path must emit exactly one WARN naming the key when the ceiling is disabled,
-// and none when it is set.
+// and none when it is set. The record must carry the key and the offending
+// value as ATTRIBUTES so a JSON log can be alerted on (#924); a pre-formatted
+// message alone is only greppable by a human.
 func TestResilienceLadderWiringWarnsWhenCredentialCeilingDisabled(t *testing.T) {
 	warn := func(d time.Duration) string {
 		var buf bytes.Buffer
@@ -83,6 +85,12 @@ func TestResilienceLadderWiringWarnsWhenCredentialCeilingDisabled(t *testing.T) 
 		}
 		if !strings.Contains(out, "auth.max_attempt_credential_lifetime") || !strings.Contains(out, "activeDeadlineSeconds") {
 			t.Errorf("ceiling %v: WARN must name the key and the lost pod deadline floor, got %q", d, out)
+		}
+		if !strings.Contains(out, `config_key=auth.max_attempt_credential_lifetime`) {
+			t.Errorf("ceiling %v: WARN must carry the config key as an attribute, got %q", d, out)
+		}
+		if !strings.Contains(out, "value="+d.String()) {
+			t.Errorf("ceiling %v: WARN must carry the offending value as an attribute, got %q", d, out)
 		}
 	}
 	if out := warn(24 * time.Hour); out != "" {

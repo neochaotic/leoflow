@@ -159,22 +159,31 @@ func TestValidateResilienceLadderRejectsEachViolation(t *testing.T) {
 // and a task pod with no declared execution timeout gets no ActiveDeadlineSeconds
 // floor. The operator's only signal is the boot WARN, so the warnings must name
 // the key and both consequences for zero and for negative values, and must be
-// empty when the ceiling is set.
+// empty when the ceiling is set. The key and the offending value are carried as
+// FIELDS, not only inside the prose: a pre-formatted string logs a JSON record
+// with nothing to alert on (#924).
 func TestResilienceLadderWarningsDisabledCredentialCeiling(t *testing.T) {
 	for _, d := range []time.Duration{0, -time.Second} {
 		l := defaultLadder()
 		l.MaxAttemptCredentialLifetime = d
 		got := ResilienceLadderWarnings(l)
 		if len(got) != 1 {
-			t.Fatalf("ceiling %v: want exactly one warning, got %q", d, got)
+			t.Fatalf("ceiling %v: want exactly one warning, got %+v", d, got)
+		}
+		w := got[0]
+		if w.Key != maxAttemptCredentialLifetimeKey {
+			t.Errorf("ceiling %v: warning key = %q, want %q — an alert rule matches on the field, not the prose", d, w.Key, maxAttemptCredentialLifetimeKey)
+		}
+		if w.Value != d {
+			t.Errorf("ceiling %v: warning value = %v, want the offending value", d, w.Value)
 		}
 		for _, want := range []string{"auth.max_attempt_credential_lifetime", "disabled", "renewal", "activeDeadlineSeconds", "watchdog", "wedged"} {
-			if !strings.Contains(got[0], want) {
-				t.Errorf("ceiling %v: warning %q must mention %q", d, got[0], want)
+			if !strings.Contains(w.Msg, want) {
+				t.Errorf("ceiling %v: warning %q must mention %q", d, w.Msg, want)
 			}
 		}
 	}
 	if got := ResilienceLadderWarnings(defaultLadder()); len(got) != 0 {
-		t.Errorf("a set ceiling must produce no warning, got %q", got)
+		t.Errorf("a set ceiling must produce no warning, got %+v", got)
 	}
 }

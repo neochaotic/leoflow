@@ -287,8 +287,11 @@ task override (tasks.<id>)  >  DAG default (defaults)  >  platform default (serv
 ```
 
 - `tasks.<id>` is merged at **compile** time onto the task in `dag.json`.
-- Platform defaults are applied at **dispatch** time, filling only gaps the
-  artifact left empty (keeps the artifact portable across clusters).
+- Platform defaults are applied at **dispatch** time, filling gaps the artifact
+  left empty (keeps the artifact portable across clusters) — but **wholesale**:
+  if a task declares any `resources` at all, even only `ephemeral_storage`, the
+  platform cpu/memory default does not apply to it
+  ([#802](https://github.com/neochaotic/leoflow/issues/802)).
 - **`staging` is DAG-level only** — one RWX volume is shared atomically by the
   whole run, so it cannot be per-task.
 

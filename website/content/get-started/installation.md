@@ -378,12 +378,17 @@ deploy, layer on:
   replica.
 - **NetworkPolicy — two independent values, and the task-pod one is the
   containment.** `networkPolicy.enabled=true` restricts the **control plane**,
-  and only its **ingress**: the policy's egress list, `networkPolicy.egress`, is
-  **empty by default and an empty egress list means allow-all**, deliberately, so
-  that enabling the policy does not silently break Postgres / Redis /
-  kube-apiserver access. Egress stays wide open until you populate
-  `networkPolicy.egress` with your own data-store and apiserver rules (DNS is
-  always allowed regardless). It renders nothing for task pods.
+  and only its **ingress**: `networkPolicy.egress` is **empty by default, and the
+  chart then renders a single empty egress *rule* (`- {}`), which matches every
+  destination** — deliberately, so that enabling the policy does not silently
+  break Postgres / Redis / kube-apiserver access. (The distinction matters if you
+  hand-write policies: an empty egress *list* under `policyTypes: [Egress]` is
+  deny-all; an empty *rule* is allow-all.) Egress stays wide open until you
+  populate `networkPolicy.egress` with your own data-store and apiserver rules
+  (DNS is always allowed regardless). Its ingress, meanwhile, is port-scoped but
+  not source-scoped until you set `networkPolicy.ingressFrom`: with the default
+  empty list the policy renders ports 8080/9091 with no `from`, so any pod in any
+  namespace may reach them. It renders nothing for task pods.
 - **`taskNetworkPolicy.enabled` is the task-pod policy, and it defaults to
   `false`.** This is the one that governs the pods running untrusted,
   author-supplied DAG code: it denies all ingress and allows egress only to DNS,
@@ -406,8 +411,10 @@ deploy, layer on:
   STS endpoint. The install NOTES warn while the value is off.
 - **Both policies need a CNI that *enforces* NetworkPolicy.** A rendered policy
   object is not proof of enforcement: kindnet (the default on `kind`) enforces
-  nothing, and the AWS VPC CNI enforces policy only when its network-policy agent
-  is enabled — off by default on many EKS clusters. Verify on your own CNI before
+  nothing; the AWS VPC CNI enforces policy only when its network-policy agent is
+  enabled — off by default on many EKS clusters; and on GKE, Dataplane V2
+  (Cilium) enforces natively, while a non-DPv2 Standard cluster needs the
+  network-policy addon or nothing enforces. Verify on your own CNI before
   treating either policy as a control.
 - **Secret-delivery posture.** Three `auth.*` flips decide how much credential a
   task pod can reach, and all three ship on the value that is byte-for-byte

@@ -176,9 +176,19 @@ tests:
       - hasDocuments:
           count: 1
         template: networkpolicy.yaml
-      - notEqual:
-          path: metadata.namespace
-          value: leoflow-tasks
+      # Separation is a matter of SELECTION, not of namespace: taskNamespace
+      # defaults to the release namespace, so a namespace assertion passes for
+      # free and proves nothing. Task pods carry only leoflow.io/* labels
+      # (internal/executor/kubernetes.go), so pinning the whole selector map is
+      # what fails if anyone widens it to reach them.
+      - equal:
+          path: spec.podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: leoflow
+            app.kubernetes.io/instance: leoflow
+        template: networkpolicy.yaml
+      - notExists:
+          path: spec.podSelector.matchExpressions
         template: networkpolicy.yaml
       # And its egress is the empty rule, i.e. allow-all — enabling the
       # control-plane policy restricts INGRESS only until networkPolicy.egress

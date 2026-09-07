@@ -249,13 +249,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [ADR 0054](https://leoflow.dev/project/adrs/0054-shared-cluster-coexistence/)
   promotes) makes the resources object non-nil and therefore drops the platform
   cpu and memory defaults entirely, leaving a pod with an ephemeral-storage limit
-  and no cpu or memory request at all — schedulable anywhere, invisible to
-  autoscaler capacity math, first evicted under pressure. Field-granular merge is
-  deliberately **not** done here: completing a partial block from the platform
-  default at compile time is impossible for the CLI (it cannot know the cluster's
-  default) and baking one in would destroy the portability of the compiled
-  artifact the chart explicitly promises
-  ([#802](https://github.com/neochaotic/leoflow/issues/802)).
+  and no cpu or memory request at all. Only cpu and memory are QoS compute
+  resources, so that pod is **BestEffort** — schedulable anywhere, invisible to
+  autoscaler capacity math, and first evicted under pressure. Field-granular merge is
+  deliberately **not** done here: it belongs at dispatch, server-side, where the
+  cluster default is known — and changing how the dispatcher composes a pod spec
+  mid-release alters the resource footprint of every task that has a partial
+  block, which can leave pods `Pending` on a cluster with no headroom. That
+  needs a cluster pass, not a release patch
+  ([#802](https://github.com/neochaotic/leoflow/issues/802)). (Doing it in the
+  CLI at compile time is separately impossible — it cannot know the cluster's
+  default, and baking one in would destroy the portability of the compiled
+  artifact the chart promises.)
 
 - **The installation guide no longer claims `networkPolicy.enabled` restricts
   task pods, or that it restricts egress at all.** Production hardening told
@@ -266,9 +271,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   followed the section to the letter believed the network-layer containment
   [ADR 0048](https://leoflow.dev/project/adrs/0048-no-user-code-in-control-plane/)
   leans on was in place and had none. And the control-plane policy restricts
-  **ingress only**: its `networkPolicy.egress` list is empty by default and an
-  empty egress list means allow-all, deliberately, so enabling the policy cannot
-  silently break Postgres / Redis / kube-apiserver access. The bullet is now
+  **ingress only**: its `networkPolicy.egress` is empty by default and the
+  chart then renders a single empty egress *rule* (`- {}`), which matches every
+  destination — deliberately, so enabling the policy cannot silently break
+  Postgres / Redis / kube-apiserver access. The bullet is now
   split per value, states the task policy's `false` default and the
   `blockPrivateNetworks` / `allowMetadataEgress` escape hatches (the latter is
   why the policy is opt-in: both clouds serve keyless workload identity from the

@@ -81,12 +81,13 @@ Task pods run untrusted, author-supplied DAG code, and this chart always deploys
 the production edition, so the network layer is where "a task can reach cloud
 metadata, the apiserver, or any in-cluster service" is contained (ADR 0047/0048).
 networkPolicy.enabled does NOT cover task pods: it selects control-plane pods in
-namespace {{ .Release.Namespace }}, and its own egress list is empty by
-default, which means allow-all — it restricts ingress only. Nothing selects a
-task pod in namespace {{ .Values.taskNamespace }} until you set:
+namespace {{ .Release.Namespace }}, and its egress is a single empty rule
+(- {}), which matches every destination — it restricts ingress only. Nothing
+selects a task pod in namespace {{ .Values.taskNamespace }} until you set:
      --set taskNetworkPolicy.enabled=true
-It is off by default on purpose, not by oversight: the policy always blocks
-169.254.0.0/16, which is where GKE Workload Identity and EKS Pod Identity serve
+It is off by default on purpose, not by oversight: the policy always excludes
+169.254.0.0/16 from its allow-all egress rule, and that is where GKE Workload
+Identity and EKS Pod Identity serve
 keyless credentials, so enabling it can break external-secrets auth until you
 re-allow that one host with taskNetworkPolicy.allowMetadataEgress (a /32, e.g.
 169.254.169.254/32 on GKE, 169.254.170.23/32 for EKS Pod Identity). Also

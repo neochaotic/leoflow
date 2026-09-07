@@ -232,8 +232,25 @@ helm upgrade leoflow ... \
 helm upgrade leoflow ... --set networkPolicy.enabled=true
 ```
 - **Separation PASS:** with the control-plane policy ON and
-  `taskNetworkPolicy.enabled` left at its `false` default,
-  `kubectl -n <taskNamespace> get networkpolicy` returns **zero** objects — the
+  `taskNetworkPolicy.enabled` left at its `false` default, **no policy selects a
+  task pod**. Check selection, not object count: `taskNamespace` defaults to
+  `leoflow`, which is the release namespace in §1's baseline, so counting objects
+  there returns the control-plane policy and reads as a FAIL on a correct
+  install.
+
+  ```bash
+  kubectl -n <taskNamespace> get netpol -o json | jq '
+    [ .items[]
+      | select( (.spec.podSelector.matchLabels // {} | keys)
+                + [ (.spec.podSelector.matchExpressions // [])[].key ]
+                | any(startswith("leoflow.io/")) )
+    ] | length'
+  # PASS = 0
+  ```
+
+  Task pods carry only `leoflow.io/*` labels (`internal/executor/kubernetes.go`),
+  while the control-plane policy selects `app.kubernetes.io/name` +
+  `instance` — so it cannot select a task pod even in the same namespace. The
   task pods are uncontained, which is exactly what the hardening section used to
   deny. `kubectl -n <releaseNamespace> get networkpolicy -o yaml` shows the
   control-plane policy's `spec.egress` ending in the **empty rule (`{}`)**, i.e.

@@ -332,30 +332,56 @@ func TestRunnerXComFetchErrorOutcomeRecordCarriesNoReason(t *testing.T) {
 // record renders (executor.recordFailureReason) as "task failed (exit 0)" — a
 // string that reads as a success and names no cause. This failure is one the
 // agent diagnoses itself, so it carries its own classification (#930).
-func TestRunnerReturnValuePushFailureRecordDoesNotRenderBareExitCode(t *testing.T) {
-	dir := t.TempDir()
-	returnPath := filepath.Join(dir, "return.json")
-	if err := os.WriteFile(returnPath, []byte(`{"x":1}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "termination-log")
-	client := &fakeClient{
-		spec:    &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:ok"},
-		pushErr: errors.New("xcom backend down"),
-	}
-	r := newRunner(client, &fakeCmd{exitCode: 0}, &recordingSink{})
-	r.ReturnPath = returnPath
-	r.TerminationLogPath = path
+// TestRunnerOutputPushFailureRecordsTheClassification covers all THREE
+// post-task push sites, not just the return value. They share one constant and
+// one shape — the user's code has already exited 0, so an unclassified record
+// renders as a failure naming exit code 0, which reads as a success and names
+// no cause — and a future edit that classifies one and forgets another would
+// otherwise go unnoticed. Extra links in particular are neither a return value
+// nor an XCom, which is why the constant names all three.
+func TestRunnerOutputPushFailureRecordsTheClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+		body  string
+	}{
+		{"return value", "return", `{"x":1}`},
+		{"extra links", "links", `[{"name":"run","url":"https://example.invalid"}]`},
+		{"custom xcoms", "pushes", `{"k":"v"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, tc.field+".json")
+			if err := os.WriteFile(p, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "termination-log")
+			client := &fakeClient{
+				spec:    &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:ok"},
+				pushErr: errors.New("xcom backend down"),
+			}
+			r := newRunner(client, &fakeCmd{exitCode: 0}, &recordingSink{})
+			switch tc.field {
+			case "return":
+				r.ReturnPath = p
+			case "links":
+				r.LinksPath = p
+			case "pushes":
+				r.PushesPath = p
+			}
+			r.TerminationLogPath = path
 
-	if err := r.Run(context.Background()); err == nil {
-		t.Fatal("a failed pre-report push must fail the task")
-	}
-	rec := readOutcome(t, path)
-	if rec.Reason != reasonOutputUndelivered {
-		t.Errorf("record reason = %q, want the classification constant %q — otherwise the "+
-			"reconciler renders the bare %q", rec.Reason, reasonOutputUndelivered, "task failed (exit 0)")
-	}
-	if strings.Contains(rec.Reason, "xcom backend down") {
-		t.Errorf("record reason leaks the raw push error: %q", rec.Reason)
+			if err := r.Run(context.Background()); err == nil {
+				t.Fatalf("%s: a failed pre-report push must fail the task", tc.name)
+			}
+			rec := readOutcome(t, path)
+			if rec.Reason != reasonOutputUndelivered {
+				t.Errorf("%s: record reason = %q, want the classification constant %q — otherwise the "+
+					"reconciler renders the bare %q", tc.name, rec.Reason, reasonOutputUndelivered, "task failed (exit 0)")
+			}
+			if strings.Contains(rec.Reason, "xcom backend down") {
+				t.Errorf("%s: record reason leaks the raw push error: %q", tc.name, rec.Reason)
+			}
+		})
 	}
 }

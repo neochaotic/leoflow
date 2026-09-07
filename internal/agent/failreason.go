@@ -18,8 +18,9 @@ import "errors"
 const (
 	reasonSecretUnresolved = "the task's external secret backend refused or failed to resolve a declared " +
 		"secret, so the task was not started; check the task pod's identity and the backend's permissions."
-	reasonOutputUndelivered = "the task's own code finished, but its return value or XCom outputs could not " +
-		"be delivered to the control plane; check the control plane's reachability and its XCom storage."
+	reasonOutputUndelivered = "the task's own code finished and its side effects already happened, but its " +
+		"outputs (return value, XCom, extra links) could not be delivered; a retry re-runs that code. " +
+		"Check the control plane and its XCom storage."
 )
 
 // errSecretResolution marks a buildEnv failure that came from the external secret

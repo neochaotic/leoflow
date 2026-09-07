@@ -258,8 +258,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   declared timeout **plus** a 3-minute startup headroom (the dispatch-lost
   threshold — the window in which the control plane still presumes healthy
   startup and defers reaping) **plus** up to 60 s of the pod's
-  `terminationGracePeriodSeconds` (30 s when undeclared), so the agent always
-  fires first and its diagnosis is what the operator sees. The grace is added on
+  `terminationGracePeriodSeconds` (30 s when undeclared), so the agent's clock
+  fires first and its diagnosis is the one recorded. One limit is worth stating
+  rather than discovering: the agent kills its direct child and then waits for
+  the task's output pipe to close, so a task that leaves a live grandchild
+  holding that pipe — any compound shell entrypoint, or a Python task that
+  spawns a subprocess — keeps the agent's wait open past its own deadline. That
+  task still ends on the kubelet's deadline with the generic reason and no
+  outcome record, exactly as before. The guarantee therefore holds for a task
+  whose process tree exits with it; the remaining shape is tracked in
+  [#943](https://github.com/neochaotic/leoflow/issues/943). The grace is added on
   top of the headroom rather than instead of it: it covers the shutdown tail, not
   the startup head. It is capped because the declaration is unvalidated — adding
   an hour of declared grace verbatim would put the deadline an hour past the

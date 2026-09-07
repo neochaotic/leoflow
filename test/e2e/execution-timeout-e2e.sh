@@ -190,17 +190,19 @@ task_field() {
 
 # task_pod prints the name of the task pod dispatched for one task_id, or empty.
 #
-# It REFUSES to guess when more than one pod carries the label. The selector is
-# task-id only — the pod's run-id label is the run's internal UUID, which the API
-# does not expose — so it is unique only because purge_runs below leaves exactly
-# one run of this DAG. It is not unique by construction: a task instance left
-# `running` in the SHARED dev database by an earlier invocation is re-dispatched
-# once this run's control plane takes leadership, and its pod carries the same
-# task-id label. Picking items[0] then silently read and froze the wrong run's
-# pod while the assertions polled this run's task instance.
+# It REFUSES to guess when more than one pod matches. The selector pairs the
+# task id with the DAG id, which the dispatcher stamps on every task pod and
+# which is unique per invocation here, so the lookup is unique BY CONSTRUCTION
+# rather than by exclusion. That matters because the sweep can only remove DAGs
+# under this scenario's own prefix: a task instance left `running` in the SHARED
+# dev database by any OTHER dag with a task named the same — a chaos scenario, a
+# hand-made dev dag — is re-dispatched once this run's control plane takes
+# leadership, and its pod would carry the same task-id label. Picking items[0]
+# then silently read and froze the wrong run's pod while the assertions polled
+# this run's task instance. The refuse-to-guess check stays as belt and braces.
 task_pod() {
   local names count
-  names="$(kubectl get pods -n "$NS" -l "leoflow.io/task-id=$1" \
+  names="$(kubectl get pods -n "$NS" -l "leoflow.io/dag-id=$DAG_ID,leoflow.io/task-id=$1" \
     -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
   count="$(printf '%s' "$names" | wc -w | tr -d ' ')"
   [ "$count" -le 1 ] \
@@ -344,6 +346,13 @@ export LEOFLOW_LOGS_DIR="${WORKDIR}/logs"
 export LEOFLOW_SERVER_HTTP_ADDR="0.0.0.0:${HTTP_PORT}"
 export LEOFLOW_SERVER_METRICS_ADDR="0.0.0.0:${METRICS_PORT}"
 export LEOFLOW_DATABASE_URL="$DATABASE_URL"
+# Assertion 4's premise, pinned rather than inherited. The keeper declares no
+# execution_timeout, so its pod's activeDeadlineSeconds IS this ceiling — the
+# floor branch of podActiveDeadline. Viper binds every LEOFLOW_* automatically,
+# so a developer with a low ceiling exported (the state #937 was filed about)
+# would have the kubelet preempt the agent-lost reaper, and assertion 4 would go
+# red naming the reaper for a shell variable.
+export LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME=24h
 "$ROOT/bin/leoflow-server" >"$WORKDIR/server.log" 2>&1 &
 SERVER_PID=$!
 # Wait on /readyz with a NAMED cause. Without this a control plane that never

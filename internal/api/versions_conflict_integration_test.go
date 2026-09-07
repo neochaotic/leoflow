@@ -57,8 +57,10 @@ func TestRegisterVersionDuplicateReturns409(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate version push = %d, want 409 (%s)", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
-	for _, leak := range []string{"23505", "dag_versions_unique", "SQLSTATE"} {
+	// Scan what the server composed, not the dag id it echoes back — see
+	// leakScanTarget.
+	body := leakScanTarget(rec.Body.String(), dagID)
+	for _, leak := range pgLeaks {
 		if strings.Contains(body, leak) {
 			t.Errorf("409 body leaks raw pg internals (%q): %s", leak, body)
 		}

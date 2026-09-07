@@ -20,13 +20,14 @@ type fakeRenewer struct {
 	ok      bool
 	err     error
 
+	gotCtx   context.Context
 	gotToken string
 	gotTTL   time.Duration
 	gotMax   time.Duration
 }
 
-func (f *fakeRenewer) RenewUserToken(token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error) {
-	f.gotToken, f.gotTTL, f.gotMax = token, ttl, maxLifetime
+func (f *fakeRenewer) RenewUserToken(ctx context.Context, token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error) {
+	f.gotCtx, f.gotToken, f.gotTTL, f.gotMax = ctx, token, ttl, maxLifetime
 	return f.renewed, f.ok, f.err
 }
 
@@ -77,6 +78,11 @@ func TestRenewTokenReturnsFreshToken(t *testing.T) {
 	}
 	if r.gotMax != 24*time.Hour {
 		t.Errorf("renewer max_lifetime = %v, want 24h (TokenMaxLifetimeSecs)", r.gotMax)
+	}
+	// The renewer reloads the user from the store, so it must run under the
+	// request's context rather than a detached one (#801).
+	if r.gotCtx == nil {
+		t.Error("renewer got a nil context; the store reload must be canceled with the request")
 	}
 }
 

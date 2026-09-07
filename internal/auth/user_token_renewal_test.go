@@ -46,7 +46,7 @@ func TestRenewUserTokenShortTTLAndPreservedOrigin(t *testing.T) {
 	// 55 minutes later, near expiry, the CLI silently renews.
 	t1 := t0.Add(55 * time.Minute)
 	a.now = func() time.Time { return t1 }
-	renewed, ok, err := a.RenewUserToken(issued, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("RenewUserToken: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRenewUserTokenRejectsExpired(t *testing.T) {
 		t.Fatalf("mintUserToken: %v", err)
 	}
 	a.now = func() time.Time { return t0.Add(2 * time.Minute) }
-	renewed, ok, err := a.RenewUserToken(expired, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), expired, time.Hour, 24*time.Hour)
 	if err == nil || ok || renewed != "" {
 		t.Errorf("renewing an expired token must error and mint nothing; got ok=%v renewed=%q err=%v", ok, renewed, err)
 	}
@@ -116,7 +116,7 @@ func TestRenewUserTokenCeilingStopsRenewal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	renewed, ok, err := a.RenewUserToken(aged, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), aged, time.Hour, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("RenewUserToken must not error past the ceiling: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestRenewUserTokenNoCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	if _, ok, err := a.RenewUserToken(aged, time.Hour, 0); err != nil || !ok {
+	if _, ok, err := a.RenewUserToken(context.Background(), aged, time.Hour, 0); err != nil || !ok {
 		t.Errorf("a non-positive ceiling must never refuse renewal; got ok=%v err=%v", ok, err)
 	}
 }
@@ -151,7 +151,7 @@ func TestRenewUserTokenRejectsForeignAndAgentTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	if _, ok, ferr := a.RenewUserToken(foreign, time.Hour, 24*time.Hour); ferr == nil || ok {
+	if _, ok, ferr := a.RenewUserToken(context.Background(), foreign, time.Hour, 24*time.Hour); ferr == nil || ok {
 		t.Errorf("renewing a foreign-signed token must fail; got ok=%v err=%v", ok, ferr)
 	}
 
@@ -159,7 +159,7 @@ func TestRenewUserTokenRejectsForeignAndAgentTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueAgentToken: %v", err)
 	}
-	if _, ok, aerr := a.RenewUserToken(agentTok, time.Hour, 24*time.Hour); aerr == nil || ok {
+	if _, ok, aerr := a.RenewUserToken(context.Background(), agentTok, time.Hour, 24*time.Hour); aerr == nil || ok {
 		t.Errorf("an agent-audience token must not be renewable on the user path; got ok=%v err=%v", ok, aerr)
 	}
 }
@@ -197,7 +197,7 @@ func TestRenewUserTokenRefusesDeactivatedUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	renewed, ok, err := a.RenewUserToken(issued, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
 	if err == nil || ok || renewed != "" {
 		t.Fatalf("a deactivated user must be refused and minted nothing; got ok=%v renewed=%q err=%v", ok, renewed, err)
 	}
@@ -218,7 +218,7 @@ func TestRenewUserTokenRefusesMissingNonDevSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	renewed, ok, err := a.RenewUserToken(issued, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
 	if err == nil || ok || renewed != "" {
 		t.Fatalf("a non-dev subject with no user row must be refused; got ok=%v renewed=%q err=%v", ok, renewed, err)
 	}
@@ -237,7 +237,7 @@ func TestRenewUserTokenFailsClosedOnStoreError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	if renewed, ok, rerr := a.RenewUserToken(issued, time.Hour, 24*time.Hour); rerr == nil || ok || renewed != "" {
+	if renewed, ok, rerr := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour); rerr == nil || ok || renewed != "" {
 		t.Fatalf("a store error must fail closed; got ok=%v renewed=%q err=%v", ok, renewed, rerr)
 	}
 }
@@ -256,7 +256,7 @@ func TestRenewUserTokenAllowsDevSubjectWithNoUserRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	renewed, ok, err := a.RenewUserToken(issued, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
 	if err != nil || !ok {
 		t.Fatalf("the dev subject must keep renewing without a user row; got ok=%v err=%v", ok, err)
 	}
@@ -277,7 +277,7 @@ func TestRenewUserTokenAllowsNilStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	if _, ok, rerr := a.RenewUserToken(issued, time.Hour, 24*time.Hour); rerr != nil || !ok {
+	if _, ok, rerr := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour); rerr != nil || !ok {
 		t.Fatalf("a nil store must still renew; got ok=%v err=%v", ok, rerr)
 	}
 }

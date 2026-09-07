@@ -179,10 +179,21 @@ func (a *JWTAuthenticator) mintUserToken(user *User, ttl time.Duration, origin t
 // maxLifetime disables the ceiling. exp is always now+ttl — never accumulated.
 //
 // An invalid incoming token (bad signature, wrong audience, expired) returns an
-// error and is never re-minted. Roles are copied from the incoming token, exactly
-// as they were signed; Authenticate still reloads authorization from the store on
-// every request, so a renewed token confers no more than the original did.
-func (a *JWTAuthenticator) RenewUserToken(token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error) {
+// error and is never re-minted.
+//
+// Renewal RE-PROVES the principal: after the claims check and the ceiling check
+// it reloads the user from the store, exactly as Authenticate does, and refuses
+// (ErrInvalidToken) when the account is inactive or its row is gone. Issuing a
+// credential is not weaker than using one, so a deactivated user must stop
+// receiving fresh tokens, not merely stop being able to spend them. The same two
+// carve-outs Authenticate makes apply verbatim: a nil store (no data plane bound
+// — the trusted in-process minting context) and the dev-token subject, which has
+// no backing row by design. Any other store failure fails closed; that adds no
+// failure mode, because a database blip that refuses this renewal would refuse
+// the following request anyway, and the client's refresh is best-effort. Roles on
+// the re-minted token come from the reload, so a role revoked mid-session is
+// reflected at once rather than carried forward from the old claims.
+func (a *JWTAuthenticator) RenewUserToken(ctx context.Context, token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error) {
 	var c jwtClaims
 	parsed, err := jwt.ParseWithClaims(token, &c, func(*jwt.Token) (any, error) {
 		return a.secret, nil
@@ -201,10 +212,37 @@ func (a *JWTAuthenticator) RenewUserToken(token string, ttl, maxLifetime time.Du
 	if maxLifetime > 0 && !origin.IsZero() && a.clock().Sub(origin) > maxLifetime {
 		return "", false, nil // past the ceiling: let the credential lapse
 	}
-	user := &User{ID: c.Subject, TenantID: c.TenantID, Email: c.Email, Roles: c.Roles}
+	user, err := a.reloadForRenewal(ctx, &c)
+	if err != nil {
+		return "", false, err
+	}
 	renewed, err = a.mintUserToken(user, ttl, origin)
 	if err != nil {
 		return "", false, err
 	}
 	return renewed, true, nil
+}
+
+// reloadForRenewal resolves the principal a renewal will re-mint, preferring the
+// store over the incoming token's claims. It is the read side that makes renewal
+// obey the same revocation rule as request authentication, and it mirrors
+// Authenticate's branches one for one — nil store and the dev-token subject fall
+// back to the signed claims, an inactive or otherwise-missing user is refused,
+// and any other store error fails closed.
+func (a *JWTAuthenticator) reloadForRenewal(ctx context.Context, c *jwtClaims) (*User, error) {
+	claimed := &User{ID: c.Subject, TenantID: c.TenantID, Email: c.Email, Roles: c.Roles}
+	if a.store == nil {
+		return claimed, nil
+	}
+	user, active, err := a.store.FindUserByID(ctx, c.Subject)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) && c.Subject == DevTokenSubject {
+			return claimed, nil
+		}
+		return nil, errors.Join(ErrInvalidToken, err)
+	}
+	if !active {
+		return nil, ErrInvalidToken
+	}
+	return user, nil
 }

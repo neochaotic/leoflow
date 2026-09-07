@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -14,9 +15,11 @@ import (
 // TokenRenewer re-mints a still-valid user bearer with a fresh short TTL, bounded
 // by max_lifetime since first login. *auth.JWTAuthenticator implements it via
 // RenewUserToken; the handler depends on this narrow interface so the renew route
-// can be tested without a real signing key.
+// can be tested without a real signing key. It takes a context because renewal
+// re-proves the principal against the user store, so it must be canceled with
+// the request.
 type TokenRenewer interface {
-	RenewUserToken(token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error)
+	RenewUserToken(ctx context.Context, token string, ttl, maxLifetime time.Duration) (renewed string, ok bool, err error)
 }
 
 // breakGlass gates the credential path when the provider is OIDC (D8): only the
@@ -153,11 +156,12 @@ func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSe
 //
 // The route sits under the public /api/v2/auth/ prefix (like login/logout), so the
 // handler is self-gating: it re-mints ONLY from a cryptographically valid,
-// unexpired, correct-audience bearer (the renewer enforces all of that), and
-// answers 401 both when the token is invalid/expired and when it is past
-// max_lifetime, so the CLI falls back to login in either case. You cannot renew
-// without already holding a valid token. The response mirrors /auth/token so the
-// same client decoder handles both.
+// unexpired, correct-audience bearer whose user is still active in the store (the
+// renewer enforces all of that), and answers 401 when the token is
+// invalid/expired, when its user has been deactivated or deleted, and when it is
+// past max_lifetime, so the CLI falls back to login in every case. You cannot
+// renew without already holding a valid token for a live account. The response
+// mirrors /auth/token so the same client decoder handles both.
 func renewTokenHandler(renewer TokenRenewer, ttlSeconds, maxLifetimeSeconds int) gin.HandlerFunc {
 	ttl := time.Duration(ttlSeconds) * time.Second
 	maxLifetime := time.Duration(maxLifetimeSeconds) * time.Second
@@ -167,7 +171,7 @@ func renewTokenHandler(renewer TokenRenewer, ttlSeconds, maxLifetimeSeconds int)
 			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "missing bearer token")
 			return
 		}
-		renewed, ok, err := renewer.RenewUserToken(token, ttl, maxLifetime)
+		renewed, ok, err := renewer.RenewUserToken(c.Request.Context(), token, ttl, maxLifetime)
 		if err != nil {
 			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "token cannot be renewed; log in again")
 			return

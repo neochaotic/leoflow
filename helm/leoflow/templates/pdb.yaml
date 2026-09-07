@@ -15,6 +15,19 @@ multi-replica, active-active role). The scheduler is a single leader (ADR 0009);
 a PDB over one pod would block node drains, so it is deliberately excluded.
 Non-split covers the single "all" Deployment, unchanged. */ -}}
 {{- $role := ternary "api" "all" .Values.split.enabled -}}
+{{- /*
+A PodDisruptionBudget spec carries minAvailable OR maxUnavailable, never both:
+the apiserver rejects the pair, so a render that emitted both looked clean and
+then failed the install — the shape this chart refuses at render time
+everywhere else. This was a values-file comment until the budget became
+default-on for the HA replica floor, which put the pair one `--set` away from a
+real install. Truthiness deliberately matches the two `with` blocks below, so
+the guard judges exactly what would be rendered: a `0` or `""` on either key is
+omitted from the spec and is therefore not "set" here either (#905).
+*/ -}}
+{{- if and .Values.podDisruptionBudget.minAvailable .Values.podDisruptionBudget.maxUnavailable -}}
+{{- fail (printf "podDisruptionBudget.minAvailable=%v and podDisruptionBudget.maxUnavailable=%v are both set: a PodDisruptionBudget spec carries exactly one of the two and the apiserver rejects both together, so the install would fail after a clean render. Set one and clear the other (podDisruptionBudget.maxUnavailable=\"\" keeps the chart's minAvailable default). See #905." .Values.podDisruptionBudget.minAvailable .Values.podDisruptionBudget.maxUnavailable) -}}
+{{- end -}}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

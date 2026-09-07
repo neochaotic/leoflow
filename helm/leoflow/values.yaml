@@ -463,9 +463,9 @@ autoscaling:
 podDisruptionBudget:
   # -- (bool) Tri-state. Unset/empty (default) = auto: the PDB renders iff the guaranteed replica floor is `> 1`. `true` forces it on (on a single replica this blocks node drains and auto-upgrades — an informed choice; NOTES warns). `false` forces it off. The quoted string spellings `"true"` / `"false"` are accepted too, because Argo CD's `helm.parameters` and `helm --set-string` pass every override as a string — reading those as "not a boolean" used to fall through to auto, so a forced-on budget silently never rendered. Any OTHER non-empty value fails the render rather than falling back to auto.
   enabled:
-  # -- Minimum replicas that must remain up during voluntary disruption. Set only ONE of minAvailable / maxUnavailable.
+  # -- Minimum replicas that must remain up during voluntary disruption. Set only ONE of minAvailable / maxUnavailable — a PDB spec carries exactly one, the apiserver rejects both together, and the chart fails the render on the pair rather than letting the install fail after a clean render.
   minAvailable: 1
-  # -- Maximum replicas allowed unavailable during voluntary disruption. Set only ONE of minAvailable / maxUnavailable.
+  # -- Maximum replicas allowed unavailable during voluntary disruption. Set only ONE of minAvailable / maxUnavailable — setting this one means clearing `minAvailable` (`""`), since the chart fails the render when both are set.
   maxUnavailable: ""
   # -- `spec.unhealthyPodEvictionPolicy` (policy/v1, GA since Kubernetes 1.27; older apiservers prune the field — set `""` to omit it). `AlwaysAllow` (default) lets unhealthy pods be evicted even when the budget is unmet: with the Kubernetes default `IfHealthyBudget`, both replicas unready (bad DB credentials after a rotation, image-pull failure, wedged rollout) means even the broken pods cannot be evicted and node drains hang on an already-down control plane.
   unhealthyPodEvictionPolicy: AlwaysAllow

@@ -176,6 +176,23 @@ tests:
       - failedTemplate:
           errorMessage: "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got \"yes\"). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905."
 
+  # ─── minAvailable XOR maxUnavailable ─────────────────────────────────────
+  # A PodDisruptionBudget spec carries one of the two, never both: the apiserver
+  # rejects the pair, so rendering it fails the install after the render looked
+  # fine — the shape this chart refuses at render time everywhere else. It was a
+  # values-file comment until the budget became default-on for the HA profile,
+  # which put the pair one `--set` away from a real install (#905).
+  - it: refuses a PodDisruptionBudget with both minAvailable and maxUnavailable set
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.minAvailable: 1
+      podDisruptionBudget.maxUnavailable: 1
+    asserts:
+      - failedTemplate:
+          errorMessage: "podDisruptionBudget.minAvailable=1 and podDisruptionBudget.maxUnavailable=1 are both set: a PodDisruptionBudget spec carries exactly one of the two and the apiserver rejects both together, so the install would fail after a clean render. Set one and clear the other (podDisruptionBudget.maxUnavailable=\"\" keeps the chart's minAvailable default). See #905."
+
   # ─── Single-writer log volume guard ──────────────────────────────────────
   # A ReadWriteOnce / ReadWriteOncePod PVC attaches to one node / one pod. A
   # second control-plane replica scheduled elsewhere hangs in ContainerCreating

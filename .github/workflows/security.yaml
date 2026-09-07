@@ -79,7 +79,7 @@ jobs:
       # Container image scanning returns once deploy/Dockerfile.server exists
       # (Phase 6 deploy artifacts).
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@314ff8b43182423b84c50b1670b0e10f858f2d98 # master
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
         with:
           scan-type: fs
           scan-ref: .

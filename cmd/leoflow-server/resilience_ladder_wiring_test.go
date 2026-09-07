@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,12 @@ import (
 	"github.com/neochaotic/leoflow/internal/scheduler"
 )
 
+// ceilingEnv is the env var viper's AutomaticEnv binds to
+// auth.max_attempt_credential_lifetime, the one ladder rung an operator can
+// move. It is the ONLY non-hermetic input to the wired ladder: every other rung
+// is a build-time constant, and LoadServer("", nil) reads no config file.
+const ceilingEnv = "LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME"
+
 // TestResilienceLadderWiringValidates pins that the ladder the server actually
 // boots with — agent heartbeat/TTL, default reaper config, reconcile interval,
 // the scheduler's infra re-place ceiling and the SHIPPED default
@@ -19,7 +26,22 @@ import (
 // depends on. The ceiling is read from the config defaults rather than
 // hardcoded, so a change to the shipped default that breaks the order fails
 // this test too, not only a change to a build-time constant.
+//
+// LoadServer resolves that ceiling through viper's AutomaticEnv, so the test
+// unsets ceilingEnv for its own duration to reach the config package's own
+// defaults map and nothing else (#924). Without that, a developer with a short
+// ceiling exported — exactly the developer most likely to be exercising this
+// knob — saw this test fail complaining about the SHIPPED defaults, which are
+// not what it was reading. A too-short ceiling has its own test below, where it
+// is set explicitly rather than inherited from the shell.
 func TestResilienceLadderWiringValidates(t *testing.T) {
+	// t.Setenv registers the restore and bars t.Parallel; there is no
+	// t.Unsetenv, so remove the variable by hand afterwards.
+	t.Setenv(ceilingEnv, "")
+	if err := os.Unsetenv(ceilingEnv); err != nil {
+		t.Fatalf("unsetting %s: %v", ceilingEnv, err)
+	}
+
 	cfg, err := config.LoadServer("", nil)
 	if err != nil {
 		t.Fatalf("LoadServer with shipped defaults: %v", err)

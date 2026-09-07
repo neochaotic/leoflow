@@ -437,6 +437,15 @@ The HA profile sets `60` for comfortable HTTP + dispatch drain headroom under
 load. The chart deliberately ships **no default**: a default would add up to
 30 s of downtime to every single-replica `Recreate` upgrade, for nothing.
 
+Three values mean the same thing here — unset, `null`, and an explicit `0`: the
+chart omits the field and **Kubernetes' own 30 s applies**, which is also the
+grace the `preStopSleepSeconds` guard reasons about. A literal `0` is
+deliberately *not* rendered, because in a pod spec it means `SIGKILL` with
+nothing drained at all — in-flight HTTP requests cut, the dispatch pool never
+settling (task instances left stuck `queued`), open agent log streams never
+flushed, and any `preStop` sleep unsatisfiable. If you really want no grace, set
+it on the pod spec yourself rather than through this value.
+
 ## Involuntary disruptions: why HA is the posture that matters
 
 No PDB, annotation or grace period prevents:

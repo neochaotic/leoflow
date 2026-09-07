@@ -782,12 +782,22 @@ jobs:
           curl -fsSLO "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           sudo install -m 0755 kubectl /usr/local/bin/kubectl
           go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-          # Pinned to 1.9.* like every other dbt install in the repo (the three
-          # dbt e2e images and the adapter-contracts legs). Unpinned, the resolver
-          # takes the 2.0 pre-release, whose experimental parser is a source build
-          # that DOWNLOADS a wheel from GitHub releases during metadata generation
-          # — so this step failed on an HTTP 504 with nothing of ours involved.
-          # The sibling job documents the same reasoning; this one was the straggler.
+          # Pinned to 1.9.* to match the adapter version every other dbt install
+          # in the repo pins (the three dbt e2e images and the adapter-contracts
+          # legs); this step was the one that pinned nothing at all.
+          #
+          # Unpinned it does NOT take a 2.0 pre-release — pip excludes
+          # pre-releases by default, and 2.0 has no stable release. It takes
+          # dbt-core 1.12.x, whose own requirement on
+          # dbt-core-experimental-parser is pre-release-bounded (>=2.0.0b1), and
+          # that package ships sdist-only from 2.0.0a5 on. So pip has to build
+          # it, the build backend fetches over the network, and this step died
+          # on an HTTP 504 with nothing of ours involved. 1.9.11 has no such
+          # dependency, which is what actually closes the hole.
+          #
+          # NOTE: the sibling installs pin only dbt-postgres / dbt-duckdb, whose
+          # dbt-core requirement has no upper bound, so they still resolve
+          # dbt-core 1.12.x and remain exposed — tracked in #957.
           pip install --quiet "dbt-core==1.9.*" "dbt-postgres==1.9.*"
       - name: Apply migrations
         if: steps.gate.outputs.run == 'true'
@@ -1046,6 +1056,21 @@ jobs:
   # a directory that no longer exists — scripts `cd` into nothing, doc links
   # 404 — and no build step resolves the string, so the rot is invisible
   # without a gate. (The guard script owns the literal old-path string.)
+  # ─────────────────────────────────────────────────────────────────────
+  # Release-script self-test. cut-release.sh holds logic that runs only during
+  # a cut — the tag normalizers, and FLAKE_RE, which decides whether a red run
+  # is rerun or stops the release. Nothing else exercises it, so a defect there
+  # surfaces mid-release. It needs no network and takes milliseconds.
+  # ─────────────────────────────────────────────────────────────────────
+  cut-release-selftest:
+    name: Release script self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Run the release script self-test
+        run: bash scripts/check-cut-release-selftest.sh
+
   # ─────────────────────────────────────────────────────────────────────
   stale-deploy-path:
     name: No stale legacy deploy path

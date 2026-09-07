@@ -58,10 +58,15 @@ type Record struct {
 	// a reader that does not know the field still decodes the record as a plain
 	// failure, and a writer that never sets it produces today's bytes exactly.
 	//
-	// It carries a CLASSIFICATION, never a raw error: the agent maps the failure
-	// to one of a closed set of operator-facing strings, so nothing derived from
-	// a credential or an internal error path can reach this durable, end-user
-	// visible field.
+	// It carries a CLASSIFICATION, never a raw error. The agent maps the failure
+	// either to one of a closed set of operator-facing constants (the bootstrap
+	// and environment-build classifiers in internal/agent) or to a fixed template
+	// whose only variable is the timeout the task itself declared; a failure its
+	// classifiers recognize nothing in records NO reason at all rather than
+	// falling back to the error's text. So nothing derived from a credential or an
+	// internal error path can reach this durable, end-user-visible field. A reader
+	// still bounds it: the record can also arrive from a task that wrote its own
+	// termination message.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -79,6 +84,22 @@ func FailedWith(exitCode int32) Record {
 // message rather than losing the whole record to the size cap.
 func FailedBecause(reason string) Record {
 	return Record{V: Version, Outcome: Failed, Reason: TruncateReason(reason, MaxReasonLen)}
+}
+
+// FailedBecauseWith returns a failure record carrying BOTH the user process exit
+// code and a classified reason. It is the shape a diagnosed failure of a process
+// that did run needs (#930): the reason names the cause the control plane cannot
+// otherwise derive — an execution_timeout the agent enforced itself — while the
+// exit code keeps the raw signal the operator still wants to see. FailedBecause
+// remains the constructor for a failure where no user process ever ran, and so
+// has no exit code to report.
+func FailedBecauseWith(exitCode int32, reason string) Record {
+	return Record{
+		V:        Version,
+		Outcome:  Failed,
+		ExitCode: &exitCode,
+		Reason:   TruncateReason(reason, MaxReasonLen),
+	}
 }
 
 // TruncateReason clamps a failure reason to limit bytes, cutting on a rune boundary

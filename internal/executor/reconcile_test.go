@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -450,5 +451,72 @@ func TestReconcileRecordsCompletedSweep(t *testing.T) {
 	}
 	if !failing.LastSweepCompletedAt().IsZero() {
 		t.Errorf("a sweep that could not list pods must record nothing, got %v", failing.LastSweepCompletedAt())
+	}
+}
+
+// TestReconcileSettlesTimeoutReasonFromRecord closes the loop on #930: an
+// execution_timeout whose report never landed is settled from the durable record
+// alone, and the operator sees the agent's diagnosis rather than the generic
+// "task failed (exit N)". This is the pod the kubelet leaves behind when it kills
+// the agent mid-report-retry — phase Failed, no report ever delivered.
+func TestReconcileSettlesTimeoutReasonFromRecord(t *testing.T) {
+	const reason = "execution_timeout: task exceeded 10s limit"
+	// 255, not 137: the agent's own cancel kills the child, a signal death reports
+	// exit code -1, and the agent clamps -1 to 255 before recording it.
+	pod := withRecord(managedPod("p-timeout", "ti-timeout", corev1.PodFailed),
+		taskoutcome.FailedBecauseWith(255, reason))
+	reporter := &fakeReporter{}
+	r := NewReconciler(fake.NewClientset(pod), "leoflow", reporter)
+
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got, ok := reporter.settled["ti-timeout"]
+	if !ok || got.kind != settleFailed {
+		t.Fatalf("timed-out pod's task instance should be settled failed, got %+v (ok=%v)", got, ok)
+	}
+	if !strings.Contains(got.reason, "execution_timeout:") {
+		t.Errorf("reason = %q, want the agent's execution_timeout diagnosis", got.reason)
+	}
+}
+
+// TestRecordFailureReasonPrefersReasonOverExitCode pins the precedence a
+// reason-carrying failure record depends on (#930): with BOTH a reason and an
+// exit code present, the classification wins. Flipping this would silently
+// regress the timeout diagnosis back to "task failed (exit 255)" (255 is the
+// production value: the agent clamps a signal death's -1).
+func TestRecordFailureReasonPrefersReasonOverExitCode(t *testing.T) {
+	rec := taskoutcome.FailedBecauseWith(255, "execution_timeout: task exceeded 10s limit")
+	if got := recordFailureReason(rec); !strings.Contains(got, "execution_timeout:") {
+		t.Errorf("recordFailureReason = %q, want the reason, not the exit code", got)
+	}
+	if rec.ExitCode == nil || *rec.ExitCode != 255 {
+		t.Errorf("exit_code = %v, want 255 kept in the record alongside the reason", rec.ExitCode)
+	}
+}
+
+// TestRecordFailureReasonBoundsTheReason: recordFailureReason is the one reason
+// producer here that reads a value the reconciler did not build. Every sibling
+// (podFailureReason, waitingFailureReason) bounds its output because kubelet
+// fields are unbounded input for an end-user-visible value — and a record's
+// reason is no different: the agent bounds what IT writes, but a task can write
+// its own termination message before being killed, and the kubelet's ceiling
+// there is ~4 KiB, seventeen times the record's own cap. Decode does not bound
+// it either, so the reader must.
+func TestRecordFailureReasonBoundsTheReason(t *testing.T) {
+	msg, err := json.Marshal(map[string]any{
+		"v":       taskoutcome.Version,
+		"outcome": "failed",
+		"reason":  strings.Repeat("A", 4000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := taskoutcome.Decode(string(msg))
+	if !ok {
+		t.Fatalf("a task-written failure record must still decode: %s", msg)
+	}
+	if got := recordFailureReason(rec); len(got) > taskoutcome.MaxReasonLen {
+		t.Errorf("recordFailureReason length = %d, want <= %d", len(got), taskoutcome.MaxReasonLen)
 	}
 }

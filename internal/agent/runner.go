@@ -149,9 +149,16 @@ func (r *Runner) runOneAttempt(ctx context.Context) error {
 		// A buildEnv failure — notably a hard external-secret resolver error (ADR
 		// 0060 B6) — means the task cannot run. Report FAILED with the reason so the
 		// TI settles as failed with a visible cause, instead of being stranded until
-		// a reaper marks it agent_lost. The resolver's reason is already sanitized
-		// (no secret material).
-		return r.failWithReason(ctx, 1, err.Error())
+		// a reaper marks it agent_lost.
+		//
+		// The message and the classification are deliberately different values. The
+		// message is the raw error, which belongs in the report and the logs; the
+		// DURABLE record only ever carries what classifyEnvFailure recognizes, and
+		// "" for everything else. Handing err.Error() to both would put a wrapped
+		// gRPC error — control-plane endpoint, TLS handshake text — on a durable
+		// field readable by anyone with pod read access in the task namespace
+		// (#930).
+		return r.failWithReason(ctx, 1, err.Error(), classifyEnvFailure(err))
 	}
 	return r.execute(ctx, argv, env, time.Duration(spec.GetExecutionTimeoutSeconds())*time.Second)
 }
@@ -424,7 +431,10 @@ func (r *Runner) secretsEnv(ctx context.Context, spec *agentv1.TaskSpec) ([]stri
 	if r.Resolver != nil && !vaultDenied {
 		resolved, err := r.resolveExternal(ctx, coveredRefs(spec, r.SecretBackend))
 		if err != nil {
-			return nil, err
+			// Mark the failure by KIND so classifyEnvFailure can recognize it without
+			// reading the provider's error text, which must never reach the durable
+			// outcome record (#930).
+			return nil, fmt.Errorf("%w: %w", errSecretResolution, err)
 		}
 		for ref, val := range resolved {
 			if ref.Kind == secretsource.KindConnection {
@@ -611,7 +621,10 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	// parent SIGTERM still flows through the generic fail path.
 	if timeout > 0 && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
 		msg := fmt.Sprintf("execution_timeout: task exceeded %s limit", timeout)
-		return r.failWithReason(ctx, exitCode, msg)
+		// The message doubles as the classification here, and only here: it is built
+		// from a fixed template whose only variable is the declared timeout, so it
+		// carries nothing derived from an error.
+		return r.failWithReason(ctx, exitCode, msg, msg)
 	}
 	// A reschedule-mode sensor poked not-ready: it exits with rescheduleExitCode AND
 	// leaves its next-poke time in ReschedulePath. The FILE is the real signal — a
@@ -624,16 +637,23 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 		}
 	}
 	if runErr != nil || exitCode != 0 {
-		return r.fail(ctx, exitCode, runErr)
+		// An ordinary non-zero exit stays UNCLASSIFIED: the record's own
+		// "task failed (exit N)" rendering is the better operator string, and the
+		// cause is raw error text whose detail belongs in the task logs.
+		return r.fail(ctx, exitCode, runErr, "")
 	}
+	// The three output pushes below all run AFTER the user process exited 0, so a
+	// failure here is the agent's own diagnosis: the task worked and only the
+	// delivery of its outputs did not. Unclassified, the record would render as
+	// "task failed (exit 0)" — a string that reads as a success and names no cause.
 	if err := r.pushReturnValue(ctx); err != nil {
-		return r.fail(ctx, 0, err)
+		return r.fail(ctx, 0, err, reasonOutputUndelivered)
 	}
 	if err := r.pushExtraLinks(ctx); err != nil {
-		return r.fail(ctx, 0, err)
+		return r.fail(ctx, 0, err, reasonOutputUndelivered)
 	}
 	if err := r.pushCustomXComs(ctx); err != nil {
-		return r.fail(ctx, 0, err)
+		return r.fail(ctx, 0, err, reasonOutputUndelivered)
 	}
 	return r.report(ctx, agentv1.TaskState_TASK_STATE_SUCCESS, 0, "")
 }
@@ -641,19 +661,29 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 // failWithReason is fail() but with a pre-built error message — used by the
 // execution_timeout path so the operator sees "timeout" rather than the
 // generic "task exited non-zero" or the raw context.DeadlineExceeded.
-func (r *Runner) failWithReason(ctx context.Context, exitCode int, msg string) error {
-	if rerr := r.report(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg); rerr != nil {
+//
+// msg and reason are SEPARATE parameters on purpose (#930). msg is the reported,
+// logged description and may be raw error text. reason is what travels on the
+// DURABLE outcome record, so it must be a classification from the closed set in
+// failreason.go — or "", which records no reason at all. A call site that has a
+// message but no classification for it passes "" and loses nothing: the record
+// then renders from the exit code, as it always did.
+func (r *Runner) failWithReason(ctx context.Context, exitCode int, msg, reason string) error {
+	if rerr := r.reportClassified(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg, reason); rerr != nil {
 		slog.Warn("reporting failed state", "error", rerr)
 	}
 	return errors.New(msg)
 }
 
-func (r *Runner) fail(ctx context.Context, exitCode int, cause error) error {
+// fail reports a terminal failure whose description is an error. reason follows
+// the same rule as failWithReason's: a classification constant, or "" to leave the
+// durable record carrying only the exit code. cause NEVER reaches the record.
+func (r *Runner) fail(ctx context.Context, exitCode int, cause error, reason string) error {
 	msg := "task exited non-zero"
 	if cause != nil {
 		msg = cause.Error()
 	}
-	if rerr := r.report(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg); rerr != nil {
+	if rerr := r.reportClassified(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg, reason); rerr != nil {
 		slog.Warn("reporting failed state", "error", rerr)
 	}
 	if cause != nil {
@@ -805,7 +835,20 @@ func (r *Runner) applyHeartbeatResponse(resp *agentv1.HeartbeatResponse) (termin
 }
 
 func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode int32, msg string) error {
-	r.recordOutcome(state, exitCode)
+	return r.reportClassified(ctx, state, exitCode, msg, "")
+}
+
+// reportClassified is report() for a failure the agent diagnosed itself: reason is
+// carried into the durable outcome record so the diagnosis survives a report that
+// is never delivered (#930). Everything else is identical to report(), which is
+// this with an empty reason.
+//
+// The reason must be a CLASSIFICATION the agent built — not a raw error and
+// nothing derived from a credential — because the record is durable and
+// end-user visible (see taskoutcome.Record.Reason). msg carries the raw
+// description instead; the two are never assumed to be the same string.
+func (r *Runner) reportClassified(ctx context.Context, state agentv1.TaskState, exitCode int32, msg, reason string) error {
+	r.recordOutcome(state, exitCode, reason)
 	if r.BeforeReport != nil {
 		r.BeforeReport(state)
 	}
@@ -821,11 +864,20 @@ func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode i
 // before the report is delivered (ADR 0052). Keying off the reported state — not
 // the individual fail()/failWithReason() call sites — guarantees every failure
 // sink is covered. Non-terminal states are a no-op.
-func (r *Runner) recordOutcome(state agentv1.TaskState, exitCode int32) {
+//
+// A non-empty reason (the execution_timeout diagnosis, #930) is recorded ALONGSIDE
+// the exit code, never instead of it: the reason names the cause the control plane
+// cannot derive from a dead pod, the exit code stays the raw signal. An empty
+// reason produces today's bytes exactly.
+func (r *Runner) recordOutcome(state agentv1.TaskState, exitCode int32, reason string) {
 	switch state {
 	case agentv1.TaskState_TASK_STATE_SUCCESS:
 		r.writeOutcome(taskoutcome.Succeeded())
 	case agentv1.TaskState_TASK_STATE_FAILED:
+		if reason != "" {
+			r.writeOutcome(taskoutcome.FailedBecauseWith(exitCode, reason))
+			return
+		}
 		r.writeOutcome(taskoutcome.FailedWith(exitCode))
 	default:
 		// Non-terminal states (RUNNING, and the reschedule handled separately in

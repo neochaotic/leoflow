@@ -148,3 +148,41 @@ func TestDecodeIgnoresReasonOnNonFailure(t *testing.T) {
 		t.Errorf("a success record must carry no reason, got %q", got.Reason)
 	}
 }
+
+// TestFailedBecauseWithKeepsBothExitCodeAndReason: for a diagnosed failure of a
+// process that DID run (#930) the operator needs both halves — the reason names a
+// cause the control plane cannot derive, the exit code is the raw signal — and
+// both must survive an encode/decode round trip.
+func TestFailedBecauseWithKeepsBothExitCodeAndReason(t *testing.T) {
+	const reason = "execution_timeout: task exceeded 10s limit"
+	enc, err := FailedBecauseWith(137, reason).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := Decode(enc)
+	if !ok {
+		t.Fatalf("a reason-and-exit-code record must decode, got %q", enc)
+	}
+	if got.Outcome != Failed {
+		t.Errorf("outcome = %q, want %q", got.Outcome, Failed)
+	}
+	if got.Reason != reason {
+		t.Errorf("reason = %q, want %q", got.Reason, reason)
+	}
+	if got.ExitCode == nil || *got.ExitCode != 137 {
+		t.Errorf("exit_code = %v, want 137", got.ExitCode)
+	}
+}
+
+// TestFailedBecauseWithBoundsTheReason: the exit-code-carrying variant bounds the
+// reason exactly as FailedBecause does, so neither constructor can produce a
+// record too large for the termination message.
+func TestFailedBecauseWithBoundsTheReason(t *testing.T) {
+	rec := FailedBecauseWith(1, strings.Repeat("x", 4000))
+	if len(rec.Reason) > MaxReasonLen {
+		t.Errorf("reason length = %d, want <= %d", len(rec.Reason), MaxReasonLen)
+	}
+	if _, err := rec.Encode(); err != nil {
+		t.Errorf("an oversized reason must be truncated, not rejected: %v", err)
+	}
+}

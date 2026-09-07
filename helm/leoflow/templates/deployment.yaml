@@ -96,8 +96,14 @@ no second pod to serve while the rollout is wedged. The multi-pod version of
 this shape is already refused above; this is the same volume physics at one
 replica, so refuse it here rather than let helm report success over a control
 plane that never comes back (#905).
+
+It judges leoflow.deploymentStrategy, the TRIMMED and validated value the
+template renders, not the raw one: comparing the raw value let `RollingUpdate `
+past this refusal into a spec the apiserver accepts once YAML drops the space.
+That helper also records the assumption both sides rest on — that the chart
+renders no maxSurge knob — and what a future PR adding one owes this guard.
 */ -}}
-{{- if and (eq (.Values.deployment.strategy | toString) "RollingUpdate") .Values.logs.persistence.enabled $singleWriter -}}
+{{- if and (eq (include "leoflow.deploymentStrategy" .) "RollingUpdate") .Values.logs.persistence.enabled $singleWriter -}}
 {{- fail (printf "deployment.strategy=RollingUpdate cannot roll over logs.persistence.accessMode=%s: a RollingUpdate surges a replacement pod before the old one is gone, and a single-writer volume attaches to one node/pod, so the surge pod hangs in ContainerCreating on a Multi-Attach error and the rollout never converges — on a single replica that is a control plane that never comes back, while helm reports success. Leave deployment.strategy empty and the chart auto-selects Recreate for a single-writer logs PVC, or move the logs off it: logs.persistence.enabled=false with logs.sink.provider=s3|gcs (recommended), or logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass. See #905." $logsAccessMode) -}}
 {{- end -}}
 {{- if and (gt $logMounters 1) .Values.logs.persistence.enabled $singleWriter -}}

@@ -20,8 +20,12 @@ spec:
   {{- /* Update strategy (#868): an explicit value wins; otherwise default to
        Recreate when the logs PVC is ReadWriteOnce, because a RollingUpdate surges
        a second pod that Multi-Attach-deadlocks on the RWO volume (the rollout
-       never converges). RWX or an ephemeral emptyDir tolerate RollingUpdate. */ -}}
-  {{- $strategy := .ctx.Values.deployment.strategy }}
+       never converges). RWX or an ephemeral emptyDir tolerate RollingUpdate.
+       leoflow.deploymentStrategy is the explicit half: validated and TRIMMED, so
+       what renders here is what deployment.yaml's refusal judged. Rendering the
+       raw value let `RollingUpdate ` past the refusal and into a spec the
+       apiserver accepts once YAML drops the space (#905). */ -}}
+  {{- $strategy := include "leoflow.deploymentStrategy" .ctx }}
   {{- if not $strategy }}
     {{- $am := .ctx.Values.logs.persistence.accessMode }}
     {{- if and .ctx.Values.logs.persistence.enabled (or (eq $am "ReadWriteOnce") (eq $am "ReadWriteOncePod")) }}

@@ -396,6 +396,47 @@ tests:
           path: spec.strategy.type
           value: Recreate
 
+  # ─── The strategy value is an allowlist too ──────────────────────────────
+  # Same denylist shape the access mode just shed. The template rendered the
+  # value verbatim into spec.strategy.type and the refusal above compared it
+  # EXACTLY, so a lowercase spelling bypassed the refusal AND the auto-selection
+  # and the apiserver rejected the install; and the same value with a TRAILING
+  # SPACE bypassed the refusal while YAML trimmed it on the way to the
+  # apiserver, which then ACCEPTED it — the Multi-Attach deadlock the refusal
+  # exists to prevent, reached through the refusal (#905).
+  - it: refuses a lowercase deployment.strategy the apiserver would reject
+    template: deployment.yaml
+    set:
+      deployment.strategy: rollingupdate
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.strategy=\"rollingupdate\" (kind string) is not a Deployment update strategy: set RollingUpdate, Recreate, or \"\" to let the chart auto-select (Recreate over a single-writer logs PVC, RollingUpdate otherwise). The value is rendered verbatim into spec.strategy.type and compared exactly, so an unrecognized spelling used to bypass both the single-writer RollingUpdate refusal and the auto-selection: the apiserver then rejected the install, or — for a spelling it accepts after trimming, like a trailing space — accepted the surge onto a volume only one pod can hold. See #905."
+
+  - it: refuses a deployment.strategy with a trailing space, which the apiserver would ACCEPT
+    template: deployment.yaml
+    set:
+      deployment.strategy: "RollingUpdate "
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.strategy=RollingUpdate cannot roll over logs.persistence.accessMode=ReadWriteOnce: a RollingUpdate surges a replacement pod before the old one is gone, and a single-writer volume attaches to one node/pod, so the surge pod hangs in ContainerCreating on a Multi-Attach error and the rollout never converges — on a single replica that is a control plane that never comes back, while helm reports success. Leave deployment.strategy empty and the chart auto-selects Recreate for a single-writer logs PVC, or move the logs off it: logs.persistence.enabled=false with logs.sink.provider=s3|gcs (recommended), or logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass. See #905."
+
+  # The allowlist trims BEFORE it compares, so stray whitespace is normalized
+  # rather than refused — an exact-compare allowlist would reject this spelling
+  # outright, and the operator asked for something the chart supports. The
+  # trailing space is unobservable in the parsed spec (YAML strips it from a
+  # plain scalar), which is exactly why the same spelling had to be caught at
+  # the guard above instead.
+  - it: trims whitespace off an otherwise valid deployment.strategy rather than refusing it
+    template: deployment.yaml
+    set:
+      deployment.strategy: "Recreate "
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
   - it: allows an explicit RollingUpdate on a ReadWriteMany logs PVC
     template: deployment.yaml
     set:

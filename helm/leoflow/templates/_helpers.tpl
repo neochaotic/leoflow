@@ -230,6 +230,50 @@ true
 {{- end -}}
 {{- end -}}
 
+{{/*
+The EXPLICIT deployment.strategy, trimmed and stringified once — empty means the
+caller should auto-select. It is the one definition both the render
+(_controlplane-deployment.tpl) and the single-writer RollingUpdate refusal
+(deployment.yaml) read, so the value that is judged is the value that renders.
+
+It is an allowlist for the same reason the access mode became one. The template
+rendered this value VERBATIM into spec.strategy.type and the refusal compared it
+EXACTLY, which left two holes on the same key:
+
+  - `rollingupdate` matched neither, so it skipped the refusal AND the
+    auto-selection, rendered as-is, and the apiserver rejected the install after
+    a clean render — the defect class this chart refuses at render time.
+  - `RollingUpdate ` — one trailing space — skipped the refusal too, but YAML
+    strips a trailing space from a plain scalar, so the apiserver ACCEPTED it.
+    That is worse: the operator gets exactly the Multi-Attach deadlock the
+    refusal exists to prevent, reached THROUGH the refusal.
+
+So: trim, allow only empty / RollingUpdate / Recreate, and fail anything else
+rather than pass it to the apiserver (#905).
+
+ASSUMES the chart renders no surge knob. Deployment.spec.strategy.rollingUpdate
+(maxSurge / maxUnavailable) is deliberately absent, which is what makes
+"RollingUpdate over a single-writer volume" unconditionally a deadlock: the
+default maxSurge of 25% rounds up to one extra pod. A future PR that exposes
+maxSurge makes this guard WRONG — `maxSurge: 0` rolls a single-writer volume
+safely — and it must then gate the refusal on the surge being non-zero. The one
+shape where an operator legitimately wants the surge today is a node-pinned
+local volume, where both pods land on the same node and the volume is
+re-attachable there; that operator can patch spec.strategy on the rendered
+Deployment rather than have the chart weaken the guard for everyone.
+*/}}
+{{- define "leoflow.deploymentStrategy" -}}
+{{- $raw := .Values.deployment.strategy -}}
+{{- $strategy := "" -}}
+{{- if not (kindIs "invalid" $raw) -}}
+{{- $strategy = trim (toString $raw) -}}
+{{- end -}}
+{{- if not (has $strategy (list "" "RollingUpdate" "Recreate")) -}}
+{{- fail (printf "deployment.strategy=%q (kind %s) is not a Deployment update strategy: set RollingUpdate, Recreate, or \"\" to let the chart auto-select (Recreate over a single-writer logs PVC, RollingUpdate otherwise). The value is rendered verbatim into spec.strategy.type and compared exactly, so an unrecognized spelling used to bypass both the single-writer RollingUpdate refusal and the auto-selection: the apiserver then rejected the install, or — for a spelling it accepts after trimming, like a trailing space — accepted the surge onto a volume only one pod can hold. See #905." (toString $raw) (kindOf $raw)) -}}
+{{- end -}}
+{{- $strategy -}}
+{{- end -}}
+
 {{/* Name of the Secret holding generated/inline credentials. */}}
 {{- define "leoflow.secretName" -}}
 {{- printf "%s-secrets" (include "leoflow.fullname" .) -}}

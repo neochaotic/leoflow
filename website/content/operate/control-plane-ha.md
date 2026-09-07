@@ -159,6 +159,47 @@ topology that gives dispatch failover today; choose the split when you need the
 restricted API identity more than scheduler failover, and know which one you
 picked.
 
+### Warm pools are rebuilt on the far side of a failover
+
+[Warm worker pools](/operate/warm-pools/) survive a failover as *pods*, but not
+as a *pool*. The assignment stream every warm worker holds open
+(`AwaitAssignment`) is gated to the scheduler **leader**, and the registry of
+which workers are warm, which pool they serve and which are free is
+**in-memory and leader-local** — none of it is persisted or shared between
+replicas. So a new leader starts with an empty registry and the pool is rebuilt
+from the workers' side:
+
+- **Idle warm workers exit and are replaced.** A control plane on its way out
+  ends every idle assignment stream at `SIGTERM` with `Unavailable`, and a
+  worker sitting idle treats that as a clean recycle: it exits `0`, with no
+  `ERROR` line and no failed pod. A hard-killed leader looks the same to the
+  worker — the broken stream is `Unavailable` too. The new leader's warm-pool
+  reconciler is leader-gated as well, and it counts live warm pods from the
+  **apiserver** and busy ones from the durable `warm_worker_id` binding, never
+  from the registry, so it rebuilds each active DAG version's
+  `minIdleWorkers` buffer on its own cycle without double-creating.
+- **A worker handed a follower reconnects toward the leader.** Every replica
+  serves the agent gRPC port, so the Service can route a worker to a follower,
+  which refuses the stream with `FailedPrecondition` ("not the scheduler
+  leader"). The worker re-dials with jittered exponential backoff until it
+  reaches the leader — bounded by a configurable number of consecutive
+  rejections (10 by default), after which it exits and lets the reconciler
+  replace the pod rather than spinning forever against a misconfigured
+  deployment.
+- **Attempts in flight are not killed.** Only *idle* streams end at `SIGTERM`; a
+  busy worker finishes its attempt. If its pod does die, the durable
+  warm-attempt binding written when the worker acked the assignment is what lets
+  the new leader's warm-worker-lost reaper find every attempt that pod held and
+  re-place them on the infrastructure-retry budget, without charging the user's
+  `try_number` ([scheduler resilience](/operate/scheduler-resilience/)).
+
+The cost is a **cold window just after a failover**. Warm placement is
+assign-if-free-else-dedicated, so until workers have re-registered against the
+new leader, attempts fall through to the dedicated pod-per-task path and pay the
+start-up they would otherwise have amortized. Nothing is stranded and nothing
+fails — the first attempts after a failover are simply as slow as they were
+before warm pools were turned on.
+
 ## The storage precondition
 
 Task pods stream their logs over gRPC to the control plane, which persists them
@@ -423,6 +464,8 @@ window; the resilience mechanisms make the remaining window survivable. Run both
   with the full values table.
 - [Scheduler resilience](/operate/scheduler-resilience/) — what happens to
   in-flight tasks around a restart.
+- [Warm worker pools](/operate/warm-pools/) — the pool is leader-local and is
+  rebuilt on failover; what that costs the attempts that follow one.
 - [Upgrades](/operate/upgrades/) — rolling a control-plane release, edition by
   edition.
 - [ADR 0009](/project/adrs/0009-leader-election/) — leader election;

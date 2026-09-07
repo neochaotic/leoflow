@@ -1057,19 +1057,20 @@ jobs:
   # 404 — and no build step resolves the string, so the rot is invisible
   # without a gate. (The guard script owns the literal old-path string.)
   # ─────────────────────────────────────────────────────────────────────
-  # Release-script self-test. cut-release.sh holds logic that runs only during
-  # a cut — the tag normalizers, and FLAKE_RE, which decides whether a red run
-  # is rerun or stops the release. Nothing else exercises it, so a defect there
-  # surfaces mid-release. It needs no network and takes milliseconds.
+  # Script self-tests. cut-release.sh and the check-* gates hold logic nothing
+  # else exercises — the tag normalizers, FLAKE_RE (which decides whether a red
+  # run is rerun or stops a release), and the gates' ref comparisons. A defect
+  # there surfaces mid-release. Discovery is by self_test() definition, so a new
+  # script's cases join this job by existing. No network, milliseconds.
   # ─────────────────────────────────────────────────────────────────────
-  cut-release-selftest:
-    name: Release script self-test
+  script-selftests:
+    name: Script self-tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Run the release script self-test
-        run: bash scripts/check-cut-release-selftest.sh
+      - name: Run every scripts/*.sh self-test
+        run: bash scripts/check-script-selftests.sh
 
   # ─────────────────────────────────────────────────────────────────────
   stale-deploy-path:

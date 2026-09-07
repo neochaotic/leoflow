@@ -23,10 +23,29 @@ jobs:
     # Exempt PRs with no user-facing change (release-prep, chore, dependabot,
     # docs-only). The `labeled`/`unlabeled` triggers above make this re-evaluate
     # as soon as the label is added or removed.
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+    #
+    # Dependabot is exempt by author, not by label. This comment already named
+    # it, but nothing wired it up: .github/dependabot.yaml applies
+    # ["dependencies", "<ecosystem>"] and never `skip-changelog`, so every
+    # Dependabot PR failed this guard and could not merge without someone
+    # labelling it by hand. Keying on the author rather than adding the label to
+    # four ecosystem blocks keeps one mechanism instead of two, and survives a
+    # label being removed. pull_request.user.login is the PR's author, unlike
+    # github.actor, which on a `labeled` event is whoever applied the label.
+    if: >-
+      ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+          && github.event.pull_request.user.login != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      # base_ref goes through the environment rather than into the command text:
+      # ${{ }} is substituted before the shell sees it, and git refnames permit
+      # ';', '$(' and backticks. Unreachable while `branches: [main]` pins it,
+      # but nothing would catch it if that pin were widened (#970).
       - name: Fetch the base branch tip
-        run: git fetch --no-tags --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
       - name: Require a CHANGELOG [Unreleased] entry (or the skip-changelog label)
-        run: bash scripts/check-changelog-entry.sh "origin/${{ github.base_ref }}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/check-changelog-entry.sh "origin/$BASE_REF"

@@ -131,6 +131,28 @@ self_test() {
     [ "$hit" = 1 ] || { echo "FAIL: FLAKE_RE alternative matches no known transient: $alt"; fail=1; }
   done < <(printf '%s' "$FLAKE_RE" | tr '|' '\n')
 
+  # The release-prep PR must carry skip-changelog. Without it the changelog
+  # guard fails the prepare PR itself — on an rc it deliberately leaves
+  # [Unreleased] alone — and wait_sha_green correctly refuses to call that a
+  # flake, so the cut dies one step past the gates. Asserted against a stub
+  # because the real call opens a pull request.
+  local stubdir argv
+  stubdir="$(mktemp -d)"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$STUB_ARGV"\n' > "$stubdir/gh"
+  chmod +x "$stubdir/gh"
+  argv="$(
+    export PATH="$stubdir:$PATH" STUB_ARGV="$stubdir/argv" REPO=o/r
+    create_prepare_pr release/v9.9.9-rc.1 "release: prepare v9.9.9-rc.1" body >/dev/null 2>&1
+    cat "$stubdir/argv" 2>/dev/null
+  )"
+  if printf '%s\n' "$argv" | grep -qx -- '--label' && printf '%s\n' "$argv" | grep -qx 'skip-changelog'; then
+    echo "  ok   prepare PR carries --label skip-changelog"
+  else
+    echo "  FAIL prepare PR is missing --label skip-changelog; the changelog guard will fail it"; fail=1
+  fi
+  _eq "$(printf '%s\n' "$argv" | grep -cx 'release/v9.9.9-rc.1')" "1" "prepare PR heads the release branch"
+  rm -rf "$stubdir"
+
   if [ "$fail" = 0 ]; then echo "self-test: PASS"; else echo "self-test: FAIL"; return 1; fi
 }
 
@@ -147,8 +169,15 @@ wait_sha_green() {
       warn "timed out after ${deadline}s waiting on CI for ${sha:0:8} — inspect: gh run list --commit $sha"
       echo RED; return 2
     fi
-    j=$(gh run list --limit 40 --json databaseId,status,conclusion,headSha \
-          -q "[.[] | select(.headSha==\"$sha\")]" 2>/dev/null)
+    # --commit filters SERVER-side. The old form listed the 40 most recent runs
+    # repo-wide and filtered headSha here, but one push fans out to ~7 runs and
+    # the changelog guard alone appears 4x per sha (its labeled/unlabeled
+    # triggers), so 40 runs spans about 5 shas. Measured on this repo: the
+    # release sha's 4 runs were outside the window and the query returned 0,
+    # which takes the `cnt -eq 0` branch below and spins to the deadline before
+    # dying RED on a green sha.
+    j=$(gh run list --commit "$sha" --limit 100 --json databaseId,status,conclusion 2>/dev/null \
+          | jq '[.[]]' 2>/dev/null)
     # jq can emit partial output or `null` before erroring, so coerce to a real
     # integer before any [ -eq/-gt ] (else "integer expression expected"). Safe
     # defaults keep the loop waiting rather than falsely declaring a verdict.
@@ -189,12 +218,47 @@ date_the_changelog() {
   perl -0pi -e "s/^## \\[Unreleased\\]/## [Unreleased]\n\n## [$cv] - $today/m" "$CHANGELOG"
 }
 
+# create_prepare_pr: opens the release-prep PR. Extracted so --self-test can
+# assert the argv against a gh stub.
+#
+# --label skip-changelog is load-bearing, not tidiness. changelog-guard.yaml
+# triggers on every pull_request to main and exempts only that label, and on an
+# rc the prepare PR touches Chart.yaml but deliberately leaves [Unreleased]
+# alone — so the guard compares equal sections and fails the PR. FLAKE_RE does
+# not match "does not add a CHANGELOG entry" (correctly: it is not a flake), so
+# wait_sha_green returns RED and the cut dies. Release-prep is exactly the case
+# the label documents.
+create_prepare_pr() { # <branch> <title> <body>
+  gh pr create --repo "$REPO" --base main --head "$1" --title "$2" --body "$3" --label skip-changelog
+}
+
 run_gates() { # <tag>
-  local tag="$1" s ok=0
-  for s in "$ROOT"/scripts/check-*.sh; do
-    if [[ "$s" == *chart-version-matches-tag* ]]; then bash "$s" "$tag" >/dev/null 2>&1; else bash "$s" >/dev/null 2>&1; fi
-    local rc=$?
-    if [ "$rc" -eq 0 ]; then log "gate PASS $(basename "$s")"; else echo "gate FAIL $(basename "$s")" >&2; ok=1; fi
+  local tag="$1" s ok=0 out rc
+  # nullglob: without it an empty glob leaves the literal pattern, bash exits
+  # 127 on it, and the cut dies reporting "gate FAIL check-*.sh".
+  shopt -s nullglob
+  local -a gates=("$ROOT"/scripts/check-*.sh)
+  shopt -u nullglob
+  # A gate renamed out of check-*.sh silently leaves the cut's gate set with no
+  # signal at all, so assert the floor.
+  [ "${#gates[@]}" -ge "${MIN_GATES:-6}" ] || {
+    echo "gate set shrank to ${#gates[@]} (expected >= ${MIN_GATES:-6}) — a check-*.sh was renamed or removed" >&2
+    return 1
+  }
+  for s in "${gates[@]}"; do
+    # Capture rather than discard: a bare "gate FAIL <name>" during a cut is
+    # unrecoverable, since $logf does not exist until after the tag.
+    if [[ "$s" == *chart-version-matches-tag* ]]; then out="$(bash "$s" "$tag" 2>&1)"; else out="$(bash "$s" 2>&1)"; fi
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf 'gate FAIL %s\n%s\n' "$(basename "$s")" "$out" >&2; ok=1
+    elif [[ "$out" == *"gate skipped"* ]]; then
+      # A gate that has no question to ask at cut time must not be reported as
+      # a PASS: 6/6 PASS for 5 gates that ran is false confidence.
+      log "gate SKIP $(basename "$s") — not applicable at cut time"
+    else
+      log "gate PASS $(basename "$s")"
+    fi
   done
   return $ok
 }
@@ -276,7 +340,7 @@ main() {
   local title body
   if is_rc "$version"; then title="release: prepare $tag"; body="Chart version/appVersion -> $cv (ADR 0028 lockstep). rc keeps [Unreleased]."; \
   else title="release: promote $tag GA"; body="CHANGELOG [Unreleased] -> [$cv] - $(date -u +%F); Chart version/appVersion -> $cv (ADR 0028 lockstep)."; fi
-  gh pr create --repo "$REPO" --base main --head "$branch" --title "$title" --body "$body" >/dev/null
+  create_prepare_pr "$branch" "$title" "$body" >/dev/null
   local pr; pr="$(gh pr view "$branch" --json number -q .number)"
   log "prepare PR #$pr — waiting for CI"
   [ "$(wait_sha_green "$(git rev-parse "$branch")")" = GREEN ] || die "PR #$pr CI red (non-flake) — inspect and retry"
@@ -304,7 +368,9 @@ main() {
       warn "timed out after ${rdeadline}s waiting on the $tag release workflows — inspect: gh run list --branch $tag"
       break
     fi
-    j=$(gh run list --limit 25 --json databaseId,status,conclusion,headBranch -q "[.[] | select(.headBranch==\"$tag\")]" 2>/dev/null)
+    # --branch filters server-side, same window problem as wait_sha_green.
+    j=$(gh run list --branch "$tag" --limit 100 --json databaseId,status,conclusion 2>/dev/null \
+          | jq '[.[]]' 2>/dev/null)
     # Coerce jq output to an integer before [ -eq/-gt ] (see wait_sha_green).
     cnt=$(printf '%s' "$j" | jq 'length' 2>/dev/null); [[ "$cnt" =~ ^[0-9]+$ ]] || cnt=0
     [ "$cnt" -eq 0 ] && { sleep 20; continue; }

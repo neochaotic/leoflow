@@ -78,7 +78,9 @@ for the datastore/secret keys this runbook intentionally does not spell out:
 - `serviceAccount.annotations` / `taskServiceAccount.annotations` — IRSA role-arn.
 - `rbac.create` (true) — renders the executor Role (+ the cluster-scoped
   `tokenreviews` grant when `auth.agentTokenTransport=exchange`).
-- `auth.agentTokenTransport` (`envvar`) / `auth.secretLivenessMode` (`observe`).
+- `auth.agentTokenTransport` (`envvar`) / `auth.secretLivenessMode` (`observe`) /
+  `auth.secretScoping` (`permissive`) — the last one became a chart value in #803;
+  before that it was reachable only through `extraEnv`.
 - `execution.warmPoolsEnabled` (false) — requires `agentTokenTransport=exchange`
   **and** `secretLivenessMode=enforce` (chart refuses to render otherwise).
 - `config.trustedProxies` (`[]`) — **#725**, must be reachable now.
@@ -118,6 +120,17 @@ The rc.3 tranche (#722–#729). ✔ = also unit/helm-verified; ★ = **only a re
   declares fewer secrets than the vault. **PASS:** `GET /api/v2/eventLogs` shows a
   `secret.scope_warning` row (not just a log line). Flip a scenario to `enforce`
   and confirm a `secret.liveness_denied` row is written too.
+- **#800 zero-declaration blind spot** — the row above validates the population
+  that *does* warn, so a green RC has been certifying past the one that does not.
+  With `secretScoping=permissive` (default), run a DAG declaring **no** variables
+  and **no** connections against a tenant that has several connections defined.
+  **PASS (today's behavior, and the blind spot made executable):** the task
+  receives **every** connection in the vault, and `GET /api/v2/eventLogs` shows
+  **no** `secret.scope_warning` row for that run. That silence is exactly what an
+  operator would read as "safe to flip to `enforce`", while this same DAG would
+  receive **nothing** after the flip. Until #800's code half lands, this row is
+  the reminder that a clean trail is not evidence; when it lands, this row
+  inverts — the run must then produce a warning naming zero declarations.
 - **#723 reaper try-number ★** — see §4.2.
 - **#724 validation 400 ✔** — register a DAG version declaring an unknown
   connection. **PASS:** API returns **400** (not 500); message points at

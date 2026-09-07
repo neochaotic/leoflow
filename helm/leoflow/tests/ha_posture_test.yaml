@@ -138,6 +138,44 @@ tests:
       - hasDocuments:
           count: 0
 
+  # ─── The tri-state accepts the string spellings a GitOps tool sends ──────
+  # Argo CD's `helm.parameters` and Flux's `postRenderers` values pass every
+  # override as a STRING (the same shape as `helm --set-string`), so an operator
+  # asking for `podDisruptionBudget.enabled: "true"` on a single replica used to
+  # get the auto default silently — a forced-on budget that never rendered, and
+  # no diagnostic anywhere. Accept the string spellings, and refuse anything that
+  # is neither a bool nor one of them rather than falling back to auto (#905).
+  - it: honors a string-typed podDisruptionBudget.enabled=true on a single replica (Argo CD helm.parameters)
+    template: pdb.yaml
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+
+  - it: honors a string-typed podDisruptionBudget.enabled=false at replicaCount > 1 (Argo CD helm.parameters)
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses a podDisruptionBudget.enabled that is neither a bool nor a true/false string
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.enabled: "yes"
+    asserts:
+      - failedTemplate:
+          errorMessage: "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got \"yes\"). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905."
+
   # ─── Single-writer log volume guard ──────────────────────────────────────
   # A ReadWriteOnce / ReadWriteOncePod PVC attaches to one node / one pod. A
   # second control-plane replica scheduled elsewhere hangs in ContainerCreating

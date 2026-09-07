@@ -163,13 +163,34 @@ tri-state: an explicit true/false wins (true on a single replica is the
 operator's informed choice, and NOTES.txt says what it costs); unset (auto)
 renders the PDB exactly when the guaranteed replica floor is above one, i.e.
 when there is a second pod to keep serving while one is evicted.
+
+The explicit half accepts the STRING spellings of the two booleans as well as
+real booleans, because a GitOps tool does not send booleans: Argo CD's
+`helm.parameters` and `helm --set-string` pass every override as a string, and a
+`kindIs "bool"` test alone read `"true"` as "not a bool" and fell through to
+auto — so an operator who asked for a budget on a single replica got none, with
+no diagnostic anywhere (#905). Anything else non-empty is a `fail` rather than
+another silent fallback to auto: the whole failure mode here was a value that
+looked accepted and did nothing.
 */}}
 {{- define "leoflow.pdbEnabled" -}}
 {{- $enabled := .Values.podDisruptionBudget.enabled -}}
+{{- $auto := gt (include "leoflow.controlPlaneReplicaFloor" . | int) 1 -}}
 {{- if kindIs "bool" $enabled -}}
 {{- $enabled -}}
+{{- else if kindIs "invalid" $enabled -}}
+{{- $auto -}}
 {{- else -}}
-{{- gt (include "leoflow.controlPlaneReplicaFloor" . | int) 1 -}}
+{{- $spelled := lower (toString $enabled) -}}
+{{- if eq $spelled "" -}}
+{{- $auto -}}
+{{- else if eq $spelled "true" -}}
+true
+{{- else if eq $spelled "false" -}}
+false
+{{- else -}}
+{{- fail (printf "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got %q). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905." $enabled) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

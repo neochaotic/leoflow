@@ -461,7 +461,7 @@ autoscaling:
 # reclamation). It protects the pod at the cost of cluster operations — an
 # informed trade an operator may still choose with an explicit `enabled: true`.
 podDisruptionBudget:
-  # -- (bool) Tri-state. Unset/empty (default) = auto: the PDB renders iff the guaranteed replica floor is `> 1`. `true` forces it on (on a single replica this blocks node drains and auto-upgrades — an informed choice; NOTES warns). `false` forces it off.
+  # -- (bool) Tri-state. Unset/empty (default) = auto: the PDB renders iff the guaranteed replica floor is `> 1`. `true` forces it on (on a single replica this blocks node drains and auto-upgrades — an informed choice; NOTES warns). `false` forces it off. The quoted string spellings `"true"` / `"false"` are accepted too, because Argo CD's `helm.parameters` and `helm --set-string` pass every override as a string — reading those as "not a boolean" used to fall through to auto, so a forced-on budget silently never rendered. Any OTHER non-empty value fails the render rather than falling back to auto.
   enabled:
   # -- Minimum replicas that must remain up during voluntary disruption. Set only ONE of minAvailable / maxUnavailable.
   minAvailable: 1

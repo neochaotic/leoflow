@@ -55,6 +55,11 @@ expect_substring 'secretKey:'                  "secretKey in chart-managed Secre
 expect_substring 'name: LEOFLOW_EXECUTION_WARM_POOLS_ENABLED'  "warm-pool flag env entry in deployment (ADR 0058)"
 expect_substring 'name: LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT'    "agent token transport env entry in deployment (ADR 0055)"
 expect_substring 'name: LEOFLOW_AUTH_SECRET_LIVENESS_MODE'     "secret liveness mode env entry in deployment (ADR 0055)"
+# The scope-by-declaration policy is stamped for the discoverability reason
+# rather than the coupling one (#803): it participates in no render-time guard,
+# but it is what decides whether a task receives the whole tenant vault, so the
+# chart has to be where an operator finds it and its default.
+expect_substring 'name: LEOFLOW_AUTH_SECRET_SCOPING'           "secret scoping policy env entry in deployment (ADR 0055)"
 
 # Migration Job must be hardened the same way as the Deployment (#174):
 # restricted-PSA clusters require runAsNonRoot+numeric runAsUser on EVERY

@@ -377,14 +377,7 @@ deploy, layer on:
   object store (`logs.sink`); a `ReadWriteOnce` PVC pins you to a single
   replica.
 - **NetworkPolicy.** Set `networkPolicy.enabled=true` to restrict the control
-  plane to only the flows it needs. **Task pods have their own policy**, off by
-  default and separate: `taskNetworkPolicy.enabled=true` denies task-pod ingress
-  and blocks the cloud-metadata range on egress, so a DAG cannot pivot to
-  internal services or steal the node's cloud identity
-  ([ADR 0054 §5](/project/adrs/0054-shared-cluster-coexistence/)). It requires a
-  CNI that enforces policy, and keyless external-secrets auth needs a single host
-  re-allowed through
-  [`taskNetworkPolicy.allowMetadataEgress`](/operate/external-secrets/).
+  plane and task pods to only the flows they need.
 - **Secret-delivery posture.** Three `auth.*` flips decide how much credential a
   task pod can reach, and all three ship on the value that is byte-for-byte
   today's behavior — so a default install is the *permissive* end of each:

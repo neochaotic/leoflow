@@ -160,9 +160,11 @@ one of them misses is a shape both miss — there is one definition.
 {{/*
 Whether the PodDisruptionBudget renders. podDisruptionBudget.enabled is
 tri-state: an explicit true/false wins (true on a single replica is the
-operator's informed choice, and NOTES.txt says what it costs); unset (auto)
-renders the PDB exactly when the guaranteed replica floor is above one, i.e.
-when there is a second pod to keep serving while one is evicted.
+operator's informed choice, and NOTES.txt says what it costs — via
+leoflow.pdbEnabledExplicit, so the warning follows every spelling this helper
+honours); unset (auto) renders the PDB exactly when the guaranteed replica floor
+is above one, i.e. when there is a second pod to keep serving while one is
+evicted.
 
 The explicit half accepts the STRING spellings of the two booleans as well as
 real booleans, because a GitOps tool does not send booleans: Argo CD's
@@ -191,6 +193,36 @@ false
 {{- else -}}
 {{- fail (printf "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got %q). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905." $enabled) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether podDisruptionBudget.enabled was set EXPLICITLY — "true" when it is, empty
+when the release is in auto mode. It reports the SPELLING, not the YAML type: a
+bool, or a non-empty value that lowercases to `true` or `false`, is explicit;
+unset, null and empty are auto.
+
+NOTES.txt needs this and `kindIs "bool"` will not do. Both of its budget branches
+used to key on the value being a real bool, which was correct only while the
+helper above ignored the string spellings. Once it honoured them, a
+string-spelled `"true"` at a single replica rendered the budget and skipped the
+warning that says what the budget costs — drains hanging on the one pod,
+auto-upgrades stalling — so the Argo CD path this exists to serve got the trap
+without the diagnostic, where before it got neither. The upgrade note has the
+mirror bug: it attributes the budget to auto-selection ("replica floor > 1") over
+a value the operator set by hand. One predicate, used by both branches (#905).
+
+It deliberately does NOT validate: an unparseable value is `fail`ed by
+leoflow.pdbEnabled, which every consumer of this predicate also renders, so
+duplicating the refusal here would only risk the two disagreeing.
+*/}}
+{{- define "leoflow.pdbEnabledExplicit" -}}
+{{- $enabled := .Values.podDisruptionBudget.enabled -}}
+{{- if kindIs "bool" $enabled -}}
+true
+{{- else if kindIs "invalid" $enabled -}}
+{{- else if has (lower (toString $enabled)) (list "true" "false") -}}
+true
 {{- end -}}
 {{- end -}}
 

@@ -27,7 +27,12 @@ Agent gRPC TLS:
     CA ConfigMap:       {{ .Values.agentTLS.caConfigMap }}
 {{- end }}
 {{- $replicaFloor := include "leoflow.controlPlaneReplicaFloor" . | int }}
-{{- if and (kindIs "bool" .Values.podDisruptionBudget.enabled) .Values.podDisruptionBudget.enabled (le $replicaFloor 1) }}
+{{- /* Both budget branches key on leoflow.pdbEnabledExplicit, never on the value
+being a real bool: the helper honours the string spellings a GitOps tool sends, so
+a `kindIs "bool"` test here left a string-spelled budget rendering over a single
+replica with this warning suppressed — the trap with none of the diagnostic that
+justifies allowing it (#905). */ -}}
+{{- if and (eq (include "leoflow.pdbEnabledExplicit" .) "true") (eq (include "leoflow.pdbEnabled" .) "true") (le $replicaFloor 1) }}
 
 WARNING: podDisruptionBudget.enabled=true with a single replica. The budget
 blocks EVERY voluntary eviction of the one control-plane pod: node drains hang
@@ -45,7 +50,10 @@ restarts. Ship task logs to object storage (logs.sink.provider=s3|gcs with
 logs.sink.bucket) or use a ReadWriteMany logs PVC — see
 helm/leoflow/examples/values-ha.yaml.
 {{- end }}
-{{- if and .Release.IsUpgrade (eq (include "leoflow.pdbEnabled" .) "true") (not (kindIs "bool" .Values.podDisruptionBudget.enabled)) }}
+{{- /* Auto-selection only: this note credits the replica floor for the budget, so
+printing it over a value the operator set by hand — in either spelling — hands
+their own decision back to them as the chart's (#905). */ -}}
+{{- if and .Release.IsUpgrade (eq (include "leoflow.pdbEnabled" .) "true") (ne (include "leoflow.pdbEnabledExplicit" .) "true") }}
 
 NOTE: this release renders a PodDisruptionBudget (auto: replica floor {{ $replicaFloor }} > 1).
 It keeps one control-plane replica serving through node drains and upgrades. Set

@@ -166,6 +166,21 @@ tests:
       - hasDocuments:
           count: 0
 
+  # The helper lowercases before comparing, so `"True"` — the spelling a Python
+  # or Helmfile templating layer produces from a real boolean — is accepted. That
+  # was undocumented and untested; lock it so a future tightening of the compare
+  # cannot drop it silently (#905).
+  - it: honors an uppercase-T string podDisruptionBudget.enabled=True on a single replica
+    template: pdb.yaml
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "True"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+
   - it: refuses a podDisruptionBudget.enabled that is neither a bool nor a true/false string
     template: pdb.yaml
     set:
@@ -671,6 +686,31 @@ tests:
       - matchRegexRaw:
           pattern: "WARNING: podDisruptionBudget.enabled=true with a single replica"
 
+  # The warning has to follow the value's SPELLING, not its YAML type. Once the
+  # helper honoured `"true"`, a string-spelled budget rendered over a single
+  # replica while these two branches — still keyed on `kindIs "bool"` — stayed
+  # silent, so the Argo CD path this chart exists to serve got the drain-blocking
+  # budget with none of the warning that justifies allowing it. Before the string
+  # spellings were honoured the operator got no budget and no warning, which was
+  # at least consistent (#905).
+  - it: NOTES warn when a string-typed PDB is forced onto a single replica (Argo CD helm.parameters)
+    template: NOTES.txt
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "true"
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: podDisruptionBudget.enabled=true with a single replica"
+
+  - it: NOTES warn when an uppercase-T string PDB is forced onto a single replica
+    template: NOTES.txt
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "True"
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: podDisruptionBudget.enabled=true with a single replica"
+
   - it: NOTES warn when HA runs on ephemeral per-pod log storage with the disk sink
     template: NOTES.txt
     set:
@@ -892,6 +932,24 @@ tests:
       logs.sink.provider: s3
       logs.sink.bucket: b
       podDisruptionBudget.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "NOTE: this release renders a PodDisruptionBudget"
+
+  # Same clause, string spelling: the note says the budget was AUTO-selected
+  # ("auto: replica floor 2 > 1"), so printing it over a value the operator set
+  # by hand misattributes their own decision back to them (#905).
+  - it: NOTES do not call out a PDB the operator set explicitly as a string
+    template: NOTES.txt
+    release:
+      name: leoflow
+      upgrade: true
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      logs.sink.provider: s3
+      logs.sink.bucket: b
+      podDisruptionBudget.enabled: "true"
     asserts:
       - notMatchRegexRaw:
           pattern: "NOTE: this release renders a PodDisruptionBudget"

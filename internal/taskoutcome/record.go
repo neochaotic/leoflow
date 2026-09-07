@@ -81,6 +81,22 @@ func FailedBecause(reason string) Record {
 	return Record{V: Version, Outcome: Failed, Reason: TruncateReason(reason, MaxReasonLen)}
 }
 
+// FailedBecauseWith returns a failure record carrying BOTH the user process exit
+// code and a classified reason. It is the shape a diagnosed failure of a process
+// that did run needs (#930): the reason names the cause the control plane cannot
+// otherwise derive — an execution_timeout the agent enforced itself — while the
+// exit code keeps the raw signal the operator still wants to see. FailedBecause
+// remains the constructor for a failure where no user process ever ran, and so
+// has no exit code to report.
+func FailedBecauseWith(exitCode int32, reason string) Record {
+	return Record{
+		V:        Version,
+		Outcome:  Failed,
+		ExitCode: &exitCode,
+		Reason:   TruncateReason(reason, MaxReasonLen),
+	}
+}
+
 // TruncateReason clamps a failure reason to limit bytes, cutting on a rune boundary
 // so a truncated multi-byte character never produces invalid UTF-8.
 //

@@ -320,6 +320,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   finds no reachable call path from leoflow into the affected symbols; the bump
   keeps the dependency scan clean and the fix in place regardless.
 
+### Changed
+
+- **Dependency refresh, with the generated protobuf code regenerated to match.**
+  The AWS SDK (including S3), the Google Cloud Storage client, the OpenTelemetry
+  SDK, go-oidc and gRPC move to their current minor and patch releases; the S3
+  and GCS clients are the object log sink's own transport, so the release
+  validates them rather than shipping them unexercised. `google.golang.org/protobuf`
+  moves from a pseudo-version to the `v1.36.12` release, which changes the
+  generator the committed code must match, so `proto/agent/v1` is regenerated in
+  the same change — the proto-sync gate pins `protoc-gen-go` to the module version
+  precisely so this cannot drift silently.
+
 ## [0.4.4] - 2026-09-03
 
 ### Security

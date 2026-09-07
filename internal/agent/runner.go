@@ -641,8 +641,15 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 // failWithReason is fail() but with a pre-built error message — used by the
 // execution_timeout path so the operator sees "timeout" rather than the
 // generic "task exited non-zero" or the raw context.DeadlineExceeded.
+//
+// The message is also carried into the durable outcome record (#930). That is the
+// difference from fail(): every caller of failWithReason hands over a diagnosis
+// the agent classified itself, naming a cause the control plane cannot observe
+// from a dead pod, so it must survive a report that never lands. fail()'s message
+// deliberately does NOT travel: it is either a restatement of the exit code the
+// record already carries, or raw error text whose detail belongs in the logs.
 func (r *Runner) failWithReason(ctx context.Context, exitCode int, msg string) error {
-	if rerr := r.report(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg); rerr != nil {
+	if rerr := r.reportClassified(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg, msg); rerr != nil {
 		slog.Warn("reporting failed state", "error", rerr)
 	}
 	return errors.New(msg)
@@ -805,7 +812,19 @@ func (r *Runner) applyHeartbeatResponse(resp *agentv1.HeartbeatResponse) (termin
 }
 
 func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode int32, msg string) error {
-	r.recordOutcome(state, exitCode)
+	return r.reportClassified(ctx, state, exitCode, msg, "")
+}
+
+// reportClassified is report() for a failure the agent diagnosed itself: reason is
+// carried into the durable outcome record so the diagnosis survives a report that
+// is never delivered (#930). Everything else is identical to report(), which is
+// this with an empty reason.
+//
+// The reason must be a CLASSIFICATION the agent built — not a raw error and
+// nothing derived from a credential — because the record is durable and
+// end-user visible (see taskoutcome.Record.Reason).
+func (r *Runner) reportClassified(ctx context.Context, state agentv1.TaskState, exitCode int32, msg, reason string) error {
+	r.recordOutcome(state, exitCode, reason)
 	if r.BeforeReport != nil {
 		r.BeforeReport(state)
 	}
@@ -821,11 +840,20 @@ func (r *Runner) report(ctx context.Context, state agentv1.TaskState, exitCode i
 // before the report is delivered (ADR 0052). Keying off the reported state — not
 // the individual fail()/failWithReason() call sites — guarantees every failure
 // sink is covered. Non-terminal states are a no-op.
-func (r *Runner) recordOutcome(state agentv1.TaskState, exitCode int32) {
+//
+// A non-empty reason (the execution_timeout diagnosis, #930) is recorded ALONGSIDE
+// the exit code, never instead of it: the reason names the cause the control plane
+// cannot derive from a dead pod, the exit code stays the raw signal. An empty
+// reason produces today's bytes exactly.
+func (r *Runner) recordOutcome(state agentv1.TaskState, exitCode int32, reason string) {
 	switch state {
 	case agentv1.TaskState_TASK_STATE_SUCCESS:
 		r.writeOutcome(taskoutcome.Succeeded())
 	case agentv1.TaskState_TASK_STATE_FAILED:
+		if reason != "" {
+			r.writeOutcome(taskoutcome.FailedBecauseWith(exitCode, reason))
+			return
+		}
 		r.writeOutcome(taskoutcome.FailedWith(exitCode))
 	default:
 		// Non-terminal states (RUNNING, and the reschedule handled separately in

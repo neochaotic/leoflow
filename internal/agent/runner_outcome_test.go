@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/neochaotic/leoflow/internal/taskoutcome"
@@ -230,5 +231,58 @@ func TestRunnerNoTerminationLogWhenPathUnset(t *testing.T) {
 	// TerminationLogPath left empty.
 	if err := r.Run(context.Background()); err != nil {
 		t.Fatalf("Run with no termination-log path must be unaffected: %v", err)
+	}
+}
+
+// TestRunnerTimeoutOutcomeRecordCarriesReason is the airtight half of the
+// execution_timeout guarantee (#930). #925 made the agent's clock fire before the
+// kubelet's, so the agent produces the diagnosis — but the diagnosis only reached
+// the operator through the REPORT. When the control plane is unreachable across
+// the timeout, or the kubelet's SIGTERM lands mid-retry, the report never arrives
+// and the reconciler renders the generic "task failed (exit N)" from the durable
+// record. The record must carry the classification too, and keep the exit code:
+// both matter to the operator.
+func TestRunnerTimeoutOutcomeRecordCarriesReason(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "termination-log")
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator:                "bash",
+		Entrypoint:              "sleep 1000",
+		ExecutionTimeoutSeconds: 1,
+	}}
+	r := newRunner(client, &fakeCmd{blockUntilCancel: true}, &recordingSink{})
+	r.TerminationLogPath = path
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a task exceeding its execution timeout must fail")
+	}
+	rec := readOutcome(t, path)
+	if rec.Outcome != taskoutcome.Failed {
+		t.Fatalf("timeout outcome = %q, want failed", rec.Outcome)
+	}
+	if !strings.Contains(rec.Reason, "execution_timeout") {
+		t.Errorf("record reason = %q, want it to name execution_timeout", rec.Reason)
+	}
+	if rec.ExitCode == nil || *rec.ExitCode != 137 {
+		t.Errorf("exit_code = %v, want the killed process's 137 kept alongside the reason", rec.ExitCode)
+	}
+}
+
+// TestRunnerNonZeroExitOutcomeRecordCarriesNoReason is the other side of the
+// narrow scope (#930): an ordinary non-zero exit leaves NO classification. Its
+// message is either a restatement of the exit code or raw error text whose detail
+// lives in the logs, and the record's own "task failed (exit N)" rendering is the
+// better operator string — so the reason field stays reserved for a diagnosis the
+// control plane cannot otherwise derive.
+func TestRunnerNonZeroExitOutcomeRecordCarriesNoReason(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "termination-log")
+	client := &fakeClient{spec: &agentv1.TaskSpec{Operator: "python", Entrypoint: "dag:boom"}}
+	r := newRunner(client, &fakeCmd{exitCode: 3, err: errors.New("boom")}, &recordingSink{})
+	r.TerminationLogPath = path
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a non-zero exit must fail")
+	}
+	if rec := readOutcome(t, path); rec.Reason != "" {
+		t.Errorf("reason = %q, want empty for an ordinary non-zero exit", rec.Reason)
 	}
 }

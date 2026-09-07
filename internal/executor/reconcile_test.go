@@ -452,3 +452,41 @@ func TestReconcileRecordsCompletedSweep(t *testing.T) {
 		t.Errorf("a sweep that could not list pods must record nothing, got %v", failing.LastSweepCompletedAt())
 	}
 }
+
+// TestReconcileSettlesTimeoutReasonFromRecord closes the loop on #930: an
+// execution_timeout whose report never landed is settled from the durable record
+// alone, and the operator sees the agent's diagnosis rather than the generic
+// "task failed (exit N)". This is the pod the kubelet leaves behind when it kills
+// the agent mid-report-retry — phase Failed, no report ever delivered.
+func TestReconcileSettlesTimeoutReasonFromRecord(t *testing.T) {
+	const reason = "execution_timeout: task exceeded 10s limit"
+	pod := withRecord(managedPod("p-timeout", "ti-timeout", corev1.PodFailed),
+		taskoutcome.FailedBecauseWith(137, reason))
+	reporter := &fakeReporter{}
+	r := NewReconciler(fake.NewClientset(pod), "leoflow", reporter)
+
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got, ok := reporter.settled["ti-timeout"]
+	if !ok || got.kind != settleFailed {
+		t.Fatalf("timed-out pod's task instance should be settled failed, got %+v (ok=%v)", got, ok)
+	}
+	if !strings.Contains(got.reason, "execution_timeout:") {
+		t.Errorf("reason = %q, want the agent's execution_timeout diagnosis", got.reason)
+	}
+}
+
+// TestRecordFailureReasonPrefersReasonOverExitCode pins the precedence a
+// reason-carrying failure record depends on (#930): with BOTH a reason and an
+// exit code present, the classification wins. Flipping this would silently
+// regress the timeout diagnosis back to "task failed (exit 137)".
+func TestRecordFailureReasonPrefersReasonOverExitCode(t *testing.T) {
+	rec := taskoutcome.FailedBecauseWith(137, "execution_timeout: task exceeded 10s limit")
+	if got := recordFailureReason(rec); !strings.Contains(got, "execution_timeout:") {
+		t.Errorf("recordFailureReason = %q, want the reason, not the exit code", got)
+	}
+	if rec.ExitCode == nil || *rec.ExitCode != 137 {
+		t.Errorf("exit_code = %v, want 137 kept in the record alongside the reason", rec.ExitCode)
+	}
+}

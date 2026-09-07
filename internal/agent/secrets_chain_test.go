@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -154,5 +155,28 @@ func TestRunnerReportsFailedOnResolverError(t *testing.T) {
 	}
 	if len(client.states) == 0 || client.states[len(client.states)-1] != agentv1.TaskState_TASK_STATE_FAILED {
 		t.Errorf("resolver error must report terminal FAILED (B6); states=%v", client.states)
+	}
+}
+
+// A hard resolver error is the other diagnosis the agent classifies itself, so it
+// travels in the durable outcome record too (#930): the task never ran, and if the
+// FAILED report does not land the reconciler would otherwise render a bare
+// "task failed (exit 1)" with no trace of the refused secret backend.
+func TestRunnerResolverErrorOutcomeRecordCarriesReason(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "termination-log")
+	client := &fakeClient{spec: &agentv1.TaskSpec{
+		Operator: "bash", Entrypoint: "echo hi",
+		DeclaredVariables: []string{"region"},
+	}}
+	r := newRunner(client, &fakeCmd{}, &recordingSink{})
+	r.TerminationLogPath = path
+	r.Resolver = fakeResolver{err: errors.New("access denied")}
+	r.SecretBackend = secretsource.Backend{Variables: true}
+
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("a hard resolver error must fail the task")
+	}
+	if rec := readOutcome(t, path); rec.Reason == "" {
+		t.Error("a resolver-error record must carry the agent's classification, not just an exit code")
 	}
 }

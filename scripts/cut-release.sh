@@ -28,8 +28,10 @@ REPO="neochaotic/leoflow"
 
 # Transient CI failures that are safe to rerun — never a code signal. Matches the
 # classes seen in practice: registry rate-limits, Go module-proxy stream resets,
-# the shallow-fetch merge-base gate, the lite cold-start /readyz timing flake.
-FLAKE_RE='toomanyrequests|Rate exceeded|TLS handshake|i/o timeout|no space left|Connection reset|context deadline|Client\.Timeout|INTERNAL_ERROR|proxy\.golang\.org|stream ID [0-9]|readyz never responded|go mod download|failed to solve|returned error: 404|reserve cache|no merge base|exit code 128'
+# the shallow-fetch merge-base gate, the lite cold-start /readyz timing flake, a
+# k3d cluster whose loadbalancer image will not pull, and a Python build backend
+# that fetches over the network during metadata generation.
+FLAKE_RE='toomanyrequests|Rate exceeded|TLS handshake|i/o timeout|no space left|Connection reset|context deadline|Client\.Timeout|INTERNAL_ERROR|proxy\.golang\.org|stream ID [0-9]|readyz never responded|go mod download|failed to solve|returned error: 404|reserve cache|no merge base|exit code 128|HTTP Error 5[0-9][0-9]|returned error: 5[0-9][0-9]|curl: \\(22\\)|curl: \\(35\\)|curl: \\(56\\)|Gateway Time-out|metadata-generation-failed|failed to download https|Cluster creation FAILED|failed Cluster Creation|Initialize containers'
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$*" >&2; }

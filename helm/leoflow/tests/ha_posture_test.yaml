@@ -319,6 +319,62 @@ tests:
       - hasDocuments:
           count: 1
 
+  # ─── An explicit RollingUpdate must not defeat the Recreate auto-selection ─
+  # A RollingUpdate surges a replacement pod BEFORE the old one is gone, and a
+  # single-writer volume attaches to one node / one pod, so the surge pod hangs
+  # in ContainerCreating on a Multi-Attach error and the rollout never converges.
+  # The auto-selection (#868) picks Recreate for exactly this shape — but it only
+  # runs when deployment.strategy is empty, so an explicit override walked
+  # straight back into the deadlock, on a single replica no less, where there is
+  # no other pod to serve while the rollout is wedged (#905).
+  - it: refuses an explicit RollingUpdate on the default ReadWriteOnce logs PVC
+    template: deployment.yaml
+    set:
+      deployment.strategy: RollingUpdate
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.strategy=RollingUpdate cannot roll over logs.persistence.accessMode=ReadWriteOnce: a RollingUpdate surges a replacement pod before the old one is gone, and a single-writer volume attaches to one node/pod, so the surge pod hangs in ContainerCreating on a Multi-Attach error and the rollout never converges — on a single replica that is a control plane that never comes back, while helm reports success. Leave deployment.strategy empty and the chart auto-selects Recreate for a single-writer logs PVC, or move the logs off it: logs.persistence.enabled=false with logs.sink.provider=s3|gcs (recommended), or logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass. See #905."
+
+  - it: refuses an explicit RollingUpdate on a ReadWriteOncePod logs PVC
+    template: deployment.yaml
+    set:
+      deployment.strategy: RollingUpdate
+      logs.persistence.accessMode: ReadWriteOncePod
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.strategy=RollingUpdate cannot roll over logs.persistence.accessMode=ReadWriteOncePod: a RollingUpdate surges a replacement pod before the old one is gone, and a single-writer volume attaches to one node/pod, so the surge pod hangs in ContainerCreating on a Multi-Attach error and the rollout never converges — on a single replica that is a control plane that never comes back, while helm reports success. Leave deployment.strategy empty and the chart auto-selects Recreate for a single-writer logs PVC, or move the logs off it: logs.persistence.enabled=false with logs.sink.provider=s3|gcs (recommended), or logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass. See #905."
+
+  - it: keeps an explicit Recreate on a single-writer logs PVC, which is what the auto-selection would pick
+    template: deployment.yaml
+    set:
+      deployment.strategy: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: allows an explicit RollingUpdate on a ReadWriteMany logs PVC
+    template: deployment.yaml
+    set:
+      deployment.strategy: RollingUpdate
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  - it: allows an explicit RollingUpdate when the logs live in object storage, with no PVC to hold
+    template: deployment.yaml
+    set:
+      deployment.strategy: RollingUpdate
+      logs.persistence.enabled: false
+      logs.sink.provider: s3
+      logs.sink.bucket: leoflow-task-logs
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
   # ─── Drain grace + eviction opt-in wiring ────────────────────────────────
   # A voluntary eviction sends SIGTERM and waits terminationGracePeriodSeconds
   # before SIGKILL. The control plane drains its HTTP servers and releases the

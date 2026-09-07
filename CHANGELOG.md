@@ -309,6 +309,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   would let renewal traffic burn the password-login budget for the address (and
   for everyone behind a proxy when `server.trusted_proxies` is unset); a renewal
   limiter needs its own instance and is tracked separately.
+- **Three registered settings that were written down nowhere, plus a guard for
+  the next one (#801).** `auth.jwt.max_lifetime_seconds` — the ceiling that
+  bounds a transparently renewed session, i.e. the control that makes renewal
+  acceptable — and `secrets.backend` / `secrets.backend_kwargs` bound from the
+  environment but appeared in no settings table in the configuration reference,
+  so an operator had no documented way to reach them. All three now have rows
+  (`secrets.*` gets its own section). `TestDocumentedEnvVarsBind` could not catch
+  this: it only runs doc → binding. The new reverse guard runs binding → doc, so
+  registering a key without documenting it now fails the build (same class as
+  #725 / #733 / #743).
 - **The pod-lost reaper no longer reaps a task whose pod is still there,
   finished.** Its liveness question returned one bool for two different states —
   "no pod for this attempt at all" and "a pod that exists in a terminal phase" —

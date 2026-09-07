@@ -32,6 +32,30 @@ func bindableEnvVars() map[string]struct{} {
 // credential) are not treated as server settings.
 func docEnvVarsFromReference(t *testing.T) []string {
 	t.Helper()
+	envRe := regexp.MustCompile(`LEOFLOW_[A-Z0-9_]+`)
+	seen := map[string]struct{}{}
+	var vars []string
+	for _, firstCol := range docSettingFirstColumns(t) {
+		for _, v := range envRe.FindAllString(firstCol, -1) {
+			if _, dup := seen[v]; dup {
+				continue
+			}
+			seen[v] = struct{}{}
+			vars = append(vars, v)
+		}
+	}
+	if len(vars) == 0 {
+		t.Fatal("no LEOFLOW_* variables parsed from the configuration reference")
+	}
+	return vars
+}
+
+// docSettingFirstColumns returns the first column of every table row in the
+// configuration reference — the cell that names the setting, either as its
+// LEOFLOW_* env var or, for a config-file/Helm-values-only key, in dotted form.
+// It is the shared read side of both directions of the doc/binding guard.
+func docSettingFirstColumns(t *testing.T) []string {
+	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -42,9 +66,7 @@ func docEnvVarsFromReference(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("read %s: %v", docPath, err)
 	}
-	envRe := regexp.MustCompile(`LEOFLOW_[A-Z0-9_]+`)
-	seen := map[string]struct{}{}
-	var vars []string
+	var cols []string
 	for _, line := range strings.Split(string(raw), "\n") {
 		if !strings.HasPrefix(strings.TrimSpace(line), "|") {
 			continue
@@ -54,18 +76,12 @@ func docEnvVarsFromReference(t *testing.T) []string {
 		if i := strings.Index(line[1:], "|"); i >= 0 {
 			firstCol = line[:i+1]
 		}
-		for _, v := range envRe.FindAllString(firstCol, -1) {
-			if _, dup := seen[v]; dup {
-				continue
-			}
-			seen[v] = struct{}{}
-			vars = append(vars, v)
-		}
+		cols = append(cols, firstCol)
 	}
-	if len(vars) == 0 {
-		t.Fatalf("no LEOFLOW_* variables parsed from %s", docPath)
+	if len(cols) == 0 {
+		t.Fatalf("no table rows parsed from %s", docPath)
 	}
-	return vars
+	return cols
 }
 
 // TestDocumentedEnvVarsBind is the class-level guard: every LEOFLOW_* variable
@@ -158,5 +174,31 @@ func TestLoadServerBindsRedisCAFile(t *testing.T) {
 	}
 	if c.Redis.CAFile != "/etc/leoflow/redis-ca/ca.crt" {
 		t.Errorf("Redis.CAFile = %q, want %q", c.Redis.CAFile, "/etc/leoflow/redis-ca/ca.crt")
+	}
+}
+
+// TestRegisteredKeysAreDocumented is the reverse of TestDocumentedEnvVarsBind:
+// every key registered in serverDefaults must be named in the configuration
+// reference, either as its LEOFLOW_* env var or — for a config-file/Helm-values
+// key — in dotted form. The forward guard only runs doc → binding, so a setting
+// that binds but is written down nowhere is invisible to it. That is exactly how
+// auth.jwt.max_lifetime_seconds shipped as the ceiling bounding transparently
+// renewed sessions — the control that makes the feature acceptable — with no
+// reference row and no chart value, reachable only through extraEnv (#801, same
+// class as #725 / #733 / #743).
+//
+// Registering a key is a promise that an operator can set it, so the reference
+// row is part of shipping it. There is deliberately no exception list: an
+// operator-only key still gets a row, marked as such.
+func TestRegisteredKeysAreDocumented(t *testing.T) {
+	cols := strings.Join(docSettingFirstColumns(t), "\n")
+	for key := range serverDefaults {
+		env := "LEOFLOW_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+		if strings.Contains(cols, env) || strings.Contains(cols, key) {
+			continue
+		}
+		t.Errorf("%s (%s) is registered in serverDefaults but is named in no "+
+			"settings table in website/content/reference/configuration.md, so "+
+			"an operator has no documented way to reach it", key, env)
 	}
 }

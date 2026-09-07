@@ -127,6 +127,7 @@ var — viper does not split one env var into a map or list.
 | `LEOFLOW_AUTH_PROVIDER` | `jwt` | both | Credential authenticator: `jwt` (default — username/password issues an HS256 token) or `oidc` (adds the OIDC/SSO login flow on top; the JWT authenticator stays the request-path verifier in both modes). `oidc` is Pro-gated and fails boot closed unless its prerequisites are met (see [OIDC / SSO](#oidc--sso-authoidc)). |
 | `LEOFLOW_AUTH_JWT_SECRET` | — *(required)* | both | Signs API/agent tokens. Required for both `jwt` and `oidc` (both mint the app's own HS256 token). |
 | `LEOFLOW_AUTH_JWT_TOKEN_TTL_SECONDS` | `3600` | both | Lifetime, in seconds, of an issued API token. |
+| `LEOFLOW_AUTH_JWT_MAX_LIFETIME_SECONDS` | `86400` | both | Ceiling, in seconds, on the **total** age of a transparently renewed session, measured from first login and preserved across every renewal. Past it, `POST /api/v2/auth/token/renew` refuses and the user must log in again; the short `TOKEN_TTL_SECONDS` is what bounds a stolen token, this only caps how long a live session may keep refreshing. A non-positive value disables the ceiling. Renewal also re-checks that the account is still active, so a deactivated user stops being issued tokens as well as being refused on use. The chart has no value for this yet — set it through `extraEnv`. |
 | `LEOFLOW_AUTH_LOGIN_RATE_LIMIT_PER_MINUTE` | `5` | both | Cap on **failed** `/auth/token` attempts per client IP per minute (anti-brute-force). A successful login consumes no budget. `leoflow lite` raises this well above the default (local single-user tool). |
 | `LEOFLOW_SECRET_KEY` | — | both | 32-byte key encrypting connection secrets at rest ([ADR 0019](/project/adrs/0019-secret-encryption-at-rest/)). Raw 32 chars, 64-char hex, or base64. Empty disables connection writes. |
 | `LEOFLOW_AUTH_SECRET_SCOPING` | `permissive` | both | Scope-by-declaration policy ([ADR 0055](/project/adrs/0055-secret-scoping-and-token-liveness/)): `permissive` (delivers the whole tenant vault; warns when a DAG declares a narrower set), `enforce` (delivers only the declared subset — empty declaration ⇒ nothing), or `off` (no scoping). Operator-scoped, never author-settable. Helm: `auth.secretScoping`. |
@@ -229,6 +230,21 @@ dedicated pod per task attempt.
 | `LEOFLOW_LOGS_SINK_FORCE_PATH_STYLE` | `false` | Pro | **s3-only.** Use path-style addressing (bucket in the path, not the host). Required by MinIO and some S3-compatible stores. |
 | `LEOFLOW_LOGS_SINK_ACCESS_KEY_ID` / `LEOFLOW_LOGS_SINK_SECRET_ACCESS_KEY` | _(empty)_ | Pro | **s3-only.** Static credentials — **discouraged**. Leave empty (recommended) to use the keyless chain (IRSA / instance profile), per [ADR 0035](/project/adrs/0035-cloud-connector-auth-keyless-first/). |
 | `LEOFLOW_LOGS_SINK_CREDENTIALS_FILE` | _(empty)_ | Pro | **gcs-only.** Path to a service-account JSON key — **discouraged**. Leave empty (recommended) to use Application Default Credentials (GKE Workload Identity). |
+
+### External secrets (`secrets.*`)
+
+Operator-only ([ADR 0060](/project/adrs/0060-external-secrets-resolution/)):
+delivered to the task pod as `LEOFLOW_SECRETS_*`, which an author's task env can
+never set. Empty `backend` keeps the Leoflow vault as the only source —
+byte-identical to having no external secrets at all. See
+[External secrets](/operate/external-secrets/) and run the
+[cluster validation runbook](/operate/external-secrets-cluster-validation/)
+before enabling it in production.
+
+| Variable | Default | Edition | Purpose |
+|---|---|---|---|
+| `LEOFLOW_SECRETS_BACKEND` | _(empty — disabled)_ | Pro (K8s) | Provider secrets-backend class the in-pod resolver drives (e.g. `airflow.providers.amazon.aws.secrets.secrets_manager.SecretsManagerBackend`). When set, a Connection/Variable a DAG declares can be resolved pod-side from the provider store under the pod's keyless identity. Helm: `secrets.backend`. |
+| `LEOFLOW_SECRETS_BACKEND_KWARGS` | _(empty — treated as `{}`)_ | Pro (K8s) | Provider kwargs as a JSON **object string** (`connections_prefix`, `variables_prefix`, `region_name`, …), delivered to the pod verbatim. A kind is served only if its `*_prefix` kwarg is present. A JSON string rather than a map so a single env var sets it, matching the env-only control-plane chart. Keyless auth (IRSA / Workload Identity) uses the task pod's ServiceAccount — set `executor.task_service_account` accordingly. Helm: `secrets.backendKwargs`. |
 
 ### Observability (`observability.*`)
 

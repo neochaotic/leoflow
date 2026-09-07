@@ -116,9 +116,16 @@ func outcomeRecord(pod *corev1.Pod) (taskoutcome.Record, bool) {
 // could report anything, e.g. a refused bootstrap) wins: it is the only
 // description of a cause the control plane cannot otherwise observe. Otherwise
 // the reason names the exit code, as before.
+//
+// The record's own reason is bounded here for the same fact the sibling producers
+// bound theirs for: this is a value the reconciler READS rather than builds. The
+// agent bounds what it writes, but the termination message is a file the task's
+// own process can write before it is killed, the kubelet's ceiling there is
+// ~4 KiB — seventeen times taskoutcome.MaxReasonLen — and Decode imposes no
+// length limit of its own.
 func recordFailureReason(rec taskoutcome.Record) string {
 	if rec.Reason != "" {
-		return rec.Reason
+		return boundReason(rec.Reason)
 	}
 	if rec.ExitCode != nil {
 		return fmt.Sprintf("task failed (exit %d)", *rec.ExitCode)

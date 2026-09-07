@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -491,5 +492,31 @@ func TestRecordFailureReasonPrefersReasonOverExitCode(t *testing.T) {
 	}
 	if rec.ExitCode == nil || *rec.ExitCode != 255 {
 		t.Errorf("exit_code = %v, want 255 kept in the record alongside the reason", rec.ExitCode)
+	}
+}
+
+// TestRecordFailureReasonBoundsTheReason: recordFailureReason is the one reason
+// producer here that reads a value the reconciler did not build. Every sibling
+// (podFailureReason, waitingFailureReason) bounds its output because kubelet
+// fields are unbounded input for an end-user-visible value — and a record's
+// reason is no different: the agent bounds what IT writes, but a task can write
+// its own termination message before being killed, and the kubelet's ceiling
+// there is ~4 KiB, seventeen times the record's own cap. Decode does not bound
+// it either, so the reader must.
+func TestRecordFailureReasonBoundsTheReason(t *testing.T) {
+	msg, err := json.Marshal(map[string]any{
+		"v":       taskoutcome.Version,
+		"outcome": "failed",
+		"reason":  strings.Repeat("A", 4000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := taskoutcome.Decode(string(msg))
+	if !ok {
+		t.Fatalf("a task-written failure record must still decode: %s", msg)
+	}
+	if got := recordFailureReason(rec); len(got) > taskoutcome.MaxReasonLen {
+		t.Errorf("recordFailureReason length = %d, want <= %d", len(got), taskoutcome.MaxReasonLen)
 	}
 }

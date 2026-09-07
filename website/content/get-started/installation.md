@@ -376,8 +376,39 @@ deploy, layer on:
   Longhorn-rwx / CephFS / EFS / Azure Files / GCP Filestore) or ship logs to an
   object store (`logs.sink`); a `ReadWriteOnce` PVC pins you to a single
   replica.
-- **NetworkPolicy.** Set `networkPolicy.enabled=true` to restrict the control
-  plane and task pods to only the flows they need.
+- **NetworkPolicy — two independent values, and the task-pod one is the
+  containment.** `networkPolicy.enabled=true` restricts the **control plane**,
+  and only its **ingress**: the policy's egress list, `networkPolicy.egress`, is
+  **empty by default and an empty egress list means allow-all**, deliberately, so
+  that enabling the policy does not silently break Postgres / Redis /
+  kube-apiserver access. Egress stays wide open until you populate
+  `networkPolicy.egress` with your own data-store and apiserver rules (DNS is
+  always allowed regardless). It renders nothing for task pods.
+- **`taskNetworkPolicy.enabled` is the task-pod policy, and it defaults to
+  `false`.** This is the one that governs the pods running untrusted,
+  author-supplied DAG code: it denies all ingress and allows egress only to DNS,
+  the control-plane gRPC, and every other destination *except* the cloud-metadata
+  range `169.254.0.0/16`. It is the network-layer containment
+  [ADR 0048](/project/adrs/0048-no-user-code-in-control-plane/) leans on when it
+  argues that untrusted code is contained outside the control plane, so a
+  production deploy should set it explicitly:
+  `--set taskNetworkPolicy.enabled=true`. Two knobs go with it:
+  `taskNetworkPolicy.blockPrivateNetworks=true` *additionally* denies RFC1918 and
+  the apiserver (opt-in, because a DAG calling an internal service is a
+  legitimate orchestration pattern the policy cannot tell apart from the
+  apiserver by IP), and `taskNetworkPolicy.allowMetadataEgress` re-permits single
+  hosts inside the blocked metadata range — one `/32` each, never the whole
+  range. That last one is why the policy is opt-in rather than on by default:
+  both clouds serve **keyless workload identity from the link-local range**, so
+  turning the policy on breaks keyless external-secrets auth on GKE Workload
+  Identity (`169.254.169.254/32`) and EKS Pod Identity (`169.254.170.23/32`)
+  until the exception is added. AWS IRSA needs no exception — it uses the public
+  STS endpoint. The install NOTES warn while the value is off.
+- **Both policies need a CNI that *enforces* NetworkPolicy.** A rendered policy
+  object is not proof of enforcement: kindnet (the default on `kind`) enforces
+  nothing, and the AWS VPC CNI enforces policy only when its network-policy agent
+  is enabled — off by default on many EKS clusters. Verify on your own CNI before
+  treating either policy as a control.
 - **Secret-delivery posture.** Three `auth.*` flips decide how much credential a
   task pod can reach, and all three ship on the value that is byte-for-byte
   today's behavior — so a default install is the *permissive* end of each:

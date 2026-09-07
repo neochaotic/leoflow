@@ -220,6 +220,31 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   window the ladder itself implies (70-150 s) instead of lingering to the pod
   deadline.
   ([#930](https://github.com/neochaotic/leoflow/issues/930))
+- **The installation guide no longer claims `networkPolicy.enabled` restricts
+  task pods, or that it restricts egress at all.** Production hardening told
+  operators to set `networkPolicy.enabled=true` "to restrict the control plane
+  and task pods to only the flows they need", and both halves of that sentence
+  were wrong. Task pods are governed by a *different* value,
+  `taskNetworkPolicy.enabled`, which defaults to `false` — so an operator who
+  followed the section to the letter believed the network-layer containment
+  [ADR 0048](https://leoflow.dev/project/adrs/0048-no-user-code-in-control-plane/)
+  leans on was in place and had none. And the control-plane policy restricts
+  **ingress only**: its `networkPolicy.egress` list is empty by default and an
+  empty egress list means allow-all, deliberately, so enabling the policy cannot
+  silently break Postgres / Redis / kube-apiserver access. The bullet is now
+  split per value, states the task policy's `false` default and the
+  `blockPrivateNetworks` / `allowMetadataEgress` escape hatches (the latter is
+  why the policy is opt-in: both clouds serve keyless workload identity from the
+  always-blocked link-local range), and says plainly that neither policy is a
+  control without a CNI that enforces it. The install NOTES now carry a WARNING
+  while `taskNetworkPolicy.enabled` is false, so the deliberately-off default is
+  visible at the moment the operator can act on it. The task policy's default is
+  **unchanged**: it always blocks `169.254.0.0/16`, so defaulting it on would
+  break keyless external-secrets auth for anyone who does not know to add a
+  single-address exception, and its enforcement is CNI-dependent and invisible to
+  this project's gates — a default-on policy that silently does nothing on a
+  large share of installs is a worse posture than an opt-in one that is honestly
+  labelled ([#804](https://github.com/neochaotic/leoflow/issues/804)).
 
 - **The pod-lost reaper no longer reaps a task whose pod is still there,
   finished.** Its liveness question returned one bool for two different states —

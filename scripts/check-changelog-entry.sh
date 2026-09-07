@@ -45,6 +45,46 @@ self_test() {
 	local dated
 	dated=$'## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n- x\n'
 	_eq "$(printf '%s' "$dated" | unreleased_section | tr -d '[:space:]')" "" "empty Unreleased extracts blank"
+	# The pure filter above was the only thing under test, which is why nothing
+	# caught that this gate fails when invoked with no pull request to judge —
+	# cut-release.sh's run_gates() globs scripts/check-*.sh and runs this one
+	# bare from main, where the base and the working tree are the same commit,
+	# so every cut died on "mechanical gates failed". These cases drive the
+	# script itself in a throwaway repository.
+	local script tmp
+	script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+	tmp="$(mktemp -d)"
+	(
+		cd "$tmp" || exit 1
+		git init -q . && git config user.email t@t && git config user.name t
+		mkdir -p scripts && cp "$script" scripts/
+		printf '%s\n' '# Changelog' '' '## [Unreleased]' '' '### Fixed' '- a thing (#1)' '' '## [1.0.0] - 2026-01-01' '- old' > CHANGELOG.md
+		git add -A && git commit -qm base && git branch -M main
+		git remote add origin . && git update-ref refs/remotes/origin/main refs/heads/main
+	) >/dev/null 2>&1
+	# On the base branch there is no PR: the gate must skip, not fail.
+	local rc=0
+	( cd "$tmp" && bash scripts/check-changelog-entry.sh >/dev/null 2>&1 ) || rc=$?
+	_eq "$rc" "0" "skips on the base branch (the cut invokes it bare)"
+	# On a branch that changes something else, it must still fail.
+	rc=0
+	(
+		cd "$tmp" || exit 1
+		git checkout -qb feature && echo x > other.txt && git add -A && git commit -qm other
+		bash scripts/check-changelog-entry.sh >/dev/null 2>&1
+	) || rc=$?
+	_eq "$rc" "1" "still fails a branch that adds no entry"
+	# And pass when the branch does add one.
+	rc=0
+	(
+		cd "$tmp" || exit 1
+		printf '%s\n' '# Changelog' '' '## [Unreleased]' '' '### Fixed' '- a thing (#1)' '- another thing (#2)' '' '## [1.0.0] - 2026-01-01' '- old' > CHANGELOG.md
+		git add -A && git commit -qm entry
+		bash scripts/check-changelog-entry.sh >/dev/null 2>&1
+	) || rc=$?
+	_eq "$rc" "0" "passes a branch that adds an entry"
+	rm -rf "$tmp"
+
 	if [ "$fail" -eq 0 ]; then echo "self-test: PASS"; return 0; else echo "self-test: FAIL"; return 1; fi
 }
 
@@ -55,6 +95,18 @@ base="${1:-origin/main}"
 
 if [ ! -f "$CHANGELOG" ]; then
 	echo "FAIL: $CHANGELOG not found"; exit 1
+fi
+
+# With no pull request to judge, this gate has no question to ask. HEAD being an
+# ancestor of the base ref means we ARE on the base branch — which is how
+# cut-release.sh's run_gates() invokes every scripts/check-*.sh during a release.
+# Comparing the base's Unreleased section against its own is always equal, so the
+# gate reported FAIL and the cut died on "mechanical gates failed". A pull
+# request's HEAD is never an ancestor of its base, so the gate still runs there.
+if git rev-parse --verify --quiet "$base" >/dev/null 2>&1 &&
+	git merge-base --is-ancestor HEAD "$base" >/dev/null 2>&1; then
+	echo "OK: HEAD is on ${base}, so there is no pull request to judge — gate skipped."
+	exit 0
 fi
 
 base_section="$(git show "${base}:${CHANGELOG}" 2>/dev/null | unreleased_section || true)"

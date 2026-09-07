@@ -48,42 +48,69 @@ self_test() {
 	# The pure filter above was the only thing under test, which is why nothing
 	# caught that this gate fails when invoked with no pull request to judge —
 	# cut-release.sh's run_gates() globs scripts/check-*.sh and runs this one
-	# bare from main, where the base and the working tree are the same commit,
-	# so every cut died on "mechanical gates failed". These cases drive the
-	# script itself in a throwaway repository.
+	# bare from a release branch whose HEAD is origin/main, so the base and the
+	# comparison were the same commit and every rc cut died on "mechanical gates
+	# failed". These cases drive the script itself in a throwaway repository.
+	#
+	# Ambient git config is neutralised rather than hoped about: a global
+	# commit.gpgsign with an unavailable gpg, or a core.hooksPath whose
+	# pre-commit refuses, otherwise kills this script at `git commit` under
+	# set -e with every byte of the reason inside a redirect. Asserts are on the
+	# MESSAGE, not just the exit code, because exit 0 cannot distinguish "passed
+	# because an entry was added" from "passed because it skipped".
 	local script tmp
-	script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+	script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-changelog-entry.sh"
 	tmp="$(mktemp -d)"
-	(
+	trap 'rm -rf "${tmp:-}"' RETURN
+
+	local setup_log
+	setup_log="$(
+		export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 		cd "$tmp" || exit 1
-		git init -q . && git config user.email t@t && git config user.name t
-		mkdir -p scripts && cp "$script" scripts/
-		printf '%s\n' '# Changelog' '' '## [Unreleased]' '' '### Fixed' '- a thing (#1)' '' '## [1.0.0] - 2026-01-01' '- old' > CHANGELOG.md
-		git add -A && git commit -qm base && git branch -M main
-		git remote add origin . && git update-ref refs/remotes/origin/main refs/heads/main
-	) >/dev/null 2>&1
-	# On the base branch there is no PR: the gate must skip, not fail.
-	local rc=0
-	( cd "$tmp" && bash scripts/check-changelog-entry.sh >/dev/null 2>&1 ) || rc=$?
-	_eq "$rc" "0" "skips on the base branch (the cut invokes it bare)"
-	# On a branch that changes something else, it must still fail.
-	rc=0
-	(
-		cd "$tmp" || exit 1
-		git checkout -qb feature && echo x > other.txt && git add -A && git commit -qm other
-		bash scripts/check-changelog-entry.sh >/dev/null 2>&1
-	) || rc=$?
-	_eq "$rc" "1" "still fails a branch that adds no entry"
-	# And pass when the branch does add one.
-	rc=0
-	(
-		cd "$tmp" || exit 1
-		printf '%s\n' '# Changelog' '' '## [Unreleased]' '' '### Fixed' '- a thing (#1)' '- another thing (#2)' '' '## [1.0.0] - 2026-01-01' '- old' > CHANGELOG.md
-		git add -A && git commit -qm entry
-		bash scripts/check-changelog-entry.sh >/dev/null 2>&1
-	) || rc=$?
-	_eq "$rc" "0" "passes a branch that adds an entry"
-	rm -rf "$tmp"
+		git -c init.defaultBranch=main init -q . &&
+		git config user.email t@example.invalid && git config user.name tester &&
+		mkdir -p scripts && cp "$script" scripts/ &&
+		printf '%s\n' '# Changelog' '' '## [Unreleased]' '' '### Fixed' '- a thing (#1)' '' '## [1.0.0] - 2026-01-01' '- old' > CHANGELOG.md &&
+		git add -A && git commit -qm base &&
+		git update-ref refs/remotes/origin/main refs/heads/main
+	2>&1)" || { printf '  FAIL self-test setup could not build the fixture repo\n%s\n' "$setup_log"; return 1; }
+
+	# _case <name> <want-rc> <want-substring> -- <commands run inside $tmp>
+	_case() {
+		local name="$1" want_rc="$2" want_msg="$3"; shift 4
+		local out rc=0
+		out="$(
+			export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+			cd "$tmp" || exit 1
+			"$@" >/dev/null 2>&1
+			bash scripts/check-changelog-entry.sh 2>&1
+		)" || rc=$?
+		_eq "$rc" "$want_rc" "$name (exit)"
+		case "$out" in
+			*"$want_msg"*) printf '  ok   %s (message)\n' "$name" ;;
+			*) printf '  FAIL %s (message)\n    got:  %q\n    want to contain: %q\n' "$name" "$out" "$want_msg"; fail=1 ;;
+		esac
+	}
+
+	# 1. Bare on the base branch: how run_gates invokes it. Must skip.
+	_case "skips on the base branch" 0 "gate skipped" -- true
+	# 2. The shape the cut ACTUALLY presents: a release branch off origin/main
+	#    with an uncommitted CHANGELOG rewrite (bump_chart/date_the_changelog run
+	#    before run_gates, and the commit comes after). Must still skip. If
+	#    anyone moves run_gates after the commit, this is what goes red.
+	_case "skips with the cut's dirty worktree" 0 "gate skipped" -- \
+		bash -c 'git checkout -qb release/v9.9.9 main && printf "%s\n" "# Changelog" "" "## [Unreleased]" "" "## [9.9.9] - 2026-09-07" "- dated" > CHANGELOG.md'
+	# 3. A real branch that changes something else: must still FAIL.
+	_case "still fails a branch that adds no entry" 1 "does not add a CHANGELOG entry" -- \
+		bash -c 'git checkout -q main && git checkout -qb feature && git checkout -- CHANGELOG.md && echo x > other.txt && git add -A && git commit -qm other'
+	# 4. And pass, by comparison rather than by skipping, when it adds one.
+	_case "passes a branch that adds an entry" 0 "updated relative to" -- \
+		bash -c 'printf "%s\n" "# Changelog" "" "## [Unreleased]" "" "### Fixed" "- a thing (#1)" "- another (#2)" "" "## [1.0.0] - 2026-01-01" "- old" > CHANGELOG.md && git add -A && git commit -qm entry'
+	# 5. A base ref that does not resolve must FAIL, never approve. Before this
+	#    it printed OK: git show of a missing ref yields an empty base section,
+	#    which differs from a non-empty head section.
+	_case "fails closed when the base ref is missing" 1 "not present" -- \
+		bash -c 'git update-ref -d refs/remotes/origin/main'
 
 	if [ "$fail" -eq 0 ]; then echo "self-test: PASS"; return 0; else echo "self-test: FAIL"; return 1; fi
 }
@@ -97,15 +124,32 @@ if [ ! -f "$CHANGELOG" ]; then
 	echo "FAIL: $CHANGELOG not found"; exit 1
 fi
 
-# With no pull request to judge, this gate has no question to ask. HEAD being an
-# ancestor of the base ref means we ARE on the base branch — which is how
-# cut-release.sh's run_gates() invokes every scripts/check-*.sh during a release.
-# Comparing the base's Unreleased section against its own is always equal, so the
-# gate reported FAIL and the cut died on "mechanical gates failed". A pull
-# request's HEAD is never an ancestor of its base, so the gate still runs there.
-if git rev-parse --verify --quiet "$base" >/dev/null 2>&1 &&
+# A base ref that does not resolve must never let a PR through. `git show` of a
+# missing ref yields an empty base section, which differs from any non-empty head
+# section, so this gate used to print OK on a PR that added nothing — fail-open,
+# which in a gate is worse than the cut being blocked. Reachable the moment a
+# workflow loses its fetch step or checks out shallow.
+git rev-parse --verify --quiet "$base" >/dev/null 2>&1 ||
+	{ echo "FAIL: base ref '${base}' is not present — fetch it before running this gate (shallow clone?)"; exit 1; }
+
+# With no pull request to judge, this gate has no question to ask.
+# cut-release.sh's run_gates() globs scripts/check-*.sh and runs each one bare
+# from a release branch created at origin/main, so the base's Unreleased section
+# was compared against its own: always equal, always FAIL, and every rc cut died
+# on "mechanical gates failed".
+#
+# Two conditions, both required. GITHUB_BASE_REF is set on pull_request and
+# pull_request_target and unset locally and during a cut, so it is literally
+# "there is no pull request"; without it, a workflow using pull_request_target
+# without an explicit ref checks out the BASE branch, HEAD becomes the base tip,
+# and this gate would rubber-stamp every PR forever. HEAD being an ancestor of
+# the base means the content is already contained in the base, so there is
+# nothing this gate could judge either way. Ancestry only ever under-reports
+# reachability on truncated history, so a shallow clone makes it fail closed —
+# the gate runs.
+if [ -z "${GITHUB_BASE_REF:-}" ] &&
 	git merge-base --is-ancestor HEAD "$base" >/dev/null 2>&1; then
-	echo "OK: HEAD is on ${base}, so there is no pull request to judge — gate skipped."
+	echo "OK: HEAD is contained in ${base} and no pull request is in play — gate skipped."
 	exit 0
 fi
 

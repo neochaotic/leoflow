@@ -22,7 +22,10 @@ no user-facing change (release-prep, chore, dependabot, docs-only) carries the
    `version`+`appVersion` in lockstep (ADR 0028), regenerate the chart README with
    `helm-docs`, and for a **GA** move `CHANGELOG [Unreleased]` to `[X.Y.Z] - <date>`
    with a fresh empty `[Unreleased]` (an **rc** keeps `[Unreleased]`). Run every
-   `scripts/check-*.sh` gate against the tag.
+   `scripts/check-*.sh` gate against the tag. One of them,
+   `check-changelog-entry.sh`, is a pull-request gate with no question to ask
+   when there is no pull request, so it reports `gate SKIP`; the cut log
+   distinguishes SKIP from PASS to keep the count honest.
 3. **PR → wait green → merge** — opens the prepare PR and waits for CI, re-running
    **only known-transient flakes** (registry rate-limits, Go module-proxy resets,
    the shallow-fetch merge-base gate, the cold-start `/readyz` timeout) and never

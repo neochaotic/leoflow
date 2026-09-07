@@ -162,7 +162,12 @@ dimensions of the same credential and are configured independently:
 Warm pools require `agent_token_transport=exchange` **and**
 `secret_liveness_mode=enforce`. `secret_scoping` and
 `max_attempt_credential_lifetime` are independent hardening choices with their own
-rollout arcs. All are operator-scoped and documented in the
+rollout arcs — and for `secret_scoping` that arc runs through the `permissive`
+warning trail, where a clean trail proves only that no *declaring* DAG is
+over-served and does **not** prove that no DAG would lose secrets under
+`enforce`, since a DAG that declares nothing produces no warning at all
+([#800](https://github.com/neochaotic/leoflow/issues/800)). All are
+operator-scoped and documented in the
 [Configuration reference](/reference/configuration/#server-environment-leoflow_).
 
 ## See also

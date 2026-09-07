@@ -66,7 +66,46 @@ RWX as the alternative.
 */ -}}
 {{- $logMounters := include "leoflow.logMounterCeiling" . | int -}}
 {{- $logsAccessMode := .Values.logs.persistence.accessMode -}}
+{{- /*
+Both the single-writer refusal below and the `Recreate` strategy auto-selection
+in _controlplane-deployment.tpl test this value against the two single-writer
+SPELLINGS, which made it a denylist: an empty value, or a typo like
+`readWriteMany`, matched neither branch, so it skipped the guard AND the
+auto-selection and left the install to fail at the apiserver — or, worse, to
+surge a RollingUpdate onto a volume only one pod can hold. Turn it into an
+allowlist of the three modes the control plane can actually use. ReadOnlyMany is
+a real Kubernetes mode and deliberately not one of them: the control plane
+WRITES task logs into this volume. Only checked when a PVC is actually rendered
+— with persistence off nothing reads the value, and refusing dead config would
+be noise (#905).
+*/ -}}
+{{- if .Values.logs.persistence.enabled -}}
+{{- if not (has $logsAccessMode (list "ReadWriteOnce" "ReadWriteOncePod" "ReadWriteMany")) -}}
+{{- fail (printf "logs.persistence.accessMode=%q (kind %s) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905." (toString $logsAccessMode) (kindOf $logsAccessMode)) -}}
+{{- end -}}
+{{- end -}}
 {{- $singleWriter := or (eq $logsAccessMode "ReadWriteOnce") (eq $logsAccessMode "ReadWriteOncePod") -}}
+{{- /*
+The strategy auto-selection (#868) picks `Recreate` over a single-writer logs
+PVC precisely because a RollingUpdate surges a replacement pod before the old
+one releases the volume, and the surge pod then hangs in ContainerCreating on a
+Multi-Attach error with the rollout never converging. But the auto-selection
+only runs when deployment.strategy is EMPTY, so an explicit override walked
+straight back into the deadlock — and at the shipped replicaCount of 1 there is
+no second pod to serve while the rollout is wedged. The multi-pod version of
+this shape is already refused above; this is the same volume physics at one
+replica, so refuse it here rather than let helm report success over a control
+plane that never comes back (#905).
+
+It judges leoflow.deploymentStrategy, the TRIMMED and validated value the
+template renders, not the raw one: comparing the raw value let `RollingUpdate `
+past this refusal into a spec the apiserver accepts once YAML drops the space.
+That helper also records the assumption both sides rest on — that the chart
+renders no maxSurge knob — and what a future PR adding one owes this guard.
+*/ -}}
+{{- if and (eq (include "leoflow.deploymentStrategy" .) "RollingUpdate") .Values.logs.persistence.enabled $singleWriter -}}
+{{- fail (printf "deployment.strategy=RollingUpdate cannot roll over logs.persistence.accessMode=%s: a RollingUpdate surges a replacement pod before the old one is gone, and a single-writer volume attaches to one node/pod, so the surge pod hangs in ContainerCreating on a Multi-Attach error and the rollout never converges — on a single replica that is a control plane that never comes back, while helm reports success. Leave deployment.strategy empty and the chart auto-selects Recreate for a single-writer logs PVC, or move the logs off it: logs.persistence.enabled=false with logs.sink.provider=s3|gcs (recommended), or logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass. See #905." $logsAccessMode) -}}
+{{- end -}}
 {{- if and (gt $logMounters 1) .Values.logs.persistence.enabled $singleWriter -}}
 {{- fail (printf "more than one control-plane pod would mount the logs PVC (replicaCount > 1, autoscaling.maxReplicas > 1, or split.enabled), but logs.persistence.accessMode=%s attaches the volume to a single node/pod: the extra pods hang in ContainerCreating with a Multi-Attach error while the install reports success. HA needs a log store every replica can write. Recommended: set logs.persistence.enabled=false and ship task logs to object storage (logs.sink.provider=s3|gcs with logs.sink.bucket). Alternative: logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass (EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx). Or keep a single replica. See helm/leoflow/examples/values-ha.yaml." $logsAccessMode) -}}
 {{- end -}}

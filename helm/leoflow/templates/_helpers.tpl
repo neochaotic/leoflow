@@ -160,17 +160,118 @@ one of them misses is a shape both miss — there is one definition.
 {{/*
 Whether the PodDisruptionBudget renders. podDisruptionBudget.enabled is
 tri-state: an explicit true/false wins (true on a single replica is the
-operator's informed choice, and NOTES.txt says what it costs); unset (auto)
-renders the PDB exactly when the guaranteed replica floor is above one, i.e.
-when there is a second pod to keep serving while one is evicted.
+operator's informed choice, and NOTES.txt says what it costs — via
+leoflow.pdbEnabledExplicit, so the warning follows every spelling this helper
+honours); unset (auto) renders the PDB exactly when the guaranteed replica floor
+is above one, i.e. when there is a second pod to keep serving while one is
+evicted.
+
+The explicit half accepts the STRING spellings of the two booleans as well as
+real booleans, because a GitOps tool does not send booleans: Argo CD's
+`helm.parameters` and `helm --set-string` pass every override as a string, and a
+`kindIs "bool"` test alone read `"true"` as "not a bool" and fell through to
+auto — so an operator who asked for a budget on a single replica got none, with
+no diagnostic anywhere (#905). Anything else non-empty is a `fail` rather than
+another silent fallback to auto: the whole failure mode here was a value that
+looked accepted and did nothing.
 */}}
 {{- define "leoflow.pdbEnabled" -}}
 {{- $enabled := .Values.podDisruptionBudget.enabled -}}
+{{- $auto := gt (include "leoflow.controlPlaneReplicaFloor" . | int) 1 -}}
 {{- if kindIs "bool" $enabled -}}
 {{- $enabled -}}
+{{- else if kindIs "invalid" $enabled -}}
+{{- $auto -}}
 {{- else -}}
-{{- gt (include "leoflow.controlPlaneReplicaFloor" . | int) 1 -}}
+{{- $spelled := lower (toString $enabled) -}}
+{{- if eq $spelled "" -}}
+{{- $auto -}}
+{{- else if eq $spelled "true" -}}
+true
+{{- else if eq $spelled "false" -}}
+false
+{{- else -}}
+{{- /* %q over the raw interface garbles anything that is not a string: an
+integer renders as a quoted rune (`'\x05'`) or a bad-verb error, and neither
+names what the operator typed. Quote the string CONVERSION and add the kind, so
+the message is legible for every value that can reach here (#905). */ -}}
+{{- fail (printf "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got %q, kind %s). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905." (toString $enabled) (kindOf $enabled)) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether podDisruptionBudget.enabled was set EXPLICITLY — "true" when it is, empty
+when the release is in auto mode. It reports the SPELLING, not the YAML type: a
+bool, or a non-empty value that lowercases to `true` or `false`, is explicit;
+unset, null and empty are auto.
+
+NOTES.txt needs this and `kindIs "bool"` will not do. Both of its budget branches
+used to key on the value being a real bool, which was correct only while the
+helper above ignored the string spellings. Once it honoured them, a
+string-spelled `"true"` at a single replica rendered the budget and skipped the
+warning that says what the budget costs — drains hanging on the one pod,
+auto-upgrades stalling — so the Argo CD path this exists to serve got the trap
+without the diagnostic, where before it got neither. The upgrade note has the
+mirror bug: it attributes the budget to auto-selection ("replica floor > 1") over
+a value the operator set by hand. One predicate, used by both branches (#905).
+
+It deliberately does NOT validate: an unparseable value is `fail`ed by
+leoflow.pdbEnabled, which every consumer of this predicate also renders, so
+duplicating the refusal here would only risk the two disagreeing.
+*/}}
+{{- define "leoflow.pdbEnabledExplicit" -}}
+{{- $enabled := .Values.podDisruptionBudget.enabled -}}
+{{- if kindIs "bool" $enabled -}}
+true
+{{- else if kindIs "invalid" $enabled -}}
+{{- else if has (lower (toString $enabled)) (list "true" "false") -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+The EXPLICIT deployment.strategy, trimmed and stringified once — empty means the
+caller should auto-select. It is the one definition both the render
+(_controlplane-deployment.tpl) and the single-writer RollingUpdate refusal
+(deployment.yaml) read, so the value that is judged is the value that renders.
+
+It is an allowlist for the same reason the access mode became one. The template
+rendered this value VERBATIM into spec.strategy.type and the refusal compared it
+EXACTLY, which left two holes on the same key:
+
+  - `rollingupdate` matched neither, so it skipped the refusal AND the
+    auto-selection, rendered as-is, and the apiserver rejected the install after
+    a clean render — the defect class this chart refuses at render time.
+  - `RollingUpdate ` — one trailing space — skipped the refusal too, but YAML
+    strips a trailing space from a plain scalar, so the apiserver ACCEPTED it.
+    That is worse: the operator gets exactly the Multi-Attach deadlock the
+    refusal exists to prevent, reached THROUGH the refusal.
+
+So: trim, allow only empty / RollingUpdate / Recreate, and fail anything else
+rather than pass it to the apiserver (#905).
+
+ASSUMES the chart renders no surge knob. Deployment.spec.strategy.rollingUpdate
+(maxSurge / maxUnavailable) is deliberately absent, which is what makes
+"RollingUpdate over a single-writer volume" unconditionally a deadlock: the
+default maxSurge of 25% rounds up to one extra pod. A future PR that exposes
+maxSurge makes this guard WRONG — `maxSurge: 0` rolls a single-writer volume
+safely — and it must then gate the refusal on the surge being non-zero. The one
+shape where an operator legitimately wants the surge today is a node-pinned
+local volume, where both pods land on the same node and the volume is
+re-attachable there; that operator can patch spec.strategy on the rendered
+Deployment rather than have the chart weaken the guard for everyone.
+*/}}
+{{- define "leoflow.deploymentStrategy" -}}
+{{- $raw := .Values.deployment.strategy -}}
+{{- $strategy := "" -}}
+{{- if not (kindIs "invalid" $raw) -}}
+{{- $strategy = trim (toString $raw) -}}
+{{- end -}}
+{{- if not (has $strategy (list "" "RollingUpdate" "Recreate")) -}}
+{{- fail (printf "deployment.strategy=%q (kind %s) is not a Deployment update strategy: set RollingUpdate, Recreate, or \"\" to let the chart auto-select (Recreate over a single-writer logs PVC, RollingUpdate otherwise). The value is rendered verbatim into spec.strategy.type and compared exactly, so an unrecognized spelling used to bypass both the single-writer RollingUpdate refusal and the auto-selection: the apiserver then rejected the install, or — for a spelling it accepts after trimming, like a trailing space — accepted the surge onto a volume only one pod can hold. See #905." (toString $raw) (kindOf $raw)) -}}
+{{- end -}}
+{{- $strategy -}}
 {{- end -}}
 
 {{/* Name of the Secret holding generated/inline credentials. */}}

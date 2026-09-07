@@ -22,6 +22,7 @@ on:
       - "helm/**"
       - "scripts/helm-template-checks.sh"
       - "scripts/rbac-covers-executor.sh"
+      - "scripts/check-values-doc-comments.sh"
       - ".github/workflows/helm-ci.yaml"
       - ".github/ci/kind-datastores.yaml"
       - "deploy/Dockerfile.server"
@@ -55,6 +56,15 @@ jobs:
 
       - name: helm lint
         run: helm lint helm/leoflow
+
+      # The helm-docs gate below diffs the README against helm-docs' own output,
+      # so it is SATISFIED by a row helm-docs renders wrong. A " --" in the prose
+      # of a doc comment is the delimiter again, and helm-docs takes the last
+      # one: the description and the `(bool)` type hint are dropped and the row
+      # renders blank and typed `string`. Nothing compares the row against the
+      # comment meant to produce it, so this runs FIRST and independently.
+      - name: check-values-doc-comments (helm-docs cannot see this class)
+        run: bash scripts/check-values-doc-comments.sh
 
       # helm-docs: ensure the chart README is in sync with values.yaml. If a
       # contributor edits values.yaml (adds/removes keys, changes a `# --`

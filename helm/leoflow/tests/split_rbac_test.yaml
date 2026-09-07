@@ -48,3 +48,26 @@ tests:
       - equal:
           path: subjects[0].name
           value: leoflow
+
+  # serviceAccount.annotations is ONE value rendered onto EVERY control-plane SA,
+  # so in split mode the cloud identity it carries lands on both. That is what the
+  # object log sink needs: the scheduler WRITES task logs to the bucket and any api
+  # replica READS them back to serve the UI, so annotating only one role leaves half
+  # the control plane without credentials. Locked here because values-ha.yaml states
+  # it (#905).
+  - it: renders serviceAccount.annotations onto BOTH split ServiceAccounts (the log-sink identity)
+    template: serviceaccount.yaml
+    set:
+      serviceAccount.annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/leoflow-control-plane
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.annotations["eks.amazonaws.com/role-arn"]
+          value: arn:aws:iam::123456789012:role/leoflow-control-plane
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["eks.amazonaws.com/role-arn"]
+          value: arn:aws:iam::123456789012:role/leoflow-control-plane
+        documentIndex: 1

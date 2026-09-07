@@ -138,6 +138,89 @@ tests:
       - hasDocuments:
           count: 0
 
+  # ─── The tri-state accepts the string spellings a GitOps tool sends ──────
+  # Argo CD's `helm.parameters` and Flux's `postRenderers` values pass every
+  # override as a STRING (the same shape as `helm --set-string`), so an operator
+  # asking for `podDisruptionBudget.enabled: "true"` on a single replica used to
+  # get the auto default silently — a forced-on budget that never rendered, and
+  # no diagnostic anywhere. Accept the string spellings, and refuse anything that
+  # is neither a bool nor one of them rather than falling back to auto (#905).
+  - it: honors a string-typed podDisruptionBudget.enabled=true on a single replica (Argo CD helm.parameters)
+    template: pdb.yaml
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+
+  - it: honors a string-typed podDisruptionBudget.enabled=false at replicaCount > 1 (Argo CD helm.parameters)
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The helper lowercases before comparing, so `"True"` — the spelling a Python
+  # or Helmfile templating layer produces from a real boolean — is accepted. That
+  # was undocumented and untested; lock it so a future tightening of the compare
+  # cannot drop it silently (#905).
+  - it: honors an uppercase-T string podDisruptionBudget.enabled=True on a single replica
+    template: pdb.yaml
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "True"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+
+  # The same garbling, on the other new message: `%q` over an interface value
+  # renders an integer as a quoted rune, so `enabled: 5` reported `got '\x05'`
+  # and named nothing the operator had typed (#905).
+  - it: names an integer podDisruptionBudget.enabled instead of a quoted rune
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.enabled: 5
+    asserts:
+      - failedTemplate:
+          errorMessage: "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got \"5\", kind float64). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905."
+
+  - it: refuses a podDisruptionBudget.enabled that is neither a bool nor a true/false string
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.enabled: "yes"
+    asserts:
+      - failedTemplate:
+          errorMessage: "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got \"yes\", kind string). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905."
+
+  # ─── minAvailable XOR maxUnavailable ─────────────────────────────────────
+  # A PodDisruptionBudget spec carries one of the two, never both: the apiserver
+  # rejects the pair, so rendering it fails the install after the render looked
+  # fine — the shape this chart refuses at render time everywhere else. It was a
+  # values-file comment until the budget became default-on for the HA profile,
+  # which put the pair one `--set` away from a real install (#905).
+  - it: refuses a PodDisruptionBudget with both minAvailable and maxUnavailable set
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.minAvailable: 1
+      podDisruptionBudget.maxUnavailable: 1
+    asserts:
+      - failedTemplate:
+          errorMessage: "podDisruptionBudget.minAvailable=1 and podDisruptionBudget.maxUnavailable=1 are both set: a PodDisruptionBudget spec carries exactly one of the two and the apiserver rejects both together, so the install would fail after a clean render. Set one and clear the other (podDisruptionBudget.maxUnavailable=\"\" keeps the chart's minAvailable default). See #905."
+
   # ─── Single-writer log volume guard ──────────────────────────────────────
   # A ReadWriteOnce / ReadWriteOncePod PVC attaches to one node / one pod. A
   # second control-plane replica scheduled elsewhere hangs in ContainerCreating
@@ -207,6 +290,174 @@ tests:
       - equal:
           path: spec.replicas
           value: 1
+
+  # ─── The access mode is an allowlist, not a denylist ─────────────────────
+  # Both the single-writer refusal above and the `Recreate` strategy
+  # auto-selection used to test the access mode against the two single-writer
+  # SPELLINGS, so an empty value or a typo — `readWriteMany` — matched neither,
+  # skipped both, and left the install to fail at the apiserver (or, worse, to
+  # surge a RollingUpdate onto a volume only one pod can hold). Refuse anything
+  # that is not one of the three modes the control plane can actually use (#905).
+  - it: refuses an empty logs.persistence.accessMode
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "logs.persistence.accessMode=\"\" (kind string) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+
+  - it: refuses a mis-cased logs.persistence.accessMode typo
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: readWriteMany
+    asserts:
+      - failedTemplate:
+          errorMessage: "logs.persistence.accessMode=\"readWriteMany\" (kind string) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+
+  - it: refuses ReadOnlyMany, a real access mode the control plane cannot write to
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: ReadOnlyMany
+    asserts:
+      - failedTemplate:
+          errorMessage: "logs.persistence.accessMode=\"ReadOnlyMany\" (kind string) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+
+  # A refusal that garbles the value it names is a worse diagnostic than one that
+  # names it plainly. Both new messages ran the QUOTED verb over an interface
+  # value, so an integer came out as an escape sequence and a null as a Go format
+  # error — and a null is precisely the shape a layered values file produces when
+  # a later layer blanks a key it does not want, which is one of the shapes this
+  # guard exists for. Quote the string CONVERSION instead, and name the kind so
+  # "empty string" and "absent" are told apart (#905).
+  - it: names a null logs.persistence.accessMode instead of printing a format error
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "logs.persistence.accessMode=\"<nil>\" (kind invalid) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+
+  - it: accepts ReadWriteOncePod, the third valid mode, on a single replica
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: ReadWriteOncePod
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  # A bogus access mode with no PVC at all is dead config, not a broken install:
+  # nothing reads it, so the guard stays out of the way — the same "model the
+  # rendered spec" rule the drain-grace guard follows.
+  - it: ignores the access mode when logs persistence is off, where nothing reads it
+    template: deployment.yaml
+    set:
+      logs.persistence.enabled: false
+      logs.persistence.accessMode: readWriteMany
+      logs.sink.provider: s3
+      logs.sink.bucket: leoflow-task-logs
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # ─── An explicit RollingUpdate must not defeat the Recreate auto-selection ─
+  # A RollingUpdate surges a replacement pod BEFORE the old one is gone, and a
+  # single-writer volume attaches to one node / one pod, so the surge pod hangs
+  # in ContainerCreating on a Multi-Attach error and the rollout never converges.
+  # The auto-selection (#868) picks Recreate for exactly this shape — but it only
+  # runs when deployment.strategy is empty, so an explicit override walked
+  # straight back into the deadlock, on a single replica no less, where there is
+  # no other pod to serve while the rollout is wedged (#905).
+  - it: refuses an explicit RollingUpdate on the default ReadWriteOnce logs PVC
+    template: deployment.yaml
+    set:
+      deployment.strategy: RollingUpdate
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.strategy=RollingUpdate cannot roll over logs.persistence.accessMode=ReadWriteOnce: a RollingUpdate surges a replacement pod before the old one is gone, and a single-writer volume attaches to one node/pod, so the surge pod hangs in ContainerCreating on a Multi-Attach error and the rollout never converges — on a single replica that is a control plane that never comes back, while helm reports success. Leave deployment.strategy empty and the chart auto-selects Recreate for a single-writer logs PVC, or move the logs off it: logs.persistence.enabled=false with logs.sink.provider=s3|gcs (recommended), or logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass. See #905."
+
+  - it: refuses an explicit RollingUpdate on a ReadWriteOncePod logs PVC
+    template: deployment.yaml
+    set:
+      deployment.strategy: RollingUpdate
+      logs.persistence.accessMode: ReadWriteOncePod
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.strategy=RollingUpdate cannot roll over logs.persistence.accessMode=ReadWriteOncePod: a RollingUpdate surges a replacement pod before the old one is gone, and a single-writer volume attaches to one node/pod, so the surge pod hangs in ContainerCreating on a Multi-Attach error and the rollout never converges — on a single replica that is a control plane that never comes back, while helm reports success. Leave deployment.strategy empty and the chart auto-selects Recreate for a single-writer logs PVC, or move the logs off it: logs.persistence.enabled=false with logs.sink.provider=s3|gcs (recommended), or logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass. See #905."
+
+  - it: keeps an explicit Recreate on a single-writer logs PVC, which is what the auto-selection would pick
+    template: deployment.yaml
+    set:
+      deployment.strategy: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  # ─── The strategy value is an allowlist too ──────────────────────────────
+  # Same denylist shape the access mode just shed. The template rendered the
+  # value verbatim into spec.strategy.type and the refusal above compared it
+  # EXACTLY, so a lowercase spelling bypassed the refusal AND the auto-selection
+  # and the apiserver rejected the install; and the same value with a TRAILING
+  # SPACE bypassed the refusal while YAML trimmed it on the way to the
+  # apiserver, which then ACCEPTED it — the Multi-Attach deadlock the refusal
+  # exists to prevent, reached through the refusal (#905).
+  - it: refuses a lowercase deployment.strategy the apiserver would reject
+    template: deployment.yaml
+    set:
+      deployment.strategy: rollingupdate
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.strategy=\"rollingupdate\" (kind string) is not a Deployment update strategy: set RollingUpdate, Recreate, or \"\" to let the chart auto-select (Recreate over a single-writer logs PVC, RollingUpdate otherwise). The value is rendered verbatim into spec.strategy.type and compared exactly, so an unrecognized spelling used to bypass both the single-writer RollingUpdate refusal and the auto-selection: the apiserver then rejected the install, or — for a spelling it accepts after trimming, like a trailing space — accepted the surge onto a volume only one pod can hold. See #905."
+
+  - it: refuses a deployment.strategy with a trailing space, which the apiserver would ACCEPT
+    template: deployment.yaml
+    set:
+      deployment.strategy: "RollingUpdate "
+    asserts:
+      - failedTemplate:
+          errorMessage: "deployment.strategy=RollingUpdate cannot roll over logs.persistence.accessMode=ReadWriteOnce: a RollingUpdate surges a replacement pod before the old one is gone, and a single-writer volume attaches to one node/pod, so the surge pod hangs in ContainerCreating on a Multi-Attach error and the rollout never converges — on a single replica that is a control plane that never comes back, while helm reports success. Leave deployment.strategy empty and the chart auto-selects Recreate for a single-writer logs PVC, or move the logs off it: logs.persistence.enabled=false with logs.sink.provider=s3|gcs (recommended), or logs.persistence.accessMode=ReadWriteMany on an RWX StorageClass. See #905."
+
+  # The allowlist trims BEFORE it compares, so stray whitespace is normalized
+  # rather than refused — an exact-compare allowlist would reject this spelling
+  # outright, and the operator asked for something the chart supports. The
+  # trailing space is unobservable in the parsed spec (YAML strips it from a
+  # plain scalar), which is exactly why the same spelling had to be caught at
+  # the guard above instead.
+  - it: trims whitespace off an otherwise valid deployment.strategy rather than refusing it
+    template: deployment.yaml
+    set:
+      deployment.strategy: "Recreate "
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: allows an explicit RollingUpdate on a ReadWriteMany logs PVC
+    template: deployment.yaml
+    set:
+      deployment.strategy: RollingUpdate
+      logs.persistence.accessMode: ReadWriteMany
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  - it: allows an explicit RollingUpdate when the logs live in object storage, with no PVC to hold
+    template: deployment.yaml
+    set:
+      deployment.strategy: RollingUpdate
+      logs.persistence.enabled: false
+      logs.sink.provider: s3
+      logs.sink.bucket: leoflow-task-logs
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
 
   # ─── Drain grace + eviction opt-in wiring ────────────────────────────────
   # A voluntary eviction sends SIGTERM and waits terminationGracePeriodSeconds
@@ -504,6 +755,43 @@ tests:
       - matchRegexRaw:
           pattern: "WARNING: podDisruptionBudget.enabled=true with a single replica"
 
+  # The warning has to follow the value's SPELLING, not its YAML type. Once the
+  # helper honoured `"true"`, a string-spelled budget rendered over a single
+  # replica while these two branches — still keyed on `kindIs "bool"` — stayed
+  # silent, so the Argo CD path this chart exists to serve got the drain-blocking
+  # budget with none of the warning that justifies allowing it. Before the string
+  # spellings were honoured the operator got no budget and no warning, which was
+  # at least consistent (#905).
+  - it: NOTES warn when a string-typed PDB is forced onto a single replica (Argo CD helm.parameters)
+    template: NOTES.txt
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "true"
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: podDisruptionBudget.enabled=true with a single replica"
+
+  - it: NOTES stay quiet when a string-typed PDB is turned OFF at a single replica
+    template: NOTES.txt
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "false"
+    asserts:
+      # The negative half of the spelling fix. A budget the operator turned off
+      # renders nothing, so warning about one would be noise — and this is the
+      # case a naive "the value is a non-empty string" test would get wrong.
+      - notMatchRegexRaw:
+          pattern: "WARNING: podDisruptionBudget.enabled"
+
+  - it: NOTES warn when an uppercase-T string PDB is forced onto a single replica
+    template: NOTES.txt
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "True"
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: podDisruptionBudget.enabled=true with a single replica"
+
   - it: NOTES warn when HA runs on ephemeral per-pod log storage with the disk sink
     template: NOTES.txt
     set:
@@ -725,6 +1013,24 @@ tests:
       logs.sink.provider: s3
       logs.sink.bucket: b
       podDisruptionBudget.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "NOTE: this release renders a PodDisruptionBudget"
+
+  # Same clause, string spelling: the note says the budget was AUTO-selected
+  # ("auto: replica floor 2 > 1"), so printing it over a value the operator set
+  # by hand misattributes their own decision back to them (#905).
+  - it: NOTES do not call out a PDB the operator set explicitly as a string
+    template: NOTES.txt
+    release:
+      name: leoflow
+      upgrade: true
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      logs.sink.provider: s3
+      logs.sink.bucket: b
+      podDisruptionBudget.enabled: "true"
     asserts:
       - notMatchRegexRaw:
           pattern: "NOTE: this release renders a PodDisruptionBudget"

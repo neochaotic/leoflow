@@ -20,8 +20,12 @@ spec:
   {{- /* Update strategy (#868): an explicit value wins; otherwise default to
        Recreate when the logs PVC is ReadWriteOnce, because a RollingUpdate surges
        a second pod that Multi-Attach-deadlocks on the RWO volume (the rollout
-       never converges). RWX or an ephemeral emptyDir tolerate RollingUpdate. */ -}}
-  {{- $strategy := .ctx.Values.deployment.strategy }}
+       never converges). RWX or an ephemeral emptyDir tolerate RollingUpdate.
+       leoflow.deploymentStrategy is the explicit half: validated and TRIMMED, so
+       what renders here is what deployment.yaml's refusal judged. Rendering the
+       raw value let `RollingUpdate ` past the refusal and into a spec the
+       apiserver accepts once YAML drops the space (#905). */ -}}
+  {{- $strategy := include "leoflow.deploymentStrategy" .ctx }}
   {{- if not $strategy }}
     {{- $am := .ctx.Values.logs.persistence.accessMode }}
     {{- if and .ctx.Values.logs.persistence.enabled (or (eq $am "ReadWriteOnce") (eq $am "ReadWriteOncePod")) }}
@@ -70,8 +74,14 @@ spec:
       # default 30s. deployment.preStopSleepSeconds runs inside this same grace
       # but BEFORE SIGTERM, so the grace has to hold both: size it as that sleep
       # plus ~35s, with headroom, when running the object log sink at scale (the
-      # HA profile ships 60 alongside a 5s sleep). Omitted when unset so a
-      # default install's pod spec is unchanged (Kubernetes applies its own 30s).
+      # HA profile ships 60 alongside a 5s sleep). `with` omits the field for nil,
+      # 0 and "" alike, so a default install's pod spec is unchanged and Kubernetes
+      # applies its own 30s. An explicit 0 landing there is deliberate, not a
+      # dropped value: a literal 0 in the spec is SIGKILL with nothing drained —
+      # HTTP cut mid-request, the dispatch pool never settling, log streams never
+      # flushed — and it makes any preStop sleep unsatisfiable. The chart's 0 means
+      # "the Kubernetes default applies", and the render guard in deployment.yaml
+      # reasons about that same 30 (#905).
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
       {{- with .ctx.Values.imagePullSecrets }}

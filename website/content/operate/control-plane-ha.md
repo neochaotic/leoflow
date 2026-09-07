@@ -103,9 +103,15 @@ It sets, and documents why:
 | `terminationGracePeriodSeconds` | `60` | headroom for the HTTP shutdown, the dispatch-pool drain and the bounded gRPC stop (see below) |
 | `podAnnotations` → `karpenter.sh/do-not-disrupt` | *commented out* | EKS/Karpenter-only opt-in, see below |
 
-Edit the `CHANGEME` datastore URLs, secrets and bucket, and annotate the
-control-plane ServiceAccount with the cloud identity that may write the bucket
-(IRSA on EKS, Workload Identity on GKE).
+Edit the `CHANGEME` datastore URLs, secrets and bucket, and bind the
+control-plane ServiceAccount to the cloud identity that may write the bucket:
+IRSA on EKS (`serviceAccount.annotations`), **EKS Pod Identity** — AWS's current
+recommendation, which needs *no* annotation and is configured as a Pod Identity
+association against the ServiceAccount instead — or Workload Identity on GKE. In
+[split mode](#split-mode-is-not-dispatch-ha) `serviceAccount.annotations` is
+rendered onto **both** ServiceAccounts and both need the identity: the scheduler
+*writes* task logs to the bucket and any api replica *reads* them back to serve
+the UI, so annotating one role leaves half the control plane without credentials.
 
 {{% alert title="Why the chart does not default to two replicas" color="info" %}}
 Because it would break every existing install on upgrade. The default install
@@ -152,6 +158,73 @@ above: image pull, boot, leadership. Non-split `replicaCount: 2` is the only
 topology that gives dispatch failover today; choose the split when you need the
 restricted API identity more than scheduler failover, and know which one you
 picked.
+
+### Warm pools are rebuilt on the far side of a failover
+
+[Warm worker pools](/operate/warm-pools/) survive a failover as *pods*, but not
+as a *pool*. The assignment stream every warm worker holds open
+(`AwaitAssignment`) is gated to the scheduler **leader**, and the registry of
+which workers are warm, which pool they serve and which are free is
+**in-memory and leader-local** — none of it is persisted or shared between
+replicas. So a new leader starts with an empty registry and the pool is rebuilt
+from the workers' side:
+
+- **Idle warm workers exit and are replaced.** A control plane on its way out
+  ends **every** assignment stream at `SIGTERM` with `Unavailable`, and a worker
+  sitting idle treats that as a clean recycle: it exits `0`, with no `ERROR`
+  line and no failed pod. A hard-killed leader is the same *code* but not the
+  same *timing*. A killed process has its sockets torn down by the kernel, so
+  the worker's blocked receive fails promptly with `Unavailable` too; a lost
+  **node** closes nothing, and nothing pings — the agent's dial configures no
+  gRPC keepalive, and the control plane deliberately enables no server-initiated
+  keepalive either (it only *permits* a client's pings on an otherwise idle
+  stream, so gRPC does not `GOAWAY` them as abusive). "Nothing pings" is true of
+  gRPC only: Go's dialer still enables TCP keepalive at a 15s period, so the
+  kernel gives up after roughly 2.5 minutes on Linux defaults rather than never,
+  and the assignment stream's own idle TTL (5 minutes by default) is a second
+  backstop. So that worker sits blocked on a stream to a control plane that is
+  already gone for minutes, not seconds — bounded, but far longer than the
+  prompt failure a killed process produces. Tracked as
+  [#946](https://github.com/neochaotic/leoflow/issues/946). The new leader's warm-pool
+  reconciler is leader-gated as well, and it counts live warm pods from the
+  **apiserver** and busy ones from the durable `warm_worker_id` binding, never
+  from the registry, so it rebuilds each active DAG version's
+  `minIdleWorkers` buffer on its own cycle without double-creating.
+- **A worker handed a follower reconnects toward the leader.** Every replica
+  serves the agent gRPC port, so the Service can route a worker to a follower,
+  which refuses the stream with `FailedPrecondition` ("not the scheduler
+  leader"). The worker re-dials with jittered exponential backoff until it
+  reaches the leader — bounded at **10** consecutive rejections, a fixed
+  constant today (the bound is a field only tests set), after which it exits
+  non-zero and lets the reconciler replace the pod rather than spinning forever
+  against a misconfigured deployment.
+- **A busy worker finishes its attempt, then exits non-zero — by design.** The
+  server puts **no busy predicate** on the shutdown: the raw `SIGTERM` context
+  *is* the shutdown signal the assignment handler selects on, so every open
+  stream ends there, busy or idle. What is idle-specific is the **worker's**
+  handling, and deliberately so — it accepts `Unavailable` as a clean end only
+  in the branch that is waiting for work, because an attempt dying mid-flight
+  and a real outage must both still surface as failures, and a test locks that.
+  So a busy worker runs its attempt to completion and reports its terminal
+  state; then its slot-free send fails on the dead stream, the error is
+  loop-fatal, it propagates out of the worker loop, and the process logs one
+  `ERROR` and exits `1`. Warm pods are `RestartPolicy: Never`, so **expect one
+  `Failed` warm pod and one `ERROR` line per busy worker per control-plane
+  restart** — and that `Failed` pod is exactly the signal the warm-worker-lost
+  reaper keys on. A terminal warm pod is not live, so any attempt still bound to
+  it — via the durable `warm_worker_id` written when the worker acked the
+  assignment — is re-placed on the infrastructure-retry budget without charging
+  the user's `try_number`
+  ([scheduler resilience](/operate/scheduler-resilience/)).
+
+The cost is a **cold window just after a failover**, on top of those exits. Warm
+placement is assign-if-free-else-dedicated, so until workers have re-registered
+against the new leader, attempts fall through to the dedicated pod-per-task path
+and pay the start-up they would otherwise have amortized. Attempts themselves
+are not stranded — the binding and the reaper cover the ones a dead worker held
+— but a failover is not free of failures either: budget one `Failed` warm pod
+per busy worker, and read a post-failover `ERROR` from a warm worker as the
+expected shape rather than an incident.
 
 ## The storage precondition
 
@@ -390,6 +463,15 @@ The HA profile sets `60` for comfortable HTTP + dispatch drain headroom under
 load. The chart deliberately ships **no default**: a default would add up to
 30 s of downtime to every single-replica `Recreate` upgrade, for nothing.
 
+Three values mean the same thing here — unset, `null`, and an explicit `0`: the
+chart omits the field and **Kubernetes' own 30 s applies**, which is also the
+grace the `preStopSleepSeconds` guard reasons about. A literal `0` is
+deliberately *not* rendered, because in a pod spec it means `SIGKILL` with
+nothing drained at all — in-flight HTTP requests cut, the dispatch pool never
+settling (task instances left stuck `queued`), open agent log streams never
+flushed, and any `preStop` sleep unsatisfiable. If you really want no grace, set
+it on the pod spec yourself rather than through this value.
+
 ## Involuntary disruptions: why HA is the posture that matters
 
 No PDB, annotation or grace period prevents:
@@ -417,6 +499,8 @@ window; the resilience mechanisms make the remaining window survivable. Run both
   with the full values table.
 - [Scheduler resilience](/operate/scheduler-resilience/) — what happens to
   in-flight tasks around a restart.
+- [Warm worker pools](/operate/warm-pools/) — the pool is leader-local and is
+  rebuilt on failover; what that costs the attempts that follow one.
 - [Upgrades](/operate/upgrades/) — rolling a control-plane release, edition by
   edition.
 - [ADR 0009](/project/adrs/0009-leader-election/) — leader election;

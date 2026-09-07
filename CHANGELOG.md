@@ -93,6 +93,59 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **HA chart posture: five render refusals for combinations that used to fail
+  later, and the ServiceAccount / warm-pool docs the profile was missing.**
+  `podDisruptionBudget.enabled` keyed on a real boolean, so the string spellings
+  a GitOps tool sends — Argo CD's `helm.parameters`, `helm --set-string` — fell
+  through to auto and an operator forcing the budget on a single replica got
+  none, silently; `"true"` / `"false"` are now honored and any other non-empty
+  value **fails the render** rather than falling back to auto a second time. The
+  install notes follow the *spelling* rather than the YAML type, so a
+  string-spelled budget on a single replica still prints the warning that it
+  blocks every voluntary eviction, and an upgrade no longer credits
+  auto-selection for a budget the operator set by hand.
+  `logs.persistence.accessMode` was an exact-string denylist, so `""` or a typo
+  like `readWriteMany` skipped *both* the single-writer refusal and the
+  `Recreate` strategy auto-selection and failed at the apiserver instead; it is
+  now an allowlist of `ReadWriteOnce` / `ReadWriteOncePod` / `ReadWriteMany`
+  (`ReadOnlyMany` is refused too — the control plane writes task logs), checked
+  only when a PVC is actually rendered. Setting **both** `minAvailable` and
+  `maxUnavailable` rendered both keys and the apiserver rejects the pair, so it
+  now fails the render — reachable now that the budget is default-on for the HA
+  replica floor. And `deployment.strategy` becomes an allowlist of
+  `RollingUpdate` / `Recreate` / `""`, trimmed before it is compared, with an
+  explicit `RollingUpdate` over a single-writer logs PVC refused outright: the
+  override defeated the `Recreate` auto-selection and surged straight back into
+  the Multi-Attach deadlock, at one replica, with helm reporting success — while
+  the exact comparison it used to make let a lowercase `rollingupdate` past both
+  the refusal and the auto-selection into an install the apiserver rejected, and
+  let `RollingUpdate ` with a trailing space past the refusal into one the
+  apiserver **accepted**, delivering the deadlock through the guard. A refusal
+  also names a non-string value plainly now instead of rendering it as a Go
+  escape sequence or format error. On the docs side,
+  `examples/values-ha.yaml` now names **EKS Pod Identity** (AWS's current
+  recommendation, which needs *no* annotation) beside IRSA and states that in
+  split mode `serviceAccount.annotations` lands on **both** ServiceAccounts and
+  both need the identity — the scheduler writes task logs to the bucket, any api
+  replica reads them back. The HA page gains a warm-pools section: the
+  assignment stream is leader-gated over an in-memory, leader-local registry, so
+  a failover leaves the new leader with no pool. Every assignment stream ends at
+  `SIGTERM`, not only the idle ones: an idle worker treats that as a clean
+  recycle and exits `0`, while a **busy** worker completes its attempt and then
+  exits non-zero when its slot-free send hits the dead stream — so expect one
+  `Failed` warm pod and one `ERROR` line per busy worker per control-plane
+  restart, which is the signal the warm-worker-lost reaper keys on; an attempt
+  the pod still held when it died is what that reaper re-places, and in this
+  ordering the attempt has usually already settled, so the reaper matters for a
+  worker killed MID-attempt rather than for one that failed on its way out. It
+  re-places
+  the attempts that pod held from the durable `warm_worker_id` binding. A worker
+  routed to a follower re-dials with bounded backoff, and warm placement
+  degrades to dedicated pods until workers have re-registered. Finally, `terminationGracePeriodSeconds: 0` is documented as
+  meaning "the Kubernetes default (30 s) applies" — the chart omits the field
+  and deliberately never renders a literal `0`, which would be SIGKILL with
+  nothing drained.
+
 - **The pod-lost reaper no longer reaps a task whose pod is still there,
   finished.** Its liveness question returned one bool for two different states —
   "no pod for this attempt at all" and "a pod that exists in a terminal phase" —

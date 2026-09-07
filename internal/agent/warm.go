@@ -233,7 +233,11 @@ func (w *WarmRunner) serve(ctx context.Context, dagVersionID string) error {
 			// burning the shutdown fix set out to remove, relocated from the server's
 			// warnings to the workers' exit codes. It is deliberately NOT accepted in
 			// serveAssignment's branch below, nor at Run's top level: an attempt dying
-			// mid-flight, and a real outage, must both still surface as failures (#918).
+			// mid-flight, and a real outage, must both still surface as failures. The
+			// consequence an operator sees is a busy worker that completes its attempt,
+			// fails its slot-free send on the dead stream, and exits non-zero — one
+			// Failed warm pod per busy worker per control-plane restart, which is what
+			// the warm-worker-lost reaper keys on (#918, landed in #927).
 			if errors.Is(rerr, errIdleRecycle) {
 				slog.Info("warm worker idle-recycle: no assignment within idle TTL", "idle_ttl", w.IdleTTL)
 				return nil

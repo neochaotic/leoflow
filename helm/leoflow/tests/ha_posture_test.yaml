@@ -263,6 +263,62 @@ tests:
           path: spec.replicas
           value: 1
 
+  # ─── The access mode is an allowlist, not a denylist ─────────────────────
+  # Both the single-writer refusal above and the `Recreate` strategy
+  # auto-selection used to test the access mode against the two single-writer
+  # SPELLINGS, so an empty value or a typo — `readWriteMany` — matched neither,
+  # skipped both, and left the install to fail at the apiserver (or, worse, to
+  # surge a RollingUpdate onto a volume only one pod can hold). Refuse anything
+  # that is not one of the three modes the control plane can actually use (#905).
+  - it: refuses an empty logs.persistence.accessMode
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "logs.persistence.accessMode=\"\" is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+
+  - it: refuses a mis-cased logs.persistence.accessMode typo
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: readWriteMany
+    asserts:
+      - failedTemplate:
+          errorMessage: "logs.persistence.accessMode=\"readWriteMany\" is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+
+  - it: refuses ReadOnlyMany, a real access mode the control plane cannot write to
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: ReadOnlyMany
+    asserts:
+      - failedTemplate:
+          errorMessage: "logs.persistence.accessMode=\"ReadOnlyMany\" is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+
+  - it: accepts ReadWriteOncePod, the third valid mode, on a single replica
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: ReadWriteOncePod
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  # A bogus access mode with no PVC at all is dead config, not a broken install:
+  # nothing reads it, so the guard stays out of the way — the same "model the
+  # rendered spec" rule the drain-grace guard follows.
+  - it: ignores the access mode when logs persistence is off, where nothing reads it
+    template: deployment.yaml
+    set:
+      logs.persistence.enabled: false
+      logs.persistence.accessMode: readWriteMany
+      logs.sink.provider: s3
+      logs.sink.bucket: leoflow-task-logs
+    asserts:
+      - hasDocuments:
+          count: 1
+
   # ─── Drain grace + eviction opt-in wiring ────────────────────────────────
   # A voluntary eviction sends SIGTERM and waits terminationGracePeriodSeconds
   # before SIGKILL. The control plane drains its HTTP servers and releases the

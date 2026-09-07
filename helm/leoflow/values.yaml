@@ -176,7 +176,7 @@ logs:
     size: 50Gi
     # -- StorageClass for the PVC. Empty uses the cluster default. Specify an RWX class when `accessMode: ReadWriteMany`.
     storageClass: ""
-    # -- PVC access mode. `ReadWriteOnce` (default) is fine for single-replica deployments. At `replicaCount > 1` (or an HPA / split with more than one mounter) the chart FAILS the render on `ReadWriteOnce` / `ReadWriteOncePod` — a single-writer volume Multi-Attach-deadlocks the extra pods silently — so HA needs either `ReadWriteMany` here or `persistence.enabled: false` + the object-store `sink`. Also drives `deployment.strategy`: an RWO/RWOP PVC auto-selects `Recreate` (a rolling upgrade would Multi-Attach-deadlock).
+    # -- PVC access mode — one of `ReadWriteOnce`, `ReadWriteMany`, `ReadWriteOncePod`; any other value (a typo, an empty string, or `ReadOnlyMany`, which the log-writing control plane cannot use) FAILS the render, because an unrecognized mode used to skip both the single-writer refusal and the `Recreate` auto-selection and fail at the apiserver instead. `ReadWriteOnce` (default) is fine for single-replica deployments. At `replicaCount > 1` (or an HPA / split with more than one mounter) the chart FAILS the render on `ReadWriteOnce` / `ReadWriteOncePod` — a single-writer volume Multi-Attach-deadlocks the extra pods silently — so HA needs either `ReadWriteMany` here or `persistence.enabled: false` + the object-store `sink`. Also drives `deployment.strategy`: an RWO/RWOP PVC auto-selects `Recreate` (a rolling upgrade would Multi-Attach-deadlock).
     accessMode: ReadWriteOnce
   # Object-store log backend (opt-in). Set `sink.provider` to `s3` or `gcs` and task
   # logs ship to a bucket instead of the PVC — `s3` for AWS S3 / MinIO / Ceph RGW,

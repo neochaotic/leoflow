@@ -181,6 +181,19 @@ tests:
       - isKind:
           of: PodDisruptionBudget
 
+  # The same garbling, on the other new message: `%q` over an interface value
+  # renders an integer as a quoted rune, so `enabled: 5` reported `got '\x05'`
+  # and named nothing the operator had typed (#905).
+  - it: names an integer podDisruptionBudget.enabled instead of a quoted rune
+    template: pdb.yaml
+    set:
+      replicaCount: 2
+      logs.persistence.enabled: false
+      podDisruptionBudget.enabled: 5
+    asserts:
+      - failedTemplate:
+          errorMessage: "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got \"5\", kind float64). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905."
+
   - it: refuses a podDisruptionBudget.enabled that is neither a bool nor a true/false string
     template: pdb.yaml
     set:
@@ -189,7 +202,7 @@ tests:
       podDisruptionBudget.enabled: "yes"
     asserts:
       - failedTemplate:
-          errorMessage: "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got \"yes\"). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905."
+          errorMessage: "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got \"yes\", kind string). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905."
 
   # ─── minAvailable XOR maxUnavailable ─────────────────────────────────────
   # A PodDisruptionBudget spec carries one of the two, never both: the apiserver
@@ -291,7 +304,7 @@ tests:
       logs.persistence.accessMode: ""
     asserts:
       - failedTemplate:
-          errorMessage: "logs.persistence.accessMode=\"\" is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+          errorMessage: "logs.persistence.accessMode=\"\" (kind string) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
 
   - it: refuses a mis-cased logs.persistence.accessMode typo
     template: deployment.yaml
@@ -299,7 +312,7 @@ tests:
       logs.persistence.accessMode: readWriteMany
     asserts:
       - failedTemplate:
-          errorMessage: "logs.persistence.accessMode=\"readWriteMany\" is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+          errorMessage: "logs.persistence.accessMode=\"readWriteMany\" (kind string) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
 
   - it: refuses ReadOnlyMany, a real access mode the control plane cannot write to
     template: deployment.yaml
@@ -307,7 +320,22 @@ tests:
       logs.persistence.accessMode: ReadOnlyMany
     asserts:
       - failedTemplate:
-          errorMessage: "logs.persistence.accessMode=\"ReadOnlyMany\" is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+          errorMessage: "logs.persistence.accessMode=\"ReadOnlyMany\" (kind string) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
+
+  # A refusal that garbles the value it names is a worse diagnostic than one that
+  # names it plainly. Both new messages ran the QUOTED verb over an interface
+  # value, so an integer came out as an escape sequence and a null as a Go format
+  # error — and a null is precisely the shape a layered values file produces when
+  # a later layer blanks a key it does not want, which is one of the shapes this
+  # guard exists for. Quote the string CONVERSION instead, and name the kind so
+  # "empty string" and "absent" are told apart (#905).
+  - it: names a null logs.persistence.accessMode instead of printing a format error
+    template: deployment.yaml
+    set:
+      logs.persistence.accessMode: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "logs.persistence.accessMode=\"<nil>\" (kind invalid) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905."
 
   - it: accepts ReadWriteOncePod, the third valid mode, on a single replica
     template: deployment.yaml

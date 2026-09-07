@@ -81,7 +81,7 @@ be noise (#905).
 */ -}}
 {{- if .Values.logs.persistence.enabled -}}
 {{- if not (has $logsAccessMode (list "ReadWriteOnce" "ReadWriteOncePod" "ReadWriteMany")) -}}
-{{- fail (printf "logs.persistence.accessMode=%q is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905." $logsAccessMode) -}}
+{{- fail (printf "logs.persistence.accessMode=%q (kind %s) is not a PersistentVolumeClaim access mode the control plane can use: set ReadWriteOnce (single replica — the chart default), ReadWriteMany (HA, on an RWX StorageClass: EFS, Filestore, Azure Files, NFS, CephFS, Longhorn-rwx) or ReadWriteOncePod. ReadOnlyMany is a real access mode but the control plane WRITES task logs into this volume, so it is refused here too. An unrecognized value matched neither the single-writer refusal nor the Recreate update-strategy auto-selection, so the install rendered clean and then failed at the apiserver — or surged a RollingUpdate onto a volume only one pod can hold. See #905." (toString $logsAccessMode) (kindOf $logsAccessMode)) -}}
 {{- end -}}
 {{- end -}}
 {{- $singleWriter := or (eq $logsAccessMode "ReadWriteOnce") (eq $logsAccessMode "ReadWriteOncePod") -}}

@@ -191,7 +191,11 @@ true
 {{- else if eq $spelled "false" -}}
 false
 {{- else -}}
-{{- fail (printf "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got %q). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905." $enabled) -}}
+{{- /* %q over the raw interface garbles anything that is not a string: an
+integer renders as a quoted rune (`'\x05'`) or a bad-verb error, and neither
+names what the operator typed. Quote the string CONVERSION and add the kind, so
+the message is legible for every value that can reach here (#905). */ -}}
+{{- fail (printf "podDisruptionBudget.enabled must be a boolean, the string \"true\" or \"false\", or empty for auto (got %q, kind %s). It is tri-state: empty renders the PodDisruptionBudget exactly when the guaranteed replica floor is above one, true forces it on, false forces it off. The string spellings are accepted because Argo CD's helm.parameters and helm --set-string pass every override as a string; any other value is refused rather than silently falling back to auto, which would leave a budget the operator asked for unrendered with no diagnostic. See #905." (toString $enabled) (kindOf $enabled)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

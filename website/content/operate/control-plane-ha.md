@@ -170,10 +170,17 @@ replicas. So a new leader starts with an empty registry and the pool is rebuilt
 from the workers' side:
 
 - **Idle warm workers exit and are replaced.** A control plane on its way out
-  ends every idle assignment stream at `SIGTERM` with `Unavailable`, and a
-  worker sitting idle treats that as a clean recycle: it exits `0`, with no
-  `ERROR` line and no failed pod. A hard-killed leader looks the same to the
-  worker — the broken stream is `Unavailable` too. The new leader's warm-pool
+  ends **every** assignment stream at `SIGTERM` with `Unavailable`, and a worker
+  sitting idle treats that as a clean recycle: it exits `0`, with no `ERROR`
+  line and no failed pod. A hard-killed leader is the same *code* but not the
+  same *timing*. A killed process has its sockets torn down by the kernel, so
+  the worker's blocked receive fails promptly with `Unavailable` too; a lost
+  **node** closes nothing, and nothing pings — the agent's dial configures no
+  gRPC keepalive, and the control plane deliberately enables no server-initiated
+  keepalive either (it only *permits* a client's pings on an otherwise idle
+  stream, so gRPC does not `GOAWAY` them as abusive). That worker therefore sits
+  blocked on a stream to a control plane that is already gone until the OS's own
+  TCP timeout gives up — minutes, not seconds. The new leader's warm-pool
   reconciler is leader-gated as well, and it counts live warm pods from the
   **apiserver** and busy ones from the durable `warm_worker_id` binding, never
   from the registry, so it rebuilds each active DAG version's
@@ -182,23 +189,37 @@ from the workers' side:
   serves the agent gRPC port, so the Service can route a worker to a follower,
   which refuses the stream with `FailedPrecondition` ("not the scheduler
   leader"). The worker re-dials with jittered exponential backoff until it
-  reaches the leader — bounded by a configurable number of consecutive
-  rejections (10 by default), after which it exits and lets the reconciler
-  replace the pod rather than spinning forever against a misconfigured
-  deployment.
-- **Attempts in flight are not killed.** Only *idle* streams end at `SIGTERM`; a
-  busy worker finishes its attempt. If its pod does die, the durable
-  warm-attempt binding written when the worker acked the assignment is what lets
-  the new leader's warm-worker-lost reaper find every attempt that pod held and
-  re-place them on the infrastructure-retry budget, without charging the user's
-  `try_number` ([scheduler resilience](/operate/scheduler-resilience/)).
+  reaches the leader — bounded at **10** consecutive rejections, a fixed
+  constant today (the bound is a field only tests set), after which it exits
+  non-zero and lets the reconciler replace the pod rather than spinning forever
+  against a misconfigured deployment.
+- **A busy worker finishes its attempt, then exits non-zero — by design.** The
+  server puts **no busy predicate** on the shutdown: the raw `SIGTERM` context
+  *is* the shutdown signal the assignment handler selects on, so every open
+  stream ends there, busy or idle. What is idle-specific is the **worker's**
+  handling, and deliberately so — it accepts `Unavailable` as a clean end only
+  in the branch that is waiting for work, because an attempt dying mid-flight
+  and a real outage must both still surface as failures, and a test locks that.
+  So a busy worker runs its attempt to completion and reports its terminal
+  state; then its slot-free send fails on the dead stream, the error is
+  loop-fatal, it propagates out of the worker loop, and the process logs one
+  `ERROR` and exits `1`. Warm pods are `RestartPolicy: Never`, so **expect one
+  `Failed` warm pod and one `ERROR` line per busy worker per control-plane
+  restart** — and that `Failed` pod is exactly the signal the warm-worker-lost
+  reaper keys on. A terminal warm pod is not live, so any attempt still bound to
+  it — via the durable `warm_worker_id` written when the worker acked the
+  assignment — is re-placed on the infrastructure-retry budget without charging
+  the user's `try_number`
+  ([scheduler resilience](/operate/scheduler-resilience/)).
 
-The cost is a **cold window just after a failover**. Warm placement is
-assign-if-free-else-dedicated, so until workers have re-registered against the
-new leader, attempts fall through to the dedicated pod-per-task path and pay the
-start-up they would otherwise have amortized. Nothing is stranded and nothing
-fails — the first attempts after a failover are simply as slow as they were
-before warm pools were turned on.
+The cost is a **cold window just after a failover**, on top of those exits. Warm
+placement is assign-if-free-else-dedicated, so until workers have re-registered
+against the new leader, attempts fall through to the dedicated pod-per-task path
+and pay the start-up they would otherwise have amortized. Attempts themselves
+are not stranded — the binding and the reaper cover the ones a dead worker held
+— but a failover is not free of failures either: budget one `Failed` warm pod
+per busy worker, and read a post-failover `ERROR` from a warm worker as the
+expected shape rather than an incident.
 
 ## The storage precondition
 

@@ -77,7 +77,19 @@ METRICS_PORT="${LEOFLOW_E2E_METRICS_PORT:-9090}"
 PY_VERSION="${LEOFLOW_E2E_PY_VERSION:-3.11}"
 BASE_IMAGE="leoflow-base:py${PY_VERSION}"
 DAG_IMAGE="leoflow-timeout-dag:dev"
-DAG_ID="timeoutdag"
+# A UNIQUE dag_id per invocation, under a fixed prefix.
+#
+# The dags/dag_versions rows live in the SHARED dev database and outlive this
+# script, so a fixed id makes each invocation collide with the last: re-pushing
+# the same leoflow version is a 409 ("inserting version: resource already
+# exists"), and until that push lands the scheduler is still acting on the
+# PREVIOUS version — dispatching ITS runs at control-plane boot, before the image
+# import, into pods that carry this run's task-id labels. A fresh id makes both
+# impossible by construction. DAG_PREFIX is what purge_stale_dags sweeps, so a
+# crashed invocation cannot leave a live DAG behind either, and cleanup
+# deregisters this one.
+DAG_PREFIX="timeoutdag"
+DAG_ID="${DAG_PREFIX}$(date +%s)"
 API="http://localhost:${HTTP_PORT}"
 NS=leoflow
 # The server's OWN database, not the Lite dev database `leoflow db migrate`
@@ -147,6 +159,11 @@ fail() { printf '\033[1;31mFAIL:\033[0m %s\n' "$*" >&2; dump_pods; exit 1; }
 SERVER_PID=""
 cleanup() {
   set +e
+  # Deregister this run's DAG while the control plane is still up. Its rows are
+  # `running` at this point (the keeper's agent is frozen on purpose), so leaving
+  # them behind poisons the next invocation and leaves live-looking rows in the
+  # maintainer's dev database.
+  [ -n "${TOKEN:-}" ] && deregister_dag "$TOKEN" "$DAG_ID"
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
   k3d cluster delete "$CLUSTER" >/dev/null 2>&1
   rm -rf "$WORKDIR"
@@ -172,9 +189,56 @@ task_field() {
 }
 
 # task_pod prints the name of the task pod dispatched for one task_id, or empty.
+#
+# It REFUSES to guess when more than one pod carries the label. The selector is
+# task-id only — the pod's run-id label is the run's internal UUID, which the API
+# does not expose — so it is unique only because purge_runs below leaves exactly
+# one run of this DAG. It is not unique by construction: a task instance left
+# `running` in the SHARED dev database by an earlier invocation is re-dispatched
+# once this run's control plane takes leadership, and its pod carries the same
+# task-id label. Picking items[0] then silently read and froze the wrong run's
+# pod while the assertions polled this run's task instance.
 task_pod() {
-  kubectl get pods -n "$NS" -l "leoflow.io/task-id=$1" \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
+  local names count
+  names="$(kubectl get pods -n "$NS" -l "leoflow.io/task-id=$1" \
+    -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
+  count="$(printf '%s' "$names" | wc -w | tr -d ' ')"
+  [ "$count" -le 1 ] \
+    || fail "$count pods carry leoflow.io/task-id=$1 ($names) — another run of '$DAG_ID' is live in this cluster, so no assertion here can say which pod it read; refusing to guess"
+  printf '%s' "$names"
+}
+
+# deregister_dag removes one DAG artifact and cascades its runs, task instances
+# and XCom. Best-effort and never fails the caller: it is a cleanup primitive.
+deregister_dag() {
+  local token="$1" dag="$2"
+  if curl -fsS --max-time "$CURL_MAX_TIME" -X DELETE -H "Authorization: Bearer $token" \
+    "$API/api/v2/dags/$dag?deregister=true" >/dev/null 2>&1; then
+    log "deregistered dag $dag"
+  else
+    log "could not deregister dag $dag (continuing)"
+  fi
+}
+
+# purge_stale_dags deregisters every DAG this scenario left in the shared dev
+# database on an earlier invocation.
+#
+# It has to exist because the script kills its control plane while its own run is
+# still `running` — the keeper's agent is frozen by design — so a crashed or
+# interrupted invocation leaves `running` task instances behind. This run's
+# control plane then re-dispatches them into the fresh cluster, where their pods
+# carry the same leoflow.io/task-id labels as the run under test and shadow every
+# pod the assertions read. Called as early as the API allows, so the window
+# before a stale run can be dispatched is as small as possible; task_pod refuses
+# to guess if anything still slips through.
+purge_stale_dags() {
+  local token="$1" dag
+  for dag in $(curl -fsS --max-time "$CURL_MAX_TIME" -H "Authorization: Bearer $token" \
+    "$API/api/v2/dags?limit=200" 2>/dev/null \
+    | jq -r --arg p "$DAG_PREFIX" --arg self "$DAG_ID" \
+      '.dags[]?.dag_id | select(startswith($p)) | select(. != $self)' 2>/dev/null || true); do
+    deregister_dag "$token" "$dag"
+  done
 }
 
 for tool in k3d kubectl docker jq curl migrate; do
@@ -216,7 +280,7 @@ YAML
 # that pipe, so the agent would block past its own deadline and the kubelet
 # would win the race for a reason that has nothing to do with #925.
 cat >"$PROJ/dag.py" <<'PY'
-"""timeoutdag — locks the execution_timeout race against the kubelet."""
+"""Locks the execution_timeout race against the kubelet (#925 / #930)."""
 from __future__ import annotations
 
 import time
@@ -242,7 +306,17 @@ def keeper() -> None:
     time.sleep(3600)
 
 
-with DAG("timeoutdag", schedule="@daily", catchup=False, tags=["e2e"]):
+PY
+# The tail is written with expansion (the body above stays literal) because the
+# dag_id is unique per invocation.
+#
+# schedule=None, like the chaos scenarios: the script triggers exactly ONE run
+# and every assertion reads a specific task instance of it. Under a real schedule
+# the scheduler adds a run of its own, whose pods carry the same
+# leoflow.io/task-id label and shadow the run under test.
+cat >>"$PROJ/dag.py" <<PY
+
+with DAG("${DAG_ID}", schedule=None, catchup=False, tags=["e2e"]):
     sleeper()
     keeper()
 PY
@@ -286,6 +360,15 @@ done
 [ "$LEADER_AT" != 0 ] || fail "the control plane never became ready on $API/readyz after 60s; server.log tail:
 $(tail -30 "$WORKDIR/server.log")"
 
+# Mint the admin token and sweep earlier invocations' DAGs IMMEDIATELY, before
+# the ~30s of compile and image import: a stale `running` task instance is
+# re-dispatched by this control plane, and the sooner its DAG is gone the smaller
+# that window is.
+TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" \
+  --username admin@leoflow.local --password admin)" || fail "minting an admin token failed"
+log "Sweeping DAGs left by earlier invocations (prefix '$DAG_PREFIX')"
+purge_stale_dags "$TOKEN"
+
 log "Compiling + building the DAG image"
 "$ROOT/bin/leoflow" compile "$PROJ" --image "$DAG_IMAGE" --build --dockerfile Dockerfile \
   -o "$PROJ/dag.json" || fail "leoflow compile failed"
@@ -301,8 +384,6 @@ log "Importing the images into the cluster (pre-loaded: no pull at dispatch)"
 k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 
 log "Pushing + triggering"
-TOKEN="$("$ROOT/bin/leoflow" auth create-token --server "$API" \
-  --username admin@leoflow.local --password admin)" || fail "minting an admin token failed"
 "$ROOT/bin/leoflow" push "$PROJ/dag.json" --server "$API" --token "$TOKEN" || fail "leoflow push failed"
 RUN_ID="$(curl -fsS --max-time "$CURL_MAX_TIME" -X POST -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d '{}' \

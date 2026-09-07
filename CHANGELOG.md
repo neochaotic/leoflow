@@ -289,6 +289,26 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   large share of installs is a worse posture than an opt-in one that is honestly
   labelled ([#804](https://github.com/neochaotic/leoflow/issues/804)).
 
+- **Token renewal now re-proves the user, not just the token (#801).**
+  `POST /api/v2/auth/token/renew` validated the incoming bearer, checked the
+  session ceiling, and then re-minted the principal purely from the token's
+  claims — it never reloaded the user, unlike every other auth path. A user
+  deactivated or deleted mid-session therefore kept getting `200` and a fresh
+  token from the renew endpoint until `auth.jwt.max_lifetime_seconds` elapsed.
+  Renewal now reloads the user and answers `401` when the account is inactive or
+  its row is gone. **Severity, precisely:** this was a broken invariant and a
+  false changelog claim, not an access path. The renewed token was inert — both
+  consumers of a user token authenticate through the store-backed reload, so it
+  was rejected on use — and no product path deactivates a user today (the users
+  API exposes only list and create), so reaching the precondition required
+  editing the database by hand. The two carve-outs the request path already makes
+  are preserved exactly: no bound data plane (in-process `leoflow dev`) and the
+  dev-token subject, which has no user row by design; any other store error
+  refuses the renewal. The renew route remains without a rate limiter — the
+  existing login limiter counts failures toward an IP lockout, so sharing it
+  would let renewal traffic burn the password-login budget for the address (and
+  for everyone behind a proxy when `server.trusted_proxies` is unset); a renewal
+  limiter needs its own instance and is tracked separately.
 - **The pod-lost reaper no longer reaps a task whose pod is still there,
   finished.** Its liveness question returned one bool for two different states —
   "no pod for this attempt at all" and "a pod that exists in a terminal phase" —
@@ -992,8 +1012,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longer hit `401 missing bearer token` every hour. Backed by a new
   `POST /api/v2/auth/token/renew` that re-mints the same identity with a fresh
   short TTL, bounded by `auth.jwt.max_lifetime_seconds` (default 24h). The
-  access-token TTL is unchanged and revocation is still enforced per request, so a
-  renewed token dies the moment its user is deactivated.
+  access-token TTL is unchanged and revocation is enforced per request, so a
+  renewed token is rejected the moment its user is deactivated. (Corrected: as
+  shipped, revocation was enforced on *use* but not on *issuance* — the renew
+  endpoint itself kept answering `200` for a deactivated user until the ceiling
+  elapsed. Fixed in a later release; see the Unreleased entry.)
 - **`leoflow runs list` (#747).** The common `runs` verb now lists DAG runs
   (`--state`/`--dag`/`--older-than`) alongside `trigger` and `status`, reusing the
   same lister as `leoflow admin runs list`.

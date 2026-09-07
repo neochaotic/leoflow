@@ -378,6 +378,29 @@ deploy, layer on:
   replica.
 - **NetworkPolicy.** Set `networkPolicy.enabled=true` to restrict the control
   plane and task pods to only the flows they need.
+- **Secret-delivery posture.** Three `auth.*` flips decide how much credential a
+  task pod can reach, and all three ship on the value that is byte-for-byte
+  today's behavior — so a default install is the *permissive* end of each:
+  `auth.secretScoping` (`permissive` — every task receives the **whole tenant
+  vault**), `auth.secretLivenessMode` (`observe` — a task instance that is no
+  longer live still resolves secrets) and `auth.agentTokenTransport` (`envvar` —
+  the bearer token sits in plaintext on the `Pod` object). What each one narrows,
+  and which combinations are required together, is tabled in
+  [Agent credential transport → Relationship to secret scoping](/operate/agent-credential-transport/#relationship-to-secret-scoping).
+
+{{% alert title="`secretScoping: enforce` denies secrets to a DAG that declares none" color="warning" %}}
+Under `enforce` a task receives **only** the Variables and Connections its
+`leoflow.yaml` declares — and a DAG that declares **nothing** therefore receives
+**nothing**, not everything. The declaration schema is new, so most existing DAGs
+declare nothing and would break on the flip. Land it the way any breaking
+security change lands: leave `permissive` on while your DAGs adopt
+[declarations](/author-dags/variables-connections/#declare-what-a-task-consumes),
+then flip. Note what the observation period can and cannot tell you — the
+scope-warning trail covers only DAGs whose declarations still resolve, so it
+sees neither a DAG that declares nothing nor one whose declared names have since
+been deleted from the vault
+([#800](https://github.com/neochaotic/leoflow/issues/800)).
+{{% /alert %}}
 
 {{% alert title="The agent channel is server TLS, not mutual mTLS" color="info" %}}
 The agent↔control-plane gRPC channel is **one-way (server) TLS**: the agent

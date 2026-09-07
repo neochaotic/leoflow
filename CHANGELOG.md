@@ -8,6 +8,33 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`auth.secretScoping` is now a chart value, and the security flips are
+  reachable from the install path (#803, #800).** The policy that decides whether
+  a task pod receives the whole tenant vault was the one ADR 0055 knob with no
+  Helm value — settable only through `extraEnv` — so `values.yaml`, the file an
+  operator reads to discover what is tunable, showed neither the knob nor its
+  default. It is now a first-class value, stamped into the control-plane
+  Deployment env on every render like its two siblings, and the configuration
+  reference row carries the `Helm:` hint the others had. **The default is
+  unchanged (`permissive`)** and no render behavior changes: the value is
+  deliberately *not* in the chart's guarded-variable list, so an operator who
+  already set `LEOFLOW_AUTH_SECRET_SCOPING` through `extraEnv` keeps working —
+  `extraEnv` renders after the chart-managed block, and a helm-unittest case now
+  pins that last-wins ordering so nobody reverses it. The installation guide's
+  **Production hardening** section, which mentioned none of the four flips, now
+  names the three `auth.*` ones with their permissive-by-default values and links
+  the table that already compares them, and carries the caveat that
+  makes the scoping flip breaking: under `enforce` a DAG that declares **nothing**
+  receives **nothing**. Relatedly, the two pages that prescribe the
+  observe-then-flip arc now state what a clean scope-warning trail does *not*
+  prove. The warning counts only declared names that actually resolve, so two
+  populations never appear in the trail: a DAG that declares nothing, and a DAG
+  whose declared names no longer exist in the vault — an all-stale declaration
+  counts as zero, which is what secret rotation produces. Both receive the whole
+  vault today and nothing under `enforce` (#800; the code half is still open). The RC cluster
+  validation runbook gains the matching assertion, so a green RC stops certifying
+  past the blind spot.
+
 - **Control-plane HA as the first-class, guarded posture (Helm chart + docs).** A
   production drill showed the single-replica control plane is evicted by
   autoscaler consolidation as routine bin-packing, and each restart costs tens

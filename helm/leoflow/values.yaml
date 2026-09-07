@@ -236,16 +236,21 @@ auth:
   existingSecret: ""
   # -- API + agent JWT lifetime in seconds. Default 1h; raise for longer agent sessions.
   tokenTtlSeconds: 3600
-  # How the in-pod agent obtains its control-plane credential, and whether secret
-  # delivery is bound to task-instance liveness (ADR 0055). Both ship on the value
-  # that is byte-for-byte today's behavior, and both are stamped into the pod env
-  # even at their defaults: they are the security posture a warm pool's safety
-  # depends on (ADR 0058 D2), so the chart — not an out-of-band `kubectl set env`
-  # that a `helm upgrade` would never notice — is their source of truth.
+  # How the in-pod agent obtains its control-plane credential, whether secret
+  # delivery is bound to task-instance liveness, and what a task is allowed to
+  # fetch (ADR 0055). All three ship on the value that is byte-for-byte today's
+  # behavior, and all three are stamped into the pod env even at their defaults,
+  # so the chart — not an out-of-band `kubectl set env` that a `helm upgrade`
+  # would never notice — is their source of truth. For the first two that is a
+  # security coupling (ADR 0058 D2 rests on them); for `secretScoping` it is
+  # discoverability: it decides whether a task receives the whole tenant vault,
+  # so the file an operator reads has to show it and its default (#803).
   # -- Agent credential transport: `envvar` (default) puts the task-scoped bearer in a plaintext `LEOFLOW_AGENT_TOKEN` env var on the Pod object; `exchange` mounts a projected ServiceAccount token that the agent trades once — via a control-plane TokenReview — for the task-scoped JWT, so no bearer sits in plaintext on the pod spec. `exchange` needs the cluster-scoped TokenReview grant the chart renders with it (`rbac.create`), and is a hard prerequisite of `execution.warmPoolsEnabled` (ADR 0058 D2). Server-wide: switching it changes how EVERY task pod authenticates, warm or dedicated.
   agentTokenTransport: envvar
   # -- Secret-delivery liveness gate: `observe` (default) logs and audits a would-have-denied when the calling task instance is no longer live but still delivers the secrets; `enforce` denies. Required at `enforce` by `execution.warmPoolsEnabled` (ADR 0058 D2) — a reused pod's superseded attempt would otherwise still resolve secrets. Run `observe` first and read the audit trail before flipping.
   secretLivenessMode: observe
+  # -- Scope-by-declaration policy for secret delivery: `permissive` (default) delivers the WHOLE tenant vault to every task regardless of what its `leoflow.yaml` declares, and only logs + audits a warning when a task declared a narrower non-empty set; `enforce` delivers only the declared subset; `off` disables scoping and its warning entirely. `enforce` denies secrets to a DAG that declares NONE, which — the declaration schema being new — is most DAGs, so run `permissive` first and read the scope-warning trail before flipping. A clean trail proves only that no DAG whose declarations still RESOLVE is over-served: the warning counts only declared names that actually resolve, so it says nothing about a DAG that declares nothing, nor about one whose declared names were since deleted from the vault (an all-stale declaration counts as zero) (#800). Operator-scoped, never DAG-author-settable.
+  secretScoping: permissive
 
 # Warm worker pools (ADR 0058) — reuse one task pod across many attempts of the
 # SAME dag_version, instead of one pod per attempt. OFF by default: every attempt

@@ -280,6 +280,18 @@ spec:
               value: {{ .ctx.Values.auth.agentTokenTransport | quote }}
             - name: LEOFLOW_AUTH_SECRET_LIVENESS_MODE
               value: {{ .ctx.Values.auth.secretLivenessMode | quote }}
+            # The scope-by-declaration policy (ADR 0055 D9) is stamped alongside
+            # them for a different reason: it is coupled to nothing, but it is the
+            # knob that decides whether a task receives the whole tenant vault, and
+            # before #803 `extraEnv` was its only route — so values.yaml, the file
+            # an operator reads to find what is tunable, did not show it or its
+            # default. It is deliberately NOT in deployment.yaml's $guarded list:
+            # that list is for the variables the chart validates against each
+            # other, and guarding this one would fail the render for every operator
+            # who already set it through extraEnv. extraEnv renders after this
+            # block, so last-wins keeps them working (tests/secret_scoping_test.yaml).
+            - name: LEOFLOW_AUTH_SECRET_SCOPING
+              value: {{ .ctx.Values.auth.secretScoping | quote }}
             - name: LEOFLOW_EXECUTION_WARM_POOLS_ENABLED
               value: {{ .ctx.Values.execution.warmPoolsEnabled | quote }}
             {{- if .ctx.Values.execution.warmPoolsEnabled }}

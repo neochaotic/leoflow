@@ -191,7 +191,7 @@ func TestIssueTokenStampsOrigin(t *testing.T) {
 // TestRenewUserTokenTakesRolesFromStore is the success-path lock the refusal
 // tests do not provide. Every other new case here pins a branch that REFUSES,
 // so all of them keep passing if the reload's result is discarded and the
-// claimed principal is re-minted instead — which is the one behaviour change a
+// claimed principal is re-minted instead — which is the one behavior change a
 // user can observe on the happy path, and the whole point of reloading. Mint a
 // token claiming a role the store no longer grants, renew, and read the roles
 // back off the re-minted token: they must be the store's.

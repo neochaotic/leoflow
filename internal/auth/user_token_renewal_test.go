@@ -188,6 +188,37 @@ func TestIssueTokenStampsOrigin(t *testing.T) {
 // Every other renewal test above builds the authenticator with a nil store, so
 // nothing here exercised the reload at all — a deactivated user kept collecting
 // fresh tokens from /auth/token/renew until the session ceiling elapsed (#801).
+// TestRenewUserTokenTakesRolesFromStore is the success-path lock the refusal
+// tests do not provide. Every other new case here pins a branch that REFUSES,
+// so all of them keep passing if the reload's result is discarded and the
+// claimed principal is re-minted instead — which is the one behaviour change a
+// user can observe on the happy path, and the whole point of reloading. Mint a
+// token claiming a role the store no longer grants, renew, and read the roles
+// back off the re-minted token: they must be the store's.
+func TestRenewUserTokenTakesRolesFromStore(t *testing.T) {
+	const secret = "renew-roles-secret"
+	issued, err := MintUserToken(secret, time.Hour, User{
+		ID: "u-stale", TenantID: "default", Email: "s@x.y", Roles: []string{"admin"},
+	})
+	if err != nil {
+		t.Fatalf("MintUserToken: %v", err)
+	}
+	store := &fakeStore{byIDUser: &User{
+		ID: "u-stale", TenantID: "default", Email: "s@x.y", Roles: []string{"viewer"},
+	}}
+	a := NewJWTAuthenticator(store, secret, time.Hour)
+
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
+	if err != nil || !ok {
+		t.Fatalf("RenewUserToken: ok=%v err=%v", ok, err)
+	}
+	got := userClaimsOf(t, a, renewed).Roles
+	if len(got) != 1 || got[0] != "viewer" {
+		t.Errorf("re-minted roles = %v, want the store's [viewer] — a renewal that re-mints the "+
+			"claimed roles carries a grant the store has already withdrawn", got)
+	}
+}
+
 func TestRenewUserTokenRefusesDeactivatedUser(t *testing.T) {
 	store := &fakeStore{user: &User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}, inactive: true}
 	a := NewJWTAuthenticator(store, "secret", time.Hour)

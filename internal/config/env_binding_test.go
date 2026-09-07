@@ -191,10 +191,25 @@ func TestLoadServerBindsRedisCAFile(t *testing.T) {
 // row is part of shipping it. There is deliberately no exception list: an
 // operator-only key still gets a row, marked as such.
 func TestRegisteredKeysAreDocumented(t *testing.T) {
-	cols := strings.Join(docSettingFirstColumns(t), "\n")
+	// Match on WHOLE names, not substrings. A substring test lets a key that is
+	// a prefix of another documented key pass for free — secrets.backend is a
+	// prefix of secrets.backend_kwargs, so deleting the former's row used to
+	// leave this green, shadowed by the latter. That is the one way a guard
+	// like this fails silently rather than loudly.
+	cols := docSettingFirstColumns(t)
+	documented := make(map[string]struct{}, len(cols)*2)
+	tokens := regexp.MustCompile(`[A-Za-z0-9_.]+`)
+	for _, col := range cols {
+		for _, tok := range tokens.FindAllString(col, -1) {
+			documented[tok] = struct{}{}
+		}
+	}
 	for key := range serverDefaults {
 		env := "LEOFLOW_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
-		if strings.Contains(cols, env) || strings.Contains(cols, key) {
+		if _, ok := documented[env]; ok {
+			continue
+		}
+		if _, ok := documented[key]; ok {
 			continue
 		}
 		t.Errorf("%s (%s) is registered in serverDefaults but is named in no "+

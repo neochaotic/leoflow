@@ -1026,7 +1026,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   renewed token is rejected the moment its user is deactivated. (Corrected: as
   shipped, revocation was enforced on *use* but not on *issuance* — the renew
   endpoint itself kept answering `200` for a deactivated user until the ceiling
-  elapsed. Fixed in a later release; see the Unreleased entry.)
+  elapsed. Fixed later; see the token-renewal entry under Fixed above.)
 - **`leoflow runs list` (#747).** The common `runs` verb now lists DAG runs
   (`--state`/`--dag`/`--older-than`) alongside `trigger` and `status`, reusing the
   same lister as `leoflow admin runs list`.

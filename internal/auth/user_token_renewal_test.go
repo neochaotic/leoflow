@@ -46,7 +46,7 @@ func TestRenewUserTokenShortTTLAndPreservedOrigin(t *testing.T) {
 	// 55 minutes later, near expiry, the CLI silently renews.
 	t1 := t0.Add(55 * time.Minute)
 	a.now = func() time.Time { return t1 }
-	renewed, ok, err := a.RenewUserToken(issued, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("RenewUserToken: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRenewUserTokenRejectsExpired(t *testing.T) {
 		t.Fatalf("mintUserToken: %v", err)
 	}
 	a.now = func() time.Time { return t0.Add(2 * time.Minute) }
-	renewed, ok, err := a.RenewUserToken(expired, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), expired, time.Hour, 24*time.Hour)
 	if err == nil || ok || renewed != "" {
 		t.Errorf("renewing an expired token must error and mint nothing; got ok=%v renewed=%q err=%v", ok, renewed, err)
 	}
@@ -116,7 +116,7 @@ func TestRenewUserTokenCeilingStopsRenewal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	renewed, ok, err := a.RenewUserToken(aged, time.Hour, 24*time.Hour)
+	renewed, ok, err := a.RenewUserToken(context.Background(), aged, time.Hour, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("RenewUserToken must not error past the ceiling: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestRenewUserTokenNoCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	if _, ok, err := a.RenewUserToken(aged, time.Hour, 0); err != nil || !ok {
+	if _, ok, err := a.RenewUserToken(context.Background(), aged, time.Hour, 0); err != nil || !ok {
 		t.Errorf("a non-positive ceiling must never refuse renewal; got ok=%v err=%v", ok, err)
 	}
 }
@@ -151,7 +151,7 @@ func TestRenewUserTokenRejectsForeignAndAgentTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mintUserToken: %v", err)
 	}
-	if _, ok, ferr := a.RenewUserToken(foreign, time.Hour, 24*time.Hour); ferr == nil || ok {
+	if _, ok, ferr := a.RenewUserToken(context.Background(), foreign, time.Hour, 24*time.Hour); ferr == nil || ok {
 		t.Errorf("renewing a foreign-signed token must fail; got ok=%v err=%v", ok, ferr)
 	}
 
@@ -159,7 +159,7 @@ func TestRenewUserTokenRejectsForeignAndAgentTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueAgentToken: %v", err)
 	}
-	if _, ok, aerr := a.RenewUserToken(agentTok, time.Hour, 24*time.Hour); aerr == nil || ok {
+	if _, ok, aerr := a.RenewUserToken(context.Background(), agentTok, time.Hour, 24*time.Hour); aerr == nil || ok {
 		t.Errorf("an agent-audience token must not be renewable on the user path; got ok=%v err=%v", ok, aerr)
 	}
 }
@@ -179,5 +179,136 @@ func TestIssueTokenStampsOrigin(t *testing.T) {
 	c := userClaimsOf(t, a, tok)
 	if c.OriginIssuedAt == nil || !c.OriginIssuedAt.Equal(t0) {
 		t.Errorf("issued origin = %v, want issue instant %v", c.OriginIssuedAt, t0)
+	}
+}
+
+// TestRenewUserTokenRefusesDeactivatedUser pins the invariant this whole file
+// had missed: renewal must RE-PROVE the principal against the store, exactly as
+// Authenticate does, instead of rebuilding it from the incoming token's claims.
+// Every other renewal test above builds the authenticator with a nil store, so
+// nothing here exercised the reload at all — a deactivated user kept collecting
+// fresh tokens from /auth/token/renew until the session ceiling elapsed (#801).
+// TestRenewUserTokenTakesRolesFromStore is the success-path lock the refusal
+// tests do not provide. Every other new case here pins a branch that REFUSES,
+// so all of them keep passing if the reload's result is discarded and the
+// claimed principal is re-minted instead — which is the one behavior change a
+// user can observe on the happy path, and the whole point of reloading. Mint a
+// token claiming a role the store no longer grants, renew, and read the roles
+// back off the re-minted token: they must be the store's.
+func TestRenewUserTokenTakesRolesFromStore(t *testing.T) {
+	const secret = "renew-roles-secret"
+	issued, err := MintUserToken(secret, time.Hour, User{
+		ID: "u-stale", TenantID: "default", Email: "s@x.y", Roles: []string{"admin"},
+	})
+	if err != nil {
+		t.Fatalf("MintUserToken: %v", err)
+	}
+	store := &fakeStore{byIDUser: &User{
+		ID: "u-stale", TenantID: "default", Email: "s@x.y", Roles: []string{"viewer"},
+	}}
+	a := NewJWTAuthenticator(store, secret, time.Hour)
+
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
+	if err != nil || !ok {
+		t.Fatalf("RenewUserToken: ok=%v err=%v", ok, err)
+	}
+	got := userClaimsOf(t, a, renewed).Roles
+	if len(got) != 1 || got[0] != "viewer" {
+		t.Errorf("re-minted roles = %v, want the store's [viewer] — a renewal that re-mints the "+
+			"claimed roles carries a grant the store has already withdrawn", got)
+	}
+}
+
+func TestRenewUserTokenRefusesDeactivatedUser(t *testing.T) {
+	store := &fakeStore{user: &User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}, inactive: true}
+	a := NewJWTAuthenticator(store, "secret", time.Hour)
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return t0 }
+	issued, err := a.mintUserToken(&User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}, time.Hour, t0)
+	if err != nil {
+		t.Fatalf("mintUserToken: %v", err)
+	}
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
+	if err == nil || ok || renewed != "" {
+		t.Fatalf("a deactivated user must be refused and minted nothing; got ok=%v renewed=%q err=%v", ok, renewed, err)
+	}
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("deactivated renewal error = %v, want ErrInvalidToken", err)
+	}
+}
+
+// TestRenewUserTokenRefusesMissingNonDevSubject mirrors
+// TestAuthenticateRejectsMissingNonDevSubject onto the renewal path: a subject
+// with no user row (a hard-deleted user) is refused rather than trusted from the
+// roles baked into its signed claims.
+func TestRenewUserTokenRefusesMissingNonDevSubject(t *testing.T) {
+	a := NewJWTAuthenticator(&fakeStore{byIDErr: ErrUserNotFound}, "secret", time.Hour)
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return t0 }
+	issued, err := a.mintUserToken(&User{ID: "deleted-user-id", TenantID: "default", Roles: []string{"admin"}}, time.Hour, t0)
+	if err != nil {
+		t.Fatalf("mintUserToken: %v", err)
+	}
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
+	if err == nil || ok || renewed != "" {
+		t.Fatalf("a non-dev subject with no user row must be refused; got ok=%v renewed=%q err=%v", ok, renewed, err)
+	}
+}
+
+// TestRenewUserTokenFailsClosedOnStoreError: a store failure during the reload
+// refuses the renewal instead of falling through to the token's claims, which
+// would let a flaky database silently restore the old claims-only behavior. It
+// adds no new failure mode — a blip that refuses the renewal would refuse the
+// following request too, and the client's refresh is best-effort by construction.
+func TestRenewUserTokenFailsClosedOnStoreError(t *testing.T) {
+	a := NewJWTAuthenticator(&fakeStore{byIDErr: errors.New("connection refused")}, "secret", time.Hour)
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return t0 }
+	issued, err := a.mintUserToken(&User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}, time.Hour, t0)
+	if err != nil {
+		t.Fatalf("mintUserToken: %v", err)
+	}
+	if renewed, ok, rerr := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour); rerr == nil || ok || renewed != "" {
+		t.Fatalf("a store error must fail closed; got ok=%v renewed=%q err=%v", ok, renewed, rerr)
+	}
+}
+
+// TestRenewUserTokenAllowsDevSubjectWithNoUserRow preserves the first of
+// Authenticate's two carve-outs on the renewal path: the in-process `leoflow dev`
+// token intentionally has no user row, so its signed claims stay the source of
+// truth and its session keeps renewing.
+func TestRenewUserTokenAllowsDevSubjectWithNoUserRow(t *testing.T) {
+	a := NewJWTAuthenticator(&fakeStore{byIDErr: ErrUserNotFound}, "secret", time.Hour)
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return t0 }
+	issued, err := a.mintUserToken(
+		&User{ID: DevTokenSubject, TenantID: "default", Email: "dev@leoflow.local", Roles: []string{"admin"}},
+		time.Hour, t0)
+	if err != nil {
+		t.Fatalf("mintUserToken: %v", err)
+	}
+	renewed, ok, err := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
+	if err != nil || !ok {
+		t.Fatalf("the dev subject must keep renewing without a user row; got ok=%v err=%v", ok, err)
+	}
+	got := userClaimsOf(t, a, renewed)
+	if got.Subject != DevTokenSubject || len(got.Roles) != 1 || got.Roles[0] != "admin" {
+		t.Errorf("renewed dev claims = %+v, want the signed claims preserved", got)
+	}
+}
+
+// TestRenewUserTokenAllowsNilStore preserves Authenticate's other carve-out: with
+// no data plane bound (the trusted in-process minting context — `leoflow dev`,
+// tests) there is nothing to reload, so renewal proceeds on the signed claims.
+func TestRenewUserTokenAllowsNilStore(t *testing.T) {
+	a := NewJWTAuthenticator(nil, "secret", time.Hour)
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return t0 }
+	issued, err := a.mintUserToken(&User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}, time.Hour, t0)
+	if err != nil {
+		t.Fatalf("mintUserToken: %v", err)
+	}
+	if _, ok, rerr := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour); rerr != nil || !ok {
+		t.Fatalf("a nil store must still renew; got ok=%v err=%v", ok, rerr)
 	}
 }

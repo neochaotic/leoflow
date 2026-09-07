@@ -178,9 +178,14 @@ from the workers' side:
   **node** closes nothing, and nothing pings — the agent's dial configures no
   gRPC keepalive, and the control plane deliberately enables no server-initiated
   keepalive either (it only *permits* a client's pings on an otherwise idle
-  stream, so gRPC does not `GOAWAY` them as abusive). That worker therefore sits
-  blocked on a stream to a control plane that is already gone until the OS's own
-  TCP timeout gives up — minutes, not seconds. The new leader's warm-pool
+  stream, so gRPC does not `GOAWAY` them as abusive). "Nothing pings" is true of
+  gRPC only: Go's dialer still enables TCP keepalive at a 15s period, so the
+  kernel gives up after roughly 2.5 minutes on Linux defaults rather than never,
+  and the assignment stream's own idle TTL (5 minutes by default) is a second
+  backstop. So that worker sits blocked on a stream to a control plane that is
+  already gone for minutes, not seconds — bounded, but far longer than the
+  prompt failure a killed process produces. Tracked as
+  [#946](https://github.com/neochaotic/leoflow/issues/946). The new leader's warm-pool
   reconciler is leader-gated as well, and it counts live warm pods from the
   **apiserver** and busy ones from the durable `warm_worker_id` binding, never
   from the registry, so it rebuilds each active DAG version's

@@ -93,7 +93,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **HA chart posture: four render refusals for combinations that used to fail
+- **HA chart posture: five render refusals for combinations that used to fail
   later, and the ServiceAccount / warm-pool docs the profile was missing.**
   `podDisruptionBudget.enabled` keyed on a real boolean, so the string spellings
   a GitOps tool sends — Argo CD's `helm.parameters`, `helm --set-string` — fell
@@ -134,7 +134,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recycle and exits `0`, while a **busy** worker completes its attempt and then
   exits non-zero when its slot-free send hits the dead stream — so expect one
   `Failed` warm pod and one `ERROR` line per busy worker per control-plane
-  restart, which is the signal the warm-worker-lost reaper keys on to re-place
+  restart, which is the signal the warm-worker-lost reaper keys on; an attempt
+  the pod still held when it died is what that reaper re-places, and in this
+  ordering the attempt has usually already settled, so the reaper matters for a
+  worker killed MID-attempt rather than for one that failed on its way out. It
+  re-places
   the attempts that pod held from the durable `warm_worker_id` binding. A worker
   routed to a follower re-dials with bounded backoff, and warm placement
   degrades to dedicated pods until workers have re-registered. Finally, `terminationGracePeriodSeconds: 0` is documented as

@@ -771,6 +771,18 @@ tests:
       - matchRegexRaw:
           pattern: "WARNING: podDisruptionBudget.enabled=true with a single replica"
 
+  - it: NOTES stay quiet when a string-typed PDB is turned OFF at a single replica
+    template: NOTES.txt
+    set:
+      replicaCount: 1
+      podDisruptionBudget.enabled: "false"
+    asserts:
+      # The negative half of the spelling fix. A budget the operator turned off
+      # renders nothing, so warning about one would be noise — and this is the
+      # case a naive "the value is a non-empty string" test would get wrong.
+      - notMatchRegexRaw:
+          pattern: "WARNING: podDisruptionBudget.enabled"
+
   - it: NOTES warn when an uppercase-T string PDB is forced onto a single replica
     template: NOTES.txt
     set:

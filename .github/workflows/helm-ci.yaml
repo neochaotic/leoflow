@@ -57,11 +57,6 @@ jobs:
       - name: helm lint
         run: helm lint helm/leoflow
 
-      # helm-docs: ensure the chart README is in sync with values.yaml. If a
-      # contributor edits values.yaml (adds/removes keys, changes a `# --`
-      # description) without regenerating, this gate fails with the exact diff
-      # so they know to run `helm-docs -c helm/leoflow` locally and re-commit.
-      # Pinned to v1.14.2 per ADR 0014.
       # The helm-docs gate below diffs the README against helm-docs' own output,
       # so it is SATISFIED by a row helm-docs renders wrong. A " --" in the prose
       # of a doc comment is the delimiter again, and helm-docs takes the last
@@ -71,6 +66,11 @@ jobs:
       - name: check-values-doc-comments (helm-docs cannot see this class)
         run: bash scripts/check-values-doc-comments.sh
 
+      # helm-docs: ensure the chart README is in sync with values.yaml. If a
+      # contributor edits values.yaml (adds/removes keys, changes a `# --`
+      # description) without regenerating, this gate fails with the exact diff
+      # so they know to run `helm-docs -c helm/leoflow` locally and re-commit.
+      # Pinned to v1.14.2 per ADR 0014.
       - name: helm-docs check (README in sync with values.yaml)
         run: |
           set -euo pipefail

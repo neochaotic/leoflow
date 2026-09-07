@@ -220,6 +220,74 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   window the ladder itself implies (70-150 s) instead of lingering to the pod
   deadline.
   ([#930](https://github.com/neochaotic/leoflow/issues/930))
+- **A partial resource-defaults pair now fails loudly instead of silently
+  suppressing the platform default.** `defaults.resources` in `leoflow.yaml` and
+  `executor.defaults.resources_*` in the chart both expand one quantity into a
+  request *and* a limit, and both are documented as landing a task that declares
+  no resources of its own in Guaranteed QoS. Neither holds for a *partial* pair,
+  and the partial case was worse than merely missing a QoS class: a
+  `defaults.resources` with only `cpu` (or only `memory`) still converts to a
+  non-nil resources object, the empty dimension is dropped from the pod spec, and
+  because the object is non-nil the dispatcher's fallback to the per-cluster
+  platform default never runs — so the task got one dimension pinned and the
+  other with **no request or limit from anywhere**, worse configured than with no
+  defaults block at all. `defaults.resources` now **requires both `cpu` and
+  `memory`**: the break surfaces on the author's machine at compile time with the
+  missing field named (`at '/defaults/resources': missing property 'memory'`),
+  since the requests-equals-limits expansion is the block's only documented
+  purpose and half of it is meaningless. On the operator side, the control plane
+  now logs a boot `WARN` when exactly one of
+  `executor.defaults.resources_cpu` / `_memory` is set, naming both keys, the
+  Burstable class actually reached and the dimension nothing else will supply,
+  with `config_key` / `missing_config_key` / `value` as fields so it can be
+  alerted on; the chart comment, the rendered chart README, the configuration
+  reference and the schema description no longer promise Guaranteed for a partial
+  pair. **The pod-spec behaviour is unchanged in this release** — a partial pair
+  still suppresses the platform default wholesale rather than merging per field,
+  and the same wholesale suppression is reachable without any `defaults` block at
+  all: a task declaring only an `ephemeral_storage` limit (a standalone knob
+  [ADR 0054](https://leoflow.dev/project/adrs/0054-shared-cluster-coexistence/)
+  promotes) makes the resources object non-nil and therefore drops the platform
+  cpu and memory defaults entirely, leaving a pod with an ephemeral-storage limit
+  and no cpu or memory request at all. Only cpu and memory are QoS compute
+  resources, so that pod is **BestEffort** — schedulable anywhere, invisible to
+  autoscaler capacity math, and first evicted under pressure. Field-granular merge is
+  deliberately **not** done here: it belongs at dispatch, server-side, where the
+  cluster default is known — and changing how the dispatcher composes a pod spec
+  mid-release alters the resource footprint of every task that has a partial
+  block, which can leave pods `Pending` on a cluster with no headroom. That
+  needs a cluster pass, not a release patch
+  ([#802](https://github.com/neochaotic/leoflow/issues/802)). (Doing it in the
+  CLI at compile time is separately impossible — it cannot know the cluster's
+  default, and baking one in would destroy the portability of the compiled
+  artifact the chart promises.)
+
+- **The installation guide no longer claims `networkPolicy.enabled` restricts
+  task pods, or that it restricts egress at all.** Production hardening told
+  operators to set `networkPolicy.enabled=true` "to restrict the control plane
+  and task pods to only the flows they need", and both halves of that sentence
+  were wrong. Task pods are governed by a *different* value,
+  `taskNetworkPolicy.enabled`, which defaults to `false` — so an operator who
+  followed the section to the letter believed the network-layer containment
+  [ADR 0048](https://leoflow.dev/project/adrs/0048-no-user-code-in-control-plane/)
+  leans on was in place and had none. And the control-plane policy restricts
+  **ingress only**: its `networkPolicy.egress` is empty by default and the
+  chart then renders a single empty egress *rule* (`- {}`), which matches every
+  destination — deliberately, so enabling the policy cannot silently break
+  Postgres / Redis / kube-apiserver access. The bullet is now
+  split per value, states the task policy's `false` default and the
+  `blockPrivateNetworks` / `allowMetadataEgress` escape hatches (the latter is
+  why the policy is opt-in: both clouds serve keyless workload identity from the
+  always-blocked link-local range), and says plainly that neither policy is a
+  control without a CNI that enforces it. The install NOTES now carry a WARNING
+  while `taskNetworkPolicy.enabled` is false, so the deliberately-off default is
+  visible at the moment the operator can act on it. The task policy's default is
+  **unchanged**: it always blocks `169.254.0.0/16`, so defaulting it on would
+  break keyless external-secrets auth for anyone who does not know to add a
+  single-address exception, and its enforcement is CNI-dependent and invisible to
+  this project's gates — a default-on policy that silently does nothing on a
+  large share of installs is a worse posture than an opt-in one that is honestly
+  labelled ([#804](https://github.com/neochaotic/leoflow/issues/804)).
 
 - **The pod-lost reaper no longer reaps a task whose pod is still there,
   finished.** Its liveness question returned one bool for two different states —

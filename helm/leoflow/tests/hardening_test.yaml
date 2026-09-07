@@ -151,3 +151,130 @@ tests:
       - equal:
           path: spec.endpoints[0].interval
           value: 30s
+
+  # ─── The two NetworkPolicy values are independent (#804) ────────────────
+  # The installation guide used to tell operators that networkPolicy.enabled
+  # restricts "the control plane and task pods". It restricts neither's egress
+  # and no task pod at all: the control-plane policy selects control-plane pods
+  # in the release namespace, and nothing selects a task pod unless
+  # taskNetworkPolicy.enabled is set. Lock the separation the sentence
+  # conflated, in BOTH directions, so the corrected text cannot silently rot.
+  - it: networkPolicy.enabled alone renders zero policies in the task namespace (#804)
+    templates: [networkpolicy.yaml, task-networkpolicy.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskNamespace: leoflow-tasks
+      networkPolicy.enabled: true
+    asserts:
+      # Nothing in the task namespace: the task pods are uncontained.
+      - hasDocuments:
+          count: 0
+        template: task-networkpolicy.yaml
+      # The control-plane policy renders, in the RELEASE namespace.
+      - hasDocuments:
+          count: 1
+        template: networkpolicy.yaml
+      # Separation is a matter of SELECTION, not of namespace: taskNamespace
+      # defaults to the release namespace, so a namespace assertion passes for
+      # free and proves nothing. Task pods carry only leoflow.io/* labels
+      # (internal/executor/kubernetes.go), so pinning the whole selector map is
+      # what fails if anyone widens it to reach them.
+      - equal:
+          path: spec.podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: leoflow
+            app.kubernetes.io/instance: leoflow
+        template: networkpolicy.yaml
+      - notExists:
+          path: spec.podSelector.matchExpressions
+        template: networkpolicy.yaml
+      # And its egress is the empty rule, i.e. allow-all — enabling the
+      # control-plane policy restricts INGRESS only until networkPolicy.egress
+      # is populated. The values comment says so; the guide claimed otherwise.
+      - equal:
+          path: spec.egress[1]
+          value: {}
+        template: networkpolicy.yaml
+
+  - it: taskNetworkPolicy.enabled alone contains task pods without any control-plane policy (#804)
+    templates: [networkpolicy.yaml, task-networkpolicy.yaml]
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskNamespace: leoflow-tasks
+      taskNetworkPolicy.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: networkpolicy.yaml
+      - hasDocuments:
+          count: 1
+        template: task-networkpolicy.yaml
+      - equal:
+          path: metadata.namespace
+          value: leoflow-tasks
+        template: task-networkpolicy.yaml
+
+  # ─── Install NOTES: the deliberately-off task-pod policy (#804) ──────────
+  # taskNetworkPolicy.enabled is false by default, deliberately: the policy
+  # always blocks 169.254.0.0/16, which is where both GKE Workload Identity and
+  # EKS Pod Identity serve keyless credentials, and enforcement is CNI-dependent
+  # (kindnet enforces nothing; the AWS VPC CNI needs its network-policy agent
+  # enabled). An off-by-default security control is only honest if it is visible,
+  # and the install is the moment the operator can act on it — NOTES.txt already
+  # carries warnings of exactly this shape for other silent defaults.
+  - it: NOTES warn that task pods are uncontained while taskNetworkPolicy is off
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: taskNetworkPolicy.enabled=false"
+      # The WARNING must name the value to set and the two escape hatches, or it
+      # is an alarm with no action attached.
+      - matchRegexRaw:
+          pattern: "taskNetworkPolicy.enabled=true"
+      - matchRegexRaw:
+          pattern: "blockPrivateNetworks"
+      - matchRegexRaw:
+          pattern: "allowMetadataEgress"
+      # And it must not let the control-plane value stand in for it — the exact
+      # substitution the installation guide made (#804).
+      - matchRegexRaw:
+          pattern: "networkPolicy.enabled does NOT cover task pods"
+
+  - it: NOTES stay quiet about the task policy once it is enabled
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskNetworkPolicy.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: taskNetworkPolicy.enabled=false"
+
+  - it: enabling only the control-plane policy does NOT silence the task-pod warning
+    template: NOTES.txt
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      networkPolicy.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: taskNetworkPolicy.enabled=false"

@@ -84,7 +84,11 @@ for the datastore/secret keys this runbook intentionally does not spell out:
 - `execution.warmPoolsEnabled` (false) — requires `agentTokenTransport=exchange`
   **and** `secretLivenessMode=enforce` (chart refuses to render otherwise).
 - `config.trustedProxies` (`[]`) — **#725**, must be reachable now.
-- `executor.defaults.resources.cpu` / `.memory` (`""`) — **#725**, QoS defaults.
+- `executor.defaults.resources.cpu` / `.memory` (`""`) — **#725**, QoS defaults;
+  set **both or neither** (**#802**: one alone is Burstable and suppresses the
+  other dimension entirely).
+- `networkPolicy.enabled` (`false`) / `taskNetworkPolicy.enabled` (`false`) —
+  **#804**, two independent policies; the second is the task-pod containment.
 - `logs.persistence.enabled` / `.accessMode` (`ReadWriteOnce`) / `.storageClass`.
 
 Baseline install (single-replica, dedicated pod-per-task, defaults):
@@ -202,10 +206,64 @@ helm upgrade leoflow ... \
   `kubectl get pod <task> -o jsonpath='{.status.qosClass}'` = **`Guaranteed`**
   (not `BestEffort`); both `requests` and `limits` present. Drive a node to memory
   pressure → the task pod is **not** first evicted.
+- **PARTIAL-pair PASS (#802):** this section only ever set both fields, so it
+  certified past the partial case entirely. Re-run with **cpu only**:
+  ```bash
+  helm upgrade leoflow ... --set executor.defaults.resources.cpu=250m \
+    --set executor.defaults.resources.memory=""
+  ```
+  **PASS** is all three: the control-plane log carries one boot `WARN` with
+  `config_key=executor.defaults.resources_cpu` and
+  `missing_config_key=executor.defaults.resources_memory`; a task declaring no
+  resources shows `qosClass` = **`Burstable`**, *not* the `Guaranteed` the chart
+  comment used to promise; and `kubectl get pod <task> -o jsonpath='{.spec.containers[0].resources}'`
+  shows **no memory request or limit at all**. Also compile a `leoflow.yaml` whose
+  `defaults.resources` sets only `cpu` — **PASS:** `leoflow compile` **fails**
+  naming the missing field (`missing property 'memory'`), it does not produce a
+  `dag.json`.
 - **ClientIP PASS:** behind the ALB/NLB, several bad logins from **different**
   clients do **not** share one lockout bucket once `config.trustedProxies` is set
   to the ingress CIDR (before the fix, all requests collapsed to the ingress IP and
   a handful of bad logins locked out everyone).
+
+### §4.4 — #804: the two NetworkPolicy values are not one value
+
+```bash
+helm upgrade leoflow ... --set networkPolicy.enabled=true
+```
+- **Separation PASS:** with the control-plane policy ON and
+  `taskNetworkPolicy.enabled` left at its `false` default, **no policy selects a
+  task pod**. Check selection, not object count: `taskNamespace` defaults to
+  `leoflow`, which is the release namespace in §1's baseline, so counting objects
+  there returns the control-plane policy and reads as a FAIL on a correct
+  install.
+
+  ```bash
+  kubectl -n <taskNamespace> get netpol -o json | jq '
+    [ .items[]
+      | select( (.spec.podSelector.matchLabels // {} | keys)
+                + [ (.spec.podSelector.matchExpressions // [])[].key ]
+                | any(startswith("leoflow.io/")) )
+    ] | length'
+  # PASS = 0
+  ```
+
+  Task pods carry only `leoflow.io/*` labels (`internal/executor/kubernetes.go`),
+  while the control-plane policy selects `app.kubernetes.io/name` +
+  `instance` — so it cannot select a task pod even in the same namespace. The
+  task pods are uncontained, which is exactly what the hardening section used to
+  deny. `kubectl -n <releaseNamespace> get networkpolicy -o yaml` shows the
+  control-plane policy's `spec.egress` ending in the **empty rule (`{}`)**, i.e.
+  allow-all: enabling it restricts ingress only.
+- **Containment PASS:** re-run with `--set taskNetworkPolicy.enabled=true` and
+  confirm one policy in `<taskNamespace>`, **and that this CNI enforces it** — a
+  task pod's `curl` to `169.254.169.254` must time out. On kindnet it will not
+  (kindnet enforces nothing), and the AWS VPC CNI enforces only with its
+  network-policy agent enabled: a rendered object is not evidence.
+- **Keyless caveat PASS:** with the task policy on, a DAG using keyless
+  external-secrets auth (GKE Workload Identity / EKS Pod Identity) fails until
+  `taskNetworkPolicy.allowMetadataEgress` re-allows that one `/32`. Confirm the
+  failure *and* the recovery — this is why the policy stays opt-in.
 
 ---
 
@@ -232,6 +290,8 @@ helm upgrade leoflow ... \
 | #723 | retry not wedged (§4.2) | | |
 | #724 | validation → 400 | | |
 | #725 | QoS Guaranteed + ClientIP (§4.3) | | |
+| #802 | partial resource pair → Burstable + boot WARN + compile error (§4.3) | | |
+| #804 | control-plane policy on, task policy off → 0 netpols in taskNamespace (§4.4) | | |
 | #726 | api has no tls.key (§4.1) | | |
 | #727 | migrate job no SA token | | |
 | #728 | warm TMPDIR fresh (§4.2) | | |

@@ -147,12 +147,14 @@ spec:
             {{- end }}
             {{- if .ctx.Values.executor.defaults.resources.cpu }}
             # L0 per-cluster CPU default (ADR 0023). The server applies it as both
-            # request and limit → Guaranteed QoS for tasks that declare none (#725).
+            # request and limit (#725). Guaranteed QoS needs the MEMORY default set
+            # too — cpu alone is Burstable, and the server WARNs at boot (#802).
             - name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_CPU
               value: {{ .ctx.Values.executor.defaults.resources.cpu | quote }}
             {{- end }}
             {{- if .ctx.Values.executor.defaults.resources.memory }}
             # L0 per-cluster memory default (ADR 0023), request == limit (#725).
+            # Pairs with the cpu default above; either one alone is Burstable.
             - name: LEOFLOW_EXECUTOR_DEFAULTS_RESOURCES_MEMORY
               value: {{ .ctx.Values.executor.defaults.resources.memory | quote }}
             {{- end }}

@@ -22,6 +22,7 @@ on:
       - "helm/**"
       - "scripts/helm-template-checks.sh"
       - "scripts/rbac-covers-executor.sh"
+      - "scripts/check-values-doc-comments.sh"
       - ".github/workflows/helm-ci.yaml"
       - ".github/ci/kind-datastores.yaml"
       - "deploy/Dockerfile.server"
@@ -61,6 +62,15 @@ jobs:
       # description) without regenerating, this gate fails with the exact diff
       # so they know to run `helm-docs -c helm/leoflow` locally and re-commit.
       # Pinned to v1.14.2 per ADR 0014.
+      # The helm-docs gate below diffs the README against helm-docs' own output,
+      # so it is SATISFIED by a row helm-docs renders wrong. A " --" in the prose
+      # of a doc comment is the delimiter again, and helm-docs takes the last
+      # one: the description and the `(bool)` type hint are dropped and the row
+      # renders blank and typed `string`. Nothing compares the row against the
+      # comment meant to produce it, so this runs FIRST and independently.
+      - name: check-values-doc-comments (helm-docs cannot see this class)
+        run: bash scripts/check-values-doc-comments.sh
+
       - name: helm-docs check (README in sync with values.yaml)
         run: |
           set -euo pipefail

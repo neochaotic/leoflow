@@ -113,6 +113,9 @@ run_step "helm-template-checks.sh"       bash scripts/helm-template-checks.sh
 run_step "rbac-covers-executor.sh"       bash scripts/rbac-covers-executor.sh
 run_step "check-dependabot-dirs.sh"      bash scripts/check-dependabot-dirs.sh
 run_step "helm README fresh (helm-docs)" helm_docs_fresh
+# Runs alongside the freshness check, not inside it: helm-docs renders a swallowed
+# doc comment deterministically, so a broken README row SATISFIES helm_docs_fresh.
+run_step "check-values-doc-comments.sh"  bash scripts/check-values-doc-comments.sh
 
 # --- k3d end-to-end (slow; skippable) ----------------------------------------
 if [ "${SKIP_E2E:-0}" = "1" ]; then

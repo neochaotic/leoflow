@@ -129,11 +129,12 @@
         "execution_timeout_seconds": { "type": "integer", "minimum": 1 },
         "resources": {
           "type": "object",
-          "description": "Default CPU/memory for tasks that declare none; expanded to requests == limits so the task reaches Guaranteed QoS (#725).",
+          "description": "Default CPU AND memory for tasks that declare none; expanded to requests == limits so the task reaches Guaranteed QoS (#725). BOTH fields are required: that expansion is the block's only purpose, so a partial pair reaches only Burstable, and it still suppresses the per-cluster platform default the missing dimension would otherwise have come from (#802). Set both, or omit the block.",
           "properties": {
             "cpu": { "type": "string" },
             "memory": { "type": "string" }
           },
+          "required": ["cpu", "memory"],
           "additionalProperties": false
         },
         "node_selector": {

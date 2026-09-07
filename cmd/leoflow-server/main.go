@@ -388,6 +388,63 @@ func warnStartup(cfg *config.ServerConfig, logger *slog.Logger) {
 	for _, w := range executor.ResilienceLadderWarnings(resilienceLadder(cfg)) {
 		logger.Warn(w.Msg, "config_key", w.Key, "value", w.Value)
 	}
+	for _, w := range platformDefaultWarnings(cfg.Executor.Defaults) {
+		logger.Warn(w.Msg, "config_key", w.Key, "value", w.Value, "missing_config_key", w.MissingKey)
+	}
+}
+
+// configWarning is one boot WARN about an operator setting that is accepted but
+// quietly delivers less than the value is documented to deliver: the
+// operator-readable sentence plus the fields a monitoring rule needs. Same shape
+// and same reason as executor.LadderWarning — a pre-formatted string alone
+// leaves the JSON record with nothing but msg, so the alert an operator would
+// actually want can only be written as a substring match on prose that a later
+// reword silently breaks. Msg stays self-contained so a plain-text log needs no
+// field expansion to be read.
+type configWarning struct {
+	Msg   string
+	Key   string
+	Value string
+	// MissingKey is the sibling key the operator has to set for the documented
+	// behavior to hold.
+	MissingKey string
+}
+
+// platformDefaultWarnings reports executor.defaults settings that pass
+// validation but silently deliver less than the value promises. Today there is
+// one: a PARTIAL resources pair.
+//
+// resources_cpu/resources_memory are documented — in the chart's values.yaml, in
+// the rendered chart README, and in the configuration reference — as landing a
+// task that declares no resources of its own in Guaranteed QoS. That holds only
+// when BOTH are set, because Guaranteed requires requests == limits for cpu AND
+// memory. With one set, platformDefaults below still builds a non-nil default,
+// the empty dimension is dropped from the pod spec, and the task gets one
+// dimension pinned and the other with no request or limit at all: Burstable,
+// first throttled/evicted under node pressure, and invisible to the Cluster
+// Autoscaler's scale-up math on the dimension left out. A half-configured
+// default is better than none, so it is not a boot error — but it is otherwise
+// invisible, and the operator who set one field believes they configured the
+// documented behavior. Pure, like the ladder warnings: called once at boot,
+// after the logger exists.
+func platformDefaultWarnings(c config.PlatformDefaultsSection) []configWarning {
+	const cpuKey, memKey = "executor.defaults.resources_cpu", "executor.defaults.resources_memory"
+	if (c.ResourcesCPU == "") == (c.ResourcesMemory == "") {
+		// Both set (the documented configuration) or neither (the shipped
+		// default). Nothing to say.
+		return nil
+	}
+	set, missing, value, dimension := cpuKey, memKey, c.ResourcesCPU, "memory"
+	if c.ResourcesCPU == "" {
+		set, missing, value, dimension = memKey, cpuKey, c.ResourcesMemory, "cpu"
+	}
+	return []configWarning{{
+		Msg: fmt.Sprintf("%s is set (%q) with no %s: a task that declares no resources of its own gets that one quantity as its request AND limit and NO %s request or limit at all, so the pod is Burstable, not the Guaranteed QoS this default is documented to deliver — and nothing else supplies the missing %s. Set both quantities, or neither",
+			set, value, missing, dimension, dimension),
+		Key:        set,
+		Value:      value,
+		MissingKey: missing,
+	}}
 }
 
 // resilienceLadder assembles the effective timing knobs the control-plane
@@ -1756,8 +1813,12 @@ func wrapBuffered(inner dispatch.Inner, sink dispatch.FailureSink, logger *slog.
 // platformDefaults maps the executor.defaults config (L0 task defaults, ADR
 // 0023) into the dispatcher's PlatformDefaults. Resources are set only when a
 // quantity is configured, so an unset section leaves req.Resources untouched;
-// when set, both requests and limits are populated so the default lands the task
-// in Guaranteed QoS.
+// when set, both requests and limits are populated from the same quantity.
+//
+// That reaches Guaranteed QoS only when BOTH cpu and memory are configured.
+// A partial pair yields Burstable — the empty dimension is dropped from the pod
+// spec entirely — which is why platformDefaultWarnings emits a boot WARN for it
+// rather than letting the gap stay invisible.
 func platformDefaults(c config.PlatformDefaultsSection) dispatch.PlatformDefaults {
 	d := dispatch.PlatformDefaults{
 		StagingSize:         c.StagingSize,
@@ -1770,9 +1831,11 @@ func platformDefaults(c config.PlatformDefaultsSection) dispatch.PlatformDefault
 	}
 	if c.ResourcesCPU != "" || c.ResourcesMemory != "" {
 		// Set requests AND limits to the same quantity so a task that relies on the
-		// platform default reaches Guaranteed QoS (requests == limits). Requests
-		// alone yields Burstable and is first to be throttled/evicted under node
-		// pressure — the opposite of what pinning a per-cluster default is for.
+		// platform default reaches Guaranteed QoS (requests == limits, cpu AND
+		// memory — a partial pair only reaches Burstable, and warns at boot).
+		// Requests alone yields Burstable and is first to be throttled/evicted
+		// under node pressure — the opposite of what pinning a per-cluster default
+		// is for.
 		// A DAG/task that declares its own resources still overrides this wholesale
 		// (see internal/dispatch), so this only shapes the no-declaration case.
 		d.Resources = &domain.Resources{

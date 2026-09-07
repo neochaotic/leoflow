@@ -105,15 +105,19 @@ taskPodSecurity:
 # always wins, keeping the dag.json artifact portable across clusters.
 executor:
   defaults:
-    # -- Default CPU/memory for a task that declares none of its own. When set, the
-    # control plane applies the value as BOTH the request and the limit, so the task
-    # lands in Guaranteed QoS (least likely to be throttled/evicted under node
-    # pressure). Empty (default) leaves tasks with no platform resource floor, i.e.
-    # BestEffort QoS unless the DAG sets its own (#725). Kubernetes quantities.
+    # -- Default CPU **and** memory for a task that declares none of its own. Set
+    # BOTH: the control plane applies each value as its own request AND limit, and
+    # Kubernetes grants Guaranteed QoS (least likely to be throttled/evicted under
+    # node pressure) only when requests == limits for cpu AND memory. Setting just
+    # one lands the task in **Burstable** with NO request or limit at all on the
+    # other dimension — nothing else fills it in — and the control plane logs a boot
+    # WARN naming the missing key (#802). Empty (default) leaves tasks with no
+    # platform resource floor, i.e. BestEffort QoS unless the DAG sets its own
+    # (#725). Kubernetes quantities.
     resources:
-      # -- Default CPU request+limit (e.g. `250m`, `1`). Empty = unset.
+      # -- Default CPU request+limit (e.g. `250m`, `1`). Empty = unset. Set together with `memory`.
       cpu: ""
-      # -- Default memory request+limit (e.g. `256Mi`, `1Gi`). Empty = unset.
+      # -- Default memory request+limit (e.g. `256Mi`, `1Gi`). Empty = unset. Set together with `cpu`.
       memory: ""
     # -- Default size + StorageClass for the per-run staging volume when the DAG
     # enabled staging without pinning them (#743). Env-only override path: the

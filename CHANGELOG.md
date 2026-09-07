@@ -220,6 +220,43 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   window the ladder itself implies (70-150 s) instead of lingering to the pod
   deadline.
   ([#930](https://github.com/neochaotic/leoflow/issues/930))
+- **A partial resource-defaults pair now fails loudly instead of silently
+  suppressing the platform default.** `defaults.resources` in `leoflow.yaml` and
+  `executor.defaults.resources_*` in the chart both expand one quantity into a
+  request *and* a limit, and both are documented as landing a task that declares
+  no resources of its own in Guaranteed QoS. Neither holds for a *partial* pair,
+  and the partial case was worse than merely missing a QoS class: a
+  `defaults.resources` with only `cpu` (or only `memory`) still converts to a
+  non-nil resources object, the empty dimension is dropped from the pod spec, and
+  because the object is non-nil the dispatcher's fallback to the per-cluster
+  platform default never runs — so the task got one dimension pinned and the
+  other with **no request or limit from anywhere**, worse configured than with no
+  defaults block at all. `defaults.resources` now **requires both `cpu` and
+  `memory`**: the break surfaces on the author's machine at compile time with the
+  missing field named (`at '/defaults/resources': missing property 'memory'`),
+  since the requests-equals-limits expansion is the block's only documented
+  purpose and half of it is meaningless. On the operator side, the control plane
+  now logs a boot `WARN` when exactly one of
+  `executor.defaults.resources_cpu` / `_memory` is set, naming both keys, the
+  Burstable class actually reached and the dimension nothing else will supply,
+  with `config_key` / `missing_config_key` / `value` as fields so it can be
+  alerted on; the chart comment, the rendered chart README, the configuration
+  reference and the schema description no longer promise Guaranteed for a partial
+  pair. **The pod-spec behaviour is unchanged in this release** — a partial pair
+  still suppresses the platform default wholesale rather than merging per field,
+  and the same wholesale suppression is reachable without any `defaults` block at
+  all: a task declaring only an `ephemeral_storage` limit (a standalone knob
+  [ADR 0054](https://leoflow.dev/project/adrs/0054-shared-cluster-coexistence/)
+  promotes) makes the resources object non-nil and therefore drops the platform
+  cpu and memory defaults entirely, leaving a pod with an ephemeral-storage limit
+  and no cpu or memory request at all — schedulable anywhere, invisible to
+  autoscaler capacity math, first evicted under pressure. Field-granular merge is
+  deliberately **not** done here: completing a partial block from the platform
+  default at compile time is impossible for the CLI (it cannot know the cluster's
+  default) and baking one in would destroy the portability of the compiled
+  artifact the chart explicitly promises
+  ([#802](https://github.com/neochaotic/leoflow/issues/802)).
+
 - **The installation guide no longer claims `networkPolicy.enabled` restricts
   task pods, or that it restricts egress at all.** Production hardening told
   operators to set `networkPolicy.enabled=true` "to restrict the control plane

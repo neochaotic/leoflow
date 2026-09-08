@@ -47,6 +47,31 @@ function cachedChromium() {
 
 const CRASH_RE = /Cannot read properties|is not a function|client-side exception|Something went wrong|Minified React error #\d/i;
 
+// finish writes the report and exits explicitly, rather than letting the
+// process end when the event loop happens to drain.
+//
+// The reason is symmetry, not a known leak. Both failure paths call
+// process.exit, so they can never linger; the pass path fell off the end of
+// the async IIFE and depended on nothing else holding the loop open. A test
+// runner whose two outcomes exit by different mechanisms will eventually
+// differ in behaviour, and the one that can hang is the one that succeeded —
+// which is the hardest case to read from CI, because the log says it passed.
+// (Searched for an actual leak first: one launch, one context, one page, all
+// closed by browser.close(); every API call goes through page.request, which
+// the context owns. Nothing is left open. This is insurance, not a workaround.)
+//
+// Flushing is the part that needs care. console.log to a pipe — which is what
+// CI gives us — is asynchronous, and a bare process.exit() drops whatever has
+// not reached the OS. That would truncate the result line, the one thing a
+// reader needs. So the exit happens in the write callback, with an unref'd 5s
+// timer as a backstop for a stdout that never drains; unref'd so the timer
+// itself cannot hold the process open.
+function finish(code, text, stream = process.stdout) {
+  process.exitCode = code;
+  setTimeout(() => process.exit(code), 5000).unref();
+  stream.write(text, () => process.exit(code));
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true, executablePath: cachedChromium() });
   const page = await (await browser.newContext()).newPage();
@@ -232,14 +257,15 @@ const CRASH_RE = /Cannot read properties|is not a function|client-side exception
   await browser.close();
 
   const failed = results.filter((r) => r.bad);
-  console.log('\n===== UI SMOKE =====');
+  const report = ['', '===== UI SMOKE ====='];
   for (const r of results) {
-    console.log(`${r.bad ? 'FAIL' : 'ok  '}  ${r.name}`);
-    r.errs.forEach((e) => console.log('        ' + e.slice(0, 200)));
+    report.push(`${r.bad ? 'FAIL' : 'ok  '}  ${r.name}`);
+    r.errs.forEach((e) => report.push('        ' + e.slice(0, 200)));
   }
-  if (failed.length) {
-    console.error(`\nUI SMOKE FAILED: ${failed.length} screen(s) threw an uncaught error.`);
-    process.exit(1);
-  }
-  console.log(`\nUI SMOKE PASSED: ${results.length} screens/interactions, no crashes.`);
-})().catch((e) => { console.error('FATAL', e.message); process.exit(1); });
+  report.push(
+    failed.length
+      ? `\nUI SMOKE FAILED: ${failed.length} screen(s) threw an uncaught error.`
+      : `\nUI SMOKE PASSED: ${results.length} screens/interactions, no crashes.`,
+  );
+  finish(failed.length ? 1 : 0, report.join('\n') + '\n');
+})().catch((e) => finish(1, `FATAL ${(e && e.stack) || String(e)}\n`, process.stderr));

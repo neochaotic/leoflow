@@ -322,9 +322,6 @@ func liteDbtBinAt(home, dagID string) string {
 	return ""
 }
 
-// liteDbtBin resolves liteDbtBinAt against the user's home, so a Lite compile parses
-// the manifest with the same dbt the task runs — not a system dbt the user may not
-// have (L1).
 // dbtParseBinAt picks the dbt that parses the manifest: the DAG's own per-DAG
 // venv dbt when this host has one, else whatever is on PATH.
 //

@@ -165,12 +165,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   uses. The executor is chosen by server configuration
   (`LEOFLOW_EXECUTOR_TYPE`), not by anything in the `dag.json`, so compile cannot
   infer it; it is now an explicit option that only Lite's subprocess run mode
-  sets. **Behavior change, in two places:** a bare `leoflow compile` now emits the
-  in-image relative path, and it no longer reaches for the per-DAG Lite venv's
-  `dbt` or generates a parse-time duckdb profile — that flag carried the same
-  conflation and moved with it, so a bare compile on a Lite host now needs `dbt`
-  on `PATH` and a resolvable profile, where it previously borrowed the venv's.
-  Lite itself is unaffected: `leoflow dev` sets the flag.
+  sets. **Behavior change:** a bare `leoflow compile` now emits the in-image
+  relative path, and no longer writes a parse-time duckdb profile — so a project
+  with no managed connection and no `profiles.yml` of its own fails the parse
+  instead of compiling against a stub for the wrong warehouse. Which `dbt`
+  parses the manifest is *not* part of this: that question does not depend on
+  where the DAG will run, so the per-DAG venv's `dbt` is preferred whenever the
+  host has one, image-bound compiles included. Lite itself is unaffected:
+  `leoflow dev` sets the flag.
 - **A hybrid DAG's dbt projects are baked into the image (#20).** `generatedDockerfile` branched on the top-level `dbt:` block and
   had no reference to `dbt_groups` at all: for a `dag.py` with dbt task groups —
   the authoring shape ADR 0043 defines — it COPYed only the DAG source. The

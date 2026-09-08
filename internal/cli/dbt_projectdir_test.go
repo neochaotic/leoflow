@@ -181,3 +181,59 @@ func TestDbtParseBinDoesNotDependOnTheRuntimeTarget(t *testing.T) {
 		t.Errorf("dbtParseBinAt with no home = %q, want \"dbt\"", got)
 	}
 }
+
+// TestManifestParseUsesTheVenvDbtEvenForAnImageBoundCompile locks the WIRING of
+// the parse-binary split, not the leaf. dbtParseBinAt has a table test above;
+// re-gating loadDbtManifest's call to it on the runtime target leaves that table
+// green, which is round one's lesson repeating one layer down: the leaf was
+// never wrong, the wiring was.
+//
+// It also cannot be reached through TestCompiledEntrypointsAreWiredForTheRightTarget,
+// because every case there pins `manifest:` and loadDbtManifest short-circuits
+// before choosing a binary. This one deliberately leaves the manifest unpinned.
+func TestManifestParseUsesTheVenvDbtEvenForAnImageBoundCompile(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".leoflow", "dev", "venvs", "sales", "bin")
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Exits 3 so the error is unmistakably THIS binary and not PATH's.
+	if err := os.WriteFile(filepath.Join(binDir, "dbt"), []byte("#!/bin/sh\nexit 3\n"), 0o755); err != nil { //nolint:gosec // a test stub must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir()) // no dbt on PATH at all
+
+	dir := t.TempDir()
+	project := filepath.Join(dir, "analytics")
+	if err := os.MkdirAll(project, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "dbt_project.yml"), []byte("name: a\nversion: \"1.0\"\nprofile: a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// No `manifest:` — this is the path that actually runs `dbt parse`.
+	yaml := "schema_version: \"1.0\"\ndag_id: sales\nowner: t\ndbt:\n  project: analytics\n  schedule: \"@daily\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	// local:false — an IMAGE-bound compile. It must still prefer the venv dbt:
+	// that is the DAG's own, pinned to the adapter its leoflow.yaml declares.
+	err := runCompile(cmd, dir, compileOptions{output: filepath.Join(dir, "dag.json"), image: "reg/s:v1", dagVersion: "v1"})
+	if err == nil {
+		t.Fatal("expected the stub dbt to fail the parse")
+	}
+	if strings.Contains(err.Error(), "not on PATH") {
+		t.Fatalf("an image-bound compile fell back to PATH instead of the DAG's own venv dbt: %v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 3") {
+		t.Errorf("error %q does not show the venv stub ran", err)
+	}
+}

@@ -21,9 +21,7 @@ no user-facing change (release-prep, chore, dependabot, docs-only) carries the
 2. **Prepare** — a `release/<tag>` branch: bump `helm/leoflow/Chart.yaml`
    `version`+`appVersion` in lockstep (ADR 0028), regenerate the chart README with
    `helm-docs`, and for a **GA** move `CHANGELOG [Unreleased]` to `[X.Y.Z] - <date>`
-   with a fresh empty `[Unreleased]` (an **rc** keeps `[Unreleased]`), . On a **GA** the
-   published docs root is repointed too, but **after the tag exists** — see
-   below. Run every
+   with a fresh empty `[Unreleased]` (an **rc** keeps `[Unreleased]`). Run every
    `scripts/check-*.sh` gate against the tag. One of them,
    `check-changelog-entry.sh`, is a pull-request gate with no question to ask
    when there is no pull request, so it reports `gate SKIP`; the cut log
@@ -34,9 +32,16 @@ no user-facing change (release-prep, chore, dependabot, docs-only) carries the
    hard-failing on them; then squash-merges.
 4. **Guard → tag** — verifies the Chart at the merge commit matches the version,
    then — behind an explicit **confirmation gate** — tags and pushes.
-5. **Watch** — follows the tag's release workflows to **PUBLISHED**, un-drafting +
-   re-running if the gate retracts on a flake (#862). Writes `.release-<tag>.log`.
-
+5. **Watch** — writes `.release-<tag>.log` the moment the tag is pushed, then
+   follows the tag's release workflows to **PUBLISHED**, un-drafting +
+   re-running if the gate retracts on a flake (#862).
+6. **Publish the docs root** (**GA** only, and only if step 5 reached
+   PUBLISHED) — opens a `docs/promote-<tag>` PR repointing
+   `website/scripts/ci/versions.json`, waits for it green and merges it. It runs
+   last on purpose: the Pages deploy checks the tag out, so it cannot ride in
+   the prepare commit; and the site root must never advertise a release whose
+   artifacts are red or still draft. A failure here costs the docs root and
+   nothing else — the release is already out and logged. See below.
 
 ## If the cut dies after the prepare PR merged
 
@@ -49,7 +54,17 @@ interrupted cut from an accidental re-cut of a released one.
 
     scripts/cut-release.sh <version> --resume
 
-picks up at the merge-commit gate. It refuses unless `main`'s `Chart.yaml`
+picks up at the merge-commit gate. Compose it with `--dry-run` first — it is
+the only preflight there is, it costs nothing, and it prints the sha it would
+tag plus every commit it is excluding, so you can check both by eye before
+anything is pushed:
+
+    scripts/cut-release.sh <version> --resume --dry-run
+
+`--resume` refuses a shallow clone outright: `git rev-list` is truncated there,
+and at depth 1 the walk below would silently return `main`'s tip. Run
+`git fetch --unshallow` first.
+ It refuses unless `main`'s `Chart.yaml`
 carries exactly the version being cut, which is what proves the prepare half
 completed, and it tags the commit that **introduced** that version rather than
 `main`'s tip — a chart version is a plateau, so anything merged since the

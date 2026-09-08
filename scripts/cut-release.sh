@@ -12,6 +12,8 @@
 #   scripts/cut-release.sh v0.4.4-rc.1            # interactive confirm before tag
 #   scripts/cut-release.sh 0.4.4 --yes            # non-interactive (CI/automation)
 #   scripts/cut-release.sh v0.4.4-rc.1 --dry-run  # preflight + print the plan, no mutation
+#   scripts/cut-release.sh <version> --resume     # finish a cut that died after
+#                                                 # the prepare PR merged
 #   scripts/cut-release.sh --self-test            # pure-logic cases, no network
 #
 # A `-rc.N` version keeps CHANGELOG `[Unreleased]`; a GA version (no `-rc`) moves
@@ -167,6 +169,143 @@ self_test() {
   # And the REST shape must not regress if anything ever feeds it in.
   _eq "$(run_verdict '[{"status":"completed","conclusion":null}]')" "PENDING" "a null conclusion is treated like an empty one"
 
+  # promote_docs_version rewrites the file that decides which ref the published
+  # docs root is built from. Getting it wrong ships the wrong docs for a
+  # release, silently.
+  local vt; vt="$(mktemp -d)"
+  _versions() { printf '%s' "$1" >"$vt/versions.json"; }
+  _promote() { ( ROOT="$vt" && mkdir -p "$vt/website/scripts/ci" && cp "$vt/versions.json" "$vt/website/scripts/ci/versions.json" && promote_docs_version "$1" >/dev/null && cat "$vt/website/scripts/ci/versions.json" ); }
+
+  _versions '{"versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false},{"id":"v1.0.0","ref":"v1.0.0","subpath":"v1.0.0","label":"v1.0.0","archived":false}]}'
+  local out; out="$(_promote v2.0.0)"
+  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .ref')" "v2.0.0" "docs root repointed at the new GA"
+  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="v1.0.0") | .archived')" "true" "the superseded GA is archived"
+  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .label')" "latest" "the dropdown label is left alone"
+
+  # The outgoing GA may have no archive leg yet — three of them do not, because
+  # no cut has ever run this. One must be created rather than silently skipped.
+  _versions '{"versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false},{"id":"dev","ref":"","subpath":"dev","label":"dev","archived":false}]}'
+  out="$(_promote v2.0.0)"
+  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="v1.0.0") | .subpath')" "v1.0.0" "an archive leg is created for an outgoing GA that had none"
+  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="dev") | .ref')" "" "the dev leg is untouched"
+  _eq "$(printf '%s' "$out" | jq -r '[.versions[].id] | join(",")')" "latest,v1.0.0,dev" "the new leg lands after latest"
+
+  # ...and after `latest` specifically, not after whatever happens to be first.
+  # The insertion used to be .[0:1] + [new] + .[1:], which is the same thing only
+  # while latest sits at index 0 — and nothing enforces that; the function only
+  # checks there is exactly one. With dev first, the archive leg landed BEFORE
+  # latest, and array order is the version dropdown's order
+  # (render-version-config.py emits one [[params.versions]] per entry, in order).
+  _versions '{"versions":[{"id":"dev","ref":"","subpath":"dev","label":"dev","archived":false},{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false}]}'
+  out="$(_promote v2.0.0)"
+  _eq "$(printf '%s' "$out" | jq -r '[.versions[].id] | join(",")')" "dev,latest,v1.0.0" "the new leg lands after latest even when latest is not first"
+
+  # Re-running a cut must not archive the version it is promoting.
+  _versions '{"versions":[{"id":"latest","ref":"v2.0.0","subpath":"","label":"latest","archived":false}]}'
+  out="$(_promote v2.0.0)"
+  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .ref')" "v2.0.0" "promoting the current root is a no-op"
+
+  # restore_docs_file has to undo a STAGED edit, not just a dirty worktree. The
+  # commit at the end of promote_docs_pr runs one line after `git add`, so when
+  # it fails the file is already in the index — and `git checkout -- <path>`
+  # restores the worktree FROM the index, making it a no-op there. The staged
+  # edit then rode the branch switch onto the operator's branch and failed the
+  # next cut's working-tree guard, while the comment claimed it could not.
+  local rf; rf="$(mktemp -d)"
+  (
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    mkdir -p "$rf/website/scripts/ci" && printf '{"v":1}\n' >"$rf/website/scripts/ci/versions.json"
+    cd "$rf" && git -c init.defaultBranch=main init -q . &&
+    git config user.email t@example.invalid && git config user.name tester &&
+    git add -A && git commit -qm base &&
+    printf '{"v":2}\n' >website/scripts/ci/versions.json && git add website/scripts/ci/versions.json
+  ) >/dev/null 2>&1 || { echo "  FAIL restore_docs_file: could not build the fixture"; fail=1; }
+  local rfroot="$ROOT"; ROOT="$rf"; restore_docs_file; ROOT="$rfroot"
+  _eq "$(cd "$rf" && git status --porcelain)" "" "restore_docs_file also drops a STAGED versions.json"
+  rm -rf "$rf"
+
+  # promote_docs_version must RETURN on a bad input, never die. It runs after
+  # `git push origin <tag>`, so an `exit` there takes the whole script with it
+  # and skips the provenance line, the entire release watch and the #862
+  # un-draft — leaving a pushed tag, a possibly-draft release nobody is
+  # watching, and no scripted way forward: re-invoking dies on "tag already
+  # exists", and so does --resume. That is the state this PR exists to remove.
+  #
+  # Called here NOT in a subshell, deliberately: the subshell in _promote is
+  # what makes the cases above blind to an exit, and the caller has no subshell.
+  # If this regresses, --self-test aborts here; the EXIT trap below names it.
+  local pdrc reached=0 oroot="$ROOT"
+  _versions '{"versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest"},{"id":"latest","ref":"v1.0.1","subpath":"","label":"latest"}]}'
+  mkdir -p "$vt/website/scripts/ci" && cp "$vt/versions.json" "$vt/website/scripts/ci/versions.json"
+  # >&3: the trap runs in the redirection context of the command that exited,
+  # and that command carries >/dev/null 2>&1 to keep its warn out of the
+  # transcript — so a plain echo here lands in /dev/null and the abort is silent
+  # again, which is the one thing the trap exists to prevent. Measured: zero
+  # lines without the fd, the FAIL line with it.
+  exec 3>&2
+  trap 'echo "  FAIL promote_docs_version exited (die) instead of returning — everything below here did not run" >&3' EXIT
+  ROOT="$vt"; promote_docs_version v2.0.0 >/dev/null 2>&1 && pdrc=0 || pdrc=$?
+  trap - EXIT
+  reached=1; ROOT="$oroot"
+  _eq "$pdrc" "1" "promote_docs_version returns 1 on a versions.json with two \`latest\` legs"
+  _eq "$reached" "1" "and its caller keeps running — a die here strands a pushed tag"
+
+  rm -f "$vt/website/scripts/ci/versions.json"
+  ROOT="$vt"; promote_docs_version v2.0.0 >/dev/null 2>&1 && pdrc=0 || pdrc=$?
+  reached=2; ROOT="$oroot"
+  _eq "$pdrc" "1" "promote_docs_version returns 1 when versions.json is missing"
+  _eq "$reached" "2" "and that path keeps running too"
+  rm -rf "$vt"
+
+  # resume_target is the only check between --resume and a tag on the wrong
+  # commit, so both answers are driven against a real repository.
+  # The fixture has commits AFTER the bump, because that is the shape that
+  # broke: a chart version is a plateau, so the tip passes the version check
+  # while being the wrong commit to tag.
+  local rt; rt="$(mktemp -d)"
+  (
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    cd "$rt" && git -c init.defaultBranch=main init -q . &&
+    git config user.email t@example.invalid && git config user.name tester &&
+    mkdir -p helm/leoflow && printf 'version: 9.9.8\nappVersion: "9.9.8"\n' >helm/leoflow/Chart.yaml &&
+    git add -A && git commit -qm base &&
+    printf 'version: 9.9.9\nappVersion: "9.9.9"\n' >helm/leoflow/Chart.yaml &&
+    git add -A && git commit -qm "release: prepare v9.9.9" &&
+    echo one >a.txt && git add -A && git commit -qm "unrelated one" &&
+    echo two >b.txt && git add -A && git commit -qm "unrelated two" &&
+    git update-ref refs/remotes/origin/main refs/heads/main
+  ) >/dev/null 2>&1 || { echo "  FAIL resume_target: could not build the fixture"; fail=1; }
+  local got rc want
+  want="$( cd "$rt" && git rev-parse HEAD~2 )"   # the prepare commit
+  got="$( cd "$rt" && resume_target 9.9.9 v9.9.9 2>/dev/null )" && rc=0 || rc=$?
+  _eq "$rc" "0" "resume_target accepts a main that carries the version being cut"
+  _eq "$got" "$want" "resume_target returns the commit that INTRODUCED the version, not the tip"
+  _eq "$( cd "$rt" && resume_target 9.9.9 v9.9.9 2>&1 >/dev/null | grep -c 'unrelated' )" "2" "it names the commits it is excluding"
+  got="$( cd "$rt" && resume_target 1.2.3 v1.2.3 2>&1 )" && rc=0 || rc=$?
+  _eq "$rc" "1" "resume_target refuses a main that carries a different version"
+  case "$got" in *"does not hold a prepared"*) echo "  ok   resume_target says why it refused" ;;
+    *) printf '  FAIL resume_target message\n    got: %q\n' "$got"; fail=1 ;; esac
+
+  # A shallow clone truncates rev-list, and the truncation is invisible. At
+  # depth 1 the shallow root has no parents, so it is not TREESAME to anything
+  # and gets listed even though it never touched Chart.yaml: intro lands on the
+  # tip, the "main advanced" warn never fires, and the exact bug the walk above
+  # exists to kill is back and silent. Deeper is worse, not better — a wrong sha
+  # delivered with a confident exclusion list. This is CI's own clone shape:
+  # actions/checkout defaults to fetch-depth 1 and the script-selftests job does
+  # not override it, and --resume is advertised for automation.
+  local sh; sh="$(mktemp -d)"
+  if ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+       git clone --depth=1 -q "file://$rt" "$sh/c" ) >/dev/null 2>&1; then
+    got="$( cd "$sh/c" && resume_target 9.9.9 v9.9.9 2>&1 )" && rc=0 || rc=$?
+    _eq "$rc" "1" "resume_target refuses a shallow clone instead of tagging the tip"
+    case "$got" in *shallow*) echo "  ok   it names the shallow clone as the reason" ;;
+      *) printf '  FAIL shallow-clone message\n    got: %q\n' "$got"; fail=1 ;; esac
+  else
+    echo "  FAIL resume_target: could not build the shallow fixture"; fail=1
+  fi
+  rm -rf "$sh" "$rt"
+
   # The release-prep PR must carry skip-changelog. Without it the changelog
   # guard fails the prepare PR itself — on an rc it deliberately leaves
   # [Unreleased] alone — and wait_sha_green correctly refuses to call that a
@@ -188,6 +327,82 @@ self_test() {
   fi
   _eq "$(printf '%s\n' "$argv" | grep -cx 'release/v9.9.9-rc.1')" "1" "prepare PR heads the release branch"
   rm -rf "$stubdir"
+
+  # promote_docs_pr had no coverage at all — every case above targets
+  # promote_docs_version or restore_docs_file. That is how a seven-call-site
+  # function shipped with one call site missing its argument and the whole gate
+  # green: the one that lost it strands the operator on docs/promote-<tag>, and
+  # nothing anywhere said so. Two invariants are locked, on BOTH the no-op and
+  # the happy path: the function returns you to the ref you were on with a clean
+  # tree, AND it did the work — because asserting only the restore passes when
+  # promote_docs_pr does nothing at all. Measured: make `git checkout -b` fail so
+  # the function returns at its first line, and a restore-only assertion still
+  # reports "operator-branch||0". So the gh stub records its argv and the origin
+  # is inspected: the no-op path must push nothing and open no PR, the happy path
+  # must push the repointed root and merge it.
+  #
+  # Driven against a bare repo as origin, a gh stub, and a wait_sha_green
+  # override, so it needs no network. Run in a subshell for the cd/PATH, and the
+  # rc is asserted so a die inside cannot pass for a pass.
+  local pp; pp="$(mktemp -d)"
+  _pp_fixture() { # <latest-ref>  -> builds origin + a clone, operator on their own branch
+    rm -rf "$pp/origin" "$pp/wt"; mkdir -p "$pp/origin"
+    (
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+      cd "$pp/origin" && git -c init.defaultBranch=main init -q --bare . &&
+      git clone -q "$pp/origin" "$pp/wt" && cd "$pp/wt" &&
+      git config user.email t@example.invalid && git config user.name tester &&
+      mkdir -p website/scripts/ci &&
+      printf '{"versions":[{"id":"latest","ref":"%s","subpath":"","label":"latest","archived":false}]}\n' "$1" \
+        >website/scripts/ci/versions.json &&
+      git add -A && git commit -qm base && git push -q origin main &&
+      git checkout -q -b operator-branch
+    ) >/dev/null 2>&1
+  }
+  _pp_run() { # -> echoes "<branch after>|<porcelain after>|<rc>"
+    local rc
+    (
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+      export PATH="$pp/stub:$PATH" REPO=o/r ROOT="$pp/wt" GH_ARGV="$pp/ghargv"
+      cd "$pp/wt" && wait_sha_green() { echo GREEN; } && promote_docs_pr v2.0.0
+    ) >/dev/null 2>&1
+    rc=$?
+    printf '%s|%s|%s' \
+      "$(cd "$pp/wt" && git rev-parse --abbrev-ref HEAD)" \
+      "$(cd "$pp/wt" && git status --porcelain)" "$rc"
+  }
+  mkdir -p "$pp/stub"
+  # The stub records its argv: without that, the cases below pass when
+  # promote_docs_pr does NOTHING. Measured — make `git checkout -b` fail and the
+  # function returns at its first line, yet both cases still report
+  # "operator-branch||0". The restore invariant is real but it is not the whole
+  # claim the comments make, so assert the work too.
+  printf '#!/bin/sh\nprintf "%%s " "$@" >>"$GH_ARGV"; printf "\\n" >>"$GH_ARGV"\ncase "$*" in *"--json number"*) echo 7 ;; esac\nexit 0\n' >"$pp/stub/gh"
+  chmod +x "$pp/stub/gh"
+
+  # The no-op path: main already serves the tag, so promote_docs_version writes
+  # nothing and the function returns early. This is the call site that lost its
+  # argument, and it is reachable exactly after the manual recovery RELEASING.md
+  # now documents.
+  _pp_fixture v2.0.0 || { echo "  FAIL promote_docs_pr: could not build the no-op fixture"; fail=1; }
+  rm -f "$pp/ghargv"
+  _eq "$(_pp_run)" "operator-branch||0" "promote_docs_pr returns you to your branch when the root already serves the tag"
+  _eq "$(cat "$pp/ghargv" 2>/dev/null)" "" "the no-op path opens no PR"
+  _eq "$(git -C "$pp/origin" rev-parse -q --verify refs/heads/docs/promote-v2.0.0 >/dev/null 2>&1 && echo pushed || echo no)" "no" \
+    "the no-op path pushes nothing"
+
+  # The happy path: the file changes, the PR is opened and merged through the
+  # stub, and gh's own branch switch never happens — so the restore is the only
+  # thing bringing HEAD back.
+  _pp_fixture v1.0.0 || { echo "  FAIL promote_docs_pr: could not build the happy-path fixture"; fail=1; }
+  rm -f "$pp/ghargv"
+  _eq "$(_pp_run)" "operator-branch||0" "promote_docs_pr returns you to your branch after promoting"
+  _eq "$(grep -c '^pr merge 7 ' "$pp/ghargv" 2>/dev/null)" "1" "the happy path actually merges the docs PR"
+  _eq "$(git -C "$pp/origin" rev-parse -q --verify refs/heads/docs/promote-v2.0.0 >/dev/null 2>&1 && echo pushed || echo no)" "pushed" \
+    "the happy path actually pushes the branch"
+  _eq "$(git -C "$pp/origin" show refs/heads/docs/promote-v2.0.0:website/scripts/ci/versions.json 2>/dev/null | jq -r '.versions[] | select(.id=="latest") | .ref')" \
+    "v2.0.0" "and what it pushed is the repointed root"
+  rm -rf "$pp"
 
   if [ "$fail" = 0 ]; then echo "self-test: PASS"; else echo "self-test: FAIL"; return 1; fi
 }
@@ -297,6 +512,177 @@ wait_sha_green() {
 
 # ---- prepare edits ---------------------------------------------------------
 
+# resume_target <chart-version> <tag>: echo the sha --resume should pick up at,
+# or die. Split out so --self-test can drive both answers against a throwaway
+# repository; it is the only thing standing between --resume and a tag on the
+# wrong commit.
+resume_target() { # <chart-version> <tag>
+  local cv="$1" tag="$2" tip on_tip c v intro=""
+  # Every answer below comes out of `git rev-list`, which a shallow clone
+  # truncates without saying so. At depth 1 the shallow root has no parents, so
+  # it is not TREESAME to anything and is listed even though it never touched
+  # Chart.yaml: intro lands on the tip, the "main advanced" warn never fires,
+  # and the plateau bug this function exists to kill comes back silent. Deeper
+  # is worse — a wrong sha with a confident exclusion list. Refuse instead:
+  # actions/checkout defaults to fetch-depth 1, and --resume is advertised for
+  # automation, so this is the clone shape CI would hand us.
+  [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ] ||
+    die "--resume: this is a shallow clone — rev-list is truncated here, so the walk would tag the wrong commit (at depth 1, silently the tip). Run: git fetch --unshallow"
+  tip="$(git rev-parse origin/main 2>/dev/null)" || die "--resume: cannot resolve origin/main"
+  on_tip="$(git show "${tip}:helm/leoflow/Chart.yaml" 2>/dev/null | awk '/^version:/{print $2; exit}')"
+  [ -n "$on_tip" ] || die "--resume: no Chart.yaml version at ${tip:0:8}"
+  [ "$on_tip" = "$cv" ] || die "--resume: main carries chart $on_tip, not $cv — main does not hold a prepared $tag."
+
+  # The tip is the WRONG answer, and it looks right. A chart version is a
+  # plateau, not an edge: it stays equal to cv for every commit from the prepare
+  # merge until the next cut, so anything merged in between passes the check.
+  # Measured on this repo: three commits carried 0.4.5-rc.2, and the tip was two
+  # unrelated PRs ahead of the prepare commit the tag belongs on. Walk back to
+  # the commit that INTRODUCED cv — the same sha the non-resume path produces.
+  for c in $(git rev-list origin/main -- helm/leoflow/Chart.yaml); do
+    v="$(git show "${c}:helm/leoflow/Chart.yaml" | awk '/^version:/{print $2; exit}')"
+    [ "$v" = "$cv" ] || break
+    intro="$c"
+  done
+  [ -n "$intro" ] || die "--resume: no commit on main introduces chart $cv"
+  if [ "$intro" != "$tip" ]; then
+    warn "resume: main advanced since $tag was prepared; tagging ${intro:0:8} and excluding:"
+    git log --oneline "$intro..origin/main" >&2
+  fi
+  printf '%s' "$intro"
+}
+
+# promote_docs_pr <tag>: land the docs promotion, AFTER the tag exists.
+#
+# This cannot ride in the prepare commit. versions.json lives under website/,
+# which is in website-deploy.yml's push path filter, so the prepare merge would
+# trigger a deploy whose `latest` leg checks out `ref: <tag>` — a tag the cut
+# has not created yet, because it tags only after main is green on that very
+# commit. The deploy fails, wait_sha_green sees red, and the cut dies at the
+# merge-commit gate with no scripted way out: --resume cannot help either,
+# since the sha stays red until the tag exists and the tag is what the red run
+# is blocking. The GA would be unpublishable.
+#
+# Post-tag also happens to be the only ordering that WORKS: the deploy reads
+# versions.json from the triggering ref (main), not from the tag, and a tag
+# push does not trigger that workflow at all. So the promotion must arrive as
+# its own push to main, after the tag is real.
+#
+# Failures here warn rather than die: the release is already published, and a
+# stale docs root is recoverable by re-running this by hand. Dying would tell
+# the operator the cut failed when it did not.
+# restore_docs_file: put versions.json back to HEAD, staged edit included.
+#
+# `git checkout -- <path>` restores the worktree from the INDEX, so the moment
+# `git add` has run it is a no-op: a failed commit right after it left the file
+# STAGED, the branch switch carried it to the operator's branch, and the next
+# cut died on "working tree not clean". Split out from promote_docs_pr so the
+# self-test can drive it — the hole was in a closure no test could reach.
+restore_docs_file() {
+  git -C "$ROOT" restore --staged --worktree -- website/scripts/ci/versions.json 2>/dev/null || true
+}
+
+promote_docs_pr() { # <tag>
+  local tag="$1" pr orig
+  local branch="docs/promote-$tag"
+  # Restore whatever ref we found, not `main`: from a git worktree — which is
+  # how this script is developed, and the cut only WARNS when HEAD is not main —
+  # `git checkout main` fails rc=128 ("already used by worktree at ..."), and
+  # `2>/dev/null` swallows the reason. Every early return goes through _restore,
+  # which also drops an uncommitted versions.json: leaving that behind fails the
+  # NEXT cut at its working-tree guard.
+  orig="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+  # Takes the ref as an argument: bash has no local functions, so _restore
+  # outlives this one, while `orig` (local) does not. Reading $orig from the
+  # leaked copy would be an unbound-variable exit under `set -u` — a shell-
+  # killing exit living past the tag push, which is the one thing this file
+  # may not have.
+  _restore() { # <ref-to-return-to>
+    local o="${1:-}"
+    restore_docs_file
+    # Never silent: a missing argument used to strand the operator on the docs
+    # branch with no trace. That is how the call site below went unconverted
+    # through a green gate — six of seven passed "$orig" and nothing said so.
+    [ -n "$o" ] || { warn "docs promotion: _restore got no ref — still on $(git rev-parse --abbrev-ref HEAD 2>/dev/null)"; return 0; }
+    git checkout -q "$o" 2>/dev/null || git checkout -q --detach "$o" 2>/dev/null || true
+  }
+  git checkout -q -b "$branch" origin/main 2>/dev/null || { warn "docs promotion: could not create $branch — publish the docs root by hand"; return 0; }
+  promote_docs_version "$tag" || { warn "docs promotion skipped"; _restore "$orig"; return 0; }
+  # -C "$ROOT": promote_docs_version writes an absolute path, so a bare relative
+  # pathspec stages nothing whenever cwd is not the repo root — and the
+  # --cached --quiet below is then TRUE, so the failure came back as the log
+  # line "docs: root already serves <tag>". A flat lie, return 0, and a dirty
+  # tree left behind. Check the exit.
+  git -C "$ROOT" add website/scripts/ci/versions.json || { warn "docs promotion: could not stage versions.json"; _restore "$orig"; return 0; }
+  if git -C "$ROOT" diff --cached --quiet -- website/scripts/ci/versions.json; then log "docs: root already serves $tag"; _restore "$orig"; return 0; fi
+  git -C "$ROOT" commit -q -m "docs: publish $tag at the documentation root" -- website/scripts/ci/versions.json || { warn "docs promotion: commit failed"; _restore "$orig"; return 0; }
+  git push -u origin "$branch" -q || { warn "docs promotion: push failed — open the PR by hand from $branch"; _restore "$orig"; return 0; }
+  gh pr create --repo "$REPO" --base main --head "$branch" --label skip-changelog \
+    --title "docs: publish $tag at the documentation root" \
+    --body "Repoints website/scripts/ci/versions.json's \`latest\` leg at $tag and archives the one it replaces. Opened by cut-release.sh after the tag was pushed — the deploy checks the tag out, so this cannot ride in the prepare commit." >/dev/null || { warn "docs promotion: gh pr create failed"; _restore "$orig"; return 0; }
+  pr="$(gh pr view "$branch" --json number -q .number 2>/dev/null)"
+  log "docs promotion PR #$pr — waiting for CI"
+  # Its own budget: wait_sha_green restarts the clock per call, so the default
+  # 5400s would pin the operator's terminal for 90 minutes on a docs PR after
+  # the release is already out. ci.yaml has no path filter, so this one-file PR
+  # still drags the full suite — 30 minutes is generous for it. An operator who
+  # exports CUT_WAIT_DEADLINE overrides this default and gets their own value,
+  # whether it is larger or smaller.
+  if [ "$(CUT_WAIT_DEADLINE="${CUT_DOCS_WAIT_DEADLINE:-${CUT_WAIT_DEADLINE:-1800}}" wait_sha_green "$(git rev-parse "$branch")")" = GREEN ]; then
+    gh pr merge "$pr" --repo "$REPO" --squash --delete-branch >/dev/null 2>&1 &&
+      log "docs root now serves $tag (PR #$pr)" || warn "docs promotion PR #$pr is green but did not merge — merge it by hand"
+  else
+    warn "docs promotion PR #$pr is not green — the release is published, but the docs root still serves the previous GA. Fix and merge #$pr."
+  fi
+  _restore "$orig"
+}
+
+# promote_docs_version <tag>: point the published docs root at the GA being cut
+# and archive the one it replaces.
+#
+# website/scripts/ci/versions.json decides which ref each leg of the Pages tree
+# is built from, and its `latest` entry with subpath "" is the SITE ROOT. Its
+# own header says a GA "touches ONLY this file" — and no cut has ever touched
+# it: it has one commit in its history (#817), so v0.4.2, v0.4.3 and v0.4.4 all
+# shipped with the root still built from v0.4.1. Anyone reading the docs gets
+# the wrong version, and a link to an ADR added after v0.4.1 is a live 404 at
+# the root while resolving fine under /dev/ — which is how #953's dead links
+# would have recurred one ADR number later.
+#
+# A procedure written in a comment that no script performs is a procedure that
+# does not happen, so the cut performs it. rc cuts do not: a prerelease is not
+# what the docs root should serve.
+#
+# It RETURNS on every failure and never dies, because of WHERE it runs: past
+# `git push origin <tag>`. `die` is `exit 1`, and an exit inside a function
+# called in the current shell takes the whole script with it — the caller's
+# `|| warn` guard is not reached, it is dead code. That would skip the release
+# watch and #862's un-draft, and strand the operator on a pushed tag that
+# neither a re-invocation nor --resume can get past ("tag already exists"):
+# exactly the no-scripted-way-out state this file was changed to remove.
+promote_docs_version() { # <tag>
+  local tag="$1" f="$ROOT/website/scripts/ci/versions.json" prev tmp
+  [ -f "$f" ] || { warn "versions.json not found at $f"; return 1; }
+  jq -e '[.versions[]? | select(.id=="latest")] | length == 1' "$f" >/dev/null 2>&1 ||
+    { warn "versions.json must have exactly one \`latest\` entry"; return 1; }
+  prev="$(jq -r '(.versions[] | select(.id=="latest") | .ref) // empty' "$f")"
+  [ -n "$prev" ] || { warn "versions.json has no \`latest\` entry to repoint"; return 1; }
+  if [ "$prev" = "$tag" ]; then log "docs: latest already $tag"; return 0; fi
+  tmp="$(mktemp)"
+  jq --arg tag "$tag" --arg prev "$prev" '
+    .versions |= (
+      map(if .id == "latest" then .ref = $tag else . end)
+      | if any(.[]; .id == $prev)
+        then map(if .id == $prev then .archived = true else . end)
+        else ( ([.[] | .id] | index("latest")) + 1 ) as $at
+             | .[0:$at] + [{id: $prev, ref: $prev, subpath: $prev, label: $prev, archived: true}] + .[$at:]
+        end
+    )' "$f" >"$tmp" || { rm -f "$tmp"; warn "rewriting versions.json failed"; return 1; }
+  mv "$tmp" "$f" || { rm -f "$tmp"; warn "could not replace versions.json"; return 1; }
+  chmod 644 "$f" 2>/dev/null || true
+  log "docs: root now built from $tag (archived $prev)"
+}
+
 read_chart_version() { awk '/^version:/{print $2; exit}' "$CHART"; }
 
 bump_chart() { # <chart_version>
@@ -373,17 +759,18 @@ main() {
   # operator's shell or CI env can never silently bypass confirm_tag (M1). Only
   # --yes, parsed below, may set it.
   ASSUME_YES=0
-  local arg version="" dry=0
+  local arg version="" dry=0 resume=0
   for arg in "$@"; do
     case "$arg" in
       --self-test) self_test; exit $? ;;
       --dry-run)   dry=1 ;;
       --yes)       ASSUME_YES=1 ;;
+      --resume)    resume=1 ;;
       -*)          die "unknown flag: $arg" ;;
       *)           version="$arg" ;;
     esac
   done
-  [ -n "$version" ] || die "usage: cut-release.sh <version> [--dry-run] [--yes]"
+  [ -n "$version" ] || die "usage: cut-release.sh <version> [--dry-run] [--yes] [--resume]"
 
   version="${version#v}"
   valid_version "$version" || die "invalid version '$version' (want X.Y.Z or X.Y.Z-rc.N)"
@@ -393,7 +780,20 @@ main() {
   for t in gh jq git helm-docs; do command -v "$t" >/dev/null || die "missing tool: $t"; done
 
   log "cutting $tag (chart $cv, $(is_rc "$version" && echo prerelease || echo GA))"
+  # --tags explicitly: `git fetch origin main` does not follow tags, so a local
+  # check alone passes in a clone that never saw a tag pushed from elsewhere —
+  # which is exactly the --resume situation.
+  git fetch origin --tags -q >/dev/null 2>&1 || warn "could not refresh tags — the 'tag already exists' check below is local-only"
   git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1 && die "tag $tag already exists"
+
+  if [ "$dry" = 1 ] && [ "$resume" = 1 ]; then
+    log "DRY RUN (--resume) — no tag, no push:"
+    git fetch origin main -q || die "cannot reach origin"
+    local rsha; rsha="$(resume_target "$cv" "$tag")" || exit 1
+    printf '  would tag:     %s at %s\n  chart there:   %s\n  skipped:       prepare, gates, PR, merge (already on main)\n' \
+      "$tag" "${rsha:0:8}" "$cv"
+    exit 0
+  fi
 
   if [ "$dry" = 1 ]; then
     log "DRY RUN — plan only, no branch/commit/PR/tag:"
@@ -406,8 +806,30 @@ main() {
 
   if ! git diff --quiet || ! git diff --cached --quiet; then die "working tree not clean"; fi
   [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || warn "not on main (on $(git rev-parse --abbrev-ref HEAD))"
-  git fetch origin main -q
+  # Unchecked, a stale origin/main feeds both the re-cut guard and the branch
+  # this cut is built on. The --resume path already dies here; so should this.
+  git fetch origin main -q || die "cannot reach origin"
 
+  local sha
+  if [ "$resume" = 1 ]; then
+    # A cut is a transaction with an irreversible middle: by the time it waits
+    # on the merge commit, the prepare PR is merged, main carries the bump, and
+    # gh deleted release/<tag>. If it dies there — #975 refusing to tag on a run
+    # that did not finish is the way it dies — re-invoking hits the re-cut guard
+    # below ("chart on main is already ..."), which cannot tell an interrupted
+    # cut from an accidental re-cut of a released version. That left tagging by
+    # hand as the only way forward, which is the manual step this script exists
+    # to remove. It happened on v0.4.5-rc.2.
+    #
+    # The safety property that makes resuming safe already exists in the normal
+    # path: main's Chart.yaml at the sha must carry exactly the version being
+    # cut. If it does, the prepare half genuinely completed and only the tag is
+    # missing. If it does not, this is not an interrupted cut and --resume is
+    # the wrong tool. There is deliberately no override for that check.
+    git fetch origin main -q || die "--resume: cannot reach origin — refusing to judge main from a stale clone"
+    sha="$(resume_target "$cv" "$tag")" || exit 1
+    log "resume: main already carries $cv at ${sha:0:8}; picking up at the merge-commit gate"
+  else
   # Re-cut guard: the target version must differ from what main already carries,
   # so `--yes` with a fat-fingered or already-released version can't silently
   # re-cut the current line.
@@ -443,8 +865,10 @@ main() {
   gh pr merge "$pr" --repo "$REPO" --squash --delete-branch --subject "$title" --body "$body" >/dev/null || die "merge failed"
   log "PR #$pr merged"
   sleep 8; git fetch origin main -q
-  local sha; sha="$(git rev-parse origin/main)"
+  sha="$(git rev-parse origin/main)"
   [ "$(git show "$sha:helm/leoflow/Chart.yaml" | awk '/^version:/{print $2;exit}')" = "$cv" ] || die "guard: Chart at $sha is not $cv"
+  fi
+
   log "main CI on merge commit ${sha:0:8}"
   [ "$(wait_sha_green "$sha")" = GREEN ] || die "main red on the merge commit — NOT tagging"
 
@@ -452,11 +876,16 @@ main() {
   git tag -a "$tag" "$sha" -m "leoflow $tag" || die "creating tag $tag failed"
   git push origin "$tag" || die "pushing tag $tag failed — the tag is local only; 'git push origin $tag' when ready"
   log "tagged $tag @ ${sha:0:8}"
+  # Provenance goes down the instant the push returns, never behind a fallible
+  # step. The docs promotion used to run here and can spend half an hour on a
+  # PR, so a failure there cost the .release-<tag>.log line for an irreversible
+  # act AND starved the release watch below — including #862's un-draft, which
+  # is what lets a retracted draft release recover on a rerun.
   { echo "tag=$tag sha=$sha date=$(date -u +%FT%TZ) kind=$(is_rc "$version" && echo rc || echo ga)"; } >>"$logf"
 
   log "release workflows"
   sleep 15
-  local reruns=0 j verdict failed rid isflake rstart=$SECONDS
+  local reruns=0 j verdict failed rid isflake published=0 rstart=$SECONDS
   local rdeadline="${CUT_WAIT_DEADLINE:-5400}"
   while :; do
     if [ $((SECONDS - rstart)) -gt "$rdeadline" ]; then
@@ -471,7 +900,7 @@ main() {
     case "$verdict" in
       NONE)     sleep 20; continue ;;
       PENDING)  sleep 45; continue ;;
-      GREEN)    log "$tag PUBLISHED"; break ;;
+      GREEN)    log "$tag PUBLISHED"; published=1; break ;;
       BLOCKED*) warn "a $tag release run did not finish (${verdict#BLOCKED }) — the tag is already pushed, so inspect before announcing: gh run list --branch $tag"
                 break ;;
       FAILED)   ;; # falls through to the flake path below
@@ -492,6 +921,23 @@ main() {
   done
   gh release view "$tag" --repo "$REPO" --json tagName,isDraft,isPrerelease,url \
     -q '"release \(.tagName) draft=\(.isDraft) prerelease=\(.isPrerelease) \(.url)"' 2>/dev/null | tee -a "$logf"
+
+  # The docs root is repointed LAST, and only at a release that actually
+  # published: the site root must never advertise a tag whose artifacts are red
+  # or still draft. Everything above this line is already recorded, so a failure
+  # here costs the docs root and nothing else.
+  #
+  # `published` tracks the workflow verdict, not `isDraft`. Those coincide only
+  # because release.yaml's retract step ends in `exit 1`, so a drafted release
+  # is always a red run, and its green arm un-drafts. That invariant lives in
+  # another file — if that `exit 1` ever goes, check this.
+  if ! is_rc "$version"; then
+    if [ "${published:-0}" = 1 ]; then
+      promote_docs_pr "$tag"
+    else
+      warn "docs root NOT promoted: the $tag release workflows never reached PUBLISHED, and the root must not point at a release with no artifacts. The tag is pushed — once the release is good, promote by hand (RELEASING.md)."
+    fi
+  fi
   log "done — log at $logf"
 }
 

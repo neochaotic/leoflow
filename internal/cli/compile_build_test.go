@@ -285,9 +285,11 @@ func TestGeneratedDockerfileMixedCopiesDagSourceAndEveryGroupProject(t *testing.
 			t.Errorf("generatedDockerfile() missing %q, got:\n%s", want, df)
 		}
 	}
-	// The USER drop must stay last, because PodSecurity's runAsNonRoot admits the
-	// pod on the final USER (#852). Ownership is not the reason — COPY lands
-	// uid=0 gid=0 whatever USER is active, measured against a real build — but
+	// The USER drop must stay last, because the kubelet resolves the image's
+	// final USER when a task pod sets runAsNonRoot with no runAsUser, and a root
+	// image fails CreateContainerConfigError (#852). Ownership is not the reason
+	// — COPY lands uid=0 gid=0 whatever USER is active, measured on a real build
+	// under both BuildKit and the classic builder — but
 	// the structure is still worth locking: a COPY emitted below the drop would
 	// mean the drop is no longer last.
 	drop := strings.LastIndex(df, "USER 65532:65532")

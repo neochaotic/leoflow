@@ -17,8 +17,10 @@ import (
 //
 // Sorted rather than ranged: DbtGroups is a map and Go randomizes map
 // iteration, so emitting in range order would give a different Dockerfile on
-// every compile — thrashing the layer cache and breaking the byte-for-byte
-// reproducibility ADR 0003 promises. Deduplicated because two groups may cover
+// every compile — a different image digest from an unchanged project, and a
+// cold layer cache every time. (ADR 0003 argues for per-DAG images; it says
+// nothing about reproducibility, so this is the engineering reason, not a
+// citation.) Deduplicated because two groups may cover
 // one project with different granularity or selectors, and a repeated COPY is a
 // wasted layer that reads like a bug in a diff.
 //
@@ -138,8 +140,12 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 	// `--user` install whose console scripts (e.g. `dbt`) land in ~/.local/bin, which
 	// is not on PATH — so a synthesized dbt image would fail `dbt: command not found`.
 	// Install as root (system site → /usr/local/bin on PATH), then drop back to the
-	// non-root runtime USER as the LAST instruction, so PodSecurity's runAsNonRoot
-	// admits the pod (#852).
+	// non-root runtime USER as the LAST instruction, so the image's final USER is a
+	// numeric non-root UID (#852). That is what the KUBELET resolves at container
+	// creation when a task pod sets runAsNonRoot with no runAsUser — buildSecurityContext
+	// sets exactly that pair — and a root image fails CreateContainerConfigError,
+	// which reconcile.go matches by name. PodSecurity admission never reads the
+	// image; it only checks the PodSpec.
 	//
 	// The drop being last is not what makes the copied source read-only to the
 	// task. COPY without --chown lands uid=0 gid=0 whatever USER is active —

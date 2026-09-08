@@ -110,3 +110,76 @@ func TestValidateAcceptsUsableDbtManifest(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateDbtGroupsProjectRejectsEscapingAndAbsolutePaths extends the ADR
+// 0042 guard to ADR 0043's task groups. It covered cfg.Dbt only and returned
+// early when that was nil — which is every hybrid DAG — so dbt_groups paths fed
+// the same filepath.Join chain and the same Docker build context unguarded.
+//
+// The one that is not merely confusing: "../shared" clamps to a sibling of the
+// DAG directory in the build context and normalizes to /home/shared in the
+// image, so when that directory happens to exist the build goes GREEN and bakes
+// a directory nobody named — while Lite resolves the real sibling. Lite and Pro
+// then run the same DAG against different data, silently.
+func TestValidateDbtGroupsProjectRejectsEscapingAndAbsolutePaths(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		group *DbtConfig
+		field string
+	}{
+		{"escaping project", &DbtConfig{Project: "../shared"}, "dbt_groups.transform.project"},
+		{"absolute project", &DbtConfig{Project: "/opt/dbt"}, "dbt_groups.transform.project"},
+		{"escaping manifest", &DbtConfig{Project: "t", Manifest: "../x/manifest.json"}, "dbt_groups.transform.manifest"},
+		{"absolute manifest", &DbtConfig{Project: "t", Manifest: "/tmp/manifest.json"}, "dbt_groups.transform.manifest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &LeoflowConfig{DbtGroups: map[string]*DbtConfig{"transform": tc.group}}
+			err := cfg.validateDbtProject()
+			if !errors.Is(err, ErrInvalidDbtProject) {
+				t.Fatalf("validateDbtProject() = %v, want ErrInvalidDbtProject", err)
+			}
+			// The message must name the key, not just the value: a config with
+			// several groups is otherwise a hunt.
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("error %q does not name %q", err, tc.field)
+			}
+		})
+	}
+}
+
+// TestValidateDbtGroupsErrorIsDeterministic: DbtGroups is a map, so reporting
+// the first offender found by range order would name a different group on
+// different runs — an error message that changes between identical compiles.
+func TestValidateDbtGroupsErrorIsDeterministic(t *testing.T) {
+	cfg := &LeoflowConfig{DbtGroups: map[string]*DbtConfig{
+		"zulu": {Project: "../z"}, "alpha": {Project: "../a"},
+		"mike": {Project: "../m"}, "bravo": {Project: "../b"},
+	}}
+	first := cfg.validateDbtProject()
+	if first == nil {
+		t.Fatal("validateDbtProject() = nil, want an error")
+	}
+	for range 50 {
+		if got := cfg.validateDbtProject(); got.Error() != first.Error() {
+			t.Fatalf("error text is not stable: %q then %q", first, got)
+		}
+	}
+	if !strings.Contains(first.Error(), "dbt_groups.alpha.project") {
+		t.Errorf("want the lowest-sorted group reported first, got %q", first)
+	}
+}
+
+// TestValidateDbtGroupsAcceptsContainedPaths is the bidirectional half: the
+// guard must not start refusing the shapes the docs teach.
+func TestValidateDbtGroupsAcceptsContainedPaths(t *testing.T) {
+	cfg := &LeoflowConfig{DbtGroups: map[string]*DbtConfig{
+		"transform": {Project: "./transform"},
+		"marketing": {Project: "marketing", Manifest: "target/manifest.json"},
+		"root":      {Project: "."},
+		"empty":     {},
+		"nil":       nil,
+	}}
+	if err := cfg.validateDbtProject(); err != nil {
+		t.Errorf("validateDbtProject() = %v, want nil for contained paths", err)
+	}
+}

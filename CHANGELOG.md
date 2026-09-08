@@ -130,8 +130,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **A hybrid DAG's dbt projects are baked into the image, so its dbt tasks can
-  run (#20).** `generatedDockerfile` branched on the top-level `dbt:` block and
+- **A hybrid DAG's dbt projects are baked into the image (#20).** `generatedDockerfile` branched on the top-level `dbt:` block and
   had no reference to `dbt_groups` at all: for a `dag.py` with dbt task groups —
   the authoring shape ADR 0043 defines — it COPYed only the DAG source. The
   group's tasks then ran `dbt --project-dir <project>` from WORKDIR
@@ -141,10 +140,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the gap only appeared once something built. Both the DAG source and every
   group's project are COPYed now, deduplicated and **sorted**: `dbt_groups` is a
   map and Go randomizes map iteration, so emitting in range order would give a
-  different Dockerfile per compile and break the byte-for-byte reproducibility
-  of ADR 0003. `project: "."` collapses to a single `COPY . /home/leoflow/`,
+  different image digest from an unchanged project, and a cold layer cache every
+  time. `project: "."` collapses to a single `COPY . /home/leoflow/`,
   matching the fact that no `--project-dir` is emitted for that value. The
   `leoflow dev` cluster path had the identical gap and gets the identical fix.
+  Paths under `dbt_groups` are validated the same way `dbt.project` already was:
+  the guard for escaping and absolute paths returned early whenever the
+  top-level `dbt:` block was absent — which is every hybrid DAG — so a
+  `../shared` that happened to exist built **green** against a directory nobody
+  named, while Lite resolved the real sibling. Two paths still fail after this,
+  and are tracked separately: `compile` without `--build` (and `deploy
+  --skip-build`) bakes an absolute host path into the dbt entrypoint, and a
+  group with no `connection:` cannot resolve a project-baked `profiles.yml`.
   Also corrected while in the file: the `#852` comment claimed the source COPY
   had to sit above the `USER` drop to land root-owned. Measured against a real
   build, `COPY` lands `uid=0 gid=0` whatever `USER` is active; what the ordering

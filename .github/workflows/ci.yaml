@@ -1073,6 +1073,24 @@ jobs:
         run: bash scripts/check-script-selftests.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # The Lite cold-start release gate pre-pulls the Postgres image by tag, and
+  # that job has no checkout (it installs from the published release), so the
+  # tag is duplicated in release.yaml. Checked here rather than only in the
+  # cut's own pre-flight: a bump to docker-compose.dev.yaml would otherwise go
+  # green through all of CI and surface mid-release.
+  # ─────────────────────────────────────────────────────────────────────
+  lite-prepull-tag:
+    name: Lite pre-pull tag matches the compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+      - name: Check the Lite pre-pull tag
+        run: bash scripts/check-lite-prepull-matches-compose.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   stale-deploy-path:
     name: No stale legacy deploy path
     runs-on: ubuntu-latest

@@ -33,8 +33,8 @@ done
 
 # A rename or a lost self_test() would otherwise shrink this gate to nothing
 # while still exiting 0 — the same silent-shrink hole run_gates guards against.
-if [ "$found" -lt "${MIN_SELFTESTS:-3}" ]; then
-	echo "FAIL: found only $found self-test(s), expected at least ${MIN_SELFTESTS:-3} — did a script lose its self_test()?" >&2
+if [ "$found" -lt "${MIN_SELFTESTS:-4}" ]; then
+	echo "FAIL: found only $found self-test(s), expected at least ${MIN_SELFTESTS:-4} — did a script lose its self_test()?" >&2
 	exit 1
 fi
 [ "$failed" -eq 0 ] || exit 1

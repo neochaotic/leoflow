@@ -190,6 +190,16 @@ self_test() {
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="dev") | .ref')" "" "the dev leg is untouched"
   _eq "$(printf '%s' "$out" | jq -r '[.versions[].id] | join(",")')" "latest,v1.0.0,dev" "the new leg lands after latest"
 
+  # ...and after `latest` specifically, not after whatever happens to be first.
+  # The insertion used to be .[0:1] + [new] + .[1:], which is the same thing only
+  # while latest sits at index 0 — and nothing enforces that; the function only
+  # checks there is exactly one. With dev first, the archive leg landed BEFORE
+  # latest, and array order is the version dropdown's order
+  # (render-version-config.py emits one [[params.versions]] per entry, in order).
+  _versions '{"versions":[{"id":"dev","ref":"","subpath":"dev","label":"dev","archived":false},{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false}]}'
+  out="$(_promote v2.0.0)"
+  _eq "$(printf '%s' "$out" | jq -r '[.versions[].id] | join(",")')" "dev,latest,v1.0.0" "the new leg lands after latest even when latest is not first"
+
   # Re-running a cut must not archive the version it is promoting.
   _versions '{"versions":[{"id":"latest","ref":"v2.0.0","subpath":"","label":"latest","archived":false}]}'
   out="$(_promote v2.0.0)"
@@ -322,9 +332,14 @@ self_test() {
   # promote_docs_version or restore_docs_file. That is how a seven-call-site
   # function shipped with one call site missing its argument and the whole gate
   # green: the one that lost it strands the operator on docs/promote-<tag>, and
-  # nothing anywhere said so. The invariant worth locking is the cheap one — the
-  # function returns you to the ref you were on, with a clean tree, on BOTH the
-  # no-op and the happy path.
+  # nothing anywhere said so. Two invariants are locked, on BOTH the no-op and
+  # the happy path: the function returns you to the ref you were on with a clean
+  # tree, AND it did the work — because asserting only the restore passes when
+  # promote_docs_pr does nothing at all. Measured: make `git checkout -b` fail so
+  # the function returns at its first line, and a restore-only assertion still
+  # reports "operator-branch||0". So the gh stub records its argv and the origin
+  # is inspected: the no-op path must push nothing and open no PR, the happy path
+  # must push the repointed root and merge it.
   #
   # Driven against a bare repo as origin, a gh stub, and a wait_sha_green
   # override, so it needs no network. Run in a subshell for the cd/PATH, and the
@@ -348,7 +363,7 @@ self_test() {
     local rc
     (
       export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-      export PATH="$pp/stub:$PATH" REPO=o/r ROOT="$pp/wt"
+      export PATH="$pp/stub:$PATH" REPO=o/r ROOT="$pp/wt" GH_ARGV="$pp/ghargv"
       cd "$pp/wt" && wait_sha_green() { echo GREEN; } && promote_docs_pr v2.0.0
     ) >/dev/null 2>&1
     rc=$?
@@ -357,7 +372,12 @@ self_test() {
       "$(cd "$pp/wt" && git status --porcelain)" "$rc"
   }
   mkdir -p "$pp/stub"
-  printf '#!/bin/sh\ncase "$*" in *"--json number"*) echo 7 ;; esac\nexit 0\n' >"$pp/stub/gh"
+  # The stub records its argv: without that, the cases below pass when
+  # promote_docs_pr does NOTHING. Measured — make `git checkout -b` fail and the
+  # function returns at its first line, yet both cases still report
+  # "operator-branch||0". The restore invariant is real but it is not the whole
+  # claim the comments make, so assert the work too.
+  printf '#!/bin/sh\nprintf "%%s " "$@" >>"$GH_ARGV"; printf "\\n" >>"$GH_ARGV"\ncase "$*" in *"--json number"*) echo 7 ;; esac\nexit 0\n' >"$pp/stub/gh"
   chmod +x "$pp/stub/gh"
 
   # The no-op path: main already serves the tag, so promote_docs_version writes
@@ -365,13 +385,23 @@ self_test() {
   # argument, and it is reachable exactly after the manual recovery RELEASING.md
   # now documents.
   _pp_fixture v2.0.0 || { echo "  FAIL promote_docs_pr: could not build the no-op fixture"; fail=1; }
+  rm -f "$pp/ghargv"
   _eq "$(_pp_run)" "operator-branch||0" "promote_docs_pr returns you to your branch when the root already serves the tag"
+  _eq "$(cat "$pp/ghargv" 2>/dev/null)" "" "the no-op path opens no PR"
+  _eq "$(git -C "$pp/origin" rev-parse -q --verify refs/heads/docs/promote-v2.0.0 >/dev/null 2>&1 && echo pushed || echo no)" "no" \
+    "the no-op path pushes nothing"
 
   # The happy path: the file changes, the PR is opened and merged through the
   # stub, and gh's own branch switch never happens — so the restore is the only
   # thing bringing HEAD back.
   _pp_fixture v1.0.0 || { echo "  FAIL promote_docs_pr: could not build the happy-path fixture"; fail=1; }
+  rm -f "$pp/ghargv"
   _eq "$(_pp_run)" "operator-branch||0" "promote_docs_pr returns you to your branch after promoting"
+  _eq "$(grep -c '^pr merge 7 ' "$pp/ghargv" 2>/dev/null)" "1" "the happy path actually merges the docs PR"
+  _eq "$(git -C "$pp/origin" rev-parse -q --verify refs/heads/docs/promote-v2.0.0 >/dev/null 2>&1 && echo pushed || echo no)" "pushed" \
+    "the happy path actually pushes the branch"
+  _eq "$(git -C "$pp/origin" show refs/heads/docs/promote-v2.0.0:website/scripts/ci/versions.json 2>/dev/null | jq -r '.versions[] | select(.id=="latest") | .ref')" \
+    "v2.0.0" "and what it pushed is the repointed root"
   rm -rf "$pp"
 
   if [ "$fail" = 0 ]; then echo "self-test: PASS"; else echo "self-test: FAIL"; return 1; fi
@@ -596,7 +626,8 @@ promote_docs_pr() { # <tag>
   # 5400s would pin the operator's terminal for 90 minutes on a docs PR after
   # the release is already out. ci.yaml has no path filter, so this one-file PR
   # still drags the full suite — 30 minutes is generous for it. An operator who
-  # exports CUT_WAIT_DEADLINE overrides this floor and gets their own value.
+  # exports CUT_WAIT_DEADLINE overrides this default and gets their own value,
+  # whether it is larger or smaller.
   if [ "$(CUT_WAIT_DEADLINE="${CUT_DOCS_WAIT_DEADLINE:-${CUT_WAIT_DEADLINE:-1800}}" wait_sha_green "$(git rev-parse "$branch")")" = GREEN ]; then
     gh pr merge "$pr" --repo "$REPO" --squash --delete-branch >/dev/null 2>&1 &&
       log "docs root now serves $tag (PR #$pr)" || warn "docs promotion PR #$pr is green but did not merge — merge it by hand"
@@ -643,7 +674,8 @@ promote_docs_version() { # <tag>
       map(if .id == "latest" then .ref = $tag else . end)
       | if any(.[]; .id == $prev)
         then map(if .id == $prev then .archived = true else . end)
-        else .[0:1] + [{id: $prev, ref: $prev, subpath: $prev, label: $prev, archived: true}] + .[1:]
+        else ( ([.[] | .id] | index("latest")) + 1 ) as $at
+             | .[0:$at] + [{id: $prev, ref: $prev, subpath: $prev, label: $prev, archived: true}] + .[$at:]
         end
     )' "$f" >"$tmp" || { rm -f "$tmp"; warn "rewriting versions.json failed"; return 1; }
   mv "$tmp" "$f" || { rm -f "$tmp"; warn "could not replace versions.json"; return 1; }

@@ -146,17 +146,24 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `leoflow dev` cluster path had the identical gap and gets the identical fix.
   Paths under `dbt_groups` are validated the same way `dbt.project` already was:
   the guard for escaping and absolute paths returned early whenever the
-  top-level `dbt:` block was absent — which is every hybrid DAG — so a
-  `../shared` that happened to exist built **green** against a directory nobody
-  named, while Lite resolved the real sibling. Two paths still fail after this,
+  top-level `dbt:` block was absent — which is every hybrid DAG. Measured against
+  real builds: an **absolute** `project:` is the silent one — Docker resolves the
+  source against the context root, so `/opt/dbt` builds **green** against
+  `<context>/opt/dbt`, a directory nobody named. An escaping `../shared` is loud
+  but misleading: the classic builder refuses outright, and BuildKit clamps to
+  `<context>/shared` and bakes *that* if it exists — never the sibling Lite
+  resolves. Either way the message never mentions `leoflow.yaml`. Two paths still fail after this,
   and are tracked separately: `compile` without `--build` (and `deploy
   --skip-build`) bakes an absolute host path into the dbt entrypoint, and a
   group with no `connection:` cannot resolve a project-baked `profiles.yml`.
   Also corrected while in the file: the `#852` comment claimed the source COPY
   had to sit above the `USER` drop to land root-owned. Measured against a real
-  build, `COPY` lands `uid=0 gid=0` whatever `USER` is active; what the ordering
-  actually buys is that the **final** `USER` is non-root, which is what
-  PodSecurity's `runAsNonRoot` admits on.
+  build under both BuildKit and the classic builder, `COPY` lands `uid=0 gid=0`
+  whatever `USER` is active; what the ordering
+  actually buys is that the **final** `USER` is a **numeric** non-root UID, which
+  is what the kubelet resolves at container creation when a task pod sets
+  `runAsNonRoot` with no `runAsUser` — the pair `buildSecurityContext` sets.
+  PodSecurity admission never reads the image; it checks the PodSpec.
 
 - **HA chart posture: five render refusals for combinations that used to fail
   later, and the ServiceAccount / warm-pool docs the profile was missing.**

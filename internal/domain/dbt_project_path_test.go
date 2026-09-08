@@ -116,11 +116,18 @@ func TestValidateAcceptsUsableDbtManifest(t *testing.T) {
 // early when that was nil — which is every hybrid DAG — so dbt_groups paths fed
 // the same filepath.Join chain and the same Docker build context unguarded.
 //
-// The one that is not merely confusing: "../shared" clamps to a sibling of the
-// DAG directory in the build context and normalizes to /home/shared in the
-// image, so when that directory happens to exist the build goes GREEN and bakes
-// a directory nobody named — while Lite resolves the real sibling. Lite and Pro
-// then run the same DAG against different data, silently.
+// Measured against real builds, the silent one is the ABSOLUTE path, not the
+// escaping one: Docker resolves a COPY source against the context root, so
+// "/opt/dbt" builds GREEN against <context>/opt/dbt and bakes a directory nobody
+// named. Go does the mirror thing on the host — filepath.Join swallows the
+// leading slash — which is what the file comment above already describes.
+//
+// "../shared" is loud but misleading rather than silent: the classic builder
+// refuses with "forbidden path outside the build context", and BuildKit clamps
+// to <context>/shared, so it is green only when the DAG dir has its own shared/
+// and then bakes THAT. Neither ever reaches the sibling — while Lite, which
+// resolves filepath.Abs on the host, does. Lite and Pro diverge on which
+// directory they read, and no message mentions leoflow.yaml.
 func TestValidateDbtGroupsProjectRejectsEscapingAndAbsolutePaths(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

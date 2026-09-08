@@ -21,8 +21,22 @@ dev = [
     "jinja2>=3.0",
 ]
 
+[tool.hatch.build]
+# Hatchling excludes VCS-ignored files by default, and it resolves the patterns
+# it finds against ITS OWN root (runtime/python), not the repository root. The
+# repo's .gitignore line 25 is `/leoflow` — anchored, so git correctly does not
+# ignore runtime/python/leoflow, but hatchling read it as "the leoflow directory
+# at my root" and silently dropped the package from the wheel. Nothing failed:
+# the build succeeded, the wheel just had no `leoflow` in it, which is #17 all
+# over again. The include list below is explicit, so opting out of VCS ignores
+# costs nothing.
+ignore-vcs = true
+
 [tool.hatch.build.targets.wheel]
-packages = ["leoflow_runtime"]
+# Two packages: the task runtime, and the `leoflow` authoring names a user's
+# dag.py imports at the top of the file — runner.py re-imports that module in
+# every python task pod, so they have to resolve there too (#17).
+packages = ["leoflow_runtime", "leoflow"]
 
 [tool.ruff]
 line-length = 100

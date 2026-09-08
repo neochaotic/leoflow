@@ -1208,3 +1208,49 @@ jobs:
 
       - name: Test
         run: pytest -v --cov=leoflow_runtime --cov-fail-under=90
+
+  # runtime-authoring-contract (#17): the names a user's dag.py imports at its
+  # top must resolve inside the TASK image, not only at parse time. runner.py
+  # re-imports the DAG module for every python task, so `from leoflow import
+  # dbt_group` runs again in the pod — and `leoflow` existed only in the
+  # parser's compile-time shim, so the hybrid shape the docs teach (ADR 0043)
+  # compiled green and then died on its own first line, in Lite and in Pro.
+  #
+  # python-runtime above installs no Airflow on purpose, so that file skips
+  # there. This leg installs the Task SDK at the version runtime/Dockerfile
+  # pins — read from the Dockerfile, not repeated here, so the two cannot drift
+  # — and installs the runtime with a real `pip install` rather than PYTHONPATH,
+  # because the package was silently dropped from the wheel once already
+  # (hatchling resolved the repo's root-anchored /leoflow ignore against its own
+  # root). The explicit import step runs BEFORE pytest so this job cannot go
+  # green by skipping everything, which is the one way a contract leg lies.
+  runtime-authoring-contract:
+    name: Runtime authoring contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Resolve the Task SDK version the base image pins
+        id: sdk
+        run: |
+          v=$(awk -F= '/^ARG AIRFLOW_TASK_SDK_VERSION=/{print $2; exit}' runtime/Dockerfile)
+          [ -n "$v" ] || { echo "no AIRFLOW_TASK_SDK_VERSION in runtime/Dockerfile"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "task SDK: $v"
+      - name: Install the way the image does
+        run: |
+          python -m pip install --quiet pytest ./runtime/python \
+            "apache-airflow-task-sdk==${{ steps.sdk.outputs.version }}"
+      - name: Both imports must resolve, from the installed wheel
+        run: |
+          python - <<'PY'
+          import leoflow, airflow.sdk
+          print("leoflow:", leoflow.__file__)
+          assert "site-packages" in leoflow.__file__, \
+              f"leoflow resolved from the source tree, not the wheel: {leoflow.__file__}"
+          PY
+      - name: Authoring contract
+        run: python -m pytest runtime/python/tests/test_leoflow_authoring.py -q

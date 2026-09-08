@@ -130,6 +130,31 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`from leoflow import dbt_group` now resolves inside the task image, so a
+  hybrid DAG runs (#17).** A `dag.py` is not a compile-time-only artifact: the
+  runtime re-imports the module for every `python` task, so every top-level
+  import in the DAG runs again inside the task pod and inside the Lite per-DAG
+  venv. `leoflow` existed only in the parser's compile-time shim, which is on
+  `sys.path` for the duration of a parse and nowhere else — so the shape the
+  docs teach, a `dag.py` with Python tasks around a `dbt_group()` (ADR 0043),
+  compiled green and then died on its own first line with
+  `ModuleNotFoundError: No module named 'leoflow'`, in Lite and in Pro alike.
+  The runtime now ships a real `leoflow` package deriving from the Task SDK's
+  `BaseOperator` — which is load-bearing rather than tidiness, because
+  `pull >> models` dispatches to the *real* operator's `__rshift__` and would
+  never consult a bare stub's. The placeholder refuses to execute if one ever
+  reaches a pod, rather than reporting a green run that did nothing. Lite's venv
+  freshness gate probes both packages, so a venv built before this existed
+  reinstalls instead of looking healthy. Nothing caught this because the only
+  mixed-mode e2e wires `BashOperator`s around the group, and a bash task never
+  imports `dag.py`; a new CI leg installs the Task SDK at the version the base
+  image pins and imports the documented example for real, and it hard-checks the
+  imports before pytest so it cannot go green by skipping. Packaging is pinned
+  down too: hatchling had silently dropped the new package from the wheel by
+  resolving the repository's root-anchored `/leoflow` ignore against its own
+  root, which the CI leg now catches because it installs the wheel rather than
+  setting `PYTHONPATH`.
+
 - **HA chart posture: five render refusals for combinations that used to fail
   later, and the ServiceAccount / warm-pool docs the profile was missing.**
   `podDisruptionBudget.enabled` keyed on a real boolean, so the string spellings

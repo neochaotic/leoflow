@@ -45,7 +45,7 @@ func TestEmbeddedAssetsPresent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read authoring dir: %v", err)
 		}
-		var names []string
+		names := make([]string, 0, len(entries))
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}

@@ -13,12 +13,15 @@ package leoflow
 
 import "embed"
 
+// Four patterns across two directives, and runtime/python/leoflow has to be its
+// own: all:runtime/python/leoflow_runtime cannot match it. Omitting it is silent
+// — hatchling ships a wheel without a `packages` entry whose directory is absent,
+// no error and no warning, so a binary-only Lite install would build every
+// per-DAG venv from a pysrc tree with no authoring package in it (#17). The all:
+// prefix is what carries files beginning with an underscore, which __init__.py
+// does. embed_test.go asserts each package arrives.
+//
 //go:embed all:parser/leoflow_parser parser/pyproject.toml parser/README.md
-// runtime/python/leoflow is a SEPARATE pattern: all:runtime/python/leoflow_runtime
-// cannot match it, and omitting it is silent — hatchling ships a wheel without a
-// `packages` entry whose directory is absent, so a binary-only Lite install would
-// build its venv from a pysrc tree with no authoring package in it (#17). The
-// all: prefix is required for both: __init__.py starts with an underscore.
 //go:embed all:runtime/python/leoflow_runtime all:runtime/python/leoflow runtime/python/pyproject.toml runtime/python/README.md
 var pythonSources embed.FS
 

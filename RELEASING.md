@@ -32,8 +32,72 @@ no user-facing change (release-prep, chore, dependabot, docs-only) carries the
    hard-failing on them; then squash-merges.
 4. **Guard → tag** — verifies the Chart at the merge commit matches the version,
    then — behind an explicit **confirmation gate** — tags and pushes.
-5. **Watch** — follows the tag's release workflows to **PUBLISHED**, un-drafting +
-   re-running if the gate retracts on a flake (#862). Writes `.release-<tag>.log`.
+5. **Watch** — writes `.release-<tag>.log` the moment the tag is pushed, then
+   follows the tag's release workflows to **PUBLISHED**, un-drafting +
+   re-running if the gate retracts on a flake (#862).
+6. **Publish the docs root** (**GA** only, and only if step 5 reached
+   PUBLISHED) — opens a `docs/promote-<tag>` PR repointing
+   `website/scripts/ci/versions.json`, waits for it green and merges it. It runs
+   last on purpose: the Pages deploy checks the tag out, so it cannot ride in
+   the prepare commit; and the site root must never advertise a release whose
+   artifacts are red or still draft. A failure here costs the docs root and
+   nothing else — the release is already out and logged. See below.
+
+## If the cut dies after the prepare PR merged
+
+The cut is a transaction with an irreversible middle. Once the prepare PR is
+merged, `main` carries the bump and the `release/<tag>` branch is gone — so a
+failure at the merge-commit gate (which is how a cut fails: the tag gate
+refuses a run that did not finish) cannot be recovered by re-invoking, because
+the re-cut guard sees `main` already carrying the version and cannot tell an
+interrupted cut from an accidental re-cut of a released one.
+
+    scripts/cut-release.sh <version> --resume
+
+picks up at the merge-commit gate. It refuses unless `main`'s `Chart.yaml`
+carries exactly the version being cut, which is what proves the prepare half
+completed, and it tags the commit that **introduced** that version rather than
+`main`'s tip — a chart version is a plateau, so anything merged since the
+prepare would otherwise be swept into the tag. When they differ it prints what
+it is excluding. There is deliberately no override for the version check: fix
+the reason the gate refused, then resume.
+
+Compose it with `--dry-run` first. It prints the sha it would tag and every
+commit it is excluding, so you can check both by eye before anything is pushed:
+
+    scripts/cut-release.sh <version> --resume --dry-run
+
+It is a preview of the *target*, not a full preflight — it exits before the
+working-tree and on-`main` checks, so a dirty tree still passes it and fails
+the real run.
+
+`--resume` refuses a shallow clone outright: `git rev-list` is truncated there,
+and at depth 1 it would silently return `main`'s tip. Run `git fetch --unshallow`.
+
+## Publishing the docs root (GA)
+
+`website/scripts/ci/versions.json`'s `latest` entry is the ref the published
+site root is built from. A GA repoints it and archives the one it replaces —
+and the cut opens that as its own PR **after pushing the tag**, because the
+deploy checks the tag out and it does not exist until then. If that PR does not
+land, the release is still published; the docs root just still serves the
+previous GA until it does.
+
+The cut skips the promotion entirely when the release workflows never reach
+PUBLISHED — the root must not advertise a tag with no artifacts behind it — and
+says so. `--resume` cannot help once the tag exists, so that recovery is by
+hand. Three edits to `website/scripts/ci/versions.json`, as one PR labelled
+`skip-changelog`:
+
+1. point the `latest` entry's `ref` at the new tag (leave its `label` alone —
+   the dropdown says "latest", and `render-version-config.py` reads `label`);
+2. for the GA it replaces, set `"archived": true`, adding the entry if it has
+   none yet — `id`/`ref`/`subpath`/`label` all the **outgoing** tag, inserted
+   directly after the `latest` entry, since the order here is the order of the
+   version dropdown;
+3. leave every other leg untouched, `dev` included.
+
+That is exactly what `promote_docs_version` does — read it if in doubt.
 
 ## Release authorization
 

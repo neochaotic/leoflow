@@ -205,10 +205,31 @@ self_test() {
   # Called here NOT in a subshell, deliberately: the subshell in _promote is
   # what makes the cases above blind to an exit, and the caller has no subshell.
   # If this regresses, --self-test aborts here and prints nothing below it.
+  # restore_docs_file has to undo a STAGED edit, not just a dirty worktree. The
+  # commit at the end of promote_docs_pr runs one line after `git add`, so when
+  # it fails the file is already in the index — and `git checkout -- <path>`
+  # restores the worktree FROM the index, making it a no-op there. The staged
+  # edit then rode the branch switch onto the operator's branch and failed the
+  # next cut's working-tree guard, while the comment claimed it could not.
+  local rf; rf="$(mktemp -d)"
+  (
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    mkdir -p "$rf/website/scripts/ci" && printf '{"v":1}\n' >"$rf/website/scripts/ci/versions.json"
+    cd "$rf" && git -c init.defaultBranch=main init -q . &&
+    git config user.email t@example.invalid && git config user.name tester &&
+    git add -A && git commit -qm base &&
+    printf '{"v":2}\n' >website/scripts/ci/versions.json && git add website/scripts/ci/versions.json
+  ) >/dev/null 2>&1 || { echo "  FAIL restore_docs_file: could not build the fixture"; fail=1; }
+  local rfroot="$ROOT"; ROOT="$rf"; restore_docs_file; ROOT="$rfroot"
+  _eq "$(cd "$rf" && git status --porcelain)" "" "restore_docs_file also drops a STAGED versions.json"
+  rm -rf "$rf"
+
   local pdrc reached=0 oroot="$ROOT"
   _versions '{"versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest"},{"id":"latest","ref":"v1.0.1","subpath":"","label":"latest"}]}'
   mkdir -p "$vt/website/scripts/ci" && cp "$vt/versions.json" "$vt/website/scripts/ci/versions.json"
+  trap 'echo "  FAIL promote_docs_version exited (die) instead of returning — everything below here did not run"' EXIT
   ROOT="$vt"; promote_docs_version v2.0.0 >/dev/null 2>&1 && pdrc=0 || pdrc=$?
+  trap - EXIT
   reached=1; ROOT="$oroot"
   _eq "$pdrc" "1" "promote_docs_version returns 1 on a versions.json with two \`latest\` legs"
   _eq "$reached" "1" "and its caller keeps running — a die here strands a pushed tag"
@@ -458,6 +479,17 @@ resume_target() { # <chart-version> <tag>
 # Failures here warn rather than die: the release is already published, and a
 # stale docs root is recoverable by re-running this by hand. Dying would tell
 # the operator the cut failed when it did not.
+# restore_docs_file: put versions.json back to HEAD, staged edit included.
+#
+# `git checkout -- <path>` restores the worktree from the INDEX, so the moment
+# `git add` has run it is a no-op: a failed commit right after it left the file
+# STAGED, the branch switch carried it to the operator's branch, and the next
+# cut died on "working tree not clean". Split out from promote_docs_pr so the
+# self-test can drive it — the hole was in a closure no test could reach.
+restore_docs_file() {
+  git -C "$ROOT" restore --staged --worktree -- website/scripts/ci/versions.json 2>/dev/null || true
+}
+
 promote_docs_pr() { # <tag>
   local tag="$1" pr orig
   local branch="docs/promote-$tag"
@@ -468,37 +500,44 @@ promote_docs_pr() { # <tag>
   # which also drops an uncommitted versions.json: leaving that behind fails the
   # NEXT cut at its working-tree guard.
   orig="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
-  _restore() {
-    git -C "$ROOT" checkout -q -- website/scripts/ci/versions.json 2>/dev/null || true
-    git checkout -q "$orig" 2>/dev/null || git checkout -q --detach "$orig" 2>/dev/null || true
+  # Takes the ref as an argument: bash has no local functions, so _restore
+  # outlives this one, while `orig` (local) does not. Reading $orig from the
+  # leaked copy would be an unbound-variable exit under `set -u` — a shell-
+  # killing exit living past the tag push, which is the one thing this file
+  # may not have.
+  _restore() { # <ref-to-return-to>
+    local o="${1:-}"
+    restore_docs_file
+    [ -n "$o" ] || return 0
+    git checkout -q "$o" 2>/dev/null || git checkout -q --detach "$o" 2>/dev/null || true
   }
   git checkout -q -b "$branch" origin/main 2>/dev/null || { warn "docs promotion: could not create $branch — publish the docs root by hand"; return 0; }
-  promote_docs_version "$tag" || { warn "docs promotion skipped"; _restore; return 0; }
+  promote_docs_version "$tag" || { warn "docs promotion skipped"; _restore "$orig"; return 0; }
   # -C "$ROOT": promote_docs_version writes an absolute path, so a bare relative
   # pathspec stages nothing whenever cwd is not the repo root — and the
   # --cached --quiet below is then TRUE, so the failure came back as the log
   # line "docs: root already serves <tag>". A flat lie, return 0, and a dirty
   # tree left behind. Check the exit.
-  git -C "$ROOT" add website/scripts/ci/versions.json || { warn "docs promotion: could not stage versions.json"; _restore; return 0; }
-  if git -C "$ROOT" diff --cached --quiet; then log "docs: root already serves $tag"; _restore; return 0; fi
-  git -C "$ROOT" commit -q -m "docs: publish $tag at the documentation root" || { warn "docs promotion: commit failed"; _restore; return 0; }
-  git push -u origin "$branch" -q || { warn "docs promotion: push failed — open the PR by hand from $branch"; _restore; return 0; }
+  git -C "$ROOT" add website/scripts/ci/versions.json || { warn "docs promotion: could not stage versions.json"; _restore "$orig"; return 0; }
+  if git -C "$ROOT" diff --cached --quiet -- website/scripts/ci/versions.json; then log "docs: root already serves $tag"; _restore; return 0; fi
+  git -C "$ROOT" commit -q -m "docs: publish $tag at the documentation root" -- website/scripts/ci/versions.json || { warn "docs promotion: commit failed"; _restore "$orig"; return 0; }
+  git push -u origin "$branch" -q || { warn "docs promotion: push failed — open the PR by hand from $branch"; _restore "$orig"; return 0; }
   gh pr create --repo "$REPO" --base main --head "$branch" --label skip-changelog \
     --title "docs: publish $tag at the documentation root" \
-    --body "Repoints website/scripts/ci/versions.json's \`latest\` leg at $tag and archives the one it replaces. Opened by cut-release.sh after the tag was pushed — the deploy checks the tag out, so this cannot ride in the prepare commit." >/dev/null || { warn "docs promotion: gh pr create failed"; _restore; return 0; }
+    --body "Repoints website/scripts/ci/versions.json's \`latest\` leg at $tag and archives the one it replaces. Opened by cut-release.sh after the tag was pushed — the deploy checks the tag out, so this cannot ride in the prepare commit." >/dev/null || { warn "docs promotion: gh pr create failed"; _restore "$orig"; return 0; }
   pr="$(gh pr view "$branch" --json number -q .number 2>/dev/null)"
   log "docs promotion PR #$pr — waiting for CI"
   # Its own budget: wait_sha_green restarts the clock per call, so the default
   # 5400s would pin the operator's terminal for 90 minutes on a docs PR after
   # the release is already out. ci.yaml has no path filter, so this one-file PR
   # still drags the full suite — 30 minutes is generous for it.
-  if [ "$(CUT_WAIT_DEADLINE="${CUT_DOCS_WAIT_DEADLINE:-1800}" wait_sha_green "$(git rev-parse "$branch")")" = GREEN ]; then
+  if [ "$(CUT_WAIT_DEADLINE="${CUT_DOCS_WAIT_DEADLINE:-${CUT_WAIT_DEADLINE:-1800}}" wait_sha_green "$(git rev-parse "$branch")")" = GREEN ]; then
     gh pr merge "$pr" --repo "$REPO" --squash --delete-branch >/dev/null 2>&1 &&
       log "docs root now serves $tag (PR #$pr)" || warn "docs promotion PR #$pr is green but did not merge — merge it by hand"
   else
     warn "docs promotion PR #$pr is not green — the release is published, but the docs root still serves the previous GA. Fix and merge #$pr."
   fi
-  _restore
+  _restore "$orig"
 }
 
 # promote_docs_version <tag>: point the published docs root at the GA being cut
@@ -789,8 +828,13 @@ main() {
   # published: the site root must never advertise a tag whose artifacts are red
   # or still draft. Everything above this line is already recorded, so a failure
   # here costs the docs root and nothing else.
+  #
+  # `published` tracks the workflow verdict, not `isDraft`. Those coincide only
+  # because release.yaml's retract step ends in `exit 1`, so a drafted release
+  # is always a red run, and its green arm un-drafts. That invariant lives in
+  # another file — if that `exit 1` ever goes, check this.
   if ! is_rc "$version"; then
-    if [ "$published" = 1 ]; then
+    if [ "${published:-0}" = 1 ]; then
       promote_docs_pr "$tag"
     else
       warn "docs root NOT promoted: the $tag release workflows never reached PUBLISHED, and the root must not point at a release with no artifacts. The tag is pushed — once the release is good, promote by hand (RELEASING.md)."

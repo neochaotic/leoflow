@@ -54,23 +54,25 @@ interrupted cut from an accidental re-cut of a released one.
 
     scripts/cut-release.sh <version> --resume
 
-picks up at the merge-commit gate. Compose it with `--dry-run` first — it is
-the only preflight there is, it costs nothing, and it prints the sha it would
-tag plus every commit it is excluding, so you can check both by eye before
-anything is pushed:
-
-    scripts/cut-release.sh <version> --resume --dry-run
-
-`--resume` refuses a shallow clone outright: `git rev-list` is truncated there,
-and at depth 1 the walk below would silently return `main`'s tip. Run
-`git fetch --unshallow` first.
- It refuses unless `main`'s `Chart.yaml`
+picks up at the merge-commit gate. It refuses unless `main`'s `Chart.yaml`
 carries exactly the version being cut, which is what proves the prepare half
 completed, and it tags the commit that **introduced** that version rather than
 `main`'s tip — a chart version is a plateau, so anything merged since the
 prepare would otherwise be swept into the tag. When they differ it prints what
 it is excluding. There is deliberately no override for the version check: fix
 the reason the gate refused, then resume.
+
+Compose it with `--dry-run` first. It prints the sha it would tag and every
+commit it is excluding, so you can check both by eye before anything is pushed:
+
+    scripts/cut-release.sh <version> --resume --dry-run
+
+It is a preview of the *target*, not a full preflight — it exits before the
+working-tree and on-`main` checks, so a dirty tree still passes it and fails
+the real run.
+
+`--resume` refuses a shallow clone outright: `git rev-list` is truncated there,
+and at depth 1 it would silently return `main`'s tip. Run `git fetch --unshallow`.
 
 ## Publishing the docs root (GA)
 
@@ -80,6 +82,20 @@ and the cut opens that as its own PR **after pushing the tag**, because the
 deploy checks the tag out and it does not exist until then. If that PR does not
 land, the release is still published; the docs root just still serves the
 previous GA until it does.
+
+The cut skips the promotion entirely when the release workflows never reach
+PUBLISHED — the root must not advertise a tag with no artifacts behind it — and
+says so. `--resume` cannot help once the tag exists, so that recovery is by
+hand. Three edits to `website/scripts/ci/versions.json`, as one PR labelled
+`skip-changelog`:
+
+1. point the `latest` entry's `ref` at the new tag (leave its `label` alone —
+   the dropdown says "latest", and `render-version-config.py` reads `label`);
+2. for the GA it replaces, set `"archived": true`, adding the entry
+   (`id`/`ref`/`subpath` all the tag, `label` the tag) if it has none yet;
+3. leave every other leg untouched, `dev` included.
+
+That is exactly what `promote_docs_version` does — read it if in doubt.
 
 ## Release authorization
 

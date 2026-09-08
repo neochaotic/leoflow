@@ -26,12 +26,19 @@ func newValidateCommand() *cobra.Command {
 			if verr := cfg.Validate(); verr != nil {
 				return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
 			}
-			dagSrc := dagSourcePath(dir, cfg)
-			if _, serr := os.Stat(dagSrc); serr != nil {
-				return fmt.Errorf("DAG source not found: %w", serr)
-			}
-			if perr := checkDagPythonSyntax(cmd, dagSrc); perr != nil {
-				return perr
+			// A pure-dbt project has no dag.py: the dbt project IS the DAG
+			// (ADR 0042). Stat'ing the source unconditionally made the whole
+			// mode unvalidatable — the command that exists to say "this is
+			// fine" always said it was not (#996). The check is scoped, not
+			// removed: a dag.py DAG with a missing source still fails here.
+			if cfg.Dbt == nil {
+				dagSrc := dagSourcePath(dir, cfg)
+				if _, serr := os.Stat(dagSrc); serr != nil {
+					return fmt.Errorf("DAG source not found: %w", serr)
+				}
+				if perr := checkDagPythonSyntax(cmd, dagSrc); perr != nil {
+					return perr
+				}
 			}
 			if _, werr := fmt.Fprintf(cmd.OutOrStdout(), "%s is valid\n", projectConfigPath(dir)); werr != nil {
 				return werr

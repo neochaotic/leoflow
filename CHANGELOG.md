@@ -130,6 +130,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`leoflow.yaml` rejects keys the schema does not define, and `leoflow validate`
+  finally works on a pure-dbt project (#15, #996).** The authoring schema declares
+  `additionalProperties: false` and that guard was **unreachable**: the loader used
+  `yaml.Unmarshal`, which drops an unknown key into the void, and `Validate()` then
+  marshals the *struct* back to JSON and validates that — so by the time the schema
+  saw the document, the offending key had ceased to exist. Every typo, and every key
+  written at the wrong level, was accepted in silence. This is not hypothetical: our
+  own flagship dbt example taught a **top-level `schedule:`**, which is not a schema
+  key (the real one is `dbt.schedule`), so a team following the docs shipped a DAG
+  that never ran and took days to notice — `leoflow validate` said "is valid" the
+  whole time. The three examples that taught it are corrected, and the reference
+  table now says where the key belongs. The refusal names the offending keys and,
+  for `schedule` specifically, points at both right answers. **This is breaking for
+  a project carrying a stray key** — deliberately, and better at a GA than after
+  one. Discovery is unaffected: a Lite workspace loads every subdirectory with a
+  lenient parse, so a DAG with a typo keeps its `dag_id` and its `dbt:` block and is
+  told off by `compile`, rather than silently vanishing from the workspace or being
+  renamed after its directory. Separately, `validate` stat'd `dag.py` unconditionally,
+  so a project whose DAG *is* the dbt project could never be validated at all; the
+  check is now scoped to a `dag.py` DAG, where a missing source still fails.
+
 - **HA chart posture: five render refusals for combinations that used to fail
   later, and the ServiceAccount / warm-pool docs the profile was missing.**
   `podDisruptionBudget.enabled` keyed on a real boolean, so the string spellings

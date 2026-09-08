@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 	yaml "go.yaml.in/yaml/v3"
@@ -28,13 +33,115 @@ func loadProjectConfig(dir string) (*domain.LeoflowConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", p, err)
 	}
-	var cfg domain.LeoflowConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	cfg, unknown, err := parseProjectConfig(data)
+	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", p, err)
 	}
-	cfg.ApplyDefaults()
-	return &cfg, nil
+	if unknown != nil {
+		return nil, fmt.Errorf("%s: %w", p, unknown)
+	}
+	return cfg, nil
 }
+
+// loadProjectConfigLenient is loadProjectConfig without the unknown-key
+// refusal. Discovery uses it: a Lite workspace loads every subdirectory, and a
+// project whose yaml has a stray key still has a dag_id, a dbt block and a
+// source. Refusing here would either rename the DAG after its directory or drop
+// it from the workspace entirely — a typo should be reported by compile, with
+// the file and the key, not by a DAG quietly disappearing. Genuine syntax
+// errors still fail.
+func loadProjectConfigLenient(dir string) (*domain.LeoflowConfig, error) {
+	p := projectConfigPath(dir)
+	data, err := os.ReadFile(p) //nolint:gosec // G304: project path is supplied by the operator on the CLI.
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", p, err)
+	}
+	cfg, _, perr := parseProjectConfig(data) //nolint:errcheck // discarding the unknown-key error is what "lenient" means here.
+	if perr != nil {
+		return nil, fmt.Errorf("parsing %s: %w", p, perr)
+	}
+	return cfg, nil
+}
+
+// parseProjectConfig decodes leoflow.yaml twice, on purpose: once strictly to
+// learn whether the file carries keys the schema does not define, and once
+// leniently to produce the config regardless. Splitting the two lets one caller
+// refuse the file while another keeps working with it.
+//
+// The strict pass is what makes the schema's `additionalProperties: false`
+// reachable at all (#15). It was not: yaml.Unmarshal drops an unknown key into
+// the void, and Validate() then marshals the STRUCT back to JSON and validates
+// that — so by the time the schema sees the document, the offending key has
+// already ceased to exist. Every typo, and every key written at the wrong level,
+// was accepted in silence.
+func parseProjectConfig(data []byte) (cfg *domain.LeoflowConfig, unknown, err error) {
+	var strict domain.LeoflowConfig
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if serr := dec.Decode(&strict); serr != nil && !isUnknownFieldError(serr) {
+		// A real syntax error, not an unknown key: both loaders must fail.
+		return nil, nil, serr
+	} else if serr != nil {
+		unknown = unknownKeyError(serr)
+	}
+
+	var lenient domain.LeoflowConfig
+	if lerr := yaml.Unmarshal(data, &lenient); lerr != nil {
+		return nil, nil, lerr
+	}
+	lenient.ApplyDefaults()
+	return &lenient, unknown, nil
+}
+
+// isUnknownFieldError reports whether a yaml decode error is only about keys the
+// struct does not define. yaml/v3 reports these as a TypeError whose every entry
+// says "field X not found in type Y"; anything else in the list is a real
+// decode failure and must not be downgraded to an unknown-key warning.
+func isUnknownFieldError(err error) bool {
+	te := &yaml.TypeError{}
+	if !errors.As(err, &te) || len(te.Errors) == 0 {
+		return false
+	}
+	for _, e := range te.Errors {
+		if !strings.Contains(e, "not found in type") {
+			return false
+		}
+	}
+	return true
+}
+
+// unknownKeyError turns yaml's per-line "field X not found in type Y" list into
+// one message that names the keys and, for the key our own docs taught, says
+// where it actually belongs. A rejection that only says "unknown key" moves the
+// user from a silent failure to a puzzle; naming the right key is the fix.
+func unknownKeyError(err error) error {
+	te := &yaml.TypeError{}
+	if !errors.As(err, &te) {
+		return err
+	}
+	keys := make([]string, 0, len(te.Errors))
+	seen := map[string]bool{}
+	for _, e := range te.Errors {
+		m := unknownFieldRe.FindStringSubmatch(e)
+		if len(m) < 2 || seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		keys = append(keys, m[1])
+	}
+	slices.Sort(keys)
+	msg := fmt.Sprintf("unknown key %q", strings.Join(keys, `", "`))
+	if len(keys) > 1 {
+		msg = fmt.Sprintf("unknown keys %q", strings.Join(keys, `", "`))
+	}
+	if seen["schedule"] {
+		// The one we taught ourselves, in three places, for three releases.
+		msg += ". A dag.py DAG takes its schedule from DAG(schedule=…); a pure-dbt DAG declares it under dbt.schedule. There is no top-level schedule:"
+	}
+	return fmt.Errorf("%s in leoflow.yaml", msg)
+}
+
+var unknownFieldRe = regexp.MustCompile(`field ([^ ]+) not found in type`)
 
 // dagSourcePath resolves the DAG source file for a project. The caller is
 // expected to have applied schema defaults (cfg.ApplyDefaults), so cfg.DagSource

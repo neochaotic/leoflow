@@ -144,7 +144,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   connection still wins — it generates a profile from the operator's credentials
   into `DBT_PROFILES_DIR`, and letting a file checked into the repository
   override that would be a downgrade, so that case is pinned by a test. Applies
-  to the top-level `dbt:` block and to `dbt_groups` alike.
+  to the top-level `dbt:` block and to `dbt_groups` alike — **and to Lite**,
+  where the same path was equally dead: the subprocess executor points
+  `DBT_PROFILES_DIR` at an empty per-task scratch dir, so a Lite project shipping
+  its own `profiles.yml` failed the same way. The Lite dbt e2e fixture asserts it
+  ships none, which is why nobody noticed.
 
 - **`compile` and `deploy --skip-build` no longer bake the operator's own
   absolute path into dbt tasks (#993).** Whether dbt's `--project-dir` is baked
@@ -161,10 +165,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   uses. The executor is chosen by server configuration
   (`LEOFLOW_EXECUTOR_TYPE`), not by anything in the `dag.json`, so compile cannot
   infer it; it is now an explicit option that only Lite's subprocess run mode
-  sets. **Behavior change:** a bare `leoflow compile` now emits the in-image
-  relative path. Lite is unaffected — `leoflow dev` sets the flag itself — but a
-  `dag.json` hand-compiled for a subprocess executor must now come from
-  `leoflow dev`.
+  sets. **Behavior change, in two places:** a bare `leoflow compile` now emits the
+  in-image relative path, and it no longer reaches for the per-DAG Lite venv's
+  `dbt` or generates a parse-time duckdb profile — that flag carried the same
+  conflation and moved with it, so a bare compile on a Lite host now needs `dbt`
+  on `PATH` and a resolvable profile, where it previously borrowed the venv's.
+  Lite itself is unaffected: `leoflow dev` sets the flag.
 
 - **HA chart posture: five render refusals for combinations that used to fail
   later, and the ServiceAccount / warm-pool docs the profile was missing.**

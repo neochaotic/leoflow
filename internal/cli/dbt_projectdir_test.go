@@ -1,8 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // TestDbtProjectDir: for an image build (Pro) the dbt --project-dir stays
@@ -30,52 +37,113 @@ func TestDbtProjectDir(t *testing.T) {
 	}
 }
 
-// TestCompileOptionsLocalIsNotDerivedFromBuild pins the fix for #993.
+// TestCompiledEntrypointsAreWiredForTheRightTarget locks the WIRING of #993 and
+// #994, through runCompile, because that is where both bugs lived.
 //
-// `local` selects between two incompatible meanings of --project-dir: an
-// absolute host path for a subprocess executor running from a per-task temp
-// workdir (Lite), and the relative path inside the image for a pod (Pro). It
-// used to be derived as `!o.build`, which reads as "we did not build an image
-// this invocation" — a different question. `leoflow compile` without --build
-// and `leoflow deploy --skip-build` both mean "the image already exists or will
-// be built elsewhere", and both were classified local, so every dbt task in the
-// produced dag.json carried the operator's own absolute path:
+// The leaf helpers were never wrong: dbtProjectDir computed a correct absolute
+// path from a wrong input, and decorateCommands appended a correct flag it was
+// never given. So a test of either passes with both bugs fully restored —
+// measured, both packages green with `local := !o.build` back. A regression test
+// that cannot fail on the actual defect is not one.
 //
-//	dbt run --select mart --project-dir /Users/<someone>/work/sales/analytics
+// #993: `local` decided between an absolute host path for a subprocess executor
+// and the relative in-image path for a pod, and it was derived from `!o.build` —
+// "we did not build an image this invocation", a different question. A bare
+// compile and `deploy --skip-build` both baked the operator's own path into a
+// dag.json destined for pods.
 //
-// That dag.json is what gets registered and executed in pods, so the task exits
-// seconds after start with "project directory does not exist" and nothing points
-// at the real cause. Same class as #20, through a different door — and the more
-// likely one for a CI or prebuilt-image workflow.
-//
-// The executor is chosen by SERVER configuration (LEOFLOW_EXECUTOR_TYPE), not by
-// anything in the dag.json, so compile cannot infer it. It has to be told, and
-// only Lite's subprocess mode knows the answer is yes.
-func TestCompileOptionsLocalIsNotDerivedFromBuild(t *testing.T) {
+// #994: the base image aims DBT_PROFILES_DIR at /tmp so dbt's writes stay off
+// the read-only project (#852), so dbt never looks inside the project and a
+// project shipping its own profiles.yml was unreachable.
+func TestCompiledEntrypointsAreWiredForTheRightTarget(t *testing.T) {
+	manifest, merr := os.ReadFile(filepath.Join("..", "dbt", "testdata", "manifest_wide.json"))
+	if merr != nil {
+		t.Fatalf("reading fixture manifest: %v", merr)
+	}
+
 	for _, c := range []struct {
-		name  string
-		opts  compileOptions
-		local bool
+		name        string
+		local       bool
+		hasProfiles bool
+		want        []string
+		deny        []string
 	}{
-		{"bare compile targets an image", compileOptions{}, false},
-		{"compile --build targets an image", compileOptions{build: true}, false},
-		{"deploy targets an image", compileOptions{build: true, push: true}, false},
-		{"deploy --skip-build still targets an image", compileOptions{}, false},
-		{"only Lite's subprocess mode is local", compileOptions{local: true}, true},
-		{"Lite's cluster mode is not", compileOptions{build: true, builder: "docker"}, false},
+		{
+			name: "an image-bound compile bakes in-image relative paths",
+			want: []string{"--project-dir analytics"},
+			// The absolute form is the #993 defect; any leading slash after the
+			// flag means a host path rode into an artifact destined for a pod.
+			deny: []string{"--project-dir /", "--profiles-dir"},
+		},
+		{
+			name:  "a Lite compile bakes the absolute workspace path",
+			local: true,
+			want:  []string{"--project-dir /"},
+		},
+		{
+			name:        "a project shipping profiles.yml is pointed at it",
+			hasProfiles: true,
+			want:        []string{"--project-dir analytics", "--profiles-dir analytics"},
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if c.opts.local != c.local {
-				t.Errorf("compileOptions%+v local = %v, want %v", c.opts, c.opts.local, c.local)
+			dir := t.TempDir()
+			project := filepath.Join(dir, "analytics")
+			if err := os.MkdirAll(project, 0o750); err != nil {
+				t.Fatal(err)
 			}
-			// And the value must reach the baked flag unchanged: deriving it
-			// from build is what produced the host path.
-			got := dbtProjectDir("/work/sales", "analytics", c.opts.local)
-			if c.local && got != "/work/sales/analytics" {
-				t.Errorf("local build baked %q, want the absolute workspace path", got)
+			if err := os.WriteFile(filepath.Join(project, "manifest.json"), manifest, 0o600); err != nil {
+				t.Fatal(err)
 			}
-			if !c.local && got != "analytics" {
-				t.Errorf("image build baked %q, want the relative in-image path", got)
+			if c.hasProfiles {
+				if err := os.WriteFile(filepath.Join(project, "profiles.yml"), []byte("analytics:\n  target: dev\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			yaml := "schema_version: \"1.0\"\ndag_id: sales\nowner: t\ndbt:\n  project: analytics\n  manifest: manifest.json\n  schedule: \"@daily\"\n"
+			if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte(yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			cmd := &cobra.Command{}
+			cmd.SetContext(context.Background())
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+
+			opts := compileOptions{output: filepath.Join(dir, "dag.json"), image: "reg/sales:v1", dagVersion: "v1", local: c.local}
+			if rerr := runCompile(cmd, dir, opts); rerr != nil {
+				t.Fatalf("runCompile: %v\noutput:\n%s", rerr, out.String())
+			}
+			data, rerr := os.ReadFile(filepath.Join(dir, "dag.json"))
+			if rerr != nil {
+				t.Fatal(rerr)
+			}
+			var spec struct {
+				Tasks []struct {
+					TaskID     string `json:"task_id"`
+					Entrypoint string `json:"entrypoint"`
+				} `json:"tasks"`
+			}
+			if uerr := json.Unmarshal(data, &spec); uerr != nil {
+				t.Fatal(uerr)
+			}
+			if len(spec.Tasks) == 0 {
+				t.Fatal("compiled no tasks — the fixture stopped exercising the dbt path")
+			}
+			// Every task, not the first: the flags are appended per task and a
+			// partial application is exactly the shape that would slip through.
+			for _, task := range spec.Tasks {
+				for _, w := range c.want {
+					if !strings.Contains(task.Entrypoint, w) {
+						t.Errorf("task %q entrypoint %q is missing %q", task.TaskID, task.Entrypoint, w)
+					}
+				}
+				for _, d := range c.deny {
+					if strings.Contains(task.Entrypoint, d) {
+						t.Errorf("task %q entrypoint %q must not contain %q", task.TaskID, task.Entrypoint, d)
+					}
+				}
 			}
 		})
 	}

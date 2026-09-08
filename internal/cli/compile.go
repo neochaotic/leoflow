@@ -157,10 +157,12 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	if perr != nil {
 		return perr
 	}
-	// A non-build compile is a Lite/host build (subprocess executor), same as the
-	// dbt_group path. On Lite: --project-dir must be absolute (the task runs from a
-	// temp workdir), and with no managed connection each task gets the zero-config
-	// duckdb profile step — unless the project ships its own profiles.yml (#575).
+	// Lite (subprocess executor): --project-dir must be absolute, because the task
+	// does not run from the project — it runs from the workspace root — and with no
+	// managed connection each task gets the zero-config duckdb profile step, unless
+	// the project ships its own profiles.yml (#575). o.local is set by `leoflow
+	// dev`'s subprocess mode and by nothing else; deriving it from !o.build is what
+	// #993 was.
 	local := o.local
 	spec, err := dbt.Compile(manifest, dbt.Meta{
 		DagID:       cfg.DagID,

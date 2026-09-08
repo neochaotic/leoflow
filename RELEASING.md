@@ -91,8 +91,10 @@ hand. Three edits to `website/scripts/ci/versions.json`, as one PR labelled
 
 1. point the `latest` entry's `ref` at the new tag (leave its `label` alone —
    the dropdown says "latest", and `render-version-config.py` reads `label`);
-2. for the GA it replaces, set `"archived": true`, adding the entry
-   (`id`/`ref`/`subpath` all the tag, `label` the tag) if it has none yet;
+2. for the GA it replaces, set `"archived": true`, adding the entry if it has
+   none yet — `id`/`ref`/`subpath`/`label` all the **outgoing** tag, inserted
+   directly after the `latest` entry, since the order here is the order of the
+   version dropdown;
 3. leave every other leg untouched, `dev` included.
 
 That is exactly what `promote_docs_version` does — read it if in doubt.

@@ -195,16 +195,6 @@ self_test() {
   out="$(_promote v2.0.0)"
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .ref')" "v2.0.0" "promoting the current root is a no-op"
 
-  # promote_docs_version must RETURN on a bad input, never die. It runs after
-  # `git push origin <tag>`, so an `exit` there takes the whole script with it
-  # and skips the provenance line, the entire release watch and the #862
-  # un-draft — leaving a pushed tag, a possibly-draft release nobody is
-  # watching, and no scripted way forward: re-invoking dies on "tag already
-  # exists", and so does --resume. That is the state this PR exists to remove.
-  #
-  # Called here NOT in a subshell, deliberately: the subshell in _promote is
-  # what makes the cases above blind to an exit, and the caller has no subshell.
-  # If this regresses, --self-test aborts here and prints nothing below it.
   # restore_docs_file has to undo a STAGED edit, not just a dirty worktree. The
   # commit at the end of promote_docs_pr runs one line after `git add`, so when
   # it fails the file is already in the index — and `git checkout -- <path>`
@@ -224,10 +214,26 @@ self_test() {
   _eq "$(cd "$rf" && git status --porcelain)" "" "restore_docs_file also drops a STAGED versions.json"
   rm -rf "$rf"
 
+  # promote_docs_version must RETURN on a bad input, never die. It runs after
+  # `git push origin <tag>`, so an `exit` there takes the whole script with it
+  # and skips the provenance line, the entire release watch and the #862
+  # un-draft — leaving a pushed tag, a possibly-draft release nobody is
+  # watching, and no scripted way forward: re-invoking dies on "tag already
+  # exists", and so does --resume. That is the state this PR exists to remove.
+  #
+  # Called here NOT in a subshell, deliberately: the subshell in _promote is
+  # what makes the cases above blind to an exit, and the caller has no subshell.
+  # If this regresses, --self-test aborts here; the EXIT trap below names it.
   local pdrc reached=0 oroot="$ROOT"
   _versions '{"versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest"},{"id":"latest","ref":"v1.0.1","subpath":"","label":"latest"}]}'
   mkdir -p "$vt/website/scripts/ci" && cp "$vt/versions.json" "$vt/website/scripts/ci/versions.json"
-  trap 'echo "  FAIL promote_docs_version exited (die) instead of returning — everything below here did not run"' EXIT
+  # >&3: the trap runs in the redirection context of the command that exited,
+  # and that command carries >/dev/null 2>&1 to keep its warn out of the
+  # transcript — so a plain echo here lands in /dev/null and the abort is silent
+  # again, which is the one thing the trap exists to prevent. Measured: zero
+  # lines without the fd, the FAIL line with it.
+  exec 3>&2
+  trap 'echo "  FAIL promote_docs_version exited (die) instead of returning — everything below here did not run" >&3' EXIT
   ROOT="$vt"; promote_docs_version v2.0.0 >/dev/null 2>&1 && pdrc=0 || pdrc=$?
   trap - EXIT
   reached=1; ROOT="$oroot"
@@ -311,6 +317,62 @@ self_test() {
   fi
   _eq "$(printf '%s\n' "$argv" | grep -cx 'release/v9.9.9-rc.1')" "1" "prepare PR heads the release branch"
   rm -rf "$stubdir"
+
+  # promote_docs_pr had no coverage at all — every case above targets
+  # promote_docs_version or restore_docs_file. That is how a seven-call-site
+  # function shipped with one call site missing its argument and the whole gate
+  # green: the one that lost it strands the operator on docs/promote-<tag>, and
+  # nothing anywhere said so. The invariant worth locking is the cheap one — the
+  # function returns you to the ref you were on, with a clean tree, on BOTH the
+  # no-op and the happy path.
+  #
+  # Driven against a bare repo as origin, a gh stub, and a wait_sha_green
+  # override, so it needs no network. Run in a subshell for the cd/PATH, and the
+  # rc is asserted so a die inside cannot pass for a pass.
+  local pp; pp="$(mktemp -d)"
+  _pp_fixture() { # <latest-ref>  -> builds origin + a clone, operator on their own branch
+    rm -rf "$pp/origin" "$pp/wt"; mkdir -p "$pp/origin"
+    (
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+      cd "$pp/origin" && git -c init.defaultBranch=main init -q --bare . &&
+      git clone -q "$pp/origin" "$pp/wt" && cd "$pp/wt" &&
+      git config user.email t@example.invalid && git config user.name tester &&
+      mkdir -p website/scripts/ci &&
+      printf '{"versions":[{"id":"latest","ref":"%s","subpath":"","label":"latest","archived":false}]}\n' "$1" \
+        >website/scripts/ci/versions.json &&
+      git add -A && git commit -qm base && git push -q origin main &&
+      git checkout -q -b operator-branch
+    ) >/dev/null 2>&1
+  }
+  _pp_run() { # -> echoes "<branch after>|<porcelain after>|<rc>"
+    local rc
+    (
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+      export PATH="$pp/stub:$PATH" REPO=o/r ROOT="$pp/wt"
+      cd "$pp/wt" && wait_sha_green() { echo GREEN; } && promote_docs_pr v2.0.0
+    ) >/dev/null 2>&1
+    rc=$?
+    printf '%s|%s|%s' \
+      "$(cd "$pp/wt" && git rev-parse --abbrev-ref HEAD)" \
+      "$(cd "$pp/wt" && git status --porcelain)" "$rc"
+  }
+  mkdir -p "$pp/stub"
+  printf '#!/bin/sh\ncase "$*" in *"--json number"*) echo 7 ;; esac\nexit 0\n' >"$pp/stub/gh"
+  chmod +x "$pp/stub/gh"
+
+  # The no-op path: main already serves the tag, so promote_docs_version writes
+  # nothing and the function returns early. This is the call site that lost its
+  # argument, and it is reachable exactly after the manual recovery RELEASING.md
+  # now documents.
+  _pp_fixture v2.0.0 || { echo "  FAIL promote_docs_pr: could not build the no-op fixture"; fail=1; }
+  _eq "$(_pp_run)" "operator-branch||0" "promote_docs_pr returns you to your branch when the root already serves the tag"
+
+  # The happy path: the file changes, the PR is opened and merged through the
+  # stub, and gh's own branch switch never happens — so the restore is the only
+  # thing bringing HEAD back.
+  _pp_fixture v1.0.0 || { echo "  FAIL promote_docs_pr: could not build the happy-path fixture"; fail=1; }
+  _eq "$(_pp_run)" "operator-branch||0" "promote_docs_pr returns you to your branch after promoting"
+  rm -rf "$pp"
 
   if [ "$fail" = 0 ]; then echo "self-test: PASS"; else echo "self-test: FAIL"; return 1; fi
 }
@@ -508,7 +570,10 @@ promote_docs_pr() { # <tag>
   _restore() { # <ref-to-return-to>
     local o="${1:-}"
     restore_docs_file
-    [ -n "$o" ] || return 0
+    # Never silent: a missing argument used to strand the operator on the docs
+    # branch with no trace. That is how the call site below went unconverted
+    # through a green gate — six of seven passed "$orig" and nothing said so.
+    [ -n "$o" ] || { warn "docs promotion: _restore got no ref — still on $(git rev-parse --abbrev-ref HEAD 2>/dev/null)"; return 0; }
     git checkout -q "$o" 2>/dev/null || git checkout -q --detach "$o" 2>/dev/null || true
   }
   git checkout -q -b "$branch" origin/main 2>/dev/null || { warn "docs promotion: could not create $branch — publish the docs root by hand"; return 0; }
@@ -519,7 +584,7 @@ promote_docs_pr() { # <tag>
   # line "docs: root already serves <tag>". A flat lie, return 0, and a dirty
   # tree left behind. Check the exit.
   git -C "$ROOT" add website/scripts/ci/versions.json || { warn "docs promotion: could not stage versions.json"; _restore "$orig"; return 0; }
-  if git -C "$ROOT" diff --cached --quiet -- website/scripts/ci/versions.json; then log "docs: root already serves $tag"; _restore; return 0; fi
+  if git -C "$ROOT" diff --cached --quiet -- website/scripts/ci/versions.json; then log "docs: root already serves $tag"; _restore "$orig"; return 0; fi
   git -C "$ROOT" commit -q -m "docs: publish $tag at the documentation root" -- website/scripts/ci/versions.json || { warn "docs promotion: commit failed"; _restore "$orig"; return 0; }
   git push -u origin "$branch" -q || { warn "docs promotion: push failed — open the PR by hand from $branch"; _restore "$orig"; return 0; }
   gh pr create --repo "$REPO" --base main --head "$branch" --label skip-changelog \
@@ -530,7 +595,8 @@ promote_docs_pr() { # <tag>
   # Its own budget: wait_sha_green restarts the clock per call, so the default
   # 5400s would pin the operator's terminal for 90 minutes on a docs PR after
   # the release is already out. ci.yaml has no path filter, so this one-file PR
-  # still drags the full suite — 30 minutes is generous for it.
+  # still drags the full suite — 30 minutes is generous for it. An operator who
+  # exports CUT_WAIT_DEADLINE overrides this floor and gets their own value.
   if [ "$(CUT_WAIT_DEADLINE="${CUT_DOCS_WAIT_DEADLINE:-${CUT_WAIT_DEADLINE:-1800}}" wait_sha_green "$(git rev-parse "$branch")")" = GREEN ]; then
     gh pr merge "$pr" --repo "$REPO" --squash --delete-branch >/dev/null 2>&1 &&
       log "docs root now serves $tag (PR #$pr)" || warn "docs promotion PR #$pr is green but did not merge — merge it by hand"

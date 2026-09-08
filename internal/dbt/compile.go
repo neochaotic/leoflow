@@ -26,6 +26,15 @@ type Meta struct {
 	Schema string
 	// ProjectDir scopes the dbt commands with --project-dir for a subdir project.
 	ProjectDir string
+	// ProfilesDir, when set, is passed as --profiles-dir. It is how a project
+	// that ships its own profiles.yml gets honored: the base image points
+	// DBT_PROFILES_DIR at an ephemeral /tmp dir so dbt's WRITES stay off the
+	// read-only project (#852), and the side effect is that dbt never looks
+	// inside the project at all (#994). Only reads happen through this — target
+	// and log paths keep their own env and still land in /tmp. Ignored when a
+	// managed connection is set: that path generates a profile into
+	// DBT_PROFILES_DIR and must win over a checked-in file.
+	ProfilesDir string
 	// Local marks a Lite/host build: with no Connection, each task is prefixed with
 	// the step that writes a default duckdb profiles.yml (the zero-config local
 	// warehouse). Ignored on the Pro/image path. See Options.Local.
@@ -45,6 +54,7 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		Profile:     meta.Profile,
 		Schema:      meta.Schema,
 		ProjectDir:  meta.ProjectDir,
+		ProfilesDir: meta.ProfilesDir,
 		Local:       meta.Local,
 	})
 	if err != nil {

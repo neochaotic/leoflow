@@ -32,6 +32,20 @@ type compileOptions struct {
 	dockerfile string
 	build      bool
 	push       bool
+	// local says the compiled DAG will run under a SUBPROCESS executor on this
+	// host — Lite — rather than in a pod. It decides whether dbt's --project-dir
+	// is baked as an absolute workspace path or as the relative path inside the
+	// image, and which dbt binary parses the manifest.
+	//
+	// It is set explicitly rather than derived from `build`, which was the #993
+	// bug: "we did not build an image this invocation" is a different question.
+	// `compile` without --build and `deploy --skip-build` both target an image
+	// that exists or will be built elsewhere, and both used to bake the
+	// operator's own absolute path into every dbt task of a dag.json destined
+	// for a cluster. The executor is chosen by server configuration
+	// (LEOFLOW_EXECUTOR_TYPE), not by anything in the dag.json, so compile
+	// cannot infer this — only Lite's subprocess mode knows.
+	local bool
 }
 
 func newCompileCommand() *cobra.Command {
@@ -101,7 +115,7 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}); rerr != nil {
 		return rerr
 	}
-	if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg, !o.build); eerr != nil {
+	if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg, o.local); eerr != nil {
 		return eerr
 	}
 	if oerr := overlayProject(o.output, cfg); oerr != nil {
@@ -135,7 +149,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	if ierr := checkImageFlags(cmd, o.build, o.push, image); ierr != nil {
 		return ierr
 	}
-	manifest, err := loadDbtManifest(cmd, dir, cfg.Dbt, !o.build, cfg.DagID)
+	manifest, err := loadDbtManifest(cmd, dir, cfg.Dbt, o.local, cfg.DagID)
 	if err != nil {
 		return err
 	}
@@ -143,11 +157,13 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	if perr != nil {
 		return perr
 	}
-	// A non-build compile is a Lite/host build (subprocess executor), same as the
-	// dbt_group path. On Lite: --project-dir must be absolute (the task runs from a
-	// temp workdir), and with no managed connection each task gets the zero-config
-	// duckdb profile step — unless the project ships its own profiles.yml (#575).
-	local := !o.build
+	// Lite (subprocess executor): --project-dir must be absolute, because the task
+	// does not run from the project — it runs from the workspace root — and with no
+	// managed connection each task gets the zero-config duckdb profile step, unless
+	// the project ships its own profiles.yml (#575). o.local is set by `leoflow
+	// dev`'s subprocess mode and by nothing else; deriving it from !o.build is what
+	// #993 was.
+	local := o.local
 	spec, err := dbt.Compile(manifest, dbt.Meta{
 		DagID:       cfg.DagID,
 		DagVersion:  o.dagVersion,
@@ -161,6 +177,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Profile:     profile,
 		Schema:      cfg.Dbt.Schema,
 		ProjectDir:  dbtProjectDir(dir, cfg.Dbt.Project, local),
+		ProfilesDir: dbtProfilesDir(dir, cfg.Dbt.Project, local),
 		Local:       local && !dbtProjectHasProfiles(filepath.Join(dir, cfg.Dbt.Project)),
 	})
 	if err != nil {
@@ -239,6 +256,7 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 			Profile:     profile,
 			Schema:      gc.Schema,
 			ProjectDir:  dbtProjectDir(dir, gc.Project, local),
+			ProfilesDir: dbtProfilesDir(dir, gc.Project, local),
 			// Auto-default duckdb (L4) only when the project has no profiles.yml of its
 			// own — never override a warehouse the user configured.
 			Local: local && !dbtProjectHasProfiles(filepath.Join(dir, gc.Project)),
@@ -304,15 +322,28 @@ func liteDbtBinAt(home, dagID string) string {
 	return ""
 }
 
-// liteDbtBin resolves liteDbtBinAt against the user's home, so a Lite compile parses
-// the manifest with the same dbt the task runs — not a system dbt the user may not
-// have (L1).
-func liteDbtBin(dagID string) string {
+// dbtParseBinAt picks the dbt that parses the manifest: the DAG's own per-DAG
+// venv dbt when this host has one, else whatever is on PATH.
+//
+// Deliberately NOT a function of where the DAG will run. Tying it to that was
+// the #993 conflation one layer down — a venv dbt is that DAG's own, pinned to
+// the adapter its leoflow.yaml declares, while PATH's is whatever the operator
+// happens to have. When both exist the venv one is strictly the better parser,
+// whichever executor the artifact ends up on.
+func dbtParseBinAt(home, dagID string) string {
+	if v := liteDbtBinAt(home, dagID); v != "" {
+		return v
+	}
+	return "dbt"
+}
+
+// dbtParseBin is dbtParseBinAt against the real home.
+func dbtParseBin(dagID string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "dbt"
 	}
-	return liteDbtBinAt(home, dagID)
+	return dbtParseBinAt(home, dagID)
 }
 
 // writeParseDuckdbProfile writes a temporary default-duckdb profiles.yml for
@@ -322,6 +353,23 @@ func liteDbtBin(dagID string) string {
 // profiles.yml (respected) or its profile name can't be read.
 // dbtProjectHasProfiles reports whether a dbt project ships its own profiles.yml —
 // which the zero-config default duckdb (L4) must never override.
+// dbtProfilesDir returns the --profiles-dir to bake, or "" to leave dbt to
+// DBT_PROFILES_DIR. A project that ships its own profiles.yml has to be pointed
+// at explicitly: the base image aims DBT_PROFILES_DIR at an ephemeral /tmp dir
+// so dbt's writes stay off the read-only project (#852), which also means dbt
+// never looks inside the project (#994). Same absolute-vs-relative rule as
+// dbtProjectDir — the profiles live in the project directory, so it is the same
+// path.
+func dbtProfilesDir(dagDir, project string, local bool) string {
+	if !dbtProjectHasProfiles(filepath.Join(dagDir, project)) {
+		return ""
+	}
+	if d := dbtProjectDir(dagDir, project, local); d != "" {
+		return d
+	}
+	return "."
+}
+
 func dbtProjectHasProfiles(projectDir string) bool {
 	_, err := os.Stat(filepath.Join(projectDir, "profiles.yml"))
 	return err == nil

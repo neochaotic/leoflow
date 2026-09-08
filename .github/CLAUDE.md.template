@@ -21,6 +21,15 @@ The core insight: the **pod-per-task** execution model is correct (Airflow prove
 9. **Enterprise architecture, MVP features.** Schemas, interfaces, and middleware are enterprise-ready from day one. Implementations start simple.
 10. **Observability is not optional.** Prometheus metrics, OpenTelemetry tracing, and structured logs ship from the first commit.
 11. **Supply chain security is built-in.** govulncheck + gosec + Trivy + CodeQL run on every PR. See ADR 0014.
+12. **`leoflow.yaml` is the authoring standard.** A DAG is described by its
+    `leoflow.yaml`; the compiler generates the Dockerfile. A hand-written
+    Dockerfile is a supported escape hatch (ADR 0003's "Intermediate" tier), never
+    the default — not in examples, not in docs, and above all not in tests. When a
+    fixture reaches for `--dockerfile`, it stops exercising the path almost every
+    user takes. Measured on 2026-09-08: 8 of 11 end-to-end scripts took that
+    shortcut, all three dbt ones among them, so the generated Dockerfile's dbt arm
+    had **zero** coverage — which is how four separate defects (#17, #20, #993,
+    #994) shipped green in a single fixture.
 
 ## Architectural Overview
 
@@ -123,6 +132,31 @@ leoflow/
 8. **Never use Python outside of `parser/` and inside user task containers.**
 9. **When in doubt about an architectural choice, stop and ask.** Don't guess on irreversible decisions.
 10. **Agent context files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, etc.) are gitignored.** They are never committed. The template at `.github/CLAUDE.md.template` is the source of truth for the canonical context; copy from it.
+11. **A test that bypasses the documented path proves nothing.** Before trusting
+    a green suite, ask which path it exercised. The mixed-mode e2e hand-wrote a
+    Dockerfile (hiding a missing COPY), overrode `DBT_PROFILES_DIR` (hiding an
+    unreachable profile), `chown`ed the project (hiding that the read-only posture
+    was fiction), and wired Bash tasks (so nothing ever imported `dag.py`). Four
+    defects, one fixture, all invisible. The shape we recommend must be the shape
+    CI runs.
+12. **Mutation-test every new assertion, and prove the mutant applied.** Break the
+    fix, watch the test go red, restore. A test that stays green with the fix fully
+    reverted is not a regression test. Assert the edit landed (`assert
+    s.count(old) == 1`) — a mutation run whose mutant silently failed to apply is
+    indistinguishable from a passing one, and reads as rigor while providing none.
+13. **Lock the wiring, not the leaf.** Bugs cluster where a correct helper is
+    called with a wrong input. `dbtProjectDir` computed a correct absolute path
+    from a wrong flag; `decorateCommands` appended a correct argument it was never
+    given. Both leaf tests passed with both fixes reverted. Drive the real entry
+    point and assert on its output.
+14. **A comment that asserts what the code does not do is a bug.** It outlives any
+    defect, because nothing tests it. Repeatedly the code here was right and its
+    comment was wrong — an ownership claim about `COPY`, an invented ADR citation,
+    a release note describing the opposite of the commit above it. When you change
+    behavior, grep for the sentences that described the old one.
+15. **Read the exit code you think you read.** `cmd | head` reports `head`'s
+    status; a background job's log tail is not its verdict; an empty filter output
+    is not a pass. Re-measure without the pipe before concluding anything.
 
 ## Domain Vocabulary
 

@@ -133,7 +133,7 @@ rebrand-ui: ## Rewrite the embedded SPA's Docs/GitHub nav links from Airflow to 
 
 .PHONY: e2e-lite
 e2e-lite: ## End-to-end Lite happy path (setup -> control plane -> login); needs local Postgres+Redis (DESTRUCTIVE: resets leoflow_dev)
-	bash scripts/e2e-lite-login.sh
+	bash test/e2e/lite-login.sh
 
 .PHONY: e2e-lite-selfheal
 e2e-lite-selfheal: ## Lite boot self-heal gate (#404); needs local Postgres (DESTRUCTIVE: resets leoflow_dev)

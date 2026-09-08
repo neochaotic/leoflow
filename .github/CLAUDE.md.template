@@ -116,7 +116,7 @@ leoflow/
 1. **TDD is mandatory and observable.** Every production code change must be preceded by a failing test commit (or a test added in the same commit that initially fails). The workflow is: write test → run test → see it fail → implement → run test → see it pass → refactor. Never claim "this should work" without running the test. Never write production code first and tests after. See ADR 0011.
 2. **Go Report Card A+ is the floor, not the ceiling.** Every commit maintains the grade. Every exported identifier (function, type, method, constant, variable) has a GoDoc comment starting with its name and ending with a period. Cyclomatic complexity ≤ 15 per function. `make lint` must be clean before any commit. See ADR 0012.
 3. **Run `make lint` and `go test ./...` before claiming a task is done.** Show the output. "Tests should pass" is never acceptable; "tests passed (here is the output)" is the bar.
-4. **Never modify `docs/adr/*.md` files without explicit user approval.** ADRs are immutable decisions.
+4. **Never modify `website/content/project/adrs/*.md` files without explicit user approval.** ADRs are immutable decisions.
 5. **Always read relevant ADRs before writing code in a new area.** They explain *why* decisions were made.
 6. **Never introduce new dependencies without checking the tech stack table above.** Every new dep is a supply chain surface; if added, ensure it appears in `govulncheck` clean and Dependabot can track it.
 7. **Never break the `/api/v2/` API surface.** It must remain Airflow 3.2.x compatible.

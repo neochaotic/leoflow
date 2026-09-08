@@ -33,6 +33,9 @@ WAREHOUSE="leoflow-dbt-mix-wh"
 API="http://localhost:${HTTP_PORT}"
 WORKDIR="$(mktemp -d)"
 # shellcheck disable=SC2206
+# Expanded below as ${PARSER_CMD[@]+...}: on bash 3.2 — macOS, where releases are
+# cut from — "${arr[@]}" over an EMPTY array is an error under set -u, so this
+# script aborted before its first useful step and could only ever run in CI.
 PARSER_CMD=(${LEOFLOW_E2E_PARSER_CMD:+--parser-cmd "$LEOFLOW_E2E_PARSER_CMD"})
 
 # dump_pods prints the task pods, a describe tail for those not Running, and
@@ -79,20 +82,37 @@ for _ in $(seq 1 30); do docker exec "$WAREHOUSE" pg_isready -U postgres >/dev/n
 # The DAG = a dbt project at the root + a dag.py that wires operators around it.
 PROJ="$WORKDIR/$DAG_ID"
 mkdir -p "$PROJ/transform/models" "$PROJ/transform/seeds"
+# PythonOperators, not Bash. A bash task never imports dag.py, so this fixture
+# used to execute the group without ever executing the DAG module — which is
+# exactly why #17 (`from leoflow import dbt_group` unresolvable in the task
+# image) shipped green. The runtime re-imports this file for every python task.
 cat >"$PROJ/dag.py" <<'PY'
 from leoflow import dbt_group
-from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
 
+
+def pre():
+    print("pre")
+
+
+def post():
+    print("post")
+
+
 with DAG("mix", schedule="@daily"):
-    pre = BashOperator(task_id="pre", bash_command="echo pre")
+    before = PythonOperator(task_id="pre", python_callable=pre)
     models = dbt_group("transform")
-    post = BashOperator(task_id="post", bash_command="echo post")
-    pre >> models >> post
+    after = PythonOperator(task_id="post", python_callable=post)
+    before >> models >> after
 PY
 cat >"$PROJ/leoflow.yaml" <<'YAML'
 schema_version: "1.0"
 dag_id: mix
+# The adapter is declared, not installed by a hand-written Dockerfile: the
+# generated one has to carry it, and that is half of what this test now proves.
+dependencies:
+  - dbt-postgres==1.9.*
 dbt_groups:
   transform:
     project: ./transform
@@ -103,6 +123,13 @@ YAML
 # linux/amd64, which fails FROM an arm64 base on a Lima/dev host → ErrImagePull.
 case "$(uname -m)" in arm64|aarch64) HOST_PLATFORM="linux/arm64" ;; *) HOST_PLATFORM="linux/amd64" ;; esac
 cat >>"$PROJ/leoflow.yaml" <<YAML
+# base_image: the base THIS checkout just built. Without it the generated
+# Dockerfile resolves to the published base, which only gains a fix in the next
+# release — so the test would measure the last release's image instead of the code
+# under review, going green precisely when it can no longer detect a regression.
+# The hand-written Dockerfile this fixture used to ship made the FROM explicit, so
+# the question never arose.
+base_image: ${BASE_IMAGE}
 build:
   platforms:
     - ${HOST_PLATFORM}
@@ -128,18 +155,13 @@ echo "select id, sum(v) as total from {{ ref('stg') }} group by id" >"$PROJ/tran
 log "Generating the manifest"
 ( cd "$PROJ/transform" && DBT_PROFILES_DIR="$PROJ/transform" dbt parse >/dev/null 2>&1 ) || fail "dbt parse failed"
 
-cat >"$PROJ/Dockerfile" <<DOCKER
-FROM ${BASE_IMAGE}
-USER root
-RUN pip install --no-cache-dir "dbt-postgres==1.9.*"
-COPY . /home/leoflow/
-ENV DBT_PROFILES_DIR=/home/leoflow/transform
-RUN chown -R 65532:65532 /home/leoflow
-# Numeric UID so PodSecurity runAsNonRoot (on by default) admits the pod: the
-# kubelet cannot verify a login NAME. Matches the base image's USER 65532:65532.
-USER 65532:65532
-WORKDIR /home/leoflow
-DOCKER
+# No hand-written Dockerfile. This fixture used to ship one, and it was an
+# escape hatch that hid three defects at once: it COPYed the whole context (so
+# #20's missing dbt_groups COPY never bit), it set DBT_PROFILES_DIR at the
+# project (so #994's unreachable profiles.yml never bit), and it chown'd
+# /home/leoflow to the task user (so the read-only-project posture #852 claims
+# was never actually exercised). The generated Dockerfile has to do all three
+# correctly now, or this test fails.
 
 log "Building the leoflow base image"
 docker build --provenance=false -q -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT" >/dev/null
@@ -161,7 +183,7 @@ SERVER_PID=$!
 sleep 5
 
 log "Compiling (parser merges the operators with the dbt_group) + building the image"
-"$ROOT/bin/leoflow" compile "$PROJ" "${PARSER_CMD[@]}" --image "$DAG_IMAGE" --build --dockerfile Dockerfile -o "$PROJ/dag.json"
+"$ROOT/bin/leoflow" compile "$PROJ" ${PARSER_CMD[@]+"${PARSER_CMD[@]}"} --image "$DAG_IMAGE" --build -o "$PROJ/dag.json"
 log "Asserting the merge: operators + namespaced dbt tasks wired together"
 for want in pre post transform__raw transform__stg transform__mart; do
   jq -e --arg t "$want" '.tasks[] | select(.task_id==$t)' "$PROJ/dag.json" >/dev/null || fail "missing task $want"
@@ -170,6 +192,25 @@ jq -e '.tasks[] | select(.task_id=="transform__raw") | .depends_on | index("pre"
   || fail "group root transform__raw is not wired to the upstream operator 'pre'"
 jq -e '.tasks[] | select(.task_id=="post") | .depends_on | index("transform__mart")' "$PROJ/dag.json" >/dev/null \
   || fail "downstream operator 'post' is not wired to the group leaf"
+# The image the COMPILER produced, asserted directly. The run below proves these
+# transitively, but a red run says "a task failed" — these say which property
+# broke, and each one is a defect this release actually shipped.
+log "Asserting the generated image"
+docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'test -f /home/leoflow/dag.py' \
+  || fail "the generated Dockerfile did not COPY the DAG source"
+docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'test -f /home/leoflow/transform/dbt_project.yml' \
+  || fail "the generated Dockerfile did not COPY the dbt_groups project (#20)"
+docker run --rm --entrypoint python "$DAG_IMAGE" -c 'import leoflow, leoflow_runtime' \
+  || fail "the authoring package is not importable in the task image (#17)"
+docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'id -u | grep -qx 65532' \
+  || fail "the image does not end on the numeric non-root UID the kubelet checks"
+docker run --rm --entrypoint sh "$DAG_IMAGE" -c '! touch /home/leoflow/transform/WRITE_PROBE 2>/dev/null' \
+  || fail "the dbt project is writable by the task user — the read-only posture (#852) is not real"
+jq -e '[.tasks[] | select(.task_id | startswith("transform__")) | .entrypoint | test("--profiles-dir")] | all' "$PROJ/dag.json" >/dev/null \
+  || fail "no --profiles-dir baked: the project ships profiles.yml and the base image points DBT_PROFILES_DIR at /tmp (#994)"
+jq -e '[.tasks[] | .entrypoint // "" | test("--project-dir /") | not] | all' "$PROJ/dag.json" >/dev/null \
+  || fail "an absolute host path was baked into a task entrypoint (#993)"
+
 k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 
 log "Pushing + triggering"

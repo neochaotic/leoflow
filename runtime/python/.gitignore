@@ -11,15 +11,19 @@
 #
 # hatchling's locate_file stops at the FIRST .gitignore going up, so this one
 # shadows the repository's entirely: the root cause is gone rather than opted out
-# of, VCS exclusion keeps protecting both the wheel and the sdist, and a
-# developer's global ~/.gitignore can no longer reach a build run from
-# ~/.leoflow/pysrc. Opting out with `ignore-vcs = true` did the opposite — the
+# of, and VCS exclusion keeps protecting both the wheel and the sdist. It also
+# terminates the walk before $HOME, which matters because a binary-only install
+# builds from ~/.leoflow/pysrc — so this file is in embed.go's pattern list and
+# has to stay there. Opting out with `ignore-vcs = true` did the opposite — the
 # package came back and so did every dirty file in these directories: measured,
 # the sdist then shipped .coverage from the maintainer's own tree.
 #
 # Mirrors the repository root's patterns that can apply inside these two package
 # directories. Anything the root ignores and this file does not will ride into
-# the wheel, so keep them in step.
+# the wheel, so keep them in step — git reads every .gitignore up the tree
+# cumulatively while hatchling reads only the first, and that difference is the
+# whole hazard. The CI step that asserts the installed wheel holds nothing but
+# .py files is the backstop; this list is the primary.
 __pycache__/
 *.py[cod]
 *.egg-info/

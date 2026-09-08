@@ -143,9 +143,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `BaseOperator` — which is load-bearing rather than tidiness, because
   `pull >> models` dispatches to the *real* operator's `__rshift__` and would
   never consult a bare stub's. The placeholder raises rather than returning
-  quietly if one ever reaches a pod — defensive, not a live failure mode: the
-  compiler classifies it as `dbt_group` before it can emit an operator class,
-  and the runner only ever resolves a named callable. Lite's venv
+  quietly if one ever reaches a pod. That is defensive rather than a live failure
+  mode — `_operator_type` classifies it as `dbt_group` on its first branch, ahead
+  of the check that would emit an operator class, so the compiler cannot produce
+  one — but it is not inert either: the runtime's generic operator path
+  instantiates an arbitrary dotted class and calls `.execute()` on it, so the
+  raise is the last line of defence for a hand-written `dag.json`. Lite's venv
   freshness gate probes both packages, so a venv built before this existed
   reinstalls instead of looking healthy. Nothing caught this because the only
   mixed-mode e2e wires `BashOperator`s around the group, and a bash task never

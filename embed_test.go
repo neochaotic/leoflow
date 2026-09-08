@@ -49,6 +49,16 @@ func TestEmbeddedAssetsPresent(t *testing.T) {
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
+		// The ignore file has to travel with the packages. hatchling finds its
+		// ignore patterns by walking UP from its own root, so a build run from
+		// ~/.leoflow/pysrc — which is every binary-only Lite install — walks
+		// past pysrc into $HOME when this file is absent. A developer with a
+		// ~/.gitignore carrying `/leoflow` (this repo's own root line names the
+		// Go binary) then gets a wheel with no authoring package and #17 back,
+		// silently, on the exact path the embed above exists to serve.
+		if _, serr := fs.Stat(PythonSources(), "runtime/python/.gitignore"); serr != nil {
+			t.Errorf("runtime/python/.gitignore is not embedded (%v) — the pysrc build falls back to $HOME's ignore file", serr)
+		}
 		if !slices.Contains(names, "__init__.py") {
 			t.Fatalf("runtime/python/leoflow has no __init__.py (got %v) — go:embed pattern stale; the `all:` prefix is required because the file starts with _", names)
 		}

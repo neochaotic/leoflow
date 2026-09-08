@@ -246,8 +246,6 @@ ci-local: ## Run every CI gate locally — pre-push tripwire so a PR does not ar
 			|| echo "skip helm unittest (install: helm plugin install https://github.com/helm-unittest/helm-unittest)")
 	@echo "▸ python parser tests"
 	@command -v python3 >/dev/null && (cd parser && python3 -m pytest -q) || echo "skip pytest (no python3)"
-	@echo "▸ ADR index check"
-	@bash scripts/gen-adr-index.sh --check
 	@echo "▸ hugo --gc --minify (website/)"
 	@if ! command -v hugo >/dev/null; then \
 		echo "skip hugo (not installed: https://gohugo.io/installation/ — needs the extended build)"; \

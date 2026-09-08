@@ -13,8 +13,19 @@ package leoflow
 
 import "embed"
 
+// Four patterns across two directives, and runtime/python/leoflow has to be its
+// own: all:runtime/python/leoflow_runtime cannot match it. Omitting it is silent
+// — hatchling ships a wheel without a `packages` entry whose directory is absent,
+// no error and no warning, so a binary-only Lite install would build every
+// per-DAG venv from a pysrc tree with no authoring package in it (#17). The all:
+// prefix is what carries files beginning with an underscore, which __init__.py
+// does. .gitignore is named explicitly for the same reason — a directory walk
+// skips dotfiles, and that one has to travel: hatchling resolves its ignore
+// patterns by walking up from its own root, so without it a build from
+// ~/.leoflow/pysrc reaches $HOME's. embed_test.go asserts each of these arrives.
+//
 //go:embed all:parser/leoflow_parser parser/pyproject.toml parser/README.md
-//go:embed all:runtime/python/leoflow_runtime runtime/python/pyproject.toml runtime/python/README.md
+//go:embed all:runtime/python/leoflow_runtime all:runtime/python/leoflow runtime/python/pyproject.toml runtime/python/README.md runtime/python/.gitignore
 var pythonSources embed.FS
 
 // PythonSources returns the embedded parser and runtime package sources, rooted

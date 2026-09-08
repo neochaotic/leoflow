@@ -174,6 +174,35 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where the DAG will run, so the per-DAG venv's `dbt` is preferred whenever the
   host has one, image-bound compiles included. Lite itself is unaffected:
   `leoflow dev` sets the flag.
+- **`from leoflow import dbt_group` now resolves inside the task image, so a
+  hybrid DAG runs (#17).** A `dag.py` is not a compile-time-only artifact: the
+  runtime re-imports the module for every `python` task, so every top-level
+  import in the DAG runs again inside the task pod and inside the Lite per-DAG
+  venv. `leoflow` existed only in the parser's compile-time shim, which is on
+  `sys.path` for the duration of a parse and nowhere else — so the shape the
+  docs teach, a `dag.py` with Python tasks around a `dbt_group()` (ADR 0043),
+  compiled green and then died on its own first line with
+  `ModuleNotFoundError: No module named 'leoflow'`, in Lite and in Pro alike.
+  The runtime now ships a real `leoflow` package deriving from the Task SDK's
+  `BaseOperator` — which is load-bearing rather than tidiness, because
+  `pull >> models` dispatches to the *real* operator's `__rshift__` and would
+  never consult a bare stub's. The placeholder raises rather than returning
+  quietly if one ever reaches a pod. That is defensive rather than a live failure
+  mode — `_operator_type` classifies it as `dbt_group` on its first branch, ahead
+  of the check that would emit an operator class, so the compiler cannot produce
+  one — but it is not inert either: the runtime's generic operator path
+  instantiates an arbitrary dotted class and calls `.execute()` on it, so the
+  raise is the last line of defence for a hand-written `dag.json`. Lite's venv
+  freshness gate probes both packages, so a venv built before this existed
+  reinstalls instead of looking healthy. Nothing caught this because the only
+  mixed-mode e2e wires `BashOperator`s around the group, and a bash task never
+  imports `dag.py`; a new CI leg installs the Task SDK at the version the base
+  image pins and imports the documented example for real, and it hard-checks the
+  imports before pytest so it cannot go green by skipping. Packaging is pinned
+  down too: hatchling had silently dropped the new package from the wheel by
+  resolving the repository's root-anchored `/leoflow` ignore against its own
+  root, which the CI leg now catches because it installs the wheel rather than
+  setting `PYTHONPATH`.
 - **A hybrid DAG's dbt projects are baked into the image (#20).** `generatedDockerfile` branched on the top-level `dbt:` block and
   had no reference to `dbt_groups` at all: for a `dag.py` with dbt task groups —
   the authoring shape ADR 0043 defines — it COPYed only the DAG source. The

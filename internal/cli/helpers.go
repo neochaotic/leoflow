@@ -155,7 +155,7 @@ func unknownKeyError(err error) error {
 		}
 		// Marked before the dedup: a key reported at two levels must not lose
 		// its top-level mark to an early continue.
-		if strings.Contains(e, "not found in type "+leoflowConfigTypeName) {
+		if strings.HasSuffix(e, "not found in type "+leoflowConfigTypeName) {
 			topLevelKeys[m[1]] = true
 		}
 		if seen[m[1]] {

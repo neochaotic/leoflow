@@ -178,14 +178,29 @@ func TestScheduleHintDoesNotLeakAcrossKeys(t *testing.T) {
 	if strings.Contains(err.Error(), "DAG(schedule=") {
 		t.Errorf("the top-level hint leaked onto a nested schedule: %v", err)
 	}
+
+	// The other ordering. The top-level mark is set BEFORE the dedup `continue`
+	// precisely so a key reported at two levels does not lose it — move the mark
+	// after the dedup and this case silently stops hinting while the one above
+	// still passes. An invariant a refactor can erase without reddening CI is
+	// not an invariant.
+	_, err = loadProjectConfig(writeProject(t, "schema_version: \"1.0\"\ndag_id: s\nbuild:\n  schedule: x\nschedule: \"@daily\"\n"))
+	if err == nil {
+		t.Fatal("the nested-then-top-level pair was accepted")
+	}
+	if !strings.Contains(err.Error(), "DAG(schedule=") {
+		t.Errorf("a top-level schedule reported after a nested one lost its hint: %v", err)
+	}
 }
 
-// The lenient decode must not depend on the unknown-key classifier. It is a
-// string match against a third-party library's prose, and when it answers "no"
-// for a file that also has a type error, discovery loses the config — which for
-// a dbt-only project means the DAG is REMOVED from the registry as "folder
-// gone". A wrong message is an acceptable failure mode for a prose match; a
-// deleted DAG is not.
+// The lenient decode must not depend on the unknown-key classifier — not
+// because the gate was reachable (measured: yaml.Unmarshal rejects the same
+// inputs the classifier mishandles, so the verdict is identical either way) but
+// because the classifier is a string match against a third-party library's
+// prose. While it gated this decode, a yaml/v3 rewording would have cost a
+// caller its config, and for a dbt-only project that means discovery drops it
+// and the DAG is removed from the registry as "folder gone". Ungated, the same
+// rewording costs an ugly message.
 func TestLenientDecodeIsNotGatedOnTheClassifier(t *testing.T) {
 	// What is observable: the lenient loader keeps the config for a file the
 	// strict loader refuses, and it reaches that answer through yaml.Unmarshal

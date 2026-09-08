@@ -150,6 +150,40 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   renamed after its directory. Separately, `validate` stat'd `dag.py` unconditionally,
   so a project whose DAG *is* the dbt project could never be validated at all; the
   check is now scoped to a `dag.py` DAG, where a missing source still fails.
+- **A hybrid DAG's dbt projects are baked into the image (#20).** `generatedDockerfile` branched on the top-level `dbt:` block and
+  had no reference to `dbt_groups` at all: for a `dag.py` with dbt task groups —
+  the authoring shape ADR 0043 defines — it COPYed only the DAG source. The
+  group's tasks then ran `dbt --project-dir <project>` from WORKDIR
+  `/home/leoflow` against a directory that was never in the image, so every dbt
+  task exited within seconds of pod start. Compile was green and so was Lite,
+  because Lite's subprocess executor reads from disk and never needs an image —
+  the gap only appeared once something built. Both the DAG source and every
+  group's project are COPYed now, deduplicated and **sorted**: `dbt_groups` is a
+  map and Go randomizes map iteration, so emitting in range order would give a
+  different image digest from an unchanged project, and a cold layer cache every
+  time. `project: "."` collapses to a single `COPY . /home/leoflow/`,
+  matching the fact that no `--project-dir` is emitted for that value. The
+  `leoflow dev` cluster path had the identical gap and gets the identical fix.
+  Paths under `dbt_groups` are validated the same way `dbt.project` already was:
+  the guard for escaping and absolute paths returned early whenever the
+  top-level `dbt:` block was absent — which is every hybrid DAG. Measured against
+  real builds: an **absolute** `project:` is the silent one — Docker resolves the
+  source against the context root, so `/opt/dbt` builds **green** against
+  `<context>/opt/dbt`, a directory nobody named. An escaping `../shared` is loud
+  but misleading: the classic builder refuses outright, and BuildKit clamps to
+  `<context>/shared` and bakes *that* if it exists — never the sibling Lite
+  resolves. Either way the message never mentions `leoflow.yaml`. Two paths still fail after this,
+  and are tracked separately: `compile` without `--build` (and `deploy
+  --skip-build`) bakes an absolute host path into the dbt entrypoint, and a
+  group with no `connection:` cannot resolve a project-baked `profiles.yml`.
+  Also corrected while in the file: the `#852` comment claimed the source COPY
+  had to sit above the `USER` drop to land root-owned. Measured against a real
+  build under both BuildKit and the classic builder, `COPY` lands `uid=0 gid=0`
+  whatever `USER` is active; what the ordering
+  actually buys is that the **final** `USER` is a **numeric** non-root UID, which
+  is what the kubelet resolves at container creation when a task pod sets
+  `runAsNonRoot` with no `runAsUser` — the pair `buildSecurityContext` sets.
+  PodSecurity admission never reads the image; it checks the PodSpec.
 
 - **HA chart posture: five render refusals for combinations that used to fail
   later, and the ServiceAccount / warm-pool docs the profile was missing.**

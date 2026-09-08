@@ -130,6 +130,26 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`compile` and `deploy --skip-build` no longer bake the operator's own
+  absolute path into dbt tasks (#993).** Whether dbt's `--project-dir` is baked
+  as an absolute host path or as the relative path inside the image was derived
+  from `!--build` — but "we did not build an image this invocation" is a
+  different question from "this DAG will run as a subprocess on this host".
+  `leoflow compile` without `--build`, and `leoflow deploy --skip-build` (whose
+  whole purpose is reusing an image built elsewhere), were both classified local,
+  so every dbt task in the resulting `dag.json` carried something like
+  `--project-dir /Users/<someone>/work/sales/analytics`. That `dag.json` is what
+  gets registered and executed in pods, so the task exits seconds after start
+  with "project directory does not exist" and nothing points at the cause — the
+  same class as #20, through the door a CI or prebuilt-image workflow actually
+  uses. The executor is chosen by server configuration
+  (`LEOFLOW_EXECUTOR_TYPE`), not by anything in the `dag.json`, so compile cannot
+  infer it; it is now an explicit option that only Lite's subprocess run mode
+  sets. **Behavior change:** a bare `leoflow compile` now emits the in-image
+  relative path. Lite is unaffected — `leoflow dev` sets the flag itself — but a
+  `dag.json` hand-compiled for a subprocess executor must now come from
+  `leoflow dev`.
+
 - **HA chart posture: five render refusals for combinations that used to fail
   later, and the ServiceAccount / warm-pool docs the profile was missing.**
   `podDisruptionBudget.enabled` keyed on a real boolean, so the string spellings

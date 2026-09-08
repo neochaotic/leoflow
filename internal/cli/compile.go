@@ -32,6 +32,20 @@ type compileOptions struct {
 	dockerfile string
 	build      bool
 	push       bool
+	// local says the compiled DAG will run under a SUBPROCESS executor on this
+	// host — Lite — rather than in a pod. It decides whether dbt's --project-dir
+	// is baked as an absolute workspace path or as the relative path inside the
+	// image, and which dbt binary parses the manifest.
+	//
+	// It is set explicitly rather than derived from `build`, which was the #993
+	// bug: "we did not build an image this invocation" is a different question.
+	// `compile` without --build and `deploy --skip-build` both target an image
+	// that exists or will be built elsewhere, and both used to bake the
+	// operator's own absolute path into every dbt task of a dag.json destined
+	// for a cluster. The executor is chosen by server configuration
+	// (LEOFLOW_EXECUTOR_TYPE), not by anything in the dag.json, so compile
+	// cannot infer this — only Lite's subprocess mode knows.
+	local bool
 }
 
 func newCompileCommand() *cobra.Command {
@@ -101,7 +115,7 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	}); rerr != nil {
 		return rerr
 	}
-	if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg, !o.build); eerr != nil {
+	if eerr := expandDbtGroupsInFile(cmd, dir, o.output, cfg, o.local); eerr != nil {
 		return eerr
 	}
 	if oerr := overlayProject(o.output, cfg); oerr != nil {
@@ -135,7 +149,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	if ierr := checkImageFlags(cmd, o.build, o.push, image); ierr != nil {
 		return ierr
 	}
-	manifest, err := loadDbtManifest(cmd, dir, cfg.Dbt, !o.build, cfg.DagID)
+	manifest, err := loadDbtManifest(cmd, dir, cfg.Dbt, o.local, cfg.DagID)
 	if err != nil {
 		return err
 	}
@@ -147,7 +161,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	// dbt_group path. On Lite: --project-dir must be absolute (the task runs from a
 	// temp workdir), and with no managed connection each task gets the zero-config
 	// duckdb profile step — unless the project ships its own profiles.yml (#575).
-	local := !o.build
+	local := o.local
 	spec, err := dbt.Compile(manifest, dbt.Meta{
 		DagID:       cfg.DagID,
 		DagVersion:  o.dagVersion,

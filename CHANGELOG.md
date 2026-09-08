@@ -149,7 +149,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   told off by `compile`, rather than silently vanishing from the workspace or being
   renamed after its directory. Separately, `validate` stat'd `dag.py` unconditionally,
   so a project whose DAG *is* the dbt project could never be validated at all; the
-  check is now scoped to a `dag.py` DAG, where a missing source still fails.
+  check is scoped to a `dag.py` DAG, where a missing source still fails, and the
+  dbt lane gets the equivalent check it never had: **`validate` now fails when
+  `dbt.project` names a directory with no `dbt_project.yml`.** That is a new hard
+  failure, breaking for anyone whose project relied on `validate` accepting it —
+  deliberately, because the command exists to say "this is fine" and it was saying
+  it for a project that cannot run. It does not yet cover `dbt_groups[*].project`;
+  that gap is tracked separately.
 - **A hybrid DAG's dbt projects are baked into the image (#20).** `generatedDockerfile` branched on the top-level `dbt:` block and
   had no reference to `dbt_groups` at all: for a `dag.py` with dbt task groups —
   the authoring shape ADR 0043 defines — it COPYed only the DAG source. The

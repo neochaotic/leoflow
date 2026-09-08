@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -79,12 +80,15 @@ func loadProjectConfigLenient(dir string) (*domain.LeoflowConfig, error) {
 func parseProjectConfig(data []byte) (cfg *domain.LeoflowConfig, unknown, err error) {
 	// The lenient decode runs FIRST and unconditionally, and its own verdict is
 	// the one that decides whether a config exists at all. That ordering is
-	// deliberate: the classifier below is a string match against a third-party
-	// library's prose, and it used to gate this decode. When it answered "no" for
-	// a file carrying an unknown key AND a type error, discovery lost the config
-	// — and for a dbt-only project that means the DAG is REMOVED from the
-	// registry as "folder gone". A wrong message is an acceptable failure mode
-	// for a prose match; a deleted DAG is not.
+	// deliberate, but it is forward insurance rather than a fix for a reachable
+	// bug: measured, DiscoverProjects returns byte-identical results with and
+	// without the restructure, because yaml.Unmarshal rejects the same inputs the
+	// classifier mishandles. What it buys is that isUnknownFieldError is a string
+	// match against a third-party library's prose. It used to GATE this decode, so
+	// a yaml/v3 bump that reworded the error would have cost a caller its config —
+	// and for a dbt-only project that means discovery drops it and the DAG is
+	// removed from the registry as "folder gone". Now the same bump costs an ugly
+	// message and nothing else.
 	var lenient domain.LeoflowConfig
 	if lerr := yaml.Unmarshal(data, &lenient); lerr != nil {
 		return nil, nil, lerr
@@ -139,17 +143,26 @@ func unknownKeyError(err error) error {
 	}
 	keys := make([]string, 0, len(te.Errors))
 	seen := map[string]bool{}
-	topLevel := false
+	// Per KEY, not per message. Two independent ORs over the same error list let
+	// any top-level unknown key light the flag while a nested `schedule` lit the
+	// hint, so `build.schedule` next to an unrelated typo got lectured about
+	// DAG(schedule=...).
+	topLevelKeys := map[string]bool{}
 	for _, e := range te.Errors {
 		m := unknownFieldRe.FindStringSubmatch(e)
-		if len(m) < 2 || seen[m[1]] {
+		if len(m) < 2 {
+			continue
+		}
+		// Marked before the dedup: a key reported at two levels must not lose
+		// its top-level mark to an early continue.
+		if strings.Contains(e, "not found in type "+leoflowConfigTypeName) {
+			topLevelKeys[m[1]] = true
+		}
+		if seen[m[1]] {
 			continue
 		}
 		seen[m[1]] = true
 		keys = append(keys, m[1])
-		if strings.Contains(e, "not found in type domain.LeoflowConfig") {
-			topLevel = true
-		}
 	}
 	slices.Sort(keys)
 	// Quote each key, then join. Sprintf("%q", ...) over a string that already
@@ -168,7 +181,7 @@ func unknownKeyError(err error) error {
 	// `schedule` nested anywhere — build.schedule, say — got told its DAG takes
 	// its schedule from DAG(schedule=...), which is not that person's problem.
 	// The TypeError entry names the struct the field was missing from.
-	if seen["schedule"] && topLevel {
+	if topLevelKeys["schedule"] {
 		// The one we taught ourselves, in three places, for three releases.
 		msg += ". A dag.py DAG takes its schedule from DAG(schedule=…); a pure-dbt DAG declares it under dbt.schedule. There is no top-level schedule:"
 	}
@@ -176,6 +189,11 @@ func unknownKeyError(err error) error {
 }
 
 var unknownFieldRe = regexp.MustCompile(`field (.+) not found in type`)
+
+// leoflowConfigTypeName is how yaml/v3 names the root config in its "not found
+// in type X" errors. Derived from the type so renaming the struct cannot quietly
+// unlink the top-level-key detection above.
+var leoflowConfigTypeName = reflect.TypeOf(domain.LeoflowConfig{}).String()
 
 // dagSourcePath resolves the DAG source file for a project. The caller is
 // expected to have applied schema defaults (cfg.ApplyDefaults), so cfg.DagSource

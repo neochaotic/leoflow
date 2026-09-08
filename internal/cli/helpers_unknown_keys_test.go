@@ -165,6 +165,21 @@ func TestScheduleHintOnlyFiresForTheTopLevelKey(t *testing.T) {
 	}
 }
 
+// ...and the gate must correlate per KEY, not per message. `topLevel` and the
+// seen-`schedule` flag were two independent ORs over the same error list, so any
+// other top-level unknown key lit the first while a nested `schedule` lit the
+// second — and someone who wrote `build.schedule` alongside an unrelated typo got
+// lectured about DAG(schedule=…). The single-key test above cannot see it.
+func TestScheduleHintDoesNotLeakAcrossKeys(t *testing.T) {
+	_, err := loadProjectConfig(writeProject(t, "schema_version: \"1.0\"\ndag_id: s\nzzz: 1\nbuild:\n  schedule: x\n"))
+	if err == nil {
+		t.Fatal("two unknown keys were accepted")
+	}
+	if strings.Contains(err.Error(), "DAG(schedule=") {
+		t.Errorf("the top-level hint leaked onto a nested schedule: %v", err)
+	}
+}
+
 // The lenient decode must not depend on the unknown-key classifier. It is a
 // string match against a third-party library's prose, and when it answers "no"
 // for a file that also has a type error, discovery loses the config — which for

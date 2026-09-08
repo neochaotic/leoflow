@@ -13,10 +13,10 @@ Closes #
 
 ## Checklist
 
-- [ ] **TDD** — a failing test preceded the production code (red → green → refactor) — [ADR 0011](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0011-tdd-strict.md)
+- [ ] **TDD** — a failing test preceded the production code (red → green → refactor) — [ADR 0011](https://neochaotic.github.io/leoflow/project/adrs/0011-tdd-strict/)
 - [ ] `make lint test` passes locally
-- [ ] GoDocs on every new exported identifier; cyclomatic complexity ≤ 15 — [ADR 0012](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0012-code-quality-standards.md)
-- [ ] No new dependency without justification; `make vuln` clean — [ADR 0014](https://github.com/neochaotic/leoflow/blob/main/docs/adr/0014-supply-chain-security.md)
+- [ ] GoDocs on every new exported identifier; cyclomatic complexity ≤ 15 — [ADR 0012](https://neochaotic.github.io/leoflow/project/adrs/0012-code-quality-standards/)
+- [ ] No new dependency without justification; `make vuln` clean — [ADR 0014](https://neochaotic.github.io/leoflow/project/adrs/0014-supply-chain-security/)
 - [ ] Public `/api/v2/` surface unchanged, or Airflow 3.2.x compatibility preserved
 - [ ] Docs updated if behavior, flags, or config changed
 - [ ] All code, comments, and commit messages are in English

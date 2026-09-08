@@ -29,7 +29,7 @@ body:
     attributes:
       label: Does this likely need an ADR?
       description: >
-        Significant or architectural changes require a draft ADR under `docs/adr/`
+        Significant or architectural changes require a draft ADR under `website/content/project/adrs/`
         with status "Proposed" (see CONTRIBUTING.md). Unsure is fine.
       options:
         - "No — small / local change"

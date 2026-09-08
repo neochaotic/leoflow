@@ -175,6 +175,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Profile:     profile,
 		Schema:      cfg.Dbt.Schema,
 		ProjectDir:  dbtProjectDir(dir, cfg.Dbt.Project, local),
+		ProfilesDir: dbtProfilesDir(dir, cfg.Dbt.Project, local),
 		Local:       local && !dbtProjectHasProfiles(filepath.Join(dir, cfg.Dbt.Project)),
 	})
 	if err != nil {
@@ -253,6 +254,7 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 			Profile:     profile,
 			Schema:      gc.Schema,
 			ProjectDir:  dbtProjectDir(dir, gc.Project, local),
+			ProfilesDir: dbtProfilesDir(dir, gc.Project, local),
 			// Auto-default duckdb (L4) only when the project has no profiles.yml of its
 			// own — never override a warehouse the user configured.
 			Local: local && !dbtProjectHasProfiles(filepath.Join(dir, gc.Project)),
@@ -336,6 +338,23 @@ func liteDbtBin(dagID string) string {
 // profiles.yml (respected) or its profile name can't be read.
 // dbtProjectHasProfiles reports whether a dbt project ships its own profiles.yml —
 // which the zero-config default duckdb (L4) must never override.
+// dbtProfilesDir returns the --profiles-dir to bake, or "" to leave dbt to
+// DBT_PROFILES_DIR. A project that ships its own profiles.yml has to be pointed
+// at explicitly: the base image aims DBT_PROFILES_DIR at an ephemeral /tmp dir
+// so dbt's writes stay off the read-only project (#852), which also means dbt
+// never looks inside the project (#994). Same absolute-vs-relative rule as
+// dbtProjectDir — the profiles live in the project directory, so it is the same
+// path.
+func dbtProfilesDir(dagDir, project string, local bool) string {
+	if !dbtProjectHasProfiles(filepath.Join(dagDir, project)) {
+		return ""
+	}
+	if d := dbtProjectDir(dagDir, project, local); d != "" {
+		return d
+	}
+	return "."
+}
+
 func dbtProjectHasProfiles(projectDir string) bool {
 	_, err := os.Stat(filepath.Join(projectDir, "profiles.yml"))
 	return err == nil

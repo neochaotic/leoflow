@@ -130,6 +130,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A dbt task with no managed connection can find its project's own
+  `profiles.yml` (#994).** The base image points `DBT_PROFILES_DIR` at an
+  ephemeral `/tmp` dir so dbt's writes stay off the read-only project (#852) —
+  and the side effect was that dbt never looked inside the project at all, so a
+  project that ships its own `profiles.yml` failed in the pod with
+  `Invalid value for '--profiles-dir': Path '/tmp/leoflow/dbt' does not exist`,
+  while the code comment claimed it was using "the image's baked profiles.yml".
+  `--profiles-dir` is now baked at the project when the project ships one and no
+  managed connection is configured. Only reads go through it: measured in a real
+  image against real dbt, the parse succeeds and `perf_info.json` still lands in
+  `/tmp/leoflow/dbt/target`, so `readOnlyRootFilesystem` is unaffected. A managed
+  connection still wins — it generates a profile from the operator's credentials
+  into `DBT_PROFILES_DIR`, and letting a file checked into the repository
+  override that would be a downgrade, so that case is pinned by a test. Applies
+  to the top-level `dbt:` block and to `dbt_groups` alike.
+
 - **`compile` and `deploy --skip-build` no longer bake the operator's own
   absolute path into dbt tasks (#993).** Whether dbt's `--project-dir` is baked
   as an absolute host path or as the relative path inside the image was derived

@@ -148,3 +148,36 @@ func TestCompiledEntrypointsAreWiredForTheRightTarget(t *testing.T) {
 		})
 	}
 }
+
+// TestDbtParseBinDoesNotDependOnTheRuntimeTarget separates the last piece of the
+// #993 conflation. Which dbt parses the manifest was gated on `local` — "the DAG
+// will run on this host" — but that is a different question from "which dbt on
+// this host is the better parser". A per-DAG venv dbt is that DAG's own, pinned
+// to the adapter its leoflow.yaml declares; PATH's is whatever the operator
+// happens to have installed. When both exist the venv one is strictly better,
+// whether the compiled artifact ends up in a pod or in a subprocess — and after
+// #993 a bare `leoflow compile` stopped being "local", so it silently lost
+// access to the venv dbt it had been using.
+func TestDbtParseBinDoesNotDependOnTheRuntimeTarget(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".leoflow", "dev", "venvs", "sales", "bin")
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	venvDbt := filepath.Join(binDir, "dbt")
+	if err := os.WriteFile(venvDbt, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // test stub must be executable
+		t.Fatal(err)
+	}
+
+	if got := dbtParseBinAt(home, "sales"); got != venvDbt {
+		t.Errorf("dbtParseBinAt = %q, want the DAG's own venv dbt %q", got, venvDbt)
+	}
+	// No venv for this DAG: fall back to PATH, which is what the not-found error
+	// downstream is written about.
+	if got := dbtParseBinAt(home, "other"); got != "dbt" {
+		t.Errorf("dbtParseBinAt with no venv = %q, want \"dbt\"", got)
+	}
+	if got := dbtParseBinAt("", "sales"); got != "dbt" {
+		t.Errorf("dbtParseBinAt with no home = %q, want \"dbt\"", got)
+	}
+}

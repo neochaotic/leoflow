@@ -325,12 +325,28 @@ func liteDbtBinAt(home, dagID string) string {
 // liteDbtBin resolves liteDbtBinAt against the user's home, so a Lite compile parses
 // the manifest with the same dbt the task runs — not a system dbt the user may not
 // have (L1).
-func liteDbtBin(dagID string) string {
+// dbtParseBinAt picks the dbt that parses the manifest: the DAG's own per-DAG
+// venv dbt when this host has one, else whatever is on PATH.
+//
+// Deliberately NOT a function of where the DAG will run. Tying it to that was
+// the #993 conflation one layer down — a venv dbt is that DAG's own, pinned to
+// the adapter its leoflow.yaml declares, while PATH's is whatever the operator
+// happens to have. When both exist the venv one is strictly the better parser,
+// whichever executor the artifact ends up on.
+func dbtParseBinAt(home, dagID string) string {
+	if v := liteDbtBinAt(home, dagID); v != "" {
+		return v
+	}
+	return "dbt"
+}
+
+// dbtParseBin is dbtParseBinAt against the real home.
+func dbtParseBin(dagID string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "dbt"
 	}
-	return liteDbtBinAt(home, dagID)
+	return dbtParseBinAt(home, dagID)
 }
 
 // writeParseDuckdbProfile writes a temporary default-duckdb profiles.yml for

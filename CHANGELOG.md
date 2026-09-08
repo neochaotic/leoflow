@@ -167,8 +167,9 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   infer it; it is now an explicit option that only Lite's subprocess run mode
   sets. **Behavior change:** a bare `leoflow compile` now emits the in-image
   relative path, and no longer writes a parse-time duckdb profile — so a project
-  with no managed connection and no `profiles.yml` of its own fails the parse
-  instead of compiling against a stub for the wrong warehouse. Which `dbt`
+  with no managed connection and no `profiles.yml` of its own has no profile for
+  `dbt parse` to resolve, and fails unless one is reachable through `~/.dbt` or
+  `DBT_PROFILES_DIR`, instead of compiling against a stub for the wrong warehouse. Which `dbt`
   parses the manifest is *not* part of this: that question does not depend on
   where the DAG will run, so the per-DAG venv's `dbt` is preferred whenever the
   host has one, image-bound compiles included. Lite itself is unaffected:

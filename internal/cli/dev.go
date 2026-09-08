@@ -749,7 +749,9 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSp
 			if _, perr := ensureWorkspaceDagVenvs(ctx, cmd, curWs, home, runtimeSrc); perr != nil {
 				return perr
 			}
-			return devCompileAndRegisterAll(ctx, cmd, curWs, compileOptions{image: o.image}, token, nil, devURL(o.port))
+			// local: this is the subprocess run mode, so tasks execute on this
+			// host and dbt needs the absolute workspace path (#993).
+			return devCompileAndRegisterAll(ctx, cmd, curWs, compileOptions{image: o.image, local: true}, token, nil, devURL(o.port))
 		}
 	}
 	return env, makeReload, nil

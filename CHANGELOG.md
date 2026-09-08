@@ -156,6 +156,79 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deliberately, because the command exists to say "this is fine" and it was saying
   it for a project that cannot run. It does not yet cover `dbt_groups[*].project`;
   that gap is tracked separately.
+- **A dbt task with no managed connection can find its project's own
+  `profiles.yml` (#994).** The base image points `DBT_PROFILES_DIR` at an
+  ephemeral `/tmp` dir so dbt's writes stay off the read-only project (#852) —
+  and the side effect was that dbt never looked inside the project at all, so a
+  project that ships its own `profiles.yml` failed in the pod with
+  `Invalid value for '--profiles-dir': Path '/tmp/leoflow/dbt' does not exist`,
+  while the code comment claimed it was using "the image's baked profiles.yml".
+  `--profiles-dir` is now baked at the project when the project ships one and no
+  managed connection is configured. Only reads go through it: measured in a real
+  image against real dbt, the parse succeeds and `perf_info.json` still lands in
+  `/tmp/leoflow/dbt/target`, so `readOnlyRootFilesystem` is unaffected. A managed
+  connection still wins — it generates a profile from the operator's credentials
+  into `DBT_PROFILES_DIR`, and letting a file checked into the repository
+  override that would be a downgrade, so that case is pinned by a test. Applies
+  to the top-level `dbt:` block and to `dbt_groups` alike — **and to Lite**,
+  where the same path was equally dead: the subprocess executor points
+  `DBT_PROFILES_DIR` at an empty per-task scratch dir, so a Lite project shipping
+  its own `profiles.yml` failed the same way. The Lite dbt e2e fixture asserts it
+  ships none, which is why nobody noticed.
+
+- **`compile` and `deploy --skip-build` no longer bake the operator's own
+  absolute path into dbt tasks (#993).** Whether dbt's `--project-dir` is baked
+  as an absolute host path or as the relative path inside the image was derived
+  from `!--build` — but "we did not build an image this invocation" is a
+  different question from "this DAG will run as a subprocess on this host".
+  `leoflow compile` without `--build`, and `leoflow deploy --skip-build` (whose
+  whole purpose is reusing an image built elsewhere), were both classified local,
+  so every dbt task in the resulting `dag.json` carried something like
+  `--project-dir /Users/<someone>/work/sales/analytics`. That `dag.json` is what
+  gets registered and executed in pods, so the task exits seconds after start
+  with "project directory does not exist" and nothing points at the cause — the
+  same class as #20, through the door a CI or prebuilt-image workflow actually
+  uses. The executor is chosen by server configuration
+  (`LEOFLOW_EXECUTOR_TYPE`), not by anything in the `dag.json`, so compile cannot
+  infer it; it is now an explicit option that only Lite's subprocess run mode
+  sets. **Behavior change:** a bare `leoflow compile` now emits the in-image
+  relative path, and no longer writes a parse-time duckdb profile — so a project
+  with no managed connection and no `profiles.yml` of its own has no profile for
+  `dbt parse` to resolve, and fails unless one is reachable through `~/.dbt` or
+  `DBT_PROFILES_DIR`, instead of compiling against a stub for the wrong warehouse. Which `dbt`
+  parses the manifest is *not* part of this: that question does not depend on
+  where the DAG will run, so the per-DAG venv's `dbt` is preferred whenever the
+  host has one, image-bound compiles included. Lite itself is unaffected:
+  `leoflow dev` sets the flag.
+- **`from leoflow import dbt_group` now resolves inside the task image, so a
+  hybrid DAG runs (#17).** A `dag.py` is not a compile-time-only artifact: the
+  runtime re-imports the module for every `python` task, so every top-level
+  import in the DAG runs again inside the task pod and inside the Lite per-DAG
+  venv. `leoflow` existed only in the parser's compile-time shim, which is on
+  `sys.path` for the duration of a parse and nowhere else — so the shape the
+  docs teach, a `dag.py` with Python tasks around a `dbt_group()` (ADR 0043),
+  compiled green and then died on its own first line with
+  `ModuleNotFoundError: No module named 'leoflow'`, in Lite and in Pro alike.
+  The runtime now ships a real `leoflow` package deriving from the Task SDK's
+  `BaseOperator` — which is load-bearing rather than tidiness, because
+  `pull >> models` dispatches to the *real* operator's `__rshift__` and would
+  never consult a bare stub's. The placeholder raises rather than returning
+  quietly if one ever reaches a pod. That is defensive rather than a live failure
+  mode — `_operator_type` classifies it as `dbt_group` on its first branch, ahead
+  of the check that would emit an operator class, so the compiler cannot produce
+  one — but it is not inert either: the runtime's generic operator path
+  instantiates an arbitrary dotted class and calls `.execute()` on it, so the
+  raise is the last line of defence for a hand-written `dag.json`. Lite's venv
+  freshness gate probes both packages, so a venv built before this existed
+  reinstalls instead of looking healthy. Nothing caught this because the only
+  mixed-mode e2e wires `BashOperator`s around the group, and a bash task never
+  imports `dag.py`; a new CI leg installs the Task SDK at the version the base
+  image pins and imports the documented example for real, and it hard-checks the
+  imports before pytest so it cannot go green by skipping. Packaging is pinned
+  down too: hatchling had silently dropped the new package from the wheel by
+  resolving the repository's root-anchored `/leoflow` ignore against its own
+  root, which the CI leg now catches because it installs the wheel rather than
+  setting `PYTHONPATH`.
 - **A hybrid DAG's dbt projects are baked into the image (#20).** `generatedDockerfile` branched on the top-level `dbt:` block and
   had no reference to `dbt_groups` at all: for a `dag.py` with dbt task groups —
   the authoring shape ADR 0043 defines — it COPYed only the DAG source. The

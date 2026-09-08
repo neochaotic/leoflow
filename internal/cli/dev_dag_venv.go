@@ -156,7 +156,12 @@ func ensureDagVenv(ctx context.Context, cmd *cobra.Command, home, dagID, runtime
 	// importable (fresh venv) or (b) the installed runtime's checksum drifts
 	// from the bundled pysrc — the binary-upgrade case (#239). Empty checksum
 	// makes the import-gate the sole signal.
-	check := exec.CommandContext(ctx, py, "-c", "import leoflow_runtime") //nolint:gosec // py is a managed per-DAG venv interpreter
+	// Both packages: leoflow_runtime runs the task, and leoflow carries the
+	// authoring names a dag.py imports at its top — which the runner re-imports
+	// per task, so a venv missing it fails every python task (#17). Gating on
+	// leoflow_runtime alone would leave a venv built before that package existed
+	// looking healthy whenever the checksum signal is empty.
+	check := exec.CommandContext(ctx, py, "-c", "import leoflow_runtime, leoflow") //nolint:gosec // py is a managed per-DAG venv interpreter
 	importOK := check.Run() == nil
 	want, cerr := runtimeSrcChecksum(runtimeSrc)
 	need := !importOK

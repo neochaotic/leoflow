@@ -21,7 +21,9 @@ no user-facing change (release-prep, chore, dependabot, docs-only) carries the
 2. **Prepare** — a `release/<tag>` branch: bump `helm/leoflow/Chart.yaml`
    `version`+`appVersion` in lockstep (ADR 0028), regenerate the chart README with
    `helm-docs`, and for a **GA** move `CHANGELOG [Unreleased]` to `[X.Y.Z] - <date>`
-   with a fresh empty `[Unreleased]` (an **rc** keeps `[Unreleased]`). Run every
+   with a fresh empty `[Unreleased]` (an **rc** keeps `[Unreleased]`), . On a **GA** the
+   published docs root is repointed too, but **after the tag exists** — see
+   below. Run every
    `scripts/check-*.sh` gate against the tag. One of them,
    `check-changelog-entry.sh`, is a pull-request gate with no question to ask
    when there is no pull request, so it reports `gate SKIP`; the cut log
@@ -34,6 +36,35 @@ no user-facing change (release-prep, chore, dependabot, docs-only) carries the
    then — behind an explicit **confirmation gate** — tags and pushes.
 5. **Watch** — follows the tag's release workflows to **PUBLISHED**, un-drafting +
    re-running if the gate retracts on a flake (#862). Writes `.release-<tag>.log`.
+
+
+## If the cut dies after the prepare PR merged
+
+The cut is a transaction with an irreversible middle. Once the prepare PR is
+merged, `main` carries the bump and the `release/<tag>` branch is gone — so a
+failure at the merge-commit gate (which is how a cut fails: the tag gate
+refuses a run that did not finish) cannot be recovered by re-invoking, because
+the re-cut guard sees `main` already carrying the version and cannot tell an
+interrupted cut from an accidental re-cut of a released one.
+
+    scripts/cut-release.sh <version> --resume
+
+picks up at the merge-commit gate. It refuses unless `main`'s `Chart.yaml`
+carries exactly the version being cut, which is what proves the prepare half
+completed, and it tags the commit that **introduced** that version rather than
+`main`'s tip — a chart version is a plateau, so anything merged since the
+prepare would otherwise be swept into the tag. When they differ it prints what
+it is excluding. There is deliberately no override for the version check: fix
+the reason the gate refused, then resume.
+
+## Publishing the docs root (GA)
+
+`website/scripts/ci/versions.json`'s `latest` entry is the ref the published
+site root is built from. A GA repoints it and archives the one it replaces —
+and the cut opens that as its own PR **after pushing the tag**, because the
+deploy checks the tag out and it does not exist until then. If that PR does not
+land, the release is still published; the docs root just still serves the
+previous GA until it does.
 
 ## Release authorization
 

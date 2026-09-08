@@ -3,7 +3,9 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -26,16 +28,33 @@ var ErrInvalidDbtProject = errors.New("invalid dbt.project")
 // inside a pod, where it surfaces as "project directory does not exist" with no
 // indication that leoflow.yaml was the cause.
 func (c *LeoflowConfig) validateDbtProject() error {
-	if c.Dbt == nil {
-		return nil
-	}
 	// Both fields feed the same filepath.Join chain: project is joined onto the
 	// DAG directory, then manifest is joined onto that result. Validating only
 	// project would leave half the defect in place.
-	for _, f := range []struct{ field, value string }{
-		{"dbt.project", c.Dbt.Project},
-		{"dbt.manifest", c.Dbt.Manifest},
-	} {
+	fields := make([]struct{ field, value string }, 0, 2+2*len(c.DbtGroups))
+	if c.Dbt != nil {
+		fields = append(fields,
+			struct{ field, value string }{"dbt.project", c.Dbt.Project},
+			struct{ field, value string }{"dbt.manifest", c.Dbt.Manifest},
+		)
+	}
+	// dbt_groups (ADR 0043) reach the same Join chain and the same build
+	// context, and this guard used to return early whenever cfg.Dbt was nil —
+	// which is every hybrid DAG, the mode leoflow actually targets. Sorted
+	// rather than ranged so a config with several bad groups always names the
+	// same one: DbtGroups is a map, and an error message that changes between
+	// identical compiles is its own bug.
+	for _, name := range slices.Sorted(maps.Keys(c.DbtGroups)) {
+		group := c.DbtGroups[name]
+		if group == nil {
+			continue
+		}
+		fields = append(fields,
+			struct{ field, value string }{"dbt_groups." + name + ".project", group.Project},
+			struct{ field, value string }{"dbt_groups." + name + ".manifest", group.Manifest},
+		)
+	}
+	for _, f := range fields {
 		if err := containedRelativePath(f.field, f.value); err != nil {
 			return err
 		}

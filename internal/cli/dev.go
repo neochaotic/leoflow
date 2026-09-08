@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -508,7 +509,12 @@ func kubectlNamespaceArgs(kubeconfig string) []string {
 // devDockerfile is the Dockerfile generated for a project that does not ship its
 // own: it layers the DAG source onto the task base image so the agent can import
 // it (matching runtime/Dockerfile's PYTHONPATH convention).
-func devDockerfile(baseImage, dagSource string, deps []string) string {
+//
+// dbtGroups carries the cleaned, sorted project directories of a hybrid DAG's
+// dbt task groups — see dbtGroupProjectDirs. They belong in the image for the
+// same reason the DAG source does: a group's tasks run `dbt --project-dir
+// <project>` from WORKDIR /home/leoflow (#20).
+func devDockerfile(baseImage, dagSource string, deps []string, dbtGroups []string) string {
 	base := filepath.Base(dagSource)
 	df := "FROM " + baseImage + "\n"
 	// Install the DAG's declared dependencies before COPY so the (rarely-changing)
@@ -516,7 +522,16 @@ func devDockerfile(baseImage, dagSource string, deps []string) string {
 	if len(deps) > 0 {
 		df += "RUN pip install --no-cache-dir " + strings.Join(deps, " ") + "\n"
 	}
-	df += fmt.Sprintf("COPY %s /home/leoflow/%s\nENV PYTHONPATH=/home/leoflow\n", base, base)
+	if slices.Contains(dbtGroups, ".") {
+		// project: "." — the project is the DAG directory; one COPY covers both.
+		df += "COPY . /home/leoflow/\n"
+	} else {
+		df += fmt.Sprintf("COPY %s /home/leoflow/%s\n", base, base)
+		for _, project := range dbtGroups {
+			df += fmt.Sprintf("COPY %s /home/leoflow/%s\n", project, project)
+		}
+	}
+	df += "ENV PYTHONPATH=/home/leoflow\n"
 	return df
 }
 
@@ -1317,7 +1332,7 @@ func ensureProjectDockerfile(cmd *cobra.Command, dir string, cfg *domain.Leoflow
 		return fmt.Errorf("resolving dependencies: %w", derr)
 	}
 	devPrintln(cmd.OutOrStdout(), "▸ generating a default Dockerfile (none found) …")
-	if werr := os.WriteFile(df, []byte(devDockerfile(devBaseImage, src, deps)), 0o600); werr != nil {
+	if werr := os.WriteFile(df, []byte(devDockerfile(devBaseImage, src, deps, dbtGroupProjectDirs(cfg))), 0o600); werr != nil {
 		return fmt.Errorf("writing Dockerfile: %w", werr)
 	}
 	return nil

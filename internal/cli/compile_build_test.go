@@ -252,3 +252,125 @@ func TestGeneratedDockerfileNoDepsNoRootSwitch(t *testing.T) {
 		t.Errorf("no deps → no root switch needed; got:\n%s", df)
 	}
 }
+
+// TestGeneratedDockerfileMixedCopiesDagSourceAndEveryGroupProject pins the fix
+// for #20. A hybrid DAG — a dag.py with dbt projects as task groups (ADR 0043),
+// which is the authoring shape leoflow targets — must bake BOTH the DAG source
+// and every group's project. generatedDockerfile branched on cfg.Dbt only and
+// had no reference to DbtGroups at all, so a group's tasks ran
+// `dbt --project-dir <project>` from WORKDIR /home/leoflow against a directory
+// that was not in the image: every dbt task exited within seconds of pod start,
+// after a green compile and a green Lite run (Lite reads from disk, so the gap
+// only appears once there is an image).
+func TestGeneratedDockerfileMixedCopiesDagSourceAndEveryGroupProject(t *testing.T) {
+	cfg := &domain.LeoflowConfig{
+		PythonVersion: "3.11",
+		Dependencies:  []string{"dbt-postgres==1.9.0"},
+		DbtGroups: map[string]*domain.DbtConfig{
+			"transform": {Project: "./transform"},
+			"marketing": {Project: "marketing"},
+		},
+	}
+	df, err := generatedDockerfile(cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("generatedDockerfile() error = %v", err)
+	}
+	for _, want := range []string{
+		"COPY dag.py /home/leoflow/dag.py",
+		"ENV PYTHONPATH=/home/leoflow",
+		"COPY transform /home/leoflow/transform",
+		"COPY marketing /home/leoflow/marketing",
+	} {
+		if !strings.Contains(df, want) {
+			t.Errorf("generatedDockerfile() missing %q, got:\n%s", want, df)
+		}
+	}
+	// The USER drop must stay last, because the kubelet resolves the image's
+	// final USER when a task pod sets runAsNonRoot with no runAsUser, and a root
+	// image fails CreateContainerConfigError (#852). Ownership is not the reason
+	// — COPY lands uid=0 gid=0 whatever USER is active, measured on a real build
+	// under both BuildKit and the classic builder — but
+	// the structure is still worth locking: a COPY emitted below the drop would
+	// mean the drop is no longer last.
+	drop := strings.LastIndex(df, "USER 65532:65532")
+	if drop < 0 {
+		t.Fatalf("generatedDockerfile() never drops back to the non-root user:\n%s", df)
+	}
+	for _, copyLine := range []string{"COPY dag.py", "COPY transform", "COPY marketing"} {
+		if strings.Index(df, copyLine) > drop {
+			t.Errorf("%q is emitted after the USER drop, so it would land task-owned:\n%s", copyLine, df)
+		}
+	}
+}
+
+// TestGeneratedDockerfileMixedGroupCopiesAreDeterministic guards ADR 0003's
+// byte-for-byte reproducibility. DbtGroups is a map and Go randomizes map
+// iteration, so emitting COPY lines in range order would produce a different
+// Dockerfile per compile — a cache-thrashing, unreproducible image.
+func TestGeneratedDockerfileMixedGroupCopiesAreDeterministic(t *testing.T) {
+	cfg := &domain.LeoflowConfig{
+		PythonVersion: "3.11",
+		DbtGroups: map[string]*domain.DbtConfig{
+			"zulu": {Project: "zulu"}, "alpha": {Project: "alpha"},
+			"mike": {Project: "mike"}, "bravo": {Project: "bravo"},
+		},
+	}
+	first, err := generatedDockerfile(cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("generatedDockerfile() error = %v", err)
+	}
+	for i := range 100 {
+		got, gerr := generatedDockerfile(cfg, "dag.py")
+		if gerr != nil {
+			t.Fatalf("generatedDockerfile() error = %v", gerr)
+		}
+		if got != first {
+			t.Fatalf("generatedDockerfile() is not deterministic (run %d differs):\n%s\n---\n%s", i, first, got)
+		}
+	}
+}
+
+// TestGeneratedDockerfileMixedGroupProjectDotEmitsOneCopy covers project: ".".
+// filepath.Clean(".") is ".", and internal/dbt/render.go omits --project-dir for
+// that value, so dbt runs from WORKDIR and the project must land at
+// /home/leoflow itself. That single COPY already carries dag.py, so emitting a
+// separate one would be redundant.
+func TestGeneratedDockerfileMixedGroupProjectDotEmitsOneCopy(t *testing.T) {
+	cfg := &domain.LeoflowConfig{
+		PythonVersion: "3.11",
+		DbtGroups:     map[string]*domain.DbtConfig{"transform": {Project: "."}},
+	}
+	df, err := generatedDockerfile(cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("generatedDockerfile() error = %v", err)
+	}
+	if n := strings.Count(df, "COPY "); n != 1 {
+		t.Errorf("generatedDockerfile() emitted %d COPY lines, want exactly 1 for project \".\":\n%s", n, df)
+	}
+	if !strings.Contains(df, "COPY . /home/leoflow/") {
+		t.Errorf("generatedDockerfile() should COPY the whole context for project \".\":\n%s", df)
+	}
+	if !strings.Contains(df, "ENV PYTHONPATH=/home/leoflow") {
+		t.Errorf("generatedDockerfile() must still set PYTHONPATH — dag.py is imported per task:\n%s", df)
+	}
+}
+
+// TestGeneratedDockerfileMixedDeduplicatesSharedProjectDir: two groups may point
+// at the same directory (different granularity or selectors over one project).
+// A duplicate COPY is a wasted layer and a diff that looks like a bug.
+func TestGeneratedDockerfileMixedDeduplicatesSharedProjectDir(t *testing.T) {
+	cfg := &domain.LeoflowConfig{
+		PythonVersion: "3.11",
+		DbtGroups: map[string]*domain.DbtConfig{
+			"staging": {Project: "./warehouse"},
+			"marts":   {Project: "warehouse"},
+		},
+	}
+	df, err := generatedDockerfile(cfg, "dag.py")
+	if err != nil {
+		t.Fatalf("generatedDockerfile() error = %v", err)
+	}
+	if n := strings.Count(df, "COPY warehouse /home/leoflow/warehouse"); n != 1 {
+		t.Errorf("generatedDockerfile() emitted the shared project COPY %d times, want 1:\n%s", n, df)
+	}
+}

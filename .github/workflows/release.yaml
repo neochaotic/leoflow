@@ -312,32 +312,98 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           mkdir -p /tmp/ws
           leoflow setup --workspace /tmp/ws </dev/null
+      # Take the image download off the boot clock. `leoflow lite --postgres
+      # docker` brings up the embedded compose (docker-compose.dev.yaml,
+      # materialized under ~/.leoflow on a binary-only install), so on a fresh
+      # runner the pull otherwise happens inside the poll below.
+      #
+      # This step is an OPTIMIZATION and must never be fatal. It is the only
+      # thing this job gained that could retract a signed release on its own,
+      # and a registry outage is not a fact about our code. On failure the pull
+      # simply happens inside the boot budget instead, which is what used to
+      # happen anyway — the budget is now wide enough to absorb it.
+      #
+      # (Three attempts help a 503 or a TLS reset. They do nothing for a Docker
+      # Hub anonymous rate limit, whose window is hours; that is precisely why
+      # this must warn rather than fail.)
+      #
+      # The tag is written out rather than read from the compose on purpose:
+      # this job deliberately has no checkout, because it tests the binary-only
+      # install path. scripts/check-lite-prepull-matches-compose.sh is what
+      # keeps the two from drifting.
+      - name: Pre-pull the Postgres image the Lite compose uses
+        run: |
+          set -u
+          for i in 1 2 3; do
+            docker pull postgres:16 && exit 0
+            echo "pull attempt $i failed; retrying in 10s" >&2
+            sleep 10
+          done
+          echo "::warning::could not pre-pull postgres:16; the pull will happen inside the boot budget instead"
       - name: Boot leoflow lite and wait for /readyz
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
+          # This job stays cheap only because `leoflow setup </dev/null` above is
+          # non-interactive and persists lite_executor: subprocess. If that
+          # default ever flips to k8s, `leoflow lite` starts building a k3d
+          # cluster inside the budget below and this job will look flaky.
+          #
           # Background lite; capture stdout+stderr so we can dump on failure.
           leoflow lite --postgres docker --port 8088 --host 127.0.0.1 >/tmp/lite.log 2>&1 &
           LITE_PID=$!
-          # Poll /readyz up to 60s. The Postgres-retry budget is 30s by
-          # itself; budget here is loose enough that a managed-PG cold extract
-          # is not penalized while still catching real hangs.
+          # 240s, not 60. What retracted v0.4.5-rc.1 was NOT the image pull —
+          # the log shows `postgres Pulled` and the container Healthy well
+          # inside the minute. What was still running at the timeout is the
+          # per-DAG venv: `pip install` of the task runtime sdist plus
+          # apache-airflow-task-sdk, an uncached PyPI resolve with a local
+          # hatchling build. First-run boot legitimately contains that.
+          #
+          # ci.yaml's lite UI smoke budgets 180s (60 x sleep 3) for the same
+          # boot on the CHEAPER managed-Postgres path — and the venv install is
+          # on that path too, since ensureWorkspaceDagVenvs runs before
+          # startDevServer. Its own comment says "its venv installs first", so
+          # the repo already knew. This gate had 60s for the heavier path.
+          #
+          # It has bitten twice, not once: v0.4.5-rc.1 attempt 1 at 60s and
+          # v0.4.3 GA attempt 1 at 61s — two of nine first attempts. Across the
+          # seven green releases the step ran 40-50s (mean 45.7, sigma 3.6), so
+          # 60s was ~4 sigma out and the tail is a PyPI download.
+          #
+          # 240s is ~5x the median and 4x under the job's own timeout-minutes:
+          # 15, which is the real hang net.
           ready=0
-          for _ in $(seq 1 60); do
+          started=$SECONDS
+          for _ in $(seq 1 240); do
             if curl -fsS http://127.0.0.1:8088/readyz >/dev/null 2>&1; then
               ready=1
               break
             fi
             sleep 1
           done
+          took=$((SECONDS - started))
           if [ "$ready" -ne 1 ]; then
-            echo "::error::/readyz never responded after 60s"
+            echo "::error::/readyz never responded after 240s"
             echo "--- lite log (tail) ---"
             tail -200 /tmp/lite.log || true
             kill -TERM "$LITE_PID" 2>/dev/null || true
             exit 1
           fi
-          echo "✓ /readyz responded"
+          # Raising the ceiling would otherwise hide a boot that doubled, so the
+          # latency is still reported — as a warning, not a failure.
+          # 75s, derived rather than picked: 1.5x the slowest of the last seven
+          # green releases (40-50s, mean 45.7, sigma 3.6 — and those figures
+          # INCLUDE the image pull the step above now removes, so the new
+          # baseline is lower). The regression this exists to catch is one
+          # heavyweight wheel entering the task-runtime dep tree, worth +20-40s;
+          # a 90s threshold would not have spoken until boot nearly doubled.
+          if [ "$took" -gt 75 ]; then
+            echo "::warning::lite cold-start took ${took}s — the last seven green releases ran 40-50s including an image pull this job no longer does. Investigate before it reaches the 240s ceiling."
+          fi
+          echo "✓ /readyz responded in ${took}s"
+          # Also to the summary, so the trend is readable across releases
+          # without pulling job logs through the API.
+          echo "lite cold-start: /readyz in ${took}s (ceiling 240s, warn 75s)" >>"$GITHUB_STEP_SUMMARY"
           # Graceful shutdown; assert SIGTERM is honored (otherwise the
           # process becomes a CI zombie and future runs leak).
           kill -TERM "$LITE_PID"

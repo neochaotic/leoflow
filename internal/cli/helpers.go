@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -75,21 +77,37 @@ func loadProjectConfigLenient(dir string) (*domain.LeoflowConfig, error) {
 // already ceased to exist. Every typo, and every key written at the wrong level,
 // was accepted in silence.
 func parseProjectConfig(data []byte) (cfg *domain.LeoflowConfig, unknown, err error) {
-	var strict domain.LeoflowConfig
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if serr := dec.Decode(&strict); serr != nil && !isUnknownFieldError(serr) {
-		// A real syntax error, not an unknown key: both loaders must fail.
-		return nil, nil, serr
-	} else if serr != nil {
-		unknown = unknownKeyError(serr)
-	}
-
+	// The lenient decode runs FIRST and unconditionally, and its own verdict is
+	// the one that decides whether a config exists at all. That ordering is
+	// deliberate: the classifier below is a string match against a third-party
+	// library's prose, and it used to gate this decode. When it answered "no" for
+	// a file carrying an unknown key AND a type error, discovery lost the config
+	// — and for a dbt-only project that means the DAG is REMOVED from the
+	// registry as "folder gone". A wrong message is an acceptable failure mode
+	// for a prose match; a deleted DAG is not.
 	var lenient domain.LeoflowConfig
 	if lerr := yaml.Unmarshal(data, &lenient); lerr != nil {
 		return nil, nil, lerr
 	}
 	lenient.ApplyDefaults()
+
+	// The strict pass is a REPORTER. It never decides whether the config parses,
+	// only what the strict callers are told about it.
+	var strict domain.LeoflowConfig
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	switch serr := dec.Decode(&strict); {
+	case serr == nil, errors.Is(serr, io.EOF):
+		// io.EOF: an empty or comments-only file. yaml.Unmarshal treats that as
+		// an empty document and so must this, or a mid-edit save in the Lite web
+		// IDE reports a bare "EOF" where it used to report the missing dag_id.
+	case isUnknownFieldError(serr):
+		unknown = unknownKeyError(serr)
+	default:
+		// A genuine decode error the lenient pass tolerated. Report it to the
+		// strict callers, but the config still stands for discovery.
+		unknown = serr
+	}
 	return &lenient, unknown, nil
 }
 
@@ -121,6 +139,7 @@ func unknownKeyError(err error) error {
 	}
 	keys := make([]string, 0, len(te.Errors))
 	seen := map[string]bool{}
+	topLevel := false
 	for _, e := range te.Errors {
 		m := unknownFieldRe.FindStringSubmatch(e)
 		if len(m) < 2 || seen[m[1]] {
@@ -128,20 +147,35 @@ func unknownKeyError(err error) error {
 		}
 		seen[m[1]] = true
 		keys = append(keys, m[1])
+		if strings.Contains(e, "not found in type domain.LeoflowConfig") {
+			topLevel = true
+		}
 	}
 	slices.Sort(keys)
-	msg := fmt.Sprintf("unknown key %q", strings.Join(keys, `", "`))
-	if len(keys) > 1 {
-		msg = fmt.Sprintf("unknown keys %q", strings.Join(keys, `", "`))
+	// Quote each key, then join. Sprintf("%q", ...) over a string that already
+	// carries the join's quotes re-escapes them and renders: unknown keys
+	// "bar\", \"foo".
+	quoted := make([]string, 0, len(keys))
+	for _, k := range keys {
+		quoted = append(quoted, strconv.Quote(k))
 	}
-	if seen["schedule"] {
+	noun := "unknown key "
+	if len(keys) > 1 {
+		noun = "unknown keys "
+	}
+	msg := noun + strings.Join(quoted, ", ")
+	// Only for the top-level key. The hint was keyed off the leaf name, so a
+	// `schedule` nested anywhere — build.schedule, say — got told its DAG takes
+	// its schedule from DAG(schedule=...), which is not that person's problem.
+	// The TypeError entry names the struct the field was missing from.
+	if seen["schedule"] && topLevel {
 		// The one we taught ourselves, in three places, for three releases.
 		msg += ". A dag.py DAG takes its schedule from DAG(schedule=…); a pure-dbt DAG declares it under dbt.schedule. There is no top-level schedule:"
 	}
 	return fmt.Errorf("%s in leoflow.yaml", msg)
 }
 
-var unknownFieldRe = regexp.MustCompile(`field ([^ ]+) not found in type`)
+var unknownFieldRe = regexp.MustCompile(`field (.+) not found in type`)
 
 // dagSourcePath resolves the DAG source file for a project. The caller is
 // expected to have applied schema defaults (cfg.ApplyDefaults), so cfg.DagSource

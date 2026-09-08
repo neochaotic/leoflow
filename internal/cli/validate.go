@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -31,6 +32,17 @@ func newValidateCommand() *cobra.Command {
 			// mode unvalidatable — the command that exists to say "this is
 			// fine" always said it was not (#996). The check is scoped, not
 			// removed: a dag.py DAG with a missing source still fails here.
+			if cfg.Dbt != nil {
+				// Scoping the dag.py check to a dag.py DAG left the dbt lane with
+				// NOTHING checked, so `validate` answered "is valid" for a dbt:
+				// block pointing at a directory that does not exist — the exact
+				// shape of #15, reintroduced by #15's own fix. The project's
+				// dbt_project.yml is the dbt equivalent of the DAG source.
+				proj := filepath.Join(dir, cfg.Dbt.Project)
+				if _, serr := os.Stat(filepath.Join(proj, "dbt_project.yml")); serr != nil {
+					return fmt.Errorf("dbt project not found: no dbt_project.yml under %s (dbt.project = %q): %w", proj, cfg.Dbt.Project, serr)
+				}
+			}
 			if cfg.Dbt == nil {
 				dagSrc := dagSourcePath(dir, cfg)
 				if _, serr := os.Stat(dagSrc); serr != nil {

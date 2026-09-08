@@ -135,3 +135,99 @@ func TestValidateStillRequiresTheDagSourceForAPythonDag(t *testing.T) {
 		t.Fatalf("validate accepted a python DAG with no dag.py: %v", err)
 	}
 }
+
+// A message that names several keys must be readable. `%q` over a string that
+// already contains the quotes from the join re-escapes them, so the headline
+// feature of this change rendered as: unknown keys "bar\", \"foo".
+func TestUnknownKeyMessageRendersSeveralKeys(t *testing.T) {
+	_, err := loadProjectConfig(writeProject(t, "schema_version: \"1.0\"\ndag_id: s\nfoo: 1\nbar: 2\n"))
+	if err == nil {
+		t.Fatal("two unknown keys were accepted")
+	}
+	if !strings.Contains(err.Error(), `unknown keys "bar", "foo"`) {
+		t.Errorf("message is not readable: %v", err)
+	}
+	if strings.Contains(err.Error(), `\"`) {
+		t.Errorf("message carries escaped quotes: %v", err)
+	}
+}
+
+// The top-level `schedule:` hint is keyed off the leaf name, so it fired for a
+// `schedule` nested anywhere — telling someone who wrote `build.schedule` that
+// their DAG takes its schedule from DAG(schedule=…), which is not their problem.
+func TestScheduleHintOnlyFiresForTheTopLevelKey(t *testing.T) {
+	_, err := loadProjectConfig(writeProject(t, "schema_version: \"1.0\"\ndag_id: s\nbuild:\n  schedule: x\n"))
+	if err == nil {
+		t.Fatal("a nested unknown key was accepted")
+	}
+	if strings.Contains(err.Error(), "DAG(schedule=") {
+		t.Errorf("the top-level hint fired for a nested schedule: %v", err)
+	}
+}
+
+// The lenient decode must not depend on the unknown-key classifier. It is a
+// string match against a third-party library's prose, and when it answers "no"
+// for a file that also has a type error, discovery loses the config — which for
+// a dbt-only project means the DAG is REMOVED from the registry as "folder
+// gone". A wrong message is an acceptable failure mode for a prose match; a
+// deleted DAG is not.
+func TestLenientDecodeIsNotGatedOnTheClassifier(t *testing.T) {
+	// What is observable: the lenient loader keeps the config for a file the
+	// strict loader refuses, and it reaches that answer through yaml.Unmarshal
+	// alone — the classifier no longer sits between them.
+	dir := writeProject(t, "schema_version: \"1.0\"\ndag_id: sales\nschedule: \"@daily\"\ndbt:\n  project: analytics\n")
+	cfg, err := loadProjectConfigLenient(dir)
+	if err != nil {
+		t.Fatalf("loadProjectConfigLenient refused a file it must still parse: %v", err)
+	}
+	if cfg.DagID != "sales" || cfg.Dbt == nil {
+		t.Errorf("lost the config: DagID=%q Dbt=%v — discovery would drop this DAG", cfg.DagID, cfg.Dbt)
+	}
+	if _, serr := loadProjectConfig(dir); serr == nil {
+		t.Error("the strict loader must still refuse it")
+	}
+
+	// A genuine type error still fails BOTH, and that is not something the
+	// restructure changes: yaml.Unmarshal rejects it too, so there is no config
+	// to hand discovery. Pinning it so nobody reads the case above as a promise
+	// that the lenient loader tolerates everything.
+	bad := writeProject(t, "schema_version: \"1.0\"\ndag_id: sales\ndependencies: 5\n")
+	if _, lerr := loadProjectConfigLenient(bad); lerr == nil {
+		t.Error("the lenient loader accepted a type error")
+	}
+}
+
+// An empty or comments-only file must not become a hard failure. Decoder.Decode
+// returns io.EOF where yaml.Unmarshal treats it as an empty document, so a
+// mid-edit save in the Lite web IDE started reporting a bare "EOF" instead of
+// the missing dag_id.
+func TestEmptyProjectConfigIsNotAnError(t *testing.T) {
+	for _, body := range []string{"", "# nada ainda\n"} {
+		cfg, err := loadProjectConfig(writeProject(t, body))
+		if err != nil {
+			t.Errorf("loadProjectConfig(%q) = %v, want the empty document to parse", body, err)
+			continue
+		}
+		if verr := cfg.Validate(); verr == nil {
+			t.Errorf("an empty config should fail Validate() on the missing dag_id, not at the decoder")
+		}
+	}
+}
+
+// #996 scoped the dag.py check to a dag.py DAG and put nothing in its place, so
+// `validate` answered "is valid" for a dbt: block pointing at a directory that
+// does not exist — the exact shape of #15, reintroduced by #15's own fix.
+func TestValidateRejectsADbtProjectThatIsNotThere(t *testing.T) {
+	dir := writeProject(t, "schema_version: \"1.0\"\ndag_id: sales\ndbt:\n  project: ./nowhere\n")
+	cmd := newValidateCommand()
+	cmd.SetArgs([]string{dir})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("validate accepted a dbt project directory that does not exist")
+	}
+	if !strings.Contains(err.Error(), "dbt_project.yml") {
+		t.Errorf("error %q should name what is missing", err)
+	}
+}

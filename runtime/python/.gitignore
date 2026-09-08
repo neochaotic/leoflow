@@ -1,0 +1,40 @@
+# This file exists for the BUILD, not for git — the repository root's .gitignore
+# already covers every pattern below.
+#
+# Hatchling excludes VCS-ignored files by default, and it finds the ignore file
+# by walking UP from its own root (runtime/python), then matches the patterns it
+# finds relative to THAT root. So the repository's `/leoflow` line — anchored to
+# the repo root, where it names the built Go binary, and which git correctly does
+# not apply here — read to hatchling as "the leoflow directory at my root" and
+# silently dropped runtime/python/leoflow from the wheel. The build succeeded and
+# the wheel simply had no authoring package in it (#17).
+#
+# hatchling's locate_file stops at the FIRST .gitignore going up, so this one
+# shadows the repository's entirely: the root cause is gone rather than opted out
+# of, VCS exclusion keeps protecting both the wheel and the sdist, and a
+# developer's global ~/.gitignore can no longer reach a build run from
+# ~/.leoflow/pysrc. Opting out with `ignore-vcs = true` did the opposite — the
+# package came back and so did every dirty file in these directories: measured,
+# the sdist then shipped .coverage from the maintainer's own tree.
+#
+# Mirrors the repository root's patterns that can apply inside these two package
+# directories. Anything the root ignores and this file does not will ride into
+# the wheel, so keep them in step.
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+.coverage
+.coverage.*
+.venv/
+venv/
+dist/
+.env
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/

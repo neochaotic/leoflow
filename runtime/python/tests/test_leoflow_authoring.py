@@ -98,11 +98,17 @@ def test_runtime_package_exports_match_the_parser_shim():
     import leoflow
 
     def public_names(path: pathlib.Path) -> set[str]:
+        # Signatures, not just names: a `granularity=` added to one twin and not
+        # the other parses green and dies in the pod, which is the shape this
+        # guards. AsyncFunctionDef too, so an async export cannot drift unseen.
         tree = ast.parse(path.read_text())
         return {
-            n.name
+            (n.name, ast.unparse(n.args))
             for n in tree.body
-            if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and not n.name.startswith("_")
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and not n.name.startswith("_")
+        } | {
+            n.name for n in tree.body
+            if isinstance(n, ast.ClassDef) and not n.name.startswith("_")
         }
 
     runtime_names = public_names(pathlib.Path(leoflow.__file__))

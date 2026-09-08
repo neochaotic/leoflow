@@ -142,8 +142,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The runtime now ships a real `leoflow` package deriving from the Task SDK's
   `BaseOperator` — which is load-bearing rather than tidiness, because
   `pull >> models` dispatches to the *real* operator's `__rshift__` and would
-  never consult a bare stub's. The placeholder refuses to execute if one ever
-  reaches a pod, rather than reporting a green run that did nothing. Lite's venv
+  never consult a bare stub's. The placeholder raises rather than returning
+  quietly if one ever reaches a pod — defensive, not a live failure mode: the
+  compiler classifies it as `dbt_group` before it can emit an operator class,
+  and the runner only ever resolves a named callable. Lite's venv
   freshness gate probes both packages, so a venv built before this existed
   reinstalls instead of looking healthy. Nothing caught this because the only
   mixed-mode e2e wires `BashOperator`s around the group, and a bash task never

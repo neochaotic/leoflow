@@ -1240,6 +1240,10 @@ jobs:
           [ -n "$v" ] || { echo "no AIRFLOW_TASK_SDK_VERSION in runtime/Dockerfile"; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "task SDK: $v"
+          # Third copy of the pin: Lite installs it into every per-DAG venv. The
+          # Dockerfile is the source of truth; this stops the two from drifting.
+          grep -q "apache-airflow-task-sdk==$v" internal/cli/dev.go ||
+            { echo "internal/cli/dev.go pins a different Task SDK than runtime/Dockerfile ($v)"; exit 1; }
       - name: Install the way the image does
         run: |
           python -m pip install --quiet pytest ./runtime/python \
@@ -1251,6 +1255,22 @@ jobs:
           print("leoflow:", leoflow.__file__)
           assert "site-packages" in leoflow.__file__, \
               f"leoflow resolved from the source tree, not the wheel: {leoflow.__file__}"
+          PY
+      - name: The installed wheel carries the two packages and nothing else
+        run: |
+          python - <<'PY'
+          import pathlib, sys, sysconfig
+          site = pathlib.Path(sysconfig.get_paths()["purelib"])
+          bad = []
+          for pkg in ("leoflow", "leoflow_runtime"):
+              d = site / pkg
+              if not (d / "__init__.py").is_file():
+                  sys.exit(f"{pkg} is not in the installed wheel — go:embed/hatchling dropped it")
+              bad += [str(f.relative_to(site)) for f in d.rglob("*")
+                      if f.is_file() and f.suffix != ".py" and "__pycache__" not in f.parts]
+          if bad:
+              sys.exit("the wheel carries non-source files: " + ", ".join(sorted(bad)))
+          print("wheel clean:", ", ".join(sorted(p.name for p in site.glob("leoflow*") if p.is_dir())))
           PY
       - name: Authoring contract
         run: python -m pytest runtime/python/tests/test_leoflow_authoring.py -q

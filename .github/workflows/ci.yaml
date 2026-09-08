@@ -467,6 +467,7 @@ jobs:
     timeout-minutes: 15
     env:
       PYTHONPATH: parser
+      PLAYWRIGHT_VERSION: "1.63.0"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -481,10 +482,39 @@ jobs:
           node-version: "20"
       - name: Build binaries
         run: make build
+      # Cache the browser so the common path stops depending on a download at
+      # all, and give the step its own ceiling. A STEP timeout marks the step
+      # and the job `failure`; the job-level timeout-minutes marks them
+      # `cancelled`, and since #975 a cancelled run is not a green run — so an
+      # over-budget job silently stops a release cut while saying nothing about
+      # why. That is what happened on the v0.4.5-rc.2 cut: this step took 539s
+      # against its usual 24s, leaving the smoke below it only 209s of the
+      # job's 900s for work that needs 213-221s. It was over before it started.
+      # The key carries the Playwright version, and the version is pinned. A
+      # constant key would freeze on today's chromium revision: actions/cache
+      # never overwrites an existing key, so the next Playwright bump would
+      # restore the wrong browser, download the right one at full cost, and
+      # then refuse to save it — the cache degrades to a pure restore cost and
+      # never self-heals until a human edits the key.
+      #
+      # Pinning also closes an inconsistency: every action here is SHA-pinned
+      # and the repo runs govulncheck, CodeQL, gitleaks and Trivy, while this
+      # step installed whatever `latest` resolved to — a package whose
+      # postinstall downloads a browser binary.
+      - name: Cache the Playwright browser
+        id: pw-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
+      # The install still runs on a cache hit: --with-deps installs OS packages
+      # the cache does not carry, and the browser download is the only part the
+      # cache shortcuts.
       - name: Install Playwright + Chromium
+        timeout-minutes: 6
         run: |
           npm init -y >/dev/null 2>&1
-          npm i --no-save playwright-core playwright
+          npm i --no-save playwright-core@"$PLAYWRIGHT_VERSION" playwright@"$PLAYWRIGHT_VERSION"
           npx playwright install --with-deps chromium
       - name: Boot Lite and run the UI smoke
         run: |
@@ -510,8 +540,25 @@ jobs:
           # Wait for the typed-params fixture DAG to register too (the trigger-form step needs it).
           for _ in $(seq 1 40); do curl -fsS -H "Authorization: Bearer $TOK" http://localhost:18080/api/v2/dags/params_demo >/dev/null 2>&1 && break; sleep 3; done
           sleep 10
+          # A `timeout` here so a hang in the smoke itself fails loudly, as
+          # exit 124 naming the command, rather than running the job out of
+          # budget into a `cancelled` that says nothing.
+          #
+          # 180s is 4x the measured node run. An earlier draft used 600s on the
+          # reasoning that it "cannot false-kill because the job wall arrives
+          # first" — which is exactly why it could never fire either: those are
+          # the same property. This step's own instrumentation settled it on the
+          # first run: node takes 45s, and it starts around t+334s of a 900s
+          # job, so anything above ~560s is unreachable.
+          #
+          # The duration prints on BOTH paths. Under `set -e` a bare invocation
+          # would skip the echo precisely when the timeout tripped, which is the
+          # one case it was added for.
+          t0=$SECONDS; rc=0
           LEOFLOW_URL=http://localhost:18080 LEOFLOW_USER=admin@leoflow.local LEOFLOW_PASS="$PW" \
-            node test/e2e/ui-smoke.js
+            timeout --kill-after=30 180 node test/e2e/ui-smoke.js || rc=$?
+          echo "ui-smoke node run: $((SECONDS - t0))s (rc=$rc)"
+          exit $rc
 
   # ─────────────────────────────────────────────────────────────────────
   # Full pod-per-task e2e on a real k3d cluster (test/e2e/e2e.sh): builds the

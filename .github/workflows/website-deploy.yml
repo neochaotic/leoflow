@@ -138,7 +138,7 @@ jobs:
           node-version: "22"
 
       - name: Setup Python (pdoc + generator post-processing)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 

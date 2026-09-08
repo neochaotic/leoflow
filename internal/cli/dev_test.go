@@ -282,7 +282,7 @@ func TestDevDagImageRef(t *testing.T) {
 }
 
 func TestDevDockerfile(t *testing.T) {
-	df := devDockerfile("leoflow-base:py3.11", "dag.py", nil)
+	df := devDockerfile("leoflow-base:py3.11", "dag.py", nil, nil)
 	for _, must := range []string{"FROM leoflow-base:py3.11", "COPY dag.py", "PYTHONPATH"} {
 		if !strings.Contains(df, must) {
 			t.Errorf("generated Dockerfile missing %q:\n%s", must, df)
@@ -292,7 +292,7 @@ func TestDevDockerfile(t *testing.T) {
 		t.Errorf("no deps -> no pip install line:\n%s", df)
 	}
 	// Declared dependencies are pip-installed before COPY (cached layer).
-	withDeps := devDockerfile("leoflow-base:py3.11", "dag.py", []string{"duckdb==1.1.3", "pandas"})
+	withDeps := devDockerfile("leoflow-base:py3.11", "dag.py", []string{"duckdb==1.1.3", "pandas"}, nil)
 	if !strings.Contains(withDeps, "RUN pip install --no-cache-dir duckdb==1.1.3 pandas") {
 		t.Errorf("deps not installed in Dockerfile:\n%s", withDeps)
 	}
@@ -703,5 +703,32 @@ func writeFakeBinary(t *testing.T, path string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestDevDockerfileCopiesDbtGroupProjects: the `leoflow dev` cluster path had
+// the same #20 gap as the compile path — it layered only the DAG source, so a
+// hybrid DAG's dbt task groups ran against project directories that were not in
+// the image. The Lite subprocess loop reads from disk and never notices, which
+// is exactly why this went unseen: the gap only appears once something builds.
+func TestDevDockerfileCopiesDbtGroupProjects(t *testing.T) {
+	cfg := &domain.LeoflowConfig{DbtGroups: map[string]*domain.DbtConfig{
+		"transform": {Project: "./transform"},
+		"marketing": {Project: "marketing"},
+	}}
+	df := devDockerfile("leoflow-base:py3.11", "dag.py", nil, dbtGroupProjectDirs(cfg))
+	for _, want := range []string{
+		"COPY dag.py /home/leoflow/dag.py",
+		"COPY marketing /home/leoflow/marketing",
+		"COPY transform /home/leoflow/transform",
+		"ENV PYTHONPATH=/home/leoflow",
+	} {
+		if !strings.Contains(df, want) {
+			t.Errorf("devDockerfile() missing %q, got:\n%s", want, df)
+		}
+	}
+	// Sorted, for the same reproducibility reason as the compile path.
+	if strings.Index(df, "COPY marketing") > strings.Index(df, "COPY transform") {
+		t.Errorf("devDockerfile() emits group COPYs out of sorted order:\n%s", df)
 	}
 }

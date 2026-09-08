@@ -5,11 +5,44 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/neochaotic/leoflow/internal/domain"
 	"github.com/neochaotic/leoflow/internal/version"
 )
+
+// dbtGroupProjectDirs returns the distinct project directories the dbt_groups
+// of a dag.py DAG need baked into the image, cleaned and in a stable order.
+//
+// Sorted rather than ranged: DbtGroups is a map and Go randomizes map
+// iteration, so emitting in range order would give a different Dockerfile on
+// every compile — thrashing the layer cache and breaking the byte-for-byte
+// reproducibility ADR 0003 promises. Deduplicated because two groups may cover
+// one project with different granularity or selectors, and a repeated COPY is a
+// wasted layer that reads like a bug in a diff.
+//
+// The cleaned form is what the baked flag resolves against: dbtProjectDir
+// returns the value verbatim, so `--project-dir ./transform` from WORKDIR
+// /home/leoflow lands on /home/leoflow/transform — which is where
+// filepath.Clean puts the COPY destination.
+func dbtGroupProjectDirs(cfg *domain.LeoflowConfig) []string {
+	seen := make(map[string]bool, len(cfg.DbtGroups))
+	dirs := make([]string, 0, len(cfg.DbtGroups))
+	for _, group := range cfg.DbtGroups {
+		if group == nil || group.Project == "" {
+			continue
+		}
+		project := filepath.Clean(group.Project)
+		if seen[project] {
+			continue
+		}
+		seen[project] = true
+		dirs = append(dirs, project)
+	}
+	slices.Sort(dirs)
+	return dirs
+}
 
 // generatedDockerfileName is the file a yaml-driven build writes its synthesized
 // Dockerfile to when the project ships none. The leading dot keeps it out of the
@@ -105,7 +138,13 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 	// `--user` install whose console scripts (e.g. `dbt`) land in ~/.local/bin, which
 	// is not on PATH — so a synthesized dbt image would fail `dbt: command not found`.
 	// Install as root (system site → /usr/local/bin on PATH), then drop back to the
-	// non-root runtime USER before the source COPY (#852).
+	// non-root runtime USER as the LAST instruction, so PodSecurity's runAsNonRoot
+	// admits the pod (#852).
+	//
+	// The drop being last is not what makes the copied source read-only to the
+	// task. COPY without --chown lands uid=0 gid=0 whatever USER is active —
+	// measured against a real build, both before and after a USER instruction —
+	// so the ownership holds regardless of where the drop sits.
 	rootForInstall := len(cfg.SystemPackages) > 0 || len(deps) > 0
 	if rootForInstall {
 		b.WriteString("USER root\n")
@@ -126,8 +165,9 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 		// + models/ + baked manifest.json) to the workdir and set no PYTHONPATH. The
 		// task runs `dbt --project-dir <project>` from WORKDIR /home/leoflow, so the
 		// project must land at /home/leoflow/<project> matching the baked --project-dir.
-		// COPYed while still root, so the project is read-only to the task: dbt writes
-		// target/, logs/, and profiles.yml to /tmp (base ENV), never the project (#852).
+		// The project is read-only to the task because COPY lands it root-owned, not
+		// because of where it sits relative to the USER drop: dbt writes target/,
+		// logs/, and profiles.yml to /tmp (base ENV), never the project (#852).
 		project := filepath.Clean(cfg.Dbt.Project)
 		fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\n", project, project)
 		if rootForInstall {
@@ -135,8 +175,27 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 		}
 		return b.String(), nil
 	}
+	// A dag.py DAG, with or without dbt task groups (ADR 0043). Both the DAG
+	// source and every group's project have to be in the image: a group's tasks
+	// run `dbt --project-dir <project>` from WORKDIR /home/leoflow, so a project
+	// that was never COPYed makes every dbt task exit within seconds of pod
+	// start — after a green compile and a green Lite run, because Lite's
+	// subprocess executor reads from disk and never needs the image (#20).
 	base := filepath.Base(dagSource)
-	fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\nENV PYTHONPATH=/home/leoflow\n", base, base)
+	groups := dbtGroupProjectDirs(cfg)
+	if slices.Contains(groups, ".") {
+		// project: "." means the dbt project IS the DAG directory. render.go
+		// omits --project-dir for that value, so dbt runs from WORKDIR and the
+		// whole context must land at /home/leoflow — one COPY that already
+		// carries dag.py and subsumes every other group directory.
+		b.WriteString("COPY . /home/leoflow/\n")
+	} else {
+		fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\n", base, base)
+		for _, project := range groups {
+			fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\n", project, project)
+		}
+	}
+	b.WriteString("ENV PYTHONPATH=/home/leoflow\n")
 	if rootForInstall {
 		b.WriteString("USER 65532:65532\n")
 	}

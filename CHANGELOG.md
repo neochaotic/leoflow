@@ -130,6 +130,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A hybrid DAG's dbt projects are baked into the image, so its dbt tasks can
+  run (#20).** `generatedDockerfile` branched on the top-level `dbt:` block and
+  had no reference to `dbt_groups` at all: for a `dag.py` with dbt task groups —
+  the authoring shape ADR 0043 defines — it COPYed only the DAG source. The
+  group's tasks then ran `dbt --project-dir <project>` from WORKDIR
+  `/home/leoflow` against a directory that was never in the image, so every dbt
+  task exited within seconds of pod start. Compile was green and so was Lite,
+  because Lite's subprocess executor reads from disk and never needs an image —
+  the gap only appeared once something built. Both the DAG source and every
+  group's project are COPYed now, deduplicated and **sorted**: `dbt_groups` is a
+  map and Go randomizes map iteration, so emitting in range order would give a
+  different Dockerfile per compile and break the byte-for-byte reproducibility
+  of ADR 0003. `project: "."` collapses to a single `COPY . /home/leoflow/`,
+  matching the fact that no `--project-dir` is emitted for that value. The
+  `leoflow dev` cluster path had the identical gap and gets the identical fix.
+  Also corrected while in the file: the `#852` comment claimed the source COPY
+  had to sit above the `USER` drop to land root-owned. Measured against a real
+  build, `COPY` lands `uid=0 gid=0` whatever `USER` is active; what the ordering
+  actually buys is that the **final** `USER` is non-root, which is what
+  PodSecurity's `runAsNonRoot` admits on.
+
 - **HA chart posture: five render refusals for combinations that used to fail
   later, and the ServiceAccount / warm-pool docs the profile was missing.**
   `podDisruptionBudget.enabled` keyed on a real boolean, so the string spellings

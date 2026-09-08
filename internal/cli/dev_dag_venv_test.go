@@ -126,10 +126,15 @@ func TestEnsureDagVenvSkipsAllGatesWhenAlreadyFresh(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	// A python stub that always succeeds — used for the `python -c "import
-	// leoflow_runtime"` gate. Any args are ignored.
+	// A python stub that always succeeds — used for the importability gate.
+	// It records its args so the gate's payload can be asserted below: the
+	// runner re-imports the user's dag.py per task, so a venv that has
+	// leoflow_runtime but not leoflow looks healthy here and then fails every
+	// python task in Lite (#17).
 	pyStub := filepath.Join(binDir, "python")
-	if err := os.WriteFile(pyStub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	argvLog := filepath.Join(home, "py-argv")
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argvLog + "\nexit 0\n"
+	if err := os.WriteFile(pyStub, []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// A pysrc fixture so runtimeSrcChecksum returns a stable value; then
@@ -155,6 +160,21 @@ func TestEnsureDagVenvSkipsAllGatesWhenAlreadyFresh(t *testing.T) {
 	}
 	if got != pyStub {
 		t.Errorf("ensureDagVenv returned %q, want %q (the stub)", got, pyStub)
+	}
+
+	// The freshness gate must probe BOTH packages. leoflow carries the
+	// authoring names a dag.py imports at its top (dbt_group, ADR 0043), and
+	// runner.py re-imports that module for every python task — so a venv
+	// holding only leoflow_runtime passes this gate and then fails every
+	// python task in the pod. Gating on leoflow_runtime alone left a venv
+	// built before that package existed looking fresh whenever the checksum
+	// signal is empty.
+	argv, rerr := os.ReadFile(argvLog)
+	if rerr != nil {
+		t.Fatalf("the python stub recorded no args: %v", rerr)
+	}
+	if !strings.Contains(string(argv), "import leoflow_runtime, leoflow") {
+		t.Errorf("importability gate probed %q, want it to import leoflow_runtime AND leoflow", strings.TrimSpace(string(argv)))
 	}
 }
 

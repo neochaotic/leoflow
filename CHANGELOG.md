@@ -282,6 +282,25 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not-ready rather than report nothing at all. An **ahead** schema still passes,
   as it does at boot — expand-contract migrations keep older code working, and
   failing it would break `helm rollback`.
+### Testing
+
+- **The DAG base-image pin is now verified end to end, for both of its branches
+  (#1032).** A generated DAG Dockerfile builds `FROM
+  ghcr.io/neochaotic/leoflow-runtime:py<ver>-v<X.Y.Z>` when the CLI is a released
+  build and from the moving `:py<ver>` line otherwise, and that immutability is
+  what makes a base-image bump safe to ship in a patch. Only the pure function
+  choosing the tag was tested; nothing asserted that a real, version-stamped
+  binary emits it. Worse, the version stamp is exactly what selects the branch —
+  `make build` stamps `git describe` — so which branch the toolchain exercised
+  flipped with the distance from the last tag: pinned on the tag commit, moving
+  one commit later, with nothing declaring which was under test and nothing
+  failing when it changed. A new integration test (`go test -tags integration
+  ./internal/cli/`, `make test-integration`) builds the CLI three times with the
+  version linked in — the GoReleaser release form `9.9.9`, the tag form `v9.9.9`,
+  and a describe form `v9.9.9-3-gdeadbee` — compiles a scaffolded project with no
+  `base_image:`, and asserts the exact `FROM` the builder is handed. Needs no
+  cluster and no registry, so it runs on every pull request. No shipped behavior
+  changes.
 
 ## [0.4.5] - 2026-09-09
 

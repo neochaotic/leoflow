@@ -202,6 +202,52 @@ func dagSourcePath(dir string, cfg *domain.LeoflowConfig) string {
 	return filepath.Join(dir, cfg.DagSource)
 }
 
+// regularFileExists reports whether path names an existing regular file.
+//
+// The regularity test is load-bearing, not defensive. `dag_source` has no
+// pattern in the authoring schema, so `dag_source: "."` is legal and stats
+// successfully as the project directory — a plain existence check refuses every
+// dbt-only project with "delete .". A directory literally named dag.py stats
+// the same way.
+func regularFileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular()
+}
+
+// errDbtBlockWithDagSource refuses a project carrying BOTH a top-level dbt:
+// block and a DAG source, because the two describe different DAGs and only one
+// of them can win.
+//
+// It used to be the dbt: block, silently: compile routes on cfg.Dbt before the
+// parser is ever invoked, so the Python was never read and nothing said so. The
+// author's whole feedback loop — validate, compile, deploy — reported success
+// while shipping a DAG missing every non-dbt task (#1001). This is also the
+// state a migration passes through, since writing the dag.py before deleting
+// dbt: is the order a person naturally works in.
+//
+// Refusing rather than merging keeps the semantics question ("which wins?
+// how would they compose?") out of the decision: there is no reading of both
+// blocks at once that the author could have intended.
+func errDbtBlockWithDagSource(dir string, cfg *domain.LeoflowConfig) error {
+	if cfg == nil || cfg.Dbt == nil {
+		return nil
+	}
+	src := dagSourcePath(dir, cfg)
+	// Absence is the ordinary case — a genuine dbt-only project has no DAG
+	// source — so it is not an error to report, and an unreadable path is not
+	// evidence of a conflict either.
+	if !regularFileExists(src) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s declares a top-level dbt: block and %s also exists; refusing, because the two describe different DAGs.\n"+
+			"  To keep the Python: delete the dbt: block, move the project under dbt_groups.<name>: in %s,\n"+
+			"                      and call dbt_group(\"<name>\") in %s.\n"+
+			"  To keep the dbt-only DAG: delete %s.\n"+
+			"(Compiling the pair used to succeed and drop the Python silently.)",
+		projectConfigPath(dir), src, projectConfigPath(dir), src, src)
+}
+
 // configFilePath returns the config file to load: the --config flag when set,
 // otherwise the default path when it exists, otherwise empty (defaults + env).
 func configFilePath(cmd *cobra.Command) string {

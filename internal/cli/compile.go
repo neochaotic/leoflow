@@ -83,6 +83,9 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if verr := cfg.Validate(); verr != nil {
 		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
 	}
+	if derr := errDbtBlockWithDagSource(dir, cfg); derr != nil {
+		return derr
+	}
 	// Self-heal the extracted parser sources before running the parser, so a binary
 	// upgrade (new features like dbt vs a stale ~/.leoflow/pysrc) never surfaces as
 	// a confusing "not supported" error (#239).

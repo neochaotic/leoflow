@@ -319,7 +319,8 @@ live-query coverage needs real accounts and CI secrets.
 
 ## If your DAG is only models
 
-A DAG whose tasks are *only* dbt models can skip the `dag.py`: declare the project
+A DAG whose tasks are *only* dbt models has no `dag.py` — and **must not carry
+one**, even an empty placeholder: `compile` refuses the pair. Declare the project
 under a top-level `dbt:` block and the shape comes from dbt's `ref()`/`source()`
 graph. It is one file fewer to start with.
 
@@ -339,9 +340,10 @@ DAG-wide — all four come from `leoflow.yaml` and apply to both shapes.
 
 **Adding one Python task means rewriting the DAG.** Delete `dbt:`, add
 `dbt_groups:`, write a `dag.py`, and move the schedule from `dbt.schedule` to
-`DAG(schedule=…)`. **Delete `dbt:` first.** A project that has both a top-level
-`dbt:` block and a `dag.py` compiles green and silently ignores the Python —
-the `dbt:` block wins before the parser is consulted
+`DAG(schedule=…)`. **Delete `dbt:` in the same change.** A project carrying both
+a top-level `dbt:` block and a `dag.py` is refused by `compile` and `validate`,
+naming which block to remove — the two describe different DAGs and there is no
+reading of both at once
 ([#1001](https://github.com/neochaotic/leoflow/issues/1001)).
 
 **Every `task_id` changes**: the shortcut emits bare node ids

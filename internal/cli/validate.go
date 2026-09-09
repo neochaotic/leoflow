@@ -32,6 +32,9 @@ func newValidateCommand() *cobra.Command {
 			// mode unvalidatable — the command that exists to say "this is
 			// fine" always said it was not (#996). The check is scoped, not
 			// removed: a dag.py DAG with a missing source still fails here.
+			if derr := errDbtBlockWithDagSource(dir, cfg); derr != nil {
+				return derr
+			}
 			if cfg.Dbt != nil {
 				// Scoping the dag.py check to a dag.py DAG left the dbt lane with
 				// NOTHING checked, so `validate` answered "is valid" for a dbt:

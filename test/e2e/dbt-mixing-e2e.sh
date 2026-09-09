@@ -196,8 +196,12 @@ jq -e '.tasks[] | select(.task_id=="transform__raw") | .depends_on | index("pre"
 jq -e '.tasks[] | select(.task_id=="post") | .depends_on | index("transform__mart")' "$PROJ/dag.json" >/dev/null \
   || fail "downstream operator 'post' is not wired to the group leaf"
 # The image the COMPILER produced, asserted directly. A red run only says "a task
-# failed"; these name the property. Note the run does NOT prove all of them: it
-# never writes into the project, so A5 is a property only this block checks.
+# failed"; these name the property.
+#
+# The write probe below is the one the cluster run cannot stand in for. dbt's only
+# write into the project is its .user.yml tracking cookie, dropped in the profiles
+# dir — and dbt swallows the EACCES — so a writable project produces an identical
+# green run. Only this block can tell the two apart.
 log "Asserting the generated image"
 docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'test -f /home/leoflow/dag.py' \
   || fail "the generated Dockerfile did not COPY the DAG source"
@@ -214,16 +218,22 @@ jq -e '[.tasks[] | select(.task_id | startswith("transform__")) | .entrypoint | 
 jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not] | all' "$PROJ/dag.json" >/dev/null \
   || fail "an absolute host path was baked into a task entrypoint (#993)"
 
-# F9: the adapter must come from dependencies:, since no hand-written Dockerfile
+# The adapter must come from dependencies:, since no hand-written Dockerfile
 # installs it any more. Without this, deleting the pip layer from the generated
-# Dockerfile leaves all the assertions above green.
-docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'command -v dbt >/dev/null' \
-  || fail "the declared adapter (dependencies:) is not installed in the generated image"
+# Dockerfile leaves every assertion above green. Import the adapter rather than
+# probing for the dbt binary, so the check and its message are one statement.
+docker run --rm --entrypoint python "$DAG_IMAGE" -c 'import dbt.adapters.postgres' \
+  || fail "the adapter declared in dependencies: is not installed in the generated image"
 
 # #993 CANNOT manifest under --build: `local` is false either way there, so the
 # assertion above is a canary, not a proof. The defect needs a bare compile —
 # which is also the door a CI or prebuilt-image workflow actually walks through.
 "$ROOT/bin/leoflow" compile "$PROJ" ${PARSER_CMD[@]+"${PARSER_CMD[@]}"} --image "$DAG_IMAGE" -o "$PROJ/nobuild.json"
+# Anchor first: `all` over an empty array is true, so without this the check
+# below would go green measuring nothing if the group ever stopped expanding —
+# the same shape it was added to remove, one level down.
+jq -e '[.tasks[] | select(.task_id | startswith("transform__"))] | length == 3' "$PROJ/nobuild.json" >/dev/null \
+  || fail "the bare compile did not expand the dbt_group — the #993 check below would pass on nothing"
 jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not] | all' "$PROJ/nobuild.json" >/dev/null \
   || fail "a bare compile baked an absolute host path into a pod-bound dag.json (#993)"
 

@@ -81,9 +81,22 @@ self_test() {
 	printf 'website/content/operate/x.md\n' > "$tmp/f"
 	check X "$tmp/f" >/dev/null || { echo "self-test FAIL: docs-only PR rejected" >&2; return 1; }
 
+	# Exercise the CLI ENTRYPOINT, not just check(). The bug this catches:
+	# the entrypoint forwarded only $1, dropping the file list, so every real
+	# invocation diffed <base>...HEAD (empty) and passed. check() was fine.
+	rc=0; bash "$0" X "$tmp/c" >/dev/null 2>&1 || rc=$?
+	[ "$rc" -ne 0 ] || { echo "self-test FAIL: entrypoint ignored the file list" >&2; return 1; }
+	rc=0; bash "$0" X "$tmp/f" >/dev/null 2>&1 || rc=$?
+	[ "$rc" -eq 0 ] || { echo "self-test FAIL: entrypoint rejected a docs-only PR" >&2; return 1; }
+
 	echo "check-docs-updated self-test: ok"
 }
 
 if [ "${1:-}" = "--self-test" ]; then self_test; exit $?; fi
-[ $# -ge 1 ] || { echo "usage: $0 <base-ref> | --self-test" >&2; exit 2; }
-check "$1"
+[ $# -ge 1 ] || { echo "usage: $0 <base-ref> [changed-files-file] | --self-test" >&2; exit 2; }
+# Forward BOTH arguments. This used to be `check "$1"`, which silently dropped
+# the file list and diffed <base>...HEAD instead — empty in CI, so the gate
+# passed everything. The self-test never caught it because it calls check()
+# directly and bypasses this line, so the only broken path was the only one
+# CI uses. A gate whose entrypoint is inert is worse than no gate.
+check "$@"

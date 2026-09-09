@@ -47,6 +47,22 @@ die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---- pure logic (unit-testable, no network) --------------------------------
 
+# flake_verdict <log-text> -> prints "flake" | "real" | "unknown"
+#
+# "unknown" is a distinct answer on purpose. A job that dies in `Initialize
+# containers` — the service-container pull, this repo's most frequent failure
+# (#1007) — has no step log, so `gh run view --log-failed` returns EMPTY. The
+# caller used to grep that empty string, get no match, and conclude "not a
+# flake", which disabled the rerun loop for the one failure it most needed to
+# handle (#978). No evidence is not evidence of absence: for a cut, unknown
+# means rerun, because a rerun is cheap and a stopped cut on a transient is not.
+flake_verdict() {
+  local lg="${1:-}"
+  [ -n "$lg" ] || { echo unknown; return 0; }
+  if printf '%s' "$lg" | grep -qE "$FLAKE_RE"; then echo flake; else echo real; fi
+}
+
+
 # normalize_tag: accept "0.4.4", "v0.4.4", "0.4.4-rc.1" -> "v0.4.4[-rc.1]".
 normalize_tag() { local v="${1#v}"; printf 'v%s' "$v"; }
 # chart_version: the SemVer the Helm chart carries (no leading v).
@@ -59,6 +75,16 @@ valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; }
 self_test() {
   local fail=0
   _eq() { [ "$1" = "$2" ] || { echo "FAIL: $3: '$1' != '$2'"; fail=1; }; }
+  # flake_verdict: the three answers, and the one that used to be missing.
+  _eq "$(flake_verdict 'Error: toomanyrequests: Rate exceeded')" "flake"   "rate limit is a flake"
+  _eq "$(flake_verdict 'FAIL: TestFoo assertion failed')"        "real"    "a test failure is real"
+  _eq "$(flake_verdict '')"                                      "unknown" "an unreadable log is UNKNOWN, not a non-flake (#978)"
+  # The regression this locks: `Initialize containers` leaves no step log, so
+  # --log-failed returns empty. Treating that as "real" stopped the cut on this
+  # repo's most common transient. Assert the two are not the same answer.
+  _eq "$([ "$(flake_verdict '')" = "$(flake_verdict 'FAIL: TestFoo assertion failed')" ] && echo same || echo different)" \
+      "different" "empty and a genuine failure must not classify alike"
+
   _eq "$(normalize_tag 0.4.4)"      "v0.4.4"        "normalize bare"
   _eq "$(normalize_tag v0.4.4)"     "v0.4.4"        "normalize v"
   _eq "$(normalize_tag v0.4.4-rc.1)" "v0.4.4-rc.1"  "normalize rc"
@@ -934,8 +960,7 @@ main() {
       fi
       # Still nothing to read: treat it as UNKNOWN, which for a cut means rerun
       # rather than stop. A rerun is cheap; a stopped cut on a transient is not.
-      [ -z "$lg" ] && continue
-      printf '%s' "$lg" | grep -qE "$FLAKE_RE" || isflake=0
+      [ "$(flake_verdict "$lg")" = "real" ] && isflake=0
     done
     if [ "$isflake" = 1 ] && [ "$reruns" -lt 8 ]; then
       reruns=$((reruns+1)); warn "release flake -> rerun #$reruns"

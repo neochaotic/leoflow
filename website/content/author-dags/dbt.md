@@ -275,8 +275,8 @@ Airflow's per-task retry. Choose per DAG:
 - **Cheap/idempotent models at scale → `level`/`folder`** — pay a little recompute
   on the rare retry, save on pod startups.
 
-Resumable fused retries (persisting `run_results.json` so `dbt retry` can skip the
-already-built models) are tracked as a future enhancement.
+**Planned:** resumable fused retries — persisting `run_results.json` so `dbt retry`
+skips the already-built models ([#569](https://github.com/neochaotic/leoflow/issues/569)).
 
 ---
 
@@ -329,15 +329,22 @@ leaving it is a migration rather than an edit.
 
 **It cannot express a task that is not a dbt model.** No sensors, no provider
 operators, no Python or Bash. And because those live on the DAG object a
-`dag.py` builds, it also has nowhere to declare `start_date`, `end_date`,
-`catchup`, `max_active_runs`, `max_active_tasks` or DAG-level `params`. A
-top-level `connections:`/`variables:` is worse than rejected — the schema accepts
-it and the compiled DAG silently drops it (#997). Per-task `retries`, `resources`, `alerts`
-and `staging` do work — those come from `leoflow.yaml` and apply to both shapes.
+`dag.py` builds, it also has nowhere to declare `start_date`, `catchup`,
+`max_active_runs` or DAG-level `params`. (`end_date` and `max_active_tasks` are
+not author-settable on *either* path yet — [#797](https://github.com/neochaotic/leoflow/issues/797).)
+A top-level `connections:`/`variables:` is worse than rejected — the schema accepts
+it and the compiled DAG silently drops it ([#997](https://github.com/neochaotic/leoflow/issues/997)).
+`retries` and `resources` can be scoped per task; `alerts` and `staging` are
+DAG-wide — all four come from `leoflow.yaml` and apply to both shapes.
 
 **Adding one Python task means rewriting the DAG.** Delete `dbt:`, add
 `dbt_groups:`, write a `dag.py`, and move the schedule from `dbt.schedule` to
-`DAG(schedule=…)`. **Every `task_id` changes**: the shortcut emits bare node ids
+`DAG(schedule=…)`. **Delete `dbt:` first.** A project that has both a top-level
+`dbt:` block and a `dag.py` compiles green and silently ignores the Python —
+the `dbt:` block wins before the parser is consulted
+([#1001](https://github.com/neochaotic/leoflow/issues/1001)).
+
+**Every `task_id` changes**: the shortcut emits bare node ids
 (`stg`), a group namespaces them (`transform__stg`). That breaks run-history
 continuity and any per-task override in `tasks:` bound by id.
 {{% /alert %}}

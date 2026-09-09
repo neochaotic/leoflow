@@ -212,8 +212,10 @@ func highestPythonVersion(projects []Project) string {
 // "3.11". Components are compared numerically (so "3.10" > "3.9", which naive
 // string comparison gets wrong since '1' < '9'). Non-numeric or malformed
 // components fall back to string compare so the function never panics on
-// bad input — caller filters to the schema-allowed set ("3.10|3.11|3.12|3.13"
-// today) before relying on the result.
+// bad input — caller filters to the schema-allowed set (the python_version enum
+// in internal/domain/schemas/leoflow-yaml-schema.json, reachable as
+// domain.SupportedPythonVersions) before relying on the result. Naming the
+// versions here was a fourth copy of that list and had already gone stale.
 func pythonVersionLess(a, b string) bool {
 	aParts := strings.Split(a, ".")
 	bParts := strings.Split(b, ".")

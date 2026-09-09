@@ -6,6 +6,64 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A `py3.13` task base image, and one list that decides which ones exist
+  (#1031).** `ghcr.io/neochaotic/leoflow-runtime:py3.13` is now published
+  alongside `py3.10`/`py3.11`/`py3.12` — multi-arch and cosign-signed like its
+  siblings — so `python_version: "3.13"` works in `leoflow.yaml`. **3.13 is the
+  ceiling, and it is set by the dbt adapters, not by Airflow:** `dbt-core` and
+  `dbt-postgres` publish for 3.14, but `dbt-snowflake`, `dbt-bigquery`,
+  `dbt-databricks` and `dbt-duckdb` all stop at 3.13. A `py3.14` base would give
+  you an image where `dbt-postgres` installs and `dbt-snowflake` does not,
+  discovered inside your build rather than ours, so it is not published.
+
+  The set of published lines was stated in five places and only one of them was
+  enforced, so they had already drifted in both directions — the release
+  published a `py3.10` the CLI's host detector would never select, and the
+  detector probed for a 3.13 nobody published. There is now one list: the
+  `python_version` enum in the authoring schema, which is what
+  `leoflow compile` already validates against. `scripts/check-python-runtime-matrix.sh`
+  fails CI when the release matrix, `make runtime-images`, the
+  `runtime/Dockerfile` comment, the runtime helper's `requires-python` floor or
+  this reference disagree with it. Both directions of that drift used to surface
+  in *your* build — a selectable version with no published leg is a
+  `docker pull` 404 minutes into a compile, naming an image you never typed.
+
+- **A weekly Python end-of-life watch.** Every other supply-chain signal in the
+  repo (Dependabot, Trivy, govulncheck) reacts to a CVE that already exists. A
+  base image whose Python line has gone EOL produces the opposite signal: it
+  stops changing, because `docker-library/python` stops rebuilding an EOL line
+  the day after, while the CVEs underneath it keep accumulating. The scheduled
+  security workflow now asks endoflife.date instead, and opens a tracking issue
+  when a line we still call supported comes within 270 days of EOL, or when a
+  line we already deprecated is still being published past its own removal date.
+  It never fails a build on a date.
+
+### Deprecated
+
+- **`python_version: "3.10"` — the `py3.10` base image stops being published
+  after 2026-10-31.** Python 3.10 reaches upstream end-of-life on that date, and
+  `docker-library/python` stops rebuilding an EOL line the day after
+  (`python:3.9-slim` was last rebuilt 2025-11-01, one day after 3.9 went EOL).
+  From November, `python:3.10-slim-bookworm` — and therefore
+  `ghcr.io/neochaotic/leoflow-runtime:py3.10` — receives no further OS security
+  updates and accumulates unfixed CVEs indefinitely.
+
+  **Nothing breaks today.** The `py3.10` leg keeps being built and pushed on
+  every release until then, and images you have already built keep running. This
+  is announced rather than dropped silently because a DAG image is built `FROM`
+  the base and many projects pin `base_image`, so our choice becomes yours until
+  you rebuild. `leoflow compile` now prints a warning when your project resolves
+  to a deprecated line — including when you pin one of our published `py3.10`
+  tags through `base_image` — naming the removal date and the replacement. The
+  warning is at compile, not at task boot: the author choosing the interpreter is
+  the only person who can change it, and a per-task-pod warning would reach the
+  operator instead and repeat on every run until people filtered it out.
+
+  **What to do:** set `python_version: "3.11"` (or `"3.12"` / `"3.13"`) in
+  `leoflow.yaml` and rebuild.
+
 ## [0.4.5] - 2026-09-09
 
 ### Added

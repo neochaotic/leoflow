@@ -77,6 +77,16 @@ To serve different audiences, Leoflow supports three progressive levels:
 
 ## Official Base Images
 
+> **Note (2026-09, #1031).** The list below is the decision as taken in 2026-05
+> and is no longer current — neither the repository name nor the set of Python
+> lines. The live list is the `python_version` enum in
+> `internal/domain/schemas/leoflow-yaml-schema.json`, published as
+> `ghcr.io/neochaotic/leoflow-runtime:py<version>` and rendered in the
+> [configuration reference](/reference/configuration/#python-version-support).
+> `scripts/check-python-runtime-matrix.sh` keeps every copy of it honest; this
+> ADR is deliberately not one of them, because a decision record states what was
+> decided, not what is true today.
+
 The project maintains three base images from day one:
 
 - `leoflow/python-runtime:3.10`

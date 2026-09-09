@@ -73,6 +73,25 @@ func newCompileCommand() *cobra.Command {
 	return cmd
 }
 
+// checkProjectPreconditions runs the checks that apply to every compile before
+// the dag.py and dbt paths diverge: the leoflow.yaml must validate, it must not
+// declare a dbt: block alongside a dag.py (#1015), and a deprecated Python line
+// earns a warning the author can still act on.
+//
+// Grouped rather than inlined so both compile paths get all three by
+// construction: warnDeprecatedPython landing on only the dag.py branch would
+// leave every dbt project silently on a base image that stops being rebuilt.
+func checkProjectPreconditions(cmd *cobra.Command, dir string, cfg *domain.LeoflowConfig) error {
+	if verr := cfg.Validate(); verr != nil {
+		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
+	}
+	if derr := errDbtBlockWithDagSource(dir, cfg); derr != nil {
+		return derr
+	}
+	// Stderr, not stdout: the compile summary and any piped output stay clean.
+	return warnDeprecatedPython(cmd.ErrOrStderr(), cfg)
+}
+
 // runCompile resolves the project config, runs the parser, validates the output,
 // and optionally builds the DAG image.
 func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
@@ -80,11 +99,8 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if err != nil {
 		return err
 	}
-	if verr := cfg.Validate(); verr != nil {
-		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
-	}
-	if derr := errDbtBlockWithDagSource(dir, cfg); derr != nil {
-		return derr
+	if perr := checkProjectPreconditions(cmd, dir, cfg); perr != nil {
+		return perr
 	}
 	// Self-heal the extracted parser sources before running the parser, so a binary
 	// upgrade (new features like dbt vs a stale ~/.leoflow/pysrc) never surfaces as

@@ -10,7 +10,10 @@
 #   docker build -f runtime/Dockerfile \
 #     --build-arg PYTHON_VERSION=3.11 -t leoflow-base:py3.11 .
 #
-# PYTHON_VERSION selects the interpreter (3.10 / 3.11 / 3.12).
+# PYTHON_VERSION selects the interpreter (3.10 / 3.11 / 3.12 / 3.13). The list
+# is not authoritative here: internal/domain/schemas/leoflow-yaml-schema.json's
+# python_version enum is, and scripts/check-python-runtime-matrix.sh fails this
+# comment when it falls behind. 3.10 is deprecated (upstream EOL 2026-10-31).
 
 ARG GO_VERSION=1.26.3
 ARG PYTHON_VERSION=3.11

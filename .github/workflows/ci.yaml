@@ -1152,6 +1152,25 @@ jobs:
         run: bash scripts/check-lite-prepull-matches-compose.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # Which Python lines we publish a task base image for is stated in five
+  # files, and only the schema enum is enforced by anything (the CLI's
+  # Validate() rejects everything else). By #1031 they had already drifted in
+  # both directions. Both directions fail in the user's build, minutes in: a
+  # selectable version with no published leg is a `docker pull` 404, a
+  # published leg outside the enum is a compile that refuses a good image.
+  # ─────────────────────────────────────────────────────────────────────
+  python-runtime-matrix:
+    name: Published Python matrix agrees everywhere
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+      - name: Check the published Python matrix against the schema enum
+        run: bash scripts/check-python-runtime-matrix.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   stale-deploy-path:
     name: No stale legacy deploy path
     runs-on: ubuntu-latest
@@ -1168,6 +1187,11 @@ jobs:
   # detector promises compatibility we never verified, which is exactly
   # the silent-regression risk #220 (F2) flagged. Only 3.11/3.12/3.13 are
   # generally available today; bump as 3.14+ ship and stabilise.
+  #
+  # This is the HOST interpreter that parses a dag.py, not the interpreter
+  # inside the published task base image — a different list on purpose, checked
+  # by a different thing (the base-image list is the schema enum, gated by
+  # scripts/check-python-runtime-matrix.sh). #1031 read the two as one.
   python-parser:
     name: Python parser tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest

@@ -34,10 +34,10 @@ compile it to an immutable image. Native **map-reduce** for ML/AI as a Python li
 comprehension.
 {{% /blocks/feature %}}
 
-{{% blocks/feature icon="fa-solid fa-cubes-stacked" title="Run dbt as DAGs" url="/author-dags/dbt/" url_text="dbt projects as DAGs" %}}
-Render a **dbt** project into native model-level tasks — pod-per-task against your
-warehouse, no Airflow and no Cosmos at runtime. One `granularity` knob trades pods
-for speed.
+{{% blocks/feature icon="fa-solid fa-cubes-stacked" title="dbt in your DAGs" url="/author-dags/dbt/" url_text="Put dbt in a DAG" %}}
+Drop `dbt_group()` into your `dag.py` and your **dbt** project's models become tasks
+in the same graph — pod-per-model against your warehouse, no Airflow and no Cosmos
+at runtime. Your `ref()` graph is the shape; you never write the dependencies.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-solid fa-plug" title="Connect" url="/connections/" url_text="Browse connectors" %}}

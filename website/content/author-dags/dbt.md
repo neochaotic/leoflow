@@ -3,144 +3,33 @@
 aliases:
   - /dbt.html
 # --- end AUTO redirect aliases ---
-title: dbt projects as DAGs
+title: dbt in your DAGs
 linkTitle: dbt
 weight: 30
-description: Render a dbt project into a Leoflow DAG with native model-level tasks.
+description: Drop dbt_group() into a dag.py and your dbt project's models become tasks in the same graph.
 ---
 
-Leoflow runs a **dbt** project as a native DAG: it reads dbt's own
-`manifest.json` and turns each dbt node (seed, model, snapshot, test) into a
-Leoflow task, executed **pod-per-task** against your warehouse — no Apache
+A Leoflow DAG is a `dag.py` plus a `leoflow.yaml`. **`dbt_group("name")` puts a dbt
+project inside one**: Leoflow reads dbt's own `manifest.json` at compile time and
+turns each node (seed, model, snapshot, test) into a task in the same graph as your
+Python and Bash tasks, executed **pod-per-task** against your warehouse — no Apache
 Airflow in the control plane, and no [Cosmos](https://astronomer.github.io/astronomer-cosmos/)
 at runtime.
+
+If your DAG is *only* models, there is a shortcut that skips the `dag.py`
+entirely — see [If your DAG is only models](#if-your-dag-is-only-models). Start
+here either way: the shortcut's exit cost is real, and this section is what you
+will need the day you add one Python task.
 
 {{% pageinfo %}}
 **Your `ref()` graph *is* the DAG.** Leoflow reads dbt's manifest at compile time
 and emits one task per node — you never write task dependencies, and there is no
-library to import, no profile-mapping boilerplate, and no per-run re-parse.
+library to import and no profile-mapping boilerplate.
 {{% /pageinfo %}}
 
-There are **two ways** to bring dbt into Leoflow — pick the one that fits your DAG:
-
-<div class="lf-cards">
-  <a class="lf-card lf-card--hero" href="#1-the-dbt-project-is-the-dag">
-    <span class="lf-card__badge">Simplest</span>
-    <span class="lf-card__icon"><i class="fa-solid fa-cubes-stacked"></i></span>
-    <span class="lf-card__title">The dbt project <em>is</em> the DAG</span>
-    <span class="lf-card__desc">No Python — declare the project in <code>leoflow.yaml</code>. The fast path when a DAG is purely dbt.</span>
-    <span class="lf-card__more">See the pure-dbt path →</span>
-  </a>
-  <a class="lf-card" href="#2-mixing-dbt-with-operators">
-    <span class="lf-card__icon"><i class="fa-solid fa-diagram-project"></i></span>
-    <span class="lf-card__title">dbt mixed with operators</span>
-    <span class="lf-card__desc">Author a <code>dag.py</code> and drop a <code>dbt_group()</code> between your operators — the Cosmos <code>DbtTaskGroup</code> capability.</span>
-    <span class="lf-card__more">Mix in operators →</span>
-  </a>
-</div>
-
-{{% alert title="vs Cosmos" color="info" %}}
-Cosmos generates Airflow tasks from a dbt project by importing a Python library at
-DAG-parse time. Leoflow does the same translation in Go at **compile time**, from the
-same `manifest.json` — so there is no library to import, no profile-mapping
-boilerplate, and no per-run re-parse of the manifest. (A full side-by-side is in
-[Cosmos at a glance](#cosmos-at-a-glance).)
-{{% /alert %}}
-
 ---
 
-## 1. The dbt project is the DAG
-
-A Leoflow DAG is normally a `dag.py`. For a pure-dbt DAG there is **no Python** —
-the DAG's shape comes from dbt's `ref()`/`source()` graph. You write dbt the way
-you always do, and add one `leoflow.yaml`:
-
-```
-sales/                         # the DAG = a dbt project + leoflow.yaml
-├── leoflow.yaml               # the only Leoflow file
-├── dbt_project.yml            # dbt
-├── profiles.yml               # dbt (or use a managed connection — see below)
-├── seeds/raw_orders.csv
-└── models/
-    ├── staging/stg_orders.sql #  select … from {{ ref('raw_orders') }}
-    └── marts/orders.sql       #  select … from {{ ref('stg_orders') }}
-```
-
-```yaml
-# leoflow.yaml
-schema_version: "1.0"
-dag_id: sales
-schedule: "@daily"             # optional; empty = on-demand (Lite dev loop)
-owner: data-team
-dbt:
-  project: .                   # dir containing dbt_project.yml
-  granularity: node            # node | level | folder  (see §3)
-```
-
-Compile it like any DAG:
-
-```console
-$ leoflow compile ./sales --image registry.example.com/sales:v1
-Compiled ./sales -> dag.json (image registry.example.com/sales:v1, version 9f3a2c1)
-```
-
-`leoflow compile` reads the dbt manifest and emits one task per node:
-
-| task_id | command |
-|---|---|
-| `raw_orders` | `dbt seed --select raw_orders` |
-| `stg_orders` | `dbt run --select stg_orders` (after `raw_orders`) |
-| `orders` | `dbt run --select orders` (after `stg_orders`) |
-| `unique_orders_id` | `dbt test --select unique_orders_id` (after `orders`) |
-
-You never write task dependencies — `{{ ref('stg_orders') }}` **is** the edge.
-
-> The manifest comes from `dbt parse` (run for you in Lite on each save; baked at
-> image-build time in Pro). Set `dbt.manifest: target/manifest.json` to point at a
-> pre-built one.
-
-{{% alert title="No local dbt, or your adapter has no wheel for your Python? Pre-build the manifest in a container" color="warning" %}}
-`leoflow compile`/`--build` shells out to `dbt parse` on your machine (the
-runtime never needs dbt — only compile-time manifest generation does). If your
-host has no dbt installed, or your adapter has no prebuilt wheel for your
-Python (a common one: `dbt-databricks` publishes wheels for 3.10–3.12, not the
-Python 3.9 that ships as the default `python3` on some LTS distros/older
-macOS), `dbt parse` fails or the adapter refuses to install — before Leoflow
-ever gets involved.
-
-**Escape hatch: generate the manifest in a throwaway container with a Python
-`dbt-databricks` actually supports, then point `dbt.manifest:` at the result.**
-
-`dbt parse` does not open a warehouse connection, so a **`profiles.yml` with
-placeholder values** (matching the profile name in `dbt_project.yml`) is
-enough — no real credentials need to enter the container:
-
-```console
-$ docker run --rm -v "$PWD":/proj -w /proj python:3.11-slim bash -c "
-    pip install --no-cache-dir dbt-databricks &&
-    dbt parse --profiles-dir . "
-$ ls target/manifest.json     # now sitting in your project dir
-```
-
-```yaml
-# leoflow.yaml
-dbt:
-  project: .
-  manifest: target/manifest.json   # pinned — leoflow compile skips `dbt parse` entirely
-  connection: warehouse_databricks
-```
-
-A pinned manifest is used **as-is** (see `loadDbtManifest` — no local dbt
-required at all from that point on); regenerate it in the container whenever
-you change models. This is the same trick CI runners use when their base image
-doesn't carry a compatible Python for every adapter — see [Python on the
-runner](/operate/cicd-deploy/#python-on-the-runner) for the CI-side version of
-this problem.
-{{% /alert %}}
-
----
-
-## 2. Mixing dbt with operators
+## 1. Put a dbt project in your DAG
 
 To run operators **before/after** your models in the same DAG, author a `dag.py`
 and embed the dbt project with `dbt_group("<name>")`.
@@ -181,7 +70,7 @@ dbt_groups:
   transform:                  # the name passed to dbt_group()
     project: ./transform
     granularity: level
-    connection: warehouse_pg  # managed connection (see §4)
+    connection: warehouse_pg  # managed connection (see §3)
 ```
 
 At compile, the operators and the dbt project become **one** `dag.json`. The dbt
@@ -193,15 +82,9 @@ the group's **roots** depend on `extract`, and `notify` depends on the group's
 extract → transform__level_0 → transform__level_1 → transform__level_2 → notify
 ```
 
-> **vs Cosmos.** Cosmos puts the whole configuration in the `dag.py`
-> (`ProjectConfig`, `ProfileConfig`, `ExecutionConfig`, `RenderConfig` + many
-> kwargs). Leoflow keeps the `dag.py` to topology and moves the config to
-> `leoflow.yaml` — so the same DAG can pack differently in Lite vs Pro without
-> editing Python.
-
 ---
 
-## 3. Granularity — split vs fused
+## 2. Granularity — split vs fused
 
 `granularity` controls how dbt nodes are packed into pods. It is a knob, not a
 fixed "one model = one pod".
@@ -239,7 +122,7 @@ pod startups**, while keeping in-pod parallelism. Rule of thumb:
 
 ---
 
-## 4. The warehouse connection
+## 3. The warehouse connection
 
 dbt needs a `profiles.yml`. Leoflow resolves it for you — pick the one that fits:
 
@@ -296,23 +179,12 @@ The compiled command becomes:
 python -m leoflow_runtime --dbt-profile warehouse_pg <profile> && dbt run --select …
 ```
 
-{{% alert title="Serverless warehouse cold-start (Databricks, and similar)" color="info" %}}
-A serverless SQL warehouse auto-stops after a period of inactivity (Databricks
-serverless: ~5 min by default). The `dbt-databricks` adapter wakes it
-transparently on the next query — no manual "resume" step — but the **first**
-task to hit a stopped warehouse pays a cold-start delay (observed ~10s) before
-its query starts. This is warehouse behavior, not a Leoflow limitation: a
-scheduled dbt DAG that runs at the top of every hour, say, should expect that
-delay on its first model each run (subsequent models in the same run land on
-the now-warm warehouse). Pre-warming (a scheduled no-op query shortly before
-your DAG's run time) is a warehouse-side mitigation if the delay matters for
-your SLA.
+{{% alert title="Serverless warehouse cold-start" color="info" %}}
+A serverless SQL warehouse that has auto-stopped is woken transparently by the
+adapter, but the first task of a run pays the wake delay (~10s on Databricks
+serverless) before its query starts. Warehouse behavior, not Leoflow's; pre-warming
+is a warehouse-side mitigation if it matters for your SLA.
 {{% /alert %}}
-
-> **vs Cosmos.** Cosmos bridges Airflow connections to dbt profiles with a
-> per-warehouse `profile_mapping` class declared in Python. Leoflow does it from
-> the connection automatically — one `connection:` line, zero mapping classes,
-> and nothing secret in the image.
 
 ### Bring your own `profiles.yml`
 
@@ -348,41 +220,29 @@ is used. Per-warehouse setup — required fields (`account`/`warehouse`, `http_p
 
 ---
 
-## 5. Failure isolation & the build parse-gate
+## 4. Failure isolation & the build parse-gate
 
 **A syntax error in one model does not blow up production.** dbt parses the whole
 project on every invocation, so a compilation error in *any* model would, in
 naive setups, break *every* task. Leoflow stops that at the **build parse-gate**:
 
-- **Pro:** `dbt parse` runs at image-build time. A broken project **never
-  produces an image** — nothing deploys.
-- **Lite:** `leoflow compile` runs `dbt parse` on save — you fix it before running.
+`leoflow compile` runs `dbt parse` on your machine — **both editions**, before it
+writes anything. A broken project never produces a `dag.json` and, on Pro, never
+produces an image: nothing deploys. So a syntax error fails **loudly and early**,
+never at 5am.
 
-So a syntax error fails **loudly and early**, never at 5am. Baking the manifest +
-`partial_parse` reinforces this: runtime pods reuse the build-time parse.
+### The baked manifest
 
-### The baked manifest, and Slim CI (`state:modified+`)
+Leoflow compiles from `dbt parse`'s `target/manifest.json`. **`leoflow compile`
+runs `dbt parse` on your machine** — both editions, not inside the image build —
+and the resulting manifest is copied into the DAG image alongside the project.
+Pin a pre-built one with `dbt.manifest` to skip the parse (see
+[No local dbt](#no-local-dbt)).
 
-The manifest that Leoflow compiles from is `dbt parse`'s `target/manifest.json`. On
-**Pro** it is produced at image-build time and copied into the DAG image (alongside
-`partial_parse.msgpack`), immutable with that artifact; on **Lite** `leoflow compile`
-parses on save. Leoflow reads it **at compile time** to render tasks — dbt itself
-reuses the baked copy at runtime.
-
-That baked manifest is exactly the ingredient dbt's **Slim CI**
-(`dbt build --select state:modified+ --defer --state <prod-artifacts>`) needs — build
-only changed models and their downstreams, deferring unchanged refs to production
-relations. Leoflow does **not** yet offer this as a turnkey recipe, because two pieces
-are missing:
-
-1. **No supported way to fetch the deployed manifest** to diff against — it currently
-   lives only baked inside the immutable DAG image, with no export CLI/API.
-2. **The compiler never emits `--state`/`--defer`/`state:modified+`** selectors — it
-   selects by node/level/folder only.
-
-If you drive dbt yourself in CI (outside Leoflow's compilation) you can already run
-Slim CI by supplying your own prior `manifest.json` as `--state`. A first-class
-recipe wired to Leoflow's artifacts is tracked as a future enhancement.
+dbt's **Slim CI** (`--select state:modified+ --defer --state`) is not offered as a
+turnkey recipe: there is no supported way to export the deployed manifest to diff
+against, and the compiler emits node/level/folder selectors only. If you drive dbt
+yourself in CI you can supply your own prior `manifest.json` as `--state` today.
 
 **Run-time errors** (a model that compiles but fails against the warehouse) are
 isolated by granularity:
@@ -416,7 +276,7 @@ already-built models) are tracked as a future enhancement.
 
 ---
 
-## 6. Where config lives (two YAML worlds)
+## 5. Where config lives (two YAML worlds)
 
 | file | owner | describes |
 |---|---|---|
@@ -429,42 +289,144 @@ Power User, dbt Cloud IDE); Leoflow only adds orchestration and packing.
 
 ---
 
-## 7. Adapter assurance — what's verified how
+## 6. Adapters and auth
 
-Leoflow generates each warehouse's `profiles.yml`. How thoroughly that generation
-is tested varies by adapter:
+Leoflow generates each warehouse's `profiles.yml` from your managed
+`connection:`, so the credential never enters the image or the repository.
 
-| Adapter | Profile shape | Live query in CI |
-|---|---|---|
-| **postgres** | contract + live | ✅ real dbt on k3d (`e2e-dbt`) |
-| **duckdb** | contract + live | ✅ real dbt on Lite (`e2e-lite-dbt`) |
-| **snowflake** | ✅ contract-tested | ⚠️ hand-verified only |
-| **bigquery** | ✅ contract-tested | ⚠️ hand-verified only |
-| **databricks** | ✅ contract-tested | ⚠️ hand-verified (see below) |
+| Adapter | Auth modes |
+|---|---|
+| **postgres** | user/password |
+| **duckdb** | local file — the zero-config default on Lite |
+| **snowflake** | user/password, key-pair |
+| **bigquery** | service-account JSON, ADC / Workload Identity |
+| **databricks** | personal access token, service-principal OAuth M2M |
 
-**Contract-tested** means CI feeds Leoflow's emitted profile through the *real* dbt
-adapter's own credential parsing (`dbt-adapter-contracts` job): correct field
-names, alias resolution, required fields, and each auth mode (Snowflake key-pair,
-BigQuery keyless, Databricks OAuth M2M) are validated against the actual adapter —
-without connecting to a warehouse. What it does **not** prove is that a real query
-succeeds against your account.
+Each emitted profile is checked in CI against the real adapter's own credential
+parser — field names, alias resolution, required fields, and every auth mode
+above — so a profile Leoflow generates is one the adapter accepts. How far each
+adapter is exercised against a live warehouse is a project matter rather than an
+authoring one; it lives in
+[Contributing → dbt adapter coverage](/contribute/).
 
-**Live-query verification for the cloud adapters is maintainer-owned** — it needs
-real warehouse accounts + CI secrets. The template is `test/e2e/dbt-connection-e2e.sh`
-(today it runs against a local Postgres warehouse); pointing it at a real Snowflake/
-BigQuery/Databricks account, gated on org secrets, is the remaining step — the
-`⚠️` stays until that runs in CI on every change, not just once by hand.
+---
 
-{{% alert title="Databricks: hand-verified end-to-end on a real serverless account" color="success" %}}
-The full path has been validated against a real Databricks serverless SQL
-warehouse: managed **`connection:`** → Leoflow-generated `profiles.yml` →
-**service-principal OAuth M2M** auth → **pod-per-model** execution (`granularity:
-node`) → a `view` and a `Delta` table materialized → the warehouse's
-**transparent cold-start** observed and confirmed non-blocking (see the
-[serverless cold-start note](#4-the-warehouse-connection) in §4). This
-confirms the adapter integration works against a real account; it is still a
-**hand run**, not a CI-gated one — see the note above on closing that gap.
+## If your DAG is only models
+
+A DAG whose tasks are *only* dbt models can skip the `dag.py`: declare the project
+under a top-level `dbt:` block and the shape comes from dbt's `ref()`/`source()`
+graph. It is one file fewer to start with.
+
+{{% alert title="Know the exit cost before you start here" color="warning" %}}
+This is a shortcut, not a smaller version of §1 — it has a lower ceiling, and
+leaving it is a migration rather than an edit.
+
+**It cannot express a task that is not a dbt model.** No sensors, no provider
+operators, no Python or Bash. And because those live on the DAG object a
+`dag.py` builds, it also has nowhere to declare `start_date`, `end_date`,
+`catchup`, `max_active_runs`, `max_active_tasks`, DAG-level `params`, or
+DAG-level `connections`/`variables`. Per-task `retries`, `resources`, `alerts`
+and `staging` do work — those come from `leoflow.yaml` and apply to both shapes.
+
+**Adding one Python task means rewriting the DAG.** Delete `dbt:`, add
+`dbt_groups:`, write a `dag.py`, and move the schedule from `dbt.schedule` to
+`DAG(schedule=…)`. **Every `task_id` changes**: the shortcut emits bare node ids
+(`stg`), a group namespaces them (`transform__stg`). That breaks run-history
+continuity and any per-task override in `tasks:` bound by id.
 {{% /alert %}}
+
+You write dbt the way you always do, and add one `leoflow.yaml`:
+
+```
+sales/                         # the DAG = a dbt project + leoflow.yaml
+├── leoflow.yaml               # the only Leoflow file
+├── dbt_project.yml            # dbt
+├── profiles.yml               # dbt (or use a managed connection — see below)
+├── seeds/raw_orders.csv
+└── models/
+    ├── staging/stg_orders.sql #  select … from {{ ref('raw_orders') }}
+    └── marts/orders.sql       #  select … from {{ ref('stg_orders') }}
+```
+
+```yaml
+# leoflow.yaml
+schema_version: "1.0"
+dag_id: sales
+owner: data-team
+dependencies:
+  - dbt-postgres==1.9.*        # the adapter; the base image ships no dbt
+dbt:
+  project: .                   # dir containing dbt_project.yml
+  granularity: node            # node | level | folder  (see §2)
+  schedule: "@daily"           # optional; empty = on-demand (Lite dev loop)
+```
+
+Compile it like any DAG:
+
+```console
+$ leoflow compile ./sales --image registry.example.com/sales:v1
+Compiled ./sales -> dag.json (image registry.example.com/sales:v1, version 9f3a2c1)
+```
+
+`leoflow compile` reads the dbt manifest and emits one task per node:
+
+| task_id | command |
+|---|---|
+| `raw_orders` | `dbt seed --select raw_orders` |
+| `stg_orders` | `dbt run --select stg_orders` (after `raw_orders`) |
+| `orders` | `dbt run --select orders` (after `stg_orders`) |
+| `unique_orders_id` | `dbt test --select unique_orders_id` (after `orders`) |
+
+You never write task dependencies — `{{ ref('stg_orders') }}` **is** the edge.
+
+> The manifest comes from `dbt parse`, which `leoflow compile` runs on your
+> machine. Set `dbt.manifest: target/manifest.json` to point at a pre-built one
+> instead.
+
+
+---
+
+## No local dbt
+
+No dbt on this machine, or no wheel of your adapter for your Python? Pre-build
+the manifest in a container and pin it with `dbt.manifest`.
+
+`leoflow compile`/`--build` shells out to `dbt parse` on your machine (the
+runtime never needs dbt — only compile-time manifest generation does). If your
+host has no dbt installed, or your adapter has no prebuilt wheel for your
+Python (a common one: `dbt-databricks` publishes wheels for 3.10–3.12, not the
+Python 3.9 that ships as the default `python3` on some LTS distros/older
+macOS), `dbt parse` fails or the adapter refuses to install — before Leoflow
+ever gets involved.
+
+**Escape hatch: generate the manifest in a throwaway container with a Python
+`dbt-databricks` actually supports, then point `dbt.manifest:` at the result.**
+
+`dbt parse` does not open a warehouse connection, so a **`profiles.yml` with
+placeholder values** (matching the profile name in `dbt_project.yml`) is
+enough — no real credentials need to enter the container:
+
+```console
+$ docker run --rm -v "$PWD":/proj -w /proj python:3.11-slim bash -c "
+    pip install --no-cache-dir dbt-databricks &&
+    dbt parse --profiles-dir . "
+$ ls target/manifest.json     # now sitting in your project dir
+```
+
+```yaml
+# leoflow.yaml
+dbt:
+  project: .
+  manifest: target/manifest.json   # pinned — leoflow compile skips `dbt parse` entirely
+  connection: warehouse_databricks
+```
+
+A pinned manifest is used **as-is** (see `loadDbtManifest` — no local dbt
+required at all from that point on); regenerate it in the container whenever
+you change models. This is the same trick CI runners use when their base image
+doesn't carry a compatible Python for every adapter — see [Python on the
+runner](/operate/cicd-deploy/#python-on-the-runner) for the CI-side version of
+this problem.
 
 ---
 
@@ -485,7 +447,7 @@ confirms the adapter integration works against a real account; it is still a
 | | Cosmos | Leoflow |
 |---|---|---|
 | Where the translation runs | Python lib at DAG-parse time | Go at compile time |
-| Manifest | re-parsed per `DbtDag` init | parsed once, baked, reused |
+| Manifest | re-parsed per `DbtDag` init | parsed once at compile time |
 | Config | in the `dag.py` (4 config objects) | in `leoflow.yaml` (declarative) |
 | Connection → profile | per-warehouse `profile_mapping` class | one `connection:` line, generated in-pod |
 | Pod packing | execution mode + per-model | `granularity` knob (split/fused) |

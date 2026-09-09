@@ -18,18 +18,18 @@ the project layout and compile model, then reach for the guide that matches your
 task below.
 
 <div class="lf-cards">
-  <a class="lf-card lf-card--hero" href="/author-dags/dbt/">
-    <span class="lf-card__badge">Highlight</span>
-    <span class="lf-card__icon"><i class="fa-solid fa-cubes-stacked"></i></span>
-    <span class="lf-card__title">dbt projects as DAGs</span>
-    <span class="lf-card__desc">Render a dbt project into native model-level tasks — pod-per-task, no Airflow and no Cosmos at runtime.</span>
-    <span class="lf-card__more">Run dbt as a DAG →</span>
-  </a>
-  <a class="lf-card" href="/author-dags/dag-authoring/">
+  <a class="lf-card lf-card--hero" href="/author-dags/dag-authoring/">
+    <span class="lf-card__badge">Start here</span>
     <span class="lf-card__icon"><i class="fa-solid fa-pen-ruler"></i></span>
     <span class="lf-card__title">DAG authoring</span>
     <span class="lf-card__desc">The project layout, the two files (<code>dag.py</code> + <code>leoflow.yaml</code>), and the compile model.</span>
     <span class="lf-card__more">Learn the model →</span>
+  </a>
+  <a class="lf-card" href="/author-dags/dbt/">
+    <span class="lf-card__icon"><i class="fa-solid fa-cubes-stacked"></i></span>
+    <span class="lf-card__title">dbt in your DAGs</span>
+    <span class="lf-card__desc">Drop <code>dbt_group()</code> into a <code>dag.py</code> and your models become tasks in the same graph — pod-per-model, no Cosmos.</span>
+    <span class="lf-card__more">Put dbt in a DAG →</span>
   </a>
   <a class="lf-card" href="/author-dags/airflow-compatibility/">
     <span class="lf-card__icon"><i class="fa-brands fa-python"></i></span>

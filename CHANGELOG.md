@@ -154,8 +154,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   re-run un-drafts it" path was unreachable, and the only exit was a new tag
   (tags are immutable, ADR 0033). Observed live on `v0.4.5-rc.1`. The gate now
   prints the exact recovery, and a **Re-publish a retracted release** workflow
-  does it in one click. Separately, the steps most likely to trigger the
-  retraction gained retries: `cosign verify` (it fetches the Sigstore TUF root
+  prints the exact recovery. The real repair is one line of ordering in
+  `cut-release.sh`: the un-draft existed (#862) but sat *inside* the flake
+  branch, and a retracted release makes the smokes fail on the asset download —
+  a failure matching nothing in `FLAKE_RE`, so `isflake` went to 0 and the
+  un-draft never ran. The deadlock defended itself. It now re-publishes before
+  classifying. The flake classifier also stopped reading an unretrievable log as
+  "no flake": a job that dies in `Initialize containers` has no step log, so
+  `gh run view --log-failed` returns empty — which silently disabled the rerun
+  loop for this repo's most frequent failure (#1007, #978). It now falls back to
+  the job logs API and treats an unreadable log as unknown, which reruns.
+  Separately, the steps most likely to trigger the retraction gained retries: `cosign verify` (it fetches the Sigstore TUF root
   and talks to Rekor and Fulcio) and the seven distro prerequisite installs
   (only `apt-get` had retries; `dnf`, `zypper`, `pacman` and `apk` had none).
   `pacman -Sy` was also an unsupported partial upgrade that breaks on mirror

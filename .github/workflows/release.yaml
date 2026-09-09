@@ -263,7 +263,7 @@ jobs:
           - { image: "fedora:41", prep: "dnf install -y -q tar curl --allowerasing" }
           - { image: "quay.io/rockylinux/rockylinux:9", prep: "dnf install -y -q tar curl --allowerasing" }
           - { image: "opensuse/leap:15", prep: "zypper --no-gpg-checks -n in -y curl tar gzip" }
-          - { image: "archlinux:latest", prep: "pacman -Syu --noconfirm curl tar" }
+          - { image: "archlinux:latest", prep: "pacman -Sy --noconfirm archlinux-keyring && pacman -Syu --noconfirm curl tar" }
           - { image: "alpine:3.20", prep: "apk add --no-cache curl tar" }
     steps:
       - name: Install prerequisites (curl + tar)
@@ -285,7 +285,13 @@ jobs:
       - name: Install Leoflow via the published install.sh
         env:
           LEOFLOW_VERSION: ${{ github.ref_name }} # pin to the just-pushed tag
-        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" | sh
+        run: |
+          # Fetch and run as two steps. `curl … | sh` under `shell: sh` (sh -e,
+          # no pipefail) reports the PIPELINE's status, which is sh's — and sh
+          # succeeds on empty input, so a failed fetch exits 0 and the step
+          # passes. Verified: a 404 through that pipe gives exit 0.
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" -o /tmp/install.sh
+          sh /tmp/install.sh
 
       - name: Verify the binary and managed CPython run
         run: |
@@ -318,7 +324,13 @@ jobs:
       - name: Install Leoflow via the published install.sh
         env:
           LEOFLOW_VERSION: ${{ github.ref_name }}
-        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" | sh
+        run: |
+          # Fetch and run as two steps. `curl … | sh` under `shell: sh` (sh -e,
+          # no pipefail) reports the PIPELINE's status, which is sh's — and sh
+          # succeeds on empty input, so a failed fetch exits 0 and the step
+          # passes. Verified: a 404 through that pipe gives exit 0.
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" -o /tmp/install.sh
+          sh /tmp/install.sh
       - name: leoflow setup (non-interactive, defaults)
         run: |
           set -eu
@@ -475,6 +487,7 @@ jobs:
       contents: read
       packages: read
     steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.4.3
@@ -492,23 +505,14 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # Retry: this fetches the Sigstore TUF root and talks to Rekor and
-          # Fulcio, none of which we control. An unretried flake here fails the
-          # gate, which retracts the release to a draft (#983) — and a retracted
-          # release cannot be recovered by a plain re-run (#979).
-          n=0
-          until cosign verify \
+          # Through the same wrapper every `cosign sign` uses, rather than a
+          # second retry policy that drifts from it. verify fetches the Sigstore
+          # TUF root and talks to Rekor and Fulcio, none of which we control, and
+          # an unretried flake here retracts the release to a draft (#983).
+          ./scripts/cosign-retry.sh verify \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             --certificate-identity-regexp "^https://github\.com/${REPO}/\.github/workflows/release\.yaml@refs/tags/" \
-            "${IMAGE}"; do
-            n=$((n+1))
-            if [ "$n" -ge 3 ]; then
-              echo "::error::cosign verify failed after 3 attempts"
-              exit 1
-            fi
-            echo "cosign verify failed (attempt ${n}/3); retrying in 10s"
-            sleep 10
-          done
+            "${IMAGE}"
 
   # ── Release gate: if any of the smoke jobs OR the migrate-image build
   # failed, retract the pre-release to a draft so `curl | sh` (which resolves
@@ -556,8 +560,9 @@ jobs:
           gh run rerun ${GITHUB_RUN_ID} --failed
           \`\`\`
 
-          Or run the **Re-publish a retracted release** workflow with
-          tag \`${GITHUB_REF_NAME}\`, then re-run the failed jobs.
+          \`scripts/cut-release.sh\` does this for you when it is driving the
+          cut — it re-publishes before classifying the failure. This summary is
+          for the case where nobody is running it.
 
           **If the failure was real**, leave it drafted and cut the next tag.
           EOF

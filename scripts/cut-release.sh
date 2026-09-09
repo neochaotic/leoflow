@@ -908,12 +908,37 @@ main() {
                 break ;;
     esac
     failed=$(echo "$j" | jq -r '.[] | select(.conclusion=="failure") | .databaseId')
-    isflake=1; for rid in $failed; do gh run view "$rid" --log-failed 2>/dev/null | grep -qE "$FLAKE_RE" || isflake=0; done
+    # Un-draft BEFORE deciding whether this was a flake, not inside the flake
+    # branch (#862 put it there; #979 is why that is not enough).
+    #
+    # Once the gate retracts, most smokes fail on install.sh's asset download
+    # instead of on whatever failed first — and `curl -fsSL` prints nothing on a
+    # 404, so install.sh only says "downloading <archive> failed", which matches
+    # nothing in FLAKE_RE. isflake flips to 0, the watch stops at "non-flake",
+    # and the un-draft below it never runs. The deadlock defends itself: the
+    # symptom it creates is exactly what stops the recovery. Re-publishing first
+    # costs nothing when the release is already published, and it means the next
+    # verdict is computed against a release the smokes can actually download.
+    gh release edit "$tag" --repo "$REPO" --draft=false >/dev/null 2>&1 || true
+    isflake=1
+    for rid in $failed; do
+      # An unreadable log is NOT evidence of a non-flake. A job that dies in
+      # `Initialize containers` — the service-container pull, this repo's most
+      # frequent flake (#1007) — has no step log, so `--log-failed` returns EMPTY
+      # and the grep fails. That read "not a flake" and disabled this whole
+      # rerun loop for the single failure it most needed to handle (#978).
+      lg=$(gh run view "$rid" --log-failed 2>/dev/null || true)
+      if [ -z "$lg" ]; then
+        lg=$(gh api "repos/$REPO/actions/runs/$rid/jobs" --jq '.jobs[]|select(.conclusion=="failure")|.id' 2>/dev/null \
+             | while read -r jid; do gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null || true; done)
+      fi
+      # Still nothing to read: treat it as UNKNOWN, which for a cut means rerun
+      # rather than stop. A rerun is cheap; a stopped cut on a transient is not.
+      [ -z "$lg" ] && continue
+      printf '%s' "$lg" | grep -qE "$FLAKE_RE" || isflake=0
+    done
     if [ "$isflake" = 1 ] && [ "$reruns" -lt 8 ]; then
       reruns=$((reruns+1)); warn "release flake -> rerun #$reruns"
-      # If the gate retracted the release to a draft, un-draft so a download-based
-      # smoke can re-fetch on rerun (see #862).
-      gh release edit "$tag" --repo "$REPO" --draft=false >/dev/null 2>&1 || true
       for rid in $failed; do gh run rerun "$rid" --failed >/dev/null 2>&1; done
       sleep 60; continue
     fi

@@ -37,4 +37,10 @@ How to work on Leoflow itself.
     <span class="lf-card__desc">The two rules — private locality and masked-on-read — every feature that touches a credential must follow (<a href="/project/adrs/0061-secret-locality/">ADR 0061</a>).</span>
     <span class="lf-card__more">Read the rules →</span>
   </a>
+  <a class="lf-card" href="/contribute/image-vulnerability-scanning/">
+    <span class="lf-card__icon"><i class="fa-solid fa-shield-halved"></i></span>
+    <span class="lf-card__title">Image scanning</span>
+    <span class="lf-card__desc">Where container CVE findings appear, what blocks a build and what only opens an issue, and how to triage either one.</span>
+    <span class="lf-card__more">Read the policy →</span>
+  </a>
 </div>

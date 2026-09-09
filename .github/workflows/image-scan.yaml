@@ -1,0 +1,289 @@
+# Scheduled container image scan — the REPORTING half of the container policy.
+#
+# ── Why this is not a PR gate ────────────────────────────────────────────────
+#
+# leoflow-runtime is python:3.x-slim-bookworm and leoflow-migrate is
+# migrate/migrate (Alpine + a third-party Go binary). Neither package set is
+# ours. A CVE lands in them because a Debian security team published an
+# advisory, not because anyone here pushed a commit — so a blocking gate on them
+# fails whoever opens the next unrelated pull request, and the person who can
+# actually fix it (by rebasing a base image or bumping a pinned third-party tag)
+# is not in that PR. That gate gets switched off within a week, and switched-off
+# is worse than never-installed because it looks like coverage.
+#
+# So: this workflow never fails the build. It publishes to the Security tab and
+# keeps exactly one tracking issue current. The blocking gate lives in
+# security.yaml and covers leoflow-server, the one image whose every byte comes
+# from our go.mod.
+#
+# ── Why a fixability filter, not just a severity floor ───────────────────────
+#
+# Debian stable always carries CVEs that are unfixed there and never will be
+# fixed there. At the time of writing leoflow-runtime:py3.11 reports 273
+# findings, of which 5 are CRITICAL and every one of those 5 is unfixed upstream
+# (`will_not_fix`, `fix_deferred`, `affected`). `--ignore-unfixed` takes that
+# 273 down to 14 — the ones a human could act on today. Severity says how bad a
+# finding is; fixability says whether anyone can do anything about it. Only the
+# second is a sane gate criterion, and a policy that cannot be satisfied is a
+# policy that gets deleted.
+#
+# Unfixed findings are excluded from the SARIF upload too. A code-scanning alert
+# that can never be closed is not visibility — it is noise that teaches people
+# to stop opening the tab. The complete unfiltered inventory is kept as a build
+# artifact on every run for anyone who needs it.
+
+name: Image scan
+
+on:
+  schedule:
+    # Daily. Base-image CVEs appear on the distro's clock, not ours, so a weekly
+    # cadence means up to seven days between a fix landing upstream and anyone
+    # here knowing. Offset from security.yaml's 06:00 Monday run.
+    - cron: "20 6 * * *"
+  workflow_dispatch:
+  # The two path lists below are duplicated on purpose: GitHub Actions does not
+  # support YAML anchors, so an alias here would not expand. Keep them in sync.
+  push:
+    branches: [main]
+    paths:
+      - "runtime/**"
+      - "deploy/Dockerfile.migrate"
+      - "migrations/**"
+      - "go.mod"
+      - "go.sum"
+      - ".trivyignore.yaml"
+      - "scripts/trivy-report.py"
+      - ".github/workflows/image-scan.yaml"
+  pull_request:
+    branches: [main]
+    # Same inputs. On a PR this reports into the job summary and stays green —
+    # the author sees what their change does to the image without being blocked
+    # by findings that were already there.
+    paths:
+      - "runtime/**"
+      - "deploy/Dockerfile.migrate"
+      - "migrations/**"
+      - "go.mod"
+      - "go.sum"
+      - ".trivyignore.yaml"
+      - "scripts/trivy-report.py"
+      - ".github/workflows/image-scan.yaml"
+
+permissions:
+  contents: read
+
+env:
+  # Pinned: the scanner version decides what is reported, so an unpinned bump
+  # can move the tracking issue overnight for reasons unrelated to our images.
+  TRIVY_VERSION: "0.72.0"
+  # Matches ci.yaml, so the agent baked into the scanned runtime image is built
+  # with the toolchain that ships.
+  GO_VERSION: "1.26.6"
+  GATE_SEVERITY: "CRITICAL,HIGH"
+  ISSUE_TITLE: "Container image CVEs: fixable findings in published images"
+
+jobs:
+  scan:
+    name: Scan published image bases
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write   # SARIF upload to the Security tab
+      issues: write            # create/update the single tracking issue
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # Pinned release tarball rather than an action or a Docker Hub pull: the
+      # same reasoning as the gitleaks step in security.yaml. GitHub release
+      # downloads are reliable from Actions and rate-limited by nothing we share.
+      - name: Install Trivy
+        run: |
+          set -euo pipefail
+          url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          ok=0
+          for i in 1 2 3; do
+            if curl -fsSL "$url" -o /tmp/trivy.tgz; then ok=1; break; fi
+            echo "::warning::trivy download attempt ${i} failed; retrying in 5s"; sleep 5
+          done
+          [ "$ok" = 1 ] || { echo "::error::could not download trivy v${TRIVY_VERSION} after 3 attempts"; exit 1; }
+          tar -xzf /tmp/trivy.tgz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version
+
+      # One DB pull for every scan below.
+      - name: Warm the vulnerability database
+        run: trivy image --download-db-only
+
+      - name: Build images
+        run: |
+          set -euo pipefail
+          for py in 3.10 3.11 3.12; do
+            echo "::group::build leoflow-runtime py${py}"
+            docker build -f runtime/Dockerfile \
+              --build-arg "PYTHON_VERSION=${py}" \
+              --build-arg "GO_VERSION=${GO_VERSION}" \
+              -t "leoflow-runtime:py${py}" .
+            echo "::endgroup::"
+          done
+          echo "::group::build leoflow-migrate"
+          docker build -f deploy/Dockerfile.migrate -t leoflow-migrate:ci .
+          echo "::endgroup::"
+
+      # Scan each image once to JSON (fixable findings, every severity), then
+      # derive the SARIF from that report. The file stem names the image in the
+      # summary, so keep it readable.
+      - name: Scan images
+        run: |
+          set -euo pipefail
+          mkdir -p scan-out
+          scan() { # <report-name> <image-ref>
+            echo "::group::scan $2"
+            trivy image --quiet --scanners vuln \
+              --ignore-unfixed \
+              --ignorefile .trivyignore.yaml \
+              --format json --output "scan-out/$1.json" "$2"
+            trivy convert --quiet \
+              --format sarif --output "scan-out/$1.sarif" "scan-out/$1.json"
+            echo "::endgroup::"
+          }
+          scan leoflow-runtime-py3.10 leoflow-runtime:py3.10
+          scan leoflow-runtime-py3.11 leoflow-runtime:py3.11
+          scan leoflow-runtime-py3.12 leoflow-runtime:py3.12
+          scan leoflow-migrate       leoflow-migrate:ci
+
+      # The complete picture, including the unfixed findings the policy filters
+      # out, so a filter this workflow applies is never the only copy of the data.
+      - name: Full unfiltered inventory
+        run: |
+          set -euo pipefail
+          mkdir -p scan-out/unfiltered
+          for ref in leoflow-runtime:py3.10 leoflow-runtime:py3.11 leoflow-runtime:py3.12 leoflow-migrate:ci; do
+            name="${ref//[:\/]/-}"
+            trivy image --quiet --scanners vuln \
+              --format json --output "scan-out/unfiltered/${name}.json" "$ref"
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: trivy-image-reports
+          path: scan-out/
+          retention-days: 30
+
+      # One category per image so the uploads do not overwrite each other. Not
+      # on pull_request: a PR run would collide with the main-branch baseline
+      # under a shared category, the same trap security.yaml documents (#437).
+      - name: Upload SARIF (leoflow-runtime py3.10)
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always() && github.event_name != 'pull_request'
+        with:
+          sarif_file: scan-out/leoflow-runtime-py3.10.sarif
+          category: trivy-image-runtime-py310
+
+      - name: Upload SARIF (leoflow-runtime py3.11)
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always() && github.event_name != 'pull_request'
+        with:
+          sarif_file: scan-out/leoflow-runtime-py3.11.sarif
+          category: trivy-image-runtime-py311
+
+      - name: Upload SARIF (leoflow-runtime py3.12)
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always() && github.event_name != 'pull_request'
+        with:
+          sarif_file: scan-out/leoflow-runtime-py3.12.sarif
+          category: trivy-image-runtime-py312
+
+      - name: Upload SARIF (leoflow-migrate)
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always() && github.event_name != 'pull_request'
+        with:
+          sarif_file: scan-out/leoflow-migrate.sarif
+          category: trivy-image-migrate
+
+      - name: Build report
+        id: report
+        run: |
+          set -euo pipefail
+          python3 scripts/trivy-report.py \
+            scan-out/leoflow-runtime-py3.10.json \
+            scan-out/leoflow-runtime-py3.11.json \
+            scan-out/leoflow-runtime-py3.12.json \
+            scan-out/leoflow-migrate.json \
+            --gate-severity "$GATE_SEVERITY" \
+            --fingerprint-out scan-out/fingerprint.txt \
+            --blocking-count-out scan-out/blocking.txt \
+            > scan-out/report.md
+          {
+            echo "fingerprint=$(cat scan-out/fingerprint.txt)"
+            echo "blocking=$(cat scan-out/blocking.txt)"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Container image scan"
+            echo
+            echo "Fixable findings only. Severity floor for the \"would block\" column: \`$GATE_SEVERITY\`."
+            echo
+            cat scan-out/report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # One issue, kept current — not one issue per run, and not a comment a day.
+      # A daily scan that notifies on every run is a daily scan nobody reads, so
+      # the body is refreshed silently and a comment is posted only when the set
+      # of would-block findings actually changes.
+      - name: Update the tracking issue
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BLOCKING: ${{ steps.report.outputs.blocking }}
+          FINGERPRINT: ${{ steps.report.outputs.fingerprint }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Anchored on the exact title rather than a label, so the workflow does
+          # not depend on a label existing in the repository.
+          number="$(gh issue list --state open --limit 100 \
+            --json number,title,body \
+            --jq "[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty")"
+
+          if [ "$BLOCKING" -eq 0 ]; then
+            if [ -n "$number" ]; then
+              gh issue comment "$number" --body \
+                "All previously reported fixable ${GATE_SEVERITY} findings are gone as of [this run](${RUN_URL}). Closing."
+              gh issue close "$number"
+            fi
+            echo "no fixable ${GATE_SEVERITY} findings; nothing to track"
+            exit 0
+          fi
+
+          {
+            echo "Fixable **${GATE_SEVERITY}** findings in images we publish, from the daily"
+            echo "[image scan](${RUN_URL}). Unfixed findings are excluded — see"
+            echo "\`.github/workflows/image-scan.yaml\` for why."
+            echo
+            echo "This issue is maintained by the scan: the body is refreshed on every run and"
+            echo "the issue closes itself when the list empties. Triage guidance is in"
+            echo "[Image vulnerability scanning](https://leoflow.dev/contribute/image-vulnerability-scanning/)."
+            echo
+            cat scan-out/report.md
+            echo
+            echo "<!-- image-scan-fingerprint: ${FINGERPRINT} -->"
+          } > scan-out/issue-body.md
+
+          if [ -z "$number" ]; then
+            gh issue create --title "$ISSUE_TITLE" --body-file scan-out/issue-body.md
+            echo "opened tracking issue"
+            exit 0
+          fi
+
+          previous="$(gh issue view "$number" --json body --jq '.body' \
+            | sed -n 's/.*<!-- image-scan-fingerprint: \([0-9a-f]*\) -->.*/\1/p')"
+          gh issue edit "$number" --body-file scan-out/issue-body.md
+          if [ "$previous" != "$FINGERPRINT" ]; then
+            gh issue comment "$number" --body \
+              "The set of fixable ${GATE_SEVERITY} findings changed as of [this run](${RUN_URL}). Updated above."
+            echo "updated issue #${number} (finding set changed)"
+          else
+            echo "updated issue #${number} (no change to the finding set; stayed quiet)"
+          fi

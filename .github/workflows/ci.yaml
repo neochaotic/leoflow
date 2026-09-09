@@ -1118,6 +1118,27 @@ jobs:
         run: bash scripts/check-service-image-registry.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # Container-scan ignore list. Every finding we accept must say why and carry
+  # an expiry date, and the file holding them must actually be passed to a scan.
+  # Trivy honours `expired_at` — a lapsed entry stops suppressing, so neglect
+  # makes a finding come back rather than stay hidden — but nothing in Trivy
+  # requires an entry to have an expiry or a rationale at all, which makes the
+  # permanent unexplained entry the easiest one to write. The other half is
+  # wiring: a renamed ignore file, or a dropped `--ignorefile` flag, leaves
+  # entries that look accepted and suppress nothing. Both ends are checked.
+  # ─────────────────────────────────────────────────────────────────────
+  trivyignore-entries:
+    name: Container-scan ignore list is reviewable
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+      - name: Check every accepted finding has a reason and an expiry
+        run: bash scripts/check-trivyignore-entries.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # Script self-tests. cut-release.sh and the check-* gates hold logic nothing
   # else exercises — the tag normalizers, FLAKE_RE (which decides whether a red
   # run is rerun or stops a release), and the gates' ref comparisons. A defect

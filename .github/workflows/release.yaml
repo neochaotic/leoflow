@@ -263,16 +263,35 @@ jobs:
           - { image: "fedora:41", prep: "dnf install -y -q tar curl --allowerasing" }
           - { image: "quay.io/rockylinux/rockylinux:9", prep: "dnf install -y -q tar curl --allowerasing" }
           - { image: "opensuse/leap:15", prep: "zypper --no-gpg-checks -n in -y curl tar gzip" }
-          - { image: "archlinux:latest", prep: "pacman -Sy --noconfirm curl tar" }
+          - { image: "archlinux:latest", prep: "pacman -Sy --noconfirm archlinux-keyring && pacman -Syu --noconfirm curl tar" }
           - { image: "alpine:3.20", prep: "apk add --no-cache curl tar" }
     steps:
       - name: Install prerequisites (curl + tar)
-        run: ${{ matrix.prep }}
+        # Retry the whole prep. apt-get carries Acquire::Retries inline, but
+        # dnf/zypper/pacman/apk have none, and each distro is an independent
+        # chance to fail the gate and retract the release (#983 / #979).
+        run: |
+          n=0
+          until ${{ matrix.prep }}; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::prerequisite install failed after 3 attempts"
+              exit 1
+            fi
+            echo "prerequisite install failed (attempt ${n}/3); retrying in 10s"
+            sleep 10
+          done
 
       - name: Install Leoflow via the published install.sh
         env:
           LEOFLOW_VERSION: ${{ github.ref_name }} # pin to the just-pushed tag
-        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" | sh
+        run: |
+          # Fetch and run as two steps. `curl … | sh` under `shell: sh` (sh -e,
+          # no pipefail) reports the PIPELINE's status, which is sh's — and sh
+          # succeeds on empty input, so a failed fetch exits 0 and the step
+          # passes. Verified: a 404 through that pipe gives exit 0.
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" -o /tmp/install.sh
+          sh /tmp/install.sh
 
       - name: Verify the binary and managed CPython run
         run: |
@@ -305,7 +324,13 @@ jobs:
       - name: Install Leoflow via the published install.sh
         env:
           LEOFLOW_VERSION: ${{ github.ref_name }}
-        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" | sh
+        run: |
+          # Fetch and run as two steps. `curl … | sh` under `shell: sh` (sh -e,
+          # no pipefail) reports the PIPELINE's status, which is sh's — and sh
+          # succeeds on empty input, so a failed fetch exits 0 and the step
+          # passes. Verified: a 404 through that pipe gives exit 0.
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh" -o /tmp/install.sh
+          sh /tmp/install.sh
       - name: leoflow setup (non-interactive, defaults)
         run: |
           set -eu
@@ -462,6 +487,7 @@ jobs:
       contents: read
       packages: read
     steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.4.3
@@ -479,7 +505,11 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          cosign verify \
+          # Through the same wrapper every `cosign sign` uses, rather than a
+          # second retry policy that drifts from it. verify fetches the Sigstore
+          # TUF root and talks to Rekor and Fulcio, none of which we control, and
+          # an unretried flake here retracts the release to a draft (#983).
+          ./scripts/cosign-retry.sh verify \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             --certificate-identity-regexp "^https://github\.com/${REPO}/\.github/workflows/release\.yaml@refs/tags/" \
             "${IMAGE}"
@@ -507,6 +537,35 @@ jobs:
           set -eu
           echo "::error::release blocked: install-smoke=${{ needs.install-smoke.result }} lite-cold-start-smoke=${{ needs.lite-cold-start-smoke.result }} upgrade-smoke=${{ needs.upgrade-smoke.result }} migrate-image=${{ needs.migrate-image.result }} runtime-image=${{ needs.runtime-image.result }} verify-server-signature=${{ needs.verify-server-signature.result }}; retracting ${GITHUB_REF_NAME} to a draft."
           gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft
+          # Print the recovery, because a plain re-run CANNOT work and the reader
+          # has no way to know that from here (#979, observed on v0.4.5-rc.1).
+          # Most smoke jobs install with `curl … install.sh | sh`, which downloads
+          # from the PUBLIC release-asset URL. A draft's assets are not served
+          # there, so every re-run of a retracted release fails on the download —
+          # the failure looks identical to the original one, and the obvious next
+          # move (cut a new tag) is the expensive one, since tags are immutable
+          # (ADR 0033). Re-publish FIRST, then re-run.
+          cat >> "${GITHUB_STEP_SUMMARY}" <<EOF
+          ## ${GITHUB_REF_NAME} retracted to a draft
+
+          A plain re-run will fail on the asset download, not on whatever failed
+          here: \`install.sh\` fetches the public release-asset URL and a draft
+          does not serve one. Re-publish first.
+
+          **If the failure was transient** (see #1007 for the service-container
+          pull class, #983 for unretried network steps):
+
+          \`\`\`bash
+          gh release edit ${GITHUB_REF_NAME} --repo ${GITHUB_REPOSITORY} --draft=false
+          gh run rerun ${GITHUB_RUN_ID} --failed
+          \`\`\`
+
+          \`scripts/cut-release.sh\` does this for you when it is driving the
+          cut — it re-publishes before classifying the failure. This summary is
+          for the case where nobody is running it.
+
+          **If the failure was real**, leave it drafted and cut the next tag.
+          EOF
           exit 1
       - name: Confirm release passed all gates and ensure it is published
         if: needs.install-smoke.result == 'success' && needs.lite-cold-start-smoke.result == 'success' && needs.upgrade-smoke.result == 'success' && needs.migrate-image.result == 'success' && needs.runtime-image.result == 'success' && needs.verify-server-signature.result == 'success'

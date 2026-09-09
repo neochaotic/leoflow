@@ -136,9 +136,21 @@ promote-artifact model is tracked in #878.
 
 - **PR/main red on a non-flake** — the script stops before tagging; inspect the
   run, fix, re-run the command (it refuses if the tag already exists).
-- **Release retracted to a draft** — the script un-drafts and re-runs on a flake;
-  if it persists, `gh release edit <tag> --draft=false` then re-run the failed
-  jobs once the transient clears.
+- **Release retracted to a draft** — the script un-drafts **before** classifying
+  the failure, then re-runs on a flake. That ordering is the fix for #979: the
+  un-draft used to sit inside the flake branch, and a retracted release makes
+  most smokes fail on the asset download instead — a failure that matches
+  nothing in `FLAKE_RE`, so `isflake` went to 0 and the un-draft never ran. The
+  deadlock defended itself. If you are watching from the Actions UI rather than
+  driving `cut-release.sh`, the gate's step summary prints the two commands:
+  `gh release edit <tag> --draft=false`, then re-run the failed jobs once the
+  transient clears.
+- **The cut stopped saying "non-flake" but the failure looks transient** — check
+  whether the failed job died in `Initialize containers`. That step has no log
+  for `gh run view --log-failed` to return, so the flake classifier used to read
+  the empty output as "no flake pattern matched". It now falls back to the job
+  logs API and treats a still-unreadable log as *unknown*, which reruns rather
+  than stops (#978, #1007).
 - **`no merge base`** in the heavy-E2E gate — rebase the branch onto current
   `main` (tracked: #876).
 

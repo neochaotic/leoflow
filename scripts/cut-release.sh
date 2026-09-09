@@ -47,6 +47,22 @@ die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---- pure logic (unit-testable, no network) --------------------------------
 
+# flake_verdict <log-text> -> prints "flake" | "real" | "unknown"
+#
+# "unknown" is a distinct answer on purpose. A job that dies in `Initialize
+# containers` — the service-container pull, this repo's most frequent failure
+# (#1007) — has no step log, so `gh run view --log-failed` returns EMPTY. The
+# caller used to grep that empty string, get no match, and conclude "not a
+# flake", which disabled the rerun loop for the one failure it most needed to
+# handle (#978). No evidence is not evidence of absence: for a cut, unknown
+# means rerun, because a rerun is cheap and a stopped cut on a transient is not.
+flake_verdict() {
+  local lg="${1:-}"
+  [ -n "$lg" ] || { echo unknown; return 0; }
+  if printf '%s' "$lg" | grep -qE "$FLAKE_RE"; then echo flake; else echo real; fi
+}
+
+
 # normalize_tag: accept "0.4.4", "v0.4.4", "0.4.4-rc.1" -> "v0.4.4[-rc.1]".
 normalize_tag() { local v="${1#v}"; printf 'v%s' "$v"; }
 # chart_version: the SemVer the Helm chart carries (no leading v).
@@ -59,6 +75,16 @@ valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; }
 self_test() {
   local fail=0
   _eq() { [ "$1" = "$2" ] || { echo "FAIL: $3: '$1' != '$2'"; fail=1; }; }
+  # flake_verdict: the three answers, and the one that used to be missing.
+  _eq "$(flake_verdict 'Error: toomanyrequests: Rate exceeded')" "flake"   "rate limit is a flake"
+  _eq "$(flake_verdict 'FAIL: TestFoo assertion failed')"        "real"    "a test failure is real"
+  _eq "$(flake_verdict '')"                                      "unknown" "an unreadable log is UNKNOWN, not a non-flake (#978)"
+  # The regression this locks: `Initialize containers` leaves no step log, so
+  # --log-failed returns empty. Treating that as "real" stopped the cut on this
+  # repo's most common transient. Assert the two are not the same answer.
+  _eq "$([ "$(flake_verdict '')" = "$(flake_verdict 'FAIL: TestFoo assertion failed')" ] && echo same || echo different)" \
+      "different" "empty and a genuine failure must not classify alike"
+
   _eq "$(normalize_tag 0.4.4)"      "v0.4.4"        "normalize bare"
   _eq "$(normalize_tag v0.4.4)"     "v0.4.4"        "normalize v"
   _eq "$(normalize_tag v0.4.4-rc.1)" "v0.4.4-rc.1"  "normalize rc"
@@ -908,12 +934,40 @@ main() {
                 break ;;
     esac
     failed=$(echo "$j" | jq -r '.[] | select(.conclusion=="failure") | .databaseId')
-    isflake=1; for rid in $failed; do gh run view "$rid" --log-failed 2>/dev/null | grep -qE "$FLAKE_RE" || isflake=0; done
+    # Un-draft BEFORE deciding whether this was a flake, not inside the flake
+    # branch (#862 put it there; #979 is why that is not enough).
+    #
+    # Once the gate retracts, most smokes fail on install.sh's asset download
+    # instead of on whatever failed first — and `curl -fsSL` prints nothing on a
+    # 404, so install.sh only says "downloading <archive> failed", which matches
+    # nothing in FLAKE_RE. isflake flips to 0, the watch stops at "non-flake",
+    # and the un-draft below it never runs. The deadlock defends itself: the
+    # symptom it creates is exactly what stops the recovery. Re-publishing first
+    # costs nothing when the release is already published, and it means the next
+    # verdict is computed against a release the smokes can actually download.
+    gh release edit "$tag" --repo "$REPO" --draft=false >/dev/null 2>&1 || true
+    isflake=1
+    for rid in $failed; do
+      # An unreadable log is NOT evidence of a non-flake. A job that dies in
+      # `Initialize containers` — the service-container pull, this repo's most
+      # frequent flake (#1007) — has no step log, so `--log-failed` returns EMPTY
+      # and the grep fails. That read "not a flake" and disabled this whole
+      # rerun loop for the single failure it most needed to handle (#978).
+      lg=$(gh run view "$rid" --log-failed 2>/dev/null || true)
+      if [ -z "$lg" ]; then
+        # The `|| true` on the GROUP is load-bearing under `set -o pipefail`:
+        # the pipeline takes the status of the first failing command, so a `gh
+        # api` that 404s makes the assignment nonzero and errexit kills the cut.
+        # Measured: without it, a total API failure aborts the whole script.
+        lg=$( { gh api "repos/$REPO/actions/runs/$rid/jobs" --jq '.jobs[]|select(.conclusion=="failure")|.id' 2>/dev/null \
+                | while read -r jid; do gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null || true; done; } || true )
+      fi
+      # Still nothing to read: treat it as UNKNOWN, which for a cut means rerun
+      # rather than stop. A rerun is cheap; a stopped cut on a transient is not.
+      [ "$(flake_verdict "$lg")" = "real" ] && isflake=0
+    done
     if [ "$isflake" = 1 ] && [ "$reruns" -lt 8 ]; then
       reruns=$((reruns+1)); warn "release flake -> rerun #$reruns"
-      # If the gate retracted the release to a draft, un-draft so a download-based
-      # smoke can re-fetch on rerun (see #862).
-      gh release edit "$tag" --repo "$REPO" --draft=false >/dev/null 2>&1 || true
       for rid in $failed; do gh run rerun "$rid" --failed >/dev/null 2>&1; done
       sleep 60; continue
     fi

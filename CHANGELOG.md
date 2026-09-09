@@ -409,6 +409,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A user-facing change without a docs update now fails CI (`skip-docs` to
+  exempt).** `taskPodSecurity.readOnlyRootFilesystem` — this tranche's security
+  hardening — shipped in rc.3 with zero mentions anywhere under
+  `website/content/`, having been validated on a real cluster the same day. The
+  CHANGELOG guard exists because that same failure repeated at least eight times
+  with changelog entries; this applies the lesson one surface earlier. The gate
+  keys on capability rather than churn — the chart values file, the authoring
+  schema, and the CLI commands — so internal refactors do not trip it, and it
+  mirrors the CHANGELOG guard's shape (standalone workflow, re-runs on label,
+  Dependabot exempt by author). The missing hardening page is written.
+
 - **A `dbt:` block alongside a `dag.py` is now refused instead of silently
   discarding the Python (#1001).** `compile` routes on the `dbt:` block before
   the parser is ever invoked, so the Python was never read and nothing said so:

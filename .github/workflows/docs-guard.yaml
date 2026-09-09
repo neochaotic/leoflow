@@ -1,0 +1,47 @@
+# Requires a docs update when a PR changes user-facing surface
+# (see scripts/check-docs-updated.sh).
+#
+# A standalone workflow — not a job in ci.yaml — for the same reason as the
+# CHANGELOG guard: it triggers on `labeled` / `unlabeled` too, so applying
+# `skip-docs` re-runs THIS guard alone and the exemption takes effect at once.
+#
+# Why it exists: taskPodSecurity.readOnlyRootFilesystem — the security hardening
+# of the v0.4.5 tranche — shipped in rc.3 with zero mentions anywhere under
+# website/content/. It had been validated on a real cluster the same day. The
+# CHANGELOG guard was added after the same failure repeated at least eight times
+# with changelog entries; this is that lesson applied one surface earlier.
+name: Docs guard
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs-guard:
+    name: Docs updated for user-facing changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Dependabot is exempt by author, not by label — the same reasoning the
+    # CHANGELOG guard documents: keying on the author keeps one mechanism and
+    # survives a label being removed.
+    if: >-
+      ${{ !contains(github.event.pull_request.labels.*.name, 'skip-docs')
+          && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      # The changed-file list comes from the API rather than a git diff: the
+      # CHANGELOG guard can fetch --depth=1 because it compares one file's
+      # content, but a file LIST needs a merge base, and a shallow clone has
+      # none. Asking gh sidesteps the fetch-depth question entirely.
+      - name: Collect the changed files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr diff "$PR" --name-only > /tmp/changed.txt
+      - name: Require a docs update (or the skip-docs label)
+        run: bash scripts/check-docs-updated.sh HEAD /tmp/changed.txt

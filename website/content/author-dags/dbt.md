@@ -319,7 +319,8 @@ live-query coverage needs real accounts and CI secrets.
 
 ## If your DAG is only models
 
-A DAG whose tasks are *only* dbt models can skip the `dag.py`: declare the project
+A DAG whose tasks are *only* dbt models has no `dag.py` — and **must not carry
+one**, even an empty placeholder: `compile` refuses the pair. Declare the project
 under a top-level `dbt:` block and the shape comes from dbt's `ref()`/`source()`
 graph. It is one file fewer to start with.
 

@@ -141,6 +141,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Refusing rather than merging keeps "which one wins, and how would they
   compose?" out of the decision: no author means both at once. A genuine
   dbt-only project is untouched — the check keys on the DAG source existing.
+  **Upgrade note:** a dbt-only project carrying a *leftover* `dag.py` now fails
+  to compile until you delete the file. If you added an empty one to work around
+  #769 — `deploy --build` failed on `COPY dag.py` for pure-dbt projects between
+  v0.3.0 and v0.4.0 — that workaround has been unnecessary since v0.4.0 and the
+  file can go.
 
 - **`leoflow.yaml` rejects keys the schema does not define, and `leoflow validate`
   finally works on a pure-dbt project (#15, #996).** The authoring schema declares

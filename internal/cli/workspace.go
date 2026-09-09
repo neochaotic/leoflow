@@ -80,17 +80,24 @@ func (w *WorkspaceSpec) WatchedPaths() []string {
 	if w == nil {
 		return nil
 	}
-	paths := make([]string, 0, len(w.Projects)*2)
+	paths := make([]string, 0, len(w.Projects)*3)
 	for _, p := range w.Projects {
 		if p.HasYAML {
 			paths = append(paths, p.ConfigPath)
 		}
+		// Always watch the DAG source, even for a project whose config says dbt.
+		// projectAt keys on the source EXISTING while this used to key on
+		// Dbt != nil, and the two disagree in exactly one shape: a project
+		// carrying both, which compile now refuses. Watching only dbt_project.yml
+		// there meant the user read "delete dag.py", deleted it, and nothing
+		// reloaded — no watched path's mtime moved and the import-error banner is
+		// only cleared by a successful reload. Watching a normally-absent path is
+		// already safe: projectMtimes skips what it cannot stat.
+		paths = append(paths, filepath.Join(p.Path, p.Config.DagSource))
 		if p.Config.Dbt != nil {
 			// A pure dbt project has no dag.py; watch its dbt project file so a
 			// model/config edit still triggers a reload.
 			paths = append(paths, filepath.Join(p.Path, p.Config.Dbt.Project, "dbt_project.yml"))
-		} else {
-			paths = append(paths, filepath.Join(p.Path, p.Config.DagSource))
 		}
 	}
 	return paths

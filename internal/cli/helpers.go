@@ -202,12 +202,16 @@ func dagSourcePath(dir string, cfg *domain.LeoflowConfig) string {
 	return filepath.Join(dir, cfg.DagSource)
 }
 
-// regularFileExists reports whether path names something that is present and
-// readable. An unreadable path answers false: absence and inaccessibility are
-// both "no evidence this file participates", which is what every caller wants.
+// regularFileExists reports whether path names an existing regular file.
+//
+// The regularity test is load-bearing, not defensive. `dag_source` has no
+// pattern in the authoring schema, so `dag_source: "."` is legal and stats
+// successfully as the project directory — a plain existence check refuses every
+// dbt-only project with "delete .". A directory literally named dag.py stats
+// the same way.
 func regularFileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular()
 }
 
 // errDbtBlockWithDagSource refuses a project carrying BOTH a top-level dbt:
@@ -236,10 +240,12 @@ func errDbtBlockWithDagSource(dir string, cfg *domain.LeoflowConfig) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"%s declares a top-level dbt: block and %s also exists: the dbt: block wins and the Python in %s would be silently ignored (#1001). "+
-			"Delete one. To keep the Python, remove the dbt: block and declare the project under dbt_groups: in your dag.py; "+
-			"to keep the dbt-only DAG, delete %s",
-		projectConfigPath(dir), src, cfg.DagSource, cfg.DagSource)
+		"%s declares a top-level dbt: block and %s also exists; refusing, because the two describe different DAGs.\n"+
+			"  To keep the Python: delete the dbt: block, move the project under dbt_groups.<name>: in %s,\n"+
+			"                      and call dbt_group(\"<name>\") in %s.\n"+
+			"  To keep the dbt-only DAG: delete %s.\n"+
+			"(Compiling the pair used to succeed and drop the Python silently.)",
+		projectConfigPath(dir), src, projectConfigPath(dir), src, src)
 }
 
 // configFilePath returns the config file to load: the --config flag when set,

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -299,5 +300,47 @@ func TestResolveWorkspace_WatchedPathsCoverEveryProject(t *testing.T) {
 	}
 	for missing := range want {
 		t.Errorf("missing watched path %q", missing)
+	}
+}
+
+// TestWatchedPathsCoverTheRefusedShape pins the watcher for a project carrying
+// BOTH a dbt: block and a dag.py — the shape compile refuses (#1001).
+//
+// This used to branch on Config.Dbt != nil while projectAt branches on the DAG
+// source existing, and the two disagree in exactly this shape. The consequence
+// was not abstract: `leoflow dev` printed "delete dag.py", the user deleted it,
+// and nothing reloaded — no watched path's mtime moved, and the import-error
+// banner is only cleared by a successful reload, so the UI stayed red while the
+// project was already fixed.
+func TestWatchedPathsCoverTheRefusedShape(t *testing.T) {
+	ws := t.TempDir()
+	mixed := filepath.Join(ws, "mixed")
+	if err := os.MkdirAll(mixed, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	yaml := "dag_id: mixed\ndbt:\n  project: .\n  manifest: manifest.json\n"
+	for name, body := range map[string]string{
+		"leoflow.yaml":    yaml,
+		"dag.py":          "x=1\n",
+		"dbt_project.yml": "name: mixed\n",
+	} {
+		if err := os.WriteFile(filepath.Join(mixed, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := ResolveWorkspace(ws)
+	if err != nil {
+		t.Fatalf("ResolveWorkspace: %v", err)
+	}
+	paths := got.WatchedPaths()
+	for _, want := range []string{
+		filepath.Join(mixed, "leoflow.yaml"),
+		filepath.Join(mixed, "dag.py"),
+		filepath.Join(mixed, "dbt_project.yml"),
+	} {
+		if !slices.Contains(paths, want) {
+			t.Errorf("watcher does not cover %q, so the fix the error message asks for triggers no reload; watching %v", want, paths)
+		}
 	}
 }

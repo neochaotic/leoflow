@@ -85,8 +85,9 @@ type AlertRule struct {
 type DbtConfig struct {
 	// Project is the directory containing dbt_project.yml.
 	Project string `json:"project,omitempty" yaml:"project,omitempty"`
-	// Granularity is the task partition strategy: node, level, folder, or tag
-	// (ADR 0042 §5). Empty means node.
+	// Granularity is the task partition strategy: node, level or folder (ADR 0042
+	// §5). Empty means node. Tag and selector grouping are not implemented — the
+	// schema enum is the three above; see #398.
 	Granularity string `json:"granularity,omitempty" yaml:"granularity,omitempty"`
 	// Manifest optionally points to a pre-built manifest.json (the Pro/CI baked
 	// path); empty means run `dbt parse` to generate it at compile time.

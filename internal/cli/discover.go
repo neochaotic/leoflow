@@ -145,7 +145,7 @@ func projectAt(path string) (Project, bool) {
 		return dbtOnlyProjectAt(path, yamlPath)
 	}
 	if _, err := os.Stat(yamlPath); err == nil {
-		cfg, lerr := loadProjectConfig(path)
+		cfg, lerr := loadProjectConfigLenient(path)
 		if lerr != nil {
 			// A yaml that fails to parse is still a discovered project; its
 			// config falls back to defaults + DagID = basename. The compile
@@ -194,7 +194,7 @@ func dbtOnlyProjectAt(path, yamlPath string) (Project, bool) {
 	if _, err := os.Stat(yamlPath); err != nil {
 		return Project{}, false
 	}
-	cfg, lerr := loadProjectConfig(path)
+	cfg, lerr := loadProjectConfigLenient(path)
 	if lerr != nil || cfg.Dbt == nil {
 		return Project{}, false
 	}

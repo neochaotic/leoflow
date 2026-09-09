@@ -70,11 +70,11 @@ sales/                         # the DAG = a dbt project + leoflow.yaml
 # leoflow.yaml
 schema_version: "1.0"
 dag_id: sales
-schedule: "@daily"             # optional; empty = on-demand (Lite dev loop)
 owner: data-team
 dbt:
   project: .                   # dir containing dbt_project.yml
   granularity: node            # node | level | folder  (see §3)
+  schedule: "@daily"           # optional; empty = on-demand (Lite dev loop)
 ```
 
 Compile it like any DAG:
@@ -175,8 +175,9 @@ with DAG("sales", schedule="@daily"):
 
 ```yaml
 # sales/leoflow.yaml
+# The schedule lives in dag.py's DAG(schedule=…) — there is no top-level
+# schedule: key, and leoflow.yaml rejects one.
 dag_id: sales
-schedule: "@daily"
 dbt_groups:
   transform:                  # the name passed to dbt_group()
     project: ./transform
@@ -478,7 +479,7 @@ confirms the adapter integration works against a real account; it is still a
 | `granularity` | `node` \| `level` \| `folder` (default `node`) |
 | `manifest` | optional pre-built `manifest.json` path (project-relative); empty runs `dbt parse` |
 | `connection` | managed Leoflow connection id; empty = bring-your-own `profiles.yml` |
-| `schedule` | *(whole-DAG `dbt:` only)* cron/preset; empty = on-demand |
+| `schedule` | *(whole-DAG `dbt:` only)* cron/preset; empty = on-demand. Declared **under `dbt:`** — a `dag.py` DAG takes its schedule from `DAG(schedule=…)` instead. There is no top-level `schedule:` key, and `leoflow.yaml` rejects one. |
 
 ## Cosmos at a glance
 

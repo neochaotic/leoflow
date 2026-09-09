@@ -163,9 +163,16 @@ Two further invariants on the partition:
 
 Config:
 
+> **Design intent, not the shipped schema.** The fence below predates the
+> implementation: `groups:` is not a `dbt:` key and `leoflow.yaml` rejects it,
+> and the shipped `granularity` enum is `node | level | folder` — `resource`,
+> `tag` and `selector` are not implemented (tag/selector grouping is tracked in
+> #398). The status line above says "shipped in v0.1.1", which is true of
+> manifest rendering and not of this block.
+
 ```yaml
 dbt:
-  granularity: folder        # node | level | resource | folder | tag | selector
+  granularity: folder        # shipped enum: node | level | folder
   groups:                    # only for granularity: selector
     - { name: staging, select: "path:models/staging" }
     - { name: core,    select: "tag:core" }

@@ -202,6 +202,46 @@ func dagSourcePath(dir string, cfg *domain.LeoflowConfig) string {
 	return filepath.Join(dir, cfg.DagSource)
 }
 
+// regularFileExists reports whether path names something that is present and
+// readable. An unreadable path answers false: absence and inaccessibility are
+// both "no evidence this file participates", which is what every caller wants.
+func regularFileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// errDbtBlockWithDagSource refuses a project carrying BOTH a top-level dbt:
+// block and a DAG source, because the two describe different DAGs and only one
+// of them can win.
+//
+// It used to be the dbt: block, silently: compile routes on cfg.Dbt before the
+// parser is ever invoked, so the Python was never read and nothing said so. The
+// author's whole feedback loop — validate, compile, deploy — reported success
+// while shipping a DAG missing every non-dbt task (#1001). This is also the
+// state a migration passes through, since writing the dag.py before deleting
+// dbt: is the order a person naturally works in.
+//
+// Refusing rather than merging keeps the semantics question ("which wins?
+// how would they compose?") out of the decision: there is no reading of both
+// blocks at once that the author could have intended.
+func errDbtBlockWithDagSource(dir string, cfg *domain.LeoflowConfig) error {
+	if cfg == nil || cfg.Dbt == nil {
+		return nil
+	}
+	src := dagSourcePath(dir, cfg)
+	// Absence is the ordinary case — a genuine dbt-only project has no DAG
+	// source — so it is not an error to report, and an unreadable path is not
+	// evidence of a conflict either.
+	if !regularFileExists(src) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s declares a top-level dbt: block and %s also exists: the dbt: block wins and the Python in %s would be silently ignored (#1001). "+
+			"Delete one. To keep the Python, remove the dbt: block and declare the project under dbt_groups: in your dag.py; "+
+			"to keep the dbt-only DAG, delete %s",
+		projectConfigPath(dir), src, cfg.DagSource, cfg.DagSource)
+}
+
 // configFilePath returns the config file to load: the --config flag when set,
 // otherwise the default path when it exists, otherwise empty (defaults + env).
 func configFilePath(cmd *cobra.Command) string {

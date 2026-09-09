@@ -130,6 +130,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `dbt:` block alongside a `dag.py` is now refused instead of silently
+  discarding the Python (#1001).** `compile` routes on the `dbt:` block before
+  the parser is ever invoked, so the Python was never read and nothing said so:
+  `validate`, `compile` and `deploy` all reported success while shipping a DAG
+  missing every non-dbt task. This is also the state a migration passes through,
+  because writing the `dag.py` before deleting `dbt:` is the order a person
+  naturally works in — and the dbt authoring page now recommends that migration.
+  `compile` and `validate` both refuse the pair and name which block to delete.
+  Refusing rather than merging keeps "which one wins, and how would they
+  compose?" out of the decision: no author means both at once. A genuine
+  dbt-only project is untouched — the check keys on the DAG source existing.
+
 - **`leoflow.yaml` rejects keys the schema does not define, and `leoflow validate`
   finally works on a pure-dbt project (#15, #996).** The authoring schema declares
   `additionalProperties: false` and that guard was **unreachable**: the loader used

@@ -87,6 +87,9 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	// upgrade (new features like dbt vs a stale ~/.leoflow/pysrc) never surfaces as
 	// a confusing "not supported" error (#239).
 	ensurePysrc(cmd)
+	if derr := errDbtBlockWithDagSource(dir, cfg); derr != nil {
+		return derr
+	}
 	if cfg.Dbt != nil {
 		return runDbtCompile(cmd, dir, o, cfg)
 	}

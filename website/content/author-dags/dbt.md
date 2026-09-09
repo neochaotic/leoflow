@@ -68,6 +68,8 @@ with DAG("sales", schedule="@daily"):
 # The schedule lives in dag.py's DAG(schedule=…) — there is no top-level
 # schedule: key, and leoflow.yaml rejects one.
 dag_id: sales
+dependencies:
+  - dbt-postgres==1.9.*       # the adapter; the base image ships no dbt
 dbt_groups:
   transform:                  # the name passed to dbt_group()
     project: ./transform
@@ -306,10 +308,12 @@ Leoflow generates each warehouse's `profiles.yml` from your managed
 
 Each emitted profile is checked in CI against the real adapter's own credential
 parser — field names, alias resolution, required fields, and every auth mode
-above — so a profile Leoflow generates is one the adapter accepts. How far each
-adapter is exercised against a live warehouse is a project matter rather than an
-authoring one; it lives in
-[Contributing → dbt adapter coverage](/contribute/).
+above — so a profile Leoflow generates is one the adapter accepts.
+
+That is not the same as a query succeeding against your account. **Postgres and
+duckdb are the only adapters exercised against a live warehouse in CI**;
+Snowflake, BigQuery and Databricks are contract-tested and hand-verified, because
+live-query coverage needs real accounts and CI secrets.
 
 ---
 
@@ -326,8 +330,9 @@ leaving it is a migration rather than an edit.
 **It cannot express a task that is not a dbt model.** No sensors, no provider
 operators, no Python or Bash. And because those live on the DAG object a
 `dag.py` builds, it also has nowhere to declare `start_date`, `end_date`,
-`catchup`, `max_active_runs`, `max_active_tasks`, DAG-level `params`, or
-DAG-level `connections`/`variables`. Per-task `retries`, `resources`, `alerts`
+`catchup`, `max_active_runs`, `max_active_tasks` or DAG-level `params`. A
+top-level `connections:`/`variables:` is worse than rejected — the schema accepts
+it and the compiled DAG silently drops it (#997). Per-task `retries`, `resources`, `alerts`
 and `staging` do work — those come from `leoflow.yaml` and apply to both shapes.
 
 **Adding one Python task means rewriting the DAG.** Delete `dbt:`, add
@@ -442,6 +447,7 @@ this problem.
 | `granularity` | `node` \| `level` \| `folder` (default `node`) |
 | `manifest` | optional pre-built `manifest.json` path (project-relative); empty runs `dbt parse` |
 | `connection` | managed Leoflow connection id; empty = bring-your-own `profiles.yml` |
+| `schema` | overrides the dbt target schema in the generated profile |
 | `schedule` | *(whole-DAG `dbt:` only)* cron/preset; empty = on-demand. Declared **under `dbt:`** — a `dag.py` DAG takes its schedule from `DAG(schedule=…)` instead. There is no top-level `schedule:` key, and `leoflow.yaml` rejects one. |
 
 ## Cosmos at a glance

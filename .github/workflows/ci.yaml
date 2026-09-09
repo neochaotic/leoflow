@@ -142,7 +142,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -151,7 +151,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: mirror.gcr.io/library/redis:7
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
 
@@ -203,7 +203,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -212,7 +212,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: mirror.gcr.io/library/redis:7
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
@@ -244,7 +244,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -253,7 +253,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: mirror.gcr.io/library/redis:7
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
@@ -328,7 +328,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -363,7 +363,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -398,7 +398,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -429,7 +429,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -575,7 +575,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -584,7 +584,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: mirror.gcr.io/library/redis:7
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
@@ -672,7 +672,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -681,7 +681,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: mirror.gcr.io/library/redis:7
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
@@ -762,7 +762,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -771,7 +771,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: mirror.gcr.io/library/redis:7
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
@@ -901,7 +901,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
@@ -910,7 +910,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: mirror.gcr.io/library/redis:7
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
@@ -1110,6 +1110,15 @@ jobs:
   # there surfaces mid-release. Discovery is by self_test() definition, so a new
   # script's cases join this job by existing. No network, milliseconds.
   # ─────────────────────────────────────────────────────────────────────
+  service-image-registry:
+    name: Service images avoid a source-IP-rate-limited registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Check no workflow pulls service containers from public.ecr.aws
+        run: bash scripts/check-service-image-registry.sh
+
   script-selftests:
     name: Script self-tests
     runs-on: ubuntu-latest

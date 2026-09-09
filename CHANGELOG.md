@@ -169,6 +169,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (only `apt-get` had retries; `dnf`, `zypper`, `pacman` and `apk` had none).
   `pacman -Sy` was also an unsupported partial upgrade that breaks on mirror
   rotation rather than on anything we changed; it is now `-Syu`.
+- **CI service containers no longer pull from a registry that rate-limits by
+  source IP (#1007).** GitHub-hosted runners share a small pool of egress IPs,
+  so `public.ecr.aws` returned `toomanyrequests: Rate exceeded` on roughly 13%
+  of main runs. The failure lands in `Initialize containers` — before
+  `actions/checkout` and before any step — so no retry we write could reach it,
+  and it fired even on pull requests that changed only markdown. All twenty
+  references now use `mirror.gcr.io`, Google's unauthenticated pull-through
+  cache for Docker Hub official images. A new `check-service-image-registry.sh`
+  gate keeps them from drifting back; it is globbed into both the CI self-test
+  job and the cut's own gate set.
 
 - **`leoflow.yaml` rejects keys the schema does not define, and `leoflow validate`
   finally works on a pure-dbt project (#15, #996).** The authoring schema declares

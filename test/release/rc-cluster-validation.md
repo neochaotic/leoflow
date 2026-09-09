@@ -514,9 +514,11 @@ built** — the script builds the base image but not those two.
 
 ## §5b What a GKE run cannot settle
 
-§3a touches none of the §5 deltas — image content, entrypoint strings, container
-security context and YAML strictness have no cloud delta. The rows that **do**
-depend on them are all in §4, and a GKE pass on these is not an EKS pass:
+No §3a row **depends** on a §5 delta — image content, entrypoint strings,
+container security context and YAML strictness have no cloud delta. (#852 names
+Autopilot only to rule it out as a justification; it does not rest on it.) The
+rows that do depend on a delta are all in §4, and a GKE pass on these is not an
+EKS pass:
 
 - **§4.2 / #728 — IRSA credential cache.** "creds cached to `~/.aws/cli/cache`"
   has no Workload Identity equivalent; that half is unrunnable on GKE. The

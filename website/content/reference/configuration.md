@@ -28,7 +28,7 @@ chart's own values (image, replicas, ingress, Postgres/Redis wiring), see the
 | `base_image` | string | Override the runtime base image. |
 | `dependencies` | list | pip specifiers baked into the image. |
 | `connectors` | list | Short connector names (`postgres`, `http`, …) expanded at compile to their `apache-airflow-providers-*` packages. Sugar over `dependencies` — see [Installing a connector's provider](/connections/#installing-a-connectors-provider). |
-| `system_packages` | list | apt packages. |
+| `system_packages` | list | apt packages, installed into the DAG image at compile. Resolved against the task base image's Debian suite, now **Debian 13 (trixie)** — it was Debian 12 (bookworm) through v0.4.5, so a package name or version pin that only existed in bookworm has to be re-pinned. |
 | `dag_source` | string | DAG file (default `dag.py`). |
 | `build`, `registry` | object | Image build + push settings. |
 | `defaults` | object | DAG-level `retries`, `retry_delay_seconds`, `execution_timeout_seconds`, `resources`. |

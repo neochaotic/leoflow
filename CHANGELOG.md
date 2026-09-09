@@ -109,6 +109,43 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   documented in [Image
   scanning](https://leoflow.dev/contribute/image-vulnerability-scanning/).
 
+### Changed
+
+- **The task base image moves from Debian 12 (bookworm) to Debian 13 (trixie),
+  which takes its OpenSSL from 3.0.x to 3.5.x.** `python:3.x-slim` links CPython's
+  `ssl` module against the **system** OpenSSL, so this is the library every TLS
+  call made from inside a task terminates in — every provider hitting an API,
+  every `requests` call, every warehouse driver. bookworm ships OpenSSL 3.0.x,
+  whose **upstream support ended 2026-09-07**; trixie ships 3.5.x, supported to
+  **2030-04-08**. The suite itself is on the same trajectory: Debian 12 left
+  regular security support on 2026-06-11 and is now oldstable under the LTS
+  team's narrower, best-effort scope, while Debian 13 has full Security Team
+  support to 2028-08-09 and LTS to 2030-06-30. Verified on all three interpreter
+  variants (3.10 / 3.11 / 3.12): `openssl 3.5.7-1~deb13u2`, and the image still
+  ends on numeric UID `65532` with `import leoflow, leoflow_runtime` working.
+
+  **This changes what your `system_packages:` resolves to.** That key emits
+  `apt-get install` into the generated DAG image, and apt now resolves against
+  trixie rather than bookworm — so package versions move, and a name or version
+  pin that only existed in bookworm has to be re-pinned. apt itself goes 2.6.1 →
+  3.0.3 and repository signature verification moves from GnuPG's `gpgv` to
+  Sequoia's `sqv` (the slim image now ships **no `gpgv` at all**); a
+  `system_packages:` install of `curl git libpq-dev ca-certificates` was compiled
+  and built end-to-end against the new base to confirm the path still works.
+  Debian's own repositories were exercised and verify cleanly; a **third-party**
+  apt repository added by a custom Dockerfile layer was not, and is the case to
+  watch, since `sqv` is stricter than `gpgv` about legacy key material. Such a
+  repository fails loudly at build time rather than silently, but it can fail.
+
+  One silent behavior change is pinned rather than inherited: Debian's `passwd`
+  went 1:4.13 → 1:4.17.4 and the `HOME_MODE` default tightened with it, so the
+  unchanged `useradd` line produced `0755` on bookworm and `0700` on trixie.
+  `0700` is kept — a task pod runs as this very UID, so the owner traverses its
+  own home and no supported path breaks — but `runtime/Dockerfile` now sets the
+  mode explicitly, so it no longer moves when a distro default does. The
+  agent build stage stays on `golang:*-bookworm` deliberately; see the comment in
+  `runtime/Dockerfile` for why (nothing from it reaches a task pod).
+
 ### Deprecated
 
 - **`python_version: "3.10"` — the `py3.10` base image stops being published

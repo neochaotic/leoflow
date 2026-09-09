@@ -258,13 +258,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { image: "debian:12", prep: "apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq curl ca-certificates tar" }
-          - { image: "ubuntu:24.04", prep: "apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq curl ca-certificates tar" }
-          - { image: "fedora:41", prep: "dnf install -y -q tar curl --allowerasing" }
+          - { image: "mirror.gcr.io/library/debian:12", prep: "apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq curl ca-certificates tar" }
+          - { image: "mirror.gcr.io/library/ubuntu:24.04", prep: "apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq curl ca-certificates tar" }
+          - { image: "mirror.gcr.io/library/fedora:41", prep: "dnf install -y -q tar curl --allowerasing" }
           - { image: "quay.io/rockylinux/rockylinux:9", prep: "dnf install -y -q tar curl --allowerasing" }
-          - { image: "opensuse/leap:15", prep: "zypper --no-gpg-checks -n in -y curl tar gzip" }
-          - { image: "archlinux:latest", prep: "pacman -Sy --noconfirm archlinux-keyring && pacman -Syu --noconfirm curl tar" }
-          - { image: "alpine:3.20", prep: "apk add --no-cache curl tar" }
+          - { image: "mirror.gcr.io/opensuse/leap:15", prep: "zypper --no-gpg-checks -n in -y curl tar gzip" }
+          - { image: "mirror.gcr.io/library/archlinux:latest", prep: "pacman -Sy --noconfirm archlinux-keyring && pacman -Syu --noconfirm curl tar" }
+          - { image: "mirror.gcr.io/library/alpine:3.20", prep: "apk add --no-cache curl tar" }
     steps:
       - name: Install prerequisites (curl + tar)
         # Retry the whole prep. apt-get carries Acquire::Retries inline, but
@@ -445,7 +445,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    container: ubuntu:24.04
+    container: mirror.gcr.io/library/ubuntu:24.04
     steps:
       - name: Install prerequisites
         run: |

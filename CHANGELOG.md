@@ -176,9 +176,25 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `actions/checkout` and before any step — so no retry we write could reach it,
   and it fired even on pull requests that changed only markdown. All twenty
   references now use `mirror.gcr.io`, Google's unauthenticated pull-through
-  cache for Docker Hub official images. A new `check-service-image-registry.sh`
-  gate keeps them from drifting back; it is globbed into both the CI self-test
-  job and the cut's own gate set.
+  cache for Docker Hub. The release workflow's seven distro smoke containers and
+  the kind datastore manifest move too — those are pulled in the same pre-step
+  phase, in the workflow where a red job costs a tag. `quay.io` stays as-is; it
+  is a different registry, not the shared-IP pool.
+
+  A new `check-service-image-registry.sh` gate keeps them from drifting back. It
+  parses the workflow YAML — walking `jobs.*.container` and `jobs.*.services.*`,
+  and resolving `${{ matrix.* }}` against literal matrix values — and enforces an
+  **allowlist**, so a bare `image: postgres:16` pasted out of the compose file is
+  caught too. A grep would not have been enough: an earlier version of this gate
+  missed an env indirection, a folded scalar, a job-level `container:` and an
+  uppercase key while failing on a comment that merely mentioned the registry.
+
+  Note the trade: `mirror.gcr.io` is not covered by an SLA, and Google documents
+  it for daemon-level configuration rather than direct addressing — which is not
+  usable here, since the pull happens before any step we control. Twenty-plus
+  call sites now depend on one host; the failure mode changes from ~13% red to
+  all-or-nothing. The durable answer is a mirror we own, which needs a one-time
+  manual package-visibility flip GitHub's API cannot perform.
 
 - **`leoflow.yaml` rejects keys the schema does not define, and `leoflow validate`
   finally works on a pure-dbt project (#15, #996).** The authoring schema declares

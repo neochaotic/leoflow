@@ -20,14 +20,14 @@ release notes.
 
 | Field | Value |
 |---|---|
-| RC under test | `v0.4.0-rc.3` |
-| Cloud / cluster | AWS **EKS** (context: `<kubectl-context>`) |
-| CNI | AWS VPC CNI (note if using Calico/Cilium overlay) |
-| Node provisioning | (managed node group / Karpenter?) |
-| Server image | `ghcr.io/neochaotic/leoflow-server:v0.4.0-rc.3` |
+| RC under test | `<tag>` |
+| Cloud / cluster | `<AWS EKS / GCP GKE>` (context: `<kubectl-context>`) |
+| CNI | `<AWS VPC CNI / GKE Dataplane V2 / Calico>` — note it, §5 depends on it |
+| Node provisioning | (managed node group / Karpenter / GKE node pool?) |
+| Server image | `ghcr.io/neochaotic/leoflow-server:<tag>` |
 | Date / operator | `<date>` / `<who>` |
 
-Links: release <https://github.com/neochaotic/leoflow/releases/tag/v0.4.0-rc.3> ·
+Links: release <https://github.com/neochaotic/leoflow/releases/tag/TAG> ·
 Helm guide <https://neochaotic.github.io/leoflow/operate/helm-chart/> ·
 chart README (full values) <https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/README.md> ·
 install page <https://neochaotic.github.io/leoflow/get-started/installation/>.
@@ -45,7 +45,7 @@ install page <https://neochaotic.github.io/leoflow/get-started/installation/>.
 - **Cloud identity** for keyless auth: an **IRSA** role (`eks.amazonaws.com/role-arn`)
   to annotate the ServiceAccounts (see §3/#725, §5).
 - The `leoflow` CLI locally (client):
-  `LEOFLOW_VERSION=v0.4.0-rc.3 curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh`
+  `LEOFLOW_VERSION=<tag> curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh`
   (explicit tag — "latest" skips pre-releases).
 
 ---
@@ -116,53 +116,66 @@ Record: does the control plane reach `Ready`? Is `/api/v2/` + the UI reachable
 
 ---
 
-## §3 rc.3 feature validation (refresh this section per RC)
+## §3 v0.4.5 feature validation (refresh this section per RC)
 
-The rc.3 tranche (#722–#729). ✔ = also unit/helm-verified; ★ = **only a real cluster proves it well**.
+The v0.4.5 tranche. ✔ = also unit/e2e-verified; ★ = **only a real cluster proves it well**.
 
-- **#722 secret-audit ✔** — with `secretLivenessMode=observe`, run a DAG that
-  declares fewer secrets than the vault. **PASS:** `GET /api/v2/eventLogs` shows a
-  `secret.scope_warning` row (not just a log line). Flip a scenario to `enforce`
-  and confirm a `secret.liveness_denied` row is written too.
-- **#800 zero-declaration blind spot** — the row above validates the population
-  that *does* warn, so a green RC has been certifying past the one that does not.
-  With `secretScoping=permissive` (default), run a DAG declaring **no** variables
-  and **no** connections against a tenant that has several connections defined.
-  **PASS (today's behavior, and the blind spot made executable):** the task
-  receives **every** connection in the vault, and `GET /api/v2/eventLogs` shows
-  **no** `secret.scope_warning` row for that run. That silence is exactly what an
-  operator would read as "safe to flip to `enforce`", while this same DAG would
-  receive **nothing** after the flip. Until #800's code half lands, this row is
-  the reminder that a clean trail is not evidence; when it lands, this row
-  inverts — the run must then produce a warning naming zero declarations.
-- **#800 stale-declaration blind spot** — the second population the trail never
-  shows, and the likelier one in practice, since secret rotation produces it. The
-  warning counts only declared names that actually *resolve*, so a DAG whose
-  declarations all point at names since deleted from the vault collapses to zero
-  declared and never warns — registration-time validation (#724) guards the
-  moment of registration, not later deletion. With `secretScoping=permissive`,
-  register a DAG declaring `conn_a`, run it, then delete `conn_a` from the vault
-  and run it again. **PASS (today's behavior):** the second run receives **every**
-  connection in the vault and `GET /api/v2/eventLogs` shows **no**
-  `secret.scope_warning` row for it. Flip that same DAG to `enforce` and confirm
-  it receives **nothing** — and that no audit row explains why.
-- **#723 reaper try-number ★** — see §4.2.
-- **#724 validation 400 ✔** — register a DAG version declaring an unknown
-  connection. **PASS:** API returns **400** (not 500); message points at
-  `leoflow connections set`.
-- **#725 config-bind + QoS ★** — see §4.3.
-- **#726 gRPC key off api ★** — see §4.1 (split mode only).
-- **#727 migration-job SA token ✔** — `kubectl get job <migrate> -o yaml`.
-  **PASS:** `spec.template.spec.automountServiceAccountToken: false`.
-- **#728 warm TMPDIR ★** — see §4.2 (warm pools).
-- **#729 managed-PG idempotent** — Lite/local, not EKS. Run the opt-in E2E
-  `test/e2e/lite-managed-pg-reextract.sh` on a networked host with managed-PG.
+Every item below is one of the five GA blockers this release closed, and they
+share a root: the hybrid DAG — a `dag.py` with dbt projects as task groups — was
+never exercised end to end by CI, so four defects shipped green inside one e2e
+fixture that hand-wrote its Dockerfile and used Bash tasks. `dbt-mixing-e2e.sh`
+now exercises the generated path, which is why most rows are ✔. What remains is
+what a pod does that a container on a laptop does not.
 
-Also confirm the **rc.2 behavior change** still holds: **task pods run as non-root
-by default** — `kubectl get pod <task> -o jsonpath='{.spec.securityContext}'`;
-root-assuming DAG images now fail (expected).
+- **#17 authoring package in the task image ✔★** — deploy a hybrid DAG whose
+  `dag.py` starts `from leoflow import dbt_group` and whose Python tasks sit
+  either side of the group. **PASS:** the `python` tasks reach `success`. The
+  runtime re-imports `dag.py` per task, so a missing package fails every one of
+  them with `ModuleNotFoundError`. ★ because the e2e proves the image; only a pod
+  proves the agent's own import path under `PYTHONPATH=/home/leoflow` and UID
+  65532.
+- **#20 dbt_groups project baked into the image ✔** — same DAG. **PASS:** the
+  `transform__*` tasks reach `success` rather than exiting within seconds.
+  `kubectl exec` into a task pod and confirm `/home/leoflow/<project>/dbt_project.yml`
+  exists.
+- **#993 absolute host path in the entrypoint ★** — the one the e2e structurally
+  cannot reach, because it needs two machines. Compile on machine A, then
+  `leoflow deploy --skip-build` from a CI runner or a second machine where that
+  path does not exist. **PASS:** `kubectl get pod <task> -o jsonpath='{.spec.containers[0].args}'`
+  contains no `/Users/` or `/home/<someone>/` prefix. **FAIL** is a dbt task
+  exiting seconds after start with "project directory does not exist".
+- **#994 project-baked profiles.yml ✔★** — a group with **no** `connection:`
+  whose project ships its own `profiles.yml`. **PASS:** the dbt tasks succeed.
+  ★ because the base image points `DBT_PROFILES_DIR` at `/tmp`, and only a pod
+  with a real `/tmp` emptyDir shows whether the read path and the write path
+  agree.
+- **#852 read-only project, for real ★** — the half no test covers.
+  `taskPodSecurity.readOnlyRootFilesystem=true` with a `/tmp` emptyDir, and
+  `runAsNonRoot=true` with **no** `runAsUser`. **PASS:** the pod reaches `Running`
+  (the kubelet resolves the image's numeric USER — a different code path from
+  `docker run`, and a symbolic `USER nonroot` fails here where it passes locally),
+  the dbt tasks succeed, and nothing is written under `/home/leoflow/<project>`.
+  Watch for a namespace-default emptyDir `sizeLimit` truncating
+  `/tmp/leoflow/dbt/target` on a large manifest — every parse artifact lands there
+  now.
+- **#1005 does a task pod reuse the build-time parse? ★** — twenty minutes, and it
+  settles a claim removed from the docs rather than left standing. Run one dbt
+  task with `dbt --debug` and read whether it reports a full parse or a partial
+  one. Nothing in the tree copies the baked `target/` to `DBT_TARGET_PATH`, so a
+  full parse per task is the expected answer; if so, close #1005 and leave the
+  claim out.
+- **#15 strict `leoflow.yaml` keys ✔** — unit-covered, no cluster needed. Worth
+  one smoke: `leoflow validate` against a project carrying a stray top-level key
+  must fail and name it.
 
----
+### Not provable on GKE
+
+The four §5 deltas. Record them as **not verified on this cloud** rather than
+PASS — a GKE run that reports them green is the false confidence §5 exists to
+prevent. Specifically for this tranche: nothing above depends on IRSA, RWX or
+ingress, but **NetworkPolicy enforcement does differ**, so any netpol-dependent
+row is GKE-shaped evidence only.
+
 
 ## §4 Deep cluster-only checks (k3d cannot show these)
 
@@ -283,9 +296,19 @@ helm upgrade leoflow ... --set networkPolicy.enabled=true
 
 ## §6 Results + reporting
 
+Record **NOT VERIFIED (cloud)** rather than PASS for anything §5 says this cloud
+cannot settle. A row left blank reads as "not run"; a row marked PASS on the wrong
+cloud reads as proof, and that is the failure §5 exists to prevent.
+
 | # | Check | PASS/FAIL | Notes / evidence |
 |---|---|---|---|
 | §2 | smoke: task→success | | |
+| #17 | hybrid: python tasks succeed (§3) | | |
+| #20 | dbt_project.yml present in the task pod (§3) | | |
+| #993 | deploy --skip-build: no host path in pod args (§3) | | |
+| #994 | group with no connection: dbt tasks succeed (§3) | | |
+| #852 | readOnlyRootFilesystem + numeric non-root: pod Running, project unwritten (§3) | | |
+| #1005 | task pod: full parse or partial? (§3) | | |
 | #722 | audit rows written | | |
 | #723 | retry not wedged (§4.2) | | |
 | #724 | validation → 400 | | |

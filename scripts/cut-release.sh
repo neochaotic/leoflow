@@ -955,8 +955,12 @@ main() {
       # rerun loop for the single failure it most needed to handle (#978).
       lg=$(gh run view "$rid" --log-failed 2>/dev/null || true)
       if [ -z "$lg" ]; then
-        lg=$(gh api "repos/$REPO/actions/runs/$rid/jobs" --jq '.jobs[]|select(.conclusion=="failure")|.id' 2>/dev/null \
-             | while read -r jid; do gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null || true; done)
+        # The `|| true` on the GROUP is load-bearing under `set -o pipefail`:
+        # the pipeline takes the status of the first failing command, so a `gh
+        # api` that 404s makes the assignment nonzero and errexit kills the cut.
+        # Measured: without it, a total API failure aborts the whole script.
+        lg=$( { gh api "repos/$REPO/actions/runs/$rid/jobs" --jq '.jobs[]|select(.conclusion=="failure")|.id' 2>/dev/null \
+                | while read -r jid; do gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null || true; done; } || true )
       fi
       # Still nothing to read: treat it as UNKNOWN, which for a cut means rerun
       # rather than stop. A rerun is cheap; a stopped cut on a transient is not.

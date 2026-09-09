@@ -80,6 +80,38 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **What to do:** set `python_version: "3.11"` (or `"3.12"` / `"3.13"`) in
   `leoflow.yaml` and rebuild — or, if you pinned `base_image`, repoint it to the
   matching `py3.11` tag and rebuild.
+### Fixed
+
+- **`/readyz` no longer reports ready over a database with no schema (#1023).**
+  The readiness probe pinged each dependency and nothing more, and a Postgres
+  `Ping` succeeds whenever the *connection* is healthy — it says nothing about
+  what is behind it. Found on the v0.4.5 RC cluster: a node recycle recreated an
+  ephemeral-storage Postgres **empty**, and the running control plane answered
+  `{"status":"ready"}` HTTP 200 in the same seconds the scheduler was failing
+  every tick on `relation "dag_runs" does not exist` and `/auth/token` was
+  answering 503. Readiness now asserts the same invariant boot does —
+  `schema_migrations` present, clean, and not behind the version this binary
+  embeds — through the same storage-layer code path, so the two verdicts cannot
+  drift. This is the signal Kubernetes routes traffic on and calls a rollout
+  successful on, so the gap let `helm upgrade --wait` report success against a
+  control plane that could not serve one authenticated request, let a rolling
+  update replace working pods with broken ones, and kept a 503-ing pod in
+  Service rotation. It also covers the cases that reach installs with durable
+  storage: a restore from a backup older than the running binary, a failover to
+  a replica that has not caught up, a migration rolled back out of band, and a
+  `database.url` repointed at the wrong database.
+
+  Three properties of the fix are deliberate. The response body stays vague —
+  it names the dependency (`postgres schema not current`) and nothing else,
+  because `/readyz` is unauthenticated and the underlying error can carry a DSN
+  or an internal hostname; the detail goes to the log. **Liveness is
+  unchanged**: restarting a pod does not create a schema, so a crash loop would
+  trade an honestly not-ready pod for one that cannot even be inspected. And
+  the check is bounded at 2s, under the chart's 3s
+  `probes.readiness.timeoutSeconds`, so a wedged database makes the probe report
+  not-ready rather than report nothing at all. An **ahead** schema still passes,
+  as it does at boot — expand-contract migrations keep older code working, and
+  failing it would break `helm rollback`.
 
 ## [0.4.5] - 2026-09-09
 

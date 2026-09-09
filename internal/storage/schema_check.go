@@ -63,17 +63,32 @@ func checkSchemaCurrent(dbVersion uint, exists, dirty bool, latest uint) error {
 	}
 }
 
+// SchemaReady reports whether the live database still satisfies the invariant
+// boot asserted: schema_migrations present, clean, and not behind this binary.
+// It is the same verdict as CheckSchemaCurrent from the same code path, minus
+// the boot-only logging — the readiness probe calls it on EVERY probe, so a
+// warning here would repeat once per period for as long as the condition lasts.
+//
+// It exists because a Ping only proves the connection: a database emptied by an
+// ephemeral-volume recycle, restored from an older backup, failed over to a
+// lagging replica, or repointed by a changed database.url stays pingable while
+// serving nothing (#1023). One SELECT against a single-row table, so it is cheap
+// enough to run per probe; the caller bounds it with the probe's own deadline.
+func (p *Postgres) SchemaReady(ctx context.Context) error {
+	version, dirty, exists, latest, err := p.schemaState(ctx)
+	if err != nil {
+		return err
+	}
+	return checkSchemaCurrent(version, exists, dirty, latest)
+}
+
 // CheckSchemaCurrent reads the DB schema version and compares it to the binary's
 // embedded latest, failing fast on a mismatch. Called at boot after the pool is
 // open, before the server serves.
 func (p *Postgres) CheckSchemaCurrent(ctx context.Context) error {
-	latest, err := migrations.Latest()
+	version, dirty, exists, latest, err := p.schemaState(ctx)
 	if err != nil {
-		return fmt.Errorf("reading embedded schema version: %w", err)
-	}
-	version, dirty, exists, err := p.SchemaVersion(ctx)
-	if err != nil {
-		return fmt.Errorf("reading database schema version: %w", err)
+		return err
 	}
 	if exists && !dirty && version > latest {
 		// Ahead schema (see checkSchemaCurrent): boot proceeds — expand-contract
@@ -83,4 +98,19 @@ func (p *Postgres) CheckSchemaCurrent(ctx context.Context) error {
 			"db_version", version, "binary_latest", latest)
 	}
 	return checkSchemaCurrent(version, exists, dirty, latest)
+}
+
+// schemaState gathers both sides of the comparison — what the database says and
+// what this binary embeds — so the boot gate and the readiness probe cannot drift
+// apart on either the query or the required version.
+func (p *Postgres) schemaState(ctx context.Context) (version uint, dirty, exists bool, latest uint, err error) {
+	latest, err = migrations.Latest()
+	if err != nil {
+		return 0, false, false, 0, fmt.Errorf("reading embedded schema version: %w", err)
+	}
+	version, dirty, exists, err = p.SchemaVersion(ctx)
+	if err != nil {
+		return 0, false, false, 0, fmt.Errorf("reading database schema version: %w", err)
+	}
+	return version, dirty, exists, latest, nil
 }

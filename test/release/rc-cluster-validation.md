@@ -490,6 +490,38 @@ Prerequisites beyond §0: a Linux docker host (a Lima VM on macOS), `k3d`, `jq`,
 a migrated external Postgres, and **`bin/leoflow` + `bin/leoflow-server` already
 built** — the script builds the base image but not those two.
 
+### §4.6 — #1023: readiness fails when the schema disappears under a running pod
+
+The v0.4.5 RC found this the expensive way: an ephemeral-storage Postgres came
+back **empty** after a node recycle and the running control plane kept answering
+`/readyz` 200 while the scheduler could not read `dag_runs`. A Ping proves the
+connection, not the schema, so nothing in the probe noticed. It is a two-command
+check and it belongs in every RC from here.
+
+Do this against a **throwaway** database — it drops the schema:
+
+```bash
+API=<control-plane base URL>          # e.g. http://localhost:8080 via port-forward
+psql "$DATABASE_URL" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+curl -sS -o /dev/stderr -w '%{http_code}\n' "$API/readyz"       # expect 503
+kubectl get pod -n <ns> -l app.kubernetes.io/instance=leoflow   # READY 0/1, RESTARTS unchanged
+```
+
+**PASS:** `/readyz` answers **503** within one probe period, the pod goes
+`READY 0/1` and leaves the Service's endpoints, and the 503 body names only the
+dependency (`postgres schema not current`) — **no DSN, credentials or internal
+hostname**, since the endpoint is unauthenticated. The log line carries the
+version detail.
+
+**Also PASS, and the point of checking it:** the pod is **not restarting**.
+`/healthz` stays 200 and `RESTARTS` does not climb — liveness is deliberately
+schema-blind, because restarting creates no schema and a crash loop would cost
+you the pod you need to diagnose. A `CrashLoopBackOff` here is a FAIL.
+
+Re-run the migration Job (or restore the database) and confirm `/readyz` returns
+to 200 **without a restart** — the check is per-probe, so recovery needs no pod
+churn.
+
 ---
 
 ## §5 EKS ↔ GKE deltas (so a GKE pass doesn't give false confidence)

@@ -1137,6 +1137,13 @@ func selectDatastore(ctx context.Context, cfg *config.ServerConfig, pg *storage.
 	return xcom.NewRedisBackend(rd.Client), logs.NewRedisTailer(rd.Client), rd, cleanup, nil
 }
 
+// The readiness probe asserts the schema invariant only for dependencies that
+// ALSO implement api.SchemaChecker, and a type assertion that stops matching is
+// silent: /readyz would go back to reporting ready over an empty database with
+// every test still green (#1023). Pin the coupling here so a rename on either
+// side is a build failure.
+var _ api.SchemaChecker = (*storage.Postgres)(nil)
+
 // healthChecks builds the readiness checks, including Redis only when it is the
 // active datastore (redisHealth is nil in the embedded edition).
 func healthChecks(pg *storage.Postgres, redisHealth api.HealthChecker) map[string]api.HealthChecker {

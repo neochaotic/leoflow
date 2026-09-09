@@ -6,6 +6,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-09
+
 ### Added
 
 - **`auth.secretScoping` is now a chart value, and the security flips are

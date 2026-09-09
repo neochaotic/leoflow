@@ -23,7 +23,16 @@ import (
 // excluded from the unit-coverage floor (ADR 0011), like the other external-binary
 // orchestrators (managed_postgres.go, …). The pure branches (a pinned manifest, the
 // dbt-not-found error, the venv/profile resolution) are unit-tested via their helpers.
-func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig, local bool, dagID string) ([]byte, error) {
+// localWarehouse is NOT "where the DAG will run" in general — the dbt binary
+// above is chosen without reference to it (#993). It says specifically that this
+// compile targets Lite's zero-config duckdb warehouse, which genuinely is a
+// property of the runtime target: that warehouse exists only for the subprocess
+// executor, and `dbt parse` needs the same profile the task will get. Writing a
+// duckdb stub for an image-bound compile would let a DAG destined for Snowflake
+// parse against duckdb and produce a manifest for the wrong adapter — a green
+// compile with a silently wrong artifact, which is the class this file has spent
+// the release removing.
+func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig, localWarehouse bool, dagID string) ([]byte, error) {
 	projectDir := filepath.Join(dir, c.Project)
 	if c.Manifest != "" {
 		path := filepath.Join(projectDir, c.Manifest)
@@ -33,12 +42,7 @@ func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig, local 
 		}
 		return data, nil
 	}
-	dbtBin := "dbt"
-	if local {
-		if v := liteDbtBin(dagID); v != "" {
-			dbtBin = v
-		}
-	}
+	dbtBin := dbtParseBin(dagID)
 	if dbtBin == "dbt" {
 		if _, lerr := exec.LookPath("dbt"); lerr != nil {
 			return nil, fmt.Errorf("dbt is not on PATH: install dbt-core and your adapter (e.g. `pip install dbt-postgres`), or set dbt.manifest in leoflow.yaml to a pre-built manifest.json")
@@ -50,7 +54,7 @@ func loadDbtManifest(cmd *cobra.Command, dir string, c *domain.DbtConfig, local 
 	// Zero-config local warehouse: `dbt parse` needs a profile too, so give it a
 	// default duckdb one when the Lite project has no connection and no profiles.yml
 	// — the compile-time half of L4 (the runtime writes the same at task time).
-	if local && c.Connection == "" {
+	if localWarehouse && c.Connection == "" {
 		if pdir := writeParseDuckdbProfile(dir, c); pdir != "" {
 			defer func() { _ = os.RemoveAll(pdir) }() //nolint:errcheck // best-effort cleanup of a temp dir
 			pc.Env = append(pc.Env, "DBT_PROFILES_DIR="+pdir)

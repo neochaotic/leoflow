@@ -80,7 +80,7 @@ google_ads_demo()
 ```yaml
 # leoflow.yaml
 dag_id: google_ads_demo
-python: "3.12"
+python_version: "3.12"
 connectors: [google_ads]
 ```
 

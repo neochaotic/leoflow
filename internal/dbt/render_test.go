@@ -245,3 +245,62 @@ func TestRenderGroupedDeclaresManagedConnection(t *testing.T) {
 		}
 	}
 }
+
+// TestDecorateCommandsHonorsAProjectBakedProfilesYml pins #994.
+//
+// The base image sets DBT_PROFILES_DIR=/tmp/leoflow/dbt so dbt's writes land on
+// an ephemeral dir instead of the read-only project (#852). The side effect is
+// that dbt never looks inside the project — so a dbt task with no managed
+// connection, whose project ships its own profiles.yml, failed in the pod:
+//
+//	Invalid value for '--profiles-dir': Path '/tmp/leoflow/dbt' does not exist
+//	(and once created) Could not find profile named 'transform'
+//
+// while the default branch's comment claimed it was using "the image's baked
+// profiles.yml". Reading a profiles.yml out of the project is safe against the
+// read-only posture — only dbt's writes needed redirecting, and DBT_TARGET_PATH
+// and DBT_LOG_PATH still carry them to /tmp.
+func TestDecorateCommandsHonorsAProjectBakedProfilesYml(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		opts Options
+		want string
+		deny string
+	}{
+		{
+			name: "no connection, project ships profiles.yml",
+			opts: Options{ProjectDir: "analytics", ProfilesDir: "analytics"},
+			want: "--profiles-dir analytics",
+		},
+		{
+			name: "project is the DAG dir",
+			opts: Options{ProfilesDir: "."},
+			want: "--profiles-dir .",
+		},
+		{
+			name: "no profiles.yml — nothing is added, DBT_PROFILES_DIR still governs",
+			opts: Options{ProjectDir: "analytics"},
+			deny: "--profiles-dir",
+		},
+		{
+			// A managed connection writes its generated profile to
+			// DBT_PROFILES_DIR; overriding that would send dbt to the project's
+			// checked-in file instead of the operator's credentials.
+			name: "a managed connection wins over a baked profiles.yml",
+			opts: Options{ProjectDir: "analytics", ProfilesDir: "analytics", Connection: "warehouse", Profile: "analytics"},
+			deny: "--profiles-dir",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tasks := []domain.TaskSpec{{TaskID: "mart", Entrypoint: "dbt run --select mart"}}
+			decorateCommands(tasks, c.opts)
+			got := tasks[0].Entrypoint
+			if c.want != "" && !strings.Contains(got, c.want) {
+				t.Errorf("entrypoint %q does not contain %q", got, c.want)
+			}
+			if c.deny != "" && strings.Contains(got, c.deny) {
+				t.Errorf("entrypoint %q must not contain %q", got, c.deny)
+			}
+		})
+	}
+}

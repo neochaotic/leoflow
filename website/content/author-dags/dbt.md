@@ -31,8 +31,9 @@ library to import and no profile-mapping boilerplate.
 
 ## 1. Put a dbt project in your DAG
 
-To run operators **before/after** your models in the same DAG, author a `dag.py`
-and embed the dbt project with `dbt_group("<name>")`.
+Author a `dag.py` and call `dbt_group("<name>")` where the models belong. The
+group is a task like any other: operators before it, operators after it, one
+graph. Configure the project under `dbt_groups:` in `leoflow.yaml`.
 
 {{% alert title="Packing models into fewer pods" color="info" %}}
 By default (`granularity: node`) each model is its own pod — like Cosmos. Set
@@ -64,8 +65,9 @@ with DAG("sales", schedule="@daily"):
 
 ```yaml
 # sales/leoflow.yaml
+# The schedule lives in dag.py's DAG(schedule=…) — there is no top-level
+# schedule: key, and leoflow.yaml rejects one.
 dag_id: sales
-schedule: "@daily"
 dbt_groups:
   transform:                  # the name passed to dbt_group()
     project: ./transform
@@ -440,7 +442,7 @@ this problem.
 | `granularity` | `node` \| `level` \| `folder` (default `node`) |
 | `manifest` | optional pre-built `manifest.json` path (project-relative); empty runs `dbt parse` |
 | `connection` | managed Leoflow connection id; empty = bring-your-own `profiles.yml` |
-| `schedule` | *(whole-DAG `dbt:` only)* cron/preset; empty = on-demand |
+| `schedule` | *(whole-DAG `dbt:` only)* cron/preset; empty = on-demand. Declared **under `dbt:`** — a `dag.py` DAG takes its schedule from `DAG(schedule=…)` instead. There is no top-level `schedule:` key, and `leoflow.yaml` rejects one. |
 
 ## Cosmos at a glance
 

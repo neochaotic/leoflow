@@ -47,6 +47,15 @@ type Options struct {
 	// ProjectDir scopes each command with --project-dir so dbt finds dbt_project.yml
 	// when the project is a subdirectory of the DAG (#401). "." or empty adds nothing.
 	ProjectDir string
+	// ProfilesDir, when set, is passed as --profiles-dir. It is how a project that
+	// ships its own profiles.yml gets honored: the base image points
+	// DBT_PROFILES_DIR at an ephemeral /tmp dir so dbt's WRITES stay off the
+	// read-only project (#852), and the side effect is that dbt never looks inside
+	// the project at all (#994). Only reads go through this — DBT_TARGET_PATH and
+	// DBT_LOG_PATH still carry the writes to /tmp. Ignored when Connection is set:
+	// that path generates a profile into DBT_PROFILES_DIR and must win over a
+	// file checked into the project.
+	ProfilesDir string
 	// Local marks a Lite/host build: with no Connection, each task is prefixed with a
 	// step that writes a default duckdb profiles.yml — a zero-config local warehouse,
 	// no server and no connection needed (L4). Ignored on the Pro/image path.
@@ -194,7 +203,15 @@ func decorateCommands(tasks []domain.TaskSpec, opts Options) {
 		}
 		prefix = fmt.Sprintf("python -m leoflow_runtime --dbt-default-duckdb %s %s && ", opts.Profile, db)
 	default:
-		return // Pro/non-local without a connection: the image's baked profiles.yml
+		// No managed connection: the profile comes from the project's own
+		// profiles.yml, which dbt cannot find on its own because the base image
+		// points DBT_PROFILES_DIR at /tmp (#852, #994).
+		if opts.ProfilesDir != "" {
+			for i := range tasks {
+				tasks[i].Entrypoint += " --profiles-dir " + opts.ProfilesDir
+			}
+		}
+		return
 	}
 	for i := range tasks {
 		tasks[i].Entrypoint = prefix + tasks[i].Entrypoint

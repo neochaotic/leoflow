@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -26,12 +27,30 @@ func newValidateCommand() *cobra.Command {
 			if verr := cfg.Validate(); verr != nil {
 				return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
 			}
-			dagSrc := dagSourcePath(dir, cfg)
-			if _, serr := os.Stat(dagSrc); serr != nil {
-				return fmt.Errorf("DAG source not found: %w", serr)
+			// A pure-dbt project has no dag.py: the dbt project IS the DAG
+			// (ADR 0042). Stat'ing the source unconditionally made the whole
+			// mode unvalidatable — the command that exists to say "this is
+			// fine" always said it was not (#996). The check is scoped, not
+			// removed: a dag.py DAG with a missing source still fails here.
+			if cfg.Dbt != nil {
+				// Scoping the dag.py check to a dag.py DAG left the dbt lane with
+				// NOTHING checked, so `validate` answered "is valid" for a dbt:
+				// block pointing at a directory that does not exist — the exact
+				// shape of #15, reintroduced by #15's own fix. The project's
+				// dbt_project.yml is the dbt equivalent of the DAG source.
+				proj := filepath.Join(dir, cfg.Dbt.Project)
+				if _, serr := os.Stat(filepath.Join(proj, "dbt_project.yml")); serr != nil {
+					return fmt.Errorf("dbt project not found: no dbt_project.yml under %s (dbt.project = %q): %w", proj, cfg.Dbt.Project, serr)
+				}
 			}
-			if perr := checkDagPythonSyntax(cmd, dagSrc); perr != nil {
-				return perr
+			if cfg.Dbt == nil {
+				dagSrc := dagSourcePath(dir, cfg)
+				if _, serr := os.Stat(dagSrc); serr != nil {
+					return fmt.Errorf("DAG source not found: %w", serr)
+				}
+				if perr := checkDagPythonSyntax(cmd, dagSrc); perr != nil {
+					return perr
+				}
 			}
 			if _, werr := fmt.Fprintf(cmd.OutOrStdout(), "%s is valid\n", projectConfigPath(dir)); werr != nil {
 				return werr

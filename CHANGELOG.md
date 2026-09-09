@@ -130,6 +130,76 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`leoflow.yaml` rejects keys the schema does not define, and `leoflow validate`
+  finally works on a pure-dbt project (#15, #996).** The authoring schema declares
+  `additionalProperties: false` and that guard was **unreachable**: the loader used
+  `yaml.Unmarshal`, which drops an unknown key into the void, and `Validate()` then
+  marshals the *struct* back to JSON and validates that — so by the time the schema
+  saw the document, the offending key had ceased to exist. Every typo, and every key
+  written at the wrong level, was accepted in silence. This is not hypothetical: our
+  own flagship dbt example taught a **top-level `schedule:`**, which is not a schema
+  key (the real one is `dbt.schedule`), so a team following the docs shipped a DAG
+  that never ran and took days to notice — `leoflow validate` said "is valid" the
+  whole time. The three examples that taught it are corrected, and the reference
+  table now says where the key belongs. The refusal names the offending keys and,
+  for `schedule` specifically, points at both right answers. **This is breaking for
+  a project carrying a stray key** — deliberately, and better at a GA than after
+  one. Discovery is unaffected: a Lite workspace loads every subdirectory with a
+  lenient parse, so a DAG with a typo keeps its `dag_id` and its `dbt:` block and is
+  told off by `compile`, rather than silently vanishing from the workspace or being
+  renamed after its directory. Separately, `validate` stat'd `dag.py` unconditionally,
+  so a project whose DAG *is* the dbt project could never be validated at all; the
+  check is scoped to a `dag.py` DAG, where a missing source still fails, and the
+  dbt lane gets the equivalent check it never had: **`validate` now fails when
+  `dbt.project` names a directory with no `dbt_project.yml`.** That is a new hard
+  failure, breaking for anyone whose project relied on `validate` accepting it —
+  deliberately, because the command exists to say "this is fine" and it was saying
+  it for a project that cannot run. It does not yet cover `dbt_groups[*].project`;
+  that gap is tracked separately.
+- **A dbt task with no managed connection can find its project's own
+  `profiles.yml` (#994).** The base image points `DBT_PROFILES_DIR` at an
+  ephemeral `/tmp` dir so dbt's writes stay off the read-only project (#852) —
+  and the side effect was that dbt never looked inside the project at all, so a
+  project that ships its own `profiles.yml` failed in the pod with
+  `Invalid value for '--profiles-dir': Path '/tmp/leoflow/dbt' does not exist`,
+  while the code comment claimed it was using "the image's baked profiles.yml".
+  `--profiles-dir` is now baked at the project when the project ships one and no
+  managed connection is configured. Only reads go through it: measured in a real
+  image against real dbt, the parse succeeds and `perf_info.json` still lands in
+  `/tmp/leoflow/dbt/target`, so `readOnlyRootFilesystem` is unaffected. A managed
+  connection still wins — it generates a profile from the operator's credentials
+  into `DBT_PROFILES_DIR`, and letting a file checked into the repository
+  override that would be a downgrade, so that case is pinned by a test. Applies
+  to the top-level `dbt:` block and to `dbt_groups` alike — **and to Lite**,
+  where the same path was equally dead: the subprocess executor points
+  `DBT_PROFILES_DIR` at an empty per-task scratch dir, so a Lite project shipping
+  its own `profiles.yml` failed the same way. The Lite dbt e2e fixture asserts it
+  ships none, which is why nobody noticed.
+
+- **`compile` and `deploy --skip-build` no longer bake the operator's own
+  absolute path into dbt tasks (#993).** Whether dbt's `--project-dir` is baked
+  as an absolute host path or as the relative path inside the image was derived
+  from `!--build` — but "we did not build an image this invocation" is a
+  different question from "this DAG will run as a subprocess on this host".
+  `leoflow compile` without `--build`, and `leoflow deploy --skip-build` (whose
+  whole purpose is reusing an image built elsewhere), were both classified local,
+  so every dbt task in the resulting `dag.json` carried something like
+  `--project-dir /Users/<someone>/work/sales/analytics`. That `dag.json` is what
+  gets registered and executed in pods, so the task exits seconds after start
+  with "project directory does not exist" and nothing points at the cause — the
+  same class as #20, through the door a CI or prebuilt-image workflow actually
+  uses. The executor is chosen by server configuration
+  (`LEOFLOW_EXECUTOR_TYPE`), not by anything in the `dag.json`, so compile cannot
+  infer it; it is now an explicit option that only Lite's subprocess run mode
+  sets. **Behavior change:** a bare `leoflow compile` now emits the in-image
+  relative path, and no longer writes a parse-time duckdb profile — so a project
+  with no managed connection and no `profiles.yml` of its own has no profile for
+  `dbt parse` to resolve, and fails unless one is reachable through `~/.dbt` or
+  `DBT_PROFILES_DIR`, instead of compiling against a stub for the wrong warehouse. Which `dbt`
+  parses the manifest is *not* part of this: that question does not depend on
+  where the DAG will run, so the per-DAG venv's `dbt` is preferred whenever the
+  host has one, image-bound compiles included. Lite itself is unaffected:
+  `leoflow dev` sets the flag.
 - **`from leoflow import dbt_group` now resolves inside the task image, so a
   hybrid DAG runs (#17).** A `dag.py` is not a compile-time-only artifact: the
   runtime re-imports the module for every `python` task, so every top-level

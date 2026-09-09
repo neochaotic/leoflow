@@ -80,9 +80,9 @@ the task pod.
 
 ```yaml
 dag_id: sales
-schedule: "@daily"
 dbt:
   project: .
+  schedule: "@daily"
   granularity: node      # one pod per model
   connection: warehouse_pg
 ```

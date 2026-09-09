@@ -70,6 +70,10 @@ Why leoflow.yaml for the mode: it must be able to **vary Lite vs Pro from one DA
 fuse in Lite for a fast dev loop, split in Pro for isolation — which a value baked into
 dag.py could not. Default is `split`.
 
+> **Design intent, not yet implemented.** The `groups:` block and
+> `dbt_groups.<name>.threads` below are not schema keys — `leoflow.yaml` rejects
+> them. Kept here as the shape this ADR argues for.
+
 ```yaml
 # leoflow.yaml
 groups:

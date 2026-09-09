@@ -34,8 +34,10 @@ API="http://localhost:${HTTP_PORT}"
 WORKDIR="$(mktemp -d)"
 # shellcheck disable=SC2206
 # Expanded below as ${PARSER_CMD[@]+...}: on bash 3.2 — macOS, where releases are
-# cut from — "${arr[@]}" over an EMPTY array is an error under set -u, so this
-# script aborted before its first useful step and could only ever run in CI.
+# cut from — "${arr[@]}" over an EMPTY array is an error under set -u. The
+# assignment here is fine; only the expansion at the compile step is not, so the
+# script died AFTER the warehouse, the dbt parse, the base image build and the
+# k3d cluster create. Five minutes in, which is why nobody ran it locally twice.
 PARSER_CMD=(${LEOFLOW_E2E_PARSER_CMD:+--parser-cmd "$LEOFLOW_E2E_PARSER_CMD"})
 
 # dump_pods prints the task pods, a describe tail for those not Running, and
@@ -124,11 +126,11 @@ YAML
 case "$(uname -m)" in arm64|aarch64) HOST_PLATFORM="linux/arm64" ;; *) HOST_PLATFORM="linux/amd64" ;; esac
 cat >>"$PROJ/leoflow.yaml" <<YAML
 # base_image: the base THIS checkout just built. Without it the generated
-# Dockerfile resolves to the published base, which only gains a fix in the next
-# release — so the test would measure the last release's image instead of the code
-# under review, going green precisely when it can no longer detect a regression.
-# The hand-written Dockerfile this fixture used to ship made the FROM explicit, so
-# the question never arose.
+# Dockerfile resolves to the published moving tag, so the test would measure the
+# last release's image instead of the code under review — wrong in either
+# direction, and today it happens to fail rather than pass, because the published
+# py3.11 tag predates #991 and has no leoflow package. The hand-written Dockerfile
+# this fixture used to ship made the FROM explicit, so the question never arose.
 base_image: ${BASE_IMAGE}
 build:
   platforms:
@@ -159,9 +161,10 @@ log "Generating the manifest"
 # escape hatch that hid three defects at once: it COPYed the whole context (so
 # #20's missing dbt_groups COPY never bit), it set DBT_PROFILES_DIR at the
 # project (so #994's unreachable profiles.yml never bit), and it chown'd
-# /home/leoflow to the task user (so the read-only-project posture #852 claims
-# was never actually exercised). The generated Dockerfile has to do all three
-# correctly now, or this test fails.
+# /home/leoflow to the task user (so #852's root-owned project was never actually
+# exercised). Two of those are the generated Dockerfile's job; the third is not —
+# --profiles-dir is decorated onto the entrypoint by dbtProfilesDir, and the
+# Dockerfile carries no profiles logic at all.
 
 log "Building the leoflow base image"
 docker build --provenance=false -q -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT" >/dev/null
@@ -192,24 +195,37 @@ jq -e '.tasks[] | select(.task_id=="transform__raw") | .depends_on | index("pre"
   || fail "group root transform__raw is not wired to the upstream operator 'pre'"
 jq -e '.tasks[] | select(.task_id=="post") | .depends_on | index("transform__mart")' "$PROJ/dag.json" >/dev/null \
   || fail "downstream operator 'post' is not wired to the group leaf"
-# The image the COMPILER produced, asserted directly. The run below proves these
-# transitively, but a red run says "a task failed" — these say which property
-# broke, and each one is a defect this release actually shipped.
+# The image the COMPILER produced, asserted directly. A red run only says "a task
+# failed"; these name the property. Note the run does NOT prove all of them: it
+# never writes into the project, so A5 is a property only this block checks.
 log "Asserting the generated image"
 docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'test -f /home/leoflow/dag.py' \
   || fail "the generated Dockerfile did not COPY the DAG source"
 docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'test -f /home/leoflow/transform/dbt_project.yml' \
   || fail "the generated Dockerfile did not COPY the dbt_groups project (#20)"
-docker run --rm --entrypoint python "$DAG_IMAGE" -c 'import leoflow, leoflow_runtime' \
+docker run --rm -w / -e PYTHONPATH= --entrypoint python "$DAG_IMAGE" -c 'from leoflow import dbt_group; import leoflow_runtime' \
   || fail "the authoring package is not importable in the task image (#17)"
 docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'id -u | grep -qx 65532' \
   || fail "the image does not end on the numeric non-root UID the kubelet checks"
-docker run --rm --entrypoint sh "$DAG_IMAGE" -c '! touch /home/leoflow/transform/WRITE_PROBE 2>/dev/null' \
-  || fail "the dbt project is writable by the task user — the read-only posture (#852) is not real"
+docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'test -d /home/leoflow/transform && ! touch /home/leoflow/transform/WRITE_PROBE 2>/dev/null' \
+  || fail "the dbt project is writable by the task user — #852's root-owned COPY is not holding"
 jq -e '[.tasks[] | select(.task_id | startswith("transform__")) | .entrypoint | test("--profiles-dir")] | all' "$PROJ/dag.json" >/dev/null \
   || fail "no --profiles-dir baked: the project ships profiles.yml and the base image points DBT_PROFILES_DIR at /tmp (#994)"
-jq -e '[.tasks[] | .entrypoint // "" | test("--project-dir /") | not] | all' "$PROJ/dag.json" >/dev/null \
+jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not] | all' "$PROJ/dag.json" >/dev/null \
   || fail "an absolute host path was baked into a task entrypoint (#993)"
+
+# F9: the adapter must come from dependencies:, since no hand-written Dockerfile
+# installs it any more. Without this, deleting the pip layer from the generated
+# Dockerfile leaves all the assertions above green.
+docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'command -v dbt >/dev/null' \
+  || fail "the declared adapter (dependencies:) is not installed in the generated image"
+
+# #993 CANNOT manifest under --build: `local` is false either way there, so the
+# assertion above is a canary, not a proof. The defect needs a bare compile —
+# which is also the door a CI or prebuilt-image workflow actually walks through.
+"$ROOT/bin/leoflow" compile "$PROJ" ${PARSER_CMD[@]+"${PARSER_CMD[@]}"} --image "$DAG_IMAGE" -o "$PROJ/nobuild.json"
+jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not] | all' "$PROJ/nobuild.json" >/dev/null \
+  || fail "a bare compile baked an absolute host path into a pod-bound dag.json (#993)"
 
 k3d_import "$CLUSTER" "$BASE_IMAGE" "$DAG_IMAGE"
 

@@ -47,7 +47,7 @@ install page <https://neochaotic.github.io/leoflow/get-started/installation/>.
   The control-plane image comes from `ghcr.io/neochaotic/leoflow-server:<rc>`.
 - **Cloud identity** for keyless auth, to annotate the ServiceAccounts: EKS
   **IRSA** (`eks.amazonaws.com/role-arn`) or GKE **Workload Identity**
-  (`iam.gke.io/gcp-service-account`) — see §4.3/#725 and §5.
+  (`iam.gke.io/gcp-service-account`) — see §4.2/#728 and §5.
 - The `leoflow` CLI locally (client):
   `LEOFLOW_VERSION=<tag> curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/main/install.sh | sh`
   (explicit tag — "latest" skips pre-releases).
@@ -130,10 +130,6 @@ forward across RCs. Deleting a §3b row is a decision, not a refresh.
 
 ✔ = also unit/e2e-verified; ★ = **only a real cluster proves it well**.
 
-> These ✔ marks rest on `dbt-mixing-e2e.sh` exercising the generated Dockerfile
-> path, which lands in #1008. **If #1008 has not merged, treat every ✔ below as
-> unbacked** and run the row anyway.
-
 Every item below is one of the five GA blockers this release closed, and they
 share a root: the hybrid DAG — a `dag.py` with dbt projects as task groups — was
 never exercised end to end by CI, so four defects shipped green inside one e2e
@@ -172,7 +168,7 @@ kubectl run img-probe -n <taskNamespace> --rm -i --restart=Never \
   the only production site setting it is `dev.go` (Lite subprocess) — `compile`,
   `deploy` and `deploy --skip-build` all leave it false. So one machine's output
   either carries a host path or it does not.
-  **PASS (local, and what the e2e asserts):**
+  **PASS (local; `internal/cli/dbt_projectdir_test.go` asserts the same shape as a unit test):**
 
   ```bash
   leoflow compile <dag-dir> -o /tmp/spec.json   # no --build
@@ -183,7 +179,11 @@ kubectl run img-probe -n <taskNamespace> --rm -i --restart=Never \
   pod fetches over gRPC:**
 
   ```bash
-  curl -fsS -H "Authorization: Bearer $TOKEN" "$API/api/v2/dags/<dag>/spec" \
+  API=<control-plane base URL>          # e.g. http://localhost:8080 via port-forward
+  TOKEN=$(leoflow auth token)           # or the JWT from §2's login
+  DAG=<the hybrid DAG from #17>         # NOT the §2 smoke DAG — it has no dbt tasks,
+                                        # so it passes this vacuously
+  curl -fsS -H "Authorization: Bearer $TOKEN" "$API/api/v2/dags/$DAG/spec" \
     | jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not] | all'
   ```
 
@@ -222,13 +222,28 @@ kubectl run img-probe -n <taskNamespace> --rm -i --restart=Never \
   must resolve the image's numeric USER. That half is **already green three ways**
   (every k3d e2e pod, plus the image-level UID assertion in the e2e); it is not
   what makes this row cluster-only.
-  What *is* cluster-only: apiserver admission under PSA `restricted`, and a
-  namespace `LimitRange` with a default `ephemeral-storage` limit truncating
-  `/tmp/leoflow/dbt/target` on a large manifest — the executor creates that
-  emptyDir with **no `sizeLimit`**, so cluster policy is the only bound.
+  Run the PSA-`restricted` admission and the `LimitRange` ephemeral-storage
+  default here too — but note **k3d enforces both** (PodSecurity admission is
+  built in and on since 1.25; LimitRange is core), so a green there is not cloud
+  evidence and these belong in a k3d e2e rather than on cluster minutes.
+  What is genuinely cloud-only: **GKE Autopilot** mutating securityContext and
+  injecting resource requests, and **node-level ephemeral-storage eviction** under
+  a real kubelet with real disk pressure — the executor creates that emptyDir with
+  **no `sizeLimit`**, so nothing in our code bounds `/tmp/leoflow/dbt/target` on a
+  large manifest and the node is the only thing that will.
 - **#1005 does a task pod reuse the build-time parse?** — **run this locally, not
-  on the cluster.** `docker run --entrypoint dbt <dag-image> --debug parse` and
-  read whether it reports a full parse or a partial one. The base image points
+  on the cluster.** 
+
+  ```bash
+  docker run --rm --entrypoint dbt <dag-image> --debug parse \
+    --project-dir <project> --profiles-dir <project>
+  ```
+
+  Read whether it reports a full parse or a partial one. Both flags are
+  required: the image's `WORKDIR` is `/home/leoflow` while the project sits at
+  `/home/leoflow/<project>`, so a bare `parse` dies with "Not a dbt project", and
+  `DBT_PROFILES_DIR` points at a `/tmp` path that does not exist in a fresh
+  container. The base image points
   `DBT_TARGET_PATH` at `/tmp/leoflow/dbt/target` while the project (with any
   baked `target/`) is copied to `/home/leoflow/<project>`, and nothing copies one
   to the other — so a full parse per task is the expected answer. Two files and a
@@ -245,7 +260,9 @@ kubectl run img-probe -n <taskNamespace> --rm -i --restart=Never \
   With `secretScoping=permissive` (default), run a DAG declaring **no** variables
   and **no** connections against a tenant that has several connections defined.
   **PASS (today's behavior, and the blind spot made executable):** the task
-  receives **every** connection in the vault, and `GET /api/v2/eventLogs` shows
+  receives **every** connection in the vault — observe this with a probe task that
+  prints the `AIRFLOW_CONN_*` **names** it was handed, never their values — and
+  `GET /api/v2/eventLogs` shows
   **no** `secret.scope_warning` row for that run. That silence is exactly what an
   operator would read as "safe to flip to `enforce`", while this same DAG would
   receive **nothing** after the flip. Until #800's code half lands, this row is
@@ -399,19 +416,48 @@ kubectl get pdb -n <ns>                 # it should now exist, unasked
 kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
 ```
 
-**PASS:** the PDB renders, and the drain **completes** rather than hanging. If
-you want the mitigation for an unhealthy pair, set
-`podDisruptionBudget.unhealthyPodEvictionPolicy=AlwaysAllow` (needs apiserver
-≥ 1.27) and confirm it renders. Note the chart **fails the render** if
-`minAvailable` and `maxUnavailable` are both set — worth one deliberate attempt,
-since the point of that guard is to fail at render rather than at install.
+**PASS:** the PDB renders, and the drain **completes** rather than hanging.
 
-**Restart recovery (ADR 0052).** Kill the control plane while a task is running
-and confirm a task that *succeeded* is not marked failed on recovery. The
-reconciler reads the outcome from the pod's `terminationMessage`, which needs a
-real pod status — k3d can stage the pod but not the eviction class of failure.
-**PASS:** after the control plane returns, the task's final state matches what
-the pod actually did.
+**First put the two replicas on different nodes**, or this row reads FAIL on a
+correct install: the chart ships no default anti-affinity, so both api pods can
+land on one node and the drain will legitimately block on `minAvailable: 1`.
+Installing from the shipped HA profile is the better shape here, since it is also
+the artifact we advertise and nothing else validates it:
+`helm upgrade leoflow ... -f helm/leoflow/examples/values-ha.yaml`.
+
+**Then check the field survived.** `unhealthyPodEvictionPolicy: AlwaysAllow` is
+already the chart default, so *setting* it proves nothing. The cluster-only
+observation is that the apiserver kept it:
+
+```bash
+kubectl get pdb -n <ns> -o jsonpath='{.items[0].spec.unhealthyPodEvictionPolicy}'
+```
+
+**PASS:** prints `AlwaysAllow`. An apiserver older than 1.27 **prunes the field
+silently** — you get a PDB with the Kubernetes default `IfHealthyBudget`, under
+which two unready replicas cannot be evicted at all and a drain hangs on an
+already-down control plane. That silent loss is the thing worth a cluster.
+
+The chart **fails the render** if `minAvailable` and `maxUnavailable` are both
+set — worth one deliberate attempt, since the point of that guard is to fail at
+render rather than at install.
+
+**Restart recovery (ADR 0052) — do NOT hand-roll this.** Killing the control
+plane mid-task and watching the task settle to `success` proves nothing: the
+agent's terminal report retries for as long as the control plane is unreachable,
+so the ordinary report path produces the same green without the recovery path
+ever running. `test/e2e/chaos-runtime.sh` already covers it on k3d, and refuses
+that exact false green — it bakes `LEOFLOW_CHAOS_DIE_BEFORE_REPORT` into the DAG
+image (dispatch strips author-declared `LEOFLOW_`-prefixed keys, #828/#829) and
+fails loudly if the pod ends `Completed`, because that means the fault seam never
+fired. Run it rather than improvising:
+
+```bash
+LEOFLOW_CHAOS_ONLY=CD test/e2e/chaos-runtime.sh
+```
+
+**PASS:** scenarios C and D both pass. Note this script is **not** in CI — it is
+opt-in, so an RC is the moment it actually gets run.
 
 ---
 
@@ -466,8 +512,8 @@ cloud reads as proof, and that is the failure §5 exists to prevent.
 | # | Check | PASS/FAIL | Notes / evidence |
 |---|---|---|---|
 | §2 | smoke: task→success | | |
-| #17 | hybrid: python tasks succeed (§3) | | |
-| #20 | dbt_project.yml present in the task pod (§3) | | |
+| #17 | hybrid: python tasks succeed (§3a) | | |
+| #20 | dbt_groups project present in the image, both shapes (§3a) | | |
 | #993 | bare compile + /spec: no host path in any entrypoint (§3a) | | |
 | #994 | no-connection group succeeds AND carries --profiles-dir (§3a) | | |
 | #994 | second arm: a group **with** `connection:` still succeeds (§3a) | | |
@@ -481,7 +527,7 @@ cloud reads as proof, and that is the failure §5 exists to prevent.
 | #724 | validation → 400 | | |
 | #725 | QoS Guaranteed + ClientIP (§4.3) | | |
 | #802 | partial resource pair → Burstable + boot WARN + compile error (§4.3) | | |
-| #804 | control-plane policy on, task policy off → 0 netpols in taskNamespace (§4.4) | | |
+| #804 | control-plane policy on, task policy off → no policy **selects** a task pod (§4.4) | | |
 | #726 | api has no tls.key (§4.1) | | |
 | #727 | migrate job no SA token | | |
 | #728 | warm TMPDIR fresh (§4.2) | | |

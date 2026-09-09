@@ -198,10 +198,14 @@ jq -e '.tasks[] | select(.task_id=="post") | .depends_on | index("transform__mar
 # The image the COMPILER produced, asserted directly. A red run only says "a task
 # failed"; these name the property.
 #
-# The write probe below is the one the cluster run cannot stand in for. dbt's only
-# write into the project is its .user.yml tracking cookie, dropped in the profiles
-# dir — and dbt swallows the EACCES — so a writable project produces an identical
-# green run. Only this block can tell the two apart.
+# The write probe below is the one the cluster run cannot stand in for. Nothing dbt
+# does in the pod touches the project: the base image aims DBT_TARGET_PATH /
+# DBT_LOG_PATH / DBT_PROFILES_DIR at /tmp (#852), and the one file dbt would drop in
+# the profiles dir — its .user.yml tracking cookie — is already baked in by the host
+# `dbt parse` above, so it is read, not written. Where no cookie is baked, dbt
+# swallows the EACCES (tracking.py initialize_from_flags) and stops tracking. Either
+# way a writable project produces an identical green run, so only this block can tell
+# the two apart.
 log "Asserting the generated image"
 docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'test -f /home/leoflow/dag.py' \
   || fail "the generated Dockerfile did not COPY the DAG source"
@@ -229,11 +233,12 @@ docker run --rm --entrypoint python "$DAG_IMAGE" -c 'import dbt.adapters.postgre
 # assertion above is a canary, not a proof. The defect needs a bare compile —
 # which is also the door a CI or prebuilt-image workflow actually walks through.
 "$ROOT/bin/leoflow" compile "$PROJ" ${PARSER_CMD[@]+"${PARSER_CMD[@]}"} --image "$DAG_IMAGE" -o "$PROJ/nobuild.json"
-# Anchor first: `all` over an empty array is true, so without this the check
-# below would go green measuring nothing if the group ever stopped expanding —
-# the same shape it was added to remove, one level down.
+# Anchor first. The #993 check below iterates ALL tasks, so if the group ever
+# stopped expanding it would not go green on an empty array — it would go green
+# measuring `pre`/`post`, which carry no --project-dir at all. Same shape it was
+# added to remove, one level down. 3 = 1 seed + 2 models, the five nodes named above.
 jq -e '[.tasks[] | select(.task_id | startswith("transform__"))] | length == 3' "$PROJ/nobuild.json" >/dev/null \
-  || fail "the bare compile did not expand the dbt_group — the #993 check below would pass on nothing"
+  || fail "the bare compile expanded $(jq '[.tasks[]|select(.task_id|startswith("transform__"))]|length' "$PROJ/nobuild.json") transform__ tasks, want 3 — the #993 check below would pass without measuring the dbt tasks"
 jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not] | all' "$PROJ/nobuild.json" >/dev/null \
   || fail "a bare compile baked an absolute host path into a pod-bound dag.json (#993)"
 

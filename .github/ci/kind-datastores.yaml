@@ -35,7 +35,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: mirror.gcr.io/library/postgres:16-alpine
           env:
             - name: POSTGRES_USER
               value: leoflow
@@ -87,7 +87,7 @@ spec:
     spec:
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: mirror.gcr.io/library/redis:7-alpine
           ports:
             - containerPort: 6379
           readinessProbe:

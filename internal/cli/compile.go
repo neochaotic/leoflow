@@ -452,6 +452,14 @@ func buildAndPush(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.
 			return derr
 		}
 		defer cleanup()
+		// Applies whether or not the project ships its own Dockerfile: exclude_paths
+		// is a statement about what may enter the image, and it does not become
+		// less true because the author wrote the Dockerfile themselves.
+		ignoreCleanup, ierr := ensureDockerignore(cmd.ErrOrStderr(), dir, cfg)
+		if ierr != nil {
+			return ierr
+		}
+		defer ignoreCleanup()
 		var platforms []string
 		if cfg.Build != nil {
 			platforms = cfg.Build.Platforms

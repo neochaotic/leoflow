@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -206,6 +207,221 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 		b.WriteString("USER 65532:65532\n")
 	}
 	return b.String(), nil
+}
+
+// dockerignoreName is the only ignore-file form every builder reads.
+//
+// BuildKit also honors `<dockerfile>.dockerignore`, which would be tidier — it
+// needs no cleanup and cannot touch a file the user owns. It is not usable
+// here, for two measured reasons:
+//
+//   - the legacy builder ignores it completely. Built with DOCKER_BUILDKIT=0
+//     against a context holding a `.leoflow.generated.Dockerfile.dockerignore`
+//     listing `.env`, the `.env` landed in the image. A silent leak on a
+//     builder the operator can still select (`--builder`, or podman) is worse
+//     than no feature.
+//   - where it IS honored it REPLACES the context `.dockerignore` rather than
+//     adding to it. With a user `.dockerignore` excluding `big.bin` and a
+//     per-Dockerfile file excluding `.env`, `big.bin` shipped. We would have
+//     closed one leak by reopening whatever the user had closed.
+const dockerignoreName = ".dockerignore"
+
+// dockerignoreHeader marks the block this tool appends, so a repeated merge
+// after an interrupted build does not stack identical comments.
+const dockerignoreHeader = "# added by leoflow compile --build from exclude_paths (leoflow.yaml); removed after the build"
+
+// ensureDockerignore materializes exclude_paths as a .dockerignore for the
+// duration of the build, and restores the workspace afterward.
+//
+// exclude_paths has been in the schema, defaulted, and documented as "skipped
+// both in image build and workspace discovery" while having zero consumers in
+// build code (#995). With `project: "."` — mode 1's documented default — the
+// generated Dockerfile is a single `COPY . /home/leoflow/`, so the whole
+// context is baked: measured in a built image, that included a `.env` holding a
+// warehouse password, a BYO `profiles.yml`, `.git`, and the generated
+// Dockerfile the build had just written.
+//
+// The user's own .dockerignore is preserved and comes FIRST, so their file is
+// merged rather than replaced. Ours goes last because later rules win in
+// .dockerignore syntax, and leoflow.yaml is the authoritative statement of what
+// may leave in the image: a stray `!secrets/x` in a .dockerignore must not
+// silently defeat an `exclude_paths: [secrets/]` the author wrote deliberately.
+//
+// The original content is held in the closure rather than a sibling backup
+// file, so nothing extra can enter the context. If the process dies mid-build
+// the workspace is left with the MERGED file — a superset of the user's, so it
+// excludes more and never less. That is the right direction to fail in.
+func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig) (cleanup func(), err error) {
+	noop := func() {}
+	path := filepath.Join(dir, dockerignoreName)
+
+	original, rerr := os.ReadFile(path) //nolint:gosec // G304: dir is the user's own project directory.
+	had := rerr == nil
+	if rerr != nil && !os.IsNotExist(rerr) {
+		return noop, fmt.Errorf("reading %s: %w", path, rerr)
+	}
+
+	// Concatenated into a fresh slice: append onto cfg.ExcludePaths would write
+	// through to the caller's config whenever that slice has spare capacity.
+	patterns := slices.Concat(cfg.ExcludePaths, dbtBuildArtifacts(cfg))
+	warnUnexcludedSecrets(w, dir, patterns)
+	merged, changed := mergeDockerignore(original, patterns)
+	if !changed {
+		return noop, nil
+	}
+	//nolint:gosec // G703: `path` is filepath.Join(dir, <const>), and dir is the
+	// project directory the operator pointed `leoflow compile` at. Writing into
+	// it is the whole point — ensureDockerfile writes the generated Dockerfile to
+	// the same place, for the same reason.
+	if werr := os.WriteFile(path, merged, 0o600); werr != nil {
+		return noop, fmt.Errorf("writing %s: %w", path, werr)
+	}
+	return func() {
+		if had {
+			//nolint:errcheck,gosec // best-effort restore; 0600 matches the write above.
+			_ = os.WriteFile(path, original, 0o600)
+			return
+		}
+		_ = os.Remove(path) //nolint:errcheck // best-effort cleanup of a file we created
+	}, nil
+}
+
+// dbtBuildArtifacts lists the files a host-side `dbt parse` leaves inside each
+// dbt project directory, scoped to those directories.
+//
+// The compile runs `dbt parse` on the host before building, and that parse
+// writes into the project it parsed. Wholesale-COPYing the project then bakes
+// the result (#1013). Measured on an image the e2e builds:
+//
+//   - `.user.yml` is dbt's anonymous-usage cookie: a stable UUID identifying the
+//     BUILD HOST's dbt user, shared with everyone who pulls the image, and read
+//     by the in-pod dbt so every pod reports as that same user.
+//   - `logs/dbt.log` carries absolute host paths — four of them in that build.
+//     That is the #993 class (a build-host path baked into a published
+//     artifact) arriving through a door the entrypoint assertions do not watch:
+//     #993 was about the entrypoint, the entrypoint is clean, and the image
+//     leaked the paths anyway. In CI it is worse, because the path names the
+//     runner's workspace.
+//   - `target/` is dead weight: the base image points DBT_TARGET_PATH at /tmp,
+//     so the pod never reads a baked target/.
+//   - `dbt_packages/` is host-resolved dependency source; the image installs
+//     its own.
+//
+// Scoped per project directory rather than added to the default ExcludePaths,
+// because `logs` and `target` are ordinary names a non-dbt project may want
+// shipped. A project with no dbt gets none of these.
+func dbtBuildArtifacts(cfg *domain.LeoflowConfig) []string {
+	dirs := dbtGroupProjectDirs(cfg)
+	if cfg.Dbt != nil && cfg.Dbt.Project != "" {
+		project := filepath.Clean(cfg.Dbt.Project)
+		if !slices.Contains(dirs, project) {
+			dirs = append(dirs, project)
+		}
+	}
+	slices.Sort(dirs)
+
+	// profiles.yml is here rather than in the generic excludes because it is
+	// provably dead in the image, not merely unwanted: the runtime ALWAYS
+	// generates profiles.yml into DBT_PROFILES_DIR — a private 0700 scratch dir
+	// — from the connection, and never reads one out of the project
+	// (runtime/python/leoflow_runtime/__main__.py). So a baked profiles.yml is
+	// warehouse credentials in a published artifact that nothing will ever load.
+	artifacts := []string{"target", "logs", ".user.yml", "dbt_packages", "profiles.yml"}
+	out := make([]string, 0, len(dirs)*len(artifacts))
+	for _, dir := range dirs {
+		for _, a := range artifacts {
+			if dir == "." {
+				out = append(out, a)
+				continue
+			}
+			out = append(out, dir+"/"+a)
+		}
+	}
+	return out
+}
+
+// secretishNames are files whose presence in a build context is nearly always a
+// mistake, and whose contents are nearly always a credential.
+//
+// They are NOT excluded by default. `.env` in particular can be a legitimate
+// input — a DAG calling load_dotenv() reads it at run time — and silently
+// dropping it would break that project with a failure far from its cause. So
+// the author is told, once per build, in time to act. Choosing for them is the
+// wrong trade; letting a password ship unnoticed is also the wrong trade, and a
+// warning is the only option that is neither.
+var secretishNames = []string{".env", ".env.local", ".netrc", "credentials.json", "service-account.json", "id_rsa"}
+
+// warnUnexcludedSecrets prints a note for any secret-looking file that the
+// build context still carries after exclude_paths is applied.
+//
+// Scans the context root only. A recursive walk of an arbitrary project is
+// slow, and the root is where these files actually live — dbt's own credential
+// file is handled precisely, per project directory, by dbtBuildArtifacts.
+func warnUnexcludedSecrets(w io.Writer, dir string, patterns []string) {
+	excluded := make(map[string]bool, len(patterns))
+	for _, p := range patterns {
+		excluded[strings.TrimSpace(p)] = true
+	}
+	for _, name := range secretishNames {
+		if excluded[name] {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || info.IsDir() {
+			continue
+		}
+		//nolint:errcheck // a warning that cannot be delivered must not fail the build
+		fmt.Fprintf(w, "warning: %s is in the build context and will be baked into the image, "+
+			"which is pushed to a registry and pulled by every pod that runs this DAG. "+
+			"If it holds credentials, add %q to exclude_paths in leoflow.yaml.\n", name, name)
+	}
+}
+
+// mergeDockerignore appends the patterns to the existing content, skipping any
+// already present, and reports whether anything was added. The generated
+// Dockerfile is always excluded: it is written into the context by
+// ensureDockerfile and has no business inside the image it builds.
+func mergeDockerignore(original []byte, excludes []string) (merged []byte, changed bool) {
+	existing := make(map[string]bool)
+	for _, line := range strings.Split(string(original), "\n") {
+		existing[strings.TrimSpace(line)] = true
+	}
+
+	want := make([]string, 0, len(excludes)+1)
+	for _, p := range excludes {
+		p = strings.TrimSpace(p)
+		if p != "" && !existing[p] {
+			want = append(want, p)
+			existing[p] = true
+		}
+	}
+	if !existing[generatedDockerfileName] {
+		want = append(want, generatedDockerfileName)
+	}
+	if len(want) == 0 {
+		return original, false
+	}
+
+	var b strings.Builder
+	if len(original) > 0 {
+		b.Write(original)
+		if !strings.HasSuffix(string(original), "\n") {
+			b.WriteString("\n")
+		}
+	}
+	// The header is written once. A build killed before cleanup leaves the merged
+	// file behind (documented on ensureDockerignore), and the next build merges
+	// onto it — patterns already present are skipped, so without this check the
+	// only thing that accumulated was a stack of identical comments.
+	if !strings.Contains(string(original), dockerignoreHeader) {
+		b.WriteString(dockerignoreHeader)
+		b.WriteString("\n")
+	}
+	for _, p := range want {
+		b.WriteString(p)
+		b.WriteString("\n")
+	}
+	return []byte(b.String()), true
 }
 
 // ensureDockerfile resolves the Dockerfile to build with. A project that ships

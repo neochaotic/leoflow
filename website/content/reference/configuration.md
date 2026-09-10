@@ -108,7 +108,7 @@ roadmap item.
 | `connectors` | `[]` | Short connector names expanded to provider packages at compile (ADR 0038). |
 | `system_packages` | `[]` | apt packages. `apt-get install`ed into the DAG image at compile, resolving against the task base image's Debian suite — see the `system_packages` row under [leoflow.yaml](#leoflowyaml) for which suite that is and what moved. |
 | `include_paths` | `["."]` | Files copied into the image. |
-| `exclude_paths` | `[".git", "__pycache__", "*.pyc", ".venv", "venv"]` | Skipped both in image build **and** workspace discovery. Hidden directories (`.*`) are skipped as well. |
+| `exclude_paths` | `[".git", "__pycache__", "*.pyc", ".venv", "venv"]` | Skipped both in image build **and** workspace discovery. Hidden directories (`.*`) are skipped as well. On `--build`, these become a `.dockerignore` in the build context for the duration of the build — merged with yours if you have one, and removed afterwards. Add anything holding credentials: the image is pushed to a registry and pulled by every pod that runs the DAG. |
 | `build.context` | `"."` | Docker build context. |
 | `build.platforms` | `["linux/amd64"]` | Multi-arch via `["linux/amd64","linux/arm64"]`. |
 | `registry.auth_method` | `"docker_config"` | Credential source for `compile --push`. |

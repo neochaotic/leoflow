@@ -347,6 +347,41 @@ leoflow push dag.json
 Full, copy-pasteable pipelines for **GitHub Actions, GitLab CI, Google Cloud
 Build/Run, and generic runners** are in **[CI/CD & deploy examples](/operate/cicd-deploy/)**.
 
+#### What ends up in the image
+
+`--build` bakes the build context into the image, and with the default
+`project: "."` that context is your whole DAG directory. The image is pushed to
+a registry and pulled by every pod that runs the DAG, so anything in it is
+shared with everyone who can pull it.
+
+`exclude_paths` in `leoflow.yaml` decides what stays out. During the build it is
+materialized as a `.dockerignore` in the context — merged with your own if you
+have one, and removed afterwards, so the workspace is unchanged when the build
+ends. Your rules come first and Leoflow's last, which means `exclude_paths` has
+the final word: a `!` re-include in your `.dockerignore` cannot silently defeat
+an exclusion you declared in `leoflow.yaml`.
+
+For a dbt project, the artifacts a host-side `dbt parse` leaves behind are
+excluded automatically, scoped to each project directory: `target/`, `logs/`,
+`dbt_packages/`, `.user.yml` and `profiles.yml`. Two of those matter beyond
+image size — `.user.yml` is dbt's anonymous-usage cookie identifying *your*
+machine, and `logs/dbt.log` carries absolute paths from the build host. The
+runtime always generates its own `profiles.yml` from the connection into a
+private directory, so a baked one is a credential nothing will ever read.
+
+Credentials are **not** excluded for you. A `.env` can be a legitimate input —
+a DAG calling `load_dotenv()` reads it at run time — so dropping it silently
+would break that project far from the cause. Instead the build warns:
+
+```console
+warning: .env is in the build context and will be baked into the image, which is
+pushed to a registry and pulled by every pod that runs this DAG. If it holds
+credentials, add ".env" to exclude_paths in leoflow.yaml.
+```
+
+Act on it or declare it deliberately; the warning stops once the file is in
+`exclude_paths`.
+
 ---
 
 See also: [Concepts & glossary](/concepts/core-concepts/) · [Operating modes](/concepts/editions/)

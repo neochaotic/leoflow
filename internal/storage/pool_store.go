@@ -79,7 +79,7 @@ func (r *Repository) DeletePool(ctx context.Context, tenant, name string) error 
 		// missing pool or an attempt to delete the default. Disambiguate for a
 		// clear status without leaking the guard into the query's row count.
 		if p, gerr := r.GetPool(ctx, tenant, name); gerr == nil && p.IsDefault {
-			return fmt.Errorf("the default pool cannot be deleted: %w", domain.ErrConflict)
+			return domain.Safef(domain.ErrConflict, "the default pool cannot be deleted")
 		}
 		return domain.ErrNotFound
 	}

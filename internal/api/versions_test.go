@@ -3,8 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,12 +88,17 @@ func TestRegisterVersionRejectsRemovedHTTPAPIType(t *testing.T) {
 // the handleRepoError ErrValidation branch it fell through to 500, which sent
 // users to server logs instead of to their own DAG (#724).
 func TestRegisterVersionUnknownConnectionReturns400(t *testing.T) {
-	repo := &fakeVersionRepo{err: fmt.Errorf(
-		"dag %q declares unknown connection(s) %s; define them (leoflow connections set) or remove them from the DAG's connections: declaration: %w",
-		"etl", "warehouse", domain.ErrValidation)}
+	repo := &fakeVersionRepo{err: domain.Safef(domain.ErrValidation,
+		"dag %q declares unknown connection(s) %s; define them (leoflow connections set) or remove them from the DAG's connections: declaration",
+		"etl", "warehouse")}
 	rec := authGet(versionServer(repo), http.MethodPost, "/api/v2/dags/etl/versions", validSpecJSON)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown connection = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	// The phrase names what to fix. Redacting storage errors (#961) must not
+	// take it away, or the 400 sends the author to the logs after all.
+	if !strings.Contains(rec.Body.String(), "warehouse") {
+		t.Errorf("400 body no longer names the undeclared connection: %s", rec.Body.String())
 	}
 }
 

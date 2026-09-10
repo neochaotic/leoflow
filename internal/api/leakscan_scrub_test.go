@@ -6,8 +6,12 @@ import (
 	"testing"
 )
 
-// pgLeaks are the database internals no error body may carry to a client.
-var pgLeaks = []string{"23505", "dag_versions_unique", "SQLSTATE"}
+// pgLeaks are the database internals no error body may carry to a client. The
+// severity prefixes are here because the disclosure class is wider than the one
+// SQLSTATE #746 hardened: pgconn renders EVERY server error as
+// "severity: message (SQLSTATE code)", so "ERROR:" catches an unmapped code
+// whose number nobody thought to list (#961).
+var pgLeaks = []string{"23505", "dag_versions_unique", "SQLSTATE", "ERROR:", "FATAL:"}
 
 func TestLeakScanTargetIgnoresTheEchoedIdentifier(t *testing.T) {
 	// The dag id and body from the observed failure, where the timestamp
@@ -50,7 +54,7 @@ func TestLeakScanTargetStillSeesARealLeak(t *testing.T) {
 // token from pgLeaks makes every test above easier and silently weakens the
 // integration assertion that consumes it, so the floor is pinned here.
 func TestPgLeaksCoversTheKnownPgInternals(t *testing.T) {
-	for _, want := range []string{"23505", "dag_versions_unique", "SQLSTATE"} {
+	for _, want := range []string{"23505", "dag_versions_unique", "SQLSTATE", "ERROR:", "FATAL:"} {
 		if !slices.Contains(pgLeaks, want) {
 			t.Errorf("pgLeaks no longer covers %q; the 409 leak scan is weaker than it was", want)
 		}

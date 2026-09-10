@@ -16,7 +16,10 @@
 #      we publish no base image for, and finds out at `leoflow compile` when the
 #      pull 404s — inside their build, naming an image they never typed.
 #   2. Every probe candidate is either in the matrix, or carries an explicit
-#      `// lite-only` marker on its line. The probe list is deliberately WIDER:
+#      `// lite-only` marker on its line — an author assertion nothing else
+#      verifies, so this gate checks it BOTH ways and fails a marker on a line
+#      that IS published, rather than letting it become a mute button.
+#      The probe list is deliberately WIDER:
 #      it reaches forward to minors that have not shipped yet, because the Lite
 #      parser shim is stdlib-only (ADR 0024) and any of them can parse a dag.py
 #      on this host. A candidate that is neither published nor marked is the
@@ -114,6 +117,23 @@ for lineno, line in enumerate(m.group(1).splitlines(), 1):
 	lite_only = re.search(r"//\s*lite-only\b", line) is not None
 	for v in entries:
 		ordered.append(v)
+		if lite_only and v in published:
+			# The marker is an author assertion nobody verifies, so it has to be
+			# checked in BOTH directions or it decays into a mute button. The
+			# moment we start publishing a line that carries the marker, the
+			# marker is a false statement sitting in the source — and left
+			# one-way this gate would go on printing OK over it forever, which
+			# is the precise shape of the drift #1036 is about.
+			problems.append(
+				f"  {detect_rel} (pythonCandidates, line {lineno} of the literal)\n"
+				f"    probes for python{v}, marked `// lite-only`\n"
+				f"    published matrix: {', '.join(published)}\n"
+				f"    but {v} IS published now, so the marker is stale. Drop `// lite-only`\n"
+				"    from that line. The marker means \"Lite deliberately accepts a host\n"
+				"    interpreter we ship no image for\"; it is not a way to exempt an entry\n"
+				"    from this gate, and nothing else verifies it."
+			)
+			continue
 		if lite_only or v in published:
 			continue
 		problems.append(
@@ -228,6 +248,12 @@ self_test() {
 	# A line comment that merely mentions Lite is not the marker. The gate looks
 	# for the token, so prose cannot exempt an entry by accident.
 	_prose_is_not_a_marker() { _detect "$1" '\t"python3.11", "python3.12",\n\t"python3.13", "python3.14", // only Lite uses these\n'; }
+
+	# The marker checked the other way: once a marked line IS published, the
+	# marker is a false statement and the gate must say so instead of exempting
+	# it. Left one-way, a marker silences the entry forever.
+	_stale_marker() { _detect "$1" '\t"python3.11", // lite-only\n\t"python3.12", "python3.13",\n'; }
+	_case "a marker on a published line is stale, not an exemption" 1 "marker is stale" _stale_marker
 
 	_case "an agreeing tree passes"                  0 "2 marked lite-only (3.13, 3.14)" _noop
 	_case "a managed minor nobody publishes"         1 "publish no task base image for" _managed_off_the_matrix

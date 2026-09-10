@@ -172,7 +172,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already worked (`check-lite-prepull-matches-compose.sh` and the Task SDK check
   in `ci.yaml`), each with a `--self-test`, all globbed into the release cut's
   pre-flight and run per-PR by the new `Duplicated version facts agree` job:
-  `check-go-toolchain-pin.sh` (ten copies, prose comments included),
+  `check-go-toolchain-pin.sh` (eleven copies, prose comments included),
   `check-python-host-interpreters.sh` (the managed CPython must be a *member* of
   the published matrix and every host probe either published or marked
   `// lite-only` — these are relationships, not equality, see #1031),

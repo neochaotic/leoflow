@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# The Go toolchain Leoflow builds with is stated in ten places. Until #1036 it
+# Companion gate: scripts/check-migrate-cli-build-tags.sh reconciles
+# deploy/Dockerfile.migrate's pin against security.yaml's GO_VERSION, which this
+# gate in turn reconciles against go.mod. That file is covered here directly too
+# (both its ARG default and its `golang:` literal), so the two overlap rather
+# than depend on each other — but if you change either, read the other.
+#
+# The Go toolchain Leoflow builds with is stated in eleven places. Until #1036 it
 # said three different things: `toolchain go1.26.6` in go.mod, `1.26.3` in
 # runtime/Dockerfile's GO_VERSION default, `1.26.4` in the Makefile's chaos
 # pin, and `golang:1.27-bookworm` in deploy/Dockerfile.server after a Dependabot
@@ -104,8 +110,12 @@ if m.group(1) != truth_minor:
 	note("go.mod", "`go` directive minor", m.group(1))
 
 # ── 2. the website module, installed by go-version-file ──────────────────────
-# website-build.yml and website-deploy.yml both point actions/setup-go at
-# website/go.mod, so this directive IS the toolchain those jobs get.
+# website-build.yml points actions/setup-go at `website/go.mod`, so this
+# directive IS the toolchain that job gets. website-deploy.yml uses
+# `src/website/go.mod` — the same file under its own checkout path, not a
+# second module. Stated precisely because this gate's whole thesis is that an
+# untested sentence in a comment is the bug: the earlier wording claimed both
+# workflows name the same path, and they do not.
 website = read("website/go.mod")
 m = re.search(r"^go (\d+\.\d+(?:\.\d+)?)\s*$", website, re.M)
 if not m:
@@ -165,7 +175,12 @@ if pinned_workflows == 0:
 	)
 
 # ── 4. the Dockerfile ARG defaults ───────────────────────────────────────────
-for rel in ("runtime/Dockerfile", "deploy/Dockerfile.server", "scripts/chaos/Dockerfile"):
+# deploy/Dockerfile.migrate arrived with #1039, after this gate was written, and
+# was covered only by the `golang:` literal scan below — its ARG default could be
+# moved alone and this gate still printed OK. Its pin is ALSO reconciled against
+# security.yaml by scripts/check-migrate-cli-build-tags.sh, so the two gates form
+# a two-hop chain; neither header said so, which is how a seam becomes a hole.
+for rel in ("runtime/Dockerfile", "deploy/Dockerfile.server", "deploy/Dockerfile.migrate", "scripts/chaos/Dockerfile"):
 	text = read(rel)
 	m = re.search(r"^ARG GO_VERSION=(\S+)\s*$", text, re.M)
 	if not m:
@@ -247,10 +262,13 @@ self_test() {
 	_dockerfile() { # <dir> <rel> <arg-default> <from-line>
 		printf 'ARG GO_VERSION=%s\n%s\nRUN go build ./...\n' "$3" "$4" >"$1/$2"
 	}
+	_mut_migrate_arg() { # <dir>
+		printf 'ARG GO_VERSION=1.25.0\nFROM golang:${GO_VERSION}-bookworm AS build\nRUN go build ./...\n' >"$1/deploy/Dockerfile.migrate"
+	}
 	_ci() { printf 'name: CI\nenv:\n  GO_VERSION: "%s"\njobs:\n  build:\n    steps:\n      - uses: actions/setup-go@v7\n        with:\n          go-version: ${{ env.GO_VERSION }}\n' "$2" >"$1/.github/workflows/ci.yaml"; }
 	_release() { printf 'name: Release\nenv:\n  GO_VERSION: "%s"\njobs:\n  release:\n    steps:\n      - run: go build ./...\n' "$2" >"$1/.github/workflows/release.yaml"; }
 
-	# Builds a minimal repo root whose ten copies all say 1.26.6.
+	# Builds a minimal repo root whose copies all say 1.26.6.
 	_mkroot() { # <dir>
 		local d="$1"
 		mkdir -p "$d/website" "$d/.github/workflows" "$d/runtime" "$d/deploy" "$d/scripts/chaos"
@@ -259,6 +277,7 @@ self_test() {
 		_makefile "$d" 1.26.6
 		_dockerfile "$d" runtime/Dockerfile 1.26.6 'FROM golang:${GO_VERSION}-bookworm AS agent-build'
 		_dockerfile "$d" deploy/Dockerfile.server 1.26.6 'FROM golang:${GO_VERSION}-bookworm AS build'
+		_dockerfile "$d" deploy/Dockerfile.migrate 1.26.6 'FROM golang:${GO_VERSION}-bookworm AS build'
 		_dockerfile "$d" scripts/chaos/Dockerfile 1.26.6 'FROM python:3.12-slim'
 		_ci "$d" 1.26.6
 		_release "$d" 1.26.6
@@ -320,6 +339,12 @@ self_test() {
 
 	_case "an agreeing tree passes"                    0 "agrees everywhere (go1.26.6)" _noop
 	_case "a Dependabot bump to one Dockerfile"        1 "golang:1.27-bookworm" _dependabot_bumps_one_dockerfile
+	# The migrate Dockerfile arrived after this gate and was covered only by the
+	# `golang:` literal scan, so its ARG default could move alone and the gate
+	# still said OK. Confirmed on the real tree before this case existed.
+	_case "the migrate Dockerfile's ARG default is covered too" 1 "deploy/Dockerfile.migrate" \
+		_mut_migrate_arg
+
 	_case "a stale runtime ARG default"                1 "ARG GO_VERSION default: 1.26.3" _stale_runtime_arg
 	_case "a floating major.minor ARG"                 1 "Pin a full patch version" _floating_arg
 	_case "a dropped ARG fails loudly"                 1 "declares no \`ARG GO_VERSION" _missing_arg

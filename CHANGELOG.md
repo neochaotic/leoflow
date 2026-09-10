@@ -115,6 +115,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scanning](https://leoflow.dev/contribute/image-vulnerability-scanning/).
 
 ### Changed
+- **`networkPolicy.enabled` now renders an ingress rule for the metrics port
+  (9090), and its default allows any namespace.** **Existing installs get this
+  on the next `helm upgrade` with no values change.** The port serves
+  unauthenticated `/metrics`, `/healthz` and `/readyz`, and the metrics series
+  carry `dag_id` and `task_id` — so this is not equivalent to the mostly
+  JWT-gated API on 8080. **Narrow it**: set `networkPolicy.metricsFrom` to your
+  Prometheus namespace, or to an explicitly empty list to keep the port closed.
+
+  The previous default was an empty list, which rendered no rule at all — and
+  an Ingress-typed policy denies what it does not match, so the port was
+  reachable from nowhere while the value's own documentation said it was
+  "reachable from wherever `ingressFrom` allows". `networkPolicy.enabled` plus
+  `metrics.serviceMonitor.enabled` was a scrape target that was created, never
+  answered, and failed nothing at install
+  ([#1067](https://github.com/neochaotic/leoflow/issues/1067)). The default is
+  now a real value rather than a magic empty, because a magic empty whose
+  meaning lives only in a comment is how this happened.
 - The chart refuses to render `probes.readiness.timeoutSeconds` below 3. The
   server gives up at 2s so it answers before the kubelet does; a shorter kubelet
   timeout silently inverted that. Lower `periodSeconds` or `failureThreshold` to
@@ -304,6 +321,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `leoflow.yaml` and rebuild — or, if you pinned `base_image`, repoint it to the
   matching `py3.11` tag and rebuild.
 ### Fixed
+- **The chart no longer renders a HorizontalPodAutoscaler the apiserver
+  rejects.** `autoscaling.minReplicas` and `maxReplicas` are independent values
+  with independent defaults (2 and 6), so `--set autoscaling.maxReplicas=1`
+  alone produced a maximum below the minimum — a clean render and a failed
+  install, naming neither value the operator set. Refused at render time now,
+  along with a minimum below 1, which Kubernetes rejects without the
+  `HPAScaleToZero` gate ([#947](https://github.com/neochaotic/leoflow/issues/947)).
 - **A version floor in `dependencies` was silently dropped, and left junk in the
   image.** `RUN` in a Dockerfile is `/bin/sh -c`, and the specifiers were joined
   into that line unquoted — so `setuptools>=80.9.0` was a *redirection*: pip

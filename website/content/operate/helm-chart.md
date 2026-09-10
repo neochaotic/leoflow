@@ -55,6 +55,22 @@ A first-class values reference on this site is a TODO for a later migration phas
   one-switch `examples/values-ha.yaml` profile.
 - Opt-in hardening templates: HPA, NetworkPolicy, and a Prometheus
   ServiceMonitor.
+
+  Two things about that combination are worth knowing before you turn them on.
+
+  **The metrics port has its own ingress rule, and its default allows any
+  namespace.** `networkPolicy.metricsFrom` is where you narrow it, and you
+  should: the metrics listener is unauthenticated and its series carry
+  `dag_id` and `task_id`, so "reachable at all" is not the same bar as the
+  mostly JWT-gated API on 8080. Point it at your Prometheus namespace. Setting
+  it to an explicitly empty list closes the port, which is a supported choice —
+  it was just a very poor *default*, because an Ingress-typed policy denies
+  what it does not match, so `networkPolicy` plus
+  `metrics.serviceMonitor.enabled` used to give you a target that was created
+  and never answered.
+
+  **The HPA needs both of its bounds set together** — see
+  [Autoscaling](/operate/control-plane-ha/#autoscaling-set-both-bounds-or-neither).
 - TLS termination via cert-manager — see [Pro TLS](/operate/pro-tls/).
 
 ## Tuning the probes

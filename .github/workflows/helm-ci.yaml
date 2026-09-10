@@ -209,6 +209,28 @@ jobs:
             --wait --timeout 240s
           kubectl -n leoflow rollout status deploy/leoflow --timeout=120s
 
+      # #947 — a HorizontalPodAutoscaler whose maximum is under its minimum is
+      # rejected by the APISERVER, not by helm, so a render test cannot see it.
+      # The chart now refuses that pair at render time; this proves the pair it
+      # DOES render is one the apiserver accepts, which is the other half and
+      # the only half a template test cannot cover.
+      #
+      # A separate step rather than folded into the install above, so a failure
+      # here names autoscaling instead of failing the whole install for an
+      # unrelated reason. metrics-server is absent on kind, so the HPA reports
+      # unknown metrics — irrelevant: what is asserted is admission.
+      - name: HPA the apiserver accepts (#947)
+        run: |
+          set -euo pipefail
+          helm template leoflow helm/leoflow -n leoflow \
+            --set database.url='postgres://x:x@x/x' --set redis.url='redis://x/0' \
+            --set auth.jwtSecret=x --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
+            --set logs.persistence.enabled=false \
+            --set autoscaling.enabled=true --set autoscaling.minReplicas=1 --set autoscaling.maxReplicas=3 \
+            -s templates/hpa.yaml > /tmp/hpa.yaml
+          kubectl -n leoflow apply --dry-run=server -f /tmp/hpa.yaml
+          echo "the rendered HPA is admitted by the apiserver"
+
       # Snapshot the auto-generated CA before the upgrade. The upgrade step below
       # re-renders the chart against the LIVE cluster, so `lookup` must find the
       # generated Secret and reuse it — the post-upgrade step asserts this CA is

@@ -9,7 +9,7 @@ Egress stays permissive-by-default in every role (DNS always; then the operator'
 explicit rules, or allow-all) so enabling the policy never silently breaks the
 control plane. Real apiserver isolation for the api is enforced by RBAC (the api
 SA is unbound — ADR 0049), with this policy as environment-specific defense in
-depth. metrics ingress is gated on networkPolicy.metricsFrom in every role.
+depth. metrics ingress is its own rule, sourced from networkPolicy.metricsFrom.
 */ -}}
 {{- define "leoflow.controlPlaneNetworkPolicy" -}}
 {{- $ctx := .ctx -}}

@@ -122,6 +122,36 @@ if [ "$code" != "200" ]; then
   pass "non-matching pod is BLOCKED from api :8080 (http_code=${code:-none}) — Calico enforces the netpol (kindnet would NOT)"
 else fail "non-matching pod reached api :8080 (200) — netpol NOT enforced"; fi
 
+# ── #1067: the metrics port, on the one CNI in this repo that can prove it ────
+#
+# The old default left the metrics port out of every ingress rule, and an
+# Ingress-typed policy denies what it does not match — so `networkPolicy.enabled`
+# plus `metrics.serviceMonitor.enabled` produced a scrape target that was
+# created and never answered. That was a claim about YAML until now: kindnet
+# enforces no NetworkPolicy at all, so every other e2e in this repo would have
+# passed either way.
+#
+# The install above sets `ingressFrom` scoped to a label, which is exactly the
+# configuration the first attempt at this fix did NOT repair — folding the
+# metrics port into the API's rule left the careful operator broken. Asserting
+# it HERE is what proves the separate rule is independent of ingressFrom.
+log "assert: the metrics port is reachable under an enforced netpol (#1067)"
+code="$(kubectl -n "$NS" exec probe-allowed -- curl -s -m 8 -o /dev/null -w '%{http_code}' "http://${API_SVC}:9090/metrics" 2>/dev/null || true)"
+if [ "$code" = "200" ]; then
+  pass "metrics :9090 answers with ingressFrom narrowed — the scrape survives an enforced policy"
+else fail "metrics :9090 did NOT answer (http_code=${code:-none}) — a Prometheus target would be created and never respond (#1067)"; fi
+
+# And the default really is narrowable: with metricsFrom pointing elsewhere the
+# port closes, so the value does what it claims rather than being decorative.
+log "assert: metricsFrom actually restricts the scrape source (#1067)"
+kubectl -n "$NS" patch networkpolicy leoflow-api --type=json \
+  -p '[{"op":"replace","path":"/spec/ingress/1/from","value":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}}}]}]' >/dev/null 2>&1 || true
+sleep 3
+code="$(kubectl -n "$NS" exec probe-allowed -- curl -s -m 8 -o /dev/null -w '%{http_code}' "http://${API_SVC}:9090/metrics" 2>/dev/null || true)"
+if [ "$code" != "200" ]; then
+  pass "metrics :9090 is BLOCKED once metricsFrom names another namespace (http_code=${code:-none})"
+else fail "metrics :9090 still answered after narrowing metricsFrom — the value is decorative"; fi
+
 echo
 if [ "$FAILED" -ne 0 ]; then echo "PRO NETPOL+RWX: FAILED"; exit 1; fi
 echo "PRO NETPOL+RWX: all assertions held (netpol enforced + RWX shared logs)"

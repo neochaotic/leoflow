@@ -308,6 +308,35 @@ only one pod can hold.
    standby take the lock within seconds — no image pull, and the dispatch gap is
    the re-election poll, not a restart.
 
+### Autoscaling: set both bounds, or neither
+
+`autoscaling.minReplicas` and `autoscaling.maxReplicas` are independent values
+with independent defaults — 2 and 6 — so overriding one and not the other
+inverts them. The obvious shrink, `--set autoscaling.maxReplicas=1`, leaves the
+minimum at 2 and produces a HorizontalPodAutoscaler with a maximum below its
+minimum, which the apiserver rejects.
+
+The chart now refuses that pair at render time rather than letting the install
+fail, and it refuses a minimum below 1 as well: Kubernetes rejects one unless
+the `HPAScaleToZero` feature gate is enabled, which this chart does not assume.
+
+```yaml
+autoscaling:
+  enabled: true
+  minReplicas: 1   # set both together
+  maxReplicas: 3
+```
+
+With `maxReplicas` above 1 you also need the storage precondition above
+satisfied — more than one control-plane pod cannot share a ReadWriteOnce log
+volume, and the chart refuses that combination outright, so the snippet above
+only installs as written at `maxReplicas: 1`. Above that, pair it with
+`logs.persistence.enabled: false` and a `logs.sink`, or an RWX access mode.
+
+Both bounds must be whole numbers. A float in a values file used to coerce past
+the check and render a fractional replica count the apiserver rejects, so
+non-integers are refused too.
+
 ## The PodDisruptionBudget — and the single-replica trap
 
 A PodDisruptionBudget tells the eviction API how many pods must stay up during a

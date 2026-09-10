@@ -20,8 +20,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: {{ include "leoflow.roleName" (dict "ctx" . "role" $role) }}
-  minReplicas: {{ .Values.autoscaling.minReplicas }}
-  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  minReplicas: {{ include "leoflow.autoscalingBound" (dict "ctx" . "which" "min") }}
+  maxReplicas: {{ include "leoflow.autoscalingBound" (dict "ctx" . "which" "max") }}
   metrics:
     {{- with .Values.autoscaling.targetCPUUtilizationPercentage }}
     - type: Resource

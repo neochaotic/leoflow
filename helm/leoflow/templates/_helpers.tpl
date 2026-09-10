@@ -552,3 +552,58 @@ group count a valid address can have. */ -}}
 {{- end -}}
 {{- join "\n" $peers -}}
 {{- end -}}
+
+{{/*
+autoscaling.maxReplicas, validated against autoscaling.minReplicas.
+
+The two are independent values with independent defaults (2 and 6), so
+overriding only one silently inverts them: `--set autoscaling.maxReplicas=1`
+renders `minReplicas: 2` / `maxReplicas: 1`, which the apiserver rejects
+outright. The operator gets a failed install and a message about HPA field
+semantics, naming neither leoflow value nor the one they actually set.
+
+This is the class the chart already refuses everywhere else — a render that
+looks clean and then fails the install (#905's PDB and strategy guards, #1041's
+readiness floor). Refusing at render time puts the diagnosis in front of the
+person who typed the value, while they are still typing.
+
+Setting max BELOW min is far likelier than the reverse, because 1 is the
+obvious value for someone shrinking a deployment and the min default is 2.
+*/}}
+{{- define "leoflow.autoscalingBound" -}}
+{{- $which := .which -}}
+{{- $ctx := .ctx -}}
+{{- $rawMin := $ctx.Values.autoscaling.minReplicas -}}
+{{- $rawMax := $ctx.Values.autoscaling.maxReplicas -}}
+{{- /* Both bounds are validated and RENDERED through here, never raw.
+       An earlier version validated `int $v` and rendered the raw value, so
+       `minReplicas: 2.9` / `maxReplicas: 2.1` in a values file coerced to 2 and
+       2, passed the comparison, and then rendered 2.9 and 2 — the apiserver
+       rejects that, which is #947 straight back. The chart already learned this
+       once: leoflow.deploymentStrategy's own docstring says it judges the
+       validated value the template renders, "not the raw one". */ -}}
+{{- range $name, $raw := dict "minReplicas" $rawMin "maxReplicas" $rawMax -}}
+{{- if not (kindIs "int" $raw) -}}
+{{- if not (regexMatch "^-?[0-9]+$" (toString $raw)) -}}
+{{- fail (printf "autoscaling.%s=%v (kind %s) is not a whole number of replicas. A HorizontalPodAutoscaler bound is an int32; a float or a non-numeric string is either rejected by the apiserver or silently truncated. See #947." $name $raw (kindOf $raw)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $min := int $rawMin -}}
+{{- $max := int $rawMax -}}
+{{- /* min first: a negative min otherwise reports "raise the maximum to at
+       least -1", which is advice that produces another invalid HPA. */ -}}
+{{- if lt $min 1 -}}
+{{- fail (printf "autoscaling.minReplicas=%v, and a HorizontalPodAutoscaler minimum below 1 is rejected unless the HPAScaleToZero feature gate is on, which this chart does not assume. Set it to 1 or more. See #947." $rawMin) -}}
+{{- end -}}
+{{- if lt $max 1 -}}
+{{- fail (printf "autoscaling.maxReplicas=%v, and a HorizontalPodAutoscaler maximum below 1 is meaningless — the target would be scaled to nothing. Set it to at least autoscaling.minReplicas (%v). See #947." $rawMax $rawMin) -}}
+{{- end -}}
+{{- if gt $max 2147483647 -}}
+{{- fail (printf "autoscaling.maxReplicas=%v exceeds the int32 ceiling a HorizontalPodAutoscaler bound is stored in. See #947." $rawMax) -}}
+{{- end -}}
+{{- if lt $max $min -}}
+{{- fail (printf "autoscaling.maxReplicas=%v is below autoscaling.minReplicas=%v, and the apiserver rejects a HorizontalPodAutoscaler whose maximum is under its minimum. The two are independent values with independent defaults (min 2, max 6), so setting only one inverts them — this is what `--set autoscaling.maxReplicas=1` alone produces. Set both, or raise the maximum to at least %v. See #947." $rawMax $rawMin $min) -}}
+{{- end -}}
+{{- if eq $which "min" -}}{{- $min -}}{{- else -}}{{- $max -}}{{- end -}}
+{{- end -}}

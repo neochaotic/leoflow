@@ -347,6 +347,54 @@ leoflow push dag.json
 Full, copy-pasteable pipelines for **GitHub Actions, GitLab CI, Google Cloud
 Build/Run, and generic runners** are in **[CI/CD & deploy examples](/operate/cicd-deploy/)**.
 
+#### What ends up in the image
+
+`--build` bakes the build context into the image, and with the default
+`project: "."` that context is your whole DAG directory. The image is pushed to
+a registry and pulled by every pod that runs the DAG, so anything in it is
+shared with everyone who can pull it.
+
+`exclude_paths` in `leoflow.yaml` decides what stays out. During the build it is
+materialized as a `.dockerignore` in the context — merged with your own if you
+have one, and removed afterwards, so the workspace is unchanged when the build
+ends. Your rules come first and Leoflow's last, which means `exclude_paths` has
+the final word: a `!` re-include in your `.dockerignore` cannot silently defeat
+an exclusion you declared in `leoflow.yaml`.
+
+Each entry is written out in the forms Docker honours rather than verbatim.
+`.dockerignore` is **not** `.gitignore`: a pattern with no slash matches only at
+the context root, so `__pycache__` alone would leave every nested one in the
+image. Leoflow emits `p`, `**/p` and `p/**` for a bare name — the last of those
+is also what lets `exclude_paths` beat an earlier `!` rule, which re-stating the
+plain pattern does not do.
+
+For a dbt project, two things a host-side `dbt parse` leaves behind are
+excluded automatically, scoped to each project directory: `logs/` and
+`.user.yml`. Both matter beyond image size — `.user.yml` is dbt's
+anonymous-usage cookie identifying *your* machine, and it is read by the in-pod
+dbt, so every pod from that image reports as you; `logs/dbt.log` carries
+absolute paths from the build host.
+
+Nothing else in a dbt project is excluded, deliberately. `target/` holds the
+manifest `dbt.manifest` points at, `dbt_packages/` is where `dbt deps`
+installs, and `profiles.yml` may be a BYO profile you point `DBT_PROFILES_DIR`
+at — each is a real input in a configuration people use, so excluding them
+would break working projects.
+
+Credentials are **not** excluded for you either. A `.env` can be a legitimate
+input — a DAG calling `load_dotenv()` reads it at run time — and so can a BYO
+`profiles.yml`, so dropping either silently would break that project far from
+the cause. Instead the build warns:
+
+```console
+warning: .env is in the build context and will be baked into the image, which is
+pushed to a registry and pulled by every pod that runs this DAG. If it holds
+credentials, add ".env" to exclude_paths in leoflow.yaml.
+```
+
+Act on it or declare it deliberately; the warning stops once the file is in
+`exclude_paths`.
+
 ---
 
 See also: [Concepts & glossary](/concepts/core-concepts/) · [Operating modes](/concepts/editions/)

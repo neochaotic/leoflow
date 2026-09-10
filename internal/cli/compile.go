@@ -452,6 +452,18 @@ func buildAndPush(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.
 			return derr
 		}
 		defer cleanup()
+		// A project that ships its own Dockerfile gets the exclusions too, but
+		// we cannot read its COPY lines — so the secret warning softens rather
+		// than claiming what ships.
+		ownDockerfile := dockerfile != filepath.Join(dir, generatedDockerfileName)
+		// Applies whether or not the project ships its own Dockerfile: exclude_paths
+		// is a statement about what may enter the image, and it does not become
+		// less true because the author wrote the Dockerfile themselves.
+		ignoreCleanup, baked, ierr := ensureDockerignore(cmd.ErrOrStderr(), dir, cfg, ownDockerfile)
+		if ierr != nil {
+			return ierr
+		}
+		defer ignoreCleanup()
 		var platforms []string
 		if cfg.Build != nil {
 			platforms = cfg.Build.Platforms
@@ -459,6 +471,9 @@ func buildAndPush(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.
 		if berr := buildImage(cmd, o.builder, image, dockerfile, dir, platforms); berr != nil {
 			return berr
 		}
+		// After the build, where the eye lands: the warning above is minutes of
+		// layer output away by now.
+		remindBakedSecretsAfterBuild(cmd.ErrOrStderr(), baked)
 	}
 	if o.push {
 		if perr := pushImage(cmd, o.builder, image); perr != nil {

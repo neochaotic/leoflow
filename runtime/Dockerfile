@@ -19,6 +19,23 @@ ARG GO_VERSION=1.26.3
 ARG PYTHON_VERSION=3.11
 
 # ── Stage 1: build the static agent binary ───────────────────────────────────
+# Deliberately still bookworm while stage 2 is trixie — do not "fix" the
+# inconsistency without re-reading this. Nothing from this stage reaches a task
+# pod: the only thing copied out is /out/leoflow-agent, built CGO_ENABLED=0, so
+# it links no glibc and no OpenSSL from here. Go does not use OpenSSL at all
+# (crypto/tls is pure Go), and crypto/x509 reads the FINAL image's trust store,
+# not this one's. So this stage's suite changes the build environment only,
+# never what a user runs — a different risk class from stage 2, and a change
+# worth making on its own evidence rather than as a rider on a user-facing one.
+#
+# What keeps it current is the Go pin, not Debian's support calendar. GO_VERSION
+# is pinned to a PATCH release, so this image is whatever docker-library/golang
+# published for that exact tag: a Debian security update never reaches it in
+# place, and Debian 12's remaining LTS window buys it nothing. Every bump of
+# GO_VERSION pulls a freshly built image with a current package set — that is
+# the whole refresh mechanism, and it runs on the Go release cadence. The move
+# off bookworm therefore becomes forced, not optional, on the first GO_VERSION
+# bump after upstream stops publishing a `-bookworm` variant.
 FROM golang:${GO_VERSION}-bookworm AS agent-build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -37,7 +54,25 @@ RUN CGO_ENABLED=0 go build -trimpath \
 	-o /out/leoflow-agent ./cmd/leoflow-agent
 
 # ── Stage 2: runtime base ─────────────────────────────────────────────────────
-FROM python:${PYTHON_VERSION}-slim-bookworm
+# Debian 13 (trixie). The suite is pinned explicitly rather than left implicit
+# so a base-image move is a reviewable diff, not a silent consequence of
+# upstream retagging.
+#
+# The reason it is trixie and not bookworm is OpenSSL, not the Debian release
+# calendar on its own. `python:3.x-slim` links CPython's `ssl` module against
+# the SYSTEM OpenSSL, so every TLS call a task makes — every provider hitting an
+# API, every `requests` call, every warehouse driver — terminates in this
+# image's libssl. bookworm ships OpenSSL 3.0.x, whose UPSTREAM support ended
+# 2026-09-07; trixie ships 3.5.x, supported to 2030-04-08. Debian 12 also left
+# regular security support on 2026-06-11 and is now oldstable under the LTS
+# team's narrower, best-effort scope, while Debian 13 has full Security Team
+# support to 2028-08-09.
+#
+# Note that this suite is also what a user's `system_packages:` resolves
+# against: the compiler emits `apt-get install` into the generated DAG image
+# (internal/cli/compile_build.go), so the package versions a DAG gets move with
+# this line. That makes it a user-visible change, not an internal one.
+FROM python:${PYTHON_VERSION}-slim-trixie
 
 LABEL org.opencontainers.image.source="https://github.com/neochaotic/leoflow"
 LABEL org.opencontainers.image.description="Leoflow task base image (agent + Python runtime)"
@@ -51,8 +86,20 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # the UID the Helm chart pins for the control-plane and migration pods. The home
 # dir is created and owned by this UID so runtime writes to it (e.g. __pycache__)
 # succeed; the staging PVC is made group-writable at the pod level via fsGroup.
+#
+# The trailing chmod pins the home-dir mode instead of inheriting it from
+# /etc/login.defs. Debian's `passwd` went 1:4.13 (bookworm) → 1:4.17.4 (trixie)
+# and the HOME_MODE default tightened with it: the identical `useradd` line
+# produced 0755 on bookworm and produces 0700 on trixie. Nothing supported
+# breaks at 0700 — a task pod runs as this very UID (buildSecurityContext sets
+# runAsNonRoot with no runAsUser, so the kubelet uses the image's 65532) and the
+# owner traverses its own home regardless — so the tighter mode is kept. What is
+# not kept is the silence: a filesystem permission that moves because a distro
+# default moved is the kind of drift that surfaces as an unexplained EACCES
+# three releases later, so it is now stated here and independent of the suite.
 RUN groupadd --gid 65532 leoflow \
- && useradd --create-home --home-dir /home/leoflow --uid 65532 --gid 65532 leoflow
+ && useradd --create-home --home-dir /home/leoflow --uid 65532 --gid 65532 leoflow \
+ && chmod 0700 /home/leoflow
 
 COPY --from=agent-build /out/leoflow-agent /usr/local/bin/leoflow-agent
 COPY runtime/python /opt/leoflow-runtime

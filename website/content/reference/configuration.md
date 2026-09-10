@@ -28,7 +28,7 @@ chart's own values (image, replicas, ingress, Postgres/Redis wiring), see the
 | `base_image` | string | Override the runtime base image. |
 | `dependencies` | list | pip specifiers baked into the image. |
 | `connectors` | list | Short connector names (`postgres`, `http`, …) expanded at compile to their `apache-airflow-providers-*` packages. Sugar over `dependencies` — see [Installing a connector's provider](/connections/#installing-a-connectors-provider). |
-| `system_packages` | list | apt packages. |
+| `system_packages` | list | apt packages, installed into the DAG image at compile. Resolved against the task base image's Debian suite, now **Debian 13 (trixie)** — it was Debian 12 (bookworm) through v0.4.5, so a package name or version pin that only existed in bookworm has to be re-pinned. |
 | `dag_source` | string | DAG file (default `dag.py`). |
 | `build`, `registry` | object | Image build + push settings. |
 | `defaults` | object | DAG-level `retries`, `retry_delay_seconds`, `execution_timeout_seconds`, `resources`. |
@@ -69,7 +69,7 @@ not — discovered inside your build, not ours — so it is not published.
 **`3.10` is deprecated.** Python 3.10 reaches upstream end-of-life on
 2026-10-31, and `docker-library/python` stops rebuilding an EOL line the day
 after (`python:3.9-slim` was last rebuilt 2025-11-01, one day after 3.9 went
-EOL). From that point `python:3.10-slim-bookworm` — and so
+EOL). From that point `python:3.10-slim` — and so
 `leoflow-runtime:py3.10` — receives no further OS security updates and
 accumulates unfixed CVEs indefinitely. The `py3.10` leg keeps being published
 until 2026-10-31, so nothing breaks today; `leoflow validate`, `leoflow
@@ -106,7 +106,7 @@ roadmap item.
 | `dag_source` | `"dag.py"` | DAG file relative to the project. |
 | `dependencies` | `[]` | pip specifiers baked into the image. |
 | `connectors` | `[]` | Short connector names expanded to provider packages at compile (ADR 0038). |
-| `system_packages` | `[]` | apt packages. |
+| `system_packages` | `[]` | apt packages. `apt-get install`ed into the DAG image at compile, resolving against the task base image's Debian suite — see the `system_packages` row under [leoflow.yaml](#leoflowyaml) for which suite that is and what moved. |
 | `include_paths` | `["."]` | Files copied into the image. |
 | `exclude_paths` | `[".git", "__pycache__", "*.pyc", ".venv", "venv"]` | Skipped both in image build **and** workspace discovery. Hidden directories (`.*`) are skipped as well. |
 | `build.context` | `"."` | Docker build context. |

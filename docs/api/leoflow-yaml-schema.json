@@ -33,7 +33,7 @@
           "eol": "2026-10-31",
           "remove_after": "2026-10-31",
           "replacement": "3.11",
-          "reason": "Python 3.10 reaches upstream end-of-life on 2026-10-31. docker-library/python stops rebuilding an EOL line the day after (python:3.9-slim was last rebuilt 2025-11-01, one day after 3.9 went EOL), so python:3.10-slim-bookworm — and therefore leoflow-runtime:py3.10 — stops receiving OS security updates and accumulates unfixed CVEs indefinitely."
+          "reason": "Python 3.10 reaches upstream end-of-life on 2026-10-31. docker-library/python stops rebuilding an EOL line the day after (python:3.9-slim was last rebuilt 2025-11-01, one day after 3.9 went EOL), so python:3.10-slim — and therefore leoflow-runtime:py3.10 — stops receiving OS security updates and accumulates unfixed CVEs indefinitely."
         }
       }
     },

@@ -44,6 +44,19 @@
 # the matrix that publishes the leg, so it is reconciled too. A wrong date is
 # worse than a missing one: it answers the question the reader came with.
 #
+# The same argument runs one step further, and that is the last arm. The
+# deprecation `reason` is printed VERBATIM to the user on compile, validate and
+# deploy, and it named a full base-image tag including the Debian suite. Move
+# the task base from one Debian release to the next and every arm above stays
+# green — the versions and the dates did not change — while that sentence now
+# describes an image nobody builds. A reader checks the Dockerfile the compiler
+# generated, sees a different suite, and dismisses the warning as stale tooling,
+# which retires the one mechanism there is for reaching them before the leg
+# stops being published. So the suite named in the schema and in the
+# configuration reference is reconciled against runtime/Dockerfile's stage-2
+# FROM — and the fix that failure recommends is to stop naming a suite at all,
+# because `python:3.10-slim` is correct on every one of them.
+#
 # Usage: scripts/check-python-runtime-matrix.sh [--self-test]
 #        scripts/check-python-runtime-matrix.sh <repo-root>
 set -euo pipefail
@@ -352,6 +365,67 @@ for version in want:
 				f"    the py{version} deprecation note never states its EOL date ({dep['eol']})"
 			)
 
+# ── 8. the Debian suite named in prose vs the one stage 2 is built on ────────
+# The list arms above are blind to the suite: move the base image from one
+# Debian release to the next and every version still appears in every file, so
+# they all stay green while the schema's deprecation `reason` — which the CLI
+# prints VERBATIM on compile, validate and deploy — keeps naming the old one.
+# That is worse than a stale doc. A py3.10 author reads the warning, checks the
+# Dockerfile the compiler generated, finds a different suite, and files the
+# whole warning under stale tooling — which retires the one mechanism we have
+# for reaching them before the leg stops being published.
+#
+# The fix a suite move should make is to stop naming a suite: `python:3.10-slim`
+# is literally correct on every suite, because that tag has always resolved to
+# whatever the current one is. So this arm does not demand the CURRENT suite
+# anywhere; it only refuses a literal that names one stage 2 does not use. A
+# suffix-free reference is always accepted.
+#
+# Only the two files a user reads as CURRENT truth are scanned. The docs/api
+# mirror of the schema needs no arm of its own: TestEmbeddedSchemasMatchDocs
+# binds it byte-for-byte to the copy embedded in the binary, which is the copy
+# read here. CHANGELOG.md is deliberately excluded — a released section naming
+# the suite of its own era is a record, and correcting it would be falsifying
+# history rather than fixing drift.
+dockerfile_from = None
+for line in dockerfile_text.splitlines():
+	m = re.match(r"\s*FROM\s+python:(?:\$\{PYTHON_VERSION\}|3\.\d+)-slim(-[A-Za-z0-9.]+)?\s*(?:AS\s+\S+)?\s*$", line)
+	if m:
+		dockerfile_from = (line.strip(), m.group(1))
+		break
+if dockerfile_from is None:
+	fail(
+		f"{dockerfile_rel} has no `FROM python:...-slim...` line — this gate cannot tell which\n"
+		"Debian suite the task base is built on, so it cannot reconcile the suite named in the\n"
+		"schema's deprecation reason against it. Either restore the line or delete this arm\n"
+		"deliberately; a gate that stops gating after a refactor is worse than no gate."
+	)
+from_line, from_suffix = dockerfile_from
+if not from_suffix:
+	fail(
+		f"{dockerfile_rel}'s stage-2 base `{from_line}` pins no Debian suite.\n"
+		"The suffix is carried deliberately (see the comment above that FROM): with it, moving\n"
+		"the task base to a new Debian release is a reviewable one-line diff; without it the\n"
+		"move happens the day upstream retags, in someone else's build, with nothing in our\n"
+		"history to point at. Pin it, or remove this arm in the change that decides otherwise."
+	)
+suite = from_suffix.lstrip("-")
+# `3.x` as well as `3.10`: prose generalizes over the lines, and a generalized
+# literal goes stale exactly the same way a specific one does.
+IMAGE_SUITE_RE = re.compile(r"python:3\.(?:\d+|x)-slim-([A-Za-z0-9.]+)")
+for rel, text in ((schema_rel, read(schema_rel)), (docs_rel, docs_text)):
+	for m in IMAGE_SUITE_RE.finditer(text):
+		if m.group(1) == suite:
+			continue
+		problems.append(
+			f"  {rel}\n"
+			f"    names {m.group(0)}\n"
+			f"    {dockerfile_rel} stage 2: {from_line}\n"
+			f"    Drop the suite from the literal ({m.group(0).rsplit('-', 1)[0]}) rather than\n"
+			f"    swapping it for {suite!r}: the suffix-free tag is correct on every suite, so it\n"
+			"    cannot go stale on the next move. This text is printed to users verbatim."
+		)
+
 if problems:
 	sys.exit(
 		"FAIL: the published-Python list has drifted from the schema enum.\n"
@@ -374,7 +448,11 @@ self_test() {
 	# `remove_after` (2026-12-31). In the real repo the two happen to be the same
 	# date, which would let a gate that compares the wrong column against the wrong
 	# schema field pass every case below for the wrong reason.
-	_dep_json='{"3.10":{"eol":"2026-10-31","remove_after":"2026-12-31","replacement":"3.11"}}'
+	#
+	# The `reason` carries a `python:3.10-slim-trixie` literal so the happy path
+	# exercises the suite arm positively rather than only vacuously: a fixture
+	# with no image literal at all would pass that arm whether it worked or not.
+	_dep_json='{"3.10":{"eol":"2026-10-31","remove_after":"2026-12-31","replacement":"3.11","reason":"docker-library stops rebuilding python:3.10-slim-trixie after its EOL."}}'
 	_schema() { # <dir> <deprecations-json>
 		printf '{"properties":{"python_version":{"enum":["3.10","3.11"],"default":"3.11",\n "x-leoflow-python-deprecations":%s}}}\n' \
 			"$2" >"$1/internal/domain/schemas/leoflow-yaml-schema.json"
@@ -408,6 +486,18 @@ self_test() {
 		} >"$1/website/content/reference/configuration.md"
 	}
 
+	# The Dockerfile fixture carries a stage-1 `golang:*-bookworm` alongside the
+	# stage-2 `python:*-slim-trixie`, because the real one does and because that
+	# is the pair the suite arm has to tell apart: an arm that grepped the file
+	# for a suite name would read the builder's and reconcile against the wrong
+	# stage, passing every case below for the wrong reason.
+	_dfcomment_default='# PYTHON_VERSION selects the interpreter (3.10 / 3.11).'
+	_dffrom_default='FROM python:${PYTHON_VERSION}-slim-trixie'
+	_dockerfile() { # <dir> <comment-line> <stage-2-FROM-line>
+		printf '%s\nARG PYTHON_VERSION=3.11\nFROM golang:1.26.3-bookworm AS agent-build\n%s\n' \
+			"$2" "$3" >"$1/runtime/Dockerfile"
+	}
+
 	# Builds a minimal repo root whose copies all agree on 3.10/3.11.
 	_mkroot() { # <dir>
 		local d="$1"
@@ -416,8 +506,7 @@ self_test() {
 		_schema "$d" "$_dep_json"
 		_release "$d" "$_matrix_both" "$_note_default"
 		printf 'runtime-images:\n\tfor v in 3.10 3.11; do \\\n\t\tdocker build . ; \\\n\tdone\n' >"$d/Makefile"
-		printf '# PYTHON_VERSION selects the interpreter (3.10 / 3.11).\nARG PYTHON_VERSION=3.11\n' \
-			>"$d/runtime/Dockerfile"
+		_dockerfile "$d" "$_dfcomment_default" "$_dffrom_default"
 		printf '[project]\nrequires-python = ">=3.10"\n' >"$d/runtime/python/pyproject.toml"
 		_docs "$d" "$_rows_default" "$_prose_default"
 	}
@@ -449,8 +538,8 @@ self_test() {
 	_stale_makefile() { printf 'runtime-images:\n\tfor v in 3.10; do \\\n\t\tdocker build . ; \\\n\tdone\n' >"$1/Makefile"; }
 	_commented_makefile_loop() { printf 'runtime-images:\n\t# for v in 3.10 3.11; do \\\n\t@echo skip\n' >"$1/Makefile"; }
 	_other_target_loop() { printf 'other-images:\n\tfor v in 3.10 3.11; do \\\n\tdone\n\nruntime-images:\n\t@echo nothing\n' >"$1/Makefile"; }
-	_stale_dockerfile() { printf '# PYTHON_VERSION selects the interpreter (3.10 / 3.11 / 3.12).\n' >"$1/runtime/Dockerfile"; }
-	_dropped_dockerfile_comment() { printf 'ARG PYTHON_VERSION=3.11\n' >"$1/runtime/Dockerfile"; }
+	_stale_dockerfile() { _dockerfile "$1" '# PYTHON_VERSION selects the interpreter (3.10 / 3.11 / 3.12).' "$_dffrom_default"; }
+	_dropped_dockerfile_comment() { _dockerfile "$1" '# nothing to see here' "$_dffrom_default"; }
 	_raised_floor() { printf '[project]\nrequires-python = ">=3.11"\n' >"$1/runtime/python/pyproject.toml"; }
 	_stale_docs_row() {
 		_docs "$1" "$_rows_default" "$_prose_default"
@@ -491,6 +580,25 @@ self_test() {
 	_release_deprecates_a_supported_line() { _release "$1" "$_matrix_both" 'py3.11 is DEPRECATED: EOL 2027-10-31. Also py3.10 is DEPRECATED: Python 3.10 goes EOL 2026-10-31.'; }
 	_release_note_omits_eol() { _release "$1" "$_matrix_both" 'py3.10 is DEPRECATED: it goes away at some point.'; }
 
+	# ── the Debian-suite arm ───────────────────────────────────────────────────
+	# The motivating mutation is _schema_names_a_stale_suite: every version still
+	# appears in every file, every date still agrees, so every case above stays
+	# green — while the `reason` the CLI prints VERBATIM on compile/validate/deploy
+	# names a suite the base image has not been built on since the move. A reader
+	# checks their generated Dockerfile, sees a different suite, and files the
+	# whole warning under stale tooling.
+	_dep_with_reason() { # <dir> <reason>
+		_schema "$1" "{\"3.10\":{\"eol\":\"2026-10-31\",\"remove_after\":\"2026-12-31\",\"replacement\":\"3.11\",\"reason\":\"$2\"}}"
+	}
+	_schema_names_a_stale_suite() { _dep_with_reason "$1" 'docker-library stops rebuilding python:3.10-slim-bookworm after its EOL.'; }
+	_schema_is_suite_agnostic() { _dep_with_reason "$1" 'docker-library stops rebuilding python:3.10-slim after its EOL.'; }
+	_docs_name_a_stale_suite() {
+		_docs "$1" "$_rows_default" \
+			'**`3.10` is deprecated.** Upstream EOL 2026-10-31; published until 2026-12-31. From then `python:3.10-slim-bookworm` receives no updates. Set `python_version` to `3.11`.\n'
+	}
+	_dockerfile_from_omits_the_suite() { _dockerfile "$1" "$_dfcomment_default" 'FROM python:${PYTHON_VERSION}-slim'; }
+	_dockerfile_has_no_python_from() { _dockerfile "$1" "$_dfcomment_default" 'FROM scratch'; }
+
 	_case "an agreeing tree passes"                  0 "agrees everywhere (3.10, 3.11; deprecated: 3.10)" _noop
 	_case "a leg missing from the release matrix"    1 "matrix.python" _drop_from_matrix
 	_case "a commented-out matrix is not a matrix"   1 "declares no \`strategy.matrix.python\`" _comment_out_matrix
@@ -522,6 +630,11 @@ self_test() {
 	_case "release.yaml drops the deprecation note"  1 "no \`py3.10 is DEPRECATED\` note" _release_drops_deprecation_note
 	_case "release.yaml deprecates a supported leg"  1 "calls py3.11 DEPRECATED" _release_deprecates_a_supported_line
 	_case "a release note with no EOL date"          1 "never states its EOL date" _release_note_omits_eol
+	_case "the schema names a stale Debian suite"    1 "python:3.10-slim-bookworm" _schema_names_a_stale_suite
+	_case "the docs name a stale Debian suite"       1 "python:3.10-slim-bookworm" _docs_name_a_stale_suite
+	_case "a suite-agnostic reason passes"           0 "agrees everywhere" _schema_is_suite_agnostic
+	_case "a stage-2 FROM with no suite"             1 "pins no Debian suite" _dockerfile_from_omits_the_suite
+	_case "no stage-2 python FROM at all"            1 "no \`FROM python:" _dockerfile_has_no_python_from
 
 	if [ "$fail" -eq 0 ]; then echo "self-test: PASS"; return 0; else echo "self-test: FAIL"; return 1; fi
 }

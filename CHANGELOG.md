@@ -47,7 +47,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Container image vulnerability scanning, with a policy designed to stay
   switched on.** `govulncheck` reads our Go module graph and says nothing about
-  the Debian packages inside `python:3.x-slim-bookworm`, or about a third-party
+  the Debian packages inside `python:3.x-slim`, or about a third-party
   Go binary baked into someone else's image — so OS-level and vendored-binary
   CVEs in the images we publish reached a human before they reached CI. Trivy
   now scans all three (`leoflow-server`, `leoflow-runtime` on every published
@@ -109,13 +109,92 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   documented in [Image
   scanning](https://leoflow.dev/contribute/image-vulnerability-scanning/).
 
+### Changed
+
+- **The task base image moves from Debian 12 (bookworm) to Debian 13 (trixie),
+  which takes its OpenSSL from 3.0.x to 3.5.x.** `python:3.x-slim` links CPython's
+  `ssl` module against the **system** OpenSSL, so this is the library every TLS
+  call made from inside a task terminates in — every provider hitting an API,
+  every `requests` call, every warehouse driver. bookworm ships OpenSSL 3.0.x,
+  whose **upstream support ended 2026-09-07**; trixie ships 3.5.x, supported to
+  **2030-04-08**. The suite itself is on the same trajectory: Debian 12 left
+  regular security support on 2026-06-11 and is now oldstable under the LTS
+  team's narrower, best-effort scope, while Debian 13 has full Security Team
+  support to 2028-08-09 and LTS to 2030-06-30. Verified on all four interpreter
+  variants (3.10 / 3.11 / 3.12 / 3.13): `openssl 3.5.7-1~deb13u2`, and the image
+  still ends on numeric UID `65532` with `import leoflow, leoflow_runtime`
+  working.
+
+  **This changes what your `system_packages:` resolves to.** That key emits
+  `apt-get install` into the generated DAG image, and apt now resolves against
+  trixie rather than bookworm — so package versions move, and a name or version
+  pin that only existed in bookworm has to be re-pinned. apt itself goes 2.6.1 →
+  3.0.3 and repository signature verification moves from GnuPG's `gpgv` to
+  Sequoia's `sqv` (the slim image now ships **no `gpgv` at all**); a
+  `system_packages:` install of `curl git libpq-dev ca-certificates` was compiled
+  and built end-to-end against the new base to confirm the path still works.
+  Debian's own repositories were exercised and verify cleanly; a **third-party**
+  apt repository added by a custom Dockerfile layer was not, and is the case to
+  watch, since `sqv` is stricter than `gpgv` about legacy key material. Such a
+  repository fails loudly at build time rather than silently, but it can fail.
+
+  **Your outbound TLS handshake changes shape, and this is the one to read if
+  your tasks talk to anything behind a corporate proxy.** OpenSSL 3.5 enables
+  the hybrid post-quantum group `X25519MLKEM768` by default and puts its key
+  share in the first flight, which takes the ClientHello from **517 to 1525
+  bytes** (measured, same `ssl.create_default_context()`, bookworm vs trixie).
+  Middleboxes, TLS-inspecting proxies and a few load balancers are known to
+  mishandle a first flight that no longer fits one segment; the symptom is a
+  handshake that hangs or resets **at task runtime in a pod, after a green
+  build** — against one endpoint, from inside your network, which is the hardest
+  shape of failure to attribute. If you hit it, restore the classical group list
+  by pointing `OPENSSL_CONF` at a file containing
+  `[system_default_sect]` / `Groups = x25519:secp256r1:x448:secp521r1:secp384r1`
+  (verified: that puts the ClientHello back to 517 bytes) and tell us, so the
+  base can carry the setting if it turns out to be common.
+
+  **What did NOT change is the certificate floor**, which is worth stating
+  because it is the thing people expect an OpenSSL major bump to break. Both
+  suites already run at security level 2. Measured on four probes against a
+  local TLS server, bookworm's 3.0.20 and trixie's 3.5.7 behave identically: an
+  RSA-1024 leaf, an RSA-1024 CA and a SHA-1-signed leaf are refused on both, and
+  TLS 1.1 is refused on both. If a legacy vendor certificate worked before this
+  release, it still works.
+
+  One silent behavior change is pinned rather than inherited: Debian's `passwd`
+  went 1:4.13 → 1:4.17.4 and the `HOME_MODE` default tightened with it, so the
+  unchanged `useradd` line produced `0755` on bookworm and `0700` on trixie.
+  `0700` is kept — a task pod runs as this very UID, so the owner traverses its
+  own home and no supported path breaks — but `runtime/Dockerfile` now sets the
+  mode explicitly, so it no longer moves when a distro default does. The
+  agent build stage stays on `golang:*-bookworm` deliberately; see the comment in
+  `runtime/Dockerfile` for why (nothing from it reaches a task pod).
+
+  **Rolling back is not symmetric across Python lines.** Pinning `base_image`
+  to a `v0.4.5` tag gets you the bookworm base again — for `py3.10`, `py3.11`
+  and `py3.12`. There is no `py3.13-v0.4.5`: that leg is published for the first
+  time in this release, so it only ever existed on trixie. A project on
+  `python_version: "3.13"` that needs bookworm has to move to `"3.12"` as well
+  as pin the older base.
+
+  **This path now has CI behind it.** Nothing in the repository built a DAG
+  image with `system_packages:` set, so the apt half of this change was
+  certified by a hand-run build and nothing re-certified it after merge. The
+  k3d operator E2E now compiles a project through the **generated** Dockerfile
+  (no hand-written one, which would have skipped the apt layer entirely),
+  asserts the package landed, and makes one real outbound HTTPS request from
+  inside the task pod. The same run asserts the base image's own properties —
+  the Debian suite (read out of `runtime/Dockerfile` rather than hardcoded), the
+  `65532:65532 0700` home dir, and the numeric final `USER` — each of which was
+  previously guarded by a comment and by nothing else.
+
 ### Deprecated
 
 - **`python_version: "3.10"` — the `py3.10` base image stops being published
   after 2026-10-31.** Python 3.10 reaches upstream end-of-life on that date, and
   `docker-library/python` stops rebuilding an EOL line the day after
   (`python:3.9-slim` was last rebuilt 2025-11-01, one day after 3.9 went EOL).
-  From November, `python:3.10-slim-bookworm` — and therefore
+  From November, `python:3.10-slim` — and therefore
   `ghcr.io/neochaotic/leoflow-runtime:py3.10` — receives no further OS security
   updates and accumulates unfixed CVEs indefinitely.
 

@@ -31,11 +31,23 @@ type SchemaChecker interface {
 	SchemaReady(ctx context.Context) error
 }
 
-// schemaProbeTimeout bounds the schema query so a wedged or slow database cannot
-// hold the handler past the kubelet's own probe timeout (the chart's
-// probes.readiness.timeoutSeconds default is 3s). Overrunning it turns a probe
-// that should report "not ready" into a probe that reports nothing at all.
-const schemaProbeTimeout = 2 * time.Second
+// probeBudget bounds the WHOLE readiness handler, not one step of it, so a
+// wedged or slow dependency cannot hold it past the kubelet's own probe timeout
+// (the chart's probes.readiness.timeoutSeconds default is 3s; the chart refuses
+// to render a value that does not leave room for this one — see
+// leoflow.readinessTimeoutSeconds). Overrunning it turns a probe that should
+// report "not ready" into a probe that reports nothing at all, and a probe that
+// reports nothing writes no log line naming the dependency, which is the
+// diagnostic the #1023 fix exists to provide.
+//
+// It is one deadline shared by every step because a per-step allowance is not a
+// budget: bounding the schema query at 2s while leaving Ping unbounded, once per
+// dependency, made the handler's worst case Ping(pg) + 2s + Ping(redis) with the
+// Pings limited only by whatever the kubelet allowed (#1040). Sharing it means
+// the last dependency checked gets what the earlier ones left, which is the
+// honest accounting: the caller's timeout is a property of the request, not of
+// each thing the request happens to touch.
+const probeBudget = 2 * time.Second
 
 func livenessHandler(c *gin.Context) {
 	// Deliberately trivial, and deliberately NOT schema-aware: liveness decides
@@ -61,9 +73,19 @@ func checkDependency(ctx context.Context, hc HealthChecker) error {
 	if !ok {
 		return nil
 	}
-	sctx, cancel := context.WithTimeout(ctx, schemaProbeTimeout)
-	defer cancel()
-	return sc.SchemaReady(sctx)
+	// No timeout of its own: ctx already carries the handler's whole-probe
+	// deadline (probeBudget), and adding a second one here would restore the
+	// per-step allowance this deliberately replaced.
+	return sc.SchemaReady(ctx)
+}
+
+// withProbeBudget derives the single deadline every dependency check shares.
+// Both /readyz and /api/v2/monitor/health go through it: they read the same
+// checks map and must not come to disagree about how long a dependency is
+// allowed to take, for the same reason they must not disagree about whether it
+// works.
+func withProbeBudget(c *gin.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.Request.Context(), probeBudget)
 }
 
 // unreadyDetail turns a dependency failure into the one phrase the caller is
@@ -91,9 +113,11 @@ func unreadyDetail(name string, err error) string {
 
 func readinessHandler(checks map[string]HealthChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx, cancel := withProbeBudget(c)
+		defer cancel()
 		for name, hc := range checks {
-			if err := checkDependency(c.Request.Context(), hc); err != nil {
-				slog.WarnContext(c.Request.Context(), "readiness check failed", "dependency", name, "error", err)
+			if err := checkDependency(ctx, hc); err != nil {
+				slog.WarnContext(ctx, "readiness check failed", "dependency", name, "error", err)
 				AbortProblem(c, http.StatusServiceUnavailable, "not ready", unreadyDetail(name, err))
 				return
 			}

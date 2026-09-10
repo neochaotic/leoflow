@@ -43,6 +43,21 @@ type Postgres struct {
 	// period for the whole duration of a migration. SchemaReady clears it when
 	// the condition clears, so a later upgrade is reported again.
 	dirtyAheadLogged atomic.Bool
+	// health is a dedicated one-connection pool used by Ping and the schema
+	// read, so a probe never queues behind application traffic. See
+	// newHealthPool for why that matters. Nil only in tests that construct a
+	// Postgres literal; probePool falls back to Pool in that case.
+	health *pgxpool.Pool
+}
+
+// probePool returns the pool health checks must use: the dedicated one when it
+// exists, the main pool otherwise. Every probe read goes through here so no
+// single call site can quietly put a probe back on the request path's pool.
+func (p *Postgres) probePool() *pgxpool.Pool {
+	if p.health != nil {
+		return p.health
+	}
+	return p.Pool
 }
 
 // poolConfig builds a pgxpool.Config from the database section.
@@ -80,7 +95,63 @@ func NewPostgres(ctx context.Context, cfg config.DatabaseSection) (*Postgres, er
 		pool.Close()
 		return nil, err
 	}
-	return &Postgres{Pool: pool, Queries: queries.New(pool), specs: newSpecCache()}, nil
+	// Opened here rather than wired by the caller: a probe that shares the
+	// request pool is the failure mode this exists to prevent (#1042), and a
+	// caller that forgets to attach it reintroduces that silently — the checks
+	// map still satisfies HealthChecker and every test still passes. pgxpool
+	// connects lazily, so this costs no boot latency.
+	health, herr := newHealthPool(ctx, cfg)
+	if herr != nil {
+		pool.Close()
+		return nil, herr
+	}
+	return &Postgres{Pool: pool, Queries: queries.New(pool), specs: newSpecCache(), health: health}, nil
+}
+
+// newHealthPool opens the dedicated pool behind Ping and the readiness schema
+// read.
+//
+// Readiness takes two pool acquires per probe — Ping borrows a connection, the
+// schema SELECT borrows another — and both used to come from the pool serving
+// requests. Under saturation, with that pool fully lent out, the probe blocks
+// waiting for a connection and fails on its own deadline. Every replica shares
+// the condition, because load is what caused it, so they fail readiness in the
+// same window and the Service can empty: a load-induced outage reported as a
+// database problem, and one that feeds itself as the pods left in rotation
+// absorb the load of the ones that left.
+//
+// One connection is enough. Both probe reads are single-row SELECTs against
+// schema_migrations issued back to back, so nothing here benefits from
+// concurrency; what it needs is to never queue behind anything else. Same
+// reasoning as NewLeaderPool, one layer over.
+func newHealthPool(ctx context.Context, cfg config.DatabaseSection) (*pgxpool.Pool, error) {
+	pc, err := singleConnPoolConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, pc)
+	if err != nil {
+		return nil, fmt.Errorf("creating health pool: %w", err)
+	}
+	return pool, nil
+}
+
+// singleConnPoolConfig builds a pool config capped at one connection.
+//
+// It clamps MinConns as well, which poolConfig sets from database.maxIdleConns
+// (chart default 5). pgxpool does not reject MinConns > MaxConns — its
+// background health check tries to open the difference and swallows the
+// resulting puddle.ErrNotAvailable — so leaving it produces a pool that works
+// while attempting four doomed connections every health-check period, forever.
+func singleConnPoolConfig(cfg config.DatabaseSection) (*pgxpool.Config, error) {
+	pc, err := poolConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	pc.MaxConns = 1
+	pc.MinConns = 0
+	pc.MinIdleConns = 0
+	return pc, nil
 }
 
 // connectWithRetry calls pingFn until it returns nil, the budget elapses, or
@@ -122,11 +193,10 @@ func connectWithRetry(ctx context.Context, pingFn func(context.Context) error, b
 // NewLeaderPool opens a dedicated single-connection pool for the scheduler
 // advisory lock, so the session holding the lock is stable (ADR 0009).
 func NewLeaderPool(ctx context.Context, cfg config.DatabaseSection) (*pgxpool.Pool, error) {
-	pc, err := poolConfig(cfg)
+	pc, err := singleConnPoolConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-	pc.MaxConns = 1
 	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		return nil, fmt.Errorf("creating leader pool: %w", err)
@@ -134,12 +204,17 @@ func NewLeaderPool(ctx context.Context, cfg config.DatabaseSection) (*pgxpool.Po
 	return pool, nil
 }
 
-// Ping checks database connectivity (used by /readyz).
+// Ping checks database connectivity (used by /readyz). It goes through
+// probePool, not Pool: a connectivity check that has to wait for the request
+// path to free a connection is reporting load, not connectivity.
 func (p *Postgres) Ping(ctx context.Context) error {
-	return p.Pool.Ping(ctx)
+	return p.probePool().Ping(ctx)
 }
 
-// Close releases the connection pool.
+// Close releases the connection pools.
 func (p *Postgres) Close() {
+	if p.health != nil {
+		p.health.Close()
+	}
 	p.Pool.Close()
 }

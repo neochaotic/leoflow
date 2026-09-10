@@ -110,6 +110,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scanning](https://leoflow.dev/contribute/image-vulnerability-scanning/).
 
 ### Changed
+- The chart refuses to render `probes.readiness.timeoutSeconds` below 3. The
+  server gives up at 2s so it answers before the kubelet does; a shorter kubelet
+  timeout silently inverted that. Lower `periodSeconds` or `failureThreshold` to
+  react faster ([#1041](https://github.com/neochaotic/leoflow/issues/1041)).
 
 - **The task base image moves from Debian 12 (bookworm) to Debian 13 (trixie),
   which takes its OpenSSL from 3.0.x to 3.5.x.** `python:3.x-slim` links CPython's
@@ -224,6 +228,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `leoflow.yaml` and rebuild — or, if you pinned `base_image`, repoint it to the
   matching `py3.11` tag and rebuild.
 ### Fixed
+- Readiness no longer fails because the control plane is busy. The probe's two
+  database reads now come from a dedicated one-connection pool instead of the
+  pool serving API traffic, so a saturated control plane can no longer make
+  every replica report itself unready in the same window and empty the Service
+  ([#1042](https://github.com/neochaotic/leoflow/issues/1042)).
+- `/readyz` and `/api/v2/monitor/health` bound the whole check at 2s instead of
+  granting a fresh 2s per dependency with `Ping` unbounded, so a slow dependency
+  produces a 503 that names it rather than a probe that reports nothing
+  ([#1040](https://github.com/neochaotic/leoflow/issues/1040)).
 
 - **`/readyz` no longer reports ready over a database with no schema (#1023).**
   The readiness probe pinged each dependency and nothing more, and a Postgres

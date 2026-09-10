@@ -388,7 +388,7 @@ spec:
               port: {{ $probePort }}
             initialDelaySeconds: {{ .ctx.Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .ctx.Values.probes.readiness.periodSeconds }}
-            timeoutSeconds: {{ .ctx.Values.probes.readiness.timeoutSeconds }}
+            timeoutSeconds: {{ include "leoflow.readinessTimeoutSeconds" .ctx }}
             failureThreshold: {{ .ctx.Values.probes.readiness.failureThreshold }}
           livenessProbe:
             httpGet:

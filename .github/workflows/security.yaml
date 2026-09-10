@@ -36,6 +36,22 @@ jobs:
       - name: Run govulncheck
         run: govulncheck -show verbose ./...
 
+      # `./...` matches packages in THIS module and nothing else, so it does not
+      # reach the second binary we publish: the golang-migrate CLI in
+      # `leoflow-migrate`, which deploy/Dockerfile.migrate compiles from
+      # upstream's own `cmd/migrate` main package at the version pinned in our
+      # go.mod (#1039). That package is inside our module graph but outside
+      # `./...`, which is precisely the gap that let the old third-party image
+      # accumulate 50 fixable CRITICAL/HIGH unseen — naming it here is what
+      # keeps the gap closed rather than merely reset.
+      #
+      # The build tags matter: golang-migrate registers database drivers behind
+      # them, so an untagged analysis would scan a binary with no drivers in it
+      # — not the one that ships. scripts/check-migrate-cli-build-tags.sh fails
+      # CI when these tags and the Dockerfile's disagree.
+      - name: Run govulncheck on the published migrate CLI
+        run: govulncheck -tags postgres,pgx5 -show verbose github.com/golang-migrate/migrate/v4/cmd/migrate
+
   # ─────────────────────────────────────────────────────────────────────
   # CodeQL: GitHub's semantic SAST (ADR 0014)
   # Free for public repos. Catches taint flow / control flow issues.
@@ -112,11 +128,12 @@ jobs:
   # closed by a `go get`. That makes it the only image where a PR-blocking gate
   # is fair — the person who turns it red is the person who can turn it green.
   #
-  # The counterpart images (leoflow-runtime, leoflow-migrate) are NOT gated here.
-  # They inherit Debian and Alpine package sets that acquire CVEs with no commit
-  # of ours, so a blocking gate on them would fail whoever pushes next rather
-  # than whoever can fix it, and would be switched off within a week. They are
-  # scanned on a schedule instead — see .github/workflows/image-scan.yaml.
+  # `leoflow-migrate` is gated by its own job below, on the same criterion, since
+  # #1039 made it true of that image too. `leoflow-runtime` is NOT gated here: it
+  # inherits a Debian package set that acquires CVEs with no commit of ours, so a
+  # blocking gate on it would fail whoever pushes next rather than whoever can fix
+  # it, and would be switched off within a week. It is scanned on a schedule
+  # instead — see .github/workflows/image-scan.yaml.
   #
   # Policy: fixable only, CRITICAL/HIGH blocks. `ignore-unfixed` is what makes
   # this sustainable: severity says how bad a finding is, fixability says whether
@@ -129,9 +146,10 @@ jobs:
   #
   # It has to be, or the gate is theatre. Trivy keys `stdlib` findings to the Go
   # toolchain recorded in the binary's build info, not to the module graph: the
-  # migrate image reports 21 HIGH `stdlib` findings purely because its vendored
-  # binary was built with go1.25.4. Scanning a binary built by a different
-  # toolchain than the release one therefore scans a different vulnerability set
+  # migrate image used to report 21 HIGH `stdlib` findings purely because the
+  # third-party binary it shipped was built with go1.25.4 (#1039). Scanning a
+  # binary built by a different toolchain than the release one scans a different
+  # vulnerability set
   # — blind to a stdlib CVE that affects the shipped toolchain, and red for one
   # that does not.
   #
@@ -228,6 +246,84 @@ jobs:
         with:
           scan-type: image
           image-ref: leoflow-server:ci
+          scanners: vuln
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          format: table
+
+  # ─────────────────────────────────────────────────────────────────────
+  # leoflow-migrate image scan — the second half of the BLOCKING gate.
+  #
+  # This image was the strongest argument for the report-only lane: it was
+  # `FROM migrate/migrate` — Alpine plus a third-party Go binary — and the daily
+  # scan found 84 fixable findings in it, 50 of them CRITICAL/HIGH, none of them
+  # produced or closeable by a commit here.
+  #
+  # #1039 changed what the image is, and therefore which lane it belongs in.
+  # `deploy/Dockerfile.migrate` now compiles golang-migrate's own CLI from the
+  # version in our go.mod onto distroless static, so the image is a Go binary we
+  # build plus our SQL files, with no OS package set underneath. Every finding
+  # it can now report is closed by a `go get` or a toolchain bump, which is the
+  # exact criterion the server gate above rests on — "the person who turns it
+  # red is the person who can turn it green".
+  #
+  # Unlike leoflow-server there is no separate release Dockerfile to reproduce:
+  # `deploy/Dockerfile.migrate` IS the file release.yaml builds and pushes, so
+  # building it here scans the published recipe rather than an approximation.
+  # Its pinned GO_VERSION defaults to the same toolchain as this workflow's, and
+  # the build stage cross-compiles, so the amd64 image built here is byte-for-
+  # byte the recipe the release runs.
+  #
+  # Baseline at the time of writing: ZERO findings under this policy (zero
+  # unfiltered, too), so the gate starts green and any red is a real regression.
+  # ─────────────────────────────────────────────────────────────────────
+  migrate-image:
+    name: Trivy (leoflow-migrate image)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # No build-args: the Dockerfile's own GO_VERSION default is the pin, and
+      # scripts/check-migrate-cli-build-tags.sh asserts it equals this
+      # workflow's GO_VERSION. Overriding it here would scan a toolchain the
+      # release does not use.
+      - name: Build leoflow-migrate image (the published Dockerfile)
+        run: docker build -f deploy/Dockerfile.migrate -t leoflow-migrate:ci .
+
+      # Report: every FIXABLE finding at any severity, so the Security tab shows
+      # the MEDIUM/LOW ones the gate deliberately does not block on.
+      - name: Trivy image scan (SARIF report)
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          scan-type: image
+          image-ref: leoflow-migrate:ci
+          scanners: vuln
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          format: sarif
+          output: trivy-migrate-image.sarif
+
+      # Same rule as every other scan here (#437): gate on every event, upload
+      # only off pull_request so a PR run cannot overwrite the main baseline.
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always() && github.event_name != 'pull_request'
+        with:
+          sarif_file: trivy-migrate-image.sarif
+          category: trivy-migrate-image
+
+      # Gate: fixable CRITICAL/HIGH only.
+      - name: Trivy image scan (gate)
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          scan-type: image
+          image-ref: leoflow-migrate:ci
           scanners: vuln
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml

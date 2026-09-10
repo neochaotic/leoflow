@@ -1139,6 +1139,26 @@ jobs:
         run: bash scripts/check-trivyignore-entries.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # The migrate CLI we ship and the migrate CLI CI scans must be one binary.
+  # `deploy/Dockerfile.migrate` compiles golang-migrate's `cmd/migrate` from the
+  # version in our go.mod (#1039) and security.yaml runs govulncheck over that
+  # package — but golang-migrate registers its database drivers behind BUILD
+  # TAGS, so a tag on one side and not the other means govulncheck reports clean
+  # on a package that is not the one in the image. Same for the Go pin: Trivy
+  # keys stdlib findings to the toolchain in the binary. Both drifts stay green
+  # while the coverage stops meaning anything, which is the shape of the gap
+  # #1039 closed.
+  # ─────────────────────────────────────────────────────────────────────
+  migrate-cli-build-tags:
+    name: Shipped migrate CLI is the one CI scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Check the migrate CLI build tags and toolchain pin
+        run: bash scripts/check-migrate-cli-build-tags.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # Script self-tests. cut-release.sh and the check-* gates hold logic nothing
   # else exercises — the tag normalizers, FLAKE_RE (which decides whether a red
   # run is rerun or stops a release), and the gates' ref comparisons. A defect

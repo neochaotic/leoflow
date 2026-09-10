@@ -111,6 +111,41 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`leoflow-migrate` is now built from our own `go.mod` instead of `FROM
+  migrate/migrate`, taking it from 50 fixable CRITICAL/HIGH findings to zero
+  (#1039).** The migration image shipped a third-party compiled binary, and
+  that binary ran in the Helm pre-install/pre-upgrade hook Job — the first
+  thing to touch a fresh cluster, holding the database DSN, before the control
+  plane starts. `govulncheck` could not see it. The distinction is narrow and
+  worth stating exactly: `golang-migrate` **is** in our `go.mod` and
+  govulncheck does cover the copy compiled into the Lite path, but the binary
+  inside `migrate/migrate` was built from upstream's dependency set with
+  upstream's toolchain, and nothing here read it. Two migrate binaries, one
+  covered.
+
+  `deploy/Dockerfile.migrate` now compiles golang-migrate's own `cmd/migrate`
+  package — upstream's CLI, not a reimplementation — at the version `go list -m`
+  reports, onto `gcr.io/distroless/static-debian13:nonroot`. Same entrypoint,
+  same flags, same subcommands, so the chart's Job is unchanged; the registered
+  driver list narrows to what Leoflow actually supports (`postgres`,
+  `postgresql`, `pgx5`, and the `file` source) instead of the two dozen the
+  general-purpose image carried. The image runs as UID 65532 in its own right
+  rather than relying on the chart to override a root default, and drops from
+  84 MB to 20 MB.
+
+  Bumping the `FROM` pin would have cleared the same 50 findings, and was
+  rejected for the reason it keeps working: it restores the blind spot on the
+  day the next advisory lands. Instead the binary is now inside the module
+  graph CI reads. `security.yaml` runs `govulncheck` over that package by name
+  (with the build tags the image is built with, or the drivers that actually
+  ship would go unanalysed), the image moves from the daily reporting scan to
+  the **blocking** Trivy gate alongside `leoflow-server` — it now meets the
+  same criterion, that every finding is closed by a commit here — and
+  `scripts/check-migrate-cli-build-tags.sh` fails CI if the build tags or the
+  Go toolchain pin ever stop matching between the Dockerfile and the scan. The
+  demo `docker compose` stack builds the same image rather than pulling a
+  separately pinned `migrate/migrate:v4.18.1`.
+
 - **The task base image moves from Debian 12 (bookworm) to Debian 13 (trixie),
   which takes its OpenSSL from 3.0.x to 3.5.x.** `python:3.x-slim` links CPython's
   `ssl` module against the **system** OpenSSL, so this is the library every TLS

@@ -169,7 +169,10 @@ is required.
 The pre-install/pre-upgrade Job runs `migrate -path <path> -database <url> up`
 using the default image **`ghcr.io/neochaotic/leoflow-migrate`** (built from
 `deploy/Dockerfile.migrate`, published by `.github/workflows/release.yaml` on
-every tag), which bundles the Leoflow `migrations/` at `migrations.path`.
+every tag), which bundles the Leoflow `migrations/` at `migrations.path`. The
+`migrate` binary in it is golang-migrate's own CLI, compiled from the version
+pinned in Leoflow's `go.mod` onto distroless static and running as UID 65532,
+rather than a third-party image pulled at build time (#1039).
 Override `migrations.image` to use your own, or set `migrations.enabled=false`
 to migrate out of band.
 

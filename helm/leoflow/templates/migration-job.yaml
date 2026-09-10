@@ -50,4 +50,39 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.database.existingSecret | default (include "leoflow.secretName" .) }}
                   key: databaseUrl
+          {{- with .Values.migrations.resources }}
+          # Requests, not just limits, and not omitted (#1053). Without them this
+          # pod is BestEffort, which costs two things a cluster test never shows:
+          # a namespace ResourceQuota on requests.cpu/requests.memory rejects it
+          # at admission — and since this is a pre-install hook, `helm install`
+          # fails outright — and BestEffort is first out under node pressure, so
+          # an eviction mid-`up` leaves schema_migrations.dirty and backoffLimit
+          # retries into "Dirty database version N. Fix and force version." on a
+          # cluster whose control plane has not started yet.
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.database.caConfigMap }}
+          # The same CA bundle the control plane gets (#1052). Both consume the
+          # SAME databaseUrl secret, so a DSN carrying
+          # `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` — which is
+          # the recipe values.yaml documents for managed Postgres — needs the file
+          # here too. Without it the server came up and this Job failed, and only
+          # against a real managed database: with no sslrootcert lib/pq falls back
+          # to the system trust store, which is why every in-cluster CI Postgres
+          # passed.
+          volumeMounts:
+            - name: db-ca
+              mountPath: /etc/leoflow/db-ca
+              readOnly: true
+          {{- end }}
+      {{- if .Values.database.caConfigMap }}
+      volumes:
+        - name: db-ca
+          configMap:
+            name: {{ .Values.database.caConfigMap }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+      {{- end }}
 {{- end -}}

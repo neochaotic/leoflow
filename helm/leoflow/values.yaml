@@ -217,7 +217,7 @@ database:
   url: ""
   # -- Name of a Secret with key `databaseUrl` (takes precedence over `url`).
   existingSecret: ""
-  # -- Name of a ConfigMap with key `ca.crt` holding the managed-Postgres CA bundle (#315). When set, the chart mounts it at `/etc/leoflow/db-ca/ca.crt` so the operator can pin `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` in the DSN. Empty (default) means TLS still works via `sslmode=require`, but the server cert is NOT verified — the connection is encrypted but MITM-vulnerable, the standard managed-DB posture before this knob.
+  # -- Name of a ConfigMap with key `ca.crt` holding the managed-Postgres CA bundle (#315). When set, the chart mounts it at `/etc/leoflow/db-ca/ca.crt` — in the control plane **and in the pre-install migration Job** (#1052), which reads the same DSN — so the operator can pin `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` in the DSN. Empty (default) means TLS still works via `sslmode=require`, but the server cert is NOT verified — the connection is encrypted but MITM-vulnerable, the standard managed-DB posture before this knob.
   caConfigMap: ""
   # -- Max concurrent open DB connections (Postgres-side load gate). Increase for high-throughput Pro deployments.
   maxOpenConns: 20
@@ -330,6 +330,14 @@ migrations:
     pullPolicy: IfNotPresent
   # -- Path inside the migrate image where the SQL files live. Must match the COPY destination in `deploy/Dockerfile.migrate`.
   path: /migrations
+  # -- Resources for the migration Job container. Small on purpose — the work is a few dozen DDL statements — but **not empty**: with no requests the pod is BestEffort, and a namespace `ResourceQuota` on `requests.cpu`/`requests.memory` then rejects it at admission, which fails `helm install` because this is a pre-install hook (#1053). BestEffort is also first out under node pressure, and an eviction part-way through leaves the schema dirty. Limits stay within **2:1** of requests on both axes on purpose: a namespace `LimitRange` with `maxLimitRequestRatio` is as common as a quota, and a wider ratio is rejected at admission — the same install-wedge the requests are here to prevent. Keep the limits: a quota on `limits.*` rejects a pod that declares none. Clearing the block needs explicit nulls (`--set-json 'migrations.resources=null'`, or `migrations:\n  resources: null` in a values file for Argo CD / Flux, which cannot pass `--set-json`) — Helm coalesces chart defaults back into a bare `{}`, so `{}` leaves these values in place.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
   # Pod security for the pre-install/pre-upgrade Job. K8s' restricted Pod
   # Security Admission requires runAsNonRoot + a numeric runAsUser on
   # every pod, including hook Jobs. The Deployment is hardened identically

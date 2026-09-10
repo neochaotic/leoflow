@@ -87,9 +87,15 @@ RUN set -eux; \
 # dated, self-expiring entries are what handle it — see security.yaml.
 #
 # The CA bundle is what makes `sslmode=verify-full` work against a managed
-# Postgres whose CA is in the system store. A DSN with an explicit
-# `sslrootcert=` path needs that file mounted; the migration Job does not mount
-# database.caConfigMap today, which the chart's own recipe assumes.
+# Postgres whose CA is already in the system store. A DSN with an explicit
+# `sslrootcert=` path needs that file mounted instead, and the chart now mounts
+# `database.caConfigMap` here as well as in the control plane (#1052) — it did
+# not, which broke the chart's own recipe against RDS and Cloud SQL.
+#
+# Note this binary links lib/pq for `postgres://`, while the control plane uses
+# pgx. Both read `sslrootcert=<path>` the same way, so the documented recipe is
+# safe on both — but `sslrootcert=system` is pgx-only, and writing it in the
+# shared DSN starts the server and fails this Job.
 FROM gcr.io/distroless/static-debian13:nonroot
 
 LABEL org.opencontainers.image.source="https://github.com/neochaotic/leoflow"

@@ -93,3 +93,102 @@ tests:
       - equal:
           path: spec.template.spec.automountServiceAccountToken
           value: false
+
+  # #1052 — the Job reads the SAME databaseUrl secret as the control plane, so a
+  # DSN carrying `sslrootcert=/etc/leoflow/db-ca/ca.crt` (the recipe values.yaml
+  # documents for managed Postgres) needs the bundle mounted here too. It was
+  # mounted only in the Deployment, so following the chart's own instructions
+  # produced a cluster where the server came up and the pre-install Job failed.
+  #
+  # Invisible to every cluster test in CI: with no sslrootcert lib/pq falls back
+  # to the system trust store, and an in-cluster Postgres is plaintext anyway.
+  # Only a managed database with a CA outside the system roots — RDS, Cloud SQL —
+  # reaches the failing path, so this assertion is the coverage.
+  - it: "issue #1052 — mounts the managed-Postgres CA bundle into the migration Job"
+    set:
+      database.url: postgres://h/d
+      database.caConfigMap: rds-ca-bundle
+    asserts:
+      # Whole-object `contains:`, mirroring deployment_test.yaml — literally the
+      # same content blocks, because the parity between the two templates IS the
+      # fix and this makes it a textual parity between the two tests.
+      #
+      # Index-based scalar asserts were not enough. They left `volumeMounts[0].name`
+      # and `configMap.items[0].key` unasserted, and both of those surviving
+      # mutations reproduce the wedge this PR exists to remove: a dangling mount
+      # name is rejected by apiserver validation so the hook Job cannot be
+      # created, and a wrong ConfigMap key parks the pod in ContainerCreating
+      # until Helm's timeout, since the container never starts and backoffLimit
+      # never engages.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: db-ca
+            configMap:
+              name: rds-ca-bundle
+              items:
+                - key: ca.crt
+                  path: ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: db-ca
+            mountPath: /etc/leoflow/db-ca
+            readOnly: true
+      # The mount has to be on the migrate container specifically — index 0 is
+      # only the migrate container while it is the only one.
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: migrate
+
+  - it: "issue #1052 — mounts nothing when no CA ConfigMap is configured"
+    set:
+      database.url: postgres://h/d
+    asserts:
+      # Filtered rather than asserting the whole list is absent, so adding an
+      # unrelated optional volume later does not fail this case for the wrong
+      # reason. Same shape as the Deployment's.
+      - notExists:
+          path: spec.template.spec.volumes[?(@.name == 'db-ca')]
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts[?(@.name == 'db-ca')]
+
+  # #1053 — requests, not just limits. Without requests the pod is BestEffort: a
+  # namespace ResourceQuota on requests.cpu/requests.memory rejects it at
+  # admission, and because this is a pre-install hook that fails `helm install`
+  # outright. BestEffort is also evicted first under node pressure, and an
+  # eviction mid-`up` leaves schema_migrations dirty on a cluster whose control
+  # plane has not started yet.
+  - it: "issue #1053 — the migration Job requests CPU and memory (not BestEffort)"
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 128Mi
+      # The limits are pinned, not merely asserted to exist. `exists:` cannot
+      # see a limit BELOW its request, which the apiserver rejects outright —
+      # the same wedge, reached by a typo. The 2:1 ratio is also load-bearing:
+      # a namespace LimitRange with maxLimitRequestRatio rejects anything wider.
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+
+  - it: "issue #1053 — the operator can raise the migration Job's resources"
+    set:
+      database.url: postgres://h/d
+      migrations.resources.requests.cpu: 250m
+      migrations.resources.requests.memory: 512Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 250m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 512Mi

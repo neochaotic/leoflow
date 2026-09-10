@@ -130,6 +130,7 @@ jobs:
             --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
             --set agentTLS.serverCertSecret=leoflow-agent-tls-ci \
             --set agentTLS.caConfigMap=leoflow-agent-ca-ci \
+            --set database.caConfigMap=leoflow-db-ca-ci \
             | kubeconform -strict -summary -ignore-missing-schemas \
                 -schema-location default
 
@@ -169,6 +170,19 @@ jobs:
           # state — the migrate binary does NOT retry on connection refused.
           kubectl -n leoflow exec deploy/postgres -- pg_isready -U leoflow -d leoflow -t 60
           kubectl -n leoflow exec deploy/redis -- redis-cli ping | grep -q PONG
+          # A CA bundle for database.caConfigMap (#1052). The DSN below stays
+          # sslmode=disable — this is not testing TLS, it is testing that the
+          # volume kubelet has to populate is declared correctly. Two of the
+          # ways to get that wrong render valid YAML, pass kubeconform and pass
+          # helm-unittest: a dangling volumeMount name (apiserver rejects the
+          # Job, so the pre-install hook is never created) and a projected key
+          # the ConfigMap does not have (the pod parks in ContainerCreating
+          # until Helm's timeout, because the container never starts and
+          # backoffLimit never engages). Both surface here in seconds; without
+          # this the first place they surface is a real RDS install.
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /dev/null \
+            -out /tmp/ci-ca.crt -days 1 -subj "/CN=leoflow-ci-db-ca"
+          kubectl -n leoflow create configmap leoflow-db-ca-ci --from-file=ca.crt=/tmp/ci-ca.crt
 
       # Zero-prereq agent TLS (#690). This kind cluster has NO cert-manager and
       # NO pre-created Secret — exactly the fresh-cloud-cluster case #690 is
@@ -190,6 +204,7 @@ jobs:
             --set auth.jwtSecret=ci-jwt-secret \
             --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
             --set agentTLS.enabled=true \
+            --set database.caConfigMap=leoflow-db-ca-ci \
             --set bootstrap.password=ci-admin \
             --wait --timeout 240s
           kubectl -n leoflow rollout status deploy/leoflow --timeout=120s

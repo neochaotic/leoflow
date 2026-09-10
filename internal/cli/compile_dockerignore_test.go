@@ -101,14 +101,14 @@ func TestUserDockerignoreIsMergedNotReplaced(t *testing.T) {
 }
 
 // TestDbtArtifactsAreScopedToTheirProject is the #1013 regression. The compile
-// runs a host-side `dbt parse`, which writes into the project it parsed, and the
-// wholesale COPY then bakes the result: `.user.yml` (dbt's anonymous-usage
+// runs a host-side `dbt parse`, which writes into the project it parsed, and
+// the wholesale COPY then bakes the result: `.user.yml` (dbt's anonymous-usage
 // cookie, a stable UUID identifying the BUILD HOST, read by the in-pod dbt so
 // every pod reports as that user) and `logs/dbt.log` (absolute host paths — the
 // #993 class arriving through a door the entrypoint assertions do not watch).
 //
 // Scoped to the project directories rather than added to the defaults, because
-// `logs` and `target` are ordinary names a non-dbt project may want shipped.
+// `logs` is an ordinary name a non-dbt project may want shipped.
 func TestDbtArtifactsAreScopedToTheirProject(t *testing.T) {
 	dir := writeCtx(t, map[string]string{"dag.py": "x"})
 	cfg := &domain.LeoflowConfig{DagID: "d"}
@@ -119,18 +119,72 @@ func TestDbtArtifactsAreScopedToTheirProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readIgnore(t, dir)
-	for _, want := range []string{
-		"transform/target", "transform/logs", "transform/.user.yml",
-		"transform/dbt_packages", "transform/profiles.yml",
-	} {
+	for _, want := range []string{"transform/logs", "transform/.user.yml"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q — a dbt build artifact would be baked\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"\nlogs\n", "\ntarget\n"} {
-		if strings.Contains(got, unwanted) {
-			t.Errorf("unscoped %q would exclude an unrelated directory in a non-dbt tree\n%s", unwanted, got)
+	if strings.Contains(got, "\nlogs\n") {
+		t.Errorf("unscoped \"logs\" would exclude an unrelated directory in a non-dbt tree\n%s", got)
+	}
+}
+
+// TestDbtInputsAreNeverExcluded is the regression for what the dbt e2e caught
+// after the first version of this shipped. Three paths were excluded as
+// "artifacts" that are each a deliberate INPUT in a configuration that exists:
+//
+//   - `target/` holds the manifest `dbt.manifest` points at, documented as "a
+//     pre-built manifest.json (the Pro/CI baked path)". The e2e's own fixture
+//     sets `manifest: target/manifest.json`.
+//   - `dbt_packages/` is where `dbt deps` installs; resolving on the build host
+//     and baking the result is reasonable and reproducible.
+//   - `profiles.yml` is the BYO-profiles pattern — ship your own, point
+//     DBT_PROFILES_DIR at it. The runtime generates one from a Leoflow
+//     connection when it HAS one; the e2e has none.
+//
+// The claim that justified excluding profiles.yml ("the runtime always
+// generates its own and never reads one from the project") was read off a
+// single code path and was false for the configurations that exist. This test
+// is here so the next person tempted by the same tidy-up finds out in seconds
+// instead of in a k3d run.
+func TestDbtInputsAreNeverExcluded(t *testing.T) {
+	dir := writeCtx(t, map[string]string{"dag.py": "x"})
+	cfg := &domain.LeoflowConfig{DagID: "d"}
+	cfg.Dbt = &domain.DbtConfig{Project: ".", Manifest: "target/manifest.json"}
+	cfg.ApplyDefaults()
+
+	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got := readIgnore(t, dir)
+	for _, input := range []string{"target", "dbt_packages", "profiles.yml"} {
+		for _, form := range []string{"\n" + input + "\n", "\n./" + input + "\n"} {
+			if strings.Contains(got, form) {
+				t.Errorf("%q is excluded, but it is a deliberate dbt input — this breaks the manifest, dbt deps or BYO profiles path\n%s", input, got)
+			}
 		}
+	}
+}
+
+// TestByoProfilesIsWarnedNotDropped: profiles.yml is credential-shaped, so it
+// gets the same treatment as .env — the author is told, not overruled.
+func TestByoProfilesIsWarnedNotDropped(t *testing.T) {
+	dir := writeCtx(t, map[string]string{"transform/profiles.yml": "password: s3cret", "dag.py": "x"})
+	cfg := &domain.LeoflowConfig{DagID: "d"}
+	cfg.DbtGroups = map[string]*domain.DbtConfig{"a": {Project: "transform"}}
+	cfg.ApplyDefaults()
+
+	var out bytes.Buffer
+	if _, err := ensureDockerignore(&out, dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Found in the dbt project directory, not just the context root: that is
+	// where profiles.yml lives, next to dbt_project.yml.
+	if !strings.Contains(out.String(), "transform/profiles.yml") {
+		t.Errorf("no warning for a BYO profiles.yml inside the dbt project, got %q", out.String())
+	}
+	if strings.Contains(readIgnore(t, dir), "transform/profiles.yml") {
+		t.Error("the BYO profiles.yml was excluded; that breaks a project that points DBT_PROFILES_DIR at it")
 	}
 }
 

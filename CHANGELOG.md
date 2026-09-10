@@ -311,17 +311,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   It is now materialized as a `.dockerignore` for the duration of the build —
   merged with yours if you have one, restored afterwards
   ([#995](https://github.com/neochaotic/leoflow/issues/995)).
-- **dbt build artifacts no longer ship in DAG images.** The compile runs a
-  host-side `dbt parse`, which writes into the project it parsed; the wholesale
-  `COPY` then baked `.user.yml` — dbt's anonymous-usage cookie, a stable UUID
-  identifying the build host, read by the in-pod dbt so every pod reported as
-  that user — and `logs/dbt.log`, carrying absolute host paths. Also `target/`,
-  `dbt_packages/` and `profiles.yml`, the last of which is warehouse credentials
-  the runtime never reads because it always generates its own
-  ([#1013](https://github.com/neochaotic/leoflow/issues/1013)).
+- **dbt's host-side parse artifacts no longer ship in DAG images.** The compile
+  runs `dbt parse` on the host, which writes into the project it parsed; the
+  wholesale `COPY` then baked `.user.yml` — dbt's anonymous-usage cookie, a
+  stable UUID identifying the build host, read by the in-pod dbt so every pod
+  reported as that user — and `logs/dbt.log`, carrying absolute host paths
+  ([#1013](https://github.com/neochaotic/leoflow/issues/1013)). `target/`,
+  `dbt_packages/` and `profiles.yml` are deliberately left in place: each is a
+  real input in a configuration people use (the `dbt.manifest` path, host-side
+  `dbt deps`, and BYO profiles with `DBT_PROFILES_DIR`).
 - A build now warns when a credential-shaped file (`.env`, `.netrc`,
-  `credentials.json`, a service-account key, `id_rsa`) is in the context and not
-  excluded. It is a warning rather than a silent exclusion because a `.env` can
+  `credentials.json`, a service-account key, `id_rsa`, a BYO `profiles.yml`) is
+  in the context and not excluded — checking each dbt project directory as well
+  as the context root, since that is where `profiles.yml` lives. It is a warning rather than a silent exclusion because a `.env` can
   be a legitimate input, and breaking `load_dotenv()` far from its cause is the
   wrong trade in the other direction.
 - The pre-install migration Job now mounts `database.caConfigMap`. It reads the

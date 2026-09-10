@@ -361,17 +361,23 @@ ends. Your rules come first and Leoflow's last, which means `exclude_paths` has
 the final word: a `!` re-include in your `.dockerignore` cannot silently defeat
 an exclusion you declared in `leoflow.yaml`.
 
-For a dbt project, the artifacts a host-side `dbt parse` leaves behind are
-excluded automatically, scoped to each project directory: `target/`, `logs/`,
-`dbt_packages/`, `.user.yml` and `profiles.yml`. Two of those matter beyond
-image size — `.user.yml` is dbt's anonymous-usage cookie identifying *your*
-machine, and `logs/dbt.log` carries absolute paths from the build host. The
-runtime always generates its own `profiles.yml` from the connection into a
-private directory, so a baked one is a credential nothing will ever read.
+For a dbt project, two things a host-side `dbt parse` leaves behind are
+excluded automatically, scoped to each project directory: `logs/` and
+`.user.yml`. Both matter beyond image size — `.user.yml` is dbt's
+anonymous-usage cookie identifying *your* machine, and it is read by the in-pod
+dbt, so every pod from that image reports as you; `logs/dbt.log` carries
+absolute paths from the build host.
 
-Credentials are **not** excluded for you. A `.env` can be a legitimate input —
-a DAG calling `load_dotenv()` reads it at run time — so dropping it silently
-would break that project far from the cause. Instead the build warns:
+Nothing else in a dbt project is excluded, deliberately. `target/` holds the
+manifest `dbt.manifest` points at, `dbt_packages/` is where `dbt deps`
+installs, and `profiles.yml` may be a BYO profile you point `DBT_PROFILES_DIR`
+at — each is a real input in a configuration people use, so excluding them
+would break working projects.
+
+Credentials are **not** excluded for you either. A `.env` can be a legitimate
+input — a DAG calling `load_dotenv()` reads it at run time — and so can a BYO
+`profiles.yml`, so dropping either silently would break that project far from
+the cause. Instead the build warns:
 
 ```console
 warning: .env is in the build context and will be baked into the image, which is

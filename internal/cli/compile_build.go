@@ -264,7 +264,7 @@ func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig) (cle
 	// Concatenated into a fresh slice: append onto cfg.ExcludePaths would write
 	// through to the caller's config whenever that slice has spare capacity.
 	patterns := slices.Concat(cfg.ExcludePaths, dbtBuildArtifacts(cfg))
-	warnUnexcludedSecrets(w, dir, patterns)
+	warnUnexcludedSecrets(w, dir, cfg, patterns)
 	merged, changed := mergeDockerignore(original, patterns)
 	if !changed {
 		return noop, nil
@@ -286,30 +286,43 @@ func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig) (cle
 	}, nil
 }
 
-// dbtBuildArtifacts lists the files a host-side `dbt parse` leaves inside each
-// dbt project directory, scoped to those directories.
+// dbtBuildArtifacts lists what a host-side `dbt parse` leaves inside each dbt
+// project directory that is provably never read back, scoped to those
+// directories.
 //
-// The compile runs `dbt parse` on the host before building, and that parse
-// writes into the project it parsed. Wholesale-COPYing the project then bakes
-// the result (#1013). Measured on an image the e2e builds:
+// The compile runs `dbt parse` on the host, that parse writes into the project
+// it parsed, and a wholesale COPY then bakes the result (#1013). Measured on an
+// image the e2e builds:
 //
-//   - `.user.yml` is dbt's anonymous-usage cookie: a stable UUID identifying the
-//     BUILD HOST's dbt user, shared with everyone who pulls the image, and read
-//     by the in-pod dbt so every pod reports as that same user.
+//   - `.user.yml` is dbt's anonymous-usage cookie: a stable UUID identifying
+//     the BUILD HOST's dbt user, shared with everyone who pulls the image, and
+//     read by the in-pod dbt so every pod reports as that same user.
 //   - `logs/dbt.log` carries absolute host paths — four of them in that build.
 //     That is the #993 class (a build-host path baked into a published
-//     artifact) arriving through a door the entrypoint assertions do not watch:
-//     #993 was about the entrypoint, the entrypoint is clean, and the image
-//     leaked the paths anyway. In CI it is worse, because the path names the
-//     runner's workspace.
-//   - `target/` is dead weight: the base image points DBT_TARGET_PATH at /tmp,
-//     so the pod never reads a baked target/.
-//   - `dbt_packages/` is host-resolved dependency source; the image installs
-//     its own.
+//     artifact) arriving through a door the entrypoint assertions do not watch.
+//
+// **Only those two.** An earlier version of this also excluded `target/`,
+// `dbt_packages/` and `profiles.yml`, and the dbt e2e caught all three as
+// regressions — correctly, because each of them CAN be a deliberate input:
+//
+//   - `target/` holds the manifest that `dbt.manifest` points at. The field is
+//     documented as "a pre-built manifest.json (the Pro/CI baked path)", and
+//     the e2e's own fixture sets `manifest: target/manifest.json`.
+//   - `dbt_packages/` is where `dbt deps` installs. A project that resolves
+//     dependencies on the build host and bakes them is doing something
+//     reasonable and reproducible.
+//   - `profiles.yml` is the BYO-profiles pattern: ship your own and point
+//     DBT_PROFILES_DIR at it. The runtime generates a profiles.yml from a
+//     Leoflow connection when it HAS one — it does not have one here, and
+//     "the runtime always generates its own" was a claim read off a single
+//     code path rather than checked against the configurations that exist.
+//
+// profiles.yml is credential-shaped, so it is warned about instead — the same
+// trade as .env: tell the author, do not decide for them.
 //
 // Scoped per project directory rather than added to the default ExcludePaths,
-// because `logs` and `target` are ordinary names a non-dbt project may want
-// shipped. A project with no dbt gets none of these.
+// because `logs` is an ordinary name a non-dbt project may want shipped. A
+// project with no dbt gets none of these.
 func dbtBuildArtifacts(cfg *domain.LeoflowConfig) []string {
 	dirs := dbtGroupProjectDirs(cfg)
 	if cfg.Dbt != nil && cfg.Dbt.Project != "" {
@@ -320,13 +333,7 @@ func dbtBuildArtifacts(cfg *domain.LeoflowConfig) []string {
 	}
 	slices.Sort(dirs)
 
-	// profiles.yml is here rather than in the generic excludes because it is
-	// provably dead in the image, not merely unwanted: the runtime ALWAYS
-	// generates profiles.yml into DBT_PROFILES_DIR — a private 0700 scratch dir
-	// — from the connection, and never reads one out of the project
-	// (runtime/python/leoflow_runtime/__main__.py). So a baked profiles.yml is
-	// warehouse credentials in a published artifact that nothing will ever load.
-	artifacts := []string{"target", "logs", ".user.yml", "dbt_packages", "profiles.yml"}
+	artifacts := []string{"logs", ".user.yml"}
 	out := make([]string, 0, len(dirs)*len(artifacts))
 	for _, dir := range dirs {
 		for _, a := range artifacts {
@@ -343,37 +350,53 @@ func dbtBuildArtifacts(cfg *domain.LeoflowConfig) []string {
 // secretishNames are files whose presence in a build context is nearly always a
 // mistake, and whose contents are nearly always a credential.
 //
-// They are NOT excluded by default. `.env` in particular can be a legitimate
-// input — a DAG calling load_dotenv() reads it at run time — and silently
-// dropping it would break that project with a failure far from its cause. So
-// the author is told, once per build, in time to act. Choosing for them is the
-// wrong trade; letting a password ship unnoticed is also the wrong trade, and a
-// warning is the only option that is neither.
-var secretishNames = []string{".env", ".env.local", ".netrc", "credentials.json", "service-account.json", "id_rsa"}
+// They are NOT excluded. Each of them can be a legitimate input — a DAG calling
+// load_dotenv() reads `.env` at run time, and a dbt project may ship its own
+// profiles.yml with DBT_PROFILES_DIR pointed at it — so dropping one silently
+// would break that project with a failure far from its cause. Choosing for the
+// author is the wrong trade; letting a password ship unnoticed is also the
+// wrong trade; a warning is the only option that is neither.
+var secretishNames = []string{".env", ".env.local", ".netrc", "credentials.json", "service-account.json", "id_rsa", "profiles.yml"}
 
-// warnUnexcludedSecrets prints a note for any secret-looking file that the
-// build context still carries after exclude_paths is applied.
+// warnUnexcludedSecrets prints a note for any secret-looking file the build
+// context still carries after exclude_paths is applied.
 //
-// Scans the context root only. A recursive walk of an arbitrary project is
-// slow, and the root is where these files actually live — dbt's own credential
-// file is handled precisely, per project directory, by dbtBuildArtifacts.
-func warnUnexcludedSecrets(w io.Writer, dir string, patterns []string) {
+// Looks in the context root and in each dbt project directory. Not a recursive
+// walk: that is slow on an arbitrary project and noisy, and those are the two
+// places these files actually live — profiles.yml in particular belongs next to
+// dbt_project.yml, which is not the root when the project is a subdirectory.
+func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, patterns []string) {
 	excluded := make(map[string]bool, len(patterns))
 	for _, p := range patterns {
 		excluded[strings.TrimSpace(p)] = true
 	}
-	for _, name := range secretishNames {
-		if excluded[name] {
-			continue
+
+	places := []string{"."}
+	places = append(places, dbtGroupProjectDirs(cfg)...)
+	if cfg.Dbt != nil && cfg.Dbt.Project != "" {
+		places = append(places, filepath.Clean(cfg.Dbt.Project))
+	}
+
+	seen := make(map[string]bool)
+	for _, place := range places {
+		for _, name := range secretishNames {
+			rel := name
+			if place != "." {
+				rel = place + "/" + name
+			}
+			if seen[rel] || excluded[rel] {
+				continue
+			}
+			seen[rel] = true
+			info, err := os.Stat(filepath.Join(dir, rel))
+			if err != nil || info.IsDir() {
+				continue
+			}
+			//nolint:errcheck // a warning that cannot be delivered must not fail the build
+			fmt.Fprintf(w, "warning: %s is in the build context and will be baked into the image, "+
+				"which is pushed to a registry and pulled by every pod that runs this DAG. "+
+				"If it holds credentials, add %q to exclude_paths in leoflow.yaml.\n", rel, rel)
 		}
-		info, err := os.Stat(filepath.Join(dir, name))
-		if err != nil || info.IsDir() {
-			continue
-		}
-		//nolint:errcheck // a warning that cannot be delivered must not fail the build
-		fmt.Fprintf(w, "warning: %s is in the build context and will be baked into the image, "+
-			"which is pushed to a registry and pulled by every pod that runs this DAG. "+
-			"If it holds credentials, add %q to exclude_paths in leoflow.yaml.\n", name, name)
 	}
 }
 

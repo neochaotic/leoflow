@@ -268,6 +268,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `leoflow.yaml` and rebuild — or, if you pinned `base_image`, repoint it to the
   matching `py3.11` tag and rebuild.
 ### Fixed
+- The pre-install migration Job now mounts `database.caConfigMap`. It reads the
+  same DSN as the control plane, so the chart's own managed-Postgres recipe —
+  `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt` — produced an
+  install where the server came up and the Job failed. Only reachable against a
+  database whose CA is outside the system trust store, which is why no
+  in-cluster test saw it
+  ([#1052](https://github.com/neochaotic/leoflow/issues/1052)).
+- The migration Job declares CPU and memory requests, so it is no longer
+  BestEffort. A namespace `ResourceQuota` on `requests.*` rejected it at
+  admission and failed `helm install` outright, and eviction under node pressure
+  could leave the schema dirty mid-migration
+  ([#1053](https://github.com/neochaotic/leoflow/issues/1053)).
 - Readiness no longer fails because the control plane is busy. The probe's two
   database reads now come from a dedicated one-connection pool instead of the
   pool serving API traffic, so a saturated control plane can no longer make

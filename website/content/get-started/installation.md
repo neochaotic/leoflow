@@ -240,6 +240,33 @@ values you must supply are your two datastore URLs and the three credentials.
 [latest release](https://github.com/neochaotic/leoflow/releases) tag with the
 leading `v` stripped (per SemVer2).
 
+#### If your Postgres uses a private CA (RDS, Cloud SQL, Azure)
+
+`sslmode=verify-full` above verifies the server certificate against the
+**system** trust store. That is right for a Postgres whose certificate chains to
+a public CA — and wrong for most managed offerings, which sign with a provider
+or per-instance CA that is not in any system root store. Against those you get a
+certificate-verification failure at connect time.
+
+Publish the provider's CA bundle as a ConfigMap with the key `ca.crt`, point
+`database.caConfigMap` at it, and add `sslrootcert` to the DSN:
+
+```bash
+kubectl -n leoflow create configmap rds-ca --from-file=ca.crt=./global-bundle.pem
+
+helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
+  -n leoflow --create-namespace \
+  --set database.caConfigMap=rds-ca \
+  --set database.url='postgres://USER:PASS@HOST:5432/leoflow?sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt' \
+  ...
+```
+
+The chart mounts the bundle at that path in **both** the control plane and the
+pre-install migration Job. Both read the same DSN, so both need the file —
+before this was fixed the server started and the migration Job failed, which
+surfaced as `Job Failed` from `helm install` with the real error only in the
+Job pod's log.
+
 {{% alert title="OCI chart is the primary path" color="info" %}}
 The OCI chart above is **published** and is the recommended way to install
 Pro — it carries the auto-generated agent TLS by default. [Installing from

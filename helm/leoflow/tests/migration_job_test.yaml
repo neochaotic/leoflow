@@ -93,3 +93,72 @@ tests:
       - equal:
           path: spec.template.spec.automountServiceAccountToken
           value: false
+
+  # #1052 — the Job reads the SAME databaseUrl secret as the control plane, so a
+  # DSN carrying `sslrootcert=/etc/leoflow/db-ca/ca.crt` (the recipe values.yaml
+  # documents for managed Postgres) needs the bundle mounted here too. It was
+  # mounted only in the Deployment, so following the chart's own instructions
+  # produced a cluster where the server came up and the pre-install Job failed.
+  #
+  # Invisible to every cluster test in CI: with no sslrootcert lib/pq falls back
+  # to the system trust store, and an in-cluster Postgres is plaintext anyway.
+  # Only a managed database with a CA outside the system roots — RDS, Cloud SQL —
+  # reaches the failing path, so this assertion is the coverage.
+  - it: "issue #1052 — mounts the managed-Postgres CA bundle into the migration Job"
+    set:
+      database.url: postgres://h/d
+      database.caConfigMap: rds-ca-bundle
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /etc/leoflow/db-ca
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].readOnly
+          value: true
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: rds-ca-bundle
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.items[0].path
+          value: ca.crt
+
+  - it: "issue #1052 — mounts nothing when no CA ConfigMap is configured"
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+
+  # #1053 — requests, not just limits. Without requests the pod is BestEffort: a
+  # namespace ResourceQuota on requests.cpu/requests.memory rejects it at
+  # admission, and because this is a pre-install hook that fails `helm install`
+  # outright. BestEffort is also evicted first under node pressure, and an
+  # eviction mid-`up` leaves schema_migrations dirty on a cluster whose control
+  # plane has not started yet.
+  - it: "issue #1053 — the migration Job requests CPU and memory (not BestEffort)"
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 50m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+      - exists:
+          path: spec.template.spec.containers[0].resources.limits
+
+  - it: "issue #1053 — the operator can raise the migration Job's resources"
+    set:
+      database.url: postgres://h/d
+      migrations.resources.requests.cpu: 250m
+      migrations.resources.requests.memory: 512Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 250m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 512Mi

@@ -61,15 +61,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `go get`: it is scanned on **every PR and push, and the job goes red**
   (baseline today: zero findings, so it starts green). Whether that red *blocks
   a merge* is a branch-protection setting — a new job is not a required check
-  until somebody adds it. `leoflow-runtime` and `leoflow-migrate` inherit
-  package sets we do not author, where a CVE lands because a distro security
-  team published an advisory and not because anyone pushed anything — blocking
-  those would fail whoever opens the next unrelated PR while the person who can
-  fix it is elsewhere. They are scanned **daily, never block, and maintain a
+  until somebody adds it. `leoflow-runtime` inherits a Debian package set we do
+  not author, where a CVE lands because a distro security team published an
+  advisory and not because anyone pushed anything — blocking it would fail
+  whoever opens the next unrelated PR while the person who can fix it is
+  elsewhere. It is scanned **daily, never blocks, and maintains a
   single self-closing tracking issue** whose body is refreshed each run, which
   comments only when the finding set actually changes, which reopens rather than
   duplicates when findings return, and which leaves the issue alone once a human
   has reopened it.
+
+  `leoflow-migrate` started in that lane and moved to the blocking one in this
+  same release: rebuilding it from our own `go.mod` onto distroless static
+  (below) changed what the image is, so the criterion that put it in the
+  report-only lane stopped describing it.
 
   The server gate scans **the artifact GoReleaser publishes** — the release
   Dockerfile, with a binary built by the release toolchain — not the
@@ -114,6 +119,41 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server gives up at 2s so it answers before the kubelet does; a shorter kubelet
   timeout silently inverted that. Lower `periodSeconds` or `failureThreshold` to
   react faster ([#1041](https://github.com/neochaotic/leoflow/issues/1041)).
+
+- **`leoflow-migrate` is now built from our own `go.mod` instead of `FROM
+  migrate/migrate`, taking it from 50 fixable CRITICAL/HIGH findings to zero
+  (#1039).** The migration image shipped a third-party compiled binary, and
+  that binary ran in the Helm pre-install/pre-upgrade hook Job — the first
+  thing to touch a fresh cluster, holding the database DSN, before the control
+  plane starts. `govulncheck` could not see it. The distinction is narrow and
+  worth stating exactly: `golang-migrate` **is** in our `go.mod` and
+  govulncheck does cover the copy compiled into the Lite path, but the binary
+  inside `migrate/migrate` was built from upstream's dependency set with
+  upstream's toolchain, and nothing here read it. Two migrate binaries, one
+  covered.
+
+  `deploy/Dockerfile.migrate` now compiles golang-migrate's own `cmd/migrate`
+  package — upstream's CLI, not a reimplementation — at the version `go list -m`
+  reports, onto `gcr.io/distroless/static-debian13:nonroot`. Same entrypoint,
+  same flags, same subcommands, so the chart's Job is unchanged; the registered
+  driver list narrows to what Leoflow actually supports (`postgres`,
+  `postgresql`, `pgx5`, and the `file` source) instead of the two dozen the
+  general-purpose image carried. The image runs as UID 65532 in its own right
+  rather than relying on the chart to override a root default, and drops from
+  84 MB to 20 MB.
+
+  Bumping the `FROM` pin would have cleared the same 50 findings, and was
+  rejected for the reason it keeps working: it restores the blind spot on the
+  day the next advisory lands. Instead the binary is now inside the module
+  graph CI reads. `security.yaml` runs `govulncheck` over that package by name
+  (with the build tags the image is built with, or the drivers that actually
+  ship would go unanalysed), the image moves from the daily reporting scan to
+  the **blocking** Trivy gate alongside `leoflow-server` — it now meets the
+  same criterion, that every finding is closed by a commit here — and
+  `scripts/check-migrate-cli-build-tags.sh` fails CI if the build tags or the
+  Go toolchain pin ever stop matching between the Dockerfile and the scan. The
+  demo `docker compose` stack builds the same image rather than pulling a
+  separately pinned `migrate/migrate:v4.18.1`.
 
 - **The task base image moves from Debian 12 (bookworm) to Debian 13 (trixie),
   which takes its OpenSSL from 3.0.x to 3.5.x.** `python:3.x-slim` links CPython's

@@ -73,9 +73,13 @@ jobs:
   # ghcr.io/neochaotic/leoflow-migrate:<tag>; this job publishes that image,
   # multi-arch, on every release tag in parallel with install-smoke.
   #
-  # Dockerfile.migrate is `FROM migrate/migrate + COPY migrations/` — no Go
-  # binary, so GoReleaser's dockers block (which expects a built artifact) is
-  # overkill. docker/build-push-action is the simpler shape here.
+  # Dockerfile.migrate builds golang-migrate's own CLI from the version in our
+  # go.mod (#1039) and copies migrations/ on top. GoReleaser's dockers block
+  # expects a pre-built artifact from a `builds:` entry, and this binary is not
+  # one of ours to stamp — it is a dependency's main package, cross-compiled
+  # inside the Dockerfile from go.mod alone. docker/build-push-action is the
+  # simpler shape, and it builds the same file the blocking Trivy gate in
+  # security.yaml scans on every PR.
   migrate-image:
     name: Build + push leoflow-migrate image
     needs: release

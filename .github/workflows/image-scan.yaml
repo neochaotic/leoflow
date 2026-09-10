@@ -2,19 +2,22 @@
 #
 # ── Why this is not a PR gate ────────────────────────────────────────────────
 #
-# leoflow-runtime is python:3.x-slim and leoflow-migrate is
-# migrate/migrate (Alpine + a third-party Go binary). Neither package set is
-# ours. A CVE lands in them because a Debian security team published an
-# advisory, not because anyone here pushed a commit — so a blocking gate on them
-# fails whoever opens the next unrelated pull request, and the person who can
-# actually fix it (by rebasing a base image or bumping a pinned third-party tag)
-# is not in that PR. That gate gets switched off within a week, and switched-off
-# is worse than never-installed because it looks like coverage.
+# leoflow-runtime is python:3.x-slim, and that package set is not ours. A CVE
+# lands in it because a Debian security team published an advisory, not because
+# anyone here pushed a commit — so a blocking gate on it fails whoever opens the
+# next unrelated pull request, and the person who can actually fix it (by
+# rebasing a base image) is not in that PR. That gate gets switched off within a
+# week, and switched-off is worse than never-installed because it looks like
+# coverage.
 #
 # So: this workflow never fails the build. It publishes to the Security tab and
 # keeps exactly one tracking issue current. The blocking gate lives in
-# security.yaml and covers leoflow-server, the one image whose every byte comes
-# from our go.mod.
+# security.yaml and covers the images whose every byte comes from our go.mod:
+# leoflow-server, and — since #1039 rebuilt it from `FROM migrate/migrate` into
+# a distroless image holding a binary compiled from our own module graph —
+# leoflow-migrate. It used to be scanned here, and was the largest finding this
+# workflow ever produced (84 fixable, 50 CRITICAL/HIGH); it moved lanes because
+# what the image contains changed, not because the policy softened.
 #
 # ── Why a fixability filter, not just a severity floor ───────────────────────
 #
@@ -47,8 +50,6 @@ on:
     branches: [main]
     paths:
       - "runtime/**"
-      - "deploy/Dockerfile.migrate"
-      - "migrations/**"
       # The python_version enum decides which base images exist, and the first
       # step reconciles it against this workflow's SARIF upload steps.
       - "internal/domain/schemas/**"
@@ -64,8 +65,6 @@ on:
     # by findings that were already there.
     paths:
       - "runtime/**"
-      - "deploy/Dockerfile.migrate"
-      - "migrations/**"
       # The python_version enum decides which base images exist, and the first
       # step reconciles it against this workflow's SARIF upload steps.
       - "internal/domain/schemas/**"
@@ -98,8 +97,8 @@ env:
   ISSUE_TITLE: "Container image CVEs: fixable findings in published images"
 
 jobs:
-  # Named for what it does. This job builds the runtime and migrate images from
-  # the checkout — it does NOT pull a published tag. The two coincide whenever
+  # Named for what it does. This job builds the runtime images from the
+  # checkout — it does NOT pull a published tag. The two coincide whenever
   # HEAD still produces the published image, which is the normal case, but the
   # gap is real and worth stating: a base CVE in an already-published `py3.11`
   # that HEAD no longer produces is invisible here. Scan the tag directly when
@@ -180,9 +179,6 @@ jobs:
               -t "leoflow-runtime:py${py}" .
             echo "::endgroup::"
           done
-          echo "::group::build leoflow-migrate"
-          docker build -f deploy/Dockerfile.migrate -t leoflow-migrate:ci .
-          echo "::endgroup::"
 
       # Scan each image once to JSON (fixable findings, every severity), then
       # derive the SARIF from that report. The file stem names the image in the
@@ -204,7 +200,6 @@ jobs:
           for py in ${PY_LINES}; do
             scan "leoflow-runtime-py${py}" "leoflow-runtime:py${py}"
           done
-          scan leoflow-migrate leoflow-migrate:ci
 
       # The complete picture, including the unfixed findings the policy filters
       # out, so a filter this workflow applies is never the only copy of the data.
@@ -215,7 +210,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p scan-out/unfiltered
-          refs="leoflow-migrate:ci"
+          refs=""
           for py in ${PY_LINES}; do refs="${refs} leoflow-runtime:py${py}"; done
           for ref in ${refs}; do
             name="${ref//[:\/]/-}"
@@ -261,13 +256,6 @@ jobs:
           sarif_file: scan-out/leoflow-runtime-py3.13.sarif
           category: trivy-image-runtime-py313
 
-      - name: Upload SARIF (leoflow-migrate)
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
-        if: always() && github.event_name != 'pull_request'
-        with:
-          sarif_file: scan-out/leoflow-migrate.sarif
-          category: trivy-image-migrate
-
       - name: Build report
         id: report
         run: |
@@ -277,7 +265,6 @@ jobs:
           # shellcheck disable=SC2086 # deliberate word splitting over the report list.
           python3 scripts/trivy-report.py \
             ${reports} \
-            scan-out/leoflow-migrate.json \
             --gate-severity "$GATE_SEVERITY" \
             --fingerprint-out scan-out/fingerprint.txt \
             --blocking-count-out scan-out/blocking.txt \

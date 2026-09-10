@@ -169,7 +169,10 @@ is required.
 The pre-install/pre-upgrade Job runs `migrate -path <path> -database <url> up`
 using the default image **`ghcr.io/neochaotic/leoflow-migrate`** (built from
 `deploy/Dockerfile.migrate`, published by `.github/workflows/release.yaml` on
-every tag), which bundles the Leoflow `migrations/` at `migrations.path`.
+every tag), which bundles the Leoflow `migrations/` at `migrations.path`. The
+`migrate` binary in it is golang-migrate's own CLI, compiled from the version
+pinned in Leoflow's `go.mod` onto distroless static and running as UID 65532,
+rather than a third-party image pulled at build time (#1039).
 Override `migrations.image` to use your own, or set `migrations.enabled=false`
 to migrate out of band.
 
@@ -427,7 +430,7 @@ differ from what's committed.
 | metrics.serviceMonitor.scrapeTimeout | string | `"10s"` | Prometheus scrape timeout (must be ≤ interval). |
 | migrations.enabled | bool | `true` |  |
 | migrations.image.pullPolicy | string | `"IfNotPresent"` |  |
-| migrations.image.repository | string | `"ghcr.io/neochaotic/leoflow-migrate"` | leoflow-migrate image bundling Leoflow SQL migrations on top of `migrate/migrate`. Published per release by `release.yaml`, signed with cosign, multi-arch (amd64 + arm64). |
+| migrations.image.repository | string | `"ghcr.io/neochaotic/leoflow-migrate"` | leoflow-migrate image: the golang-migrate CLI compiled from the version in our `go.mod`, plus the Leoflow SQL migrations, on distroless static. Published per release by `release.yaml`, signed with cosign, multi-arch (amd64 + arm64). |
 | migrations.image.tag | string | `""` | Migration image tag. Defaults to `.Chart.appVersion` when empty. Pin to the same tag as `image.tag` (both server and migrate publish both `v`-prefix and no-`v` forms — use whichever convention you prefer, they resolve to the same digest): `--set migrations.image.tag=v0.4.0-rc.2`. |
 | migrations.path | string | `"/migrations"` | Path inside the migrate image where the SQL files live. Must match the COPY destination in `deploy/Dockerfile.migrate`. |
 | migrations.podSecurityContext.fsGroup | int | `65532` |  |

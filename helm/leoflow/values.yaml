@@ -323,7 +323,7 @@ bootstrap:
 migrations:
   enabled: true
   image:
-    # -- leoflow-migrate image bundling Leoflow SQL migrations on top of `migrate/migrate`. Published per release by `release.yaml`, signed with cosign, multi-arch (amd64 + arm64).
+    # -- leoflow-migrate image: the golang-migrate CLI compiled from the version in our `go.mod`, plus the Leoflow SQL migrations, on distroless static. Published per release by `release.yaml`, signed with cosign, multi-arch (amd64 + arm64).
     repository: ghcr.io/neochaotic/leoflow-migrate
     # -- Migration image tag. Defaults to `.Chart.appVersion` when empty. Pin to the same tag as `image.tag` (both server and migrate publish both `v`-prefix and no-`v` forms — use whichever convention you prefer, they resolve to the same digest): `--set migrations.image.tag=v0.4.0-rc.2`.
     tag: ""
@@ -336,10 +336,12 @@ migrations:
   # (top-level podSecurityContext); these defaults mirror that posture so
   # restricted-PSA clusters accept the migration Job too.
   #
-  # The migrate/migrate base image runs as root by default, but the binary
-  # is a static Go binary that works fine under any UID — verified locally
-  # via `docker run --rm -u 65532:65532 migrate/migrate -version` and
-  # `ls /migrations` (migrations are world-readable, mode 644).
+  # The image itself already runs as UID 65532 (deploy/Dockerfile.migrate,
+  # #1039) rather than as root the way the old `migrate/migrate` base did, so
+  # these values now agree with the image instead of overriding it. Kept
+  # explicit all the same: a restricted namespace verifies the POD spec, and an
+  # operator overriding `migrations.image` must land on a UID that can read
+  # /migrations (world-readable, mode 644).
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 65532
@@ -352,8 +354,10 @@ migrations:
     allowPrivilegeEscalation: false
     # migrate is a static Go binary writing only to the DB (advisory lock for
     # migration mutex). No /tmp writes, no log files. Safe to lock the root
-    # FS read-only — tightest restricted-PSA posture. Verified locally with
-    # `docker run --rm --read-only -u 65532:65532 leoflow-migrate -version`.
+    # FS read-only — tightest restricted-PSA posture. Verified against the
+    # image this chart defaults to by applying all 26 migrations with
+    # `docker run --rm --read-only -u 65532:65532 --cap-drop ALL
+    # leoflow-migrate -path=/migrations -database=<dsn> up`.
     readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 65532

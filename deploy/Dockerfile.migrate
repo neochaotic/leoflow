@@ -1,4 +1,117 @@
-# Bundles the Leoflow SQL migrations with golang-migrate, for the Helm chart's
-# migration Job (#34/#48). Run as: migrate -path /migrations -database <url> up
-FROM migrate/migrate:v4.19.1
-COPY migrations/ /migrations/
+# Bundles the Leoflow SQL migrations with the golang-migrate CLI, for the Helm
+# chart's migration Job (#34/#48). Run as:
+#   migrate -path /migrations -database <url> up
+#
+# Build from the repository root (go.mod / go.sum must be in context):
+#   docker build -f deploy/Dockerfile.migrate -t leoflow-migrate .
+#
+# ── Why this compiles the CLI instead of `FROM migrate/migrate:<tag>` (#1039) ─
+#
+# It used to be `FROM migrate/migrate:v4.19.1` plus a COPY. That shipped someone
+# else's compiled binary, with its own dependency tree and its own Go toolchain,
+# into a pod that holds the database DSN and runs before anything else on a
+# fresh cluster. `govulncheck` could not see it: golang-migrate IS in our go.mod
+# (the Lite path compiles it into the CLI, internal/cli/dev.go), but the binary
+# inside the third-party image is not in our module graph, so we had two migrate
+# binaries and covered one. The scan added in #1034 measured the difference —
+# 84 fixable findings, 50 of them CRITICAL/HIGH, against zero for leoflow-server.
+#
+# Bumping the pin would have cleared those 50 and restored the same blind spot
+# the day the next advisory landed. Building the CLI from the version already in
+# our go.mod removes the third-party image instead: one migrate binary, resolved
+# by `go list -m`, moved by Dependabot like every other dependency, and inside
+# govulncheck's reach — `govulncheck -tags postgres,pgx5
+# github.com/golang-migrate/migrate/v4/cmd/migrate` analyses exactly the package
+# this stage builds, at exactly the version it builds it at.
+#
+# The CLI surface is upstream's, unmodified: this builds upstream's own
+# `cmd/migrate` main package, not a reimplementation, so every flag and
+# subcommand the Job (or an operator) passes behaves as documented.
+
+# Pinned to the toolchain CI uses (GO_VERSION in .github/workflows/security.yaml
+# and image-scan.yaml). Not cosmetic: Trivy keys `stdlib` findings to the Go
+# toolchain recorded in the binary's build info, so a floating tag here would
+# move this image's reported vulnerability set for reasons unrelated to any
+# commit — the same trap security.yaml documents for leoflow-server.
+ARG GO_VERSION=1.26.6
+
+# Build on the NATIVE platform and cross-compile with GOARCH, rather than
+# letting buildx emulate the build stage under QEMU for the arm64 leg. The
+# output is a CGO-free static binary either way, so nothing from this stage
+# reaches the published image; bookworm vs trixie here changes the build
+# environment only, exactly as runtime/Dockerfile's agent stage explains.
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS build
+WORKDIR /src
+
+# Only the module files are copied: the package being built lives in a
+# dependency module, so none of this repository's own source is an input. That
+# also means the build cache keys on go.mod/go.sum alone and survives every
+# unrelated commit.
+COPY go.mod go.sum ./
+
+ARG TARGETARCH
+# Build tags select which database drivers are registered — golang-migrate
+# registers none by default, and a binary built without them fails at RUNTIME
+# with "unknown driver", not at build time. `postgres` covers the `postgres://`
+# and `postgresql://` schemes the Helm Job's LEOFLOW_DATABASE_URL uses; `pgx5`
+# covers the `pgx5://` scheme the Lite path uses (internal/cli/dev.go), so a DSN
+# that works in one place works in the other. Postgres is the only database
+# Leoflow supports, so no other driver is built in.
+#
+# The version stamped into the binary is READ from the module graph rather than
+# written here, so `migrate -version` cannot drift from the version actually
+# compiled. `-X main.Version=` must use the unqualified `main.` form; a
+# fully-qualified package path silently no-ops.
+#
+# TARGETARCH is filled in by BuildKit; the fallback keeps a build under any
+# front end that leaves it empty from setting GOARCH to the empty string, which
+# is not the same thing as leaving it unset.
+RUN set -eux; \
+	version="$(go list -m -f '{{.Version}}' github.com/golang-migrate/migrate/v4)"; \
+	CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH:-$(go env GOARCH)}" go build -trimpath \
+		-tags 'postgres pgx5' \
+		-ldflags="-s -w -X main.Version=${version}" \
+		-o /out/migrate github.com/golang-migrate/migrate/v4/cmd/migrate
+
+# Distroless static, Debian 13 (trixie). Same family as leoflow-server, which is
+# still on debian12 — not the same suite, and this is the suite
+# runtime/Dockerfile moved to in #1038.
+#
+# It carries a CA bundle, /etc/passwd with the nonroot user, and six base
+# packages (base-files, ca-certificates, media-types, netbase, tzdata,
+# tzdata-legacy). No shell and no package manager, so nothing an operator can
+# exec into and no application package set — but "no OS packages" would be
+# false, and the difference matters for the blocking gate: a fixable HIGH in
+# ca-certificates or tzdata reddens it and no commit here closes it. That is a
+# six-package exposure instead of Alpine's full set, and .trivyignore.yaml's
+# dated, self-expiring entries are what handle it — see security.yaml.
+#
+# The CA bundle is what makes `sslmode=verify-full` work against a managed
+# Postgres whose CA is in the system store. A DSN with an explicit
+# `sslrootcert=` path needs that file mounted; the migration Job does not mount
+# database.caConfigMap today, which the chart's own recipe assumes.
+FROM gcr.io/distroless/static-debian13:nonroot
+
+LABEL org.opencontainers.image.source="https://github.com/neochaotic/leoflow"
+LABEL org.opencontainers.image.description="golang-migrate CLI plus the Leoflow SQL migrations, for the Helm migration Job"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+COPY --from=build /out/migrate /usr/local/bin/migrate
+# Only the SQL. migrations/ also holds embed.go, latest.go and their tests,
+# which the Go side uses to compute the binary's required schema version;
+# golang-migrate's file source ignores names that do not match its version
+# pattern, so copying them was harmless — but shipping source into a runtime
+# image is not a thing to leave harmless on purpose.
+COPY migrations/*.sql /migrations/
+
+# 65532 numerically, not `nonroot` by name: a PodSecurity `restricted` namespace
+# verifies runAsNonRoot against the image's user and the kubelet can only
+# resolve a numeric UID. This is the UID helm/leoflow/values.yaml pins for the
+# migration Job, and the migrations are world-readable, so the Job's
+# readOnlyRootFilesystem + drop-ALL posture needs no change.
+USER 65532:65532
+
+# Matches the entrypoint the third-party image exposed, so the Helm Job's
+# args-only invocation (`-path=… -database=… up`) is unchanged.
+ENTRYPOINT ["/usr/local/bin/migrate"]
+CMD ["--help"]

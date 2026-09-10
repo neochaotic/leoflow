@@ -115,6 +115,11 @@ dag_id: mix
 # generated one has to carry it, and that is half of what this test now proves.
 dependencies:
   - dbt-postgres==1.9.*
+  # A version FLOOR, on purpose (#1064). `RUN` is /bin/sh -c, so an unquoted
+  # `>=` is a redirection: pip used to receive a bare `wheel`, the floor
+  # vanished, and a file named `=0.45` appeared in the image. Tiny package with
+  # no dependencies, so this costs the build almost nothing.
+  - "wheel>=0.45"
 dbt_groups:
   transform:
     project: ./transform
@@ -228,6 +233,23 @@ jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not]
 # probing for the dbt binary, so the check and its message are one statement.
 docker run --rm --entrypoint python "$DAG_IMAGE" -c 'import dbt.adapters.postgres' \
   || fail "the adapter declared in dependencies: is not installed in the generated image"
+
+# #1064 — a version floor must survive into the image. Two assertions, because
+# they fail on different halves of the defect and only one of them is
+# deterministic:
+#
+#   1. The junk file. An unquoted `>=` is a shell redirection, so the operand
+#      becomes a filename holding pip's stdout. This fires whatever pip decides
+#      to install, which is what makes it the reliable half.
+#   2. The version itself. This is the property anyone using a floor actually
+#      wants — it is how you remediate a CVE in a transitive dependency — but it
+#      only fails when the base image happens to carry an older version, so it
+#      is the honest assertion rather than the load-bearing one.
+docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'ls -A /home/leoflow | grep -q "^=" && exit 1 || exit 0' \
+  || fail "a redirection artifact (=<version>) is in the image: a dependency operator escaped the RUN quoting (#1064)"
+docker run --rm --entrypoint python "$DAG_IMAGE" -c \
+  'import sys;from importlib.metadata import version;v=version("wheel");sys.exit(0 if tuple(map(int,v.split(".")[:2]))>=(0,45) else 1)' \
+  || fail "the wheel>=0.45 floor declared in dependencies: was not honoured in the image (#1064)"
 
 # #993 CANNOT manifest under --build: `local` is false either way there, so the
 # assertion above is a canary, not a proof. The defect needs a bare compile —

@@ -304,6 +304,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `leoflow.yaml` and rebuild — or, if you pinned `base_image`, repoint it to the
   matching `py3.11` tag and rebuild.
 ### Fixed
+- **A version floor in `dependencies` was silently dropped, and left junk in the
+  image.** `RUN` in a Dockerfile is `/bin/sh -c`, and the specifiers were joined
+  into that line unquoted — so `setuptools>=80.9.0` was a *redirection*: pip
+  received a bare `setuptools`, the floor vanished, and a file named `=80.9.0`
+  appeared in the image holding pip's stdout. The build stayed green and the
+  only symptom was the wrong version inside the image. Measured with the base
+  seeded at `setuptools==79.0.1`: it stayed at 79.0.1. A floor is how you
+  remediate a CVE in a transitive dependency, so this failed exactly where
+  someone was relying on it. Every entry is now shell-quoted, for
+  `system_packages` too, which used the identical join
+  ([#1064](https://github.com/neochaotic/leoflow/issues/1064)). Quoting in the
+  YAML never helped — the parser consumes those quotes before Go sees the value.
 - **`exclude_paths` now reaches the image build.** It had been in the schema,
   defaulted, and documented as "skipped both in image build and workspace
   discovery" with zero consumers in build code, so with the default

@@ -104,7 +104,7 @@ roadmap item.
 | `dag_id` | *subdir basename* | If `leoflow.yaml` is absent, the parent directory name is used. Two subdirs resolving to the same `dag_id` is a hard error — see [Discovery rules](/author-dags/dag-authoring/#discovery-rules). |
 | `python_version` | `"3.11"` | Pick `3.10`, `3.11`, `3.12`, or `3.13`. |
 | `dag_source` | `"dag.py"` | DAG file relative to the project. |
-| `dependencies` | `[]` | pip specifiers baked into the image. |
+| `dependencies` | `[]` | pip specifiers baked into the image. Any [PEP 508](https://peps.python.org/pep-0508/) form works, including version floors (`"setuptools>=80.9.0"`) and environment markers (`'requests; python_version < "3.12"'`) — each entry is passed to pip as one literal argument, so shell characters in a specifier are never interpreted. A line break inside an entry is refused, since it would end the generated `RUN` instruction. |
 | `connectors` | `[]` | Short connector names expanded to provider packages at compile (ADR 0038). |
 | `system_packages` | `[]` | apt packages. `apt-get install`ed into the DAG image at compile, resolving against the task base image's Debian suite — see the `system_packages` row under [leoflow.yaml](#leoflowyaml) for which suite that is and what moved. |
 | `include_paths` | `["."]` | Files copied into the image. |

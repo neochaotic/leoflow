@@ -132,3 +132,61 @@ jobs:
           [ "$ok" = 1 ] || { echo "::error::could not download gitleaks v${GITLEAKS_VERSION} after 3 attempts"; exit 1; }
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
           /tmp/gitleaks dir . --no-banner --redact --exit-code 1
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Python EOL watch (#1031)
+  # Every other signal in this workflow reacts to a CVE that already exists.
+  # A base image that stops being rebuilt produces the opposite: the CVEs
+  # accumulate and the image never changes, because docker-library/python
+  # stops rebuilding an EOL line the day after it goes EOL. So this one asks
+  # the calendar (endoflife.date) instead, and it runs here because this is
+  # where the schedule already lives.
+  #
+  # It does not block anything on a date: the script exits 0 for every finding
+  # and non-zero only when it cannot do its own job (feed down, feed reshaped).
+  # A finding opens an issue instead, deduplicated by the python-eol label, so
+  # it reaches a person rather than an annotation on a scheduled run nobody
+  # opens. Issue-opening is limited to the schedule — a PR must not file one.
+  # ─────────────────────────────────────────────────────────────────────
+  python-eol:
+    name: Python EOL watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A PR must not go red because endoflife.date is down. The findings still
+    # appear as annotations on the PR run — a contributor editing the enum sees
+    # them — but only push and schedule treat the watchdog's own failure as red,
+    # where a rerun is the whole remedy and nobody is blocked meanwhile.
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Check every published Python line against endoflife.date
+        id: eol
+        run: |
+          # pipefail explicitly: the Actions default shell does not set it, and
+          # `tee` would otherwise swallow the script's own failure exit.
+          set -euo pipefail
+          bash scripts/python-eol-warn.sh | tee "$RUNNER_TEMP/python-eol.md"
+
+      - name: Open a tracking issue
+        if: github.event_name == 'schedule' && steps.eol.outputs.alert == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.eol.outputs.title }}
+        run: |
+          set -euo pipefail
+          # The label is both the filing category and the dedupe key, so create
+          # it if it is missing rather than failing the run on its absence.
+          gh label create python-eol --color FBCA04 \
+            --description "A published Python runtime base is approaching or past upstream EOL" \
+            2>/dev/null || true
+          existing="$(gh issue list --state open --label python-eol --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "python-eol issue #${existing} is already open; commenting instead of filing a duplicate"
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/python-eol.md"
+            exit 0
+          fi
+          gh issue create --title "$TITLE" --label python-eol --body-file "$RUNNER_TEMP/python-eol.md"

@@ -24,7 +24,7 @@ chart's own values (image, replicas, ingress, Postgres/Redis wiring), see the
 |---|---|---|
 | `dag_id` *(required)* | string | Unique DAG id (`^[A-Za-z0-9_][A-Za-z0-9_-]{0,199}$`). |
 | `description`, `owner`, `tags` | string / string / list | Metadata. |
-| `python_version` | `3.10`\|`3.11`\|`3.12` | Base image Python (default 3.11). |
+| `python_version` | `3.10`\|`3.11`\|`3.12`\|`3.13` | Base image Python (default 3.11). `3.10` is **deprecated** — see [Python version support](#python-version-support). |
 | `base_image` | string | Override the runtime base image. |
 | `dependencies` | list | pip specifiers baked into the image. |
 | `connectors` | list | Short connector names (`postgres`, `http`, …) expanded at compile to their `apache-airflow-providers-*` packages. Sugar over `dependencies` — see [Installing a connector's provider](/connections/#installing-a-connectors-provider). |
@@ -36,6 +36,59 @@ chart's own values (image, replicas, ingress, Postgres/Redis wiring), see the
 | `tasks.<task_id>` | object | Per-task overrides (ADR 0023): `retries`, `retry_delay_seconds`, `execution_timeout_seconds`, `env`, `resources`, `execution`. |
 
 See [DAG authoring](/author-dags/dag-authoring/) for the override layers.
+
+### Python version support
+
+Every value the schema accepts has a published, multi-arch, cosign-signed base
+image at `ghcr.io/neochaotic/leoflow-runtime:py<version>`. Nothing else does —
+if a version is not in the table above, no base image exists for it and the
+build fails on the pull.
+
+| Line | Status | Upstream EOL | Published until |
+|---|---|---|---|
+| `3.10` | **Deprecated** | 2026-10-31 | 2026-10-31 |
+| `3.11` | Supported *(default)* | 2027-10-31 | — |
+| `3.12` | Supported | 2028-10-31 | — |
+| `3.13` | Supported | 2029-10-31 | — |
+
+**Published until** is the last date on which a release publishes that leg; a
+release cut after it ships no `py<line>` image. A `—` means the line is
+supported with no removal date set. The Status and Published-until cells are
+generated from nothing — they are written by hand — but
+`scripts/check-python-runtime-matrix.sh` reconciles them against the
+`x-leoflow-python-deprecations` block in the authoring schema, so a deprecation
+that moves in the schema and not here fails the build rather than leaving this
+table quietly telling you the opposite.
+
+`3.13` is the current ceiling, and it is set by the dbt adapters rather than by
+Airflow: `dbt-core` and `dbt-postgres` publish for 3.14, but `dbt-snowflake`,
+`dbt-bigquery`, `dbt-databricks` and `dbt-duckdb` stop at 3.13. A `py3.14` base
+would give you an image where `dbt-postgres` installs and `dbt-snowflake` does
+not — discovered inside your build, not ours — so it is not published.
+
+**`3.10` is deprecated.** Python 3.10 reaches upstream end-of-life on
+2026-10-31, and `docker-library/python` stops rebuilding an EOL line the day
+after (`python:3.9-slim` was last rebuilt 2025-11-01, one day after 3.9 went
+EOL). From that point `python:3.10-slim-bookworm` — and so
+`leoflow-runtime:py3.10` — receives no further OS security updates and
+accumulates unfixed CVEs indefinitely. The `py3.10` leg keeps being published
+until 2026-10-31, so nothing breaks today; `leoflow validate`, `leoflow
+compile` and `leoflow deploy` warn when your project resolves to it.
+
+There are two ways to resolve to it, and they have different fixes:
+
+- **You set `python_version: "3.10"`.** Set `python_version: "3.11"` (or later)
+  and rebuild.
+- **You pinned `base_image` to a published `py3.10` tag** (`…:py3.10`,
+  `…:py3.10-v0.4.5`). Repoint `base_image` to the matching `py3.11` tag and
+  rebuild. Changing `python_version` here does nothing: when `base_image` is
+  set it is used verbatim and `python_version` is not consulted for the `FROM`.
+
+Existing images keep running either way; the rebuild is what moves you.
+
+This matters more than for most images because it is inherited: a DAG image is
+built `FROM` this base, so pinning `base_image` freezes your DAG on whatever the
+base was on the day you pinned it.
 
 ### Defaults
 
@@ -49,7 +102,7 @@ roadmap item.
 |---|---|---|
 | `schema_version` | `"1.0"` | Stamps every artifact for forward-compat. |
 | `dag_id` | *subdir basename* | If `leoflow.yaml` is absent, the parent directory name is used. Two subdirs resolving to the same `dag_id` is a hard error — see [Discovery rules](/author-dags/dag-authoring/#discovery-rules). |
-| `python_version` | `"3.11"` | Pick `3.10`, `3.11`, or `3.12`. |
+| `python_version` | `"3.11"` | Pick `3.10`, `3.11`, `3.12`, or `3.13`. |
 | `dag_source` | `"dag.py"` | DAG file relative to the project. |
 | `dependencies` | `[]` | pip specifiers baked into the image. |
 | `connectors` | `[]` | Short connector names expanded to provider packages at compile (ADR 0038). |

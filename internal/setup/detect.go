@@ -67,6 +67,16 @@ type Report struct {
 // present because it's the version the managed CPython matches, keeping
 // dev/prod parity for users on the documented path.
 //
+// This is NOT the list of Python lines Leoflow publishes a task base image for,
+// and it deliberately differs from it. That list is the python_version enum in
+// internal/domain/schemas/leoflow-yaml-schema.json (see
+// domain.SupportedPythonVersions), and it answers a different question: which
+// interpreter runs INSIDE the DAG image, on a machine that is not this one.
+// This list answers which interpreter on THIS host can parse a dag.py. #1031
+// read the two as one list that had drifted; they are two lists that agree
+// about nothing in particular, and the overlap is a coincidence of both being
+// Python.
+//
 // The forward-looking range (3.14–3.18) covers minors that haven't shipped
 // yet so users with a future system Python still skip the managed-CPython
 // download. Bump the upper bound when a new minor lands AND the parser

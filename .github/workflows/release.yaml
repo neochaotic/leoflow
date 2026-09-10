@@ -156,6 +156,19 @@ jobs:
   # testing Pro without the repo (#318). One leg per supported Python so an author
   # picks the interpreter via `python_version`. Multi-arch + keyless cosign mirror
   # leoflow-server/leoflow-migrate.
+  #
+  # The matrix below is a COPY. The source of truth is the `python_version` enum
+  # in internal/domain/schemas/leoflow-yaml-schema.json — the list the CLI's
+  # Validate() actually enforces — and scripts/check-python-runtime-matrix.sh
+  # fails when the two disagree. Publishing a leg nobody can select, or letting an
+  # author select a leg nobody publishes, both surface as a `docker pull` 404
+  # inside the user's own build, which is the furthest point from the cause (#1031).
+  #
+  # py3.10 is DEPRECATED: Python 3.10 goes EOL 2026-10-31 and docker-library/python
+  # stops rebuilding an EOL line the day after, so the base freezes with whatever
+  # OS CVEs it has. The leg keeps being published until then because `base_image`
+  # pins make a silent drop a broken build for somebody else; the schema carries
+  # the removal date and `leoflow compile` warns the author.
   runtime-image:
     name: Build + push leoflow-runtime base (py${{ matrix.python }})
     needs: release
@@ -164,7 +177,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12"]
+        python: ["3.10", "3.11", "3.12", "3.13"]
     permissions:
       contents: read
       packages: write

@@ -80,6 +80,17 @@ Standard GitHub feature. Configured to:
 
 ### cosign for release signing
 
+> **Note (2026-09, #1031).** `leoflow/python-runtime:*` below is the repository
+> name as decided in 2026-05 and it no longer exists. The task base images are
+> published as `ghcr.io/neochaotic/leoflow-runtime:py<version>`, one leg per
+> entry in the `python_version` enum of
+> `internal/domain/schemas/leoflow-yaml-schema.json`, and rendered in the
+> [configuration reference](/reference/configuration/#python-version-support).
+> The signing decision itself is unchanged: every published leg is signed
+> keylessly on every release. This ADR is deliberately not one of the copies
+> `scripts/check-python-runtime-matrix.sh` reconciles, because a decision record
+> states what was decided, not what is true today.
+
 Every tagged release (`v0.1.0`, `v0.1.1`, etc.) signs:
 
 1. All published binaries (`leoflow`, `leoflow-server`, `leoflow-agent`)

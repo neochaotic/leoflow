@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # lychee resolves relative links/images against each file's own directory, so
       # a dead `docs/assets/x.png` in README (the #758 class) or a moved doc link

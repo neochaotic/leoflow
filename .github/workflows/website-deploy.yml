@@ -85,7 +85,7 @@ jobs:
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
       - name: Checkout (for versions.json only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -113,13 +113,13 @@ jobs:
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout tooling (this workflow's own ref — CI scripts only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: tooling
           fetch-depth: 1
 
       - name: Checkout version content (${{ matrix.id }} @ ${{ matrix.ref }})
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ matrix.ref }}
           path: src
@@ -201,7 +201,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout (for versions.json only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 

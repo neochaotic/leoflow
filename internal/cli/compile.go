@@ -452,10 +452,14 @@ func buildAndPush(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.
 			return derr
 		}
 		defer cleanup()
+		// A project that ships its own Dockerfile gets the exclusions too, but
+		// we cannot read its COPY lines — so the secret warning softens rather
+		// than claiming what ships.
+		ownDockerfile := dockerfile != filepath.Join(dir, generatedDockerfileName)
 		// Applies whether or not the project ships its own Dockerfile: exclude_paths
 		// is a statement about what may enter the image, and it does not become
 		// less true because the author wrote the Dockerfile themselves.
-		ignoreCleanup, ierr := ensureDockerignore(cmd.ErrOrStderr(), dir, cfg)
+		ignoreCleanup, ierr := ensureDockerignore(cmd.ErrOrStderr(), dir, cfg, ownDockerfile)
 		if ierr != nil {
 			return ierr
 		}

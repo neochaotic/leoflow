@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -251,7 +252,7 @@ const dockerignoreHeader = "# added by leoflow compile --build from exclude_path
 // file, so nothing extra can enter the context. If the process dies mid-build
 // the workspace is left with the MERGED file — a superset of the user's, so it
 // excludes more and never less. That is the right direction to fail in.
-func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig) (cleanup func(), err error) {
+func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig, ownDockerfile bool) (cleanup func(), err error) {
 	noop := func() {}
 	path := filepath.Join(dir, dockerignoreName)
 
@@ -260,12 +261,26 @@ func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig) (cle
 	if rerr != nil && !os.IsNotExist(rerr) {
 		return noop, fmt.Errorf("reading %s: %w", path, rerr)
 	}
+	// A build killed before cleanup — Ctrl-C during a multi-minute `docker
+	// build`, which is THE interruption, not a rare one — leaves our merged
+	// file behind. Read back as-is it would look like the author's own work:
+	// `had` would be true, and the next successful build would "restore" a
+	// leoflow block as if they had written it, permanently, still headed
+	// "removed after the build" and no longer tracking leoflow.yaml.
+	//
+	// So strip our block on the way in and treat what remains as theirs.
+	if stripped, found := stripLeoflowBlock(original); found {
+		//nolint:errcheck // the note is best-effort; the build proceeds either way
+		fmt.Fprintf(w, "note: removing a leoflow block in %s left behind by an interrupted build\n", dockerignoreName)
+		original = stripped
+		had = len(original) > 0
+	}
 
 	// Concatenated into a fresh slice: append onto cfg.ExcludePaths would write
 	// through to the caller's config whenever that slice has spare capacity.
 	patterns := slices.Concat(cfg.ExcludePaths, dbtBuildArtifacts(cfg))
-	warnUnexcludedSecrets(w, dir, cfg, patterns)
 	merged, changed := mergeDockerignore(original, patterns)
+	warnUnexcludedSecrets(w, dir, cfg, merged, ownDockerfile)
 	if !changed {
 		return noop, nil
 	}
@@ -347,6 +362,23 @@ func dbtBuildArtifacts(cfg *domain.LeoflowConfig) []string {
 	return out
 }
 
+// copiedRoots are the context paths the generated Dockerfile actually COPYs
+// from, mirroring generatedDockerfile's decisions. A plain dag.py project copies
+// one file and nothing else; a dbt project or group at "." copies the whole
+// context; a group at `transform` copies that directory wholesale.
+func copiedRoots(cfg *domain.LeoflowConfig) []string {
+	groups := dbtGroupProjectDirs(cfg)
+	if cfg.Dbt != nil && cfg.Dbt.Project != "" {
+		if project := filepath.Clean(cfg.Dbt.Project); !slices.Contains(groups, project) {
+			groups = append(groups, project)
+		}
+	}
+	if slices.Contains(groups, ".") {
+		return []string{"."}
+	}
+	return groups
+}
+
 // secretishNames are files whose presence in a build context is nearly always a
 // mistake, and whose contents are nearly always a credential.
 //
@@ -365,16 +397,30 @@ var secretishNames = []string{".env", ".env.local", ".netrc", "credentials.json"
 // walk: that is slow on an arbitrary project and noisy, and those are the two
 // places these files actually live — profiles.yml in particular belongs next to
 // dbt_project.yml, which is not the root when the project is a subdirectory.
-func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, patterns []string) {
-	excluded := make(map[string]bool, len(patterns))
-	for _, p := range patterns {
-		excluded[strings.TrimSpace(p)] = true
+func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, merged []byte, ownDockerfile bool) {
+	// Built from the MERGED file, not just exclude_paths, so an author who
+	// excluded .env in their own .dockerignore — the docker-native, obvious
+	// place — is not told to go and duplicate it in leoflow.yaml.
+	excluded := make(map[string]bool)
+	for _, line := range strings.Split(string(merged), "\n") {
+		excluded[strings.TrimSpace(line)] = true
 	}
 
-	places := []string{"."}
-	places = append(places, dbtGroupProjectDirs(cfg)...)
-	if cfg.Dbt != nil && cfg.Dbt.Project != "" {
-		places = append(places, filepath.Clean(cfg.Dbt.Project))
+	// Only look where the image actually copies FROM. The generated Dockerfile
+	// emits `COPY . /home/leoflow/` only when a dbt project resolves to "."; for
+	// a plain dag.py project it copies one file, and warning that a .env "will
+	// be baked into the image" for an image whose only content is dag.py is a
+	// security warning that cries wolf on the most common project shape. One
+	// that cries wolf trains people to ignore the one that is real.
+	places := copiedRoots(cfg)
+	if ownDockerfile {
+		// We cannot read their COPY lines, so we cannot claim it ships — but we
+		// also must not stay quiet. Look everywhere plausible and soften below.
+		places = append(places, ".")
+		places = append(places, dbtGroupProjectDirs(cfg)...)
+	}
+	if len(places) == 0 {
+		return
 	}
 
 	seen := make(map[string]bool)
@@ -392,12 +438,71 @@ func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, p
 			if err != nil || info.IsDir() {
 				continue
 			}
+			verb := "will be baked into the image"
+			if ownDockerfile {
+				verb = "is in the build context, and your Dockerfile may copy it into the image"
+			}
 			//nolint:errcheck // a warning that cannot be delivered must not fail the build
-			fmt.Fprintf(w, "warning: %s is in the build context and will be baked into the image, "+
+			fmt.Fprintf(w, "warning: %s %s, "+
 				"which is pushed to a registry and pulled by every pod that runs this DAG. "+
-				"If it holds credentials, add %q to exclude_paths in leoflow.yaml.\n", rel, rel)
+				"If it holds credentials, add %q to exclude_paths in leoflow.yaml.\n", rel, verb, rel)
 		}
 	}
+}
+
+// expandPattern turns one exclude_paths entry into the .dockerignore forms that
+// actually deliver it. Both are measured, not assumed.
+//
+//  1. A pattern with no slash matches ONLY at the context root. `.dockerignore`
+//     is not `.gitignore`. Built with `__pycache__` and `*.pyc` in the file,
+//     `pkg/__pycache__/a.pyc` shipped; with `**/__pycache__` and `**/*.pyc` it
+//     did not. Three of the five defaults — `__pycache__`, `*.pyc`, `.venv` —
+//     are names that overwhelmingly appear nested, so without this the feature
+//     would land looking delivered and prune almost nothing.
+//
+//  2. Re-emitting a pattern that is already present does NOT override an
+//     earlier `!` exception. With `secrets`, `!secrets/keep.pem`, `secrets`,
+//     the keep.pem shipped on both builders; with `secrets/**` last it did not.
+//     That matters because the merge deliberately puts our block last so
+//     leoflow.yaml has the final word — a promise the plain form does not keep.
+//
+// So a bare directory name yields four forms and a glob yields two. Emitting a
+// form that is already present is harmless; omitting the `/**` one is what
+// silently loses to a negation.
+func expandPattern(pat string) []string {
+	pat = strings.TrimSpace(pat)
+	// A negation in exclude_paths is the author asking to KEEP something. Pass
+	// it through untouched rather than inventing forms that would fight it.
+	if pat == "" || strings.HasPrefix(pat, "!") || strings.HasPrefix(pat, "#") {
+		return nil
+	}
+	forms := []string{pat}
+	rooted := strings.Contains(pat, "/")
+	if !rooted {
+		forms = append(forms, "**/"+pat)
+	}
+	// A glob in the final segment names files, not a directory to descend into.
+	if !strings.ContainsAny(filepath.Base(pat), "*?[") {
+		forms = append(forms, strings.TrimSuffix(pat, "/")+"/**")
+		if !rooted {
+			forms = append(forms, "**/"+pat+"/**")
+		}
+	}
+	return forms
+}
+
+// stripLeoflowBlock removes the block this tool appends — the header line and
+// everything after it — and reports whether one was there. Our block is always
+// written last, so everything from the header on is ours.
+func stripLeoflowBlock(content []byte) (rest []byte, found bool) {
+	i := bytes.Index(content, []byte(dockerignoreHeader))
+	if i < 0 {
+		return content, false
+	}
+	// No trimming: the header always follows the author's content directly, so
+	// content[:i] is exactly what they had, trailing newline included. Trimming
+	// it would hand back a file one byte different from the one we read.
+	return content[:i], true
 }
 
 // mergeDockerignore appends the patterns to the existing content, skipping any
@@ -410,12 +515,13 @@ func mergeDockerignore(original []byte, excludes []string) (merged []byte, chang
 		existing[strings.TrimSpace(line)] = true
 	}
 
-	want := make([]string, 0, len(excludes)+1)
+	want := make([]string, 0, len(excludes)*4+1)
 	for _, p := range excludes {
-		p = strings.TrimSpace(p)
-		if p != "" && !existing[p] {
-			want = append(want, p)
-			existing[p] = true
+		for _, form := range expandPattern(p) {
+			if !existing[form] {
+				want = append(want, form)
+				existing[form] = true
+			}
 		}
 	}
 	if !existing[generatedDockerfileName] {

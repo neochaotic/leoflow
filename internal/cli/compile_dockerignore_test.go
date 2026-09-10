@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/neochaotic/leoflow/internal/domain"
 )
 
@@ -49,7 +51,7 @@ func TestExcludePathsReachTheBuildContext(t *testing.T) {
 	cfg.ExcludePaths = []string{"secrets", "*.pem"}
 	cfg.ApplyDefaults()
 
-	cleanup, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg)
+	cleanup, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +79,7 @@ func TestUserDockerignoreIsMergedNotReplaced(t *testing.T) {
 	cfg := &domain.LeoflowConfig{DagID: "d"}
 	cfg.ApplyDefaults()
 
-	cleanup, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg)
+	cleanup, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +117,7 @@ func TestDbtArtifactsAreScopedToTheirProject(t *testing.T) {
 	cfg.DbtGroups = map[string]*domain.DbtConfig{"a": {Project: "transform"}}
 	cfg.ApplyDefaults()
 
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg); err != nil {
+	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	got := readIgnore(t, dir)
@@ -153,7 +155,7 @@ func TestDbtInputsAreNeverExcluded(t *testing.T) {
 	cfg.Dbt = &domain.DbtConfig{Project: ".", Manifest: "target/manifest.json"}
 	cfg.ApplyDefaults()
 
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg); err != nil {
+	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	got := readIgnore(t, dir)
@@ -175,7 +177,7 @@ func TestByoProfilesIsWarnedNotDropped(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	var out bytes.Buffer
-	if _, err := ensureDockerignore(&out, dir, cfg); err != nil {
+	if _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	// Found in the dbt project directory, not just the context root: that is
@@ -192,7 +194,7 @@ func TestNoDbtMeansNoDbtExcludes(t *testing.T) {
 	dir := writeCtx(t, map[string]string{"dag.py": "x"})
 	cfg := &domain.LeoflowConfig{DagID: "d"}
 	cfg.ApplyDefaults()
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg); err != nil {
+	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := readIgnore(t, dir); strings.Contains(got, "dbt_packages") {
@@ -205,30 +207,151 @@ func TestNoDbtMeansNoDbtExcludes(t *testing.T) {
 // password ship unnoticed is also wrong. The author is told in time to act.
 func TestSecretishFilesWarnRatherThanVanish(t *testing.T) {
 	dir := writeCtx(t, map[string]string{".env": "PASSWORD=hunter2", "dag.py": "x"})
+	// A dbt project at "." is what makes the generated Dockerfile a wholesale
+	// `COPY . /home/leoflow/`, which is when .env actually ships.
 	cfg := &domain.LeoflowConfig{DagID: "d"}
+	cfg.Dbt = &domain.DbtConfig{Project: "."}
 	cfg.ApplyDefaults()
 
 	var out bytes.Buffer
-	if _, err := ensureDockerignore(&out, dir, cfg); err != nil {
+	if _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), ".env") {
-		t.Errorf("no warning for a .env in the build context, got %q", out.String())
+		t.Errorf("no warning for a .env that will be baked, got %q", out.String())
 	}
 	if strings.Contains(readIgnore(t, dir), "\n.env\n") {
 		t.Error(".env was excluded silently; that breaks load_dotenv() far from its cause")
 	}
 
-	// And the warning stops once the author acts on it.
-	cfg2 := &domain.LeoflowConfig{DagID: "d"}
+	// And it stops once the author acts on it.
+	cfg2 := &domain.LeoflowConfig{DagID: "d", Dbt: &domain.DbtConfig{Project: "."}}
 	cfg2.ExcludePaths = []string{".env"}
 	cfg2.ApplyDefaults()
 	var out2 bytes.Buffer
-	if _, err := ensureDockerignore(&out2, dir, cfg2); err != nil {
+	if _, err := ensureDockerignore(&out2, dir, cfg2, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out2.String(), "warning") {
 		t.Errorf("still warning after .env was added to exclude_paths: %q", out2.String())
+	}
+}
+
+// TestNoWarningWhenNothingCopiesIt is the "cries wolf" regression. A plain
+// dag.py project's generated Dockerfile is `COPY dag.py /home/leoflow/dag.py`
+// — the .env never enters the image. Warning that it "will be baked" there is
+// false, and a security warning that fires on the most common project shape
+// trains people to ignore the one that is real.
+func TestNoWarningWhenNothingCopiesIt(t *testing.T) {
+	dir := writeCtx(t, map[string]string{".env": "PASSWORD=hunter2", "dag.py": "x"})
+	cfg := &domain.LeoflowConfig{DagID: "d"}
+	cfg.ApplyDefaults()
+
+	var out bytes.Buffer
+	if _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("warned about a file no COPY reaches: %q", out.String())
+	}
+}
+
+// TestAuthorsOwnExclusionSilencesTheWarning. Someone who excluded .env in their
+// .dockerignore — the docker-native, obvious place — must not be told to go and
+// duplicate it in leoflow.yaml.
+func TestAuthorsOwnExclusionSilencesTheWarning(t *testing.T) {
+	dir := writeCtx(t, map[string]string{
+		".env": "PASSWORD=hunter2", "dag.py": "x", ".dockerignore": ".env\n",
+	})
+	cfg := &domain.LeoflowConfig{DagID: "d", Dbt: &domain.DbtConfig{Project: "."}}
+	cfg.ApplyDefaults()
+
+	var out bytes.Buffer
+	if _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), ".env") {
+		t.Errorf("warned about a file the author had already excluded: %q", out.String())
+	}
+}
+
+// TestBareNamesPruneNestedCopies is Blocker 2. `.dockerignore` is not
+// `.gitignore`: a pattern with no slash matches ONLY at the context root.
+// Measured on both builders — with `__pycache__` and `*.pyc` in the file,
+// `pkg/__pycache__/a.pyc` shipped; with the `**/` forms it did not. Three of
+// the five shipped defaults are names that overwhelmingly appear nested, so
+// without the expansion the feature lands looking delivered and prunes almost
+// nothing.
+func TestBareNamesPruneNestedCopies(t *testing.T) {
+	dir := writeCtx(t, map[string]string{"dag.py": "x"})
+	cfg := &domain.LeoflowConfig{DagID: "d"}
+	cfg.ApplyDefaults()
+
+	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	got := readIgnore(t, dir)
+	for _, want := range []string{"**/__pycache__", "**/*.pyc", "**/.venv"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q — the default would prune only the context root\n%s", want, got)
+		}
+	}
+}
+
+// TestOurBlockBeatsAnEarlierNegation is the other half of Blocker 2, and it is
+// what makes the documented promise true. Re-emitting a pattern that is already
+// present does NOT override an earlier `!` exception — measured: with
+// `secrets`, `!secrets/keep.pem`, `secrets`, the keep.pem shipped on both
+// builders. Only the `p/**` form wins.
+func TestOurBlockBeatsAnEarlierNegation(t *testing.T) {
+	dir := writeCtx(t, map[string]string{
+		"dag.py": "x", ".dockerignore": "secrets\n!secrets/keep.pem\n",
+	})
+	cfg := &domain.LeoflowConfig{DagID: "d"}
+	cfg.ExcludePaths = []string{"secrets"}
+	cfg.ApplyDefaults()
+
+	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	got := readIgnore(t, dir)
+	if !strings.Contains(got, "secrets/**") {
+		t.Errorf("no `secrets/**` after the author's negation, so exclude_paths loses to it\n%s", got)
+	}
+	if strings.Index(got, "secrets/**") < strings.Index(got, "!secrets/keep.pem") {
+		t.Errorf("our overriding form precedes the negation, so it does not win\n%s", got)
+	}
+}
+
+// TestInterruptedBlockIsStrippedNotAdopted is Finding 4. There is no signal
+// handling in the CLI, so Ctrl-C during a multi-minute `docker build` kills the
+// process before any defer — that is THE interruption, not a rare one. Read
+// back naively, our leftover block looks like the author's own file, and the
+// next successful build "restores" it permanently: a stale, self-perpetuating,
+// git-committable artifact headed "removed after the build" that no longer
+// tracks leoflow.yaml.
+func TestInterruptedBlockIsStrippedNotAdopted(t *testing.T) {
+	dir := writeCtx(t, map[string]string{"dag.py": "x", ".dockerignore": "big.bin\n"})
+	cfg := &domain.LeoflowConfig{DagID: "d"}
+	cfg.ApplyDefaults()
+
+	// Build one: interrupted — no cleanup runs.
+	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	// Build two: completes.
+	var out bytes.Buffer
+	cleanup, err := ensureDockerignore(&out, dir, cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "interrupted build") {
+		t.Errorf("the leftover block was adopted silently, not reported: %q", out.String())
+	}
+	cleanup()
+
+	if got := readIgnore(t, dir); got != "big.bin\n" {
+		t.Errorf("the workspace was not returned to the author's own file, got:\n%q", got)
 	}
 }
 
@@ -242,7 +365,7 @@ func TestMergeIsIdempotentAcrossAnInterruptedBuild(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	for range 3 {
-		if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg); err != nil {
+		if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -252,5 +375,52 @@ func TestMergeIsIdempotentAcrossAnInterruptedBuild(t *testing.T) {
 	}
 	if n := strings.Count(got, "\n.git\n"); n != 1 {
 		t.Errorf(".git appears %d times, want 1\n%s", n, got)
+	}
+}
+
+// TestBuildActuallyGetsTheDockerignore binds the feature to a build.
+//
+// Every other test here calls ensureDockerignore directly, so deleting its only
+// caller in buildAndPush left the whole suite green — restoring precisely the
+// #995 condition this PR exists to end: declared, documented, and wired to
+// nothing. For a change whose thesis is "a field nobody consumed", shipping the
+// wiring untested is the same defect one level up.
+//
+// The builder is operator-configurable (ADR 0015: shelled out, no Docker SDK),
+// so a script standing in for `docker` can record what the context looked like
+// at the moment the build ran — which is the only moment that matters.
+func TestBuildActuallyGetsTheDockerignore(t *testing.T) {
+	dir := writeCtx(t, map[string]string{
+		"dag.py": "print('x')", ".env": "PASSWORD=hunter2", ".git/config": "x",
+	})
+	probe := filepath.Join(t.TempDir(), "fake-builder")
+	record := filepath.Join(t.TempDir(), "seen.txt")
+	script := "#!/bin/sh\ncp \"" + dir + "/.dockerignore\" \"" + record + "\" 2>/dev/null\nexit 0\n"
+	if err := os.WriteFile(probe, []byte(script), 0o700); err != nil { //nolint:gosec // a test fixture that must be executable
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cfg := &domain.LeoflowConfig{DagID: "d", Dbt: &domain.DbtConfig{Project: "."}}
+	cfg.ApplyDefaults()
+	opts := compileOptions{build: true, builder: probe}
+	if err := buildAndPush(cmd, dir, opts, cfg, "img:t"); err != nil {
+		t.Fatalf("buildAndPush: %v", err)
+	}
+
+	seen, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("no .dockerignore existed when the builder ran: %v", err)
+	}
+	for _, want := range []string{".git", "**/__pycache__", generatedDockerfileName} {
+		if !strings.Contains(string(seen), want) {
+			t.Errorf("the builder saw a .dockerignore without %q:\n%s", want, seen)
+		}
+	}
+	// And the workspace is clean again afterwards.
+	if _, statErr := os.Stat(filepath.Join(dir, ".dockerignore")); !os.IsNotExist(statErr) {
+		t.Error("the .dockerignore outlived the build")
 	}
 }

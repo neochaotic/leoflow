@@ -361,6 +361,13 @@ ends. Your rules come first and Leoflow's last, which means `exclude_paths` has
 the final word: a `!` re-include in your `.dockerignore` cannot silently defeat
 an exclusion you declared in `leoflow.yaml`.
 
+Each entry is written out in the forms Docker honours rather than verbatim.
+`.dockerignore` is **not** `.gitignore`: a pattern with no slash matches only at
+the context root, so `__pycache__` alone would leave every nested one in the
+image. Leoflow emits `p`, `**/p` and `p/**` for a bare name — the last of those
+is also what lets `exclude_paths` beat an earlier `!` rule, which re-stating the
+plain pattern does not do.
+
 For a dbt project, two things a host-side `dbt parse` leaves behind are
 excluded automatically, scoped to each project directory: `logs/` and
 `.user.yml`. Both matter beyond image size — `.user.yml` is dbt's

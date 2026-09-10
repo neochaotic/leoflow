@@ -107,6 +107,7 @@ func TestMonitorHealthSharesTheProbeBudget(t *testing.T) {
 	rec := httptest.NewRecorder()
 	before := time.Now()
 	r.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", http.NoBody))
+	after := time.Now()
 
 	if pg.unbounded != 0 {
 		t.Errorf("%d monitor health call(s) ran with no deadline", pg.unbounded)
@@ -117,7 +118,9 @@ func TestMonitorHealthSharesTheProbeBudget(t *testing.T) {
 	if !pg.deadlines[1].Equal(pg.deadlines[0]) {
 		t.Errorf("ping and schema got different deadlines (%v vs %v)", pg.deadlines[0], pg.deadlines[1])
 	}
-	if pg.deadlines[0].Before(before.Add(probeBudget - time.Second)) {
-		t.Errorf("deadline %v is not derived from probeBudget", pg.deadlines[0])
+	// The same request-start + probeBudget window /readyz is held to. A looser
+	// lower bound accepts a hardcoded 1.5s here and calls it probeBudget.
+	if lo, hi := before.Add(probeBudget), after.Add(probeBudget); pg.deadlines[0].Before(lo) || pg.deadlines[0].After(hi) {
+		t.Errorf("deadline %v is not request-start + probeBudget (%v..%v)", pg.deadlines[0], lo, hi)
 	}
 }

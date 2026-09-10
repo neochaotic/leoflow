@@ -167,9 +167,18 @@ func TestReadinessDistinguishesSchemaFromUnavailable(t *testing.T) {
 		return rec
 	}
 
-	t.Run("a timed-out schema read reports unavailable, not a schema verdict", func(t *testing.T) {
-		// Exactly what the handler's own 2s bound produces against a slow
+	t.Run("a timed-out schema read reports a deadline, not a schema verdict", func(t *testing.T) {
+		// Exactly what the handler's own budget produces against a slow
 		// database: the storage layer wraps the context error.
+		//
+		// This used to assert "postgres unavailable". It now asserts the more
+		// specific deadline wording, because a shared probe budget made
+		// "unavailable" ambiguous in a way that matters: under one budget the
+		// check that fails is not necessarily the one that consumed it, so a
+		// timeout has to be reported AS a timeout, naming the dependency that
+		// spent the budget. The property this case exists for is unchanged and
+		// still asserted — a slow database must not be reported as a migration
+		// problem, and the answer must still name postgres.
 		rec := readyz(t, fmt.Errorf("reading database schema version: %w", context.DeadlineExceeded))
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("status = %d, want 503", rec.Code)
@@ -178,8 +187,11 @@ func TestReadinessDistinguishesSchemaFromUnavailable(t *testing.T) {
 		if strings.Contains(body, "schema not current") {
 			t.Errorf("a slow database was reported as a migration problem: %q", body)
 		}
-		if !strings.Contains(body, "postgres unavailable") {
-			t.Errorf("body = %q, want it to report postgres unavailable", body)
+		if !strings.Contains(body, "budget") {
+			t.Errorf("body = %q, want it to report that the probe budget ran out", body)
+		}
+		if !strings.Contains(body, "postgres") {
+			t.Errorf("body = %q, want it to name postgres", body)
 		}
 	})
 

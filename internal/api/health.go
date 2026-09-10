@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -84,6 +85,13 @@ func checkDependency(ctx context.Context, hc HealthChecker) error {
 // checks map and must not come to disagree about how long a dependency is
 // allowed to take, for the same reason they must not disagree about whether it
 // works.
+//
+// Scoped to the CHECKS MAP, and only that. /api/v2/monitor/health also reports a
+// scheduler heartbeat, and that path is outside this budget: Heartbeat() takes
+// no context, derives its own from context.Background() and carries its own
+// hardcoded bound, so that endpoint's worst case is this budget plus the
+// heartbeat's. It is a dashboard rather than a probe, so nothing routes on it —
+// but the number is not 2s. Folding it in is tracked separately.
 func withProbeBudget(c *gin.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(c.Request.Context(), probeBudget)
 }
@@ -100,25 +108,97 @@ func withProbeBudget(c *gin.Context) (context.Context, context.CancelFunc) {
 // makes that exact string a PASS criterion, so conflating them would also make
 // the release check pass for the wrong reason.
 //
-// Both remain 503, and both remain vague on purpose: /readyz is unauthenticated
-// (probes carry no token) and the raw error can carry a DSN, credentials or an
-// internal hostname (audit H2), so the real cause is logged server-side and the
-// response names only the dependency.
-func unreadyDetail(name string, err error) string {
-	if errors.Is(err, domain.ErrSchemaNotCurrent) {
+// A third question appeared when the probe moved to ONE budget shared by every
+// dependency: "nobody said no, we just ran out of time". Under a shared budget
+// the check that fails is whichever one happened to be running when the budget
+// expired, not the one that consumed it — a Postgres eating 1.8s of a 2s budget
+// leaves Redis 200ms, so Redis times out and a healthy Redis takes the blame.
+// Reporting that as "redis unavailable" is the same wrong-dependency page this
+// whole line of work exists to prevent, so a deadline is reported as a deadline
+// and the dependency that actually spent the budget is named instead.
+//
+// All three remain 503, and all three remain vague on purpose: /readyz is
+// unauthenticated (probes carry no token) and the raw error can carry a DSN,
+// credentials or an internal hostname (audit H2), so the real cause is logged
+// server-side and the response names only the dependency. A dependency name and
+// a coarse duration disclose nothing the endpoint does not already disclose by
+// answering 503 at all.
+func unreadyDetail(name string, err error, spent []depTiming) string {
+	switch {
+	case errors.Is(err, domain.ErrSchemaNotCurrent):
 		return name + " schema not current"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "probe budget exhausted; slowest dependency " + slowest(spent)
+	default:
+		return name + " unavailable"
 	}
-	return name + " unavailable"
+}
+
+// depTiming is how long one dependency's whole check took, kept so a budget
+// exhaustion can name the dependency that caused it rather than the one that
+// noticed it.
+type depTiming struct {
+	name string
+	took time.Duration
+}
+
+// slowest names the dependency that consumed the most of the budget, rounded to
+// a tenth of a second — enough to point an operator at the right database,
+// coarse enough not to be a timing oracle. Called only on the deadline path, so
+// spent always has at least one entry; the empty case is defensive.
+func slowest(spent []depTiming) string {
+	if len(spent) == 0 {
+		return "unknown"
+	}
+	worst := spent[0]
+	for _, d := range spent[1:] {
+		if d.took > worst.took {
+			worst = d
+		}
+	}
+	return worst.name + " (" + worst.took.Round(100*time.Millisecond).String() + ")"
+}
+
+// probeOrder is the order dependencies are checked in, sorted so it is stable.
+//
+// Map iteration order is randomized, and under a shared budget the order
+// decides which dependency runs out of time. Two probes a second apart could
+// otherwise reach different verdicts about the same cluster, and a test could
+// not pin the behavior at all.
+func probeOrder(checks map[string]HealthChecker) []string {
+	names := make([]string, 0, len(checks))
+	for name := range checks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// spentAttr renders the per-dependency timings for the log line.
+func spentAttr(spent []depTiming) []any {
+	out := make([]any, 0, len(spent)*2)
+	for _, d := range spent {
+		out = append(out, d.name, d.took.String())
+	}
+	return out
 }
 
 func readinessHandler(checks map[string]HealthChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx, cancel := withProbeBudget(c)
 		defer cancel()
-		for name, hc := range checks {
-			if err := checkDependency(ctx, hc); err != nil {
-				slog.WarnContext(ctx, "readiness check failed", "dependency", name, "error", err)
-				AbortProblem(c, http.StatusServiceUnavailable, "not ready", unreadyDetail(name, err))
+		spent := make([]depTiming, 0, len(checks))
+		for _, name := range probeOrder(checks) {
+			start := time.Now()
+			err := checkDependency(ctx, checks[name])
+			spent = append(spent, depTiming{name: name, took: time.Since(start)})
+			if err != nil {
+				// The per-dependency timings go in the log line, not just the
+				// verdict: on the deadline path they are the only record of
+				// where the budget went.
+				slog.WarnContext(ctx, "readiness check failed",
+					"dependency", name, "error", err, "spent", spentAttr(spent))
+				AbortProblem(c, http.StatusServiceUnavailable, "not ready", unreadyDetail(name, err, spent))
 				return
 			}
 		}

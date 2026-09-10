@@ -235,8 +235,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#1042](https://github.com/neochaotic/leoflow/issues/1042)).
 - `/readyz` and `/api/v2/monitor/health` bound the whole check at 2s instead of
   granting a fresh 2s per dependency with `Ping` unbounded, so a slow dependency
-  produces a 503 that names it rather than a probe that reports nothing
-  ([#1040](https://github.com/neochaotic/leoflow/issues/1040)).
+  produces a 503 rather than a probe that reports nothing
+  ([#1040](https://github.com/neochaotic/leoflow/issues/1040)). Dependencies are
+  checked in a stable order, and a 503 caused by the budget running out says so
+  and names the dependency that consumed it — under one shared budget the check
+  that fails is otherwise whichever one happened to be running when time ran
+  out, which is usually not the one at fault.
+- Node drains and cluster-autoscaler scale-down are no longer blocked during a
+  load spike. `disruptionsAllowed` is computed from ready pods, so a spike that
+  made every replica unready used to freeze the PodDisruptionBudget at zero for
+  the duration of the incident.
 
 - **`/readyz` no longer reports ready over a database with no schema (#1023).**
   The readiness probe pinged each dependency and nothing more, and a Postgres

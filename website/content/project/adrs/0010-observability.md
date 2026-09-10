@@ -125,6 +125,20 @@ Every binary exposes:
 
 K8s deployments use these for liveness and readiness probes.
 
+> **Superseded in part by #1023.** "Reachable" turned out to be too weak a bar
+> for the dependency that carries a schema. A Postgres `Ping` succeeds whenever
+> the *connection* is healthy and says nothing about what is behind it, so a
+> database emptied by a node recycle, restored from an older backup, failed over
+> to a lagging replica or repointed by a changed `database.url` kept `/readyz`
+> at 200 while the control plane could not serve one authenticated request.
+> Readiness now also asserts that `schema_migrations` is present and not behind
+> the version the running binary embeds, with one deliberate exemption: a
+> migration in flight *above* that version keeps the pod ready, because the
+> migrate Job is a `pre-upgrade` hook and failing it would empty the Service on
+> every slow upgrade. The decision above is left as written — it is the record
+> of what was decided in 2026-05, and this note is the record of what replaced
+> it.
+
 ## Consequences
 
 - The dependency footprint grows. `client_golang`, `go.opentelemetry.io/otel`, and `slog` are mandatory.

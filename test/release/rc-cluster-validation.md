@@ -495,32 +495,152 @@ built** — the script builds the base image but not those two.
 The v0.4.5 RC found this the expensive way: an ephemeral-storage Postgres came
 back **empty** after a node recycle and the running control plane kept answering
 `/readyz` 200 while the scheduler could not read `dag_runs`. A Ping proves the
-connection, not the schema, so nothing in the probe noticed. It is a two-command
-check and it belongs in every RC from here.
+connection, not the schema, so nothing in the probe noticed.
 
-Do this against a **throwaway** database — it drops the schema:
+It has two halves, and **both** have to be run. The first is the fix. The second
+is the outage the fix can cause if it is built naively, and it is the more
+expensive of the two to discover in production.
+
+#### §4.6a — a schema that vanishes takes the pod out of rotation
+
+Do this against a **throwaway** database — it drops the schema.
+
+**Port-forward to the POD, not the Service.** This is the whole point of the
+check: a correct build leaves the Service's endpoints within ~30s, and a
+port-forward through the Service dies with it. `curl` then prints `000` — a
+connection failure, not an HTTP status — and `000` is not `503`, so the row
+would read FAIL against a build that is working exactly as intended. Forwarding
+to the pod keeps talking to it after it is out of rotation, which is also the
+only way to see the 503 body at all.
 
 ```bash
-API=<control-plane base URL>          # e.g. http://localhost:8080 via port-forward
+NS=<ns>
+POD=$(kubectl get pod -n "$NS" -l app.kubernetes.io/instance=leoflow -o name | head -1)
+kubectl port-forward -n "$NS" "$POD" 8080:8080 &          # 9090 in the scheduler-only role
+PF=$!
+
 psql "$DATABASE_URL" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
-curl -sS -o /dev/stderr -w '%{http_code}\n' "$API/readyz"       # expect 503
-kubectl get pod -n <ns> -l app.kubernetes.io/instance=leoflow   # READY 0/1, RESTARTS unchanged
 ```
 
-**PASS:** `/readyz` answers **503** within one probe period, the pod goes
-`READY 0/1` and leaves the Service's endpoints, and the 503 body names only the
-dependency (`postgres schema not current`) — **no DSN, credentials or internal
-hostname**, since the endpoint is unauthenticated. The log line carries the
-version detail.
+Readiness is `periodSeconds: 10 × failureThreshold: 3`, so the flip takes up to
+30s. Wait for the condition rather than sampling it — checked instantly, a
+**correctly fixed** build still shows `READY 1/1`, and the row cannot fail:
 
-**Also PASS, and the point of checking it:** the pod is **not restarting**.
-`/healthz` stays 200 and `RESTARTS` does not climb — liveness is deliberately
-schema-blind, because restarting creates no schema and a crash loop would cost
-you the pod you need to diagnose. A `CrashLoopBackOff` here is a FAIL.
+```bash
+kubectl wait --for=condition=Ready=false --timeout=60s -n "$NS" "$POD"
+curl -sS -o /dev/stderr -w '%{http_code}\n' localhost:8080/readyz    # expect 503
+kubectl get endpoints -n "$NS" -l app.kubernetes.io/instance=leoflow  # pod's IP gone
+```
 
-Re-run the migration Job (or restore the database) and confirm `/readyz` returns
-to 200 **without a restart** — the check is per-probe, so recovery needs no pod
-churn.
+**PASS:** `kubectl wait` returns success (it did not time out), `/readyz` answers
+**503**, the pod's IP is no longer in the Service's endpoints, and the 503 body
+names only the dependency — **no DSN, credentials or internal hostname**, since
+the endpoint is unauthenticated. The version detail is in the pod log.
+
+Read the detail string, do not just grep for 503. `postgres schema not current`
+is the schema verdict; `postgres unavailable` is a database that could not be
+**read** — a timeout, a reset connection, an exhausted pool. Both are 503 and
+only the first one is this check. A run that shows `postgres unavailable` here
+has proved something about the pool, not about #1023.
+
+**Liveness must NOT fire, and this is the half that needs patience.** Liveness is
+`periodSeconds: 20 × failureThreshold: 3`, so a restart needs **60s of continuous
+failure**. `RESTARTS` read immediately after the DROP is `0` whether liveness is
+schema-blind or not, so the instant check proves nothing. Hold the broken state
+for ~90s and assert `/healthz` stays 200 the whole time — a positive assertion,
+not the absence of a restart:
+
+```bash
+end=$((SECONDS+90))
+while [ $SECONDS -lt $end ]; do
+  printf '%s ' "$(curl -sS -o /dev/null -w '%{http_code}' localhost:8080/healthz)"
+  sleep 10
+done; echo
+kubectl get pod -n "$NS" "$POD" -o jsonpath='{.status.containerStatuses[0].restartCount}{"\n"}'
+```
+
+**PASS:** every sample is `200` and the restart count is unchanged from before
+the DROP. A `CrashLoopBackOff`, or any 5xx from `/healthz`, is a FAIL — liveness
+is deliberately schema-blind, because restarting creates no schema and a crash
+loop would cost you the pod you need to diagnose.
+
+**Recovery — two traps, both of which have cost time.**
+
+*The Job is not there to re-run.* `migration-job.yaml` carries
+`helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded`, so after a
+successful install the Job object is **deleted**. `kubectl create job
+--from=job/leoflow-migrate` answers `NotFound`. What re-runs the migration is a
+Helm operation that fires the `pre-upgrade` hook:
+
+```bash
+helm upgrade leoflow <chart> -n "$NS" --reuse-values --wait
+```
+
+*`CREATE SCHEMA public` does not restore who may use it.* The recreated schema is
+owned by whichever role ran the `psql`, and every grant that was on the old one
+went with it. If the migrate Job connects as a different role — the usual split,
+and mandatory under the read-only `role:api` identity (ADR 0049) — it fails on
+`permission denied for schema public` and the Job's `backoffLimit: 3` turns that
+into a failed `helm upgrade` several minutes later. Restore ownership first,
+substituting your own roles:
+
+```sql
+ALTER SCHEMA public OWNER TO <migrate role>;
+GRANT USAGE, CREATE ON SCHEMA public TO <migrate role>;
+GRANT USAGE ON SCHEMA public TO <api role>;   -- only if you run the split identity
+```
+
+**PASS:** `/readyz` returns to 200 and the pod re-enters the endpoints **without
+a restart** — the check is per-probe, so recovery needs no pod churn. Note that
+`--wait` now blocks on real readiness, which is the #1023 fix seen from the other
+side: before it, `helm upgrade --wait` reported success against this database.
+
+#### §4.6b — a rolling upgrade never drops the Service to zero endpoints
+
+The reason §4.6a is not the whole check. The migrate Job is a
+`pre-install,pre-upgrade` hook, so on **upgrade** it runs while the OLD pods are
+live and serving, and golang-migrate commits `dirty=true` for the duration of
+each migration body. A readiness probe that treats `dirty` as not-ready flips
+**every** old replica at the same instant — they all read the same one row — for
+any migration longer than `3 × 10s`. The Service reaches zero endpoints, and in
+the `all` role that Service also carries gRPC, so running task pods lose the
+control plane mid-upgrade. Readiness is version-aware on `dirty` precisely to
+avoid this, and the property is not observable in §4.6a.
+
+Needs a migration slow enough to span more than 30s of probing. Simulate it by
+holding the row that every replica reads, in a transaction, while an upgrade runs:
+
+```bash
+# terminal 1 — watch the endpoints for the whole upgrade; never let this reach 0
+kubectl get endpoints -n "$NS" leoflow -w
+
+# terminal 2 — park the schema in the state a long migration produces:
+#   dirty, at a version ABOVE what the running binaries embed
+psql "$DATABASE_URL" -c \
+  'UPDATE schema_migrations SET version = version + 1, dirty = true;'
+sleep 60
+psql "$DATABASE_URL" -c \
+  'UPDATE schema_migrations SET version = version - 1, dirty = false;'
+```
+
+**PASS:** across the whole 60s the endpoints list never empties, `/readyz` on a
+running pod stays **200**, and the pod log carries **one** line about a migration
+being in flight — not one per probe period. If the endpoints drop to zero, or
+`/readyz` goes 503 here, readiness is treating an in-flight forward migration as
+a broken schema and every `helm upgrade` with a slow migration is an outage.
+
+**The other arm, and it must FAIL closed.** The same state at or *below* the
+running binary's own version is a genuinely half-applied schema it depends on,
+and must take the pod out of rotation:
+
+```bash
+psql "$DATABASE_URL" -c 'UPDATE schema_migrations SET dirty = true;'   # same version
+kubectl wait --for=condition=Ready=false --timeout=60s -n "$NS" "$POD"
+psql "$DATABASE_URL" -c 'UPDATE schema_migrations SET dirty = false;'
+```
+
+**PASS:** the pod goes NotReady here. A build that stays ready through **both**
+arms has not fixed #1023, it has disabled the dirty check.
 
 ---
 
@@ -599,6 +719,8 @@ cloud reads as proof, and that is the failure §5 exists to prevent.
 | #729 | managed-PG re-extract (Lite host) | | |
 | — | task pods non-root by default | | |
 | HA | HA-profile upgrade: a PDB exists that nobody asked for (§4.5) | | |
+| #1023 | schema dropped under a running pod: `/readyz` 503, pod leaves endpoints, no restart across 90s (§4.6a) | | |
+| #1023 | in-flight migration above the running binary: endpoints never empty, `/readyz` stays 200; dirty at the same version still goes NotReady (§4.6b) | | |
 | ADR 0052 | `LEOFLOW_CHAOS_ONLY=CD chaos-runtime.sh` — C and D pass (§4.5) | | |
 
 For each FAIL: open an issue on `neochaotic/leoflow` with the root cause and, where

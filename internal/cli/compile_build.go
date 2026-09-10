@@ -163,7 +163,7 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 			return "", aerr
 		}
 		// Single RUN so the apt cache cleanup stays in the same layer as the install.
-		fmt.Fprintf(&b, "RUN apt-get update && apt-get install -y --no-install-recommends %s "+
+		fmt.Fprintf(&b, "RUN apt-get update && apt-get install -y --no-install-recommends -- %s "+
 			"&& rm -rf /var/lib/apt/lists/*\n", args)
 	}
 	if len(deps) > 0 {
@@ -173,7 +173,7 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 		}
 		// Dependencies before COPY so the (rarely-changing) layer is cached across
 		// edits to the DAG source.
-		fmt.Fprintf(&b, "RUN pip install --no-cache-dir %s\n", args)
+		fmt.Fprintf(&b, "RUN pip install --no-cache-dir -- %s\n", args)
 	}
 	if cfg.Dbt != nil {
 		// A dbt project is the DAG source (ADR 0042): there is no dag.py to COPY and
@@ -646,10 +646,20 @@ func shellQuote(word string) string {
 // metacharacters" would refuse a valid form; quoting carries it through
 // intact, which a real build confirms. Quoting is the fix, not a denylist.
 //
-// A newline is the exception, because no quoting survives it: it ends the RUN
+// A newline is one exception, because no quoting survives it: it ends the RUN
 // instruction itself, and everything after becomes a new Dockerfile line. That
 // one is refused, naming the field and the entry — a stray newline in YAML is
 // invisible in the source.
+//
+// The other exception is why every element is emitted after a `--`. Quoting
+// guarantees "one argv element"; it does not guarantee "a package". A leading
+// dash is still an OPTION to the tool being run, and both tools take dangerous
+// ones: `dependencies: ["--dry-run", "six"]` built green with six absent — the
+// identical silent-failure shape as the bug this whole change is about — and an
+// apt `-o DPkg::Pre-Invoke::=<cmd>` runs that command as root during the build.
+// `--` ends option parsing in both, turning either into a loud refusal
+// ("Invalid requirement", "Unable to locate package"). Verified with real
+// builds both ways.
 func shellArgs(field string, words []string) (string, error) {
 	quoted := make([]string, 0, len(words))
 	for _, w := range words {

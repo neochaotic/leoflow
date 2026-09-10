@@ -206,11 +206,20 @@ func TestShellReceivesTheSpecsIntact(t *testing.T) {
 	df := renderFor(t, func(c *domain.LeoflowConfig) { c.Dependencies = specs })
 	got := runLineUnderSh(t, df, "pip")
 
-	// pip is called as `pip install --no-cache-dir <specs...>`.
-	if len(got) < 2 {
-		t.Fatalf("pip received %v, want install + flags + specs", got)
+	// pip is called as `pip install --no-cache-dir -- <specs...>`. Sliced after
+	// the separator rather than at a fixed index, so adding or removing a flag
+	// does not silently shift what this asserts.
+	sep := -1
+	for i, a := range got {
+		if a == "--" {
+			sep = i
+			break
+		}
 	}
-	args := got[2:]
+	if sep < 0 {
+		t.Fatalf("pip received no `--` separator: %q", got)
+	}
+	args := got[sep+1:]
 	if len(args) != len(specs) {
 		t.Fatalf("pip received %d arguments, want %d — the shell split or ate something:\n%q", len(args), len(specs), got)
 	}
@@ -238,7 +247,83 @@ func TestAptLineStillWorksAsAShellCommand(t *testing.T) {
 	}
 	// `rm` is on the recorder PATH too, so the `&&` chain having run at all is
 	// visible: if quoting had swallowed the chaining, rm would never be called.
-	if !strings.Contains(joined, "/var/lib/apt/lists/*") {
+	//
+	// Asserted on the DIRECTORY, not on the literal `/var/lib/apt/lists/*`. The
+	// glob is unquoted on purpose — it is meant to be shell — so whether it
+	// expands depends on the machine: on a runner with apt installed it becomes
+	// eighty real paths, on a Mac without /var/lib/apt/lists it stays literal.
+	// The first version of this assertion looked for the literal and passed
+	// locally while failing in CI, which is a test measuring the filesystem
+	// rather than the behavior.
+	if !strings.Contains(joined, "-rf") || !strings.Contains(joined, "/var/lib/apt/lists") {
 		t.Errorf("the cache cleanup did not run, so the && chain was broken: %q", got)
+	}
+}
+
+// TestOptionInjectionIsStoppedByTheSeparator. Quoting guarantees "one argv
+// element"; it does not guarantee "a package". A leading dash is still an
+// OPTION to the tool being run, and both tools take dangerous ones:
+//
+//   - `dependencies: ["--dry-run", "six"]` built green with six absent —
+//     confirmed on a real build. That is the identical silent-failure shape as
+//     the bug this whole change exists to fix.
+//   - `system_packages: ["-o", "DPkg::Pre-Invoke::=<cmd>", "hello"]` runs <cmd>
+//     as root during the build.
+//
+// `--` ends option parsing in both, so either becomes a loud refusal instead.
+func TestOptionInjectionIsStoppedByTheSeparator(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool string
+		mutate     func(*domain.LeoflowConfig)
+	}{
+		{"pip", "pip", func(c *domain.LeoflowConfig) { c.Dependencies = []string{"--dry-run", "six"} }},
+		{"apt-get", "apt-get", func(c *domain.LeoflowConfig) { c.SystemPackages = []string{"-o", "DPkg::Pre-Invoke::=id", "hello"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			df := renderFor(t, tc.mutate)
+			line := runLineWith(t, df, tc.tool+" ")
+			if !strings.Contains(line, " -- ") {
+				t.Fatalf("no `--` separator, so a leading-dash entry is still an option:\n%s", line)
+			}
+			// Everything the author supplied must come after it.
+			sep := strings.Index(line, " -- ")
+			for _, entry := range []string{"--dry-run", "-o", "DPkg::Pre-Invoke::=id"} {
+				if i := strings.Index(line, "'"+entry+"'"); i >= 0 && i < sep {
+					t.Errorf("%q appears before the `--`, so it is still parsed as an option:\n%s", entry, line)
+				}
+			}
+		})
+	}
+}
+
+// TestNewlineIsRefusedInSystemPackagesToo. The newline guard is the one thing
+// quoting cannot substitute for, and there was no test that it applied to
+// system_packages — so restricting it to `dependencies` was a wrong fix the
+// suite accepted.
+func TestNewlineIsRefusedInSystemPackagesToo(t *testing.T) {
+	cfg := &domain.LeoflowConfig{DagID: "d"}
+	cfg.SystemPackages = []string{"curl\nRUN echo surprise"}
+	cfg.ApplyDefaults()
+	_, err := generatedDockerfile(cfg, "dag.py")
+	if err == nil {
+		t.Fatal("a newline in system_packages was accepted; it terminates the RUN instruction")
+	}
+	if !strings.Contains(err.Error(), "system_packages") {
+		t.Errorf("the error does not name the field: %v", err)
+	}
+}
+
+// TestAptChainSurvivesQuotingWithTheOriginalBug guards the guard: the apt case
+// above asserts the `&&` chain still runs, and that assertion passes with the
+// ORIGINAL raw join in place — it is a "did I break the shell parts" check, not
+// a regression test for the quoting. This one is the regression test.
+func TestAptPackagesAreQuotedNotJoinedRaw(t *testing.T) {
+	df := renderFor(t, func(c *domain.LeoflowConfig) {
+		c.SystemPackages = []string{"pkg;touch bad"}
+	})
+	got := runLineUnderSh(t, df, "apt-get")
+	joined := strings.Join(got, "\x00")
+	if !strings.Contains(joined, "pkg;touch bad") {
+		t.Errorf("the entry did not reach apt-get as one argument: %q", got)
 	}
 }

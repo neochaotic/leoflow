@@ -316,6 +316,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `system_packages` too, which used the identical join
   ([#1064](https://github.com/neochaotic/leoflow/issues/1064)). Quoting in the
   YAML never helped — the parser consumes those quotes before Go sees the value.
+  Entries are also passed after a `--`, because quoting guarantees "one argv
+  element" and not "a package": `dependencies: ["--dry-run", "six"]` built green
+  with `six` absent — the same silent-failure shape as the bug itself — and an
+  apt `-o DPkg::Pre-Invoke::=<cmd>` ran that command as root during the build.
 - **`exclude_paths` now reaches the image build.** It had been in the schema,
   defaulted, and documented as "skipped both in image build and workspace
   discovery" with zero consumers in build code, so with the default

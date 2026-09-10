@@ -234,22 +234,20 @@ jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not]
 docker run --rm --entrypoint python "$DAG_IMAGE" -c 'import dbt.adapters.postgres' \
   || fail "the adapter declared in dependencies: is not installed in the generated image"
 
-# #1064 — a version floor must survive into the image. Two assertions, because
-# they fail on different halves of the defect and only one of them is
-# deterministic:
+# #1064 — a version floor must survive into the image. An unquoted `>=` was a
+# shell redirection, so the operand became a filename holding pip's stdout.
 #
-#   1. The junk file. An unquoted `>=` is a shell redirection, so the operand
-#      becomes a filename holding pip's stdout. This fires whatever pip decides
-#      to install, which is what makes it the reliable half.
-#   2. The version itself. This is the property anyone using a floor actually
-#      wants — it is how you remediate a CVE in a transitive dependency — but it
-#      only fails when the base image happens to carry an older version, so it
-#      is the honest assertion rather than the load-bearing one.
+# This asserts the ARTIFACT, not the version, and that is deliberate. The
+# obvious assertion — "the installed wheel satisfies the declared floor" — is
+# one that cannot fail here: the runtime base already ships wheel 0.46.3, above
+# any floor low enough to be safe to declare, so pip leaves it alone whether or
+# not the constraint survived. The version symptom only appears when the base
+# carries something OLDER, and there is no way to stage that through a
+# chart-generated Dockerfile. A test that cannot fail is worse than no test, so
+# it is not written; the version property is covered by the unit tier, which
+# asserts what pip was actually handed.
 docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'ls -A /home/leoflow | grep -q "^=" && exit 1 || exit 0' \
   || fail "a redirection artifact (=<version>) is in the image: a dependency operator escaped the RUN quoting (#1064)"
-docker run --rm --entrypoint python "$DAG_IMAGE" -c \
-  'import sys;from importlib.metadata import version;v=version("wheel");sys.exit(0 if tuple(map(int,v.split(".")[:2]))>=(0,45) else 1)' \
-  || fail "the wheel>=0.45 floor declared in dependencies: was not honoured in the image (#1064)"
 
 # #993 CANNOT manifest under --build: `local` is false either way there, so the
 # assertion above is a canary, not a proof. The defect needs a bare compile —

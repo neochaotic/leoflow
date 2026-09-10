@@ -75,9 +75,16 @@ func (r execRunner) Run(ctx context.Context, argv, env []string, stdout, stderr 
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Same signal the default cancel sends, widened to the group: an immediate
-	// SIGKILL. Cancel runs only when the context is done AND the process has not
-	// already been reaped, so cmd.Process is set and its pid cannot have been
-	// recycled by the time the group is addressed.
+	// SIGKILL. cmd.Process is always set here — Start installs the watcher that
+	// calls this only after the process exists — but the process may already
+	// have been REAPED: os/exec's watcher races its result handoff against the
+	// context, so Wait can collect the child and this still run afterwards. That
+	// is wanted rather than guarded against, because a process group outlives
+	// its leader for exactly as long as a descendant is still in it, and that
+	// descendant is what this call exists to kill. The residue is a pid reused
+	// in the microseconds between the reap and this call, which would address
+	// some other group; closing it would need a pidfd, and it costs a pid-space
+	// wraparound inside that window to happen at all.
 	cmd.Cancel = func() error { return killProcessGroup(cmd.Process) }
 	cmd.WaitDelay = r.waitDelay
 

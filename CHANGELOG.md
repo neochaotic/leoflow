@@ -80,6 +80,65 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **What to do:** set `python_version: "3.11"` (or `"3.12"` / `"3.13"`) in
   `leoflow.yaml` and rebuild — or, if you pinned `base_image`, repoint it to the
   matching `py3.11` tag and rebuild.
+### Fixed
+
+- **`/readyz` no longer reports ready over a database with no schema (#1023).**
+  The readiness probe pinged each dependency and nothing more, and a Postgres
+  `Ping` succeeds whenever the *connection* is healthy — it says nothing about
+  what is behind it. Found on the v0.4.5 RC cluster: a node recycle recreated an
+  ephemeral-storage Postgres **empty**, and the running control plane answered
+  `{"status":"ready"}` HTTP 200 in the same seconds the scheduler was failing
+  every tick on `relation "dag_runs" does not exist` and `/auth/token` was
+  answering 503. Readiness now asserts the same invariant boot does —
+  `schema_migrations` present, clean, and not behind the version this binary
+  embeds — through the same storage-layer code path, so the two verdicts cannot
+  drift. This is the signal Kubernetes routes traffic on and calls a rollout
+  successful on, so the gap let `helm upgrade --wait` report success against a
+  control plane that could not serve one authenticated request, let a rolling
+  update replace working pods with broken ones, and kept a 503-ing pod in
+  Service rotation. It also covers the cases that reach installs with durable
+  storage: a restore from a backup older than the running binary, a failover to
+  a replica that has not caught up, a migration rolled back out of band, and a
+  `database.url` repointed at the wrong database.
+
+  **A migration in flight does not take the control plane out of rotation.**
+  The migrate Job is a `pre-install,pre-upgrade` Helm hook, so on upgrade it runs
+  while the old pods are still live and serving, and golang-migrate marks the
+  schema dirty for the whole execution of each migration body. Every replica
+  reads that same row, so a probe that treated dirty as not-ready would flip all
+  of them at the same instant for any migration longer than 30s
+  (`periodSeconds × failureThreshold`) and drop the Service to zero endpoints —
+  and in the single-Deployment `all` role that Service also carries gRPC, so
+  running task pods would lose the control plane mid-upgrade. Readiness is
+  therefore version-aware where boot is not: a dirty schema **above** the
+  version the running binary embeds is a forward migration that does not concern
+  it, and the pod keeps serving (one log line per episode, not one per probe). A
+  dirty schema at or below that version is a half-applied schema the binary
+  actually depends on, and it goes not-ready. Boot still refuses to *start*
+  against any dirty schema — a process that has not begun serving has nothing to
+  lose by waiting, and that is the one state where the two verdicts are meant to
+  differ.
+
+  **`/api/v2/monitor/health` asserts the same thing.** It reads the same
+  dependency map and was also Ping-only, so in the state above it reported
+  `metadatabase: healthy` at HTTP 200 while `/readyz` was 503 and the pod was out
+  of the Service — the Airflow-compatible surface the UI dashboard renders was
+  the last place still claiming the database was fine.
+
+  Three further properties of the fix are deliberate. The response body stays
+  vague — it names the dependency and nothing else, because `/readyz` is
+  unauthenticated and the underlying error can carry a DSN or an internal
+  hostname; the detail goes to the log. It also distinguishes what it saw:
+  `postgres schema not current` is a schema verdict, `postgres unavailable` is a
+  database that could not be read at all (a timeout, a reset connection, an
+  exhausted pool). Both are 503, but only one of them is a reason to go looking
+  at migrations. **Liveness is unchanged**: restarting a pod does not create a
+  schema, so a crash loop would trade an honestly not-ready pod for one that
+  cannot even be inspected. And the check is bounded at 2s, under the chart's 3s
+  `probes.readiness.timeoutSeconds`, so a wedged database makes the probe report
+  not-ready rather than report nothing at all. An **ahead** schema still passes,
+  as it does at boot — expand-contract migrations keep older code working, and
+  failing it would break `helm rollback`.
 
 ## [0.4.5] - 2026-09-09
 

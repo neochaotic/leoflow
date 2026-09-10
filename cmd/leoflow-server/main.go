@@ -1137,8 +1137,19 @@ func selectDatastore(ctx context.Context, cfg *config.ServerConfig, pg *storage.
 	return xcom.NewRedisBackend(rd.Client), logs.NewRedisTailer(rd.Client), rd, cleanup, nil
 }
 
-// healthChecks builds the readiness checks, including Redis only when it is the
-// active datastore (redisHealth is nil in the embedded edition).
+// healthChecks builds the health checks read by /readyz and
+// /api/v2/monitor/health, including Redis only when it is the active datastore
+// (redisHealth is nil in the embedded edition).
+//
+// The "postgres" entry must keep satisfying api.SchemaChecker. Both endpoints
+// discover the schema assertion with a runtime type assertion on the VALUE in
+// this map, and an assertion that stops matching is silent — they would fall
+// back to Ping-only and report ready over an empty database with every test
+// still green, which is #1023. A compile-time `var _ api.SchemaChecker =
+// (*storage.Postgres)(nil)` does not cover that: it pins the TYPE, so wrapping
+// the value in any decorator that implements only Ping (metrics, a circuit
+// breaker, a tenant router) still compiles. The guard is on the value, in
+// TestHealthChecksPostgresCarriesTheSchemaAssertion.
 func healthChecks(pg *storage.Postgres, redisHealth api.HealthChecker) map[string]api.HealthChecker {
 	checks := map[string]api.HealthChecker{"postgres": pg}
 	if redisHealth != nil {

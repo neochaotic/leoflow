@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,6 +38,11 @@ type Postgres struct {
 	// the scheduler read path and the dispatch/agent path so a spec is fetched
 	// and decoded once per version, not once per active run per tick.
 	specs *specCache
+	// dirtyAheadLogged latches the readiness probe's "a migration is in flight"
+	// log line so it is written once per episode rather than once per probe
+	// period for the whole duration of a migration. SchemaReady clears it when
+	// the condition clears, so a later upgrade is reported again.
+	dirtyAheadLogged atomic.Bool
 }
 
 // poolConfig builds a pgxpool.Config from the database section.

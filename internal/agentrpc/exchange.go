@@ -108,15 +108,16 @@ func (s *Server) ExchangeToken(ctx context.Context, _ *agentv1.ExchangeTokenRequ
 	// instance exactly as before. IssueAgentToken mints whichever flavor.
 	id, err := s.podResolver.ResolveAgent(ctx, pod)
 	if err != nil {
-		slog.Warn("agent token exchange: cannot resolve reviewed pod to an agent identity",
-			"namespace", pod.Namespace, "pod", pod.PodName, "pod_uid", pod.PodUID, "error", err)
-		return nil, status.Errorf(codes.Internal, "resolving pod to agent identity: %v", err)
+		// The resolver reads the control plane's own state, so its error can carry
+		// SQLSTATE and schema names. The agent is told which step failed and the
+		// cause stays in the control-plane log (#1068).
+		return nil, internalStatus("resolving pod to agent identity", err,
+			"namespace", pod.Namespace, "pod", pod.PodName, "pod_uid", pod.PodUID)
 	}
 	minted, err := s.tokenMinter.IssueAgentToken(id, s.exchangeTTL)
 	if err != nil {
-		slog.Warn("agent token exchange: minting agent token failed",
-			"scope", id.Scope, "ti", id.TaskInstanceID, "worker", id.WorkerID, "error", err)
-		return nil, status.Errorf(codes.Internal, "minting agent token: %v", err)
+		return nil, internalStatus("minting agent token", err,
+			"scope", id.Scope, "ti", id.TaskInstanceID, "worker", id.WorkerID)
 	}
 	if id.Scope == auth.ScopeWarmWorker {
 		// Log the warm case distinctly (worker/dag_version, never the token): the

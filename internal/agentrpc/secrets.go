@@ -238,13 +238,13 @@ func (s *Server) GetVariables(ctx context.Context, _ *agentv1.GetVariablesReques
 		}
 		vars, verr := s.secrets.SecretVariablesScoped(ctx, id.TenantID, declared)
 		if verr != nil {
-			return nil, status.Errorf(codes.Internal, "fetching variables: %v", verr)
+			return nil, internalStatus("fetching variables", verr, attemptAttrs(id)...)
 		}
 		return &agentv1.GetVariablesResponse{Variables: vars}, nil
 	}
 	vars, err := s.secrets.SecretVariables(ctx, id.TenantID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "fetching variables: %v", err)
+		return nil, internalStatus("fetching variables", err, attemptAttrs(id)...)
 	}
 	// permissive warns on a narrow declaration; off disables the warn entirely.
 	if s.scopingPolicy() == ScopingPermissive {
@@ -276,13 +276,13 @@ func (s *Server) GetConnections(ctx context.Context, _ *agentv1.GetConnectionsRe
 		}
 		uris, uerr := s.secrets.SecretConnectionURIsScoped(ctx, id.TenantID, declared)
 		if uerr != nil {
-			return nil, status.Errorf(codes.Internal, "fetching connections: %v", uerr)
+			return nil, internalStatus("fetching connections", uerr, attemptAttrs(id)...)
 		}
 		return &agentv1.GetConnectionsResponse{ConnectionUris: uris}, nil
 	}
 	uris, err := s.secrets.SecretConnectionURIs(ctx, id.TenantID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "fetching connections: %v", err)
+		return nil, internalStatus("fetching connections", err, attemptAttrs(id)...)
 	}
 	// permissive warns on a narrow declaration; off disables the warn entirely.
 	if s.scopingPolicy() == ScopingPermissive {
@@ -300,7 +300,7 @@ func (s *Server) GetConnections(ctx context.Context, _ *agentv1.GetConnectionsRe
 func (s *Server) declaredNames(ctx context.Context, id *auth.AgentIdentity, kind string) ([]string, error) {
 	spec, err := s.store.TaskSpec(ctx, *id)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "loading task spec for scope enforcement: %v", err)
+		return nil, internalStatus("loading task spec for scope enforcement", err, attemptAttrs(id)...)
 	}
 	if kind == "connections" {
 		return spec.DeclaredConnections, nil

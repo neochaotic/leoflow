@@ -510,6 +510,32 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unknown role, an undeclared variable or connection, a `max_active_runs` cap,
   the undeletable default pool.
 
+- **Database errors no longer reach the task pod either (#1068).** The same
+  disclosure class was open on the agent gRPC transport, where twenty call
+  sites put `%v` of a storage, XCom, log-sink or signing failure into the
+  status message returned to the agent — so a SQLSTATE, a constraint name or a
+  `pgconn` connection string reached the pod. That pod is a trust boundary: it
+  runs the tenant's own image and entrypoint, so it is authenticated,
+  tenant-controlled code execution that can call `GetTaskSpec`,
+  `GetVariables` or `FetchXCom` in a loop. The control plane already treats it
+  as one — a panic in a handler has always been collapsed to a constant for
+  exactly this audience — and that rule now covers the ordinary failures too.
+
+  Every status the agent receives still names the step that failed — `loading
+  task spec`, `storing xcom`, `fetching connections`, `opening log sink` — so a
+  task's own log still says something usable; only the underlying error's text
+  is replaced, and it is written to the control-plane log under a `cause`
+  field carrying the attempt identity (`ti`, `run`, `task`, `try`), which is
+  the join key between the two. No status code changed. One message is passed
+  through deliberately, as a `domain.SafeError`: `task "x" not found in run
+  "y"`, which tells you the pod is running a task its `dag_version` does not
+  declare — a stale image or a mismatched version — rather than that the
+  control plane is broken.
+
+  This also closes a second-order path: the agent puts a failed RPC's text into
+  the state it reports, which is persisted on the task instance and rendered in
+  the UI, so a driver error could reach a browser through the pod.
+
 ### Testing
 
 - **The DAG base-image pin is now verified end to end, for both of its branches

@@ -255,7 +255,7 @@ func (s *Server) GetTaskSpec(ctx context.Context, _ *agentv1.GetTaskSpecRequest)
 	}
 	spec, err := s.store.TaskSpec(ctx, *id)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
+		return nil, internalStatus("loading task spec", err, attemptAttrs(id)...)
 	}
 	return &agentv1.TaskSpec{
 		TenantId:                id.TenantID,
@@ -299,7 +299,7 @@ func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateReques
 	// generic state write (#380).
 	if req.GetState() == agentv1.TaskState_TASK_STATE_UP_FOR_RESCHEDULE {
 		if rerr := s.store.Reschedule(ctx, *id, req.GetRescheduleAt().AsTime()); rerr != nil {
-			return nil, status.Errorf(codes.Internal, "recording reschedule: %v", rerr)
+			return nil, internalStatus("recording reschedule", rerr, attemptAttrs(id)...)
 		}
 		return &agentv1.ReportStateResponse{Acknowledged: true}, nil
 	}
@@ -325,7 +325,7 @@ func (s *Server) ReportState(ctx context.Context, req *agentv1.ReportStateReques
 			// execution is never told to terminate.
 			return &agentv1.ReportStateResponse{Acknowledged: true, ShouldTerminate: true}, nil
 		}
-		return nil, status.Errorf(codes.Internal, "recording state: %v", rerr)
+		return nil, internalStatus("recording state", rerr, attemptAttrs(id)...)
 	}
 	return &agentv1.ReportStateResponse{Acknowledged: true}, nil
 }
@@ -418,7 +418,7 @@ func (s *Server) PushXCom(ctx context.Context, req *agentv1.PushXComRequest) (*a
 	}
 	spec, err := s.store.TaskSpec(ctx, *id)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
+		return nil, internalStatus("loading task spec", err, attemptAttrs(id)...)
 	}
 	key := xcomKey(*id, id.TaskID, req.GetKey())
 	perr := s.xcom.Push(ctx, key, req.GetValue(), req.GetContentType(), spec.XComSchema)
@@ -428,7 +428,7 @@ func (s *Server) PushXCom(ctx context.Context, req *agentv1.PushXComRequest) (*a
 	case errors.Is(perr, xcom.ErrSchemaMismatch):
 		return &agentv1.PushXComResponse{Accepted: false, RejectionReason: "schema_mismatch"}, nil
 	case perr != nil:
-		return nil, status.Errorf(codes.Internal, "storing xcom: %v", perr)
+		return nil, internalStatus("storing xcom", perr, attemptAttrs(id)...)
 	}
 	return &agentv1.PushXComResponse{Accepted: true}, nil
 }
@@ -446,7 +446,7 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 	}
 	spec, err := s.store.TaskSpec(ctx, *id)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "loading task spec: %v", err)
+		return nil, internalStatus("loading task spec", err, attemptAttrs(id)...)
 	}
 	// A task may fetch XCom from an upstream it declared as an xcom input OR from any
 	// of its direct dependencies (depends_on) — the latter powers a captured
@@ -461,7 +461,7 @@ func (s *Server) FetchXCom(ctx context.Context, req *agentv1.FetchXComRequest) (
 		return nil, status.Errorf(codes.NotFound, "no xcom for task %q", req.GetUpstreamTaskId())
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "reading xcom: %v", err)
+		return nil, internalStatus("reading xcom", err, attemptAttrs(id)...)
 	}
 	return &agentv1.FetchXComResponse{
 		Value:       entry.Value,
@@ -504,11 +504,12 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 		TenantID: id.TenantID, DagID: id.DagID, RunID: id.RunID, TaskID: id.TaskID, TryNumber: id.TryNumber,
 	})
 	if oerr != nil {
-		// Surface the cause: without this, a non-writable logs.dir makes the
-		// agent see only a bare stream EOF, with no server-side explanation (#36).
-		slog.Error("opening log sink for task; logs will not be shipped",
-			"dag", id.DagID, "run", id.RunID, "task", id.TaskID, "error", oerr)
-		return status.Errorf(codes.Internal, "opening log sink: %v", oerr)
+		// The agent is told WHICH step failed — without that it sees only a bare
+		// stream EOF, with no server-side explanation (#36) — but not the sink's
+		// own text, which carries host paths, bucket names and credential-adjacent
+		// detail into the tenant's pod. internalStatus records the cause on the
+		// control-plane log, keyed by the attempt (#1068).
+		return internalStatus("opening log sink for task; logs will not be shipped", oerr, attemptAttrs(id)...)
 	}
 	defer func() {
 		cerr := w.Close()
@@ -516,7 +517,7 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 			return
 		}
 		if err == nil {
-			err = status.Errorf(codes.Internal, "flushing logs: %v", cerr)
+			err = internalStatus("flushing logs", cerr, attemptAttrs(id)...)
 			return
 		}
 		// The stream already ended with its own error (the shutdown path returns
@@ -536,7 +537,7 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 			}
 		}
 	}
-	return writeLines(s.shutdown, w, stream.Recv, publish)
+	return writeLines(s.shutdown, w, stream.Recv, publish, attemptAttrs(id))
 }
 
 // logLevelString maps the protobuf log level onto the lowercase level name the
@@ -569,7 +570,9 @@ type receivedLine struct {
 // Close (the final flush) runs while the process is still alive. A nil shutdown
 // channel never fires. The receiver goroutine exits once recv returns, which
 // gRPC guarantees after the handler returns and the stream context is canceled.
-func writeLines(shutdown <-chan struct{}, w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish func(string)) error {
+// attrs carries the attempt identity onto the cause log line of a redacted
+// failure (#1068); nil is fine for callers that have none.
+func writeLines(shutdown <-chan struct{}, w logs.LogWriter, recv func() (*agentv1.LogLine, error), publish func(string), attrs []any) error {
 	lines := make(chan receivedLine)
 	done := make(chan struct{})
 	defer close(done)
@@ -597,16 +600,17 @@ func writeLines(shutdown <-chan struct{}, w logs.LogWriter, recv func() (*agentv
 			return nil
 		}
 		if rl.err != nil {
-			return status.Errorf(codes.Internal, "receiving log line: %v", rl.err)
+			return peerStatus("receiving log line", rl.err, attrs...)
 		}
-		if werr := writeLine(w, rl.line, publish); werr != nil {
+		if werr := writeLine(w, rl.line, publish, attrs); werr != nil {
 			return werr
 		}
 	}
 }
 
-// writeLine stores one received line and publishes it for live tailing.
-func writeLine(w logs.LogWriter, line *agentv1.LogLine, publish func(string)) error {
+// writeLine stores one received line and publishes it for live tailing. attrs
+// carries the attempt identity onto the cause log line of a redacted failure.
+func writeLine(w logs.LogWriter, line *agentv1.LogLine, publish func(string), attrs []any) error {
 	msg := line.GetMessage()
 	// The agent derives the wire level from the source stream (stdout=info,
 	// stderr=error), which mis-colors an error printed to stdout or an info
@@ -620,7 +624,7 @@ func writeLine(w logs.LogWriter, line *agentv1.LogLine, publish func(string)) er
 		Message: msg,
 	}
 	if werr := w.WriteEvent(ev); werr != nil {
-		return status.Errorf(codes.Internal, "writing log line: %v", werr)
+		return internalStatus("writing log line", werr, attrs...)
 	}
 	// Publish the full event (level/stream/ts), not just the text, so a live
 	// NDJSON follower can color lines exactly like the stored drill-down.

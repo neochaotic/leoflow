@@ -133,6 +133,50 @@ journalctl -u leoflow-server -o cat | grep '"request_id":"<id>"' | jq '.cause'
 `kubectl logs deploy/leoflow -c leoflow | jq 'select(.cause) | {path, status, cause}'`
 lists every request that failed with a server-side cause.
 
+### "…: the request could not be completed; see the control-plane logs" in a task log
+
+The agent inside a task pod talks to the control plane over gRPC, and the same
+rule applies there for the same reason: the pod runs *your* image and
+entrypoint, so it is not a place to put the database's text. A failed agent RPC
+therefore reads as the step that failed plus a fixed phrase, for example:
+
+```
+fetching task spec: rpc error: code = Internal desc = loading task spec: the request could not be completed; see the control-plane logs
+```
+
+The step name is the diagnostic half and is always there. All sixteen:
+`loading task spec`, `loading task spec for scope enforcement`, `recording
+state`, `recording reschedule`, `storing xcom`, `reading xcom`, `fetching
+variables`, `fetching connections`, `resolving pod to agent identity`,
+`minting agent token`, `opening log sink for task; logs will not be shipped`,
+`writing log line`, `flushing logs`, `receiving log line`, `receiving
+assignment request`, `receiving assignment ack`. The cause is on the
+control-plane log line of the same name, carrying the attempt identity:
+
+```bash
+kubectl logs deploy/leoflow -c leoflow \
+  | jq 'select(.cause) | select(.run == "<run_id>" and .task == "<task_id>") | {msg, try, cause}'
+# {"msg":"loading task spec","try":1,"cause":"loading run: ERROR: … (SQLSTATE 42P01)"}
+```
+
+On Lite the same line comes from the service journal rather than a pod — worth
+knowing because `opening log sink` against a filesystem sink is a
+characteristically Lite failure:
+
+```bash
+journalctl -u leoflow -o cat \
+  | jq 'select(.cause) | select(.run == "<run_id>" and .task == "<task_id>") | {msg, try, cause}'
+```
+
+Three messages are *not* redacted, because they are Leoflow's own words about
+your DAG rather than an infrastructure failure, and you can act on them:
+
+| What the pod sees | Means |
+|---|---|
+| `loading task spec: task "x" not found in run "y"` | The pod is running a task its `dag_version` does not declare — usually a stale image, or a run created against a different version. |
+| `task "a" may not read xcom from "b" (not a declared input or dependency)` | The task pulled an XCom it never declared as an input or a dependency. |
+| `no xcom for task "x"` | Nothing was pushed under that key. The agent handles this one by status code rather than by text, so you will normally see its effect rather than the sentence. |
+
 ## Observability
 
 - **Metrics:** Prometheus at `:9090/metrics` (scheduler, dispatch, inline

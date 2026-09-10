@@ -449,7 +449,10 @@ deploy, layer on:
   legitimate orchestration pattern the policy cannot tell apart from the
   apiserver by IP), and `taskNetworkPolicy.allowMetadataEgress` re-permits single
   hosts inside the blocked metadata range — one `/32` each, never the whole
-  range. That last one is why the policy is opt-in rather than on by default:
+  range, and the chart **fails the render** on anything wider (IPv6: `/128`),
+  because an additive allow rule naming the range would override the `except`
+  and delete the block rather than widen the exception. That last one is why the
+  policy is opt-in rather than on by default:
   both clouds serve **keyless workload identity from the link-local range**, so
   turning the policy on breaks keyless external-secrets auth on GKE Workload
   Identity (`169.254.169.254/32`) and EKS Pod Identity (`169.254.170.23/32`)

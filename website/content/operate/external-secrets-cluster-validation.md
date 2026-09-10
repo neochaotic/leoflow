@@ -58,6 +58,11 @@ Match the `allowMetadataEgress` line to your mechanism:
 | AWS **Pod Identity** | `169.254.170.23` | `169.254.170.23/32` |
 | **GKE Workload Identity** | `169.254.169.254` | `169.254.169.254/32` |
 
+The `/32` is not a suggestion: the chart **refuses to render** an entry wider
+than one host (IPv4 `/32`, IPv6 `/128`). A `169.254.0.0/16` would not widen the
+exception, it would delete the metadata block — egress rules are additive, so a
+rule allowing the range overrides the `except` in the allow-all rule.
+
 ## 3. Deploy the canary DAG
 
 A one-task DAG that **declares** the seeded name and asserts the value it receives came from the store, not the vault (the vault has no such name):

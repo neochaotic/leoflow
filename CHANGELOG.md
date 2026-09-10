@@ -320,6 +320,32 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   element" and not "a package": `dependencies: ["--dry-run", "six"]` built green
   with `six` absent — the same silent-failure shape as the bug itself — and an
   apt `-o DPkg::Pre-Invoke::=<cmd>` ran that command as root during the build.
+- **`taskNetworkPolicy.allowMetadataEgress` can no longer reopen the metadata
+  range it exists to punch a single hole in.** The value was documented as an
+  escape hatch for one `/32` each — the GKE metadata server or the EKS Pod
+  Identity Agent — and nothing enforced it, so `169.254.0.0/16` rendered and
+  installed. That is not a wider hatch, it is the removal of the block:
+  NetworkPolicy egress rules are additive (traffic is allowed if it matches at
+  least one rule), so the allow rule this value emits overrides the
+  `except: [169.254.0.0/16]` in the allow-all rule, and the rendered manifest
+  goes on showing an except-list that blocks nothing. The one containment the
+  task-pod policy's security story rests on was a comment.
+
+  The chart now **fails the render** on any entry wider than one host, naming
+  the entry, its index, why it is refused and what to pass instead. An IPv4
+  `/32` and an IPv6 `/128` are accepted (IPv6 because the allow-all rule is
+  `0.0.0.0/0` and matches no IPv6 destination, so this list is the only route to
+  an IPv6 metadata endpoint while the policy is on); surrounding whitespace is
+  trimmed, since a padded string reaches the chart intact from `--set-string`
+  and Argo CD's `helm.parameters` and would render a `cidr` the apiserver
+  rejects. Also refused, so the guard is not one string wide: a prefix above the
+  host width, a non-numeric prefix, a bare address with no prefix, a blank
+  entry, anything that is not an address, and the value sent as a scalar instead
+  of a list — the last one used to die with `range can't iterate over
+  169.254.169.254/32`, naming neither the value nor the fix. Legitimate values
+  render byte-for-byte as before. To reach a wider range that is *not* the
+  metadata range, use `taskNetworkPolicy.extraEgress`
+  ([#958](https://github.com/neochaotic/leoflow/issues/958)).
 - **`exclude_paths` now reaches the image build.** It had been in the schema,
   defaulted, and documented as "skipped both in image build and workspace
   discovery" with zero consumers in build code, so with the default

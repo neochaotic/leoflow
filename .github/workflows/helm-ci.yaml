@@ -23,6 +23,7 @@ on:
       - "scripts/helm-template-checks.sh"
       - "scripts/rbac-covers-executor.sh"
       - "scripts/check-values-doc-comments.sh"
+      - "scripts/check-migrate-pod-selection.sh"
       - ".github/workflows/helm-ci.yaml"
       - ".github/ci/kind-datastores.yaml"
       - "deploy/Dockerfile.server"
@@ -107,6 +108,17 @@ jobs:
       # a configuration key without updating the chart side.
       - name: helm-template-checks (contract)
         run: bash scripts/helm-template-checks.sh
+
+      # Cross-document contract: the pre-install/pre-upgrade migration hook's pod
+      # must not be selectable by any control-plane Service or PodDisruptionBudget,
+      # in any deployment mode (#1055). Selection is a SUBSET relation between two
+      # documents, and helm-unittest asserts one document at a time — which is how
+      # a Job pod carrying the exact control-plane selector survived ~230 cases.
+      # This renders the chart in every mode and compares the real label maps.
+      - name: Install PyYAML (the gate compares rendered label maps)
+        run: python3 -m pip install --user pyyaml
+      - name: check-migrate-pod-selection (migrate hook pod is not a control-plane endpoint)
+        run: bash scripts/check-migrate-pod-selection.sh
 
       # Contract test in the other direction: the Role must permit every
       # Kubernetes call the executor makes. Nothing else compares the two — the

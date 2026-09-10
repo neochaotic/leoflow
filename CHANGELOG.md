@@ -328,6 +328,46 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   install, naming neither value the operator set. Refused at render time now,
   along with a minimum below 1, which Kubernetes rejects without the
   `HPAScaleToZero` gate ([#947](https://github.com/neochaotic/leoflow/issues/947)).
+- **The migration hook's pod no longer answers for the control plane on
+  `helm upgrade`.** A Service selector matches every pod whose labels *contain*
+  it, and for the default (non-split) install the control-plane Service's
+  selector is exactly the label set the migrate Job's pod template carried — so
+  the pre-upgrade hook pod was selected by the Service and by the
+  PodDisruptionBudget for the whole migration window, `Ready` from its first
+  instant because a Job pod has no readiness probe. `helm install` was never
+  affected (no Service exists yet when the pre-install hook runs) and neither was
+  `split.enabled` (api and scheduler carry a component label the Job lacked).
+
+  The measurable loss was disruption accounting, not traffic. Held open on k3s
+  v1.33.6, an integer `minAvailable` budget reported `currentHealthy: 2` over one
+  real replica — the hook pod padded the count, so the budget allowed one more
+  simultaneous eviction than it was sized for — and a percentage-valued budget
+  failed outright (`DisruptionAllowed=False`, *"jobs.batch does not implement the
+  scale subresource"*), pinning `disruptionsAllowed` at 0 and stalling every
+  voluntary eviction until the hook exited. Requests were *not* black-holed, for
+  a reason that is accidental rather than designed: all three Service ports use
+  **named** `targetPort`s and the hook pod declares no container port, so its
+  endpoint landed in a slice with `ports: null` and kube-proxy programmed nothing
+  for it. Change one of those to a numeric `targetPort` and the same cluster
+  black-holed 19 of 40 requests; consumers that resolve ports themselves (AWS
+  Load Balancer Controller in IP-target mode, service meshes, Gateway API) were
+  never covered by the accident at all.
+
+  The hook's pod now runs under its own application name
+  (`app.kubernetes.io/name: <name>-migrate`, `component: migrate`). Adding a
+  distinguishing label while keeping the shared pair would have changed nothing —
+  a superset still matches a selector — so the pod differs on a key the selector
+  *carries*. It is also the truer label: this is a different image with a
+  different lifetime, not a replica of the control plane. One consequence worth
+  knowing: with `networkPolicy.enabled`, the control-plane policy used to govern
+  the hook pod on upgrade but not on install; now it governs it in neither, which
+  is at least symmetric. Egress is allow-all by default, so nothing changes for a
+  default install — but in a namespace with a default-deny policy the migrate pod
+  needs its own allowance to reach Postgres, on upgrade as well as on install.
+  `scripts/check-migrate-pod-selection.sh` renders the chart in every deployment
+  mode and fails if any Service or PodDisruptionBudget selector is ever again a
+  subset of the hook pod's labels
+  ([#1055](https://github.com/neochaotic/leoflow/issues/1055)).
 - **A version floor in `dependencies` was silently dropped, and left junk in the
   image.** `RUN` in a Dockerfile is `/bin/sh -c`, and the specifiers were joined
   into that line unquoted — so `setuptools>=80.9.0` was a *redirection*: pip

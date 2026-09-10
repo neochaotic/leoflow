@@ -107,6 +107,36 @@ against a database a newer binary already migrated. Use `--version <VERSION>`
 with the chart version — the [latest release](https://github.com/neochaotic/leoflow/releases)
 tag with the leading `v` stripped.
 
+### The migration Job's pod is not part of the control plane
+
+The hook pod runs under its own application name —
+`app.kubernetes.io/name: <chart name>-migrate`, with
+`app.kubernetes.io/component: migrate` — deliberately *not* the control plane's
+`app.kubernetes.io/name`. A Service selector matches every pod whose labels
+contain it, so a hook pod carrying the control plane's own selector labels is
+selected by the control-plane Service and PodDisruptionBudget for as long as it
+runs, and a Job pod has no readiness probe: it counts as `Ready` from the instant
+its container starts. On `helm upgrade` — the one path where those objects
+already exist while the hook runs — that put a pod that serves nothing into the
+control plane's endpoint set and into its disruption budget's healthy count.
+
+Two consequences for your own tooling:
+
+- **Do not select control-plane pods by `app.kubernetes.io/instance` alone.**
+  That label is still on the hook pod on purpose, so
+  `kubectl -n <ns> get pods -l app.kubernetes.io/instance=<release>` finds a
+  wedged migration. Add `app.kubernetes.io/name=<chart name>` (or, in
+  `split.enabled` installs, `app.kubernetes.io/component=api|scheduler`) when you
+  mean the control plane.
+- **With `networkPolicy.enabled`, the hook pod is governed by no policy** — on
+  `helm install` and on `helm upgrade` alike. Egress is allow-all by default, so
+  a default install is unaffected. If your namespace carries a default-deny
+  policy from a platform team, give the migration pod its own egress allowance to
+  Postgres (match on `app.kubernetes.io/component: migrate`), and create it
+  outside the release or as a hook with a negative `helm.sh/hook-weight` — a
+  policy the chart creates normally does not exist yet when the *pre-install*
+  hook runs.
+
 ## Related issues
 
 - #136 — this contract.

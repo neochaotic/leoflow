@@ -73,6 +73,71 @@ suffix so the two Deployments, Services, SAs, etc. do not collide. Takes {ctx, r
 {{- include "leoflow.suffixRole" (dict "base" (include "leoflow.fullname" .ctx) "role" .role) -}}
 {{- end -}}
 
+{{/*
+Application name of the migration hook's pod: the chart name with a "-migrate"
+suffix. It is deliberately NOT leoflow.name.
+
+A Service selector matches every pod whose labels CONTAIN its map, so the migrate
+Job's pod template used to be selected by the control-plane Service and by the
+PodDisruptionBudget: for the default "all" role, leoflow.roleSelectorLabels is
+exactly leoflow.selectorLabels, and the Job carried that same pair. A Job pod has
+no readinessProbe, so it is Ready the instant its container starts. `helm install`
+never showed it (no Service exists yet when the pre-install hook runs) and split
+mode never showed it either (api and scheduler add a component label the Job
+lacks), which left `helm upgrade` on the default install as the one exposed path
+(#1055).
+
+What that cost, measured on k3s v1.33.6 (k3d) against the pre-fix chart with the hook pod
+held open:
+
+  - Disruption accounting was wrong for the whole migration window. An integer
+    minAvailable budget reported currentHealthy=2 over ONE real replica — the
+    hook pod padded the count — so the budget permitted one more simultaneous
+    eviction than it was sized for. A percentage-valued budget failed outright:
+    DisruptionAllowed=False, "jobs.batch does not implement the scale
+    subresource", disruptionsAllowed pinned at 0, every voluntary eviction
+    stalled until the hook pod exited.
+  - Traffic was NOT lost, and the reason is worth writing down because it is
+    accidental. The pod joined the Service's EndpointSlice (ready=true) but in a
+    slice with `ports: null`: all three Service ports use NAMED targetPorts and
+    this pod declares no containerPort, so the EndpointSlice controller could
+    resolve nothing and kube-proxy programmed nothing. Give any of those ports a
+    NUMERIC targetPort and the protection is gone — the same cluster then
+    black-holed 19 of 40 requests to the Service. Consumers that read
+    EndpointSlices and resolve ports themselves (AWS Load Balancer Controller in
+    IP-target mode, service meshes, Gateway API implementations) are not covered
+    by it either, and no in-cluster CI here can settle that.
+
+Adding a component label alongside the shared pair does NOT fix this — a superset
+still matches the selector. The pod has to differ on a key the selector CARRIES,
+which is why the name changes rather than being decorated. It is also the honest
+label: this pod runs a different image (leoflow-migrate) with a different
+lifetime, not a replica of the control plane.
+
+Suffixed through leoflow.suffixRole so a long nameOverride cannot produce a label
+value over the 63-char limit — this is a pre-install hook, so an invalid label is
+a failed install, not a degraded one.
+*/}}
+{{- define "leoflow.migrateName" -}}
+{{- include "leoflow.suffixRole" (dict "base" (include "leoflow.name" .) "role" "migrate") -}}
+{{- end -}}
+
+{{/*
+Pod-template labels for the migration hook Job. Kept whole and in one place so
+the set that must NOT be a superset of any control-plane selector has a single
+definition. instance is retained on purpose: `kubectl -n <ns> get pods -l
+app.kubernetes.io/instance=<release>` is how an operator finds a wedged migration,
+and it is not a key any control-plane selector can match alone.
+
+scripts/check-migrate-pod-selection.sh renders the chart and asserts no
+Service/PDB selector is a subset of this map, in every mode.
+*/}}
+{{- define "leoflow.migratePodLabels" -}}
+app.kubernetes.io/name: {{ include "leoflow.migrateName" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: migrate
+{{- end -}}
+
 {{- define "leoflow.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "leoflow.fullname" .) .Values.serviceAccount.name -}}

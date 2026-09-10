@@ -192,3 +192,49 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].resources.requests.memory
           value: 512Mi
+
+  # #1055 — the migrate hook pod must not be selectable by the control-plane
+  # Service. `leoflow.roleSelectorLabels` for the default "all" role is EXACTLY
+  # `leoflow.selectorLabels`, and a Service selector matches every pod whose
+  # labels are a SUPERSET of it. This pod template carried that same set, so on
+  # `helm upgrade` — the one path where the Service already exists while the
+  # pre-upgrade hook runs — the migrate pod joined the Service's EndpointSlice
+  # and the PodDisruptionBudget's healthy count. A Job pod has no readinessProbe,
+  # so it is Ready the instant its container starts. The disruption-accounting
+  # half is a measured loss; the traffic half is only latent today, for a reason
+  # that has nothing to do with this chart's intent — see leoflow.migrateName.
+  #
+  # Adding a component label alongside the shared set does NOT fix it: a superset
+  # still matches. The pod has to differ on a key the selector CARRIES, so the
+  # Job runs under its own application name — it is its own image
+  # (leoflow-migrate), not a replica of the control plane.
+  #
+  # The map is pinned WHOLE. Asserting that one label is present would stay green
+  # if someone re-added the shared selector set beside it, which is the exact
+  # regression. The cross-document property in every deployment mode is asserted
+  # in tests/migrate_pod_selection_test.yaml and enforced against the real
+  # rendered maps by scripts/check-migrate-pod-selection.sh.
+  - it: "issue #1055 — the migrate pod carries its own app name, not the control plane's selector labels"
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels
+          value:
+            app.kubernetes.io/name: leoflow-migrate
+            app.kubernetes.io/instance: leoflow
+            app.kubernetes.io/component: migrate
+
+  # The suffix is applied to the chart NAME, so a nameOverride carries through and
+  # the value still fits the 63-char label limit (leoflow.suffixRole truncates the
+  # base to 53 first). Without that truncation a long nameOverride would produce a
+  # label value the apiserver rejects — and this is a pre-install hook, so that is
+  # a failed `helm install`, not a degraded one.
+  - it: "issue #1055 — the migrate pod's app name follows nameOverride and stays within 63 chars"
+    set:
+      database.url: postgres://h/d
+      nameOverride: aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffggg
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeefff-migrate

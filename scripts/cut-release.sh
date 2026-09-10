@@ -748,8 +748,8 @@ run_gates() { # <tag>
   shopt -u nullglob
   # A gate renamed out of check-*.sh silently leaves the cut's gate set with no
   # signal at all, so assert the floor.
-  [ "${#gates[@]}" -ge "${MIN_GATES:-19}" ] || {
-    echo "gate set shrank to ${#gates[@]} (expected >= ${MIN_GATES:-19}) — a check-*.sh was renamed or removed" >&2
+  [ "${#gates[@]}" -ge "${MIN_GATES:-20}" ] || {
+    echo "gate set shrank to ${#gates[@]} (expected >= ${MIN_GATES:-20}) — a check-*.sh was renamed or removed" >&2
     return 1
   }
   for s in "${gates[@]}"; do
@@ -803,7 +803,13 @@ main() {
   local tag cv logf; tag="$(normalize_tag "$version")"; cv="$(chart_version "$version")"
   logf="$ROOT/.release-$tag.log"
 
-  for t in gh jq git helm-docs; do command -v "$t" >/dev/null || die "missing tool: $t"; done
+  # helm and PyYAML are here because run_gates globs scripts/check-*.sh, and
+  # check-migrate-pod-selection.sh renders the chart to compare selectors
+  # against the migrate hook's pod labels. Without them the cut fails
+  # mid-flight as "gate FAIL check-migrate-pod-selection.sh" rather than as a
+  # named missing tool, which is the wrong place to learn it.
+  for t in gh jq git helm-docs helm; do command -v "$t" >/dev/null || die "missing tool: $t"; done
+  python3 -c 'import yaml' 2>/dev/null || die "missing python module: PyYAML (pip install pyyaml) — several scripts/check-*.sh parse YAML"
 
   log "cutting $tag (chart $cv, $(is_rc "$version" && echo prerelease || echo GA))"
   # --tags explicitly: `git fetch origin main` does not follow tags, so a local

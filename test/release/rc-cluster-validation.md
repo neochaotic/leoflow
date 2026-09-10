@@ -647,6 +647,68 @@ psql "$DATABASE_URL" -c 'UPDATE schema_migrations SET dirty = false;'
 **PASS:** the pod goes NotReady here. A build that stays ready through **both**
 arms has not fixed #1023, it has disabled the dirty check.
 
+#### §4.6c — #1055: the migration hook pod is not part of the control plane
+
+`helm upgrade` runs the migrate Job as a `pre-upgrade` hook while the Service and
+the PodDisruptionBudget are already live. Its pod used to carry the exact
+control-plane selector labels, and a Job pod has no readiness probe, so it was
+`Ready` — and therefore selected — from its first instant. The fix gives it its
+own application name; these checks confirm that on a real cluster, in the window
+where it matters.
+
+The window is short on a fast migration, so hold it open. `pause` ignores the
+Job's args and never exits, which is a hook that stays running until you delete
+it — the upgrade will fail at its timeout, which is fine, this run is the
+measurement, not the release:
+
+```bash
+helm upgrade leoflow ... --set migrations.image.repository=registry.k8s.io/pause \
+                         --set migrations.image.tag=3.9 --timeout 150s &
+```
+
+**Selection PASS.** Ask the apiserver, not the chart — it is the component that
+evaluates the selector:
+
+```bash
+kubectl -n "$NS" get pods -l app.kubernetes.io/name=leoflow,app.kubernetes.io/instance=leoflow
+# PASS = only the control-plane pod(s). A leoflow-migrate-* row here is the bug.
+kubectl -n "$NS" get endpointslice -l kubernetes.io/service-name=leoflow \
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{" "}{.targetRef.name}{"\n"}{end}'
+# PASS = no leoflow-migrate-* target.
+```
+
+**Disruption PASS.** This was the half that actually cost something, and it needs
+a budget present, so force one on (`--set podDisruptionBudget.enabled=true`) or
+run the HA profile:
+
+```bash
+kubectl -n "$NS" get pdb -o custom-columns=\
+'NAME:.metadata.name,ALLOWED:.status.disruptionsAllowed,CURRENT:.status.currentHealthy,REASON:.status.conditions[0].reason'
+```
+
+PASS = `currentHealthy` equals the number of *control-plane* replicas, and the
+reason is never `SyncFailed`. On the pre-fix chart this reported one pod too many,
+and with a percentage-valued `minAvailable` it reported
+`jobs.batch does not implement the scale subresource` and pinned
+`disruptionsAllowed` at 0 — a stalled drain for the length of the migration.
+
+**The part k3d cannot settle, and EKS must.** No request was lost on k3s even
+before the fix, and only by accident: every Service port here uses a *named*
+`targetPort` and the hook pod declares no container port, so the endpoint landed
+in a slice with `ports: null` and kube-proxy programmed nothing. Anything that
+reads EndpointSlices and resolves ports for itself never had that protection. On
+the EKS RC, with the **AWS Load Balancer Controller in IP-target mode** in front
+of the api Service, re-run the hold-open upgrade and watch the target group:
+
+```bash
+aws elbv2 describe-target-health --target-group-arn <arn>
+```
+
+PASS = the migrate pod's IP is never registered. Record **NOT VERIFIED (cloud)**
+for this row on any run that is not EKS with an IP-mode ALB/NLB — a k3d pass says
+nothing about it. Same for a service mesh: an Istio/Linkerd sidecar reads the
+EndpointSlice directly.
+
 ---
 
 ## §5 EKS ↔ GKE deltas (so a GKE pass doesn't give false confidence)

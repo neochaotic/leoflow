@@ -195,6 +195,46 @@ DOCKER
 log "Building base and DAG images"
 docker build --provenance=false -f "$ROOT/runtime/Dockerfile" --build-arg "PYTHON_VERSION=${PY_VERSION}" -t "$BASE_IMAGE" "$ROOT"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# The base image's own properties. Every one of these was, until now, asserted
+# by a comment in runtime/Dockerfile and by nothing else — so each moved once
+# already without a red run: the Debian suite when the FROM was edited, and the
+# home-dir mode when Debian's `passwd` changed its HOME_MODE default under an
+# unchanged `useradd` line. Three `docker` invocations against an image this
+# script has just built anyway.
+#
+# The expected suite is read out of runtime/Dockerfile rather than written here.
+# A hardcoded "trixie" would be a fourth copy of the same fact, green on the day
+# it was typed and wrong on the day of the next move — which is the failure this
+# whole block exists to stop.
+log "Asserting the task base image's own properties (suite, home-dir mode, final USER)"
+WANT_SUITE="$(sed -n 's/^FROM python:\${PYTHON_VERSION}-slim-\([A-Za-z0-9.]*\).*/\1/p' "$ROOT/runtime/Dockerfile")"
+[ -n "$WANT_SUITE" ] \
+  || fail "runtime/Dockerfile's stage-2 FROM pins no Debian suite; this assertion has nothing to compare against"
+GOT_SUITE="$(docker run --rm --entrypoint sh "$BASE_IMAGE" -c '. /etc/os-release; printf %s "$VERSION_CODENAME"')"
+[ "$GOT_SUITE" = "$WANT_SUITE" ] \
+  || fail "base image is Debian '$GOT_SUITE' but runtime/Dockerfile's stage-2 FROM pins '$WANT_SUITE'"
+log "base suite: $GOT_SUITE (matches runtime/Dockerfile)"
+
+# 65532:65532 and 0700. The mode is pinned by an explicit chmod because the
+# distro default moved under us; the ownership is what makes 0700 survivable,
+# since a task pod runs as exactly this UID (buildSecurityContext sets
+# runAsNonRoot with no runAsUser, so the kubelet resolves the image's user) and
+# an owner traverses its own home whatever the mode. Assert the pair together:
+# 0700 with the wrong owner is an unreadable home, and that is the regression.
+GOT_HOME="$(docker run --rm --entrypoint stat "$BASE_IMAGE" -c '%u:%g %a' /home/leoflow)"
+[ "$GOT_HOME" = "65532:65532 700" ] \
+  || fail "/home/leoflow is '$GOT_HOME', want '65532:65532 700' (owner+mode pair, see runtime/Dockerfile)"
+log "home dir: $GOT_HOME"
+
+# A NUMERIC non-root user, not the name `leoflow`: PodSecurity `restricted`
+# verifies runAsNonRoot against the image's user and the kubelet can only
+# resolve a numeric UID, so a name here is a rejected container.
+GOT_USER="$(docker image inspect -f '{{.Config.User}}' "$BASE_IMAGE")"
+[ "$GOT_USER" = "65532:65532" ] \
+  || fail "base image final USER is '$GOT_USER', want numeric '65532:65532'"
+log "final USER: $GOT_USER"
+
 log "Creating k3d cluster '$CLUSTER'"
 k3d cluster create "$CLUSTER" --wait
 
@@ -487,5 +527,158 @@ done
 echo "$cblog" | grep -q "running on_failure_callback" \
   || fail "runtime did not log the on_failure_callback lifecycle in the pod (#424)"
 log "callback pod-path OK: on_failure_callback ran in the pod on terminal failure (#424)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# system_packages: on the GENERATED Dockerfile path, and one real TLS handshake
+# from inside a task pod.
+#
+# Both halves were uncovered. `grep -rn system_packages test/ .github/ examples/`
+# returned nothing: no fixture anywhere built a DAG image with the key set, so
+# the `apt-get install` the compiler emits into every such image was certified
+# by whoever last ran a build by hand. That matters more than an unused key
+# normally would, because the suite the base is built on is what those package
+# names and version pins resolve against — the apt version and its signature
+# verifier move with the base image, and this is the only place we would find
+# out.
+#
+# This leg deliberately ships NO Dockerfile. Every other project in this script
+# hand-writes one, which is the documented escape hatch and not the path almost
+# every user takes; a `system_packages:` bolted onto a project with its own
+# Dockerfile would be silently ignored (ensureDockerfile honours the file on
+# disk), and the leg would pass while testing nothing. `base_image` points at
+# the base built above rather than the published one, so what is exercised is
+# the base in this diff, not the last release's.
+#
+# The TLS half answers the question a version string cannot. python:*-slim
+# links CPython's `ssl` against the system OpenSSL, so a base-image move
+# relocates every outbound handshake a task makes onto a different libssl, and
+# whatever that library refuses is refused at task runtime in a pod, against
+# one endpoint, long after a green build. `ssl.OPENSSL_VERSION` cannot see any
+# of that; only a handshake can, which is why this is here and not a printed
+# version.
+#
+# Do not read this as guarding a specific policy difference. The certificate
+# floor was measured across the bookworm→trixie move and did not move with it:
+# both suites already run at security level 2, and an RSA-1024 leaf, an
+# RSA-1024 CA, a SHA-1-signed leaf and TLS 1.1 are refused on both. What did
+# change is the first flight's size (OpenSSL 3.5 offers a hybrid post-quantum
+# group by default, 517 → 1525 bytes), which is the kind of thing no assertion
+# can predict in advance and a completed handshake covers generically.
+#
+# pypi.org is the peer because this leg's own image build already had to reach
+# it — if it is unreachable the build failed first, so this adds no external
+# dependency the leg did not already have.
+log "system_packages + in-pod TLS (generated Dockerfile path)"
+SPID="sysdag"
+mkdir -p "$WORKDIR/$SPID"
+cat > "$WORKDIR/$SPID/leoflow.yaml" <<YAML
+schema_version: "1.0"
+dag_id: ${SPID}
+base_image: ${BASE_IMAGE}
+system_packages:
+  - curl
+  - ca-certificates
+build:
+  platforms:
+    - ${HOST_PLATFORM}
+YAML
+cat > "$WORKDIR/$SPID/dag.py" <<'PY'
+"""sysdag — system_packages install + one real outbound TLS handshake, in a pod."""
+from __future__ import annotations
+
+from airflow.sdk import DAG, task
+
+
+@task
+def apt_and_tls() -> None:
+    import shutil
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    # The apt half: a binary that is NOT in python:*-slim and can only have
+    # arrived through the generated Dockerfile's `apt-get install`. If apt or
+    # its repository signature verification broke on the current suite, the
+    # image build fails before this ever runs; this catches the subtler case
+    # where the build succeeded and installed nothing usable.
+    curl = shutil.which("curl")
+    assert curl, "system_packages did not put curl on PATH (generated apt layer did not land)"
+    print("E2E_SYSPKG curl=" + curl, flush=True)
+
+    # The TLS half. Report the version for the log, then actually shake hands.
+    print("E2E_OPENSSL " + ssl.OPENSSL_VERSION, flush=True)
+    ctx = ssl.create_default_context()
+    try:
+        with urllib.request.urlopen(
+            "https://pypi.org/simple/pip/", timeout=60, context=ctx
+        ) as resp:
+            assert resp.status == 200, f"unexpected HTTPS status {resp.status}"
+    except urllib.error.URLError as err:
+        # urlopen wraps the TLS failure in URLError and puts the ssl exception in
+        # .reason, so an `except ssl.SSLCertVerificationError` here would never
+        # fire and every TLS failure would be reported as a network one.
+        # Classify off the wrapped cause instead: an ssl.SSLError is the
+        # algorithm-policy regression this assertion exists for, and anything
+        # else is the network, which is a rerun rather than a bug in the base.
+        cause = getattr(err, "reason", None)
+        if isinstance(cause, ssl.SSLError):
+            raise AssertionError(
+                f"outbound TLS failed under {ssl.OPENSSL_VERSION} — algorithm policy, "
+                f"not reachability: {cause}"
+            ) from err
+        raise AssertionError(f"outbound HTTPS could not be attempted (network, not TLS): {err}") from err
+    print("E2E_TLS_OK", flush=True)
+
+
+with DAG("sysdag", schedule=None, tags=["e2e"]):
+    apt_and_tls()
+PY
+[ -e "$WORKDIR/$SPID/Dockerfile" ] \
+  && fail "sysdag must not ship a Dockerfile: the hand-written one would win and system_packages would never be installed"
+SP_IMAGE="leoflow-e2e-sysdag:local"
+# A unique version per run, as deploy-e2e.sh does and for the same reason: a
+# DAG version is immutable, so against the shared dev database a re-run whose
+# body changed is rejected 409 — and one whose body did not is accepted while
+# quietly running the version already stored. The second is the dangerous half
+# and it looks like a pass. CI gets a fresh Postgres per run and never sees
+# either; a developer editing this leg locally sees both.
+"$ROOT/bin/leoflow" compile "$WORKDIR/$SPID" --image "$SP_IMAGE" \
+  --build --dag-version "e2e-$(date +%s)" -o "$WORKDIR/$SPID/dag.json"
+# The generated Dockerfile installs as root and drops back to the numeric UID as
+# its LAST instruction (#852). A root-final image is a CreateContainerConfigError
+# under runAsNonRoot, discovered in the user's cluster; assert it here instead.
+SP_USER="$(docker image inspect -f '{{.Config.User}}' "$SP_IMAGE")"
+[ "$SP_USER" = "65532:65532" ] \
+  || fail "the generated system_packages image ends on USER '$SP_USER', want numeric '65532:65532'"
+log "generated DAG image final USER: $SP_USER"
+k3d_import "$CLUSTER" "$SP_IMAGE"
+"$ROOT/bin/leoflow" push "$WORKDIR/$SPID/dag.json" --server "$API" --token "$TOKEN"
+SP_RUN="$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{}' "$API/api/v2/dags/$SPID/dagRuns" | jq -r '.dag_run_id')"
+[ -n "$SP_RUN" ] && [ "$SP_RUN" != "null" ] || fail "no sysdag dag_run_id returned"
+log "sysdag run = $SP_RUN"
+sp_deadline=$(( $(date +%s) + 300 ))
+while :; do
+  sp_state="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$SPID/dagRuns/$SP_RUN/taskInstances" \
+    | jq -r '.task_instances[] | select(.task_id=="apt_and_tls") | .state')"
+  [ "$sp_state" = "success" ] && break
+  echo "${sp_state:-}" | grep -qE 'failed|upstream_failed' && fail "sysdag apt_and_tls failed (state=$sp_state)"
+  [ "$(date +%s)" -gt "$sp_deadline" ] && fail "sysdag apt_and_tls did not succeed (state=${sp_state:-<none>})"
+  sleep 3
+done
+splog=""
+for try in 0 1 2; do
+  body="$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$SPID/dagRuns/$SP_RUN/taskInstances/apt_and_tls/logs/$try" 2>/dev/null || true)"
+  if echo "$body" | grep -q "E2E_SYSPKG"; then splog="$body"; break; fi
+done
+[ -n "$splog" ] || fail "no sysdag log shipped: cannot confirm the apt install or the TLS handshake"
+echo "$splog" | grep -q "E2E_SYSPKG curl=" \
+  || fail "system_packages did not install curl into the generated DAG image"
+echo "$splog" | grep -q "E2E_TLS_OK" \
+  || fail "no outbound TLS handshake completed from the task pod (OpenSSL security level?)"
+log "system_packages installed and one real HTTPS handshake completed inside a task pod"
+echo "$splog" | grep "E2E_OPENSSL" || true
 
 log "E2E passed"

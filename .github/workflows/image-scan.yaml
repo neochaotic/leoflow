@@ -2,7 +2,7 @@
 #
 # ── Why this is not a PR gate ────────────────────────────────────────────────
 #
-# leoflow-runtime is python:3.x-slim-bookworm and leoflow-migrate is
+# leoflow-runtime is python:3.x-slim and leoflow-migrate is
 # migrate/migrate (Alpine + a third-party Go binary). Neither package set is
 # ours. A CVE lands in them because a Debian security team published an
 # advisory, not because anyone here pushed a commit — so a blocking gate on them

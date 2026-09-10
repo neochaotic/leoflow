@@ -23,11 +23,19 @@ ARG PYTHON_VERSION=3.11
 # inconsistency without re-reading this. Nothing from this stage reaches a task
 # pod: the only thing copied out is /out/leoflow-agent, built CGO_ENABLED=0, so
 # it links no glibc and no OpenSSL from here. Go does not use OpenSSL at all
-# (crypto/tls is pure Go), and the module download's trust anchors come from
-# this image's ca-certificates, which Debian 12 LTS still ships. So this stage's
-# suite changes the build environment only, never what a user runs — a different
-# risk class from stage 2, and a change worth making on its own evidence rather
-# than as a rider on a user-facing one.
+# (crypto/tls is pure Go), and crypto/x509 reads the FINAL image's trust store,
+# not this one's. So this stage's suite changes the build environment only,
+# never what a user runs — a different risk class from stage 2, and a change
+# worth making on its own evidence rather than as a rider on a user-facing one.
+#
+# What keeps it current is the Go pin, not Debian's support calendar. GO_VERSION
+# is pinned to a PATCH release, so this image is whatever docker-library/golang
+# published for that exact tag: a Debian security update never reaches it in
+# place, and Debian 12's remaining LTS window buys it nothing. Every bump of
+# GO_VERSION pulls a freshly built image with a current package set — that is
+# the whole refresh mechanism, and it runs on the Go release cadence. The move
+# off bookworm therefore becomes forced, not optional, on the first GO_VERSION
+# bump after upstream stops publishing a `-bookworm` variant.
 FROM golang:${GO_VERSION}-bookworm AS agent-build
 WORKDIR /src
 COPY go.mod go.sum ./

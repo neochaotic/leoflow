@@ -22,7 +22,13 @@ set -euo pipefail
 
 DOCS_DIR="website/content"
 # Paths whose change implies something an operator or author can see.
-SURFACE_RE='^(helm/leoflow/values\.yaml|docs/api/leoflow-yaml-schema\.json|internal/domain/schemas/|internal/cli/[a-z_]+\.go)$'
+SURFACE_RE='^(helm/leoflow/values\.yaml|docs/api/leoflow-yaml-schema\.json|internal/domain/schemas/.+|internal/cli/[a-z0-9_]+\.go)$'
+# A Go TEST file is not user-facing surface. `[a-z_]+\.go` matched
+# compile_baseimage_integration_test.go, so this gate blocked a test-only PR and
+# sent its author looking for a `skip-docs` label that did not exist. Digits are
+# allowed in the name now too; `internal/domain/schemas/` gained `.+` because the
+# alternation is `$`-anchored and a bare directory prefix matched nothing.
+NOT_SURFACE_RE='(_test\.go|/testdata/)$'
 
 check() { # <base-ref> [changed-files-file]
 	local base="$1" listfile="${2:-}" changed
@@ -32,7 +38,7 @@ check() { # <base-ref> [changed-files-file]
 		changed=$(git diff --name-only "$base"...HEAD)
 	fi
 	local surface docs
-	surface=$(printf '%s\n' "$changed" | grep -E "$SURFACE_RE" || true)
+	surface=$(printf '%s\n' "$changed" | grep -E "$SURFACE_RE" | grep -vE "$NOT_SURFACE_RE" || true)
 	docs=$(printf '%s\n' "$changed" | grep -E "^${DOCS_DIR}/" || true)
 	if [ -z "$surface" ]; then
 		echo "no user-facing surface changed; docs not required"
@@ -89,11 +95,35 @@ self_test() {
 	rc=0; bash "$0" X "$tmp/f" >/dev/null 2>&1 || rc=$?
 	[ "$rc" -eq 0 ] || { echo "self-test FAIL: entrypoint rejected a docs-only PR" >&2; return 1; }
 
+	# No arguments is how cut-release.sh's run_gates() invokes every check-*.sh.
+	# Exiting non-zero here broke the cut; this locks the skip.
+	rc=0; bash "$0" >/dev/null 2>&1 || rc=$?
+	[ "$rc" -eq 0 ] || { echo "self-test FAIL: a no-arg invocation is not a skip — this breaks every release cut" >&2; return 1; }
+
+	# A Go TEST file is not user-facing surface. This blocked a test-only PR.
+	rm -f "$tmp"/*.yaml
+	printf 'internal/cli/compile_baseimage_integration_test.go\n' >"$tmp/tst"
+	bash "$0" X "$tmp/tst" >/dev/null 2>&1 || { echo "self-test FAIL: a test-only PR was told to write docs" >&2; return 1; }
+
+	# The schemas directory is real surface; a `$`-anchored bare prefix matched nothing.
+	printf 'internal/domain/schemas/leoflow-yaml-schema.json\n' >"$tmp/sch"
+	rc=0; bash "$0" X "$tmp/sch" >/dev/null 2>&1 || rc=$?
+	[ "$rc" -ne 0 ] || { echo "self-test FAIL: an authoring-schema change did not require docs" >&2; return 1; }
+
 	echo "check-docs-updated self-test: ok"
 }
 
 if [ "${1:-}" = "--self-test" ]; then self_test; exit $?; fi
-[ $# -ge 1 ] || { echo "usage: $0 <base-ref> [changed-files-file] | --self-test" >&2; exit 2; }
+# No arguments is a SKIP, not an error. cut-release.sh's run_gates() globs
+# scripts/check-*.sh and runs each with NO arguments, treating any non-zero as
+# "gate FAIL" and dying with "mechanical gates failed". Exiting 2 here would
+# have broken every release cut -- the exact failure check-script-selftests.sh's
+# header records for an earlier gate that "failed every rc cut it was globbed
+# into". This gate needs a PR to have an opinion about; a cut has none.
+if [ $# -eq 0 ]; then
+	echo "gate skipped: needs a PR context (<base-ref> [changed-files-file])"
+	exit 0
+fi
 # Forward BOTH arguments. This used to be `check "$1"`, which silently dropped
 # the file list and diffed <base>...HEAD instead — empty in CI, so the gate
 # passed everything. The self-test never caught it because it calls check()

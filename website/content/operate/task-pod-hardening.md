@@ -12,14 +12,21 @@ cluster policy audits them.
 
 The executor builds each task container with:
 
-| field | value |
-|---|---|
-| `runAsNonRoot` | `true` |
-| `allowPrivilegeEscalation` | `false` |
-| `capabilities.drop` | `["ALL"]` |
-| `seccompProfile` | `RuntimeDefault` |
-| `automountServiceAccountToken` | `false` (pod level) |
-| `fsGroup` | `65532` |
+| field | value | always emitted? |
+|---|---|---|
+| `allowPrivilegeEscalation` | `false` | yes |
+| `capabilities.drop` | `["ALL"]` | yes |
+| `seccompProfile` | `RuntimeDefault` | yes |
+| `automountServiceAccountToken` | `false` (pod level) | yes |
+| `runAsNonRoot` | `true` | follows `taskPodSecurity.runAsNonRoot` (default `true`) |
+| `fsGroup` | `65532` (pod level) | only when `runAsNonRoot` is on |
+
+The first four cost an ordinary task nothing and do not depend on the UID, so
+the executor sets them whatever the image runs as. The last two move together:
+turn `taskPodSecurity.runAsNonRoot` off for a fleet whose images legitimately
+run as root, and the executor drops `runAsNonRoot` *and* the pod-level `fsGroup`
+— a root task already writes its volumes as root, so there is nothing to fix,
+and leaving the pod context unset skips the kubelet's recursive volume chown.
 
 Two of these are worth understanding rather than just reading.
 
@@ -54,11 +61,12 @@ and run your DAGs once after.
 
 Two things to know before you rely on it:
 
-- **The `/tmp` emptyDir has no `sizeLimit`.** Nothing in Leoflow bounds it. A
-  task that writes a large amount of scratch data is bounded only by a namespace
-  `LimitRange` with a default `ephemeral-storage` limit, or failing that by the
-  node's own eviction threshold. If your tasks produce large intermediates, set a
-  `LimitRange`.
+- **The `/tmp` emptyDir has no `sizeLimit`.** The volume itself is unbounded, but
+  the DAG author already controls this per task: set
+  `resources.limits.ephemeral_storage` in `leoflow.yaml` (ADR 0054), which the
+  kubelet enforces against the task container. A namespace `LimitRange` default,
+  or failing that the node's own eviction threshold, is the cluster-side backstop
+  — reach for it only when you cannot change the DAG.
 - **Airflow logs a warning in every task.** With a read-only root, Airflow cannot
   create `/home/leoflow/airflow/logs` and says so:
   `Could not create log folder … Read-only file system … Airflow will continue`.

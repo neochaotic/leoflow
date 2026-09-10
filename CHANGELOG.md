@@ -282,7 +282,6 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not-ready rather than report nothing at all. An **ahead** schema still passes,
   as it does at boot — expand-contract migrations keep older code working, and
   failing it would break `helm rollback`.
-### Fixed
 
 - **A user-facing change without a docs update now fails CI (`skip-docs` to
   exempt).** `taskPodSecurity.readOnlyRootFilesystem` — this tranche's security

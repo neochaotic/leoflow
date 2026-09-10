@@ -404,10 +404,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   log, so a spawn that silently fails cannot let it pass while covering only the
   easy case.
 
-  One behavior is worth knowing: a task that exits **successfully** while
-  leaving a background process holding the pipe keeps its own exit status rather
-  than being turned into a failure. It loses only the tail of its output once
-  the delay expires, and the agent logs a warning saying so.
+  One behavior is worth knowing, and one boundary on it. A task with **no
+  declared timeout** that exits successfully while leaving a background process
+  holding the pipe keeps its own exit status rather than being turned into a
+  failure; it loses only the tail of its output once the delay expires, and the
+  agent logs a warning saying so. It also now takes an extra 10s to return,
+  where before it hung indefinitely.
+
+  Where a timeout **was** declared and fired, the attempt is reported as
+  `execution_timeout` regardless of what the task's own exit status was — the
+  classification reads the deadline, not the exit code. That is pre-existing
+  and unchanged here; this fix narrows the window in which it can happen but
+  does not close it.
 - **A version floor in `dependencies` was silently dropped, and left junk in the
   image.** `RUN` in a Dockerfile is `/bin/sh -c`, and the specifiers were joined
   into that line unquoted — so `setuptools>=80.9.0` was a *redirection*: pip

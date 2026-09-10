@@ -32,22 +32,42 @@ import (
 // still happening AFTER the call returned.
 func grandchildScript(pidFile, marker string) string {
 	return fmt.Sprintf(
-		"echo $$ > %[1]s\n"+
+		// Both, and on one line: the premise "the task leads its own group" has
+		// to be checkable AFTER the kill, and Getpgid on a dead leader returns
+		// ESRCH — which is indistinguishable from "the group is gone".
+		"echo \"$$ $(ps -o pgid= -p $$ | tr -d ' ')\" > %[1]s\n"+
 			"( i=0; while [ $i -lt 400 ]; do printf x >> %[2]s; sleep 0.05; i=$((i+1)); done ) &\n"+
 			"echo started\n"+
 			"wait\n", pidFile, marker)
 }
 
-// readPGID waits for the script above to publish its own pid, which under the
-// fix is also its process-group id (the child leads a new group).
+// readPGID waits for the script above to publish its pid and its pgid, and
+// asserts they are equal — i.e. that the task really did lead its own group.
+//
+// That assertion is the premise the kill probe rests on and cannot make for
+// itself: `kill(-pgid, 0)` returns ESRCH both when the group is gone and when
+// it never existed, so without this, dropping Setpgid makes the probe report
+// success having tested nothing. Measured: the wiring test then passed in 1.1s
+// while `ps` still showed the bash tree and its sleep running — the exact
+// "returns on time, work keeps going" shape #943 is about, reproduced inside
+// its own regression test.
 func readPGID(t *testing.T, pidFile string) int {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		b, err := os.ReadFile(pidFile) //nolint:gosec // test-owned temp path
 		if err == nil {
-			if pid, cerr := strconv.Atoi(strings.TrimSpace(string(b))); cerr == nil && pid > 0 {
-				return pid
+			fields := strings.Fields(string(b))
+			if len(fields) == 2 {
+				pid, perr := strconv.Atoi(fields[0])
+				pgid, gerr := strconv.Atoi(fields[1])
+				if perr == nil && gerr == nil && pid > 0 && pgid > 0 {
+					if pid != pgid {
+						t.Fatalf("the task ran in process group %d rather than leading its own (%d): "+
+							"the kill probe would then ESRCH on a group that never existed and report success", pgid, pid)
+					}
+					return pid
+				}
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -332,5 +352,50 @@ func TestKillProcessGroupFallsBackWhenTheChildLeadsNoGroup(t *testing.T) {
 	}
 	if !exitErr.ProcessState.Sys().(syscall.WaitStatus).Signaled() { //nolint:errcheck,forcetypeassert // unix-only test
 		t.Errorf("child exited %v, want it killed by a signal", exitErr.ProcessState)
+	}
+}
+
+// TestExecRunnerTimeoutKillsATaskThatTrapsSIGTERM pins the signal, which the
+// rest of the suite does not.
+//
+// Swapping SIGKILL for SIGTERM in killProcessGroup leaves every other test in
+// this file green — measured. That is the shape of a plausible future
+// refactor ("let's shut down gracefully"), and it silently re-opens #943 for
+// any task that traps the signal: a `trap ” TERM` shell, a JVM with a
+// shutdown hook that blocks, a Python process with a SIGTERM handler that
+// swallows it. The timeout is the last resort, so it does not negotiate.
+func TestExecRunnerTimeoutKillsATaskThatTrapsSIGTERM(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	marker := filepath.Join(dir, "marker")
+
+	// Ignores TERM entirely, then does the same grandchild-holding-stdout
+	// thing: only an un-trappable signal ends this.
+	script := "trap '' TERM\n" + grandchildScript(pidFile, marker)
+
+	const deadline = 500 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+
+	var out bytes.Buffer
+	start := time.Now()
+	if _, err := NewExecRunner().Run(ctx, []string{"sh", "-c", script}, nil, &out, &out); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Run returned after %v for a %v deadline against a SIGTERM-trapping task: "+
+			"the timeout is negotiating with something that refuses", elapsed, deadline)
+	}
+	requireProcessGroupGone(t, readPGID(t, pidFile))
+
+	// Same two-sample check the sibling test uses: a marker that never grew
+	// would mean the fixture never ran, not that the kill worked.
+	before := fileSize(t, marker)
+	if before == 0 {
+		t.Fatal("the grandchild never wrote to its marker file; the test is not exercising the shape it claims")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if after := fileSize(t, marker); after != before {
+		t.Errorf("a SIGTERM-trapping task is still working after the timeout returned: marker grew %d -> %d bytes", before, after)
 	}
 }

@@ -115,6 +115,11 @@ dag_id: mix
 # generated one has to carry it, and that is half of what this test now proves.
 dependencies:
   - dbt-postgres==1.9.*
+  # A version FLOOR, on purpose (#1064). `RUN` is /bin/sh -c, so an unquoted
+  # `>=` is a redirection: pip used to receive a bare `wheel`, the floor
+  # vanished, and a file named `=0.45` appeared in the image. Tiny package with
+  # no dependencies, so this costs the build almost nothing.
+  - "wheel>=0.45"
 dbt_groups:
   transform:
     project: ./transform
@@ -228,6 +233,21 @@ jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not]
 # probing for the dbt binary, so the check and its message are one statement.
 docker run --rm --entrypoint python "$DAG_IMAGE" -c 'import dbt.adapters.postgres' \
   || fail "the adapter declared in dependencies: is not installed in the generated image"
+
+# #1064 — a version floor must survive into the image. An unquoted `>=` was a
+# shell redirection, so the operand became a filename holding pip's stdout.
+#
+# This asserts the ARTIFACT, not the version, and that is deliberate. The
+# obvious assertion — "the installed wheel satisfies the declared floor" — is
+# one that cannot fail here: the runtime base already ships wheel 0.46.3, above
+# any floor low enough to be safe to declare, so pip leaves it alone whether or
+# not the constraint survived. The version symptom only appears when the base
+# carries something OLDER, and there is no way to stage that through a
+# chart-generated Dockerfile. A test that cannot fail is worse than no test, so
+# it is not written; the version property is covered by the unit tier, which
+# asserts what pip was actually handed.
+docker run --rm --entrypoint sh "$DAG_IMAGE" -c 'ls -A /home/leoflow | grep -q "^=" && exit 1 || exit 0' \
+  || fail "a redirection artifact (=<version>) is in the image: a dependency operator escaped the RUN quoting (#1064)"
 
 # #993 CANNOT manifest under --build: `local` is false either way there, so the
 # assertion above is a canary, not a proof. The defect needs a bare compile —

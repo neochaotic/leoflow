@@ -158,14 +158,22 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 		b.WriteString("USER root\n")
 	}
 	if len(cfg.SystemPackages) > 0 {
+		args, aerr := shellArgs("system_packages", cfg.SystemPackages)
+		if aerr != nil {
+			return "", aerr
+		}
 		// Single RUN so the apt cache cleanup stays in the same layer as the install.
-		fmt.Fprintf(&b, "RUN apt-get update && apt-get install -y --no-install-recommends %s "+
-			"&& rm -rf /var/lib/apt/lists/*\n", strings.Join(cfg.SystemPackages, " "))
+		fmt.Fprintf(&b, "RUN apt-get update && apt-get install -y --no-install-recommends -- %s "+
+			"&& rm -rf /var/lib/apt/lists/*\n", args)
 	}
 	if len(deps) > 0 {
+		args, aerr := shellArgs("dependencies", deps)
+		if aerr != nil {
+			return "", aerr
+		}
 		// Dependencies before COPY so the (rarely-changing) layer is cached across
 		// edits to the DAG source.
-		fmt.Fprintf(&b, "RUN pip install --no-cache-dir %s\n", strings.Join(deps, " "))
+		fmt.Fprintf(&b, "RUN pip install --no-cache-dir -- %s\n", args)
 	}
 	if cfg.Dbt != nil {
 		// A dbt project is the DAG source (ADR 0042): there is no dag.py to COPY and
@@ -604,6 +612,65 @@ func mergeDockerignore(original []byte, excludes []string) (merged []byte, chang
 		b.WriteString("\n")
 	}
 	return []byte(b.String()), true
+}
+
+// shellQuote wraps one word so /bin/sh reads it as a single literal argument.
+//
+// Single quotes, because inside them the shell interprets nothing at all — no
+// expansion, no redirection, no word splitting. The one character that cannot
+// appear is a single quote itself, so it is closed, escaped and reopened:
+// `ev'il` becomes `'ev'\”il'`.
+//
+// NOT fmt's %q. That is Go quoting, not shell quoting: it emits double quotes,
+// inside which the shell still expands $, backticks and \, and it escapes
+// embedded quotes with a backslash the way Go does rather than the way sh
+// does. It looks right on a simple package name and diverges exactly where it
+// matters.
+func shellQuote(word string) string {
+	return "'" + strings.ReplaceAll(word, "'", `'\''`) + "'"
+}
+
+// shellArgs quotes every element for a shell-form RUN and joins them.
+//
+// `RUN <cmd>` is executed as `/bin/sh -c <cmd>`, so anything interpolated raw
+// is shell source. Joining specs unquoted made `setuptools>=80.9.0` a
+// REDIRECTION: pip received a bare `setuptools`, the version floor vanished,
+// and a file named `=80.9.0` appeared in the image holding pip's stdout. The
+// build stayed green and the only symptom was the wrong version inside the
+// image — which is the worst possible failure mode for a floor, because a
+// floor is how you remediate a CVE in a transitive dependency (#1064).
+//
+// Note what is deliberately NOT rejected: `;` is PEP 508's environment-marker
+// separator, so `requests; python_version < "3.9"` is a legal specifier that
+// also carries `<` and double quotes. The reflex to "block shell
+// metacharacters" would refuse a valid form; quoting carries it through
+// intact, which a real build confirms. Quoting is the fix, not a denylist.
+//
+// A newline is one exception, because no quoting survives it: it ends the RUN
+// instruction itself, and everything after becomes a new Dockerfile line. That
+// one is refused, naming the field and the entry — a stray newline in YAML is
+// invisible in the source.
+//
+// The other exception is why every element is emitted after a `--`. Quoting
+// guarantees "one argv element"; it does not guarantee "a package". A leading
+// dash is still an OPTION to the tool being run, and both tools take dangerous
+// ones: `dependencies: ["--dry-run", "six"]` built green with six absent — the
+// identical silent-failure shape as the bug this whole change is about — and an
+// apt `-o DPkg::Pre-Invoke::=<cmd>` runs that command as root during the build.
+// `--` ends option parsing in both, turning either into a loud refusal
+// ("Invalid requirement", "Unable to locate package"). Verified with real
+// builds both ways.
+func shellArgs(field string, words []string) (string, error) {
+	quoted := make([]string, 0, len(words))
+	for _, w := range words {
+		if strings.ContainsAny(w, "\n\r") {
+			return "", fmt.Errorf(
+				"%s entry %q contains a line break, which would end the RUN instruction and turn the rest into a new Dockerfile line; remove it",
+				field, w)
+		}
+		quoted = append(quoted, shellQuote(w))
+	}
+	return strings.Join(quoted, " "), nil
 }
 
 // ensureDockerfile resolves the Dockerfile to build with. A project that ships

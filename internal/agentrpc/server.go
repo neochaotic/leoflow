@@ -509,7 +509,7 @@ func (s *Server) StreamLogs(stream agentv1.AgentService_StreamLogsServer) (err e
 		// own text, which carries host paths, bucket names and credential-adjacent
 		// detail into the tenant's pod. internalStatus records the cause on the
 		// control-plane log, keyed by the attempt (#1068).
-		return internalStatus("opening log sink", oerr, attemptAttrs(id)...)
+		return internalStatus("opening log sink for task; logs will not be shipped", oerr, attemptAttrs(id)...)
 	}
 	defer func() {
 		cerr := w.Close()

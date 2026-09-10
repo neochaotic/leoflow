@@ -81,6 +81,13 @@ func redactedStatus(op string, cause error) error {
 // causeArgs puts the real error first on the log line, ahead of the caller's
 // own fields, under the same cause key the HTTP request log uses (#961).
 func causeArgs(cause error, attrs []any) []any {
+	// Every call site today is inside an `if err != nil`, so this cannot fire —
+	// but this helper is documented as the single sanctioned way to build one of
+	// these statuses, and a future site outside that guard would panic into the
+	// recovery interceptor rather than log.
+	if cause == nil {
+		return attrs
+	}
 	args := make([]any, 0, len(attrs)+2)
 	args = append(args, "cause", cause.Error())
 	return append(args, attrs...)

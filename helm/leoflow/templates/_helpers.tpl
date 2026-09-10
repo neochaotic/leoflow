@@ -412,3 +412,118 @@ asserts the two still agree.
 {{- end -}}
 {{- $v -}}
 {{- end -}}
+
+{{/*
+taskNetworkPolicy.allowMetadataEgress, validated and rendered as ipBlock peers.
+
+This list is the only way through the 169.254.0.0/16 exception the task-pod
+policy always installs, and that exception is the one containment the policy's
+whole security story rests on. values.yaml documented the hatch as "one /32
+each, never the whole range" and nothing enforced it, so `169.254.0.0/16`
+rendered happily — and it does not merely widen the hatch, it removes the block:
+egress rules are ADDITIVE. k8s.io/api networking/v1 (NetworkPolicySpec.Egress)
+defines outgoing traffic as allowed "if the traffic matches at least one egress
+rule across all of the NetworkPolicy objects whose podSelector matches the pod",
+and IPBlock.Except narrows only the ipBlock it belongs to. So a second rule
+allowing the range overrides the first rule's except-list, and the rendered
+manifest still shows the except-list while nothing is blocked (#958).
+
+Hence a render-time refusal, the same end the chart fails at for the other
+unsafe couplings (deployment.yaml's single-writer volume, pdb.yaml's
+minAvailable/maxUnavailable pair): the alternative is a cluster that installs
+and is silently less contained than its own documentation claims.
+
+What is accepted, deliberately:
+  - an IPv4 address with /32, or an IPv6 address with /128 — "one host" is the
+    invariant, and it is the ONLY one enforced. An in-range check is not: a
+    single-host allow outside 169.254.0.0/16 re-permits exactly one address that
+    the allow-all rule already permits (or that blockPrivateNetworks / extraExcept
+    took away), which is the same containment either way.
+  - IPv6 at all, because the allow-all rule is `0.0.0.0/0` and therefore matches
+    no IPv6 destination — this list is the only way to reach an IPv6 metadata
+    endpoint (EKS Pod Identity serves one at fd00:ec2::23) while the policy is on.
+  - surrounding whitespace, trimmed here and in what renders. A quoted
+    " 169.254.169.254/32 " keeps its padding through YAML and renders a cidr the
+    apiserver rejects; trimming is a value fix, not cosmetics.
+  - string-typed values, which is all Helm ever delivers: Argo CD's
+    helm.parameters and `--set-string` pass every override as a string.
+
+What is refused, and why each one is not just the string the issue named:
+  - any prefix below the host width (/16, /24, /0, IPv6 /64) — the reported hole;
+  - a prefix above it (/33) or a non-numeric one, which renders clean and is
+    rejected by the apiserver after the install reports success;
+  - a bare address with no prefix, same clean-render/failed-install shape;
+  - an empty or blank entry;
+  - anything that is not an address, so a typo is not silently installed;
+  - a scalar instead of a list, which is what an unindexed GitOps override
+    delivers. `range` over it used to die with "range can't iterate over
+    169.254.169.254/32", naming neither the value nor the fix.
+
+An IPv4-mapped IPv6 literal (::ffff:169.254.169.254/128) is refused as well; the
+plain IPv4 /32 spelling is the one to use.
+
+The refusal lives with the RENDER, not beside it: task-networkpolicy.yaml emits
+the peers only through this helper, so a template that stops calling it stops
+rendering the exceptions too. A guard the template no longer calls is the hole
+that leaves every gate green while the protection is gone.
+
+Not evaluated when taskNetworkPolicy.enabled is false: nothing renders then, so
+there is no policy to reopen.
+*/}}
+{{- define "leoflow.taskMetadataEgressPeers" -}}
+{{- $why := "Every entry must name exactly ONE host, because NetworkPolicy egress rules are additive: k8s.io/api networking/v1 defines outgoing traffic as allowed if it matches at least one egress rule, so an allow rule here overrides the 169.254.0.0/16 entry in the allow-all rule's except-list and anything broader than a single host reopens the cloud-metadata range this policy exists to block. Accepted: an IPv4 address with /32 (GKE Workload Identity 169.254.169.254/32, EKS Pod Identity 169.254.170.23/32) or an IPv6 address with /128; surrounding whitespace is trimmed. To reach a wider range that is NOT the metadata range, use taskNetworkPolicy.extraEgress. See #958." -}}
+{{- $raw := .Values.taskNetworkPolicy.allowMetadataEgress -}}
+{{- if not (kindIs "slice" $raw) -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress must be a list, one CIDR per entry (got %q, kind %s). A scalar arrives when the override is sent unindexed; use list syntax instead: --set taskNetworkPolicy.allowMetadataEgress[0]=169.254.169.254/32, or --set \"taskNetworkPolicy.allowMetadataEgress={169.254.169.254/32,169.254.170.23/32}\". %s" (toString $raw) (kindOf $raw) $why) -}}
+{{- end -}}
+{{- $peers := list -}}
+{{- range $i, $e := $raw -}}
+{{- $s := trim (toString $e) -}}
+{{- if eq $s "" -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q is empty. %s" $i $s $why) -}}
+{{- end -}}
+{{- $parts := splitList "/" $s -}}
+{{- if eq (len $parts) 1 -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q has no prefix length. %s" $i $s $why) -}}
+{{- end -}}
+{{- if ne (len $parts) 2 -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q is not an IPv4 or IPv6 address in CIDR form. %s" $i $s $why) -}}
+{{- end -}}
+{{- $host := index $parts 0 -}}
+{{- $prefix := index $parts 1 -}}
+{{- $v6 := contains ":" $host -}}
+{{- /* IPv4 is validated in full (leading zeros included, which net.ParseIP also
+rejects). IPv6 is validated for shape: hex groups, at most one "::", and the
+group count a valid address can have. */ -}}
+{{- $hostOK := false -}}
+{{- if $v6 -}}
+{{- $hostOK = and (regexMatch "^[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4}){2,7}$" $host) (le (len (splitList "::" $host)) 2) -}}
+{{- if and $hostOK (not (contains "::" $host)) -}}
+{{- $hostOK = eq (len (splitList ":" $host)) 8 -}}
+{{- end -}}
+{{- else -}}
+{{- $hostOK = regexMatch "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$" $host -}}
+{{- end -}}
+{{- if not $hostOK -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q is not an IPv4 or IPv6 address in CIDR form. %s" $i $s $why) -}}
+{{- end -}}
+{{- if not (regexMatch "^(0|[1-9][0-9]*)$" $prefix) -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q has a prefix length that is not a number (/%s). %s" $i $s $prefix $why) -}}
+{{- end -}}
+{{- $want := 32 -}}
+{{- $family := "IPv4" -}}
+{{- if $v6 -}}
+{{- $want = 128 -}}
+{{- $family = "IPv6" -}}
+{{- end -}}
+{{- $n := atoi $prefix -}}
+{{- if lt $n $want -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q has prefix /%s, which selects more than one host (%s needs /%d). %s" $i $s $prefix $family $want $why) -}}
+{{- end -}}
+{{- if gt $n $want -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q has prefix /%s, which is not a valid %s prefix length (%s needs /%d). %s" $i $s $prefix $family $family $want $why) -}}
+{{- end -}}
+{{- $peers = append $peers (printf "- ipBlock:\n    cidr: %q" $s) -}}
+{{- end -}}
+{{- join "\n" $peers -}}
+{{- end -}}

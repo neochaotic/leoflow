@@ -74,15 +74,17 @@ spec:
     {{- with .Values.taskNetworkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-    {{- with .Values.taskNetworkPolicy.allowMetadataEgress }}
+    {{- if .Values.taskNetworkPolicy.allowMetadataEgress }}
     # Scoped exceptions to the always-blocked cloud-metadata range, one host each,
     # for keyless external-secrets auth via a metadata/link-local endpoint (GKE
     # Workload Identity, EKS Pod Identity). NetworkPolicy egress is additive, so a
-    # /32 allow here re-permits exactly that host without opening 169.254.0.0/16.
+    # /32 allow here re-permits exactly that host without opening 169.254.0.0/16 —
+    # and by the same additivity a broader entry would REMOVE the block above
+    # rather than widen the hatch, so leoflow.taskMetadataEgressPeers refuses
+    # anything wider than one host at render time (#958). The peers render only
+    # through that helper: the guard cannot be left behind by a template that
+    # stops calling it.
     - to:
-        {{- range . }}
-        - ipBlock:
-            cidr: {{ . | quote }}
-        {{- end }}
+        {{- include "leoflow.taskMetadataEgressPeers" . | nindent 8 }}
     {{- end }}
 {{- end }}

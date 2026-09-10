@@ -253,6 +253,21 @@ taskNetworkPolicy:
 AWS IRSA needs no NetworkPolicy change (it authenticates against the public STS
 endpoint, not the metadata range).
 
+{{% alert title="One host per entry, enforced at render time" color="warning" %}}
+`allowMetadataEgress` accepts an IPv4 `/32` or an IPv6 `/128` and nothing wider.
+`169.254.0.0/16`, `169.254.169.0/24`, a bare `169.254.169.254` with no prefix, a
+malformed CIDR, or the value sent as a scalar instead of a list all **fail the
+render** with a message naming the entry and what to pass instead.
+
+The reason is that a wider entry does not widen the exception, it deletes the
+block. NetworkPolicy egress rules are additive — traffic is allowed if it
+matches *at least one* rule — so a second rule permitting `169.254.0.0/16`
+overrides the `except: [169.254.0.0/16]` in the allow-all rule, and the rendered
+manifest still shows an except-list that no longer blocks anything. To reach a
+wider range that is **not** the metadata range, use
+`taskNetworkPolicy.extraEgress`.
+{{% /alert %}}
+
 ## What this does and does not cover
 
 - **File-based credentials** (SA keys, certs, CA bundles) are the natural fit for

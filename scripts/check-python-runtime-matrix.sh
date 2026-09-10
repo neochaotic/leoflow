@@ -33,6 +33,17 @@
 # published line makes that leg unbuildable, and one below it advertises support
 # for an interpreter we ship no image for.
 #
+# The gate reconciles the deprecation STATUS AND DATES as well as the list, and
+# that second half is not optional. Reconciling only the set of versions leaves
+# the half a user acts on unguarded: move a deprecation from 3.10 to 3.11 in the
+# schema and every version still appears in every file, so the list arms stay
+# green while the support table in the configuration reference — the only place
+# a user learns the date — says the exact opposite of what the CLI enforces and
+# what the weekly watchdog asserts. The same date is hardcoded in release.yaml's
+# comment above the matrix, which is the copy a maintainer reads while editing
+# the matrix that publishes the leg, so it is reconciled too. A wrong date is
+# worse than a missing one: it answers the question the reader came with.
+#
 # Usage: scripts/check-python-runtime-matrix.sh [--self-test]
 #        scripts/check-python-runtime-matrix.sh <repo-root>
 set -euo pipefail
@@ -213,6 +224,134 @@ got = [VERSION_RE.search(ln).group(0) for ln in status_rows]
 if set(got) != wantset:
 	note(docs_rel, "Python version support table", got, want)
 
+# ── 6. the deprecation STATUS and DATES, not just the list ───────────────────
+# Reconciling only the set of versions left the half that a user actually acts
+# on unguarded: move the deprecation from 3.10 to 3.11 in the schema and this
+# table keeps saying `3.11 | Supported (default)` / `3.10 | Deprecated` with a
+# green gate. The table is the only place a user learns the date, so a stale one
+# is worse than a missing one — it answers the question, wrongly.
+
+
+def cells(row):
+	"""Split a markdown table row into its cells, markdown emphasis stripped."""
+	parts = [c.strip() for c in row.strip().strip("|").split("|")]
+	return [re.sub(r"[`*_]", "", c).strip() for c in parts]
+
+
+header = None
+for ln in docs_text.splitlines():
+	if not ln.startswith("|"):
+		continue
+	c = cells(ln)
+	if len(c) >= 4 and c[0] == "Line" and c[1] == "Status":
+		header = c
+		break
+if header is None:
+	fail(
+		f"{docs_rel} has no Python-support table header of the shape\n"
+		"`| Line | Status | Upstream EOL | Published until |` — the status/date arm of this\n"
+		"gate cannot locate its columns and must not report OK."
+	)
+# Index by name rather than position: a reordered column would otherwise be
+# compared against the wrong schema field and pass for the wrong reason.
+for required in ("Upstream EOL", "Published until"):
+	if required not in header:
+		fail(f"{docs_rel}'s Python-support table has no {required!r} column (header: {header})")
+eol_col = header.index("Upstream EOL")
+until_col = header.index("Published until")
+
+for row in status_rows:
+	c = cells(row)
+	version = VERSION_RE.search(c[0]).group(0)
+	if len(c) <= max(eol_col, until_col):
+		problems.append(f"  {docs_rel}\n    status row for {version} has {len(c)} cells, header declares {len(header)}")
+		continue
+	dep = deprecations.get(version)
+	says_deprecated = "deprecated" in c[1].lower()
+	if dep is None:
+		if says_deprecated:
+			problems.append(
+				f"  {docs_rel}\n"
+				f"    status row for {version}: {c[1]!r}\n"
+				f"    schema:  {version} carries no x-leoflow-python-deprecations entry\n"
+				"    A line the docs call deprecated and the schema does not is a line the CLI\n"
+				"    will never warn about — the user is told to move off something nothing enforces."
+			)
+		if re.search(r"\d{4}-\d{2}-\d{2}", c[until_col]):
+			problems.append(
+				f"  {docs_rel}\n"
+				f"    status row for {version} declares a removal date ({c[until_col]}) but the schema\n"
+				"    marks the line supported. Record it in x-leoflow-python-deprecations or drop it."
+			)
+		continue
+	if not says_deprecated:
+		problems.append(
+			f"  {docs_rel}\n"
+			f"    status row for {version}: {c[1]!r}\n"
+			f"    schema:  deprecated (eol {dep.get('eol')}, remove_after {dep.get('remove_after')})\n"
+			"    This table is where a user learns a line is going away."
+		)
+	for label, col, key in (("Upstream EOL", eol_col, "eol"), ("Published until", until_col, "remove_after")):
+		expected = dep.get(key)
+		if not expected:
+			fail(f"{schema_rel}'s deprecation of {version} declares no {key!r}")
+		if c[col] != expected:
+			problems.append(
+				f"  {docs_rel}\n"
+				f"    status row for {version}, {label}: {c[col]!r}\n"
+				f"    schema {key}: {expected}\n"
+				"    The date in the docs is the one the user plans around; the one in the schema is\n"
+				"    the one the CLI prints and the watchdog asserts. They cannot be two dates."
+			)
+
+# The prose paragraph beneath the table repeats the argument and the dates. It
+# is what a user reads after the table tells them there is something to read.
+for version, dep in deprecations.items():
+	marker = f"`{version}` is deprecated"
+	if marker not in docs_text:
+		problems.append(
+			f"  {docs_rel}\n"
+			f"    no prose paragraph saying {marker!r}\n"
+			f"    schema:  {version} is deprecated, remove_after {dep.get('remove_after')}\n"
+			"    The table states the verdict; the paragraph is where the reason and the fix live."
+		)
+		continue
+	para = docs_text.split(marker, 1)[1][:1600]
+	for key in ("eol", "remove_after", "replacement"):
+		if dep[key] not in para:
+			problems.append(
+				f"  {docs_rel}\n"
+				f"    the {version} deprecation paragraph never mentions {key} = {dep[key]!r}"
+			)
+
+# ── 7. the release workflow's own prose about the deprecation ────────────────
+# release.yaml hardcodes the EOL date in the comment above the matrix. It is the
+# copy a maintainer reads while editing the matrix, so it is the copy most likely
+# to be trusted and least likely to be revisited.
+workflow_text = read(workflow_rel)
+for version in want:
+	dep = deprecations.get(version)
+	found = re.search(rf"py{re.escape(version)} is DEPRECATED", workflow_text, re.I)
+	if dep and not found:
+		problems.append(
+			f"  {workflow_rel}\n"
+			f"    no `py{version} is DEPRECATED` note above the matrix\n"
+			f"    schema:  {version} is deprecated, remove_after {dep.get('remove_after')}\n"
+			"    This is the comment a maintainer reads while editing the matrix that publishes it."
+		)
+	elif dep is None and found:
+		problems.append(
+			f"  {workflow_rel}\n"
+			f"    calls py{version} DEPRECATED, but the schema does not"
+		)
+	elif dep and found:
+		tail = workflow_text[found.start():found.start() + 700]
+		if dep["eol"] not in tail:
+			problems.append(
+				f"  {workflow_rel}\n"
+				f"    the py{version} deprecation note never states its EOL date ({dep['eol']})"
+			)
+
 if problems:
 	sys.exit(
 		"FAIL: the published-Python list has drifted from the schema enum.\n"
@@ -231,27 +370,56 @@ self_test() {
 	tmp="$(mktemp -d)"
 	trap 'rm -rf "${tmp:-}"' RETURN
 
-	# Builds a minimal repo root whose five copies all agree on 3.10/3.11.
+	# The fixture deliberately gives 3.10 an `eol` (2026-10-31) DIFFERENT from its
+	# `remove_after` (2026-12-31). In the real repo the two happen to be the same
+	# date, which would let a gate that compares the wrong column against the wrong
+	# schema field pass every case below for the wrong reason.
+	_dep_json='{"3.10":{"eol":"2026-10-31","remove_after":"2026-12-31","replacement":"3.11"}}'
+	_schema() { # <dir> <deprecations-json>
+		printf '{"properties":{"python_version":{"enum":["3.10","3.11"],"default":"3.11",\n "x-leoflow-python-deprecations":%s}}}\n' \
+			"$2" >"$1/internal/domain/schemas/leoflow-yaml-schema.json"
+	}
+
+	# release.yaml carries both the matrix and the prose note about the deprecated
+	# leg, so a mutator that rewrites one must restate the other or it is changing
+	# two things at once and the case proves nothing about either.
+	_matrix_both='jobs:\n  runtime-image:\n    strategy:\n      matrix:\n        python: ["3.10", "3.11"]\n'
+	_note_default='py3.10 is DEPRECATED: Python 3.10 goes EOL 2026-10-31.'
+	_release() { # <dir> <matrix-yaml-printf-format> <deprecation-note>
+		{
+			printf '# %s\n' "$3"
+			# shellcheck disable=SC2059 # $2 IS the format: callers pass literal templates
+			printf "$2"
+		} >"$1/.github/workflows/release.yaml"
+	}
+
+	_rows_default='| `3.10` | **Deprecated** | 2026-10-31 | 2026-12-31 |\n| `3.11` | Supported *(default)* | 2027-10-31 | — |\n'
+	_prose_default='**`3.10` is deprecated.** Upstream EOL 2026-10-31; published until 2026-12-31. Set `python_version` to `3.11`.\n'
+	_docs() { # <dir> <status-rows-printf-format> <prose-printf-format>
+		{
+			printf '| `python_version` | `3.10`\\|`3.11` | Base image Python. |\n'
+			printf '| `python_version` | `"3.11"` | Pick `3.10` or `3.11`. |\n\n'
+			printf '| Line | Status | Upstream EOL | Published until |\n|---|---|---|---|\n'
+			# shellcheck disable=SC2059 # $2 IS the format: callers pass literal templates
+			printf "$2"
+			printf '\n'
+			# shellcheck disable=SC2059 # $3 IS the format: callers pass literal templates
+			printf "$3"
+		} >"$1/website/content/reference/configuration.md"
+	}
+
+	# Builds a minimal repo root whose copies all agree on 3.10/3.11.
 	_mkroot() { # <dir>
 		local d="$1"
 		mkdir -p "$d/internal/domain/schemas" "$d/.github/workflows" "$d/runtime/python" \
 			"$d/website/content/reference"
-		cat >"$d/internal/domain/schemas/leoflow-yaml-schema.json" <<'JSON'
-{"properties":{"python_version":{"enum":["3.10","3.11"],"default":"3.11",
- "x-leoflow-python-deprecations":{"3.10":{"eol":"2026-10-31"}}}}}
-JSON
-		printf 'jobs:\n  runtime-image:\n    strategy:\n      matrix:\n        python: ["3.10", "3.11"]\n' \
-			>"$d/.github/workflows/release.yaml"
+		_schema "$d" "$_dep_json"
+		_release "$d" "$_matrix_both" "$_note_default"
 		printf 'runtime-images:\n\tfor v in 3.10 3.11; do \\\n\t\tdocker build . ; \\\n\tdone\n' >"$d/Makefile"
 		printf '# PYTHON_VERSION selects the interpreter (3.10 / 3.11).\nARG PYTHON_VERSION=3.11\n' \
 			>"$d/runtime/Dockerfile"
 		printf '[project]\nrequires-python = ">=3.10"\n' >"$d/runtime/python/pyproject.toml"
-		{
-			printf '| `python_version` | `3.10`\\|`3.11` | Base image Python. |\n'
-			printf '| `python_version` | `"3.11"` | Pick `3.10` or `3.11`. |\n'
-			printf '| Line | Status |\n|---|---|\n'
-			printf '| `3.10` | Deprecated |\n| `3.11` | Supported |\n'
-		} >"$d/website/content/reference/configuration.md"
+		_docs "$d" "$_rows_default" "$_prose_default"
 	}
 
 	_case() { # <name> <want-rc> <want-substring> <mutator...>
@@ -274,23 +442,54 @@ JSON
 	}
 
 	_noop() { :; }
-	_drop_from_matrix() { printf 'jobs:\n  runtime-image:\n    strategy:\n      matrix:\n        python: ["3.10"]\n' >"$1/.github/workflows/release.yaml"; }
-	_comment_out_matrix() { printf 'jobs:\n  runtime-image:\n    strategy:\n      matrix:\n        # python: ["3.10", "3.11"]\n        os: [ubuntu-latest]\n' >"$1/.github/workflows/release.yaml"; }
-	_rename_job() { printf 'jobs:\n  runtime-base:\n    strategy:\n      matrix:\n        python: ["3.10", "3.11"]\n' >"$1/.github/workflows/release.yaml"; }
-	_unquoted_matrix() { printf 'jobs:\n  runtime-image:\n    strategy:\n      matrix:\n        python: [3.10, 3.11]\n' >"$1/.github/workflows/release.yaml"; }
+	_drop_from_matrix() { _release "$1" 'jobs:\n  runtime-image:\n    strategy:\n      matrix:\n        python: ["3.10"]\n' "$_note_default"; }
+	_comment_out_matrix() { _release "$1" 'jobs:\n  runtime-image:\n    strategy:\n      matrix:\n        # python: ["3.10", "3.11"]\n        os: [ubuntu-latest]\n' "$_note_default"; }
+	_rename_job() { _release "$1" 'jobs:\n  runtime-base:\n    strategy:\n      matrix:\n        python: ["3.10", "3.11"]\n' "$_note_default"; }
+	_unquoted_matrix() { _release "$1" 'jobs:\n  runtime-image:\n    strategy:\n      matrix:\n        python: [3.10, 3.11]\n' "$_note_default"; }
 	_stale_makefile() { printf 'runtime-images:\n\tfor v in 3.10; do \\\n\t\tdocker build . ; \\\n\tdone\n' >"$1/Makefile"; }
 	_commented_makefile_loop() { printf 'runtime-images:\n\t# for v in 3.10 3.11; do \\\n\t@echo skip\n' >"$1/Makefile"; }
 	_other_target_loop() { printf 'other-images:\n\tfor v in 3.10 3.11; do \\\n\tdone\n\nruntime-images:\n\t@echo nothing\n' >"$1/Makefile"; }
 	_stale_dockerfile() { printf '# PYTHON_VERSION selects the interpreter (3.10 / 3.11 / 3.12).\n' >"$1/runtime/Dockerfile"; }
 	_dropped_dockerfile_comment() { printf 'ARG PYTHON_VERSION=3.11\n' >"$1/runtime/Dockerfile"; }
 	_raised_floor() { printf '[project]\nrequires-python = ">=3.11"\n' >"$1/runtime/python/pyproject.toml"; }
-	_stale_docs_row() { printf '| `python_version` | `3.10`\\|`3.11`\\|`3.12` | x |\n| `3.10` | Deprecated |\n| `3.11` | Supported |\n' >"$1/website/content/reference/configuration.md"; }
-	_stale_status_table() { printf '| `python_version` | `3.10`\\|`3.11` | x |\n| `3.10` | Deprecated |\n' >"$1/website/content/reference/configuration.md"; }
+	_stale_docs_row() {
+		_docs "$1" "$_rows_default" "$_prose_default"
+		printf '| `python_version` | `3.10`\\|`3.11`\\|`3.12` | drifted |\n' >>"$1/website/content/reference/configuration.md"
+	}
+	_stale_status_table() { _docs "$1" '| `3.10` | **Deprecated** | 2026-10-31 | 2026-12-31 |\n' "$_prose_default"; }
 	_missing_schema() { rm -f "$1/internal/domain/schemas/leoflow-yaml-schema.json"; }
 	_empty_enum() { printf '{"properties":{"python_version":{"default":"3.11"}}}\n' >"$1/internal/domain/schemas/leoflow-yaml-schema.json"; }
-	_unlisted_deprecation() { printf '{"properties":{"python_version":{"enum":["3.10","3.11"],"default":"3.11","x-leoflow-python-deprecations":{"3.9":{}}}}}\n' >"$1/internal/domain/schemas/leoflow-yaml-schema.json"; }
+	_unlisted_deprecation() { _schema "$1" '{"3.9":{}}'; }
 	_deprecated_default() { printf '{"properties":{"python_version":{"enum":["3.10","3.11"],"default":"3.10","x-leoflow-python-deprecations":{"3.10":{}}}}}\n' >"$1/internal/domain/schemas/leoflow-yaml-schema.json"; }
 	_unsorted_enum() { printf '{"properties":{"python_version":{"enum":["3.11","3.10"],"default":"3.11"}}}\n' >"$1/internal/domain/schemas/leoflow-yaml-schema.json"; }
+
+	# ── the status/date arm: the half the list check cannot see ─────────────────
+	# The motivating mutation is _deprecation_moves_in_schema_only: move the
+	# deprecation from 3.10 to 3.11 in the schema and the list of versions is
+	# still identical everywhere, so every case above stays green while the table
+	# the user reads now says the exact opposite of what the CLI enforces.
+	_deprecation_moves_in_schema_only() {
+		_schema "$1" '{"3.11":{"eol":"2027-10-31","remove_after":"2027-12-31","replacement":"3.12"}}'
+		# Keep the default off the newly deprecated line so this case fails on the
+		# docs disagreement and not on the deprecated-default rule.
+		sed -i.bak 's/"default":"3.11"/"default":"3.10"/' "$1/internal/domain/schemas/leoflow-yaml-schema.json"
+		rm -f "$1/internal/domain/schemas/leoflow-yaml-schema.json.bak"
+	}
+	_docs_call_it_supported() { _docs "$1" '| `3.10` | Supported | 2026-10-31 | 2026-12-31 |\n| `3.11` | Supported *(default)* | 2027-10-31 | — |\n' "$_prose_default"; }
+	_docs_deprecate_a_supported_line() { _docs "$1" '| `3.10` | **Deprecated** | 2026-10-31 | 2026-12-31 |\n| `3.11` | **Deprecated** | 2027-10-31 | — |\n' "$_prose_default"; }
+	_docs_stale_eol() { _docs "$1" '| `3.10` | **Deprecated** | 2025-10-31 | 2026-12-31 |\n| `3.11` | Supported *(default)* | 2027-10-31 | — |\n' "$_prose_default"; }
+	_docs_stale_removal_date() { _docs "$1" '| `3.10` | **Deprecated** | 2026-10-31 | 2027-06-30 |\n| `3.11` | Supported *(default)* | 2027-10-31 | — |\n' "$_prose_default"; }
+	_docs_removal_date_on_supported_line() { _docs "$1" '| `3.10` | **Deprecated** | 2026-10-31 | 2026-12-31 |\n| `3.11` | Supported *(default)* | 2027-10-31 | 2028-01-01 |\n' "$_prose_default"; }
+	_docs_no_status_header() {
+		_docs "$1" "$_rows_default" "$_prose_default"
+		sed -i.bak 's/^| Line | Status .*/| Version | State |/' "$1/website/content/reference/configuration.md"
+		rm -f "$1/website/content/reference/configuration.md.bak"
+	}
+	_docs_no_prose() { _docs "$1" "$_rows_default" 'The table above is the whole story.\n'; }
+	_docs_prose_omits_removal_date() { _docs "$1" "$_rows_default" '**`3.10` is deprecated.** Upstream EOL 2026-10-31. Set `python_version` to `3.11`.\n'; }
+	_release_drops_deprecation_note() { _release "$1" "$_matrix_both" 'One leg per supported Python.'; }
+	_release_deprecates_a_supported_line() { _release "$1" "$_matrix_both" 'py3.11 is DEPRECATED: EOL 2027-10-31. Also py3.10 is DEPRECATED: Python 3.10 goes EOL 2026-10-31.'; }
+	_release_note_omits_eol() { _release "$1" "$_matrix_both" 'py3.10 is DEPRECATED: it goes away at some point.'; }
 
 	_case "an agreeing tree passes"                  0 "agrees everywhere (3.10, 3.11; deprecated: 3.10)" _noop
 	_case "a leg missing from the release matrix"    1 "matrix.python" _drop_from_matrix
@@ -311,6 +510,18 @@ JSON
 	_case "a deprecation outside the enum"           1 "is not in the enum" _unlisted_deprecation
 	_case "a deprecated default"                     1 "also marks deprecated" _deprecated_default
 	_case "an out-of-order enum"                     1 "not in ascending order" _unsorted_enum
+	_case "the deprecation moves in the schema only" 1 "status row for 3.11" _deprecation_moves_in_schema_only
+	_case "the docs call a deprecated line supported" 1 "This table is where a user learns" _docs_call_it_supported
+	_case "the docs deprecate a supported line"      1 "carries no x-leoflow-python-deprecations entry" _docs_deprecate_a_supported_line
+	_case "a stale Upstream EOL cell"                1 "schema eol: 2026-10-31" _docs_stale_eol
+	_case "a stale Published until cell"             1 "schema remove_after: 2026-12-31" _docs_stale_removal_date
+	_case "a removal date on a supported line"       1 "declares a removal date" _docs_removal_date_on_supported_line
+	_case "a renamed status table header"            1 "has no Python-support table header" _docs_no_status_header
+	_case "no deprecation prose at all"              1 "no prose paragraph saying" _docs_no_prose
+	_case "prose that omits the removal date"        1 "never mentions remove_after" _docs_prose_omits_removal_date
+	_case "release.yaml drops the deprecation note"  1 "no \`py3.10 is DEPRECATED\` note" _release_drops_deprecation_note
+	_case "release.yaml deprecates a supported leg"  1 "calls py3.11 DEPRECATED" _release_deprecates_a_supported_line
+	_case "a release note with no EOL date"          1 "never states its EOL date" _release_note_omits_eol
 
 	if [ "$fail" -eq 0 ]; then echo "self-test: PASS"; return 0; else echo "self-test: FAIL"; return 1; fi
 }

@@ -73,14 +73,18 @@ func newCompileCommand() *cobra.Command {
 	return cmd
 }
 
-// checkProjectPreconditions runs the checks that apply to every compile before
+// checkProjectPreconditions runs the checks that apply to every project before
 // the dag.py and dbt paths diverge: the leoflow.yaml must validate, it must not
 // declare a dbt: block alongside a dag.py (#1015), and a deprecated Python line
 // earns a warning the author can still act on.
 //
-// Grouped rather than inlined so both compile paths get all three by
-// construction: warnDeprecatedPython landing on only the dag.py branch would
-// leave every dbt project silently on a base image that stops being rebuilt.
+// Grouped rather than inlined so every entry point gets all three by
+// construction. warnDeprecatedPython landing on only the dag.py branch would
+// leave every dbt project silently on a base image that stops being rebuilt,
+// and `leoflow validate` open-coding the first two checks is how it spent this
+// PR's first round never warning at all — validate is the sub-second command an
+// author runs in a loop with leoflow.yaml open, which is the exact moment the
+// warning is worth something.
 func checkProjectPreconditions(cmd *cobra.Command, dir string, cfg *domain.LeoflowConfig) error {
 	if verr := cfg.Validate(); verr != nil {
 		return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
@@ -89,7 +93,9 @@ func checkProjectPreconditions(cmd *cobra.Command, dir string, cfg *domain.Leofl
 		return derr
 	}
 	// Stderr, not stdout: the compile summary and any piped output stay clean.
-	return warnDeprecatedPython(cmd.ErrOrStderr(), cfg)
+	// Advisory only — a write failure here must not fail an otherwise good run.
+	warnDeprecatedPython(cmd.ErrOrStderr(), cfg)
+	return nil
 }
 
 // runCompile resolves the project config, runs the parser, validates the output,
@@ -152,6 +158,9 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	if berr := buildAndPush(cmd, dir, o, cfg, image); berr != nil {
 		return berr
 	}
+	if o.build {
+		remindDeprecatedPythonAfterBuild(cmd.ErrOrStderr(), cfg)
+	}
 	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(dagSourcePath(dir, cfg), o.output, image, o.dagVersion))
 	return werr
 }
@@ -213,6 +222,9 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	}
 	if berr := buildAndPush(cmd, dir, o, cfg, image); berr != nil {
 		return berr
+	}
+	if o.build {
+		remindDeprecatedPythonAfterBuild(cmd.ErrOrStderr(), cfg)
 	}
 	_, werr := fmt.Fprint(cmd.OutOrStdout(), compileSummary(filepath.Join(dir, cfg.Dbt.Project), o.output, image, o.dagVersion))
 	return werr

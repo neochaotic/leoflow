@@ -30,6 +30,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in *your* build — a selectable version with no published leg is a
   `docker pull` 404 minutes into a compile, naming an image you never typed.
 
+  The gate reconciles the deprecation *status and dates* as well as the list, so
+  the support table in the configuration reference — the only place you can read
+  when a line stops being published — cannot say one thing while the CLI warns
+  another.
+
 - **A weekly Python end-of-life watch.** Every other supply-chain signal in the
   repo (Dependabot, Trivy, govulncheck) reacts to a CVE that already exists. A
   base image whose Python line has gone EOL produces the opposite signal: it
@@ -54,15 +59,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every release until then, and images you have already built keep running. This
   is announced rather than dropped silently because a DAG image is built `FROM`
   the base and many projects pin `base_image`, so our choice becomes yours until
-  you rebuild. `leoflow compile` now prints a warning when your project resolves
-  to a deprecated line — including when you pin one of our published `py3.10`
-  tags through `base_image` — naming the removal date and the replacement. The
-  warning is at compile, not at task boot: the author choosing the interpreter is
-  the only person who can change it, and a per-task-pod warning would reach the
-  operator instead and repeat on every run until people filtered it out.
+  you rebuild. `leoflow validate`, `leoflow compile` and `leoflow deploy` now
+  print a warning when your project resolves to a deprecated line, naming the
+  removal date and the fix. The warning is at authoring time, not at task boot:
+  the author choosing the interpreter is the only person who can change it, and
+  a per-task-pod warning would reach the operator instead and repeat on every
+  run until people filtered it out. With `--build` it is repeated in one line
+  after the image is built, because minutes of builder output otherwise scroll
+  it off the top of the terminal.
+
+  **The warning names the field you actually set, and its fix works on that
+  field.** Setting `python_version: "3.10"` is told to change `python_version`.
+  Pinning one of our published `py3.10` tags through `base_image` — including a
+  digest pin such as `…:py3.10-v0.4.5@sha256:…` — is told to repoint
+  `base_image`, and is given the exact replacement tag with its suffix
+  preserved. The two are separated because `base_image` is used verbatim: an
+  author who pins it and is told to change `python_version` can follow that
+  advice, rebuild, and get the identical warning back.
 
   **What to do:** set `python_version: "3.11"` (or `"3.12"` / `"3.13"`) in
-  `leoflow.yaml` and rebuild.
+  `leoflow.yaml` and rebuild — or, if you pinned `base_image`, repoint it to the
+  matching `py3.11` tag and rebuild.
 
 ## [0.4.5] - 2026-09-09
 

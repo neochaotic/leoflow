@@ -24,16 +24,21 @@ func newValidateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if verr := cfg.Validate(); verr != nil {
-				return fmt.Errorf("invalid %s: %w", projectConfigPath(dir), verr)
-			}
+			// Shared with `compile`/`deploy` rather than open-coded, which is
+			// what this was: schema validation, the dbt-block-with-dag.py
+			// conflict (#1015), and the deprecated-Python warning. Open-coding
+			// the first two meant `validate` silently skipped the third — and
+			// `validate` is the sub-second command an author runs in a loop
+			// with leoflow.yaml open, so it is where a warning about a field
+			// in that file has the best chance of being acted on.
+			//
 			// A pure-dbt project has no dag.py: the dbt project IS the DAG
 			// (ADR 0042). Stat'ing the source unconditionally made the whole
 			// mode unvalidatable — the command that exists to say "this is
 			// fine" always said it was not (#996). The check is scoped, not
-			// removed: a dag.py DAG with a missing source still fails here.
-			if derr := errDbtBlockWithDagSource(dir, cfg); derr != nil {
-				return derr
+			// removed: a dag.py DAG with a missing source still fails below.
+			if perr := checkProjectPreconditions(cmd, dir, cfg); perr != nil {
+				return perr
 			}
 			if cfg.Dbt != nil {
 				// Scoping the dag.py check to a dag.py DAG left the dbt lane with

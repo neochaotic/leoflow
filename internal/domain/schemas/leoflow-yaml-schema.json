@@ -39,7 +39,7 @@
     },
     "base_image": {
       "type": "string",
-      "description": "Override the default leoflow/python-runtime base image."
+      "description": "Override the image the DAG is built FROM. Default: the published Leoflow task base for python_version (ghcr.io/neochaotic/leoflow-runtime:py<python_version>, pinned to the CLI's release tag). Setting this makes python_version unused for the FROM, so a pin to a deprecated py<line> tag is not fixed by changing python_version — repoint this field. Pinning also freezes the interpreter and OS packages at whatever the base carried the day you pinned it (ADR 0003)."
     },
     "dependencies": {
       "type": "array",

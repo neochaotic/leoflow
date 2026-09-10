@@ -79,13 +79,22 @@ jobs:
           category: "/language:${{ matrix.language }}"
 
   # ─────────────────────────────────────────────────────────────────────
-  # Trivy: container image scanning (ADR 0014)
+  # Trivy: FILESYSTEM scanning of this repository (ADR 0014)
+  #
+  # This job reads our module graph and lock files. It scans no image, and the
+  # job name says so: it was called "Trivy (image scan)" for many releases with
+  # `scan-type: fs` underneath, and the maintainer drew the wrong conclusion
+  # from that name twice in one day, in both directions (#1036). Container
+  # images are scanned by the `server-image` job below (the blocking half) and
+  # by .github/workflows/image-scan.yaml (the reporting half, #1034); a third
+  # copy here would only duplicate them.
+  #
   # Runs on PRs too (#437): a fixable dependency CVE must fail its own PR check,
   # not slip through and redden main on the post-merge run (as it did in #436 and
   # #439). ignore-unfixed keeps the gate to actionable, fixable findings only.
   # ─────────────────────────────────────────────────────────────────────
   trivy:
-    name: Trivy (image scan)
+    name: Trivy (filesystem scan)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -153,15 +162,18 @@ jobs:
   # — blind to a stdlib CVE that affects the shipped toolchain, and red for one
   # that does not.
   #
-  # `deploy/Dockerfile.server` compiles from source inside `golang:1.27-bookworm`
-  # and is the developer/kind convenience path. GoReleaser publishes
+  # `deploy/Dockerfile.server` compiles from source inside `golang:<toolchain>-
+  # bookworm` and is the developer/kind convenience path. GoReleaser publishes
   # `deploy/Dockerfile.server.release`, which copies in a binary the release
   # workflow builds with GO_VERSION. So this job reproduces the release recipe —
   # same toolchain, same `CGO_ENABLED=0 -trimpath`, same distroless base — and
-  # scans that. GO_VERSION here is the same literal as release.yaml's; the two
-  # must move together.
+  # scans that. GO_VERSION here is the same literal as release.yaml's, go.mod's
+  # `toolchain` line and both Dockerfiles' `ARG GO_VERSION` default;
+  # scripts/check-go-toolchain-pin.sh fails when any of them disagree (#1036).
+  # Before that gate existed, this comment spent two paragraphs arguing for a
+  # base tag one minor ahead of the toolchain go.mod pinned, and nothing noticed.
   #
-  # A floating `golang:1.27-bookworm` would also have quietly broken the fairness
+  # A floating major.minor build tag would also have quietly broken the fairness
   # argument this gate rests on. A stdlib CVE in a floating build tag is closed
   # by a base rebuild, not by a `go get` — it would redden the blocking gate for
   # whoever opened the next unrelated PR, which is exactly the scenario used to

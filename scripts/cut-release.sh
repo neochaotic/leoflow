@@ -748,8 +748,8 @@ run_gates() { # <tag>
   shopt -u nullglob
   # A gate renamed out of check-*.sh silently leaves the cut's gate set with no
   # signal at all, so assert the floor.
-  [ "${#gates[@]}" -ge "${MIN_GATES:-9}" ] || {
-    echo "gate set shrank to ${#gates[@]} (expected >= ${MIN_GATES:-9}) — a check-*.sh was renamed or removed" >&2
+  [ "${#gates[@]}" -ge "${MIN_GATES:-16}" ] || {
+    echo "gate set shrank to ${#gates[@]} (expected >= ${MIN_GATES:-16}) — a check-*.sh was renamed or removed" >&2
     return 1
   }
   for s in "${gates[@]}"; do

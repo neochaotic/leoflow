@@ -1212,6 +1212,38 @@ jobs:
         run: bash scripts/check-python-runtime-matrix.sh
 
   # ─────────────────────────────────────────────────────────────────────
+  # Duplicated version facts (#1036). A version string written in two places
+  # with nothing between them drifts, and the failure is not a broken build —
+  # it is that somebody reads one copy and reasons correctly from a false
+  # premise. That happened three times in one day: the Go toolchain said 1.26.6,
+  # 1.26.3, 1.26.4 and 1.27 in four files; a job named "Trivy (image scan)" ran
+  # a filesystem scan; and the two Python lists were read as one.
+  #
+  # One job rather than five, because they are one class and each runs in
+  # milliseconds — but one STEP per gate, so the check that went red names
+  # itself in the job summary before anyone opens the log. Each gate prints both
+  # locations and both values.
+  # ─────────────────────────────────────────────────────────────────────
+  version-facts:
+    name: Duplicated version facts agree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+      - name: Go toolchain is one fact with one value
+        run: bash scripts/check-go-toolchain-pin.sh
+      - name: Host Python interpreters relate correctly to the published matrix
+        run: bash scripts/check-python-host-interpreters.sh
+      - name: golangci-lint pin agrees between make lint and CI
+        run: bash scripts/check-golangci-lint-pin.sh
+      - name: Lite Postgres tag agrees with the container Lite starts
+        run: bash scripts/check-lite-postgres-tag.sh
+      - name: Embedded Airflow UI pin agrees with the committed bundle
+        run: bash scripts/check-airflow-ui-pin.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   stale-deploy-path:
     name: No stale legacy deploy path
     runs-on: ubuntu-latest

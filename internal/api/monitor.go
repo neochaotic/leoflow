@@ -56,7 +56,9 @@ func monitorHealthHandler(checks map[string]HealthChecker, sched Heartbeater) gi
 	return func(c *gin.Context) {
 		dbStatus := healthStatusHealthy
 		if hc, ok := checks["postgres"]; ok {
-			if err := checkDependency(c.Request.Context(), hc); err != nil {
+			ctx, cancel := withProbeBudget(c)
+			defer cancel()
+			if err := checkDependency(ctx, hc); err != nil {
 				// Unlike /readyz this endpoint always answers 200 (the Airflow
 				// HealthInfoResponse carries the verdict in the body), so the
 				// error is logged rather than returned — and, as there, never

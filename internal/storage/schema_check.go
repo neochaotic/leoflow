@@ -18,7 +18,9 @@ import (
 func (p *Postgres) SchemaVersion(ctx context.Context) (version uint, dirty, exists bool, err error) {
 	var v int64
 	var d bool
-	row := p.Pool.QueryRow(ctx, "SELECT version, dirty FROM schema_migrations LIMIT 1")
+	// probePool, not Pool: this is the readiness path's second acquire, and the
+	// one that made a saturated pool look like a broken database (#1042).
+	row := p.probePool().QueryRow(ctx, "SELECT version, dirty FROM schema_migrations LIMIT 1")
 	if scanErr := row.Scan(&v, &d); scanErr != nil {
 		// An absent table (42P01 undefined_table) means migrations never ran — a
 		// legible "exists=false", not a hard error. Anything else is a real fault.

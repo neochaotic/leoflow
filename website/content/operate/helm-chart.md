@@ -57,6 +57,47 @@ A first-class values reference on this site is a TODO for a later migration phas
   ServiceMonitor.
 - TLS termination via cert-manager — see [Pro TLS](/operate/pro-tls/).
 
+## Tuning the probes
+
+`probes.liveness` and `probes.readiness` are exposed so you can loosen them
+under load: a busy scheduler can miss a 1s `/healthz` during a task-pod burst
+and be kubelet-killed mid-run, which cascades in-flight tasks to `agent_lost`.
+The defaults are deliberately forgiving — 5s liveness and 3s readiness timeouts,
+three failures — rather than Kubernetes' 1s/3.
+
+One of those values has a floor the chart enforces:
+
+```console
+$ helm upgrade --install leoflow oci://ghcr.io/neochaotic/charts/leoflow \
+    --set probes.readiness.timeoutSeconds=1
+Error: probes.readiness.timeoutSeconds=1 is below the 3s floor. [...]
+```
+
+`/readyz` checks the database connection *and* asserts the schema is the one
+this binary requires, and it bounds that whole check at 2s so it always answers
+before the kubelet stops listening. Setting the kubelet's timeout below that
+inverts the relationship: the kubelet cancels a probe that was about to reply,
+so instead of a `503` whose log line names the failing dependency, you get a
+bare timeout that names nothing — precisely when you most need to know which
+dependency is slow. The chart refuses the value rather than installing a cluster
+that will go quiet under stress.
+
+If you need Kubernetes to react to an unready pod *faster* than 3s, lower
+`probes.readiness.periodSeconds` or `failureThreshold` instead. Both shorten
+time-to-unready without cutting off the answer:
+
+```yaml
+probes:
+  readiness:
+    timeoutSeconds: 3   # leave at or above the floor
+    periodSeconds: 5    # check twice as often
+    failureThreshold: 2 # out of rotation after two misses
+```
+
+The readiness check runs on its own dedicated database connection, separate from
+the pool serving API traffic, so a saturated control plane does not make every
+replica report itself unready at the same moment.
+
 ## Related
 
 - [Editions & operating modes](/concepts/editions/) — what Pro gives you and its

@@ -382,3 +382,33 @@ Deployment, because nothing in discovery reports gate state.
 true
 {{- end -}}
 {{- end -}}
+
+{{/*
+probes.readiness.timeoutSeconds, validated against the server's own probe
+budget.
+
+/readyz bounds its whole handler at 2s (api.probeBudget) and that number was
+chosen to sit UNDER the kubelet's timeout, because the two are one relationship
+read from both ends: the server has to give up first, or the kubelet cancels a
+probe that was about to answer and the operator gets a timeout with no log line
+naming the dependency instead of a 503 that names it.
+
+Nothing enforced the relationship. It was a comment in the Go source next to a
+plain, floorless chart value, so `--set probes.readiness.timeoutSeconds=1`
+rendered happily and inverted it: the kubelet gives up at 1s while the server is
+still willing to spend 2s answering, and every probe against a database slower
+than 1s becomes a silent timeout (#1041). Failing the render is the right end to
+fail at — the alternative is a cluster that installs and then reports nothing.
+
+The chart cannot read the Go constant, so scripts/check-readiness-probe-budget.sh
+asserts the two still agree.
+*/}}
+{{- define "leoflow.readinessTimeoutSeconds" -}}
+{{- $min := 3 -}}
+{{- $raw := .Values.probes.readiness.timeoutSeconds -}}
+{{- $v := int $raw -}}
+{{- if lt $v $min -}}
+{{- fail (printf "probes.readiness.timeoutSeconds=%v is below the %ds floor. The leoflow-server /readyz handler bounds itself at 2s so it answers before the kubelet gives up; a shorter kubelet timeout inverts that and turns every slow-dependency probe into a timeout that logs nothing, instead of a 503 naming the dependency. Raise it to %d or more. If you need the kubelet to react faster than 3s, lower probes.readiness.periodSeconds or failureThreshold instead — those shorten time-to-unready without cutting off the answer. See #1041." $raw $min $min) -}}
+{{- end -}}
+{{- $v -}}
+{{- end -}}

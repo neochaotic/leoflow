@@ -428,7 +428,7 @@ resources:
     cpu: "1"
     memory: 512Mi
 
-# -- Liveness/readiness probes for the leoflow-server container. Exposed so an operator can loosen the timeout under load: a busy scheduler can miss a 1s `/healthz` during a task-pod burst and be kubelet-killed mid-run, which cascades in-flight tasks to agent_lost (#860). Defaults are deliberately forgiving (5s liveness / 3s readiness timeout, 3 failures) rather than Kubernetes' 1s/3.
+# -- Liveness/readiness probes for the leoflow-server container. Exposed so an operator can loosen the timeout under load: a busy scheduler can miss a 1s `/healthz` during a task-pod burst and be kubelet-killed mid-run, which cascades in-flight tasks to agent_lost (#860). Defaults are deliberately forgiving (5s liveness / 3s readiness timeout, 3 failures) rather than Kubernetes' 1s/3. `readiness.timeoutSeconds` has a **floor of 3** and the render fails below it: /readyz bounds its own work at 2s so it answers before the kubelet gives up, and a shorter kubelet timeout inverts that — you get a bare timeout instead of a 503 naming the failing dependency (#1041). To react faster, lower `readiness.periodSeconds` or `failureThreshold` instead.
 probes:
   liveness:
     initialDelaySeconds: 10

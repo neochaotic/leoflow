@@ -20,7 +20,11 @@ const (
 	// can surface WHY a 4xx/5xx happened — otherwise a failing request is logged
 	// only as a status code, with no cause (an observability blind spot).
 	contextKeyProblemDetail = "leoflow.problem_detail"
-	headerRequestID         = "X-Request-Id"
+	// contextKeyProblemCause carries the real error behind a redacted detail.
+	// The response says "the request could not be completed"; this says which
+	// SQLSTATE, on which operation, so the operator is not left guessing.
+	contextKeyProblemCause = "leoflow.problem_cause"
+	headerRequestID        = "X-Request-Id"
 )
 
 // RequestID assigns a request id (honoring an inbound X-Request-Id) and echoes it.
@@ -68,6 +72,12 @@ func StructuredLogger(logger *slog.Logger) gin.HandlerFunc {
 		// request (WARN). Below 400 stays INFO.
 		if detail := c.GetString(contextKeyProblemDetail); detail != "" {
 			attrs = append(attrs, "detail", detail)
+		}
+		// The detail is what the CLIENT was told, which for a storage failure is
+		// a deliberately vague phrase. The cause is the error itself; without it
+		// the log would say only that something went wrong.
+		if cause := c.GetString(contextKeyProblemCause); cause != "" {
+			attrs = append(attrs, "cause", cause)
 		}
 		switch {
 		case status >= 500:

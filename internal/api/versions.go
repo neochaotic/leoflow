@@ -41,7 +41,11 @@ func registerVersionHandler(repo DagVersionRepository) gin.HandlerFunc {
 		}
 		hash, err := spec.CanonicalHash()
 		if err != nil {
-			AbortProblem(c, http.StatusInternalServerError, "internal error", err.Error())
+			// Hashing touches no storage, so this error carries nothing from the
+			// database — but a 500 detail is a constant here for the same reason
+			// it is everywhere else: nobody re-audits a call site when the error
+			// source behind it changes.
+			AbortProblemCause(c, http.StatusInternalServerError, "internal error", detailInternal, err)
 			return
 		}
 		created, err := repo.RegisterDagVersion(c.Request.Context(), tenantOf(c), spec, hash)

@@ -106,6 +106,33 @@ Control-plane logs are structured `slog` (JSON by default), one line per HTTP
 request with a request id — `grep <request_id>` correlates a UI click to its
 backend trace.
 
+### "the request could not be completed; see the server logs"
+
+API error bodies never carry the underlying failure. A storage error carries
+the database's own text — for Postgres, `severity: message (SQLSTATE code)`,
+with the constraint, table and column names of the schema inside the message —
+and Leoflow is multi-tenant, so that text stays server-side (CWE-209). The
+response says only which *kind* of failure it was:
+
+| Status | Body detail | Means |
+|---|---|---|
+| 400 | `the request was rejected by a validation rule` | Input a caller can fix. Rules Leoflow states itself (an unknown role, an undeclared variable or connection) name the offending value instead. |
+| 404 | `the requested resource does not exist` | No such DAG, run, task instance, variable, connection or pool for this tenant. |
+| 409 | `the request conflicts with the current state of the resource` | A duplicate write, or a rule such as the `max_active_runs` cap, which names itself. |
+| 499 | `the client closed the request before it completed` | The caller went away (the UI supersedes in-flight grid requests routinely). Not a server fault. |
+| 500 | `the request could not be completed; see the server logs` | A server-side failure. The cause is in the log line for that request. |
+
+The cause is on the control-plane's request log line, under `cause`, alongside
+the `request_id` the response header `X-Request-Id` carries:
+
+```bash
+journalctl -u leoflow-server -o cat | grep '"request_id":"<id>"' | jq '.cause'
+# "upserting dag: ERROR: ... violates foreign key constraint \"dag_versions_dag_id_fkey\" (SQLSTATE 23503)"
+```
+
+`kubectl logs deploy/leoflow -c leoflow | jq 'select(.cause) | {path, status, cause}'`
+lists every request that failed with a server-side cause.
+
 ## Observability
 
 - **Metrics:** Prometheus at `:9090/metrics` (scheduler, dispatch, inline

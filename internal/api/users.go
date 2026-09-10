@@ -183,7 +183,9 @@ func recordUserCreatedAudit(c *gin.Context, audit UserAuditWriter, u domain.User
 // handleRepoError (duplicate email -> 409, cancellation -> 499, else 500).
 func handleUserWriteError(c *gin.Context, err error) {
 	if errors.Is(err, domain.ErrValidation) {
-		AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
+		// Same redaction as the funnel: only a phrase the storage layer composed
+		// with domain.Safef reaches the caller (#961).
+		AbortProblemCause(c, http.StatusBadRequest, "bad request", safeDetail(err, detailInvalidInput), err)
 		return
 	}
 	handleRepoError(c, err)

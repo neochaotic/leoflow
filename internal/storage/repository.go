@@ -86,7 +86,10 @@ const pgUniqueViolation = "23505"
 // mapConflict translates a Postgres unique-constraint violation into
 // domain.ErrConflict (which the API maps to 409), leaving other errors as is — so
 // a duplicate write (e.g. a second dag run for the same logical date) surfaces as
-// a clean conflict rather than a raw 500.
+// a clean conflict rather than a 500. What is at stake is the STATUS, not the
+// body: since #961 an untranslated error no longer discloses its SQLSTATE to
+// the caller either way, but a 500 for an ordinary duplicate would still send
+// the caller (and the on-call) hunting a server fault that never happened.
 func mapConflict(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
@@ -217,7 +220,7 @@ func (r *Repository) CreateOIDCUser(ctx context.Context, tenant, email, provider
 		roleID, rerr := r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: role})
 		if rerr != nil {
 			if errors.Is(rerr, pgx.ErrNoRows) {
-				return nil, fmt.Errorf("unknown role %q: %w", role, domain.ErrValidation)
+				return nil, domain.Safef(domain.ErrValidation, "unknown role %q", role)
 			}
 			return nil, fmt.Errorf("looking up role: %w", rerr)
 		}
@@ -293,7 +296,7 @@ func (r *Repository) ReconcileUserRoles(ctx context.Context, userID string, role
 		roleID, rerr := qtx.GetRoleIDForUserTenant(ctx, queries.GetRoleIDForUserTenantParams{ID: uid, Name: name})
 		if rerr != nil {
 			if errors.Is(rerr, pgx.ErrNoRows) {
-				return fmt.Errorf("unknown role %q: %w", name, domain.ErrValidation)
+				return domain.Safef(domain.ErrValidation, "unknown role %q", name)
 			}
 			return fmt.Errorf("looking up role: %w", rerr)
 		}
@@ -444,7 +447,7 @@ func (r *Repository) CreateDagRun(ctx context.Context, tenant, dagID string, run
 			return domain.DagRun{}, fmt.Errorf("counting active runs: %w", countErr)
 		}
 		if int(active) >= maxActive {
-			return domain.DagRun{}, fmt.Errorf("dag %q is at max_active_runs cap of %d: %w", dagID, maxActive, domain.ErrConflict)
+			return domain.DagRun{}, domain.Safef(domain.ErrConflict, "dag %q is at max_active_runs cap of %d", dagID, maxActive)
 		}
 	}
 	// Persist an explicit empty object when the run carries no conf (or an
@@ -994,8 +997,9 @@ func (r *Repository) RegisterDagVersion(ctx context.Context, tenant string, spec
 		// version string was pushed with different content — the hash dedup above
 		// only short-circuits identical re-pushes. Versions are immutable, so this
 		// is a genuine conflict, not an overwrite: map it to domain.ErrConflict
-		// (API 409) instead of leaking the raw pg 23505 through a 500 (#746). Bump
-		// --dag-version to push new content.
+		// so the API answers 409 instead of 500 (#746 — where it also leaked the
+		// raw 23505, which #961 closed for every code). Bump --dag-version to
+		// push new content.
 		return false, fmt.Errorf("inserting version: %w", mapConflict(err))
 	}
 	if err := r.q.SetCurrentDagVersion(ctx, queries.SetCurrentDagVersionParams{ID: dag.ID, CurrentVersionID: version.ID}); err != nil {
@@ -1039,9 +1043,9 @@ func (r *Repository) validateDeclaredSecrets(ctx context.Context, tid pgtype.UUI
 			return fmt.Errorf("checking declared variables: %w", err)
 		}
 		if unknown := unknownDeclaredNames(varNames, existing, coveredVar); len(unknown) > 0 {
-			return fmt.Errorf(
-				"dag %q declares unknown variable(s) %s; define them (leoflow variables set) or remove them from the DAG's variables: declaration: %w",
-				spec.DagID, strings.Join(unknown, ", "), domain.ErrValidation)
+			return domain.Safef(domain.ErrValidation,
+				"dag %q declares unknown variable(s) %s; define them (leoflow variables set) or remove them from the DAG's variables: declaration",
+				spec.DagID, strings.Join(unknown, ", "))
 		}
 	}
 	connNames := declaredSecretNames(spec.Connections, spec.Tasks, func(t domain.TaskSpec) []string { return t.Connections })
@@ -1051,9 +1055,9 @@ func (r *Repository) validateDeclaredSecrets(ctx context.Context, tid pgtype.UUI
 			return fmt.Errorf("checking declared connections: %w", err)
 		}
 		if unknown := unknownDeclaredNames(connNames, existing, coveredConn); len(unknown) > 0 {
-			return fmt.Errorf(
-				"dag %q declares unknown connection(s) %s; define them (leoflow connections set) or remove them from the DAG's connections: declaration: %w",
-				spec.DagID, strings.Join(unknown, ", "), domain.ErrValidation)
+			return domain.Safef(domain.ErrValidation,
+				"dag %q declares unknown connection(s) %s; define them (leoflow connections set) or remove them from the DAG's connections: declaration",
+				spec.DagID, strings.Join(unknown, ", "))
 		}
 	}
 	return nil
@@ -1156,7 +1160,7 @@ func (r *Repository) CreateUser(ctx context.Context, tenant, email, password str
 		roleID, rerr := r.q.GetRoleByName(ctx, queries.GetRoleByNameParams{TenantID: tid, Name: role})
 		if rerr != nil {
 			if errors.Is(rerr, pgx.ErrNoRows) {
-				return domain.User{}, fmt.Errorf("unknown role %q: %w", role, domain.ErrValidation)
+				return domain.User{}, domain.Safef(domain.ErrValidation, "unknown role %q", role)
 			}
 			return domain.User{}, fmt.Errorf("looking up role: %w", rerr)
 		}

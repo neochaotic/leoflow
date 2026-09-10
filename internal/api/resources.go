@@ -115,32 +115,71 @@ func tenantOf(c *gin.Context) string {
 // aborted before the server finished — not a server fault.
 const statusClientClosedRequest = 499
 
+// Client-facing details for a repository failure whose cause must stay
+// server-side. They are constants because a repository error normally wraps a
+// driver error, and pgconn renders a *pgconn.PgError as "severity: message
+// (SQLSTATE code)" with our constraint, table and column names inside the
+// message — schema disclosure to any authenticated tenant (CWE-209, #961).
+//
+// One phrase per condition, not one phrase overall: the split is the same one
+// unreadyDetail makes in health.go. "Does not exist", "conflicts", "was
+// rejected" and "could not be completed" send a caller to four different
+// places, and collapsing them into a single opaque message would cost real
+// diagnosability to buy no extra privacy.
+const (
+	detailNotFound     = "the requested resource does not exist"
+	detailConflict     = "the request conflicts with the current state of the resource"
+	detailClientClosed = "the client closed the request before it completed"
+	detailInvalidInput = "the request was rejected by a validation rule"
+	detailInternal     = "the request could not be completed; see the server logs"
+)
+
+// safeDetail returns the phrase Leoflow composed for this failure, or fallback
+// when the error carries no such phrase.
+//
+// The default is deny. Only a domain.SafeError — an error someone deliberately
+// wrote as client-facing — contributes text to a response body; everything
+// else, including every fmt.Errorf wrap of a driver error, is replaced. That
+// way a newly introduced storage error cannot leak by omission: it leaks only
+// if someone rewrites it as a SafeError, which is the one construct whose
+// GoDoc says its message is shown to clients.
+func safeDetail(err error, fallback string) string {
+	var safe *domain.SafeError
+	if errors.As(err, &safe) && safe.ClientMessage() != "" {
+		return safe.ClientMessage()
+	}
+	return fallback
+}
+
+// handleRepoError maps a repository failure to a status and a client-safe
+// detail, and hands the real error to the request log (see AbortProblemCause).
+// It is the single funnel for storage errors in this package; a handler that
+// renders a repository error any other way must apply the same redaction.
 func handleRepoError(c *gin.Context, err error) {
-	if errors.Is(err, ErrNotFound) {
-		AbortProblem(c, http.StatusNotFound, "not found", err.Error())
-		return
-	}
-	if errors.Is(err, domain.ErrConflict) {
-		AbortProblem(c, http.StatusConflict, "conflict", err.Error())
-		return
-	}
+	switch {
+	case errors.Is(err, ErrNotFound):
+		AbortProblemCause(c, http.StatusNotFound, "not found", safeDetail(err, detailNotFound), err)
+	case errors.Is(err, domain.ErrConflict):
+		AbortProblemCause(c, http.StatusConflict, "conflict", safeDetail(err, detailConflict), err)
 	// A canceled/timed-out context means the client went away (the UI routinely
 	// supersedes in-flight grid requests). That is NOT a server error — mapping it
 	// to 500 produced spurious ti_summaries 500s under rapid refresh. Report 499 so
-	// it logs as a client-side 4xx, not a server fault.
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		AbortProblem(c, statusClientClosedRequest, "client closed request", err.Error())
-		return
-	}
+	// it logs as a client-side 4xx, not a server fault. The detail is fixed rather
+	// than composed: pgconn reports a connect timeout as a ConnectError whose text
+	// carries the database user and name, and that error satisfies
+	// errors.Is(err, context.DeadlineExceeded).
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		AbortProblemCause(c, statusClientClosedRequest, "client closed request", detailClientClosed, err)
 	// A business-rule input failure (unknown role, undeclared variable/connection)
-	// is the client's to fix, not a server fault. Every domain.ErrValidation wrap
-	// site is client-supplied input, so map the whole class to 400 — otherwise it
-	// reads as a server error and points users at the logs instead of their request.
-	if errors.Is(err, domain.ErrValidation) {
-		AbortProblem(c, http.StatusBadRequest, "invalid request", err.Error())
-		return
+	// is the client's to fix, not a server fault, so the whole class maps to 400 —
+	// otherwise it reads as a server error and points users at the logs instead of
+	// their request. The rule that rejected it is stated only when the storage
+	// layer composed the phrase itself with domain.Safef.
+	case errors.Is(err, domain.ErrValidation):
+		AbortProblemCause(c, http.StatusBadRequest, "invalid request", safeDetail(err, detailInvalidInput), err)
+	default:
+		AbortProblemCause(c, http.StatusInternalServerError, "internal error", detailInternal, err)
 	}
-	AbortProblem(c, http.StatusInternalServerError, "internal error", err.Error())
 }
 
 func listDagsHandler(repo DagRepository) gin.HandlerFunc {
@@ -365,7 +404,9 @@ func applyDeclaredParams(c *gin.Context, specs DagSpecReader, dagID string, conf
 	if err != nil {
 		// A real spec-read failure must NOT silently skip param validation on a
 		// DAG that may declare typed params — fail loud instead of fail open.
-		AbortProblem(c, http.StatusInternalServerError, "internal error", "loading DAG params: "+err.Error())
+		// The read goes to storage, so the error is redacted like any other
+		// (#961) and the cause is logged.
+		AbortProblemCause(c, http.StatusInternalServerError, "internal error", detailInternal, err)
 		return nil, false
 	}
 	if len(spec.Params) == 0 {
@@ -377,7 +418,7 @@ func applyDeclaredParams(c *gin.Context, specs DagSpecReader, dagID string, conf
 	}
 	out, merr := json.Marshal(merged)
 	if merr != nil {
-		AbortProblem(c, http.StatusInternalServerError, "internal error", "encoding merged conf: "+merr.Error())
+		AbortProblemCause(c, http.StatusInternalServerError, "internal error", detailInternal, merr)
 		return nil, false
 	}
 	return out, true

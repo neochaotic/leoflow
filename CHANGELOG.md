@@ -421,6 +421,29 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not-ready rather than report nothing at all. An **ahead** schema still passes,
   as it does at boot — expand-contract migrations keep older code working, and
   failing it would break `helm rollback`.
+
+### Security
+
+- **Database errors no longer reach API clients (#961).** A repository failure
+  used to be rendered into the problem-detail body verbatim, and Postgres
+  errors render themselves as `severity: message (SQLSTATE code)` — with the
+  constraint, table and column names of the schema inside the message. Only
+  SQLSTATE `23505` was translated (to a 409), so every other code — a `23503`
+  foreign-key violation, `23502` not-null, `42P01` on a database whose
+  migration is behind, `40001`, `53300` — was disclosed to any authenticated
+  tenant of a multi-tenant control plane (CWE-209). A `pgconn` connect failure
+  additionally carries the database user and name, and reached the 499 branch
+  the same way because it satisfies `errors.Is(err, context.DeadlineExceeded)`.
+
+  Responses now carry a fixed phrase per condition — a 404 still reads as
+  missing, a 409 as a conflict, a 400 as rejected input — and the real error
+  goes to the request log under a new `cause` field, so nothing an operator
+  needs is lost. The default is deny rather than allow: only a message Leoflow
+  composed itself (`domain.Safef`) is echoed, so a newly wrapped driver error
+  cannot leak by omission. The messages worth reading survive unchanged — an
+  unknown role, an undeclared variable or connection, a `max_active_runs` cap,
+  the undeletable default pool.
+
 ### Testing
 
 - **The DAG base-image pin is now verified end to end, for both of its branches

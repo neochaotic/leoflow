@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/neochaotic/leoflow/internal/domain"
 )
 
 // HealthChecker reports dependency health for readiness checks.
@@ -43,32 +45,56 @@ func livenessHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// checkDependency runs the full health contract for one dependency: Ping first,
+// then — only for a dependency that carries a schema — the schema assertion.
+//
+// Ping first and short-circuiting, because with the connection down there is
+// nothing to learn from a schema query and it would only burn the probe's
+// budget. Shared by /readyz and /api/v2/monitor/health so the two endpoints,
+// which read the same checks map, cannot come to disagree about whether a
+// dependency works — they did, and that was half of #1023's blast radius.
+func checkDependency(ctx context.Context, hc HealthChecker) error {
+	if err := hc.Ping(ctx); err != nil {
+		return err
+	}
+	sc, ok := hc.(SchemaChecker)
+	if !ok {
+		return nil
+	}
+	sctx, cancel := context.WithTimeout(ctx, schemaProbeTimeout)
+	defer cancel()
+	return sc.SchemaReady(sctx)
+}
+
+// unreadyDetail turns a dependency failure into the one phrase the caller is
+// allowed to see, and picks WHICH phrase by the kind of failure.
+//
+// The distinction is operational, not cosmetic. The schema check reports through
+// a single error, but it answers two questions: "the schema is wrong" and "I
+// could not read the schema". A deadline exceeded against the handler's own 2s
+// bound, a reset connection, an exhausted pool — all arrive here as a non-nil
+// error from the schema call, and calling those "schema not current" points
+// whoever is paged at the migration Job for a connectivity problem. The runbook
+// makes that exact string a PASS criterion, so conflating them would also make
+// the release check pass for the wrong reason.
+//
+// Both remain 503, and both remain vague on purpose: /readyz is unauthenticated
+// (probes carry no token) and the raw error can carry a DSN, credentials or an
+// internal hostname (audit H2), so the real cause is logged server-side and the
+// response names only the dependency.
+func unreadyDetail(name string, err error) string {
+	if errors.Is(err, domain.ErrSchemaNotCurrent) {
+		return name + " schema not current"
+	}
+	return name + " unavailable"
+}
+
 func readinessHandler(checks map[string]HealthChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		for name, hc := range checks {
-			if err := hc.Ping(c.Request.Context()); err != nil {
-				// /readyz is unauthenticated (probes carry no token), so the raw
-				// dependency error — which can carry a DSN, credentials, or internal
-				// hostnames — must not go in the response (audit H2). Log the real
-				// cause server-side; tell the caller only which dependency is unready.
+			if err := checkDependency(c.Request.Context(), hc); err != nil {
 				slog.WarnContext(c.Request.Context(), "readiness check failed", "dependency", name, "error", err)
-				AbortProblem(c, http.StatusServiceUnavailable, "not ready", name+" unavailable")
-				return
-			}
-			sc, ok := hc.(SchemaChecker)
-			if !ok {
-				continue
-			}
-			// Ping passed, so the connection is up; ask whether what is behind it is
-			// still the schema this binary requires.
-			ctx, cancel := context.WithTimeout(c.Request.Context(), schemaProbeTimeout)
-			err := sc.SchemaReady(ctx)
-			cancel()
-			if err != nil {
-				// Same audit H2 reasoning as above: the version gap and any connection
-				// detail stay in the log, and the response only names the dependency.
-				slog.WarnContext(c.Request.Context(), "readiness schema check failed", "dependency", name, "error", err)
-				AbortProblem(c, http.StatusServiceUnavailable, "not ready", name+" schema not current")
+				AbortProblem(c, http.StatusServiceUnavailable, "not ready", unreadyDetail(name, err))
 				return
 			}
 		}

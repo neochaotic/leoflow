@@ -13,3 +13,12 @@ var ErrConflict = errors.New("resource already exists")
 // caller can fix (e.g. creating a user with a role that does not exist). The API
 // maps it to 400.
 var ErrValidation = errors.New("invalid input")
+
+// ErrSchemaNotCurrent is returned when the database is reachable but its
+// migration state is not one the running binary can serve. It lives here, next
+// to the other cross-cutting sentinels, because two layers need to agree on it:
+// storage produces the verdict, and the health endpoints must tell it apart
+// from "the database could not be read at all". Both answers are a 503, but one
+// sends an operator to the migration Job and the other to the connection pool,
+// and a probe that conflates them costs an on-call hour.
+var ErrSchemaNotCurrent = errors.New("database schema is not current")

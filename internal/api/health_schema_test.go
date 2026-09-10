@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/neochaotic/leoflow/internal/domain"
 )
 
 // fakeSchemaHealthCheck implements HealthChecker plus the optional SchemaChecker,
@@ -137,6 +139,71 @@ func TestReadinessHandlerAssertsSchemaInvariant(t *testing.T) {
 		}
 		if pg.schemaCalls != 0 {
 			t.Errorf("schema queried %d times on a dependency that failed Ping, want 0", pg.schemaCalls)
+		}
+	})
+}
+
+// TestReadinessDistinguishesSchemaFromUnavailable pins the classification the
+// detail string makes. The schema check reaches the handler through one return
+// value, but it answers two different questions: "the schema is wrong" and "I
+// could not read the schema". Treating every non-nil return as a schema verdict
+// reports `postgres schema not current` for a database that is merely slow —
+// the 2s bound alone produces it under pool exhaustion or a stalled connection —
+// and sends whoever is on call into migration-land for a connectivity problem.
+//
+// Both stay 503 (a probe that cannot read the schema must not report ready) and
+// both still leak nothing; only the operator-facing detail differs.
+func TestReadinessDistinguishesSchemaFromUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	readyz := func(t *testing.T, schemaErr error) *httptest.ResponseRecorder {
+		t.Helper()
+		r := gin.New()
+		r.GET("/readyz", readinessHandler(map[string]HealthChecker{
+			"postgres": &fakeSchemaHealthCheck{schemaErr: schemaErr},
+		}))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", http.NoBody))
+		return rec
+	}
+
+	t.Run("a timed-out schema read reports unavailable, not a schema verdict", func(t *testing.T) {
+		// Exactly what the handler's own 2s bound produces against a slow
+		// database: the storage layer wraps the context error.
+		rec := readyz(t, fmt.Errorf("reading database schema version: %w", context.DeadlineExceeded))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503", rec.Code)
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, "schema not current") {
+			t.Errorf("a slow database was reported as a migration problem: %q", body)
+		}
+		if !strings.Contains(body, "postgres unavailable") {
+			t.Errorf("body = %q, want it to report postgres unavailable", body)
+		}
+	})
+
+	t.Run("a real schema verdict still says schema not current", func(t *testing.T) {
+		rec := readyz(t, fmt.Errorf("%w: schema_migrations is absent", domain.ErrSchemaNotCurrent))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "postgres schema not current") {
+			t.Errorf("body = %q, want it to name the schema verdict", rec.Body.String())
+		}
+	})
+
+	t.Run("neither classification leaks connection detail", func(t *testing.T) {
+		for _, err := range []error{
+			fmt.Errorf("reading database schema version: dial postgres://leoflow:hunter2@pg.internal.svc:5432/leoflow: %w", context.DeadlineExceeded),
+			fmt.Errorf("%w: schema at v23, want v26 (postgres://leoflow:hunter2@pg.internal.svc:5432/leoflow)", domain.ErrSchemaNotCurrent),
+		} {
+			body := readyz(t, err).Body.String()
+			for _, secret := range []string{"hunter2", "pg.internal.svc", "postgres://", "5432"} {
+				if strings.Contains(body, secret) {
+					t.Errorf("body leaked %q: %q", secret, body)
+				}
+			}
 		}
 	})
 }

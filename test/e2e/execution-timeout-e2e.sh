@@ -24,15 +24,15 @@
 # with the image PRE-LOADED into the cluster so the startup delta is a few
 # seconds and the run stays fast.
 #
-# What is red before #943. Assertion 1 is red UNCONDITIONALLY on both halves:
-# the agent killed its direct child alone, the grandchild kept the stdout pipe
-# open, and the agent's Wait therefore blocked for the full 600s the grandchild
-# lives — so the kubelet's 220s deadline always fired first, stamping
-# `status.reason=DeadlineExceeded` and settling the pod with a generic reason
-# and no outcome record. Assertion 2 is red with it, for the same reason: the
-# agent never reaches the branch that writes the record. This is the scenario's
-# only unconditional outcome red; see the #925 note below for why the earlier
-# shape could not offer one.
+# What is red before #943. Assertions 1 and 2 are red UNCONDITIONALLY, on every
+# host: the agent killed its direct child alone, the grandchild kept the stdout
+# pipe open, and the agent's Wait would have blocked for the 600s that
+# grandchild lives — so the kubelet's 220s deadline always fired first, stamping
+# `status.reason=DeadlineExceeded` and settling the pod with a generic reason.
+# The agent never reached the branch that names the timeout or writes the
+# durable outcome record, so both halves of assertion 1 and the whole of
+# assertion 2 fail. These are the scenario's only unconditional OUTCOME reds;
+# see the #925 note below for why the earlier, in-process shape had none.
 #
 # What is red before #925, precisely. Assertion 3 is red UNCONDITIONALLY: the
 # pod deadline was the declared timeout itself, so 10 rather than 220, on any

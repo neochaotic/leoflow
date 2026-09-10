@@ -295,7 +295,7 @@ tests:
       autoscaling.maxReplicas: 1
     asserts:
       - failedTemplate:
-          errorPattern: "is below autoscaling.minReplicas"
+          errorMessage: "autoscaling.maxReplicas=1 is below autoscaling.minReplicas=2, and the apiserver rejects a HorizontalPodAutoscaler whose maximum is under its minimum. The two are independent values with independent defaults (min 2, max 6), so setting only one inverts them — this is what `--set autoscaling.maxReplicas=1` alone produces. Set both, or raise the maximum to at least 2. See #947."
 
   # Argo CD's helm.parameters and `helm --set-string` deliver every override as
   # a string, which is why the other guards in this chart accept the string
@@ -311,7 +311,7 @@ tests:
       autoscaling.maxReplicas: "1"
     asserts:
       - failedTemplate:
-          errorPattern: "is below autoscaling.minReplicas"
+          errorMessage: "autoscaling.maxReplicas=1 is below autoscaling.minReplicas=2, and the apiserver rejects a HorizontalPodAutoscaler whose maximum is under its minimum. The two are independent values with independent defaults (min 2, max 6), so setting only one inverts them — this is what `--set autoscaling.maxReplicas=1` alone produces. Set both, or raise the maximum to at least 2. See #947."
 
   - it: "issue #947 — refuses a minimum below 1 (HPAScaleToZero is not assumed)"
     template: hpa.yaml
@@ -324,7 +324,7 @@ tests:
       autoscaling.minReplicas: 0
     asserts:
       - failedTemplate:
-          errorPattern: "below 1 is rejected"
+          errorMessage: "autoscaling.minReplicas=0, and a HorizontalPodAutoscaler minimum below 1 is rejected unless the HPAScaleToZero feature gate is on, which this chart does not assume. Set it to 1 or more. See #947."
 
   - it: "issue #947 — a consistent pair still renders"
     template: hpa.yaml
@@ -334,22 +334,31 @@ tests:
       auth.jwtSecret: jwt
       logs.persistence.enabled: false
       autoscaling.enabled: true
-      autoscaling.minReplicas: 1
-      autoscaling.maxReplicas: 1
+      autoscaling.minReplicas: 2
+      autoscaling.maxReplicas: 5
     asserts:
       - equal:
           path: spec.minReplicas
-          value: 1
+          value: 2
       - equal:
           path: spec.maxReplicas
-          value: 1
+          value: 5
 
   # #1067 — an Ingress-typed policy denies what it does not match, so leaving
   # the metrics port out of every rule made it reachable from nowhere while the
   # value's own documentation claimed the opposite. networkPolicy.enabled +
-  # serviceMonitor.enabled + the default was a Prometheus target that never
+  # metrics.serviceMonitor.enabled + the default was a Prometheus target that never
   # answered and failed nothing at install.
-  - it: "issue #1067 — the metrics port is reachable by default, as the docs always claimed"
+  # #1067 — the old default was an EMPTY list, which rendered no rule at all,
+  # and an Ingress-typed policy denies what it does not match. So the metrics
+  # port was reachable from nowhere while the value's own comment said it was
+  # "reachable from wherever ingressFrom allows". networkPolicy.enabled plus
+  # metrics.serviceMonitor.enabled was a target that never answered and failed
+  # nothing at install.
+  #
+  # The default is now a real value rather than a magic empty, because a magic
+  # empty whose meaning lives only in a comment is exactly how this happened.
+  - it: "issue #1067 — the metrics port has an ingress rule by default"
     template: networkpolicy.yaml
     set:
       database.url: postgres://h/d
@@ -358,12 +367,40 @@ tests:
       networkPolicy.enabled: true
     asserts:
       - contains:
-          path: spec.ingress[0].ports
+          path: spec.ingress[1].ports
           content:
             port: 9090
             protocol: TCP
+      - exists:
+          path: spec.ingress[1].from
 
-  - it: "issue #1067 — setting metricsFrom makes the metrics port STRICTER than the API, not unreachable"
+  # The case the first attempt at this fix MISSED, and the reason the mechanism
+  # changed. Folding the metrics port into the API's rule made the scrape work
+  # only while ingressFrom was empty — so the careful operator, who enabled the
+  # policy AND narrowed the API sources, was still broken while the changelog
+  # claimed otherwise. A separate rule is independent of ingressFrom.
+  - it: "issue #1067 — the scrape still works when ingressFrom is narrowed"
+    template: networkpolicy.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      networkPolicy.enabled: true
+      networkPolicy.ingressFrom:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: apps
+    asserts:
+      - contains:
+          path: spec.ingress[1].ports
+          content:
+            port: 9090
+            protocol: TCP
+      # And the API rule really is narrowed, so this is not passing by accident.
+      - exists:
+          path: spec.ingress[0].from
+
+  - it: "issue #1067 — narrowing metricsFrom restricts the scrape source"
     template: networkpolicy.yaml
     set:
       database.url: postgres://h/d
@@ -375,17 +412,32 @@ tests:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
     asserts:
-      # Not in the open rule any more...
+      - contains:
+          path: spec.ingress[1].from
+          content:
+            namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: monitoring
       - notContains:
           path: spec.ingress[0].ports
           content:
             port: 9090
             protocol: TCP
-      # ...but in its own, with its own source restriction.
-      - contains:
-          path: spec.ingress[1].ports
+
+  # Explicitly emptying it is the way to close the port, and it stays possible.
+  - it: "issue #1067 — an explicitly empty metricsFrom closes the port"
+    template: networkpolicy.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      networkPolicy.enabled: true
+      networkPolicy.metricsFrom: []
+    asserts:
+      - notExists:
+          path: spec.ingress[1]
+      - notContains:
+          path: spec.ingress[0].ports
           content:
             port: 9090
             protocol: TCP
-      - exists:
-          path: spec.ingress[1].from

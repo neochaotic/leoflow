@@ -327,9 +327,15 @@ autoscaling:
   maxReplicas: 3
 ```
 
-Note the interaction with the storage precondition above: autoscaling past one
-replica is more than one control-plane pod, so it needs a log store every
-replica can write.
+With `maxReplicas` above 1 you also need the storage precondition above
+satisfied — more than one control-plane pod cannot share a ReadWriteOnce log
+volume, and the chart refuses that combination outright, so the snippet above
+only installs as written at `maxReplicas: 1`. Above that, pair it with
+`logs.persistence.enabled: false` and a `logs.sink`, or an RWX access mode.
+
+Both bounds must be whole numbers. A float in a values file used to coerce past
+the check and render a fractional replica count the apiserver rejects, so
+non-integers are refused too.
 
 ## The PodDisruptionBudget — and the single-replica trap
 

@@ -50,23 +50,35 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the Debian packages inside `python:3.x-slim-bookworm`, or about a third-party
   Go binary baked into someone else's image — so OS-level and vendored-binary
   CVEs in the images we publish reached a human before they reached CI. Trivy
-  now scans all three (`leoflow-server`, `leoflow-runtime` ×3 Python lines,
-  `leoflow-migrate`), publishing to the Security tab under one code-scanning
-  category per image.
+  now scans all three (`leoflow-server`, `leoflow-runtime` on every published
+  Python line, `leoflow-migrate`), publishing to the Security tab under one
+  code-scanning category per image.
 
   The policy is split by **who can fix the finding**, because a naive
   "fail on any HIGH" is unsatisfiable on a Debian base and gets disabled within
   a week. `leoflow-server` is distroless plus a binary built from our own
   `go.mod`, so every finding there is caused by a commit and closed by a
-  `go get`: it is scanned on **every PR and push, and it blocks** (baseline
-  today: zero findings, so the gate starts green). `leoflow-runtime` and
-  `leoflow-migrate` inherit package sets we do not author, where a CVE lands
-  because a distro security team published an advisory and not because anyone
-  pushed anything — blocking those would fail whoever opens the next unrelated
-  PR while the person who can fix it is elsewhere. They are scanned **daily,
-  never block, and maintain a single self-closing tracking issue** whose body is
-  refreshed each run and which comments only when the finding set actually
-  changes.
+  `go get`: it is scanned on **every PR and push, and the job goes red**
+  (baseline today: zero findings, so it starts green). Whether that red *blocks
+  a merge* is a branch-protection setting — a new job is not a required check
+  until somebody adds it. `leoflow-runtime` and `leoflow-migrate` inherit
+  package sets we do not author, where a CVE lands because a distro security
+  team published an advisory and not because anyone pushed anything — blocking
+  those would fail whoever opens the next unrelated PR while the person who can
+  fix it is elsewhere. They are scanned **daily, never block, and maintain a
+  single self-closing tracking issue** whose body is refreshed each run, which
+  comments only when the finding set actually changes, which reopens rather than
+  duplicates when findings return, and which leaves the issue alone once a human
+  has reopened it.
+
+  The server gate scans **the artifact GoReleaser publishes** — the release
+  Dockerfile, with a binary built by the release toolchain — not the
+  build-from-source Dockerfile used for local and kind runs. Trivy keys `stdlib`
+  findings to the toolchain recorded in the binary, so the two are different
+  scans; and the from-source path builds on a floating `golang:1.x` tag, where a
+  stdlib CVE is closed by a base rebuild rather than by a `go get`, which is
+  precisely the unfairness this policy refuses to inflict on runtime and
+  migrate.
 
   Both scans gate on **fixability first, severity second**: severity says how
   bad a finding is, fixability says whether anyone can act on it today, and only
@@ -84,8 +96,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`scripts/check-trivyignore-entries.sh`, with a `--self-test`) rejects a
   missing or placeholder rationale, a missing, lapsed, or beyond-180-day expiry,
   and a section name Trivy would silently ignore — and checks the other end of
-  the chain too, that a workflow actually passes the file to `--ignorefile`, so
-  a rename cannot leave entries that look accepted and suppress nothing.
+  the chain too, **per scan**: every step that runs trivy must pass the file, so
+  a flag dropped from one workflow cannot hide behind another workflow that
+  still has it. A scan that must apply no suppressions declares itself with a
+  reason the gate length-checks.
   `scripts/check-script-selftests.sh` now discovers Python self-tests alongside
   shell ones, so `scripts/trivy-report.py` is covered by the same gate.
 

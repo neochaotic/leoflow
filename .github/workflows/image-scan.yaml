@@ -49,6 +49,9 @@ on:
       - "runtime/**"
       - "deploy/Dockerfile.migrate"
       - "migrations/**"
+      # The python_version enum decides which base images exist, and the first
+      # step reconciles it against this workflow's SARIF upload steps.
+      - "internal/domain/schemas/**"
       - "go.mod"
       - "go.sum"
       - ".trivyignore.yaml"
@@ -63,6 +66,9 @@ on:
       - "runtime/**"
       - "deploy/Dockerfile.migrate"
       - "migrations/**"
+      # The python_version enum decides which base images exist, and the first
+      # step reconciles it against this workflow's SARIF upload steps.
+      - "internal/domain/schemas/**"
       - "go.mod"
       - "go.sum"
       - ".trivyignore.yaml"
@@ -71,6 +77,15 @@ on:
 
 permissions:
   contents: read
+
+# The tracking issue is a single shared object, so two runs of this workflow must
+# not be in flight at once: a push landing while the 06:20 cron is mid-scan gives
+# two runs that both look up the issue, both find none, and both create one. Main
+# and the schedule share `refs/heads/main`, so grouping by ref serialises exactly
+# that pair. PR runs touch no issue and supersede each other, so those cancel.
+concurrency:
+  group: image-scan-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Pinned: the scanner version decides what is reported, so an unpinned bump
@@ -83,16 +98,55 @@ env:
   ISSUE_TITLE: "Container image CVEs: fixable findings in published images"
 
 jobs:
+  # Named for what it does. This job builds the runtime and migrate images from
+  # the checkout — it does NOT pull a published tag. The two coincide whenever
+  # HEAD still produces the published image, which is the normal case, but the
+  # gap is real and worth stating: a base CVE in an already-published `py3.11`
+  # that HEAD no longer produces is invisible here. Scan the tag directly when
+  # that is the question — `trivy image ghcr.io/neochaotic/leoflow-runtime:py3.11`
+  # needs no build.
   scan:
-    name: Scan published image bases
+    name: Scan the images HEAD builds
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       security-events: write   # SARIF upload to the Security tab
+      # There is ONE job, so this is held on schedule, push and pull_request
+      # alike — `permissions:` takes no expression, and only the STEPS are
+      # guarded by `github.event_name != 'pull_request'`. Splitting the issue
+      # update into its own job to narrow the grant would mean shipping the scan
+      # output between jobs as an artifact; not worth it for a token that, on a
+      # pull_request from a fork, is read-only anyway.
       issues: write            # create/update the single tracking issue
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # Which Python lines we publish is decided in ONE place (#1031): the
+      # `python_version` enum in the authoring schema. A base image we publish
+      # and do not scan is the exact blind spot this workflow exists to close, so
+      # the loop below reads that enum rather than repeating the list.
+      #
+      # The SARIF uploads cannot be a loop — each needs its own code-scanning
+      # category — so they stay one step per line, and this step fails when that
+      # set and the enum disagree. Runs first, in seconds, before anything is
+      # built. `internal/domain/schemas/**` is in the paths filters above so the
+      # PR that adds a line is the run that catches it.
+      - name: Resolve the published Python lines
+        env:
+          # One step per line exists below. Keep in sync with the enum.
+          UPLOADED: "3.10 3.11 3.12 3.13"
+        run: |
+          set -euo pipefail
+          lines="$(python3 -c "import json,sys; \
+            print(' '.join(json.load(open(sys.argv[1]))['properties']['python_version']['enum']))" \
+            internal/domain/schemas/leoflow-yaml-schema.json)"
+          echo "schema enum: ${lines}"
+          if [ "$lines" != "$UPLOADED" ]; then
+            echo "::error::the published Python lines (${lines}) and the SARIF upload steps in this workflow (${UPLOADED}) disagree. Add or remove an 'Upload SARIF (leoflow-runtime pyX.Y)' step and update UPLOADED."
+            exit 1
+          fi
+          echo "PY_LINES=${lines}" >> "$GITHUB_ENV"
 
       # Pinned release tarball rather than an action or a Docker Hub pull: the
       # same reasoning as the gitleaks step in security.yaml. GitHub release
@@ -118,7 +172,7 @@ jobs:
       - name: Build images
         run: |
           set -euo pipefail
-          for py in 3.10 3.11 3.12; do
+          for py in ${PY_LINES}; do
             echo "::group::build leoflow-runtime py${py}"
             docker build -f runtime/Dockerfile \
               --build-arg "PYTHON_VERSION=${py}" \
@@ -147,18 +201,23 @@ jobs:
               --format sarif --output "scan-out/$1.sarif" "scan-out/$1.json"
             echo "::endgroup::"
           }
-          scan leoflow-runtime-py3.10 leoflow-runtime:py3.10
-          scan leoflow-runtime-py3.11 leoflow-runtime:py3.11
-          scan leoflow-runtime-py3.12 leoflow-runtime:py3.12
-          scan leoflow-migrate       leoflow-migrate:ci
+          for py in ${PY_LINES}; do
+            scan "leoflow-runtime-py${py}" "leoflow-runtime:py${py}"
+          done
+          scan leoflow-migrate leoflow-migrate:ci
 
       # The complete picture, including the unfixed findings the policy filters
       # out, so a filter this workflow applies is never the only copy of the data.
+      # trivy-ignorefile-exempt: this is the unsuppressed copy of record — applying
+      # .trivyignore.yaml here would make the accepted findings unrecoverable from
+      # the artifact, which is the one thing this step exists to prevent.
       - name: Full unfiltered inventory
         run: |
           set -euo pipefail
           mkdir -p scan-out/unfiltered
-          for ref in leoflow-runtime:py3.10 leoflow-runtime:py3.11 leoflow-runtime:py3.12 leoflow-migrate:ci; do
+          refs="leoflow-migrate:ci"
+          for py in ${PY_LINES}; do refs="${refs} leoflow-runtime:py${py}"; done
+          for ref in ${refs}; do
             name="${ref//[:\/]/-}"
             trivy image --quiet --scanners vuln \
               --format json --output "scan-out/unfiltered/${name}.json" "$ref"
@@ -195,6 +254,13 @@ jobs:
           sarif_file: scan-out/leoflow-runtime-py3.12.sarif
           category: trivy-image-runtime-py312
 
+      - name: Upload SARIF (leoflow-runtime py3.13)
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always() && github.event_name != 'pull_request'
+        with:
+          sarif_file: scan-out/leoflow-runtime-py3.13.sarif
+          category: trivy-image-runtime-py313
+
       - name: Upload SARIF (leoflow-migrate)
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         if: always() && github.event_name != 'pull_request'
@@ -206,10 +272,11 @@ jobs:
         id: report
         run: |
           set -euo pipefail
+          reports=""
+          for py in ${PY_LINES}; do reports="${reports} scan-out/leoflow-runtime-py${py}.json"; done
+          # shellcheck disable=SC2086 # deliberate word splitting over the report list.
           python3 scripts/trivy-report.py \
-            scan-out/leoflow-runtime-py3.10.json \
-            scan-out/leoflow-runtime-py3.11.json \
-            scan-out/leoflow-runtime-py3.12.json \
+            ${reports} \
             scan-out/leoflow-migrate.json \
             --gate-severity "$GATE_SEVERITY" \
             --fingerprint-out scan-out/fingerprint.txt \
@@ -231,24 +298,55 @@ jobs:
       # A daily scan that notifies on every run is a daily scan nobody reads, so
       # the body is refreshed silently and a comment is posted only when the set
       # of would-block findings actually changes.
+      #
+      # continue-on-error, because the header of this file promises the workflow
+      # never fails the build and `issues: write` is not guaranteed: on a fork, or
+      # under an org policy that restricts the default token, every `gh issue`
+      # call 403s and `set -euo pipefail` would turn the daily job red for a
+      # reason that has nothing to do with any image. The scan results are in the
+      # job summary, the artifact and the Security tab regardless; the trap makes
+      # the failure visible as a warning instead of as a silent success.
       - name: Update the tracking issue
         if: github.event_name != 'pull_request'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           BLOCKING: ${{ steps.report.outputs.blocking }}
           FINGERPRINT: ${{ steps.report.outputs.fingerprint }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BOT_LOGIN: "github-actions"
         run: |
           set -euo pipefail
+          trap 'echo "::warning::could not update the tracking issue (does this token carry issues: write?). The findings are in the job summary, the trivy-image-reports artifact and the Security tab."' ERR
 
-          # Anchored on the exact title rather than a label, so the workflow does
-          # not depend on a label existing in the repository.
-          number="$(gh issue list --state open --limit 100 \
-            --json number,title,body \
-            --jq "[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty")"
+          # Search by title across EVERY state, not `--state open --limit 100`.
+          # That listing is newest-first over 130+ open issues, so it stops about
+          # a month back: past that window the lookup returns nothing, a SECOND
+          # tracking issue opens and the first is abandoned open with a frozen
+          # body. `in:title` asks the server the question instead of paging, and
+          # `--state all` means a closed one is reopened rather than duplicated.
+          # Still anchored on the exact title rather than a label, so nothing
+          # depends on a label existing in the repository; the search is a
+          # prefilter and the exact match below is what decides.
+          found="$(gh issue list --state all --limit 100 \
+            --search "in:title ${ISSUE_TITLE}" \
+            --json number,title,state \
+            --jq "[.[] | select(.title == env.ISSUE_TITLE)][0] // empty")"
+          number="$(printf '%s' "$found" | jq -r '.number // empty')"
+          state="$(printf '%s' "$found" | jq -r '.state // empty')"
 
           if [ "$BLOCKING" -eq 0 ]; then
-            if [ -n "$number" ]; then
+            if [ -n "$number" ] && [ "$state" = "OPEN" ]; then
+              # Do not fight a human. If the last reopen came from a person
+              # rather than from this workflow, they reopened it deliberately —
+              # to track the migrate bump, say — and closing it again every
+              # morning, with a comment, is the behaviour that gets a bot muted.
+              reopener="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${number}/timeline" \
+                --paginate --jq '[.[] | select(.event == "reopened")] | last | .actor.login // empty')"
+              if [ -n "$reopener" ] && [ "${reopener%\[bot\]}" != "$BOT_LOGIN" ]; then
+                echo "issue #${number} was reopened by @${reopener}; leaving it to them"
+                exit 0
+              fi
               gh issue comment "$number" --body \
                 "All previously reported fixable ${GATE_SEVERITY} findings are gone as of [this run](${RUN_URL}). Closing."
               gh issue close "$number"
@@ -280,7 +378,16 @@ jobs:
           previous="$(gh issue view "$number" --json body --jq '.body' \
             | sed -n 's/.*<!-- image-scan-fingerprint: \([0-9a-f]*\) -->.*/\1/p')"
           gh issue edit "$number" --body-file scan-out/issue-body.md
-          if [ "$previous" != "$FINGERPRINT" ]; then
+
+          # Findings came back after the issue was closed. Reopening the one that
+          # already carries the history is right; opening a second one every day
+          # until somebody notices is what `--state open` used to do.
+          if [ "$state" = "CLOSED" ]; then
+            gh issue reopen "$number"
+            gh issue comment "$number" --body \
+              "Fixable ${GATE_SEVERITY} findings are back as of [this run](${RUN_URL}). Reopened; the list is above."
+            echo "reopened issue #${number} (findings returned)"
+          elif [ "$previous" != "$FINGERPRINT" ]; then
             gh issue comment "$number" --body \
               "The set of fixable ${GATE_SEVERITY} findings changed as of [this run](${RUN_URL}). Updated above."
             echo "updated issue #${number} (finding set changed)"

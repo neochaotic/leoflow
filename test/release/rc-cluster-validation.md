@@ -595,6 +595,9 @@ a restart** — the check is per-probe, so recovery needs no pod churn. Note tha
 `--wait` now blocks on real readiness, which is the #1023 fix seen from the other
 side: before it, `helm upgrade --wait` reported success against this database.
 
+Then drop the forward, or it will outlive the pod it points at and quietly
+mislead the next step: `kill $PF`.
+
 #### §4.6b — a rolling upgrade never drops the Service to zero endpoints
 
 The reason §4.6a is not the whole check. The migrate Job is a
@@ -607,11 +610,13 @@ the `all` role that Service also carries gRPC, so running task pods lose the
 control plane mid-upgrade. Readiness is version-aware on `dirty` precisely to
 avoid this, and the property is not observable in §4.6a.
 
-Needs a migration slow enough to span more than 30s of probing. Simulate it by
-holding the row that every replica reads, in a transaction, while an upgrade runs:
+Staging a genuinely slow migration is awkward and cloud-dependent, and it is not
+what is being tested — the pods only ever see one row. So write that row directly
+into the state golang-migrate leaves it in for the duration of a migration body,
+and hold it there longer than `3 × 10s` of probing:
 
 ```bash
-# terminal 1 — watch the endpoints for the whole upgrade; never let this reach 0
+# terminal 1 — watch the endpoints for the whole window; never let this reach 0
 kubectl get endpoints -n "$NS" leoflow -w
 
 # terminal 2 — park the schema in the state a long migration produces:

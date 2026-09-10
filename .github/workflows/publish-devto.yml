@@ -38,7 +38,7 @@ jobs:
     # Skip entirely if the token secret is not configured, so forks/CI stay green.
     if: ${{ github.repository == 'neochaotic/leoflow' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Publish articles on dev.to
         uses: sinedied/publish-devto@c713cc0934b35cb3df9fca759b98e36e6a540a85 # v2
         env:

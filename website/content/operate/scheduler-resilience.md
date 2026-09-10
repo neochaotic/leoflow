@@ -47,8 +47,30 @@ task served by a **warm pool** has only the agent's: warm pods carry no
 warm worker's attempt watchdog, derived from
 `auth.max_attempt_credential_lifetime` — so everything below about the kubelet
 racing the agent does not apply to them.) The **agent** owns the semantic
-timeout: it interrupts the user process at the declared boundary and reports
-`execution_timeout: task exceeded Ns limit`. The task pod's
+timeout: at the declared boundary it **SIGKILLs the task's whole process
+group**, not just the process it started, and reports
+`execution_timeout: task exceeded Ns limit`.
+
+The group matters. Signalling only the direct child left the timeout
+defeatable by anything that outlived it — a backgrounded daemon, a `nohup`, a
+shell that forks — and worse, a descendant that inherited the task's stdout
+kept the agent's own wait open, so the timeout fired and *nothing died*
+(#943). The group kill is un-trappable on purpose: a task that handles SIGTERM
+and declines to exit would otherwise be exempt from its own declared limit.
+
+Three consequences worth knowing:
+
+- **A descendant that escapes the group** (by calling `setsid`) is not
+  reached. The agent stops waiting for it after a bounded 10s and reports the
+  timeout anyway, rather than hanging. If your pod declares a
+  `terminationGracePeriodSeconds` shorter than that, the kubelet can still win
+  the race and you get the degraded reason described above.
+- **Output written before the kill is kept.** The tail still in flight when
+  the group dies is drained within the same bound; only a descendant holding
+  the pipe past it can cost you the last lines, and that is logged.
+- **A task with no declared timeout that backgrounds a process** now costs an
+  extra 10s at exit while the agent waits out the inherited pipe. Previously
+  that case hung indefinitely. The task pod's
 `activeDeadlineSeconds` is only the **backstop** for an agent that can no
 longer enforce anything (crashed, wedged, partitioned); when the kubelet gets
 there first, the pod is gone and the failure reason degrades to what Kubernetes

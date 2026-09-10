@@ -533,7 +533,7 @@ func ResilienceLadderWarnings(l ResilienceLadder) []LadderWarning
 ResilienceLadderWarnings reports the ladder settings that are valid but remove a resilience backstop, so the server can surface them as boot WARNs. ValidateResilienceLadder deliberately accepts a non\-positive credential ceiling — it is the operator's documented "no ceiling" setting — but that one value disables every wall\-clock bound the ceiling carries: heartbeat renewal of an attempt's bearer becomes unbounded; a dedicated task pod whose DAG declares no execution timeout gets no ActiveDeadlineSeconds floor; and, with warm pools enabled, the per\-attempt watchdog that keeps a wedged attempt from pinning a warm slot is off too \(a warm pod has no pod\-level deadline at all, and the worker lifetime cap drains between attempts, never mid\-attempt\). A task that wedges while still heartbeating then has no bound of its own even with a healthy control plane: the orphan\-run reaper skips a run with a live task instance and agent\-lost never fires on a live agent. None of these losses is an error; all are invisible without this signal. Pure, like the validator: the server calls it once at boot after the logger exists.
 
 <a name="OutcomeReporter"></a>
-## type [OutcomeReporter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L227-L231>)
+## type [OutcomeReporter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L234-L238>)
 
 OutcomeReporter records a terminal task\-instance outcome the reconciler recovered from a pod \(its durable outcome record, or its phase\). Every method is guarded by the attempt \(try\_number\) so a stale reconciler acting on a previous attempt's pod never clobbers a live retry, and is idempotent: a settle on an already\-terminal instance is a no\-op, not an error.
 
@@ -546,7 +546,7 @@ type OutcomeReporter interface {
 ```
 
 <a name="PodIdentity"></a>
-## type [PodIdentity](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/kubernetes.go#L326-L333>)
+## type [PodIdentity](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/kubernetes.go#L328-L335>)
 
 PodIdentity is the JSON payload of AgentIdentityAnnotation: the full task\-instance identity the control plane mints the exchanged JWT for.
 
@@ -562,7 +562,7 @@ type PodIdentity struct {
 ```
 
 <a name="ParseAgentIdentity"></a>
-### func [ParseAgentIdentity](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/kubernetes.go#L338>)
+### func [ParseAgentIdentity](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/kubernetes.go#L340>)
 
 ```go
 func ParseAgentIdentity(raw string) (PodIdentity, error)
@@ -829,7 +829,7 @@ type PodSecurity struct {
 ```
 
 <a name="PodSnapshotter"></a>
-## type [PodSnapshotter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L239-L244>)
+## type [PodSnapshotter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L246-L251>)
 
 PodSnapshotter supplies the reconciler's task\-pod set from a local cache instead of a live LIST every tick \(PR\-10\). It is safe here without a live confirm: the signal the reconciler acts on is presence of a terminal pod, which is monotonic \(a pod that reached Failed/Succeeded stays terminal\), and every settle is attempt\- and state\-guarded \(ADR 0052\), so at worst cache lag delays a settle by a tick. A nil snapshotter \(Lite/subprocess, or a cold start\) keeps the live LIST.
 
@@ -1000,7 +1000,7 @@ type ReaperStore interface {
 ```
 
 <a name="Reconciler"></a>
-## type [Reconciler](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L262-L277>)
+## type [Reconciler](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L269-L284>)
 
 Reconciler detects task pods whose task instance was never settled by the agent \(a pod killed before or during its report\) and records the true outcome — from the pod's durable outcome record where present, else its phase — so retries and run finalization proceed instead of stranding the task. It also garbage\-collects finished pods once they age out.
 
@@ -1013,7 +1013,7 @@ type Reconciler struct {
 ```
 
 <a name="NewReconciler"></a>
-### func [NewReconciler](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L280>)
+### func [NewReconciler](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L287>)
 
 ```go
 func NewReconciler(clientset kubernetes.Interface, namespace string, reporter OutcomeReporter) *Reconciler
@@ -1022,7 +1022,7 @@ func NewReconciler(clientset kubernetes.Interface, namespace string, reporter Ou
 NewReconciler builds a Reconciler over the given cluster and outcome reporter.
 
 <a name="Reconciler.LastSweepCompletedAt"></a>
-### func \(\*Reconciler\) [LastSweepCompletedAt](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L301>)
+### func \(\*Reconciler\) [LastSweepCompletedAt](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L308>)
 
 ```go
 func (r *Reconciler) LastSweepCompletedAt() time.Time
@@ -1033,7 +1033,7 @@ LastSweepCompletedAt reports when the last COMPLETED sweep finished: the task\-p
 A sweep that could not list pods records nothing. A sweep whose individual settle failed on a DB error still counts: that pod is retried next sweep, and the gate's grace leaves room for the retry before any reaper may act.
 
 <a name="Reconciler.Reconcile"></a>
-### func \(\*Reconciler\) [Reconcile](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L312>)
+### func \(\*Reconciler\) [Reconcile](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L319>)
 
 ```go
 func (r *Reconciler) Reconcile(ctx context.Context) error
@@ -1042,7 +1042,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error
 Reconcile lists managed task pods, records each terminal one's outcome against its task instance, and garbage\-collects finished pods older than the grace period. A completed sweep is stamped for LastSweepCompletedAt.
 
 <a name="Reconciler.SetPodSnapshotter"></a>
-### func \(\*Reconciler\) [SetPodSnapshotter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L287>)
+### func \(\*Reconciler\) [SetPodSnapshotter](<https://github.com/neochaotic/leoflow/blob/main/internal/executor/reconcile.go#L294>)
 
 ```go
 func (r *Reconciler) SetPodSnapshotter(s PodSnapshotter)

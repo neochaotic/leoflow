@@ -371,6 +371,51 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mode and fails if any Service or PodDisruptionBudget selector is ever again a
   subset of the hook pod's labels
   ([#1055](https://github.com/neochaotic/leoflow/issues/1055)).
+- **`execution_timeout` now applies to the task, not just to its first
+  process.** A task that left a grandchild behind defeated the timeout
+  completely. The agent's cancel SIGKILLed the direct child alone; the surviving
+  grandchild kept the stdout pipe it had inherited open; and because the agent
+  wires stdout to a log writer rather than to a file, the standard library
+  interposes that pipe and blocks `Wait` on its copying goroutine until every
+  writer closes it. So the deadline fired, nothing died, and the agent never
+  reached the branch that reports the timeout or writes the durable outcome
+  record. The attempt ended minutes later on the kubelet's
+  `activeDeadlineSeconds` with the generic container-terminated reason and
+  nothing for the reconciler to recover — the exact state the pod-deadline
+  arithmetic exists to prevent, reached through the front door
+  ([#943](https://github.com/neochaotic/leoflow/issues/943)).
+
+  This is the ordinary task shape, not an exotic one: the bash operator runs its
+  entrypoint under `bash -c`, so any `&&`, pipe, `;` or background job makes the
+  user's real programs grandchildren of the process the agent kills, and the
+  same holds for any Python task that shells out. The agent now starts the task
+  in its **own process group** and the cancel SIGKILLs the **group**, so the
+  whole tree goes with the deadline. A bounded 10-second `WaitDelay` backstops
+  the residue — a descendant that escapes the group by calling `setsid` — so
+  nothing can hold the wait open indefinitely any more. Measured on the
+  regression test: a shell backgrounding a long-running child under a 500 ms
+  deadline returned after 23.5 s before the fix and half a second after it,
+  with the task's process group gone.
+
+  This **supersedes the limitation stated in 0.4.5**, which scoped the
+  `execution_timeout` guarantee to a task whose process tree exits with it. The
+  end-to-end scenario that deliberately avoided the shape now spawns such a
+  grandchild on purpose and asserts the grandchild's own line in the shipped
+  log, so a spawn that silently fails cannot let it pass while covering only the
+  easy case.
+
+  One behavior is worth knowing, and one boundary on it. A task with **no
+  declared timeout** that exits successfully while leaving a background process
+  holding the pipe keeps its own exit status rather than being turned into a
+  failure; it loses only the tail of its output once the delay expires, and the
+  agent logs a warning saying so. It also now takes an extra 10s to return,
+  where before it hung indefinitely.
+
+  Where a timeout **was** declared and fired, the attempt is reported as
+  `execution_timeout` regardless of what the task's own exit status was — the
+  classification reads the deadline, not the exit code. That is pre-existing
+  and unchanged here; this fix narrows the window in which it can happen but
+  does not close it.
 - **A version floor in `dependencies` was silently dropped, and left junk in the
   image.** `RUN` in a Dockerfile is `/bin/sh -c`, and the specifiers were joined
   into that line unquoted — so `setuptools>=80.9.0` was a *redirection*: pip

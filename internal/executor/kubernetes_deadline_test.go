@@ -166,9 +166,9 @@ func TestPodDeadlineLetsTheAgentTimeoutFirst(t *testing.T) {
 // execution_timeout by about two hours. The term is still right to ADD (it
 // budgets the agent's own tail after its clock fires), but it is capped, because
 // that tail is not proportional to the declared grace: internal/agent/exec.go
-// runs the child under exec.CommandContext with the default cancel, so the agent
-// SIGKILLs it immediately no matter what the DAG asked for, and what is left is
-// one outcome-record write and one report RPC.
+// SIGKILLs the child's whole process group immediately no matter what the DAG
+// asked for (#943), and what is left is the agent's own bounded wait for the
+// output pipe, one outcome-record write and one report RPC.
 func TestBuildPodDeadlineCapsTerminationGraceTerm(t *testing.T) {
 	headroom := int64(defaultDispatchLostThreshold / time.Second)
 	const graceCap = int64(maxDeadlineGraceTerm)

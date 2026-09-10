@@ -190,7 +190,7 @@ type CommandRunner interface {
 ```
 
 <a name="NewExecRunner"></a>
-### func [NewExecRunner](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/exec.go#L16>)
+### func [NewExecRunner](<https://github.com/neochaotic/leoflow/blob/main/internal/agent/exec.go#L48>)
 
 ```go
 func NewExecRunner() CommandRunner

@@ -20,8 +20,19 @@
 # assertion here says anything about what an operator sees on a screen.
 #
 # The scenario declares `execution_timeout_seconds: 10` on a task that sleeps
-# far past it, with the image PRE-LOADED into the cluster so the startup delta
-# is a few seconds and the run stays fast.
+# far past it AND leaves a grandchild holding the agent's stdout pipe (#943),
+# with the image PRE-LOADED into the cluster so the startup delta is a few
+# seconds and the run stays fast.
+#
+# What is red before #943. Assertions 1 and 2 are red UNCONDITIONALLY, on every
+# host: the agent killed its direct child alone, the grandchild kept the stdout
+# pipe open, and the agent's Wait would have blocked for the 600s that
+# grandchild lives — so the kubelet's 220s deadline always fired first, stamping
+# `status.reason=DeadlineExceeded` and settling the pod with a generic reason.
+# The agent never reached the branch that names the timeout or writes the
+# durable outcome record, so both halves of assertion 1 and the whole of
+# assertion 2 fail. These are the scenario's only unconditional OUTCOME reds;
+# see the #925 note below for why the earlier, in-process shape had none.
 #
 # What is red before #925, precisely. Assertion 3 is red UNCONDITIONALLY: the
 # pod deadline was the declared timeout itself, so 10 rather than 220, on any
@@ -36,7 +47,12 @@
 # assertion 3 asserts the arithmetic directly rather than inferring it from the
 # outcome.
 #
-# Four assertions:
+# Five assertions:
+#   0. the sleeper's shipped log carries a line written by its GRANDCHILD, which
+#      is the premise of assertion 1 rather than an assertion in its own right:
+#      it proves the task really did hand the agent's stdout pipe to a process
+#      the agent does not directly own, so a silently failed spawn cannot let
+#      this scenario pass while covering only the easy shape;
 #   1. the timed-out task instance's `failure_reason` names `execution_timeout:`
 #      — the agent won the race — AND the sleeper pod's own `status.reason` is
 #      NOT `DeadlineExceeded`, which names the race winner directly rather than
@@ -275,16 +291,22 @@ tasks:
   sleeper:
     execution_timeout_seconds: ${TASK_TIMEOUT}
 YAML
-# The body sleeps IN-PROCESS rather than shelling out to sleep(1): the agent runs
-# the user process under exec.CommandContext with the default cancel (an
-# immediate SIGKILL to the direct child only), and its Wait also waits for the
-# stdout pipe to close. A shelled-out grandchild would survive the kill holding
-# that pipe, so the agent would block past its own deadline and the kubelet
-# would win the race for a reason that has nothing to do with #925.
+# The body LEAVES A GRANDCHILD holding the agent's stdout, on purpose (#943).
+# This scenario used to sleep strictly in-process to avoid that shape, because
+# the agent SIGKILLed its direct child only and then waited for the stdout pipe
+# to close, so a surviving grandchild blocked the wait past the agent's own
+# deadline and handed the race to the kubelet for a reason unrelated to #925.
+# That is the shape almost every real task has — the bash operator runs its
+# entrypoint under `bash -c`, so any `&&`, pipe or background job makes the
+# user's programs grandchildren — so avoiding it meant the green here did not
+# cover the common case. The agent now puts the child in its own process group
+# and kills the GROUP, so the scenario exercises the path instead of dodging it,
+# and assertion 1 is what proves the agent still wins the race.
 cat >"$PROJ/dag.py" <<'PY'
-"""Locks the execution_timeout race against the kubelet (#925 / #930)."""
+"""Locks the execution_timeout race against the kubelet (#925 / #930 / #943)."""
 from __future__ import annotations
 
+import subprocess
 import time
 
 from airflow.sdk import DAG, task
@@ -295,7 +317,16 @@ def sleeper() -> None:
     # Declares execution_timeout_seconds: 10 (leoflow.yaml) and runs far past it.
     # The agent's own clock must interrupt this, and the timeout must be named
     # on the task instance the API serves.
+    #
+    # The subprocess is a GRANDCHILD of the agent and inherits this process's
+    # stdout, which is the agent's log pipe (#943). Its greeting is asserted in
+    # the shipped log, because it is the premise of everything below: if the
+    # spawn silently failed, this task would be an ordinary in-process sleep and
+    # the scenario would be back to proving the easy case.
     print("sleeper: running past the declared execution_timeout", flush=True)
+    subprocess.Popen(  # noqa: S603,S607 - inheriting stdout is the point
+        ["sh", "-c", "echo 'sleeper: grandchild holding the agent stdout pipe'; sleep 600"],
+    )
     time.sleep(600)
 
 
@@ -440,6 +471,23 @@ while :; do
   [ "$(date +%s)" -lt "$deadline" ] || fail "timeout waiting for 'sleeper' to fail"
   sleep 2
 done
+
+log "Asserting the sleeper really did leave a grandchild on the agent's stdout pipe"
+# The PREMISE of assertion 1, checked rather than assumed. The grandchild writes
+# its greeting to the stdout it inherited from the task process, so seeing that
+# line in the shipped log is proof that the pipe was inherited by a process the
+# agent does not directly own — the shape #943 was about. Without this check a
+# silently failed spawn (no `sh`, no `sleep`, an image change) would quietly turn
+# this scenario back into the in-process sleep it used to be, and it would go on
+# passing while covering nothing.
+GRANDCHILD_LOG=""
+for try in 0 1 2; do
+  body="$(curl -fsS --max-time "$CURL_MAX_TIME" -H "Authorization: Bearer $TOKEN" \
+    "$API/api/v2/dags/$DAG_ID/dagRuns/$RUN_ID/taskInstances/sleeper/logs/$try" 2>/dev/null || true)"
+  case "$body" in *"grandchild holding the agent stdout pipe"*) GRANDCHILD_LOG="$body"; break ;; esac
+done
+[ -n "$GRANDCHILD_LOG" ] \
+  || fail "the sleeper's shipped log never carried the grandchild's line — the task did not spawn a process holding the agent's stdout pipe, so this scenario is not exercising the #943 shape it claims to"
 
 REASON="$(task_field sleeper failure_reason)"
 log "sleeper error_message: ${REASON:-<empty>}"

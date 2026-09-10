@@ -1,0 +1,56 @@
+# Accepted container-image vulnerability findings.
+#
+# Every entry here is a finding that a scan WOULD report and that we have
+# decided, deliberately and with a date on it, not to act on yet. Nothing is
+# suppressed by being old, noisy, or inconvenient — only by an entry in this
+# file, reviewed in the PR that adds it.
+#
+# ── Why this file exists in this shape ───────────────────────────────────────
+#
+# An ignore list is the part of a scanning policy that rots. The failure mode is
+# never "we added a bad entry"; it is "we added a reasonable entry in a hurry and
+# nobody ever looked at it again", and three years later the list is the reason
+# the scanner reports clean. So an entry cannot be written here without saying
+# WHY it is accepted and WHEN that acceptance lapses.
+#
+# `expired_at` is enforced by Trivy itself, not by convention: once the date
+# passes, Trivy stops honouring the entry and the finding comes back into the
+# scan. Verified against Trivy 0.72 — a future-dated entry suppresses, a lapsed
+# one does not. That makes the default outcome of neglect "the finding returns",
+# which is the only default that is safe.
+#
+# `scripts/check-trivyignore-entries.sh` (a CI gate) additionally refuses:
+#   - an entry with no `statement`, or a placeholder one
+#   - an entry with no `expired_at`
+#   - an entry whose `expired_at` has already lapsed (dead weight: renew it
+#     deliberately or delete it — do not leave it for the next reader to decode)
+#   - an entry parked more than 180 days out, so "accepted" cannot mean "forever"
+#   - a top-level section name Trivy does not know, which would otherwise
+#     silently suppress nothing while looking like it suppresses something
+#
+# ── How to add an entry ──────────────────────────────────────────────────────
+#
+#   vulnerabilities:
+#     - id: CVE-2023-45853
+#       # What the finding is, why it does not apply to us or cannot be acted on
+#       # yet, and what would change that. Write it for someone who finds this
+#       # line in eighteen months with no other context.
+#       statement: >-
+#         zlib1g in Debian bookworm; upstream marked will_not_fix. Reachable only
+#         through MiniZip, which nothing in the task runtime links against.
+#         Re-evaluate when the base moves off bookworm (#NNN).
+#       expired_at: 2026-12-31
+#
+# Scope note: this file is applied to the container image scans. Go module
+# vulnerabilities are govulncheck's job and are not suppressed here.
+#
+# ── Current state ────────────────────────────────────────────────────────────
+#
+# Empty, and that is the real state rather than an omission. The blocking gate
+# (leoflow-server) reports zero findings under the policy, so nothing needs
+# accepting; the runtime and migrate images are reported, not gated, so their
+# findings are tracked in an issue rather than suppressed here. The mechanism is
+# in place BEFORE the first exception, which is the only time it can be designed
+# calmly instead of under a red build.
+
+vulnerabilities: []

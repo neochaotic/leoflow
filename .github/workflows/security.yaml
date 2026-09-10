@@ -76,8 +76,11 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # Filesystem scan of the repo (dependencies + committed secrets).
-      # Container image scanning returns once deploy/Dockerfile.server exists
-      # (Phase 6 deploy artifacts).
+      # trivy-ignorefile-exempt: .trivyignore.yaml holds accepted CONTAINER IMAGE
+      # findings — OS and vendored-binary CVEs in bases we do not author. This scan
+      # reads our own module graph and lock files, a different population with a
+      # different owner, and wiring the image list in here would let one accepted
+      # base-image finding silently suppress the same CVE in code we wrote.
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
         with:
@@ -99,6 +102,138 @@ jobs:
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
+
+  # ─────────────────────────────────────────────────────────────────────
+  # leoflow-server image scan — the BLOCKING half of the container policy.
+  #
+  # This is the one image whose contents are entirely ours: distroless static
+  # plus a Go binary built from this repository's go.mod. There is no OS package
+  # set to inherit CVEs from, so every finding here is caused by a commit and
+  # closed by a `go get`. That makes it the only image where a PR-blocking gate
+  # is fair — the person who turns it red is the person who can turn it green.
+  #
+  # The counterpart images (leoflow-runtime, leoflow-migrate) are NOT gated here.
+  # They inherit Debian and Alpine package sets that acquire CVEs with no commit
+  # of ours, so a blocking gate on them would fail whoever pushes next rather
+  # than whoever can fix it, and would be switched off within a week. They are
+  # scanned on a schedule instead — see .github/workflows/image-scan.yaml.
+  #
+  # Policy: fixable only, CRITICAL/HIGH blocks. `ignore-unfixed` is what makes
+  # this sustainable: severity says how bad a finding is, fixability says whether
+  # anyone can do anything about it, and only the second is a gate criterion.
+  # Baseline at the time of writing: leoflow-server reports ZERO findings under
+  # this policy (1 total finding, nothing CRITICAL/HIGH, nothing fixable), so the
+  # gate starts green and any red is a real regression.
+  #
+  # ── The image built here is the one we publish ───────────────────────
+  #
+  # It has to be, or the gate is theatre. Trivy keys `stdlib` findings to the Go
+  # toolchain recorded in the binary's build info, not to the module graph: the
+  # migrate image reports 21 HIGH `stdlib` findings purely because its vendored
+  # binary was built with go1.25.4. Scanning a binary built by a different
+  # toolchain than the release one therefore scans a different vulnerability set
+  # — blind to a stdlib CVE that affects the shipped toolchain, and red for one
+  # that does not.
+  #
+  # `deploy/Dockerfile.server` compiles from source inside `golang:1.27-bookworm`
+  # and is the developer/kind convenience path. GoReleaser publishes
+  # `deploy/Dockerfile.server.release`, which copies in a binary the release
+  # workflow builds with GO_VERSION. So this job reproduces the release recipe —
+  # same toolchain, same `CGO_ENABLED=0 -trimpath`, same distroless base — and
+  # scans that. GO_VERSION here is the same literal as release.yaml's; the two
+  # must move together.
+  #
+  # A floating `golang:1.27-bookworm` would also have quietly broken the fairness
+  # argument this gate rests on. A stdlib CVE in a floating build tag is closed
+  # by a base rebuild, not by a `go get` — it would redden the blocking gate for
+  # whoever opened the next unrelated PR, which is exactly the scenario used to
+  # justify NOT gating runtime and migrate. Pinning to the release toolchain
+  # keeps "a finding here is closed by a commit" true.
+  #
+  # Residual gap, stated rather than papered over: this builds HEAD's binary, not
+  # a published tag. A CVE in an already-published `leoflow-server` that HEAD no
+  # longer produces is not visible here — the daily scan and the Security tab
+  # baseline from `main` are where that shows up.
+  #
+  # Cost: compiling with actions/setup-go (module + build cache across runs) and
+  # then a COPY into distroless is minutes, where `docker build` of the
+  # from-source Dockerfile re-downloaded and recompiled everything on every run.
+  # The job stays on every event deliberately — it is meant to be a required
+  # check, and a `paths:`-skipped required check never reports and blocks the PR
+  # forever.
+  # ─────────────────────────────────────────────────────────────────────
+  server-image:
+    name: Trivy (leoflow-server image)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # The GoReleaser recipe for the `leoflow-server` binary (.goreleaser.yaml,
+      # builds id: leoflow-server): CGO-free, -trimpath, version metadata in
+      # ldflags. The ldflag VALUES do not affect what Trivy reports — it reads
+      # the module list and toolchain from the build info — but the toolchain and
+      # the build mode do, so those match exactly.
+      - name: Build the release binary (the GoReleaser recipe)
+        run: |
+          set -euo pipefail
+          mkdir -p dist/image-scan-context
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags="-s -w \
+              -X github.com/neochaotic/leoflow/internal/version.version=ci \
+              -X github.com/neochaotic/leoflow/internal/version.gitCommit=${GITHUB_SHA}" \
+            -o dist/image-scan-context/leoflow-server ./cmd/leoflow-server
+          go version -m dist/image-scan-context/leoflow-server | head -3
+
+      # deploy/Dockerfile.server.release is the file .goreleaser.yaml points at
+      # for both published arches. It COPYs `leoflow-server` from the build
+      # context, so the context is the staging directory holding it.
+      - name: Build leoflow-server image (the published Dockerfile)
+        run: docker build -f deploy/Dockerfile.server.release -t leoflow-server:ci dist/image-scan-context
+
+      # Report: every FIXABLE finding at any severity, so the Security tab shows
+      # the MEDIUM/LOW ones the gate deliberately does not block on. Unfixed
+      # findings are excluded here too — an alert nobody can ever close is not
+      # visibility, it is noise that teaches people to ignore the tab.
+      - name: Trivy image scan (SARIF report)
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          scan-type: image
+          image-ref: leoflow-server:ci
+          scanners: vuln
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          format: sarif
+          output: trivy-server-image.sarif
+
+      # Same rule as the filesystem scan above (#437): gate on every event, but
+      # upload only off pull_request, so a PR run cannot overwrite the main
+      # branch baseline under a shared category.
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always() && github.event_name != 'pull_request'
+        with:
+          sarif_file: trivy-server-image.sarif
+          category: trivy-server-image
+
+      # Gate: fixable CRITICAL/HIGH only.
+      - name: Trivy image scan (gate)
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          scan-type: image
+          image-ref: leoflow-server:ci
+          scanners: vuln
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          format: table
 
   # ─────────────────────────────────────────────────────────────────────
   # Gitleaks: secret scanning

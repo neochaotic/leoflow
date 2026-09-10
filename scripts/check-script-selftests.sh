@@ -31,10 +31,26 @@ for f in "$ROOT"/scripts/*.sh; do
 	fi
 done
 
+# Python helpers under scripts/ get the same treatment, by the same
+# discovery-by-existence rule. Not every script here is shell, and a report
+# generator whose filter silently returns nothing fails exactly as quietly as a
+# gate that always passes. Scripts without a self_test are skipped, as above.
+for f in "$ROOT"/scripts/*.py; do
+	[ -f "$f" ] || continue
+	grep -qE '^def self_test\(' "$f" || continue
+	found=$((found + 1))
+	if out="$(python3 "$f" --self-test 2>&1)"; then
+		echo "OK: $(basename "$f") --self-test"
+	else
+		printf 'FAIL: %s --self-test\n%s\n' "$(basename "$f")" "$out" >&2
+		failed=$((failed + 1))
+	fi
+done
+
 # A rename or a lost self_test() would otherwise shrink this gate to nothing
 # while still exiting 0 — the same silent-shrink hole run_gates guards against.
-if [ "$found" -lt "${MIN_SELFTESTS:-7}" ]; then
-	echo "FAIL: found only $found self-test(s), expected at least ${MIN_SELFTESTS:-7} — did a script lose its self_test()?" >&2
+if [ "$found" -lt "${MIN_SELFTESTS:-9}" ]; then
+	echo "FAIL: found only $found self-test(s), expected at least ${MIN_SELFTESTS:-9} — did a script lose its self_test()?" >&2
 	exit 1
 fi
 [ "$failed" -eq 0 ] || exit 1

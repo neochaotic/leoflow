@@ -254,7 +254,7 @@ tests:
         - "169.254.169.254/all"
     asserts:
       - failedTemplate:
-          errorMessage: "taskNetworkPolicy.allowMetadataEgress[0]=\"169.254.169.254/all\" has a prefix length that is not a number (/all). Every entry must name exactly ONE host, because NetworkPolicy egress rules are additive: k8s.io/api networking/v1 defines outgoing traffic as allowed if it matches at least one egress rule, so an allow rule here overrides the 169.254.0.0/16 entry in the allow-all rule's except-list and anything broader than a single host reopens the cloud-metadata range this policy exists to block. Accepted: an IPv4 address with /32 (GKE Workload Identity 169.254.169.254/32, EKS Pod Identity 169.254.170.23/32) or an IPv6 address with /128; surrounding whitespace is trimmed. To reach a wider range that is NOT the metadata range, use taskNetworkPolicy.extraEgress. See #958."
+          errorMessage: "taskNetworkPolicy.allowMetadataEgress[0]=\"169.254.169.254/all\" has a prefix length of /all, which is not a plain decimal number without leading zeros. Every entry must name exactly ONE host, because NetworkPolicy egress rules are additive: k8s.io/api networking/v1 defines outgoing traffic as allowed if it matches at least one egress rule, so an allow rule here overrides the 169.254.0.0/16 entry in the allow-all rule's except-list and anything broader than a single host reopens the cloud-metadata range this policy exists to block. Accepted: an IPv4 address with /32 (GKE Workload Identity 169.254.169.254/32, EKS Pod Identity 169.254.170.23/32) or an IPv6 address with /128; surrounding whitespace is trimmed. To reach a wider range that is NOT the metadata range, use taskNetworkPolicy.extraEgress. See #958."
 
   - it: refuses a blank entry
     set:
@@ -282,3 +282,85 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "taskNetworkPolicy.allowMetadataEgress must be a list, one CIDR per entry (got \"169.254.169.254/32\", kind string). A scalar arrives when the override is sent unindexed; use list syntax instead: --set taskNetworkPolicy.allowMetadataEgress[0]=169.254.169.254/32, or --set \"taskNetworkPolicy.allowMetadataEgress={169.254.169.254/32,169.254.170.23/32}\". Every entry must name exactly ONE host, because NetworkPolicy egress rules are additive: k8s.io/api networking/v1 defines outgoing traffic as allowed if it matches at least one egress rule, so an allow rule here overrides the 169.254.0.0/16 entry in the allow-all rule's except-list and anything broader than a single host reopens the cloud-metadata range this policy exists to block. Accepted: an IPv4 address with /32 (GKE Workload Identity 169.254.169.254/32, EKS Pod Identity 169.254.170.23/32) or an IPv6 address with /128; surrounding whitespace is trimmed. To reach a wider range that is NOT the metadata range, use taskNetworkPolicy.extraEgress. See #958."
+
+  # Review of #1065. The helper's justification claimed that not checking range
+  # membership left "the same containment either way" — while naming the
+  # counterexample in its own parenthesis. It is not the same: this renders, and
+  # hands back the EKS apiserver ClusterIP that blockPrivateNetworks had just put
+  # in the except list.
+  #
+  # The behaviour is deliberate — a single host is the smallest grant this field
+  # can make, and an in-range check would refuse the legitimate IPv6 endpoint,
+  # which lives outside 169.254.0.0/16 entirely — so it is pinned here as a
+  # recorded decision rather than left as an accident.
+  - it: "issue #1065 — a single host outside the metadata range renders, including one blockPrivateNetworks removed"
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskNetworkPolicy.enabled: true
+      taskNetworkPolicy.blockPrivateNetworks: true
+      taskNetworkPolicy.allowMetadataEgress:
+        - "10.96.0.1/32"
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: "10.96.0.1/32"
+
+  # An IPv4-mapped IPv6 literal was refused in its dotted spelling and accepted
+  # in its hex one — the same address, two answers, because the IPv6 shape check
+  # has no `.` in its character class. The comment claimed both were refused.
+  - it: "issue #1065 — refuses an IPv4-mapped IPv6 literal in its hex spelling"
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskNetworkPolicy.enabled: true
+      taskNetworkPolicy.allowMetadataEgress:
+        - "::ffff:a9fe:a9fe/128"
+    asserts:
+      - failedTemplate:
+          errorPattern: "IPv4-mapped IPv6 literal"
+
+  - it: "issue #1065 — refuses an IPv4-mapped IPv6 literal in its dotted spelling"
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskNetworkPolicy.enabled: true
+      taskNetworkPolicy.allowMetadataEgress:
+        - "::ffff:169.254.169.254/128"
+    asserts:
+      - failedTemplate:
+          errorPattern: "IPv4-mapped IPv6 literal"
+
+  # Sprig's atoi discards strconv's error and returns 0, so an unparseable
+  # prefix used to be refused as "selects more than one host" — the right
+  # outcome for the wrong reason, which is how a message stops being a
+  # diagnostic.
+  - it: "issue #1065 — an unparseable prefix length is refused for the right reason"
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskNetworkPolicy.enabled: true
+      taskNetworkPolicy.allowMetadataEgress:
+        - "169.254.169.254/99999999999999999999"
+    asserts:
+      - failedTemplate:
+          errorPattern: "too long to be one"
+
+  - it: "issue #1065 — a leading-zero prefix says so, rather than 'not a number'"
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      taskNetworkPolicy.enabled: true
+      taskNetworkPolicy.allowMetadataEgress:
+        - "169.254.169.254/032"
+    asserts:
+      - failedTemplate:
+          errorPattern: "without leading zeros"

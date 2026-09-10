@@ -435,10 +435,21 @@ and is silently less contained than its own documentation claims.
 
 What is accepted, deliberately:
   - an IPv4 address with /32, or an IPv6 address with /128 — "one host" is the
-    invariant, and it is the ONLY one enforced. An in-range check is not: a
-    single-host allow outside 169.254.0.0/16 re-permits exactly one address that
-    the allow-all rule already permits (or that blockPrivateNetworks / extraExcept
-    took away), which is the same containment either way.
+    invariant, and it is the ONLY one enforced.
+
+    Membership of 169.254.0.0/16 is deliberately NOT checked, and the honest
+    statement of what that costs is: this field re-permits ANY single host,
+    including one that blockPrivateNetworks or extraExcept took away.
+    `blockPrivateNetworks=true` with `allowMetadataEgress: [10.96.0.1/32]`
+    renders, and hands back the EKS apiserver ClusterIP the except list had just
+    removed. That is a real footgun and it is a deliberate one: a single host is
+    the smallest thing this field can grant, `extraEgress` is not needed for it,
+    and an in-range check would refuse the legitimate IPv6 endpoint below, which
+    lives outside 169.254.0.0/16 entirely.
+
+    An earlier version of this comment claimed the containment was "the same
+    either way" while naming that exact counterexample in a parenthesis. It was
+    not; the render above disproves it.
   - IPv6 at all, because the allow-all rule is `0.0.0.0/0` and therefore matches
     no IPv6 destination — this list is the only way to reach an IPv6 metadata
     endpoint (EKS Pod Identity serves one at fd00:ec2::23) while the policy is on.
@@ -459,8 +470,11 @@ What is refused, and why each one is not just the string the issue named:
     delivers. `range` over it used to die with "range can't iterate over
     169.254.169.254/32", naming neither the value nor the fix.
 
-An IPv4-mapped IPv6 literal (::ffff:169.254.169.254/128) is refused as well; the
-plain IPv4 /32 spelling is the one to use.
+An IPv4-mapped IPv6 literal is refused in BOTH of its spellings — the dotted
+`::ffff:169.254.169.254/128` and the hex `::ffff:a9fe:a9fe/128`. The dotted one
+fell out of the IPv6 shape check (no `.` in its class) and the hex one did not,
+so the same address was accepted or refused depending on how it was written.
+The plain IPv4 /32 spelling is the one to use.
 
 The refusal lives with the RENDER, not beside it: task-networkpolicy.yaml emits
 the peers only through this helper, so a template that stops calling it stops
@@ -504,11 +518,22 @@ group count a valid address can have. */ -}}
 {{- else -}}
 {{- $hostOK = regexMatch "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$" $host -}}
 {{- end -}}
+{{- /* Both spellings of an IPv4-mapped address, so the same host cannot be
+       accepted in hex and refused in dotted form. */ -}}
+{{- if hasPrefix "::ffff:" (lower $host) -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q is an IPv4-mapped IPv6 literal; write the address as a plain IPv4 /32 instead. %s" $i $s $why) -}}
+{{- end -}}
 {{- if not $hostOK -}}
 {{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q is not an IPv4 or IPv6 address in CIDR form. %s" $i $s $why) -}}
 {{- end -}}
 {{- if not (regexMatch "^(0|[1-9][0-9]*)$" $prefix) -}}
-{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q has a prefix length that is not a number (/%s). %s" $i $s $prefix $why) -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q has a prefix length of /%s, which is not a plain decimal number without leading zeros. %s" $i $s $prefix $why) -}}
+{{- end -}}
+{{- /* Sprig's atoi discards strconv's error and returns 0, so a prefix too long
+       to parse would otherwise fall into the "selects more than one host" branch
+       below and be refused for the wrong reason. */ -}}
+{{- if gt (len $prefix) 3 -}}
+{{- fail (printf "taskNetworkPolicy.allowMetadataEgress[%d]=%q has a prefix length of /%s, which is too long to be one. %s" $i $s $prefix $why) -}}
 {{- end -}}
 {{- $want := 32 -}}
 {{- $family := "IPv4" -}}

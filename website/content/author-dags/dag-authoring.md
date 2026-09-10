@@ -57,8 +57,11 @@ DAG named `sales_etl`.
 
 - Goes **at most 5 levels deep** from the workspace root. A DAG at
   `<ws>/a/b/c/d/dag.py` is the deepest valid case. Deeper paths are skipped.
-- Skips the `exclude_paths` defaults: `.git`, `__pycache__`, `*.pyc`, `.venv`,
-  `venv`, and any other hidden directory (`.*`).
+- Skips `.git`, `__pycache__`, `.venv`, `venv`, and any hidden directory
+  (`.*`). That list *mirrors* the `exclude_paths` default so the scan and an
+  image build agree on what counts as noise — but discovery has its own copy
+  and never reads your `exclude_paths`, so changing that value does not change
+  what the scan walks.
 - Fails **loud** on a duplicate `dag_id`: if two subdirs resolve to the same
   id, lite refuses to compile any of them and prints both paths so you can
   rename one. There is no last-write-wins.

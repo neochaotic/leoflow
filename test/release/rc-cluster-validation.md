@@ -120,149 +120,53 @@ Record: does the control plane reach `Ready`? Is `/api/v2/` + the UI reachable
 
 ---
 
-## §3 v0.4.5 feature validation
+## §3 Feature validation
 
 **§3a is refreshed per RC** from that release's CHANGELOG `[Unreleased]`.
 **§3b is not** — those rows stand until the issue they name closes, and carry
 forward across RCs. Deleting a §3b row is a decision, not a refresh.
 
-### §3a — the v0.4.5 tranche
+### §3a — the post-0.4.5 tranche
 
 ✔ = also unit/e2e-verified; ★ = **only a real cluster proves it well**.
 
-Every item below is one of the five GA blockers this release closed, and they
-share a root: the hybrid DAG — a `dag.py` with dbt projects as task groups — was
-never exercised end to end by CI, so four defects shipped green inside one e2e
-fixture that hand-wrote its Dockerfile and used Bash tasks. `dbt-mixing-e2e.sh`
-now exercises the generated path, which is why most rows are ✔. What remains is
-what a pod does that a container on a laptop does not.
+Refreshed from `[Unreleased]`. The previous tranche's rows are gone by design —
+§3a is per-RC; anything that had to outlive its release is in §3b.
 
-**Task pods are `restartPolicy: Never` and live seconds.** `kubectl exec` into
-one is not runnable — the container is gone before you can attach. Where a row
-needs to look inside the image *as the cluster pulled it*, use a throwaway pod:
+This tranche has a different shape from the last one. The v0.4.5 tranche was
+four defects inside one untested fixture. These are mostly **claims that were
+true of the code and false of the documentation** — a chart value that said it
+tightened something and did not, a field the schema declared and no build code
+read, a comment asserting the opposite of its own function. Several were found
+by review re-deriving a measurement rather than by a test failing, which is why
+so many rows below are ★: what a cluster settles here is whether the *new*
+statements are true, not whether the code compiles.
 
-```bash
-kubectl run img-probe -n <taskNamespace> --rm -i --restart=Never \
-  --image=<dag-image> --command -- sh -c '<command>'
-```
+| # | What | How | ★/✔ |
+|---|---|---|---|
+| 1 | The migration Job mounts `database.caConfigMap` (#1052) | RDS, `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt`, CA in a ConfigMap. Install. **Decides:** the Job completes. Pre-fix the control plane came up and the Job failed — and no in-cluster Postgres can show it, because with no `sslrootcert` lib/pq silently falls back to the system store. | ★ |
+| 2 | `allowMetadataEgress` really is one host (#958) | EKS, VPC CNI **with the network-policy agent enabled** — assert the agent is running first or every check below passes vacuously. `allowMetadataEgress: [169.254.170.23/32]`. From a task pod: that address answers, `169.254.169.254` times out. **Decides:** whether `except` plus a separate `/32` allow produce the intended pair on this CNI. Repeat on GKE Dataplane V2 and Calico — this is the path CNIs diverge on. | ★ |
+| 3 | The metrics port under an enforcing CNI (#1067) | Covered on kind+Calico now (`pro-netpol-rwx.sh` asserts :9090 with `ingressFrom` narrowed). On EKS confirm the same under VPC CNI, and confirm a real Prometheus in another namespace scrapes it. | ✔★ |
+| 4 | Readiness survives a saturated pool (#1042) | EKS + RDS (not an in-cluster pod — the TLS and network cost is the point), `maxOpenConns: 20`. Drive the API to pool exhaustion. **Decides:** the ready count never drops. Pre-fix this is where the Service empties. | ★ |
+| 5 | The migration hook stays out of the Service and the PDB (#1055) | Hold the hook open (`migrations.image.repository=registry.k8s.io/pause`) during a `helm upgrade`. **Decides:** the pod's IP never enters the EndpointSlice, and a percentage PDB reports `currentHealthy` without it and never `SyncFailed`. Note the pre-fix traffic safety was **accidental** (named `targetPort` + no container port), so an ALB in IP-target mode is the case that matters and k3d cannot show it. | ★ |
+| 6 | The rendered HPA is admitted (#947) | kind dry-runs it already. On EKS confirm no admission webhook (OPA/Kyverno/Gatekeeper) rejects or mutates it, and that `HPAScaleToZero` really is off on your version — the min<1 refusal assumes it. | ✔★ |
+| 7 | `execution_timeout` kills the group (#943) | `execution-timeout-e2e.sh` now spawns a real grandchild holding stdout, **and is still not wired into any CI tier**. Run it by hand against the RC image. **Decides:** the attempt reports `execution_timeout`, and the grandchild is gone. Also check a `terminationGracePeriodSeconds` under 10s, where the kubelet can still win. | ★ |
+| 8 | No driver text reaches a task pod (#1068) | Break the DB mid-run. **Decides:** the pod's gRPC error carries an operation name and no SQLSTATE, and the control-plane log carries the cause. Then check the second-order path: the served `failure_reason` for that attempt must be clean too. | ★ |
+| 9 | Nothing secret ships in a DAG image (#995, #1013) | e2e asserts the redirection artifact and the dbt parse artifacts. On the RC image confirm by hand: no `=<version>` file, no `.user.yml`, no `logs/dbt.log` with a build-host path. | ✔ |
+| 10 | A version floor is honoured (#1064) | Build a DAG image whose base carries an **older** version than a declared floor — the only shape where the symptom appears, and the reason the e2e asserts the artifact instead. **Decides:** the installed version satisfies the floor. | ★ |
+| 11 | Tenant-facing errors carry no schema (#961) | Force a constraint violation through the API. **Decides:** the body names the dependency and nothing else; the log line carries `cause` and correlates by `request_id`. | ✔ |
 
-- **#17 authoring package in the task image ✔** — deploy a hybrid DAG whose
-  `dag.py` starts `from leoflow import dbt_group` and whose Python tasks sit
-  either side of the group. **PASS:** the `python` tasks reach `success`. The
-  runtime re-imports `dag.py` per task, so a missing package fails every one of
-  them with `ModuleNotFoundError`. No ★: `leoflow` ships **in the wheel**
-  (`runtime/python/pyproject.toml` `packages = ["leoflow_runtime", "leoflow"]`,
-  installed to site-packages by `runtime/Dockerfile`), so it resolves
-  independently of `PYTHONPATH` and of UID. `PYTHONPATH=/home/leoflow` is what
-  makes *`dag.py`* importable, not `leoflow`. The e2e already runs this with
-  `-e PYTHONPATH=` empty, which is stricter than a pod.
-- **#20 dbt_groups project baked into the image ✔** — same DAG. **PASS:** the
-  `transform__*` tasks reach `success` rather than exiting within seconds. To
-  see the image content, use the `img-probe` pod above with
-  `ls -l /home/leoflow/<project>/dbt_project.yml`.
-  **Second shape, not covered by the e2e:** a group whose `project` is `"."`
-  (the DAG dir itself) takes a different `COPY . /home/leoflow/` branch in
-  `compile_build.go` and omits `--project-dir` entirely. Run one.
-- **#993 absolute host path in the entrypoint ✔★** — **single machine; a second
-  one adds nothing.** `dbtProjectDir` only absolutizes when `local` is true, and
-  the only production site setting it is `dev.go` (Lite subprocess) — `compile`,
-  `deploy` and `deploy --skip-build` all leave it false. So one machine's output
-  either carries a host path or it does not.
-  **PASS (local; `internal/cli/dbt_projectdir_test.go` asserts the same shape as a unit test):**
+**Two process notes for this cut.**
 
-  ```bash
-  leoflow compile <dag-dir> -o /tmp/spec.json   # no --build
-  jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not] | all' /tmp/spec.json
-  ```
+The RC image must be built from the commit under test. #1019 is open precisely
+because a published rc predated the fixes its runbook asked you to validate,
+and this tranche makes that sharper: rows 7, 8 and 10 are meaningless against
+an older image.
 
-  **PASS (cluster) — read the entrypoint the *server* holds, which is what the
-  pod fetches over gRPC:**
+And #1079 is a known flake in `streamlogs_shutdown_test` — not reproducible in
+100 local runs, already seen reddening an unrelated PR. If it fires during the
+cut, rerun; do not treat it as a signal about the tranche.
 
-  ```bash
-  API=<control-plane base URL>          # e.g. http://localhost:8080 via port-forward
-  TOKEN=$(leoflow auth create-token --server "$API" \
-                  --username <u> --password <p>)
-  DAG=<the hybrid DAG from #17>         # NOT the §2 smoke DAG — it has no dbt tasks,
-                                        # so it passes this vacuously
-  curl -fsS -H "Authorization: Bearer $TOKEN" "$API/api/v2/dags/$DAG/spec" \
-    | jq -e '[.tasks[] | .entrypoint // "" | test("--(project|profiles)-dir /") | not] | all'
-  ```
-
-  **Do NOT** read `kubectl get pod <task> -o jsonpath='{.spec.containers[0].args}'`.
-  `BuildPod` sets neither `command` nor `args` — the entrypoint never reaches the
-  pod spec — so that jsonpath returns empty on a fixed build *and* on a broken
-  one. It is a row that cannot fail.
-  **FAIL** is a dbt task exiting seconds after start with "project directory does
-  not exist".
-- **#994 project-baked profiles.yml ✔** — a group with **no** `connection:` whose
-  project ships its own `profiles.yml`. **PASS:** the dbt tasks succeed **and**
-  the `/spec` entrypoint for every `transform__*` task carries
-  `--profiles-dir <project>`; without the positive assertion you cannot tell the
-  fix from a project that never needed it. No ★: the `/tmp` emptyDir is created
-  by `mountWritableTmp` **only** when `readOnlyRootFilesystem` is on, which is
-  off by default — `/tmp` here is the container's writable layer, identical on
-  k3d and GKE.
-  **Second arm, not covered anywhere:** a group **with** `connection:` still
-  succeeding. `decorateCommands` appends `--profiles-dir` only in the
-  no-connection branch, so the fix sits one `switch` arm from the managed-secret
-  path — the arm that also crosses ADR 0060 external secrets. Run one.
-- **#852 read-only project, for real** — the half no test covers.
-
-  ```bash
-  kubectl label ns <taskNamespace> pod-security.kubernetes.io/enforce=restricted
-  helm upgrade leoflow ... --set taskPodSecurity.readOnlyRootFilesystem=true
-  ```
-
-  **PASS:** the pod is **admitted** by a `restricted`-enforcing namespace and
-  reaches `Running` (not `CreateContainerConfigError`), and the dbt tasks succeed
-  — which is the observable form of "every write landed in the `/tmp` emptyDir".
-  Do not try to observe "nothing was written under `/home/leoflow/<project>`":
-  with a read-only rootfs the kernel makes it impossible, and the pod is gone
-  before you could look.
-  Note the executor never sets `runAsUser` — only `runAsNonRoot` — so the kubelet
-  must resolve the image's numeric USER. That half is **already green three ways**
-  (every k3d e2e pod, plus the image-level UID assertion in the e2e); it is not
-  what makes this row cluster-only.
-  **This row has no cloud-only half, and three review rounds failed to find one.**
-  Each proposed anchor collapsed on inspection: the kubelet resolving the image's
-  numeric USER is already green three ways; PSA `restricted` admission and
-  `LimitRange` are in-tree apiserver features k3d enforces identically; node-level
-  ephemeral-storage eviction runs on a real kubelet on k3d too. GKE Autopilot
-  would be a genuine delta but the RC target is EKS, where it does not exist.
-  So: **run it on whatever cluster you have and record the result, but do not
-  spend cluster time you would not otherwise spend on it.** The right home for
-  this is a k3d e2e setting
-  `LEOFLOW_EXECUTOR_DEFAULTS_READ_ONLY_TASK_ROOT_FILESYSTEM=true` against a
-  `restricted`-labelled namespace, filed as #1016. One thing worth noting while
-  you are here, because nothing in our code bounds it: the executor creates that
-  emptyDir with **no `sizeLimit`**, so a namespace `LimitRange` or the node's own
-  eviction threshold is the only limit on `/tmp/leoflow/dbt/target`.
-- **#1005 does a task pod reuse the build-time parse?** — **run this locally, not
-  on the cluster.** 
-
-  ```bash
-  docker run --rm --entrypoint dbt <dag-image> --debug parse \
-    --project-dir <project> --profiles-dir <project>
-  ```
-
-  `--project-dir` is always required — the image's `WORKDIR` is `/home/leoflow`
-  while the project sits at `/home/leoflow/<project>`, so a bare `parse` dies
-  with "Not a dbt project". `--profiles-dir` is required only for a project that
-  **bakes its own `profiles.yml`** (the #994 shape); a `connection:` group has no
-  baked profile, since the managed one is written at runtime under `/tmp`.
-
-  **Expect "full parse", and treat a partial one as the surprise.**
-  `DBT_TARGET_PATH` is `/tmp/leoflow/dbt/target`, empty in a fresh container, so
-  `partial_parse.msgpack` cannot be there. This is a question, not a gate — if it
-  answers as expected, close #1005 and leave the claim out of the docs. The base image points
-  `DBT_TARGET_PATH` at `/tmp/leoflow/dbt/target` while the project (with any
-  baked `target/`) is copied to `/home/leoflow/<project>`, and nothing copies one
-  to the other — so a full parse per task is the expected answer. Two files and a
-  `docker run` settle it; it does not deserve cluster minutes.
-- **#15 strict `leoflow.yaml` keys ✔** — unit-covered, no cluster needed. Worth
-  one smoke: a project carrying a stray top-level key must fail **both**
-  `leoflow validate` and `leoflow compile`, naming the key — and must **not**
-  break Lite discovery, which decodes leniently on purpose.
 
 ### §3b — standing assertions (carry forward until the issue closes)
 

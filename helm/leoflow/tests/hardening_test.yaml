@@ -278,3 +278,114 @@ tests:
     asserts:
       - matchRegexRaw:
           pattern: "WARNING: taskNetworkPolicy.enabled=false"
+
+  # #947 — autoscaling.minReplicas and maxReplicas are independent values with
+  # independent defaults (2 and 6), so overriding only one inverts them. The
+  # apiserver rejects a HorizontalPodAutoscaler whose maximum is under its
+  # minimum, so the render looked clean and the install failed — the exact class
+  # the chart refuses everywhere else.
+  - it: "issue #947 — refuses an autoscaling maximum below the minimum"
+    template: hpa.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.persistence.enabled: false
+      autoscaling.enabled: true
+      autoscaling.maxReplicas: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "is below autoscaling.minReplicas"
+
+  # Argo CD's helm.parameters and `helm --set-string` deliver every override as
+  # a string, which is why the other guards in this chart accept the string
+  # spellings. The refusal has to hold there too.
+  - it: "issue #947 — refuses a string-typed maximum below the minimum"
+    template: hpa.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.persistence.enabled: false
+      autoscaling.enabled: true
+      autoscaling.maxReplicas: "1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "is below autoscaling.minReplicas"
+
+  - it: "issue #947 — refuses a minimum below 1 (HPAScaleToZero is not assumed)"
+    template: hpa.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.persistence.enabled: false
+      autoscaling.enabled: true
+      autoscaling.minReplicas: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "below 1 is rejected"
+
+  - it: "issue #947 — a consistent pair still renders"
+    template: hpa.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      logs.persistence.enabled: false
+      autoscaling.enabled: true
+      autoscaling.minReplicas: 1
+      autoscaling.maxReplicas: 1
+    asserts:
+      - equal:
+          path: spec.minReplicas
+          value: 1
+      - equal:
+          path: spec.maxReplicas
+          value: 1
+
+  # #1067 — an Ingress-typed policy denies what it does not match, so leaving
+  # the metrics port out of every rule made it reachable from nowhere while the
+  # value's own documentation claimed the opposite. networkPolicy.enabled +
+  # serviceMonitor.enabled + the default was a Prometheus target that never
+  # answered and failed nothing at install.
+  - it: "issue #1067 — the metrics port is reachable by default, as the docs always claimed"
+    template: networkpolicy.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      networkPolicy.enabled: true
+    asserts:
+      - contains:
+          path: spec.ingress[0].ports
+          content:
+            port: 9090
+            protocol: TCP
+
+  - it: "issue #1067 — setting metricsFrom makes the metrics port STRICTER than the API, not unreachable"
+    template: networkpolicy.yaml
+    set:
+      database.url: postgres://h/d
+      redis.url: redis://h/0
+      auth.jwtSecret: jwt
+      networkPolicy.enabled: true
+      networkPolicy.metricsFrom:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+    asserts:
+      # Not in the open rule any more...
+      - notContains:
+          path: spec.ingress[0].ports
+          content:
+            port: 9090
+            protocol: TCP
+      # ...but in its own, with its own source restriction.
+      - contains:
+          path: spec.ingress[1].ports
+          content:
+            port: 9090
+            protocol: TCP
+      - exists:
+          path: spec.ingress[1].from

@@ -551,4 +551,30 @@ group count a valid address can have. */ -}}
 {{- $peers = append $peers (printf "- ipBlock:\n    cidr: %q" $s) -}}
 {{- end -}}
 {{- join "\n" $peers -}}
+autoscaling.maxReplicas, validated against autoscaling.minReplicas.
+
+The two are independent values with independent defaults (2 and 6), so
+overriding only one silently inverts them: `--set autoscaling.maxReplicas=1`
+renders `minReplicas: 2` / `maxReplicas: 1`, which the apiserver rejects
+outright. The operator gets a failed install and a message about HPA field
+semantics, naming neither leoflow value nor the one they actually set.
+
+This is the class the chart already refuses everywhere else — a render that
+looks clean and then fails the install (#905's PDB and strategy guards, #1041's
+readiness floor). Refusing at render time puts the diagnosis in front of the
+person who typed the value, while they are still typing.
+
+Setting max BELOW min is far likelier than the reverse, because 1 is the
+obvious value for someone shrinking a deployment and the min default is 2.
+*/}}
+{{- define "leoflow.autoscalingMaxReplicas" -}}
+{{- $min := int .Values.autoscaling.minReplicas -}}
+{{- $max := int .Values.autoscaling.maxReplicas -}}
+{{- if lt $max $min -}}
+{{- fail (printf "autoscaling.maxReplicas=%v is below autoscaling.minReplicas=%v, and the apiserver rejects a HorizontalPodAutoscaler whose maximum is under its minimum. The two are independent values with independent defaults (min 2, max 6), so setting only one inverts them — this is what `--set autoscaling.maxReplicas=1` alone produces. Set both, or raise the maximum to at least %v. See #947." .Values.autoscaling.maxReplicas .Values.autoscaling.minReplicas $min) -}}
+{{- end -}}
+{{- if lt $min 1 -}}
+{{- fail (printf "autoscaling.minReplicas=%v, and a HorizontalPodAutoscaler minimum below 1 is rejected unless the HPAScaleToZero feature gate is on, which this chart does not assume. Set it to 1 or more. See #947." .Values.autoscaling.minReplicas) -}}
+{{- end -}}
+{{- $max -}}
 {{- end -}}

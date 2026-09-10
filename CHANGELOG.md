@@ -304,6 +304,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `leoflow.yaml` and rebuild — or, if you pinned `base_image`, repoint it to the
   matching `py3.11` tag and rebuild.
 ### Fixed
+- **The chart no longer renders a HorizontalPodAutoscaler the apiserver
+  rejects.** `autoscaling.minReplicas` and `maxReplicas` are independent values
+  with independent defaults (2 and 6), so `--set autoscaling.maxReplicas=1`
+  alone produced a maximum below the minimum — a clean render and a failed
+  install, naming neither value the operator set. Refused at render time now,
+  along with a minimum below 1, which Kubernetes rejects without the
+  `HPAScaleToZero` gate ([#947](https://github.com/neochaotic/leoflow/issues/947)).
+- **`networkPolicy.enabled` no longer silently breaks the Prometheus scrape.**
+  With `metricsFrom` at its default the metrics port was in no ingress rule at
+  all, and an Ingress-typed policy denies what it does not match — so the port
+  was reachable from nowhere while the value's own documentation said it was
+  "reachable from wherever `ingressFrom` allows". Turning on `networkPolicy`
+  and `serviceMonitor` together gave you a target that was created, never
+  answered, and failed nothing at install. The default now matches the
+  documentation; set `metricsFrom` to make the scrape *stricter* than the API
+  ([#1067](https://github.com/neochaotic/leoflow/issues/1067)).
 - **A version floor in `dependencies` was silently dropped, and left junk in the
   image.** `RUN` in a Dockerfile is `/bin/sh -c`, and the specifiers were joined
   into that line unquoted — so `setuptools>=80.9.0` was a *redirection*: pip

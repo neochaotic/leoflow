@@ -40,6 +40,23 @@ spec:
         - port: {{ $ctx.Values.ports.grpc }}
           protocol: TCP
         {{- end }}
+        {{- if not $ctx.Values.networkPolicy.metricsFrom }}
+        # Metrics, when no separate source rule is configured (#1067).
+        #
+        # An Ingress-typed policy denies whatever it does not match, so leaving
+        # this port out of every rule made it reachable from NOWHERE — while
+        # metricsFrom's own documentation said the opposite ("reachable from
+        # wherever ingressFrom allows"). The combination that hit it is the
+        # careful operator's: networkPolicy.enabled with serviceMonitor.enabled
+        # and this value left alone is a Prometheus target that is created,
+        # never answers, and fails nothing at install.
+        #
+        # So the default now matches what the documentation always claimed:
+        # the metrics port is as reachable as the API, no more. Set metricsFrom
+        # to make it stricter than the API — that is what it is for.
+        - port: {{ $ctx.Values.ports.metrics }}
+          protocol: TCP
+        {{- end }}
       {{- with $ctx.Values.networkPolicy.ingressFrom }}
       from:
         {{- toYaml . | nindent 8 }}

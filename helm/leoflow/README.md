@@ -370,8 +370,8 @@ differ from what's committed.
 | auth.tokenTtlSeconds | int | `3600` | API + agent JWT lifetime in seconds. Default 1h; raise for longer agent sessions. |
 | autoscaling.behavior | object | `{}` | HPA scaling behavior (scale-up/scale-down policies). See K8s docs for autoscaling/v2 `behavior` schema. |
 | autoscaling.enabled | bool | `false` | Enable HPA for the leoflow-server Deployment. Requires metrics-server. |
-| autoscaling.maxReplicas | int | `6` | Maximum replicas. HPA never scales above this. |
-| autoscaling.minReplicas | int | `2` | Minimum replicas. HPA never scales below this. |
+| autoscaling.maxReplicas | int | `6` | Maximum replicas. HPA never scales above this. Must be at or above `minReplicas`, and the render is refused otherwise — these are independent values with independent defaults, so overriding only this one used to produce a HorizontalPodAutoscaler the apiserver rejects at install (#947). |
+| autoscaling.minReplicas | int | `2` | Minimum replicas. HPA never scales below this. Must be at least 1: the apiserver rejects a lower minimum unless the HPAScaleToZero feature gate is on, which this chart does not assume. |
 | autoscaling.targetCPUUtilizationPercentage | int | `70` | Target average CPU utilization across replicas (percent). HPA scales out when exceeded. |
 | autoscaling.targetMemoryUtilizationPercentage | string | `""` | Target average memory utilization (percent). Empty = not used. Add only if your workload is memory-bound (rare for a control plane). |
 | bootstrap.existingSecret | string | `""` | Name of a Secret with key `bootstrapPassword` (takes precedence over `password`). |
@@ -447,7 +447,7 @@ differ from what's committed.
 | networkPolicy.egress | list | `[]` | Explicit egress rules. Empty = allow-all (DNS is ALWAYS allowed regardless). Lock down to your DB/Redis/kube-apiserver endpoints in regulated environments. |
 | networkPolicy.enabled | bool | `false` | Enable NetworkPolicy gating ingress + egress on the control-plane pods. Requires a CNI that enforces policies (Calico/Cilium/etc.). |
 | networkPolicy.ingressFrom | list | `[]` | NetworkPolicy `from` rules for HTTP + gRPC ingress (task pods dial back). Empty = allow from any pod in any namespace. Tighten with e.g. `[{namespaceSelector: {}}]` for same-namespace only. |
-| networkPolicy.metricsFrom | list | `[]` | NetworkPolicy `from` rules for the metrics port (Prometheus scrape). Empty = no separate rule; the metrics port is reachable from wherever `ingressFrom` allows. Set e.g. `[{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]` to restrict to a Prometheus namespace. |
+| networkPolicy.metricsFrom | list | `[]` | NetworkPolicy `from` rules for the metrics port (Prometheus scrape). Empty = the metrics port is reachable from wherever `ingressFrom` allows, i.e. as reachable as the API and no more. Set this to make it **stricter** than the API — restricting the scrape to a Prometheus namespace is what it is for. It used to leave the port out of every rule, which an Ingress-typed policy denies, so `networkPolicy.enabled` plus `serviceMonitor.enabled` was a target that never answered and failed nothing at install (#1067). Set e.g. `[{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]` to restrict to a Prometheus namespace. |
 | nodeSelector | object | `{}` | Pod nodeSelector (standard K8s scheduling label match). |
 | observability.logFormat | string | `"json"` | Log format: `json` (production / log aggregators) or `console` (dev / human-readable). |
 | observability.logLevel | string | `"info"` | Log level: `debug`, `info`, `warn`, `error`. Production default is `info`. |

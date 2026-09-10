@@ -109,27 +109,49 @@ tests:
       database.url: postgres://h/d
       database.caConfigMap: rds-ca-bundle
     asserts:
+      # Whole-object `contains:`, mirroring deployment_test.yaml — literally the
+      # same content blocks, because the parity between the two templates IS the
+      # fix and this makes it a textual parity between the two tests.
+      #
+      # Index-based scalar asserts were not enough. They left `volumeMounts[0].name`
+      # and `configMap.items[0].key` unasserted, and both of those surviving
+      # mutations reproduce the wedge this PR exists to remove: a dangling mount
+      # name is rejected by apiserver validation so the hook Job cannot be
+      # created, and a wrong ConfigMap key parks the pod in ContainerCreating
+      # until Helm's timeout, since the container never starts and backoffLimit
+      # never engages.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: db-ca
+            configMap:
+              name: rds-ca-bundle
+              items:
+                - key: ca.crt
+                  path: ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: db-ca
+            mountPath: /etc/leoflow/db-ca
+            readOnly: true
+      # The mount has to be on the migrate container specifically — index 0 is
+      # only the migrate container while it is the only one.
       - equal:
-          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
-          value: /etc/leoflow/db-ca
-      - equal:
-          path: spec.template.spec.containers[0].volumeMounts[0].readOnly
-          value: true
-      - equal:
-          path: spec.template.spec.volumes[0].configMap.name
-          value: rds-ca-bundle
-      - equal:
-          path: spec.template.spec.volumes[0].configMap.items[0].path
-          value: ca.crt
+          path: spec.template.spec.containers[0].name
+          value: migrate
 
   - it: "issue #1052 — mounts nothing when no CA ConfigMap is configured"
     set:
       database.url: postgres://h/d
     asserts:
+      # Filtered rather than asserting the whole list is absent, so adding an
+      # unrelated optional volume later does not fail this case for the wrong
+      # reason. Same shape as the Deployment's.
       - notExists:
-          path: spec.template.spec.volumes
+          path: spec.template.spec.volumes[?(@.name == 'db-ca')]
       - notExists:
-          path: spec.template.spec.containers[0].volumeMounts
+          path: spec.template.spec.containers[0].volumeMounts[?(@.name == 'db-ca')]
 
   # #1053 — requests, not just limits. Without requests the pod is BestEffort: a
   # namespace ResourceQuota on requests.cpu/requests.memory rejects it at
@@ -143,12 +165,20 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].resources.requests.cpu
-          value: 50m
+          value: 100m
       - equal:
           path: spec.template.spec.containers[0].resources.requests.memory
-          value: 64Mi
-      - exists:
-          path: spec.template.spec.containers[0].resources.limits
+          value: 128Mi
+      # The limits are pinned, not merely asserted to exist. `exists:` cannot
+      # see a limit BELOW its request, which the apiserver rejects outright —
+      # the same wedge, reached by a typo. The 2:1 ratio is also load-bearing:
+      # a namespace LimitRange with maxLimitRequestRatio rejects anything wider.
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
 
   - it: "issue #1053 — the operator can raise the migration Job's resources"
     set:

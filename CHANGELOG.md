@@ -279,7 +279,9 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   BestEffort. A namespace `ResourceQuota` on `requests.*` rejected it at
   admission and failed `helm install` outright, and eviction under node pressure
   could leave the schema dirty mid-migration
-  ([#1053](https://github.com/neochaotic/leoflow/issues/1053)).
+  ([#1053](https://github.com/neochaotic/leoflow/issues/1053)). Limits stay
+  within 2:1 of requests so a `LimitRange` with `maxLimitRequestRatio` cannot
+  reintroduce the same admission failure by another route.
 - Readiness no longer fails because the control plane is busy. The probe's two
   database reads now come from a dedicated one-connection pool instead of the
   pool serving API traffic, so a saturated control plane can no longer make

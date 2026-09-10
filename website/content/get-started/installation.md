@@ -236,22 +236,27 @@ helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION>
 
 That's the whole install — **no cert-manager, no pre-created Secret**. The only
 values you must supply are your two datastore URLs and the three credentials.
+Using RDS or Cloud SQL? Their certificates are signed by a CA the system trust
+store does not carry, so read [private CA](#if-your-postgres-uses-a-private-ca-rds-cloud-sql)
+below before running this.
 `--version` takes the chart version — the
 [latest release](https://github.com/neochaotic/leoflow/releases) tag with the
 leading `v` stripped (per SemVer2).
 
-#### If your Postgres uses a private CA (RDS, Cloud SQL, Azure)
+#### If your Postgres uses a private CA (RDS, Cloud SQL)
 
 `sslmode=verify-full` above verifies the server certificate against the
-**system** trust store. That is right for a Postgres whose certificate chains to
-a public CA — and wrong for most managed offerings, which sign with a provider
-or per-instance CA that is not in any system root store. Against those you get a
-certificate-verification failure at connect time.
+**system** trust store. That is right whenever the Postgres certificate chains
+to a public CA — Azure Database for PostgreSQL Flexible Server does, for
+instance, so the quickstart works there unchanged. It is wrong for offerings
+that sign with a provider or per-instance CA that no system root store carries,
+where you get a certificate-verification failure at connect time.
 
 Publish the provider's CA bundle as a ConfigMap with the key `ca.crt`, point
 `database.caConfigMap` at it, and add `sslrootcert` to the DSN:
 
 ```bash
+kubectl create namespace leoflow
 kubectl -n leoflow create configmap rds-ca --from-file=ca.crt=./global-bundle.pem
 
 helm install leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
@@ -266,6 +271,20 @@ pre-install migration Job. Both read the same DSN, so both need the file —
 before this was fixed the server started and the migration Job failed, which
 surfaced as `Job Failed` from `helm install` with the real error only in the
 Job pod's log.
+
+{{% alert title="Cloud SQL needs verify-ca, not verify-full" color="warning" %}}
+Cloud SQL's per-instance server certificate carries the CN
+`<project>:<instance>`, not the address you connect to, so `verify-full`
+fails hostname verification even with the CA mounted. Use `sslmode=verify-ca`,
+or the Cloud SQL Auth Proxy, or connect via the instance DNS name
+(`<instance>.<region>.<project>.cloudsql.goog`) with a customer-managed CA.
+{{% /alert %}}
+
+The two consumers do not use the same Postgres driver — the control plane uses
+pgx, the migration Job links lib/pq. Both read `sslrootcert=<path>` identically,
+which is why the recipe above is safe on both. `sslrootcert=system` is **pgx
+only**: put it in this shared DSN and the control plane starts while the
+migration Job fails.
 
 {{% alert title="OCI chart is the primary path" color="info" %}}
 The OCI chart above is **published** and is the recommended way to install

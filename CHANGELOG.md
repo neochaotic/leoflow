@@ -155,6 +155,42 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   demo `docker compose` stack builds the same image rather than pulling a
   separately pinned `migrate/migrate:v4.18.1`.
 
+- **The Go toolchain is one fact with one value again, and four more duplicated
+  version facts got a gate (#1036).** Four files declared the Go toolchain and
+  they said three different things: `go.mod` pinned `toolchain go1.26.6`,
+  `runtime/Dockerfile` defaulted `GO_VERSION` to `1.26.3`, the Makefile's chaos
+  image to `1.26.4`, and `deploy/Dockerfile.server` had been carried to
+  `golang:1.27-bookworm` by a Dependabot bump to the one file with a literal
+  tag. Nothing was broken — CI and release both passed their own literal, so the
+  published artifacts were consistent — which is precisely why it survived: the
+  cost of this class is not a red build, it is that somebody reads one copy and
+  reasons correctly from a false premise. All four now resolve to **1.26.6**,
+  `deploy/Dockerfile.server` derives it from an `ARG GO_VERSION` default like
+  `runtime/Dockerfile` already did, and both images were rebuilt to confirm it.
+
+  Five gates now hold the line, each in the ~40-line shape of the two that
+  already worked (`check-lite-prepull-matches-compose.sh` and the Task SDK check
+  in `ci.yaml`), each with a `--self-test`, all globbed into the release cut's
+  pre-flight and run per-PR by the new `Duplicated version facts agree` job:
+  `check-go-toolchain-pin.sh` (eleven copies, prose comments included),
+  `check-python-host-interpreters.sh` (the managed CPython must be a *member* of
+  the published matrix and every host probe either published or marked
+  `// lite-only` — these are relationships, not equality, see #1031),
+  `check-golangci-lint-pin.sh` (four copies; `make lint is clean` only predicts
+  CI while they agree), `check-lite-postgres-tag.sh` (what Lite starts vs what
+  Lite *tells you* it started) and `check-airflow-ui-pin.sh` (the pin the
+  Makefile fetches vs the marker committed next to the bundle the binary
+  serves).
+
+- **The `Trivy (image scan)` job is renamed to `Trivy (filesystem scan)`,
+  because that is what it runs (#1036).** It has run `scan-type: fs` under an
+  image-scan name for many releases, behind a comment deferring image scanning
+  until `deploy/Dockerfile.server` existed — it has existed the whole time. The
+  name is the fix rather than the behaviour: container images are already
+  scanned by the `Trivy (leoflow-server image)` gate next to it and by the
+  scheduled `image-scan.yaml` workflow (#1034), and a third copy here would only
+  duplicate them.
+
 - **The task base image moves from Debian 12 (bookworm) to Debian 13 (trixie),
   which takes its OpenSSL from 3.0.x to 3.5.x.** `python:3.x-slim` links CPython's
   `ssl` module against the **system** OpenSSL, so this is the library every TLS

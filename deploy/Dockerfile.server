@@ -5,7 +5,15 @@
 #   docker build -f deploy/Dockerfile.server -t leoflow-server .
 # Migrations are applied separately (see the migrate service in docker-compose).
 
-FROM golang:1.27-bookworm AS build
+# The toolchain is one fact with one value (#1036): go.mod's `toolchain` line is
+# the source of truth and scripts/check-go-toolchain-pin.sh fails this default
+# when it falls behind. Pinned to a full PATCH release, like runtime/Dockerfile:
+# a floating major.minor tag re-resolves on every build, and this image's
+# stdlib CVE surface is keyed to the toolchain recorded in the binary's build
+# info, so a floating pin means the image the security gate scans and the image
+# the release publishes can differ for reasons no commit explains.
+ARG GO_VERSION=1.26.6
+FROM golang:${GO_VERSION}-bookworm AS build
 WORKDIR /src
 
 # Cache module downloads.

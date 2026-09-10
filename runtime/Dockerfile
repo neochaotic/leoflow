@@ -15,7 +15,10 @@
 # python_version enum is, and scripts/check-python-runtime-matrix.sh fails this
 # comment when it falls behind. 3.10 is deprecated (upstream EOL 2026-10-31).
 
-ARG GO_VERSION=1.26.3
+# GO_VERSION is not authoritative here either: go.mod's `toolchain` line is the
+# source of truth for the toolchain, and scripts/check-go-toolchain-pin.sh fails
+# this default when it falls behind (#1036).
+ARG GO_VERSION=1.26.6
 ARG PYTHON_VERSION=3.11
 
 # ── Stage 1: build the static agent binary ───────────────────────────────────

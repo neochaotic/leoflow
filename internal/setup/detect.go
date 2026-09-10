@@ -83,9 +83,16 @@ type Report struct {
 // shim has been verified against it — the list is the deliberate gate
 // for "we know this version works", not a free-for-all (see follow-up
 // issue tracking the more general fallback via `python3 --version` exec).
+//
+// The `// lite-only` marker is load-bearing, not decoration:
+// scripts/check-python-host-interpreters.sh requires every candidate to be
+// either in the published matrix or marked, so the difference between these
+// two lists is always a recorded decision rather than the unexplained gap
+// #1031 read as drift. Move an entry across the marker in the same change that
+// starts or stops publishing a base image for it.
 var pythonCandidates = []string{
 	"python3.11", "python3.12", "python3.13",
-	"python3.14", "python3.15", "python3.16", "python3.17", "python3.18",
+	"python3.14", "python3.15", "python3.16", "python3.17", "python3.18", // lite-only
 }
 
 // muslLoaders are the dynamic-loader paths that mark a musl-based distro (Alpine).

@@ -459,7 +459,7 @@ func buildAndPush(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.
 		// Applies whether or not the project ships its own Dockerfile: exclude_paths
 		// is a statement about what may enter the image, and it does not become
 		// less true because the author wrote the Dockerfile themselves.
-		ignoreCleanup, ierr := ensureDockerignore(cmd.ErrOrStderr(), dir, cfg, ownDockerfile)
+		ignoreCleanup, baked, ierr := ensureDockerignore(cmd.ErrOrStderr(), dir, cfg, ownDockerfile)
 		if ierr != nil {
 			return ierr
 		}
@@ -471,6 +471,9 @@ func buildAndPush(cmd *cobra.Command, dir string, o compileOptions, cfg *domain.
 		if berr := buildImage(cmd, o.builder, image, dockerfile, dir, platforms); berr != nil {
 			return berr
 		}
+		// After the build, where the eye lands: the warning above is minutes of
+		// layer output away by now.
+		remindBakedSecretsAfterBuild(cmd.ErrOrStderr(), baked)
 	}
 	if o.push {
 		if perr := pushImage(cmd, o.builder, image); perr != nil {

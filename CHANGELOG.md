@@ -320,10 +320,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `dbt_packages/` and `profiles.yml` are deliberately left in place: each is a
   real input in a configuration people use (the `dbt.manifest` path, host-side
   `dbt deps`, and BYO profiles with `DBT_PROFILES_DIR`).
-- A build now warns when a credential-shaped file (`.env`, `.netrc`,
-  `credentials.json`, a service-account key, `id_rsa`, a BYO `profiles.yml`) is
-  in the context and not excluded — checking each dbt project directory as well
-  as the context root, since that is where `profiles.yml` lives. It is a warning rather than a silent exclusion because a `.env` can
+- A build now warns when something credential-shaped is in the context and not
+  excluded: a file (`.env` and its `.env.*` variants, `.netrc`, `.pypirc`,
+  `credentials.json`, a service-account key, an SSH private key, a
+  `kubeconfig`, a BYO `profiles.yml`) or a whole directory (`.ssh`, `.aws`,
+  `.gnupg`, `.azure`, `.kube`, `secrets`). It checks each dbt project directory
+  as well as the context root, fires only for paths a `COPY` actually reaches —
+  a plain `dag.py` project copies one file, so warning there would be false —
+  respects an exclusion you already wrote in your own `.dockerignore`, and
+  repeats itself in one line after the build, where minutes of layer output
+  have scrolled the first warning away. It is a warning rather than a silent exclusion because a `.env` can
   be a legitimate input, and breaking `load_dotenv()` far from its cause is the
   wrong trade in the other direction.
 - The pre-install migration Job now mounts `database.caConfigMap`. It reads the

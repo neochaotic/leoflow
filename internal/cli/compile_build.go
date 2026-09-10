@@ -252,14 +252,14 @@ const dockerignoreHeader = "# added by leoflow compile --build from exclude_path
 // file, so nothing extra can enter the context. If the process dies mid-build
 // the workspace is left with the MERGED file — a superset of the user's, so it
 // excludes more and never less. That is the right direction to fail in.
-func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig, ownDockerfile bool) (cleanup func(), err error) {
+func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig, ownDockerfile bool) (cleanup func(), baked []string, err error) {
 	noop := func() {}
 	path := filepath.Join(dir, dockerignoreName)
 
 	original, rerr := os.ReadFile(path) //nolint:gosec // G304: dir is the user's own project directory.
 	had := rerr == nil
 	if rerr != nil && !os.IsNotExist(rerr) {
-		return noop, fmt.Errorf("reading %s: %w", path, rerr)
+		return noop, nil, fmt.Errorf("reading %s: %w", path, rerr)
 	}
 	// A build killed before cleanup — Ctrl-C during a multi-minute `docker
 	// build`, which is THE interruption, not a rare one — leaves our merged
@@ -280,16 +280,16 @@ func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig, ownD
 	// through to the caller's config whenever that slice has spare capacity.
 	patterns := slices.Concat(cfg.ExcludePaths, dbtBuildArtifacts(cfg))
 	merged, changed := mergeDockerignore(original, patterns)
-	warnUnexcludedSecrets(w, dir, cfg, merged, ownDockerfile)
+	baked = warnUnexcludedSecrets(w, dir, cfg, merged, ownDockerfile)
 	if !changed {
-		return noop, nil
+		return noop, baked, nil
 	}
 	//nolint:gosec // G703: `path` is filepath.Join(dir, <const>), and dir is the
 	// project directory the operator pointed `leoflow compile` at. Writing into
 	// it is the whole point — ensureDockerfile writes the generated Dockerfile to
 	// the same place, for the same reason.
 	if werr := os.WriteFile(path, merged, 0o600); werr != nil {
-		return noop, fmt.Errorf("writing %s: %w", path, werr)
+		return noop, nil, fmt.Errorf("writing %s: %w", path, werr)
 	}
 	return func() {
 		if had {
@@ -298,7 +298,7 @@ func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig, ownD
 			return
 		}
 		_ = os.Remove(path) //nolint:errcheck // best-effort cleanup of a file we created
-	}, nil
+	}, baked, nil
 }
 
 // dbtBuildArtifacts lists what a host-side `dbt parse` leaves inside each dbt
@@ -388,16 +388,55 @@ func copiedRoots(cfg *domain.LeoflowConfig) []string {
 // would break that project with a failure far from its cause. Choosing for the
 // author is the wrong trade; letting a password ship unnoticed is also the
 // wrong trade; a warning is the only option that is neither.
-var secretishNames = []string{".env", ".env.local", ".netrc", "credentials.json", "service-account.json", "id_rsa", "profiles.yml"}
+var secretishNames = []string{
+	".env", ".netrc", ".pypirc", ".npmrc", "credentials.json",
+	"service-account.json", "id_rsa", "id_ed25519", "kubeconfig", "profiles.yml",
+}
 
-// warnUnexcludedSecrets prints a note for any secret-looking file the build
-// context still carries after exclude_paths is applied.
+// secretishDirs are checked as directories. They were unreachable before: the
+// scan skipped anything IsDir(), which excluded exactly the highest-value hits
+// — a whole ~/.ssh or ~/.aws copied into a project is a bigger leak than any
+// single file in the list above.
+var secretishDirs = []string{".ssh", ".aws", ".gnupg", ".azure", ".kube", "secrets"}
+
+// secretCandidate is one thing to look for and whether it is a directory.
+type secretCandidate struct {
+	name  string
+	isDir bool
+}
+
+// secretCandidatesIn lists what to look for inside one context-relative place:
+// the fixed name and directory lists, plus whatever `.env.*` variants actually
+// exist there, so `.env.production` is covered without enumerating spellings.
+func secretCandidatesIn(dir, place string) []secretCandidate {
+	out := make([]secretCandidate, 0, len(secretishNames)+len(secretishDirs)+2)
+	for _, n := range secretishNames {
+		out = append(out, secretCandidate{n, false})
+	}
+	for _, d := range secretishDirs {
+		out = append(out, secretCandidate{d, true})
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, place, ".env.*"))
+	if err != nil {
+		return out // a bad pattern is ours, not the author's; the fixed lists still apply
+	}
+	for _, m := range matches {
+		out = append(out, secretCandidate{filepath.Base(m), false})
+	}
+	return out
+}
+
+// warnUnexcludedSecrets prints a note for any secret-looking file or directory
+// the build context still carries after exclude_paths is applied, and returns
+// what it found so the caller can repeat it after the build.
 //
-// Looks in the context root and in each dbt project directory. Not a recursive
-// walk: that is slow on an arbitrary project and noisy, and those are the two
-// places these files actually live — profiles.yml in particular belongs next to
-// dbt_project.yml, which is not the root when the project is a subdirectory.
-func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, merged []byte, ownDockerfile bool) {
+// Looks in the places the image actually copies FROM, not everywhere. The
+// generated Dockerfile emits `COPY . /home/leoflow/` only when a dbt project
+// resolves to "."; for a plain dag.py project it copies one file, and warning
+// that a .env "will be baked into the image" for an image whose only content is
+// dag.py is a security warning that cries wolf on the most common project
+// shape. One that cries wolf trains people to ignore the one that is real.
+func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, merged []byte, ownDockerfile bool) (found []string) {
 	// Built from the MERGED file, not just exclude_paths, so an author who
 	// excluded .env in their own .dockerignore — the docker-native, obvious
 	// place — is not told to go and duplicate it in leoflow.yaml.
@@ -406,12 +445,6 @@ func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, m
 		excluded[strings.TrimSpace(line)] = true
 	}
 
-	// Only look where the image actually copies FROM. The generated Dockerfile
-	// emits `COPY . /home/leoflow/` only when a dbt project resolves to "."; for
-	// a plain dag.py project it copies one file, and warning that a .env "will
-	// be baked into the image" for an image whose only content is dag.py is a
-	// security warning that cries wolf on the most common project shape. One
-	// that cries wolf trains people to ignore the one that is real.
 	places := copiedRoots(cfg)
 	if ownDockerfile {
 		// We cannot read their COPY lines, so we cannot claim it ships — but we
@@ -420,34 +453,37 @@ func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, m
 		places = append(places, dbtGroupProjectDirs(cfg)...)
 	}
 	if len(places) == 0 {
-		return
+		return nil
+	}
+
+	verb := "will be baked into the image"
+	if ownDockerfile {
+		verb = "is in the build context, and your Dockerfile may copy it into the image"
 	}
 
 	seen := make(map[string]bool)
 	for _, place := range places {
-		for _, name := range secretishNames {
-			rel := name
+		for _, c := range secretCandidatesIn(dir, place) {
+			rel := c.name
 			if place != "." {
-				rel = place + "/" + name
+				rel = place + "/" + c.name
 			}
 			if seen[rel] || excluded[rel] {
 				continue
 			}
 			seen[rel] = true
 			info, err := os.Stat(filepath.Join(dir, rel))
-			if err != nil || info.IsDir() {
+			if err != nil || info.IsDir() != c.isDir {
 				continue
-			}
-			verb := "will be baked into the image"
-			if ownDockerfile {
-				verb = "is in the build context, and your Dockerfile may copy it into the image"
 			}
 			//nolint:errcheck // a warning that cannot be delivered must not fail the build
 			fmt.Fprintf(w, "warning: %s %s, "+
 				"which is pushed to a registry and pulled by every pod that runs this DAG. "+
 				"If it holds credentials, add %q to exclude_paths in leoflow.yaml.\n", rel, verb, rel)
+			found = append(found, rel)
 		}
 	}
+	return found
 }
 
 // expandPattern turns one exclude_paths entry into the .dockerignore forms that
@@ -503,6 +539,23 @@ func stripLeoflowBlock(content []byte) (rest []byte, found bool) {
 	// content[:i] is exactly what they had, trailing newline included. Trimming
 	// it would hand back a file one byte different from the one we read.
 	return content[:i], true
+}
+
+// remindBakedSecretsAfterBuild re-states the finding in one line after the
+// image is built.
+//
+// `--build` shells out to a container builder, and the minutes of layer output
+// that follow scroll the warning off the top of the terminal. Authors read the
+// last screen of a long command, not the first. Same reasoning and same shape
+// as remindDeprecatedPythonAfterBuild — one line, not the full argument, since
+// repeating the argument in full is how a warning becomes wallpaper.
+func remindBakedSecretsAfterBuild(w io.Writer, found []string) {
+	if len(found) == 0 {
+		return
+	}
+	//nolint:errcheck // a reminder that cannot be delivered must not fail the build
+	fmt.Fprintf(w, "reminder: the image just built carries %s — see the warning above.\n",
+		strings.Join(found, ", "))
 }
 
 // mergeDockerignore appends the patterns to the existing content, skipping any

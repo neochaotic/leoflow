@@ -51,7 +51,7 @@ func TestExcludePathsReachTheBuildContext(t *testing.T) {
 	cfg.ExcludePaths = []string{"secrets", "*.pem"}
 	cfg.ApplyDefaults()
 
-	cleanup, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false)
+	cleanup, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestUserDockerignoreIsMergedNotReplaced(t *testing.T) {
 	cfg := &domain.LeoflowConfig{DagID: "d"}
 	cfg.ApplyDefaults()
 
-	cleanup, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false)
+	cleanup, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestDbtArtifactsAreScopedToTheirProject(t *testing.T) {
 	cfg.DbtGroups = map[string]*domain.DbtConfig{"a": {Project: "transform"}}
 	cfg.ApplyDefaults()
 
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	got := readIgnore(t, dir)
@@ -155,7 +155,7 @@ func TestDbtInputsAreNeverExcluded(t *testing.T) {
 	cfg.Dbt = &domain.DbtConfig{Project: ".", Manifest: "target/manifest.json"}
 	cfg.ApplyDefaults()
 
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	got := readIgnore(t, dir)
@@ -177,7 +177,7 @@ func TestByoProfilesIsWarnedNotDropped(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	var out bytes.Buffer
-	if _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	// Found in the dbt project directory, not just the context root: that is
@@ -194,7 +194,7 @@ func TestNoDbtMeansNoDbtExcludes(t *testing.T) {
 	dir := writeCtx(t, map[string]string{"dag.py": "x"})
 	cfg := &domain.LeoflowConfig{DagID: "d"}
 	cfg.ApplyDefaults()
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := readIgnore(t, dir); strings.Contains(got, "dbt_packages") {
@@ -214,7 +214,7 @@ func TestSecretishFilesWarnRatherThanVanish(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	var out bytes.Buffer
-	if _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), ".env") {
@@ -229,7 +229,7 @@ func TestSecretishFilesWarnRatherThanVanish(t *testing.T) {
 	cfg2.ExcludePaths = []string{".env"}
 	cfg2.ApplyDefaults()
 	var out2 bytes.Buffer
-	if _, err := ensureDockerignore(&out2, dir, cfg2, false); err != nil {
+	if _, _, err := ensureDockerignore(&out2, dir, cfg2, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out2.String(), "warning") {
@@ -248,7 +248,7 @@ func TestNoWarningWhenNothingCopiesIt(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	var out bytes.Buffer
-	if _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	if out.Len() != 0 {
@@ -267,7 +267,7 @@ func TestAuthorsOwnExclusionSilencesTheWarning(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	var out bytes.Buffer
-	if _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), ".env") {
@@ -287,7 +287,7 @@ func TestBareNamesPruneNestedCopies(t *testing.T) {
 	cfg := &domain.LeoflowConfig{DagID: "d"}
 	cfg.ApplyDefaults()
 
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	got := readIgnore(t, dir)
@@ -311,7 +311,7 @@ func TestOurBlockBeatsAnEarlierNegation(t *testing.T) {
 	cfg.ExcludePaths = []string{"secrets"}
 	cfg.ApplyDefaults()
 
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	got := readIgnore(t, dir)
@@ -336,12 +336,12 @@ func TestInterruptedBlockIsStrippedNotAdopted(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	// Build one: interrupted — no cleanup runs.
-	if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+	if _, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 	// Build two: completes.
 	var out bytes.Buffer
-	cleanup, err := ensureDockerignore(&out, dir, cfg, false)
+	cleanup, _, err := ensureDockerignore(&out, dir, cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestMergeIsIdempotentAcrossAnInterruptedBuild(t *testing.T) {
 	cfg.ApplyDefaults()
 
 	for range 3 {
-		if _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
+		if _, _, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -422,5 +422,52 @@ func TestBuildActuallyGetsTheDockerignore(t *testing.T) {
 	// And the workspace is clean again afterwards.
 	if _, statErr := os.Stat(filepath.Join(dir, ".dockerignore")); !os.IsNotExist(statErr) {
 		t.Error("the .dockerignore outlived the build")
+	}
+}
+
+// TestSecretDirectoriesAreReachable. The scan skipped anything IsDir(), which
+// made the highest-value hits structurally unreachable: a whole .ssh or .aws
+// copied into a project is a bigger leak than any single file.
+func TestSecretDirectoriesAreReachable(t *testing.T) {
+	dir := writeCtx(t, map[string]string{"dag.py": "x", ".aws/credentials": "key", ".env.production": "P=1"})
+	cfg := &domain.LeoflowConfig{DagID: "d", Dbt: &domain.DbtConfig{Project: "."}}
+	cfg.ApplyDefaults()
+
+	var out bytes.Buffer
+	if _, _, err := ensureDockerignore(&out, dir, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{".aws", ".env.production"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no warning for %q, got %q", want, out.String())
+		}
+	}
+}
+
+// TestFindingsComeBackForThePostBuildReminder. A warning printed before minutes
+// of layer output is a warning nobody reads — the repo already learned this and
+// shipped remindDeprecatedPythonAfterBuild for exactly this reason.
+func TestFindingsComeBackForThePostBuildReminder(t *testing.T) {
+	dir := writeCtx(t, map[string]string{"dag.py": "x", ".env": "P=1"})
+	cfg := &domain.LeoflowConfig{DagID: "d", Dbt: &domain.DbtConfig{Project: "."}}
+	cfg.ApplyDefaults()
+
+	_, baked, err := ensureDockerignore(&bytes.Buffer{}, dir, cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(baked) == 0 {
+		t.Fatal("nothing came back, so the post-build reminder can never fire")
+	}
+	var out bytes.Buffer
+	remindBakedSecretsAfterBuild(&out, baked)
+	if !strings.Contains(out.String(), ".env") {
+		t.Errorf("the reminder does not name the file: %q", out.String())
+	}
+	// And it stays silent when there is nothing to say.
+	var quiet bytes.Buffer
+	remindBakedSecretsAfterBuild(&quiet, nil)
+	if quiet.Len() != 0 {
+		t.Errorf("reminded with no findings: %q", quiet.String())
 	}
 }

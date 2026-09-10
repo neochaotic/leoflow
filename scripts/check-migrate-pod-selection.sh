@@ -84,6 +84,7 @@ if not selectors:
 	sys.exit(f"FAIL: {mode}: nothing selects control-plane pods in this render — the comparison had no left-hand side, which is a broken gate, not a pass.")
 
 problems = []
+compared = 0
 for job in jobs:
 	jname = (job.get("metadata") or {}).get("name", "<unnamed>")
 	pod = ((job.get("spec") or {}).get("template") or {}).get("metadata") or {}
@@ -92,11 +93,27 @@ for job in jobs:
 		sys.exit(f"FAIL: {mode}: Job/{jname} pod template has no labels at all — that is unselectable by accident, not by design; give it its own label set.")
 	for kind, name, sel in selectors:
 		if not sel:
+			# An empty selector means opposite things per kind, and skipping both
+			# was the hole: for a Service it is correct (no selector, so the
+			# endpoints controller does nothing), but a PodDisruptionBudget with
+			# `selector: {}` matches EVERY pod in the namespace — including this
+			# one. Skipping it meant the gate could report OK having performed
+			# zero comparisons, which is the "passes while measuring nothing"
+			# shape this repo has shipped twice.
+			if kind == "PodDisruptionBudget":
+				problems.append(
+					f"  {kind}/{name} has an empty selector, which matches every pod in the namespace, so it selects Job/{jname}"
+				)
+				compared += 1
 			continue
+		compared += 1
 		if all(labels.get(k) == v for k, v in sel.items()):
 			problems.append(
 				f"  {kind}/{name} selector {sel} is a SUBSET of Job/{jname} pod labels {labels}"
 			)
+
+if compared == 0:
+	sys.exit(f"FAIL: {mode}: zero selector/pod comparisons were performed, so an OK here would mean nothing was measured.")
 
 if problems:
 	sys.exit(
@@ -303,6 +320,41 @@ metadata: {name: leoflow-migrate}
 spec:
   template:
     metadata: {}
+'
+
+	# An empty selector means opposite things per kind, and skipping both was a
+	# hole: for a Service it is correct, but a PodDisruptionBudget with
+	# `selector: {}` matches EVERY pod in the namespace. Skipping it let the
+	# gate report OK having compared nothing — the "passes while measuring
+	# nothing" shape this repo has shipped twice.
+	_case "an empty PDB selector matches everything, and is caught" 1 "matches every pod" '
+kind: PodDisruptionBudget
+metadata: {name: leoflow}
+spec:
+  selector: {}
+---
+kind: Job
+metadata: {name: leoflow-migrate}
+spec:
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: leoflow-migrate}
+'
+
+	# A Service with no selector is legitimately skipped — but then nothing was
+	# compared, and an OK would mean nothing was measured.
+	_case "zero comparisons is a failure, not a pass" 1 "zero selector/pod comparisons" '
+kind: Service
+metadata: {name: leoflow}
+spec:
+  selector: {}
+---
+kind: Job
+metadata: {name: leoflow-migrate}
+spec:
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: leoflow-migrate}
 '
 
 	if [ "$fail" -eq 0 ]; then

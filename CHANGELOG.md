@@ -333,15 +333,18 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, and for the default (non-split) install the control-plane Service's
   selector is exactly the label set the migrate Job's pod template carried — so
   the pre-upgrade hook pod was selected by the Service and by the
-  PodDisruptionBudget for the whole migration window, `Ready` from its first
+  PodDisruptionBudget (on the HA profile, where one renders) for the whole
+  migration window, `Ready` from its first
   instant because a Job pod has no readiness probe. `helm install` was never
   affected (no Service exists yet when the pre-install hook runs) and neither was
   `split.enabled` (api and scheduler carry a component label the Job lacked).
 
   The measurable loss was disruption accounting, not traffic. Held open on k3s
   v1.33.6, an integer `minAvailable` budget reported `currentHealthy: 2` over one
-  real replica — the hook pod padded the count, so the budget allowed one more
-  simultaneous eviction than it was sized for — and a percentage-valued budget
+  real replica — the hook pod padded the count, so at the default
+  `minAvailable: 1` the hook pod **alone satisfied the budget** and every real
+  replica became evictable for the migration window, not one extra — and a
+  percentage-valued budget
   failed outright (`DisruptionAllowed=False`, *"jobs.batch does not implement the
   scale subresource"*), pinning `disruptionsAllowed` at 0 and stalling every
   voluntary eviction until the hook exited. Requests were *not* black-holed, for

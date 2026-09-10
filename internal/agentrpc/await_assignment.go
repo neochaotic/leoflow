@@ -114,7 +114,7 @@ func (s *Server) AwaitAssignment(stream agentv1.AgentService_AwaitAssignmentServ
 			if errors.Is(rerr, io.EOF) {
 				return nil
 			}
-			return status.Errorf(codes.Internal, "receiving worker message: %v", rerr)
+			return peerStatus("receiving worker message", rerr, attemptAttrs(id)...)
 		case a := <-worker.send:
 			if serr := stream.Send(a); serr != nil {
 				return serr
@@ -133,7 +133,7 @@ func (s *Server) registerFromStream(stream agentv1.AgentService_AwaitAssignmentS
 		if errors.Is(err, io.EOF) {
 			return nil, status.Error(codes.FailedPrecondition, "stream closed before worker registration")
 		}
-		return nil, status.Errorf(codes.Internal, "receiving worker registration: %v", err)
+		return nil, peerStatus("receiving worker registration", err, "worker", identity)
 	}
 	reg := first.GetRegister()
 	if reg == nil {

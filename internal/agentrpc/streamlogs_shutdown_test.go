@@ -34,7 +34,7 @@ func TestWriteLinesReturnsOnShutdown(t *testing.T) {
 	shutdown := make(chan struct{})
 	w := &fakeLogWriter{}
 	errCh := make(chan error, 1)
-	go func() { errCh <- writeLines(shutdown, w, recv, func(string) {}) }()
+	go func() { errCh <- writeLines(shutdown, w, recv, func(string) {}, nil) }()
 
 	select {
 	case err := <-errCh:
@@ -72,7 +72,7 @@ func TestWriteLinesDeliversLinesBeforeShutdown(t *testing.T) {
 	w := &fakeLogWriter{}
 	published := make(chan struct{}, 2) // publish runs after each WriteEvent, on the loop goroutine
 	errCh := make(chan error, 1)
-	go func() { errCh <- writeLines(shutdown, w, recv, func(string) { published <- struct{}{} }) }()
+	go func() { errCh <- writeLines(shutdown, w, recv, func(string) { published <- struct{}{} }, nil) }()
 	for i := 0; i < 2; i++ {
 		select {
 		case <-published:

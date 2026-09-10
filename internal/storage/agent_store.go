@@ -407,7 +407,14 @@ func (s *ExecutionStore) resolve(ctx context.Context, runID, taskID string) (dom
 			return t, spec, ver, run, nil
 		}
 	}
-	return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{}, fmt.Errorf("task %q not found in run %q", taskID, runID)
+	// The one failure on this path an agent can act on, so it is composed as a
+	// SafeError and reaches the task pod verbatim while every driver error behind
+	// the same call is redacted. It says the pod is running a task its
+	// dag_version does not declare — a stale image, a mismatched version — rather
+	// than that the control plane is broken, and it names only values the caller
+	// already holds in its own token.
+	return domain.TaskSpec{}, domain.DAGSpec{}, queries.DagVersion{}, queries.DagRun{},
+		domain.Safef(domain.ErrNotFound, "task %q not found in run %q", taskID, runID)
 }
 
 // latestTry returns the highest try_number task instance for the given task.

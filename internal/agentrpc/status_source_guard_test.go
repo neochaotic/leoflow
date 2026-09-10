@@ -34,9 +34,9 @@ var statusConstructors = map[string]bool{"Error": true, "Errorf": true, "New": t
 // pattern reappears, and it reaches the two AwaitAssignment sites whose error is
 // a transport failure a client cannot force.
 //
-// internalStatus is the single sanctioned way to turn an error into a status
-// here; its parameter is deliberately named cause, not err, because the value
-// it carries is destined for the log and never for the wire.
+// internalStatus and peerStatus are the only sanctioned ways to turn an error
+// into a status here; their parameter is deliberately named cause, not err,
+// because the value it carries is destined for the log and never for the wire.
 func TestNoErrorValueIsInterpolatedIntoAnAgentStatus(t *testing.T) {
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
@@ -87,7 +87,7 @@ func inspectStatusCalls(t *testing.T, fset *token.FileSet, file *ast.File) int {
 		seen++
 		for _, arg := range call.Args {
 			if name, found := errorishOperand(arg); found {
-				t.Errorf("%s: status.%s interpolates the error value %q into a message the task pod receives; route it through internalStatus so the cause stays in the control-plane log (#1068)",
+				t.Errorf("%s: status.%s interpolates the error value %q into a message the task pod receives; route it through internalStatus/peerStatus so the cause stays in the control-plane log (#1068)",
 					fset.Position(call.Pos()), sel.Sel.Name, name)
 			}
 		}

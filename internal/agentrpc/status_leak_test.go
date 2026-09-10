@@ -582,7 +582,7 @@ func TestAgentRPCKeepsTheAttemptIdentityOnTheCauseLine(t *testing.T) {
 // version) rather than that the control plane is broken. domain.SafeError is the
 // opt-in that lets exactly those phrases through.
 //
-// This asserts the FORMATTING layer honours the opt-in. That storage actually
+// This asserts the FORMATTING layer honors the opt-in. That storage actually
 // PRODUCES one is pinned separately, at the layer that produces it — see
 // internal/storage/agent_safe_error_integration_test.go — because this test is
 // satisfied by a fake and would stay green with every Safef reverted.

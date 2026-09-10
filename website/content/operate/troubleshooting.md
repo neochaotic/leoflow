@@ -133,6 +133,37 @@ journalctl -u leoflow-server -o cat | grep '"request_id":"<id>"' | jq '.cause'
 `kubectl logs deploy/leoflow -c leoflow | jq 'select(.cause) | {path, status, cause}'`
 lists every request that failed with a server-side cause.
 
+### "…: the request could not be completed; see the control-plane logs" in a task log
+
+The agent inside a task pod talks to the control plane over gRPC, and the same
+rule applies there for the same reason: the pod runs *your* image and
+entrypoint, so it is not a place to put the database's text. A failed agent RPC
+therefore reads as the step that failed plus a fixed phrase, for example:
+
+```
+fetching task spec: rpc error: code = Internal desc = loading task spec: the request could not be completed; see the control-plane logs
+```
+
+The step name is the diagnostic half and is always there — `loading task spec`,
+`recording state`, `recording reschedule`, `storing xcom`, `reading xcom`,
+`fetching variables`, `fetching connections`, `opening log sink`, `writing log
+line`, `flushing logs`, `minting agent token`. The cause is on the
+control-plane log line of the same name, carrying the attempt identity:
+
+```bash
+kubectl logs deploy/leoflow -c leoflow \
+  | jq 'select(.cause) | select(.run == "<run_id>" and .task == "<task_id>") | {msg, try, cause}'
+# {"msg":"loading task spec","try":1,"cause":"loading run: ERROR: … (SQLSTATE 42P01)"}
+```
+
+Two messages are *not* redacted, because they are Leoflow's own words about
+your DAG rather than an infrastructure failure, and you can act on them:
+
+| What the pod sees | Means |
+|---|---|
+| `loading task spec: task "x" not found in run "y"` | The pod is running a task its `dag_version` does not declare — usually a stale image, or a run created against a different version. |
+| `task "a" may not read xcom from "b" (not a declared input or dependency)` | The task pulled an XCom it never declared as an input or a dependency. |
+
 ## Observability
 
 - **Metrics:** Prometheus at `:9090/metrics` (scheduler, dispatch, inline

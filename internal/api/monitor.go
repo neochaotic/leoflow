@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -38,9 +39,16 @@ func componentHealth(hb Heartbeater) (status, heartbeat string) {
 // HealthInfoResponse). The Airflow UI's home dashboard polls it to color the
 // component health widgets (metadatabase, scheduler, triggerer, dag processor).
 //
-// The metadatabase status is a real probe (pings the "postgres" checker) and the
-// scheduler status is a real heartbeat (sched, when wired, reports its last loop
-// tick — a stalled leader goes unhealthy). Leoflow's single Go control plane
+// The metadatabase status is a real probe of the "postgres" checker — the SAME
+// check /readyz runs, connection and schema both. It has to be: this endpoint
+// reads the same checks map, and when it did Ping only, the #1023 state produced
+// a control plane answering `metadatabase: healthy` at HTTP 200 here while
+// /readyz was 503ing, the pod was out of the Service's endpoints and the
+// scheduler was failing every tick. The dashboard a user looks at to find out
+// whether the database is fine must not be the one surface that says it is.
+//
+// The scheduler status is a real heartbeat (sched, when wired, reports its last
+// loop tick — a stalled leader goes unhealthy). Leoflow's single Go control plane
 // subsumes the triggerer and DAG-processor roles (no separate Python daemons):
 // triggering is folded into the scheduler and DAG "processing" is GitOps
 // compile-time, so those mirror the scheduler heartbeat. See docs/ui-compatibility.md.
@@ -48,7 +56,12 @@ func monitorHealthHandler(checks map[string]HealthChecker, sched Heartbeater) gi
 	return func(c *gin.Context) {
 		dbStatus := healthStatusHealthy
 		if hc, ok := checks["postgres"]; ok {
-			if err := hc.Ping(c.Request.Context()); err != nil {
+			if err := checkDependency(c.Request.Context(), hc); err != nil {
+				// Unlike /readyz this endpoint always answers 200 (the Airflow
+				// HealthInfoResponse carries the verdict in the body), so the
+				// error is logged rather than returned — and, as there, never
+				// echoed to the caller.
+				slog.WarnContext(c.Request.Context(), "monitor health check failed", "dependency", "postgres", "error", err)
 				dbStatus = healthStatusUnhealthy
 			}
 		}

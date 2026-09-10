@@ -1,13 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/neochaotic/leoflow/internal/domain"
 )
 
 type fakeHeartbeater struct {
@@ -82,4 +86,61 @@ func TestMonitorHealthReflectsSchedulerHeartbeat(t *testing.T) {
 	if live["scheduler"]["status"] != "healthy" {
 		t.Errorf("live scheduler status = %q, want healthy", live["scheduler"]["status"])
 	}
+}
+
+// TestMonitorHealthAssertsSchemaInvariant closes the adjacent call site with the
+// identical #1023 bug. /api/v2/monitor/health reads the SAME checks map and did
+// Ping-only, so in the exact state the issue describes — empty database, /readyz
+// 503, pod out of the endpoints, scheduler failing every tick — the
+// Airflow-compatible surface the UI's home dashboard renders reported
+// `metadatabase: healthy` at HTTP 200. Two endpoints reading one map must not
+// disagree about whether the database works.
+func TestMonitorHealthAssertsSchemaInvariant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	status := func(t *testing.T, pg HealthChecker) string {
+		t.Helper()
+		r := gin.New()
+		r.GET("/h", monitorHealthHandler(map[string]HealthChecker{"postgres": pg}, nil))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/h", http.NoBody))
+		var h map[string]map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &h); err != nil {
+			t.Fatalf("decoding body %q: %v", rec.Body.String(), err)
+		}
+		return h["metadatabase"]["status"]
+	}
+
+	t.Run("a pingable database with no schema is unhealthy", func(t *testing.T) {
+		pg := &fakeSchemaHealthCheck{schemaErr: fmt.Errorf("%w: schema_migrations is absent", domain.ErrSchemaNotCurrent)}
+		if got := status(t, pg); got != healthStatusUnhealthy {
+			t.Errorf("metadatabase = %q, want %q — /readyz 503s on this same state", got, healthStatusUnhealthy)
+		}
+	})
+
+	t.Run("a current schema is healthy", func(t *testing.T) {
+		if got := status(t, &fakeSchemaHealthCheck{}); got != healthStatusHealthy {
+			t.Errorf("metadatabase = %q, want %q", got, healthStatusHealthy)
+		}
+	})
+
+	t.Run("a dependency that fails Ping is never queried for its schema", func(t *testing.T) {
+		pg := &fakeSchemaHealthCheck{pingErr: errors.New("connection refused")}
+		if got := status(t, pg); got != healthStatusUnhealthy {
+			t.Errorf("metadatabase = %q, want %q", got, healthStatusUnhealthy)
+		}
+		if pg.schemaCalls != 0 {
+			t.Errorf("schema queried %d times after a failed Ping, want 0", pg.schemaCalls)
+		}
+	})
+
+	t.Run("the schema call is bounded here too", func(t *testing.T) {
+		// The UI polls this endpoint; an unbounded query against a wedged
+		// database would hold a request goroutine for as long as it takes.
+		pg := &fakeSchemaHealthCheck{}
+		status(t, pg)
+		if !pg.hadDeadline {
+			t.Error("schema check ran with no deadline")
+		}
+	})
 }

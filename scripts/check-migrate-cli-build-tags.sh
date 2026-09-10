@@ -32,19 +32,66 @@ PKG="github.com/golang-migrate/migrate/v4/cmd/migrate"
 
 # ── Pure parsers, so --self-test can drive them without the real files ───────
 
-# dockerfile_tags reads a Dockerfile on stdin and prints the build tags of the
-# `go build` line, normalised to a sorted, comma-separated set. Accepts the
-# space-separated `-tags 'a b'` spelling the Dockerfile uses.
+# dockerfile_build_line reads a Dockerfile on stdin and prints the LOGICAL line
+# that runs `go build`: comment lines dropped, backslash continuations joined.
+#
+# Everything below parses that string rather than the file, and the difference
+# is the whole point. An earlier version grepped the file, which this same
+# Dockerfile's prose then satisfied on its own: the header explains the build in
+# English, quoting `-tags 'postgres pgx5'`, `go list -m` and the package path, so
+# a reviewer's mutation to the actual RUN line left every assertion green. A gate
+# that its own documentation satisfies is worse than no gate — it is a green
+# check that means nothing, which is the exact failure #1039 was about.
+dockerfile_build_line() {
+	sed '/^[[:space:]]*#/d' | awk '
+		{ if (buf != "") { buf = buf " " $0 } else { buf = $0 } }
+		buf ~ /\\[[:space:]]*$/ { sub(/\\[[:space:]]*$/, "", buf); next }
+		{ print buf; buf = "" }
+		END { if (buf != "") print buf }
+	' | grep -F 'go build' | head -1
+}
+
+# dockerfile_tags prints the build tags of the `go build` line, normalised to a
+# sorted, comma-separated set. Accepts the space-separated `-tags 'a b'`
+# spelling the Dockerfile uses.
 dockerfile_tags() {
-	sed -n "s/.*-tags[ =]*'\([^']*\)'.*/\1/p" | head -1 | tr ' ,' '\n' |
+	dockerfile_build_line | sed -n "s/.*-tags[ =]*'\([^']*\)'.*/\1/p" | tr ' ,' '\n' |
 		sed '/^$/d' | LC_ALL=C sort -u | paste -sd, -
+}
+
+# dockerfile_builds_pkg exits 0 when the build line's output package is $1.
+# Scoped to the build line for the same reason as the tags.
+dockerfile_builds_pkg() { # <pkg>
+	dockerfile_build_line | grep -qF -- "$1"
+}
+
+# dockerfile_reads_version exits 0 when the build line derives the stamped
+# version from the module graph rather than carrying a literal.
+dockerfile_reads_version() {
+	dockerfile_build_line | grep -qF 'go list -m'
 }
 
 # workflow_tags reads a workflow on stdin and prints the tags passed to
 # govulncheck, normalised the same way. Accepts `-tags a,b` and `-tags=a,b`.
 workflow_tags() {
-	grep -o 'govulncheck[^|]*-tags[ =][^ ]*' | sed -n 's/.*-tags[ =]\([^ ]*\).*/\1/p' |
+	sed '/^[[:space:]]*#/d' | grep -o 'govulncheck[^|]*-tags[ =][^ ]*' |
+		sed -n 's/.*-tags[ =]\([^ ]*\).*/\1/p' |
 		head -1 | tr ' ,' '\n' | sed '/^$/d' | LC_ALL=C sort -u | paste -sd, -
+}
+
+# workflow_scans_migrate_image exits 0 when the workflow still contains a Trivy
+# step whose image-ref is the migrate image, built from the migrate Dockerfile.
+#
+# This is the assertion with the most at stake and it was the one missing.
+# image-scan.yaml no longer covers leoflow-migrate at all — #1039 moved it out of
+# the report-only lane — so the job in security.yaml is the ONLY scan of this
+# image anywhere. Deleting it leaves every other gate here green and the image
+# that holds the database DSN completely unscanned: the same "coverage deleted
+# while claiming to strengthen it" shape the move was meant to avoid.
+workflow_scans_migrate_image() {
+	local body; body=$(sed '/^[[:space:]]*#/d')
+	printf '%s' "$body" | grep -qE 'image-ref:[[:space:]]*leoflow-migrate' &&
+		printf '%s' "$body" | grep -qF 'deploy/Dockerfile.migrate'
 }
 
 # dockerfile_go_version reads a Dockerfile on stdin and prints the default of
@@ -94,6 +141,52 @@ self_test() {
 	# hard failure, and this pins that it can tell the difference.
 	_eq "$(printf 'FROM scratch\n' | dockerfile_tags)" "" "no -tags yields empty"
 
+	# ── The reviewer's mutations, as fixtures ────────────────────────────
+	# Every case below was green against the first version of this gate, which
+	# grepped whole files. The Dockerfile's own header quotes `-tags 'postgres
+	# pgx5'`, `go list -m` and the package path in prose, so the documentation
+	# satisfied the checks and the mutations could not fail.
+
+	# A comment line quoting the tags must not out-vote the real build line.
+	local decoy
+	decoy=$'# example: -tags \'postgres pgx5\'\nRUN set -eux; \\\n\tgo build -tags \'pgx5\' -o /out/migrate '"$PKG"'\n'
+	_eq "$(printf '%s' "$decoy" | dockerfile_tags)" "pgx5" "a decoy -tags comment does not out-vote the build line"
+
+	# Prose naming the package must not satisfy the build-target assertion.
+	local prose
+	prose=$'# builds '"$PKG"$'\nRUN go build -o /out/migrate github.com/golang-migrate/migrate/v4/internal/cli\n'
+	if printf '%s' "$prose" | dockerfile_builds_pkg "$PKG"; then
+		printf '  FAIL %s\n' "a comment naming the package satisfies the build-target check"; fail=1
+	else
+		printf '  ok   %s\n' "prose naming the package does not satisfy the build-target check"
+	fi
+
+	# Prose quoting `go list -m` must not satisfy the version-derivation check.
+	local hardcoded
+	hardcoded=$'# the version is read with go list -m\nRUN version="v4.19.1"; go build -o /out/migrate x\n'
+	if printf '%s' "$hardcoded" | dockerfile_reads_version; then
+		printf '  FAIL %s\n' "a comment quoting 'go list -m' satisfies the version check"; fail=1
+	else
+		printf '  ok   %s\n' "prose quoting 'go list -m' does not satisfy the version check"
+	fi
+	# shellcheck disable=SC2016 # the fixture is a literal Dockerfile line; $( ) must NOT expand here.
+	_eq "$(printf 'RUN v="$(go list -m x)"; go build -o /o/m x\n' | dockerfile_build_line | grep -c 'go list -m')" "1" "a real 'go list -m' on the build line is found"
+
+	# The migrate image scan must be asserted to EXIST, not merely to agree.
+	local wf_ok wf_gone
+	wf_ok=$'      - uses: aquasecurity/trivy-action@v0\n        with:\n          image-ref: leoflow-migrate:ci\n      - run: docker build -f deploy/Dockerfile.migrate -t leoflow-migrate:ci .\n'
+	wf_gone=$'      - run: echo nothing scans the migrate image any more\n'
+	if printf '%s' "$wf_ok" | workflow_scans_migrate_image; then
+		printf '  ok   %s\n' "a present migrate image scan is recognised"
+	else
+		printf '  FAIL %s\n' "a present migrate image scan is not recognised"; fail=1
+	fi
+	if printf '%s' "$wf_gone" | workflow_scans_migrate_image; then
+		printf '  FAIL %s\n' "a deleted migrate image scan passes — the image would ship unscanned"; fail=1
+	else
+		printf '  ok   %s\n' "a deleted migrate image scan is caught"
+	fi
+
 	[ "$fail" -eq 0 ] && echo "self-test: all passed"
 	return "$fail"
 }
@@ -120,18 +213,21 @@ note() {
 if grep -qE '^\s*FROM\s+migrate/migrate' "$DOCKERFILE"; then
 	note "$DOCKERFILE is back on the third-party migrate/migrate image (#1039). The migrate binary must be compiled from the version in our go.mod so govulncheck can see it."
 fi
-if ! grep -qF "$PKG" "$DOCKERFILE"; then
-	note "$DOCKERFILE does not build $PKG."
+if ! dockerfile_builds_pkg "$PKG" <"$DOCKERFILE"; then
+	note "$DOCKERFILE's go build line does not build $PKG."
 fi
 if ! grep -qF "$PKG" "$WORKFLOW"; then
 	note "$WORKFLOW does not run govulncheck over $PKG, so the shipped migrate binary is outside CI's module graph again (#1039)."
+fi
+if ! workflow_scans_migrate_image <"$WORKFLOW"; then
+	note "$WORKFLOW no longer builds deploy/Dockerfile.migrate and scans it as leoflow-migrate. image-scan.yaml does not cover this image any more, so that job is the only scan of the container that holds the database DSN — without it the image ships unscanned and every other check here still passes."
 fi
 
 # 2. The version stamped into the binary must be READ from the module graph, not
 #    written by hand — a hardcoded `-X main.Version=v4.19.1` survives a go.mod
 #    bump and makes `migrate -version` lie about what is actually compiled.
-if ! grep -qF 'go list -m' "$DOCKERFILE"; then
-	note "$DOCKERFILE no longer derives the stamped version with 'go list -m'; a hardcoded version drifts from go.mod silently."
+if ! dockerfile_reads_version <"$DOCKERFILE"; then
+	note "$DOCKERFILE's go build line no longer derives the stamped version with 'go list -m'; a hardcoded version drifts from go.mod silently."
 fi
 
 # 3. Build tags: same set on both ends.
@@ -144,6 +240,17 @@ elif [ -z "$wf_tags" ]; then
 elif [ "$df_tags" != "$wf_tags" ]; then
 	note "build tags disagree: $DOCKERFILE builds with [$df_tags], $WORKFLOW scans with [$wf_tags]. govulncheck would be analysing a different binary than the one in the image."
 fi
+
+# 3b. Consistency is not correctness. Dropping `postgres` from BOTH ends
+#     satisfies the comparison above and produces a binary with no driver for
+#     the only database Leoflow supports — `unknown driver postgres (forgotten
+#     import?)` at Job runtime. helm-ci's kind install would catch it, several
+#     minutes and one cluster later; this catches it in seconds. Leoflow is
+#     Postgres-only, so this is a fact about the product, not a preference.
+case ",$df_tags," in
+*,postgres,*) ;;
+*) note "the build tags [$df_tags] do not include 'postgres'. golang-migrate registers its drivers behind build tags, so this binary would fail at runtime with \"unknown driver postgres\" — the migration Job would not start, and the tag comparison above cannot see it because both ends agree." ;;
+esac
 
 # 4. Go toolchain: same pin on both ends.
 df_go="$(dockerfile_go_version <"$DOCKERFILE")"

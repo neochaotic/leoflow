@@ -73,12 +73,23 @@ RUN set -eux; \
 		-ldflags="-s -w -X main.Version=${version}" \
 		-o /out/migrate github.com/golang-migrate/migrate/v4/cmd/migrate
 
-# Distroless static, Debian 13 (trixie) — the same family and posture as
-# leoflow-server, and the suite runtime/Dockerfile moved to in #1038. It carries
-# a CA bundle (needed for `sslmode=verify-full` DSNs), /etc/passwd with the
-# nonroot user, and nothing else: no shell, no package manager, no OS package
-# set to inherit CVEs from. Replaces an Alpine base whose package set was not
-# ours either.
+# Distroless static, Debian 13 (trixie). Same family as leoflow-server, which is
+# still on debian12 — not the same suite, and this is the suite
+# runtime/Dockerfile moved to in #1038.
+#
+# It carries a CA bundle, /etc/passwd with the nonroot user, and six base
+# packages (base-files, ca-certificates, media-types, netbase, tzdata,
+# tzdata-legacy). No shell and no package manager, so nothing an operator can
+# exec into and no application package set — but "no OS packages" would be
+# false, and the difference matters for the blocking gate: a fixable HIGH in
+# ca-certificates or tzdata reddens it and no commit here closes it. That is a
+# six-package exposure instead of Alpine's full set, and .trivyignore.yaml's
+# dated, self-expiring entries are what handle it — see security.yaml.
+#
+# The CA bundle is what makes `sslmode=verify-full` work against a managed
+# Postgres whose CA is in the system store. A DSN with an explicit
+# `sslrootcert=` path needs that file mounted; the migration Job does not mount
+# database.caConfigMap today, which the chart's own recipe assumes.
 FROM gcr.io/distroless/static-debian13:nonroot
 
 LABEL org.opencontainers.image.source="https://github.com/neochaotic/leoflow"
@@ -86,7 +97,12 @@ LABEL org.opencontainers.image.description="golang-migrate CLI plus the Leoflow 
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /out/migrate /usr/local/bin/migrate
-COPY migrations/ /migrations/
+# Only the SQL. migrations/ also holds embed.go, latest.go and their tests,
+# which the Go side uses to compute the binary's required schema version;
+# golang-migrate's file source ignores names that do not match its version
+# pattern, so copying them was harmless — but shipping source into a runtime
+# image is not a thing to leave harmless on purpose.
+COPY migrations/*.sql /migrations/
 
 # 65532 numerically, not `nonroot` by name: a PodSecurity `restricted` namespace
 # verifies runAsNonRoot against the image's user and the kubelet can only

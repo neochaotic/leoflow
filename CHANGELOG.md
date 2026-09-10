@@ -61,15 +61,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `go get`: it is scanned on **every PR and push, and the job goes red**
   (baseline today: zero findings, so it starts green). Whether that red *blocks
   a merge* is a branch-protection setting — a new job is not a required check
-  until somebody adds it. `leoflow-runtime` and `leoflow-migrate` inherit
-  package sets we do not author, where a CVE lands because a distro security
-  team published an advisory and not because anyone pushed anything — blocking
-  those would fail whoever opens the next unrelated PR while the person who can
-  fix it is elsewhere. They are scanned **daily, never block, and maintain a
+  until somebody adds it. `leoflow-runtime` inherits a Debian package set we do
+  not author, where a CVE lands because a distro security team published an
+  advisory and not because anyone pushed anything — blocking it would fail
+  whoever opens the next unrelated PR while the person who can fix it is
+  elsewhere. It is scanned **daily, never blocks, and maintains a
   single self-closing tracking issue** whose body is refreshed each run, which
   comments only when the finding set actually changes, which reopens rather than
   duplicates when findings return, and which leaves the issue alone once a human
   has reopened it.
+
+  `leoflow-migrate` started in that lane and moved to the blocking one in this
+  same release: rebuilding it from our own `go.mod` onto distroless static
+  (below) changed what the image is, so the criterion that put it in the
+  report-only lane stopped describing it.
 
   The server gate scans **the artifact GoReleaser publishes** — the release
   Dockerfile, with a binary built by the release toolchain — not the

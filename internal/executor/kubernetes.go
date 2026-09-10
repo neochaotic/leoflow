@@ -270,9 +270,11 @@ const maxPodActiveDeadline = math.MaxInt32
 // durable outcome record and land one report RPC, and the kubelet must not
 // preempt that. But the tail is not proportional to the declared grace. The
 // agent does not pass the declaration on to the child: internal/agent/exec.go
-// runs it under exec.CommandContext with the default cancel, an immediate
-// SIGKILL whatever the DAG asked for. So what is left after the kill is one
-// record write and one RPC, and a minute covers that on any cluster.
+// SIGKILLs the child's whole process group immediately, whatever the DAG asked
+// for (#943). What is left after that kill is bounded by the agent too — its
+// execWaitDelay (10 s) caps the wait for an output pipe held open by a
+// descendant that escaped the group — so the worst tail is that delay plus one
+// record write and one RPC, and a minute covers it on any cluster.
 const maxDeadlineGraceTerm = 60
 
 // podDeadlineGraceTerm is the shutdown tail the pod deadline budgets for the

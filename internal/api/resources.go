@@ -168,7 +168,15 @@ func handleRepoError(c *gin.Context, err error) {
 	// than composed: pgconn reports a connect timeout as a ConnectError whose text
 	// carries the database user and name, and that error satisfies
 	// errors.Is(err, context.DeadlineExceeded).
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	//
+	// Gate on the REQUEST's context, not on the error's chain. A pgconn connect
+	// timeout satisfies errors.Is(err, context.DeadlineExceeded) while the caller
+	// is still perfectly connected, so chain-matching alone reported a database
+	// outage as the tenant hanging up: WARN instead of ERROR, a 4xx instead of a
+	// 5xx, and a 5xx-rate alert that misses the one incident it exists to catch
+	// (#1071). A caller who went away has a done context; a dead database does not.
+	case c.Request != nil && c.Request.Context().Err() != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
 		AbortProblemCause(c, statusClientClosedRequest, "client closed request", detailClientClosed, err)
 	// A business-rule input failure (unknown role, undeclared variable/connection)
 	// is the client's to fix, not a server fault, so the whole class maps to 400 —

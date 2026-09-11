@@ -114,14 +114,24 @@ func (a *JWTAuthenticator) Authenticate(ctx context.Context, token string) (*Use
 	}
 	user, active, err := a.store.FindUserByID(ctx, c.Subject)
 	if err != nil {
-		// A subject with no user row is trusted from its signed claims ONLY for the
-		// in-process dev token (which has no DB row by design); any other missing
-		// subject fails closed, so a hard-deleted user cannot keep claimed roles
-		// until the token expires — deletion revokes at once, like is_active=false.
-		if errors.Is(err, ErrUserNotFound) && c.Subject == DevTokenSubject {
-			return claimed, nil
+		if errors.Is(err, ErrUserNotFound) {
+			// A subject with no user row is trusted from its signed claims ONLY for
+			// the in-process dev token (which has no DB row by design); any other
+			// missing subject fails closed, so a hard-deleted user cannot keep
+			// claimed roles until the token expires — deletion revokes at once, like
+			// is_active=false.
+			if c.Subject == DevTokenSubject {
+				return claimed, nil
+			}
+			return nil, errors.Join(ErrInvalidToken, err)
 		}
-		return nil, errors.Join(ErrInvalidToken, err)
+		// Any OTHER store failure means we could not DETERMINE whether this token
+		// is valid — not that it is invalid. Propagating it unchanged is the rule
+		// #843 set for IssueToken, and it applies here for the same reason: a
+		// database outage answered as "invalid token" tells every client to
+		// re-authenticate against the database that is already down, and tells
+		// whoever is on call that they have an auth incident (#1087).
+		return nil, err
 	}
 	if !active {
 		return nil, ErrInvalidToken

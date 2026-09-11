@@ -163,12 +163,32 @@ func TestAuthenticateFailsClosedOnStoreError(t *testing.T) {
 	// A DB failure during the reload must reject the request, never fall through
 	// to the token claims (which would let a failing store silently disable
 	// revocation) and never panic.
+	//
+	// The assertion used to be `errors.Is(err, ErrInvalidToken)`, which encoded
+	// the CLASSIFICATION rather than the security property and made a database
+	// outage indistinguishable from a forged token (#1087). Fail-closed does not
+	// depend on the error's identity: both callers of Authenticate allow on
+	// `err == nil` and deny on anything else, and nothing outside this package
+	// references ErrInvalidToken. So the property is "an error, and no user" —
+	// which is what this now asserts, plus the new requirement that a backend
+	// failure is not labeled invalid.
 	const secret = "dberr-secret"
 	tok, _ := MintUserToken(secret, time.Hour, User{ID: "u1", TenantID: "default", Roles: []string{"admin"}})
-	store := &fakeStore{byIDErr: errors.New("connection refused")}
+	dbErr := errors.New("connection refused")
+	store := &fakeStore{byIDErr: dbErr}
 	a := NewJWTAuthenticator(store, secret, time.Hour)
-	if _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, ErrInvalidToken) {
-		t.Errorf("a store error must fail closed as ErrInvalidToken, got %v", err)
+	user, err := a.Authenticate(context.Background(), tok)
+	if err == nil {
+		t.Fatal("a store error must reject the request; got err = nil")
+	}
+	if user != nil {
+		t.Errorf("a store error must not return a user (that would disable revocation); got %+v", user)
+	}
+	if !errors.Is(err, dbErr) {
+		t.Errorf("the cause must survive for the log; got %v", err)
+	}
+	if errors.Is(err, ErrInvalidToken) {
+		t.Error("a backend failure must not be labeled an invalid token — the caller maps that to 401 and tells the client to re-authenticate against the database that is down")
 	}
 }
 

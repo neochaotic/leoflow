@@ -121,6 +121,7 @@ func TestHandleRepoErrorNeverLeaksDriverTextToTheClient(t *testing.T) {
 		name   string
 		err    error
 		pgErr  *pgconn.PgError
+		gone   bool // the caller hung up: its request context is done
 		status int
 	}{
 		{
@@ -163,7 +164,17 @@ func TestHandleRepoErrorNeverLeaksDriverTextToTheClient(t *testing.T) {
 			name:   "driver error joined to a client cancel stays a 499",
 			err:    errors.Join(context.Canceled, fk),
 			pgErr:  fk,
+			gone:   true,
 			status: statusClientClosedRequest,
+		},
+		{
+			// Same shape, caller still connected: a pgconn connect timeout carries
+			// context.DeadlineExceeded in its chain, and routing on that alone
+			// reported an outage as the tenant hanging up (#1071).
+			name:   "a connect timeout with a live caller is a 500, and still leaks nothing",
+			err:    fmt.Errorf("listing dags: %w", errors.Join(context.DeadlineExceeded, fk)),
+			pgErr:  fk,
+			status: http.StatusInternalServerError,
 		},
 	}
 
@@ -176,7 +187,13 @@ func TestHandleRepoErrorNeverLeaksDriverTextToTheClient(t *testing.T) {
 			r.GET("/x", func(c *gin.Context) { handleRepoError(c, tc.err) })
 
 			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody))
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.gone {
+				cancel()
+			} else {
+				defer cancel()
+			}
+			r.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodGet, "/x", http.NoBody))
 
 			if rec.Code != tc.status {
 				t.Errorf("status = %d, want %d (%s)", rec.Code, tc.status, rec.Body.String())
@@ -200,19 +217,24 @@ func TestHandleRepoErrorNeverLeaksDriverTextToTheClient(t *testing.T) {
 	}
 }
 
-// TestHandleRepoErrorRedactsAConnectionStringOnTheCancelBranch covers the case
+// TestHandleRepoErrorRedactsAConnectionString covers the case
 // no PgError fixture can: a pgconn.ConnectError renders the database user and
 // name, and a connect TIMEOUT satisfies errors.Is(err, context.DeadlineExceeded)
 // — so before #961 it took the 499 branch and echoed the DSN identity there,
 // nowhere near the 500 the issue was written about. The error is produced by
 // dialing, not hand-built, because ConnectError's inner error is unexported.
-func TestHandleRepoErrorRedactsAConnectionStringOnTheCancelBranch(t *testing.T) {
+func TestHandleRepoErrorRedactsAConnectionString(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	// TEST-NET-3 is routable nowhere, so the dial runs into the deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	// Port 1 on loopback refuses immediately: a real *pgconn.ConnectError, whose
+	// text is what this test exists to keep out of the body, with no network
+	// round trip and no timing dependency. It used to dial TEST-NET-3 with a
+	// 250ms deadline and then accept EITHER branch — so on a runner where the
+	// dial failed fast it silently exercised the 500 path while being named for
+	// the cancel one, and it cost a network wait inside a unit suite (#1071).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, connErr := pgconn.Connect(ctx,
-		"postgres://leoflow_app:s3cr3t@203.0.113.1:5432/leoflow_meta?sslmode=disable&connect_timeout=1")
+		"postgres://leoflow_app:s3cr3t@127.0.0.1:1/leoflow_meta?sslmode=disable")
 	if connErr == nil {
 		t.Skip("the dial unexpectedly succeeded; no connect error to redact")
 	}
@@ -222,8 +244,12 @@ func TestHandleRepoErrorRedactsAConnectionStringOnTheCancelBranch(t *testing.T) 
 	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
 	handleRepoError(c, fmt.Errorf("listing dags: %w", connErr))
 
-	// Whichever branch it lands on (499 when the deadline is what surfaced, 500
-	// otherwise), the identity of the database must not be in the body.
+	// The caller is still connected, so an unreachable database is a server
+	// fault — deterministically, whatever the driver put in the error's chain.
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 for an unreachable database with a live caller", rec.Code)
+	}
+	// And the identity of the database must not be in the body.
 	body := rec.Body.String()
 	for _, leak := range []string{"leoflow_app", "leoflow_meta", "203.0.113.1", "failed to connect", connErr.Error()} {
 		if strings.Contains(body, leak) {

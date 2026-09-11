@@ -77,6 +77,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   untouched"), which is how the false statement reached the configuration
   reference before the audit caught it.
 
+- **A dbt-only DAG keeps the `connections:` and `variables:` it declares
+  (#997).** `dbt.Compile` built its spec from an explicit field list that omitted
+  both, so a `leoflow.yaml` declaring them produced a `dag.json` without them —
+  while the `dag.py` path emitted both from the same file. Under ADR 0055 secret
+  scoping that is not a missing JSON field: what a task pod may see is derived
+  from what the DAG declares, so the pod received **nothing**, and the DAG failed
+  inside the task rather than at compile.
+
 - **`leoflow lite --help` now says the admin password is shown once, and names
   the way back (#1105).** It described the UI as being "behind a login (the admin
   created by `leoflow setup`)" and stopped there. The password is printed once

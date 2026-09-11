@@ -201,6 +201,11 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Tags:        cfg.Tags,
 		Schedule:    cfg.Dbt.Schedule,
 		Granularity: dbt.Granularity(cfg.Dbt.Granularity),
+		// The declared secret set. Without these the dbt-only path produced a
+		// dag.json with no connections/variables, and ADR 0055 scoping then
+		// delivered nothing to the task pod (#997).
+		Connections: cfg.Connections,
+		Variables:   cfg.Variables,
 		Connection:  conn,
 		Profile:     profile,
 		Schema:      cfg.Dbt.Schema,

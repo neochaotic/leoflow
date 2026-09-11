@@ -49,6 +49,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A dbt folder that cannot be a task id is refused by name (#1114).** With
+  `granularity: folder` the folder name becomes the task id verbatim, so a
+  folder like `my folder!` produced an unusable id. It was already caught — but
+  at the end of the compile, as `schema validation: jsonschema validation
+  failed with 'file:///…/dag.json#'`, leaving the author to work out that a dbt
+  folder name was the cause. The compiler knows the folder and the rule, and now
+  says both, along with the models the group holds and the two ways out.
+
 - **The migration Job honours `nodeSelector`, `tolerations` and `affinity`
   (#1056).** It was the one workload in the chart ignoring the pod-placement
   values every other workload respects, and it is the workload that runs

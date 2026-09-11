@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -287,6 +288,10 @@ func renderGrouped(nodes map[string]execNode, gran Granularity) ([]domain.TaskSp
 			gran, strings.Join(append(cyc, cyc[0]), " -> "))
 	}
 
+	if verr := checkDerivedTaskIDs(members, gran); verr != nil {
+		return nil, verr
+	}
+
 	tasks := make([]domain.TaskSpec, 0, len(members))
 	for g, mem := range members {
 		sort.Strings(mem)
@@ -408,4 +413,31 @@ func sortedSetKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// taskIDPattern mirrors the dag schema's task_id rule. It is duplicated here on
+// purpose: the schema is the authority and still rejects a bad id, but it does
+// so at the END of the compile, as a jsonschema failure naming dag.json. A dbt
+// folder becomes a task id verbatim, so this package knows both the offending
+// folder and the rule, and is the only place that can say which folder.
+var taskIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,199}$`)
+
+// checkDerivedTaskIDs refuses a group key that cannot be a task id, naming the
+// folder and the knob that produced it (#1114).
+func checkDerivedTaskIDs(members map[string][]string, gran Granularity) error {
+	keys := make([]string, 0, len(members))
+	for g := range members {
+		keys = append(keys, g)
+	}
+	sort.Strings(keys)
+	for _, g := range keys {
+		if taskIDPattern.MatchString(g) {
+			continue
+		}
+		mem := append([]string(nil), members[g]...)
+		sort.Strings(mem)
+		return fmt.Errorf("dbt granularity=%s derives the task id %q from your project, and it is not a usable task id (letters, digits, underscore, then letters/digits/underscore/hyphen, up to 200 chars). It groups %s — rename it in the dbt project, or use granularity=node so each model keeps its own name",
+			gran, g, strings.Join(mem, ", "))
+	}
+	return nil
 }

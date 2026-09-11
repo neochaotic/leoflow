@@ -23,6 +23,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not be read: asserting "0" on a lookup that never ran would be worse than
   silence.
 
+
 ### Fixed
 
 - **`leoflow lite --help` now says the admin password is shown once, and names
@@ -32,9 +33,6 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it was already listed as a subcommand in the same help output — just never
   connected to the sentence about the login. Present and unlinked is the same as
   absent for someone stuck on a login screen.
-
-
-### Fixed
 
 - **A 401 now says when your saved token belongs to a different server
   (#1102).** `~/.leoflow/config.yaml` holds a `server_url` and a `token`, written
@@ -57,8 +55,26 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of the same line, and now share one. Holding more than one server's token at a
   time is the structural answer and is still open.
 
+- **Lite seeds a declared connection your environment already carries (#1103).**
+  Registration is fail-closed against the vault: a DAG declaring a connection the
+  vault does not hold is refused, with a message naming the fix. In Lite that
+  meant declaring the same value twice — once as `AIRFLOW_CONN_<ID>` for the task
+  (the subprocess executor inherits the environment, which is how tasks read
+  connections) and once in the vault so registration would pass. The first
+  `leoflow dev` of a project now works without the second declaration.
 
-### Fixed
+  Four constraints, because taking a secret from ambient environment is only
+  defensible under them: only connections the DAG **declares** are considered, so
+  unrelated `AIRFLOW_CONN_*` exports are never copied out of your shell; a
+  connection the vault already holds is **never** replaced, so a stale export
+  cannot shadow a value you set deliberately; a URI that does not parse is
+  reported by name and not stored, because a broken connection that exists is
+  worse than one that is missing; and every seeded connection is announced by
+  name — never by value — so a secret store never fills itself silently.
+
+  If the vault cannot be read at all, nothing is seeded: "already set" is then
+  unknown, and the one thing this must never do is overwrite. Seeding is best
+  effort throughout and never fails a reload.
 
 - **A database outage is reported as an outage, not as the caller's fault
   (#1087, #1071).** Two surfaces answered a dependency failure with a statement
@@ -134,7 +150,6 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   differently. `leoflow validate`'s syntax check still resolves the older
   managed-first/`python3` precedence and does not yet honour `python_version` —
   tracked separately.
-
 
 ## [0.4.6] - 2026-09-11
 

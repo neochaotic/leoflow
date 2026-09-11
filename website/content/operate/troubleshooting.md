@@ -58,6 +58,7 @@ leoflow-mcp --version
 
 | Symptom | Cause / fix |
 |---|---|
+| `declares unknown connection(s)` on the first `leoflow dev` of a project | Lite seeds a declared connection from `AIRFLOW_CONN_<ID>` when your environment already carries it, so this usually means the variable is absent or misspelled — the lookup upper-cases the id, so `my_db` reads `AIRFLOW_CONN_MY_DB`. Only connections the DAG **declares** are considered, a connection already in the vault is never replaced by the environment (use `leoflow connections set` to change one), and a URI that cannot be parsed is reported by name and not stored. |
 | `leoflow compile` dumps a Python traceback with internal parser paths first | Recent builds lead the failure with the user-facing line (e.g. `SyntaxError: ...`) and put the parser paths in the bounded tail. If you still see the internal-first dump, you are on an older release — update. |
 | `leoflow compile` rejects a sensor / Jinja template / branching operator | This is **intentional** — Leoflow accepts a closed set of task types (`python`, `bash`, `airflow_operator`). See [DAG authoring → Not supported](/author-dags/dag-authoring/#not-supported--leoflow-compile-rejects-these) for the full list and workarounds (`@task` + poll loop for sensors; build values from `airflow.sdk` context for Jinja). |
 | `Compiled .../dag.py -> dag.json (image , version dev)` (dangling comma) | Older build — update. Recent versions render `(no image, version dev)` when `--image` is unset. |

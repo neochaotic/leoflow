@@ -775,6 +775,11 @@ func devSubprocessSetup(ctx context.Context, cmd *cobra.Command, ws *WorkspaceSp
 			if _, perr := ensureWorkspaceDagVenvs(ctx, cmd, curWs, home, runtimeSrc); perr != nil {
 				return perr
 			}
+			// Seed declared connections the environment already carries, BEFORE
+			// registration reads the vault — registration is fail-closed, and in
+			// Lite the value is usually already exported for the task to consume
+			// (#1103).
+			seedDeclaredConnections(ctx, cmd, curWs, token, devURL(o.port))
 			// local: this is the subprocess run mode, so tasks execute on this
 			// host and dbt needs the absolute workspace path (#993).
 			return devCompileAndRegisterAll(ctx, cmd, curWs, compileOptions{image: o.image, local: true}, token, nil, devURL(o.port))

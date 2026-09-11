@@ -43,6 +43,30 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.migrations.podSecurityContext | nindent 8 }}
+      # Pod placement is INHERITED from the top-level values rather than given
+      # its own knobs (#1056). An operator who set `tolerations` said "Leoflow
+      # runs on this pool", and the migration Job is Leoflow — it was the one
+      # workload in the chart ignoring the values every other workload honours,
+      # and it is the workload that runs FIRST. On a tainted or dedicated pool
+      # the hook was unschedulable: the pod sat Pending, Helm waited out the hook
+      # timeout, and the install failed with a message that never mentioned
+      # scheduling.
+      #
+      # No `migrations.nodeSelector` etc.: a Job-specific pool is surface nobody
+      # has asked for, and this chart is busy removing values that are declared
+      # and unread rather than adding more.
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrate
           image: "{{ .Values.migrations.image.repository }}:{{ $migrateTag }}"

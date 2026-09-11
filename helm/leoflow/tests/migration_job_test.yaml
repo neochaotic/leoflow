@@ -238,3 +238,55 @@ tests:
       - equal:
           path: spec.template.metadata.labels["app.kubernetes.io/name"]
           value: aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeefff-migrate
+
+  # #1056: the Job is the FIRST workload the chart runs and was the only one
+  # ignoring the pod-placement values every other workload honours. On a cluster
+  # with a tainted or dedicated pool — the operator set `tolerations` precisely
+  # so Leoflow lands there — the pre-install hook is unschedulable: the pod sits
+  # Pending, Helm waits out the hook timeout, and the install fails with a
+  # message that says nothing about scheduling.
+  - it: inherits nodeSelector, tolerations and affinity from the top-level values
+    set:
+      database.url: postgres://h/d
+      nodeSelector:
+        workload: leoflow
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: leoflow
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values: [eu-west-1a]
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.workload
+          value: leoflow
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: dedicated
+      - equal:
+          path: spec.template.spec.tolerations[0].effect
+          value: NoSchedule
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key
+          value: topology.kubernetes.io/zone
+
+  # Absent values must render nothing at all: an empty `nodeSelector: {}` in the
+  # pod spec is not harmless noise — it is a diff against every existing
+  # release, and on some admission stacks an empty affinity block is rejected.
+  - it: renders no placement keys when none are set
+    set:
+      database.url: postgres://h/d
+    asserts:
+      - notExists:
+          path: spec.template.spec.nodeSelector
+      - notExists:
+          path: spec.template.spec.tolerations
+      - notExists:
+          path: spec.template.spec.affinity

@@ -25,6 +25,21 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The migration Job honours `nodeSelector`, `tolerations` and `affinity`
+  (#1056).** It was the one workload in the chart ignoring the pod-placement
+  values every other workload respects, and it is the workload that runs
+  **first**. On a cluster with a tainted or dedicated node pool — where the
+  operator set `tolerations` precisely so Leoflow lands there — the pre-install
+  hook was unschedulable: the pod sat `Pending`, Helm waited out the hook
+  timeout, and `helm install` failed with a message that never mentioned
+  scheduling.
+
+  The values are inherited from the top level rather than given their own
+  `migrations.*` knobs. Someone who set `tolerations` said "Leoflow runs on this
+  pool", and the migration Job is Leoflow; a Job-specific pool is surface nobody
+  has asked for. Nothing is rendered when nothing is set, so an existing release
+  sees no diff.
+
 - **`leoflow lite --help` now says the admin password is shown once, and names
   the way back (#1105).** It described the UI as being "behind a login (the admin
   created by `leoflow setup`)" and stopped there. The password is printed once

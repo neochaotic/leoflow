@@ -243,6 +243,23 @@ and the resulting manifest is copied into the DAG image alongside the project.
 Pin a pre-built one with `dbt.manifest` to skip the parse (see
 [No local dbt](#no-local-dbt)).
 
+**Which `dbt` runs the parse is not the same in both editions**, and the
+difference decides whether you need dbt installed on your host at all:
+
+- Under **`leoflow dev`** the per-DAG venv is provisioned from `dependencies:`
+  *before* the project is compiled, and the parse uses **that venv's `dbt`**. So
+  a Lite project that declares `dbt-core` and its adapter in `dependencies:`
+  compiles with no dbt on your `PATH` — the version that parses your models is
+  the same one that will run them.
+- Running **`leoflow compile` by hand** provisions nothing. It falls back to the
+  `dbt` on your `PATH`, and fails with a message naming both ways out if there
+  is none: install dbt-core plus your adapter, or pin `dbt.manifest`.
+
+The practical consequence is the reverse of what people usually assume: you do
+not need to `pip install dbt-core` to develop a dbt DAG in Lite. Declaring it in
+`dependencies:` is enough, and is better, because the host and the task then
+cannot disagree about the dbt version.
+
 dbt's **Slim CI** (`--select state:modified+ --defer --state`) is not offered as a
 turnkey recipe: there is no supported way to export the deployed manifest to diff
 against, and the compiler emits node/level/folder selectors only. If you drive dbt

@@ -773,10 +773,7 @@ func ensureWorkspaceDagVenvs(ctx context.Context, cmd *cobra.Command, ws *Worksp
 			if deps, derr = p.Config.EffectiveDependencies(); derr != nil {
 				return "", fmt.Errorf("resolving dependencies for project %q: %w", p.Path, derr)
 			}
-			// The same field the task base image is selected from, so the dev venv
-			// and the cluster agree on the interpreter (#1092). ApplyDefaults fills
-			// it, so this is empty only for a config that never went through it.
-			pyVersion = p.Config.PythonVersion
+			pyVersion = devEnforcedPythonVersion(cmd, p.Config)
 		}
 		py, verr := ensureDagVenv(ctx, cmd, home, dagID, runtimeSrc, pyVersion, deps)
 		if verr != nil {
@@ -2107,4 +2104,36 @@ func minorOf(v string) (int, error) {
 		return 0, fmt.Errorf("unrecognized version %q", v)
 	}
 	return strconv.Atoi(parts[1])
+}
+
+// devEnforcedPythonVersion reports the python_version a dev venv must be built
+// on, or "" to keep the historical precedence (managed build, else any host
+// python3 >= 3.11).
+//
+// Enforcing this field is right only when it says something. It says nothing in
+// three cases, and refusing to boot in any of them would break a working dev
+// loop over a choice the user never made:
+//
+//   - ApplyDefaults fills it with "3.11" for every config that omits it — and
+//     discovery defaults EVERY project, including directories with no
+//     leoflow.yaml at all. Enforcing there turns "no python3.11 on this host"
+//     from a silent, working fallback into a hard stop, on a machine where
+//     nothing is actually inconsistent: the image is py3.11 because the same
+//     default chose it, so dev and the cluster already agree.
+//   - An explicit build.base_image wins over python_version when the image is
+//     resolved (resolveBaseImage), so the field has no bearing on what the
+//     cluster runs and cannot be skewed against it.
+//   - A deprecated version is one we are withdrawing. Refusing tells the author
+//     to install an interpreter that is on its way out, to keep using a version
+//     that is on its way out. Warn and fall back, which is the nudge that
+//     matches the direction of travel.
+func devEnforcedPythonVersion(cmd *cobra.Command, cfg *domain.LeoflowConfig) string {
+	if cfg == nil || cfg.PythonVersionDefaulted || cfg.BaseImage != "" {
+		return ""
+	}
+	if _, deprecated := domain.DeprecatedPythonVersion(cfg.PythonVersion); deprecated {
+		devPrintf(cmd.OutOrStdout(), "▸ python_version %s is deprecated; building this venv on the default interpreter instead — migrate to a supported version\n", cfg.PythonVersion)
+		return ""
+	}
+	return cfg.PythonVersion
 }

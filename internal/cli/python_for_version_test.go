@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/neochaotic/leoflow/internal/domain"
 )
 
 // TestParsePythonMinor covers the `python_version` field as it is actually
@@ -330,4 +333,76 @@ func TestInstallHintOnlyOffersSetupForTheVersionItInstalls(t *testing.T) {
 	if !strings.Contains(got, fmt.Sprintf("3.%d", minPythonMinor+2)) {
 		t.Errorf("installHint = %q, want it to name the version the user actually needs", got)
 	}
+}
+
+// TestDevEnforcedPythonVersion is the regression for the blocker the review
+// caught in the first cut of #1092: ApplyDefaults fills python_version with
+// "3.11" for every config that omits it, and discovery defaults EVERY project,
+// so enforcing the field unconditionally turned a working `leoflow dev` into a
+// hard refusal on any host without a 3.11 — over a value the CLI invented and
+// then attributed to the user ("this project declares python_version 3.11").
+//
+// Nothing is inconsistent in that case: the task image is py3.11 because the
+// same default chose it, so dev and the cluster already agree.
+func TestDevEnforcedPythonVersion(t *testing.T) {
+	cmd := devTestCmd()
+
+	t.Run("a defaulted version is not enforced", func(t *testing.T) {
+		cfg := &domain.LeoflowConfig{DagID: "d"}
+		cfg.ApplyDefaults() // fills "3.11" and marks it defaulted
+		if !cfg.PythonVersionDefaulted {
+			t.Fatal("ApplyDefaults must mark an unset python_version as defaulted")
+		}
+		if got := devEnforcedPythonVersion(cmd, cfg); got != "" {
+			t.Errorf("enforced %q for a version nobody declared; want \"\" so the historical fallback applies", got)
+		}
+	})
+
+	t.Run("a declared version IS enforced", func(t *testing.T) {
+		cfg := &domain.LeoflowConfig{DagID: "d", PythonVersion: "3.13"}
+		cfg.ApplyDefaults()
+		if cfg.PythonVersionDefaulted {
+			t.Fatal("a declared python_version must not be marked defaulted")
+		}
+		if got := devEnforcedPythonVersion(cmd, cfg); got != "3.13" {
+			t.Errorf("enforced %q, want \"3.13\" — this is the #1092 case", got)
+		}
+	})
+
+	t.Run("an explicit base_image makes the field inert", func(t *testing.T) {
+		// resolveBaseImage returns base_image and never consults python_version,
+		// so there is nothing for the venv to be skewed against.
+		cfg := &domain.LeoflowConfig{DagID: "d", PythonVersion: "3.13"}
+		cfg.BaseImage = "ghcr.io/acme/custom:1"
+		cfg.ApplyDefaults()
+		if got := devEnforcedPythonVersion(cmd, cfg); got != "" {
+			t.Errorf("enforced %q despite an explicit base_image; the cluster will not use that version", got)
+		}
+	})
+
+	t.Run("a deprecated version warns and falls back", func(t *testing.T) {
+		// Refusing would tell the author to install an interpreter we are
+		// withdrawing, to keep a version we are withdrawing.
+		deprecated := ""
+		for _, v := range []string{"3.10", "3.11", "3.12", "3.13"} {
+			if _, ok := domain.DeprecatedPythonVersion(v); ok {
+				deprecated = v
+				break
+			}
+		}
+		if deprecated == "" {
+			t.Skip("no deprecated python version in the schema today")
+		}
+		cfg := &domain.LeoflowConfig{DagID: "d", PythonVersion: deprecated}
+		cfg.ApplyDefaults()
+		out := &bytes.Buffer{}
+		c := devTestCmd()
+		c.SetOut(out)
+		if got := devEnforcedPythonVersion(c, cfg); got != "" {
+			t.Errorf("enforced deprecated %q, want a fallback", got)
+		}
+		if !strings.Contains(out.String(), deprecated) {
+			t.Errorf("the fallback must say which version it is stepping around; got %q", out.String())
+		}
+	})
 }

@@ -8,6 +8,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`leoflow build` builds every project in a workspace (#1115).** `leoflow
+  compile <dir> --image <ref> --build` has always built one; with several DAGs
+  that meant running it once per directory with the right reference each time,
+  by hand, which is where the reference goes wrong. Each project's image comes
+  from its own `registry:` block — the same derivation `deploy` already uses — so
+  nothing about naming is new.
+
+  A project that declares no registry is **reported by name**, not skipped
+  quietly: a command that covers less than the workspace without saying so leaves
+  you believing images exist. A failure stops the run naming the project, because
+  a half-built workspace where some images are new and some are stale is worse
+  than a clear failure — afterwards the difference is invisible.
+
 - **`include_paths` copies the files it says it copies (#1062).** It was
   declared, defaulted, documented and read by nothing: a project could set it
   and believe a helper module was shipping, while the generated Dockerfile

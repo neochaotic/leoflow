@@ -296,6 +296,7 @@ func ensureDockerignore(w io.Writer, dir string, cfg *domain.LeoflowConfig, ownD
 	// Concatenated into a fresh slice: append onto cfg.ExcludePaths would write
 	// through to the caller's config whenever that slice has spare capacity.
 	patterns := slices.Concat(cfg.ExcludePaths, dbtBuildArtifacts(cfg))
+	warnDroppedNegations(w, cfg.ExcludePaths)
 	merged, changed := mergeDockerignore(original, patterns)
 	baked = warnUnexcludedSecrets(w, dir, cfg, merged, ownDockerfile)
 	if !changed {
@@ -538,8 +539,17 @@ func warnUnexcludedSecrets(w io.Writer, dir string, cfg *domain.LeoflowConfig, m
 // silently loses to a negation.
 func expandPattern(pat string) []string {
 	pat = strings.TrimSpace(pat)
-	// A negation in exclude_paths is the author asking to KEEP something. Pass
-	// it through untouched rather than inventing forms that would fight it.
+	// A negation, a comment and a blank entry all emit NOTHING — the entry is
+	// dropped, not passed through. (The comment here used to claim the opposite
+	// of what the code does, which is how it reached the configuration reference
+	// as a false statement; #1081.)
+	//
+	// Dropping a negation is the deliberate half of that. Order decides a
+	// .dockerignore, and the leoflow block is APPENDED after whatever the author
+	// already wrote, so a `!` we emit could resurrect a path one of their own
+	// earlier lines excluded. A negation belongs in their file, which the merge
+	// only ever appends to — never rewrites. The caller warns, by name, so the
+	// drop is visible rather than silent.
 	if pat == "" || strings.HasPrefix(pat, "!") || strings.HasPrefix(pat, "#") {
 		return nil
 	}
@@ -757,4 +767,36 @@ func extraIncludePaths(cfg *domain.LeoflowConfig, copied map[string]bool) ([]str
 		out = append(out, clean)
 	}
 	return out, nil
+}
+
+// warnDroppedNegations tells the author that a `!` entry in exclude_paths
+// contributed nothing, and where a negation does work (#1081).
+//
+// The drop itself is deliberate — see expandPattern — but silence made
+// exclude_paths a field that accepts input and discards it, which is the shape
+// this repository has spent a release removing. Only `!` is reported: a `#`
+// entry is a comment, not a request that was refused, and warning about it
+// would be noise on a file people comment freely.
+func warnDroppedNegations(w io.Writer, excludes []string) {
+	var dropped []string
+	for _, p := range excludes {
+		if strings.HasPrefix(strings.TrimSpace(p), "!") {
+			dropped = append(dropped, strings.TrimSpace(p))
+		}
+	}
+	if len(dropped) == 0 {
+		return
+	}
+	//nolint:errcheck // a warning that cannot be delivered must not fail the build
+	fmt.Fprintf(w, "warning: exclude_paths %s %s ignored — a negation is not emitted into the block leoflow appends, because that block lands AFTER your own lines and could resurrect a path you excluded. Put the negation in your own %s, which leoflow only ever appends to.\n",
+		strings.Join(dropped, ", "), plural(len(dropped), "was", "were"), dockerignoreName)
+}
+
+// plural picks the verb form for a count, so a single dropped entry does not
+// read as a list.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }

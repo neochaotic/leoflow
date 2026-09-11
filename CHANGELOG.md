@@ -64,6 +64,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   has asked for. Nothing is rendered when nothing is set, so an existing release
   sees no diff.
 
+- **`exclude_paths` says when a `!` entry was ignored (#1081).** A negation
+  contributed nothing to the generated `.dockerignore` and nothing said so, which
+  made `exclude_paths` a field that accepts input and discards it. The drop
+  stays — order decides a `.dockerignore`, and leoflow's block is appended
+  **after** your own lines, so a `!` emitted there could resurrect a path one of
+  your earlier lines excluded. The build now names the ignored entries and points
+  at your own `.dockerignore`, which the merge only ever appends to. A `#` entry
+  is a comment rather than a request that was refused, and is not reported.
+
+  The function's comment claimed the opposite of what it did ("passed through
+  untouched"), which is how the false statement reached the configuration
+  reference before the audit caught it.
+
 - **`leoflow lite --help` now says the admin password is shown once, and names
   the way back (#1105).** It described the UI as being "behind a login (the admin
   created by `leoflow setup`)" and stopped there. The password is printed once

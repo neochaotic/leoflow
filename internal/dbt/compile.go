@@ -10,6 +10,9 @@ import (
 // version, image, ownership, schedule, and the granularity strategy. These come
 // from the Leoflow project config, not from dbt.
 type Meta struct {
+	// Warn, when set, receives advisories that are not build failures — passed
+	// through to Render. nil means say nothing (#1114).
+	Warn        func(string)
 	DagID       string
 	DagVersion  string
 	Image       string
@@ -50,6 +53,7 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 	}
 	tasks, err := Render(manifestJSON, Options{
 		Granularity: meta.Granularity,
+		Warn:        meta.Warn,
 		Connection:  meta.Connection,
 		Profile:     meta.Profile,
 		Schema:      meta.Schema,

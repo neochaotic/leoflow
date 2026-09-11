@@ -8,6 +8,29 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`include_paths` copies the files it says it copies (#1062).** It was
+  declared, defaulted, documented and read by nothing: a project could set it
+  and believe a helper module was shipping, while the generated Dockerfile
+  `COPY`ed only the DAG source and any dbt group directories.
+
+  It is **additive** — paths copied alongside the DAG source, not an allowlist
+  that replaces it. An allowlist would need a stated precedence against
+  `exclude_paths` and `dag_source`, and would silently shrink images for anyone
+  who set the field expecting the documented "files copied into the image";
+  adding is the reading that cannot break a build that works today. The default
+  `["."]` means *no extra paths*: every existing project carries it, so it must
+  not change what their images contain.
+
+  An entry that is absolute, or that escapes the build context, is refused at
+  compile with the entry named — Docker cannot `COPY` it, and failing at build
+  time would name a Docker error instead. Included paths are scanned by the
+  credential warning like everything else that ships.
+
+  `build.context` is still unimplemented and still tracked: wiring it moves the
+  `.dockerignore` to the context root AND re-roots every `COPY` in the generated
+  Dockerfile, and getting that wrong produces an image with no DAG in it — a
+  failure that only appears when a task runs.
+
 - **`leoflow dev --fresh`, and a banner line for the state you inherited
   (#1104).** Lite keeps its state under `~/.leoflow/dev` and nothing reset it, so
   a DAG registered during a spike weeks ago stayed registered: it kept being

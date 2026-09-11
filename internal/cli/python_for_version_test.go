@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -202,6 +204,26 @@ func containsAll(s string, subs ...string) bool {
 	return true
 }
 
+// writeFakeDagVenv lays down a per-DAG venv that exists and answers every
+// freshness gate: an interpreter that exits 0 and a pyvenv.cfg recording the
+// minor it was built on.
+func writeFakeDagVenv(t *testing.T, home, dagID, builtOn string) (dir, py string) {
+	t.Helper()
+	dir = dagVenvDir(home, dagID)
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	py = filepath.Join(bin, "python")
+	if err := os.WriteFile(py, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pyvenv.cfg"), []byte("version = "+builtOn+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir, py
+}
+
 // TestDagVenvRebuiltWhenDeclaredMinorChanges is the second half of #1092. The
 // resolver alone fixes only venvs that do not exist yet: ensureDagVenv returns
 // early when the interpreter file is present, so an author who edits
@@ -209,34 +231,103 @@ func containsAll(s string, subs ...string) bool {
 // interpreter with no indication.
 //
 // The assertion is indirect on purpose. Asking for a minor no host has makes the
-// rebuild observable without depending on which Pythons the test machine
+// mismatch branch observable without depending on which Pythons the test machine
 // carries: the error can only be reached by (a) noticing the venv's minor
 // disagrees, and (b) going back out to resolve a base for the declared one. A
-// build that skipped the check would return the existing venv and no error.
+// build that skipped the check would return the existing venv and no error —
+// the stub interpreter satisfies every other gate.
+//
+// The venv must SURVIVE the failure. Resolution runs before the discard, so an
+// author who types a minor this host does not have gets an error and keeps the
+// venv they had; discarding first cost them a full dependency reinstall even
+// after reverting the edit, and the reload path keeps serving the last
+// registered DAG either way.
 func TestDagVenvRebuiltWhenDeclaredMinorChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh stub is POSIX-only")
+	}
 	home := t.TempDir()
 	const dagID = "skewed"
-	dir := dagVenvDir(home, dagID)
-	bin := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A venv that exists and works — built on 3.11.
-	if err := os.WriteFile(filepath.Join(bin, "python"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // test fixture
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "pyvenv.cfg"), []byte("version = 3.11.15\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	_, py := writeFakeDagVenv(t, home, dagID, "3.11.15")
 
 	_, err := ensureDagVenv(context.Background(), devTestCmd(), home, dagID, "", "3.99", nil)
 	if err == nil {
-		t.Fatal("err = nil; the venv is on 3.11 while the project declares 3.99, so it must be rebuilt (and rebuilding must fail here, since no host has 3.99)")
+		t.Fatal("err = nil; the venv is on 3.11 while the project declares 3.99, so a base for 3.99 must be resolved (and no host has one)")
 	}
 	if !containsAll(err.Error(), "3.99") {
 		t.Errorf("error %q should name the declared version", err)
 	}
-	if _, serr := os.Stat(filepath.Join(bin, "python")); serr == nil {
-		t.Error("the stale 3.11 venv is still on disk; a failed rebuild must not leave the wrong interpreter in place")
+	if _, serr := os.Stat(py); serr != nil {
+		t.Errorf("the venv was destroyed on a rebuild that could not start (%v); the last working venv must survive an unresolvable python_version", serr)
+	}
+}
+
+// TestDagVenvKeptWhenDeclaredMinorMatches is the upgrade case for every project
+// that exists today: ApplyDefaults fills python_version with "3.11", so almost
+// every venv built by the previous release now runs through the version-aware
+// path. A venv already on the declared minor must be left exactly as it was —
+// no rebuild, no reinstall, and no interpreter resolution at all.
+func TestDagVenvKeptWhenDeclaredMinorMatches(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh stub is POSIX-only")
+	}
+	home := t.TempDir()
+	const dagID = "steady"
+	_, py := writeFakeDagVenv(t, home, dagID, "3.11.15")
+
+	got, err := ensureDagVenv(context.Background(), devTestCmd(), home, dagID, "", "3.11", nil)
+	if err != nil {
+		t.Fatalf("ensureDagVenv on a venv already built for the declared minor: %v", err)
+	}
+	if got != py {
+		t.Errorf("returned %q, want the existing venv %q", got, py)
+	}
+	// Content, not existence: a rebuild would have replaced the stub with a real
+	// interpreter, so comparing bytes is what actually rules one out.
+	b, rerr := os.ReadFile(py) //nolint:gosec // test fixture path
+	if rerr != nil || string(b) != "#!/bin/sh\nexit 0\n" {
+		t.Errorf("the venv interpreter was replaced (%q, %v); a matching minor must be a no-op", b, rerr)
+	}
+}
+
+// TestDagVenvKeptWhenPyvenvCfgUnreadable pins the deliberate non-decision: a
+// venv whose pyvenv.cfg is missing (an older layout, a truncated write) is left
+// alone rather than rebuilt, because "unknown" read as "wrong" would mean a full
+// reinstall on every single boot — a worse failure than the skew.
+func TestDagVenvKeptWhenPyvenvCfgUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh stub is POSIX-only")
+	}
+	home := t.TempDir()
+	const dagID = "opaque"
+	dir, py := writeFakeDagVenv(t, home, dagID, "3.11.15")
+	if err := os.Remove(filepath.Join(dir, "pyvenv.cfg")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ensureDagVenv(context.Background(), devTestCmd(), home, dagID, "", "3.99", nil)
+	if err != nil {
+		t.Fatalf("ensureDagVenv with an unreadable pyvenv.cfg: %v", err)
+	}
+	if got != py {
+		t.Errorf("returned %q, want the existing venv %q", got, py)
+	}
+}
+
+// TestInstallHintOnlyOffersSetupForTheVersionItInstalls guards an error message
+// that used to send the user around a loop it cannot end: `leoflow setup`
+// provisions exactly one minor — the managed build's — so offering it to someone
+// who asked for 3.13 means setup succeeds, 3.13 is still missing, and the same
+// error comes back.
+func TestInstallHintOnlyOffersSetupForTheVersionItInstalls(t *testing.T) {
+	if got := installHint(minPythonMinor); !strings.Contains(got, "leoflow setup") {
+		t.Errorf("installHint(3.%d) = %q, want it to offer `leoflow setup` — that is the version setup installs", minPythonMinor, got)
+	}
+	got := installHint(minPythonMinor + 2)
+	if strings.Contains(got, "leoflow setup") {
+		t.Errorf("installHint(3.%d) = %q, must not offer `leoflow setup`: setup only ever provisions 3.%d", minPythonMinor+2, got, minPythonMinor)
+	}
+	if !strings.Contains(got, fmt.Sprintf("3.%d", minPythonMinor+2)) {
+		t.Errorf("installHint = %q, want it to name the version the user actually needs", got)
 	}
 }

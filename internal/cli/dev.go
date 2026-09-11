@@ -2031,10 +2031,22 @@ func resolvePythonFor(ctx context.Context, want int, managed string,
 		found = append(found, fmt.Sprintf("%d.%d", major, minor))
 	}
 	if len(found) > 0 {
-		return "", fmt.Errorf("this project declares python_version 3.%d, but the only interpreters on this host report %s; install Python 3.%d, or change python_version to a version you have",
-			want, strings.Join(dedupe(found), ", "), want)
+		return "", fmt.Errorf("this project declares python_version 3.%d, but the only interpreters on this host report %s; %s, or change python_version to a version you have",
+			want, strings.Join(dedupe(found), ", "), installHint(want))
 	}
-	return "", fmt.Errorf("this project declares python_version 3.%d and no Python interpreter was found; install Python 3.%d or run `leoflow setup`", want, want)
+	return "", fmt.Errorf("this project declares python_version 3.%d and no Python interpreter was found; %s", want, installHint(want))
+}
+
+// installHint names the action that actually produces the requested minor.
+// `leoflow setup` provisions exactly one version — the managed build's pinned
+// minor — so offering it for any other minor sends the user around a loop that
+// cannot end: setup succeeds, the version they asked for is still missing, and
+// the same error comes back.
+func installHint(want int) string {
+	if want == minPythonMinor {
+		return fmt.Sprintf("run `leoflow setup` to provision a managed CPython 3.%d", want)
+	}
+	return fmt.Sprintf("install Python 3.%d", want)
 }
 
 // dedupe keeps the first occurrence of each entry, so an error that lists the

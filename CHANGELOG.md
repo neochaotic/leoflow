@@ -32,10 +32,13 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and nothing else. A venv whose `pyvenv.cfg` cannot be read is left alone rather
   than rebuilt on every boot.
 
-  `leoflow dev` and `leoflow validate` now resolve from the same candidate list
-  `leoflow setup` and `leoflow doctor` report on. They had diverged: doctor could
-  name a `python3.13` that dev never probed for by name, so the two answered
-  "which Python will be used?" differently.
+  Resolution under a declared version probes the same candidate list `leoflow
+  setup` and `leoflow doctor` report on, via a new `setup.PythonCandidates`
+  accessor. The lists had diverged: doctor could name a `python3.13` that dev
+  never probed for by name, so the two answered "which Python will be used?"
+  differently. `leoflow validate`'s syntax check still resolves the older
+  managed-first/`python3` precedence and does not yet honour `python_version` —
+  tracked separately.
 
 
 ## [0.4.6] - 2026-09-11

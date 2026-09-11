@@ -139,16 +139,29 @@ func ensureDagVenv(ctx context.Context, cmd *cobra.Command, home, dagID, runtime
 	dir := dagVenvDir(home, dagID)
 	inst := detectInstaller(exec.LookPath)
 
-	if err := discardVenvOnMinorChange(cmd, dir, dagID, pythonVersion); err != nil {
-		return "", err
+	stale, staleMinor, serr := dagVenvMinorMismatch(dir, pythonVersion)
+	if serr != nil {
+		return "", serr
 	}
-
-	if _, err := os.Stat(py); err != nil {
-		devPrintf(cmd.OutOrStdout(), "▸ creating isolated dev venv for %q …\n", dagID)
+	_, statErr := os.Stat(py)
+	if stale || statErr != nil {
+		// Resolve the base interpreter BEFORE discarding anything. A declared
+		// minor the host does not have aborts the command, and the reload path
+		// keeps serving whatever was last registered — so the venv that boot was
+		// built on has to survive the failure. Discarding first left the author
+		// who typed a version they do not have with no venv at all, and a full
+		// dependency reinstall even after reverting the edit.
 		base, berr := devBasePython(ctx, home, pythonVersion)
 		if berr != nil {
 			return "", berr
 		}
+		if stale {
+			devPrintf(cmd.OutOrStdout(), "▸ %q declares python_version %s but its venv was built on 3.%d — rebuilding it (this reinstalls the runtime and every declared dependency)\n", dagID, pythonVersion, staleMinor)
+			if rerr := os.RemoveAll(dir); rerr != nil {
+				return "", fmt.Errorf("removing the %q venv built on Python 3.%d: %w", dagID, staleMinor, rerr)
+			}
+		}
+		devPrintf(cmd.OutOrStdout(), "▸ creating isolated dev venv for %q …\n", dagID)
 		mk := exec.CommandContext(ctx, base, "-m", "venv", dir) //nolint:gosec // base is the managed CPython or a resolved python3 >= 3.11
 		mk.Stdout, mk.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 		if e := mk.Run(); e != nil {
@@ -198,34 +211,36 @@ func dagVenvDepsUpToDate(home, dagID string, deps []string) bool {
 	return string(b) == devDepsSignature(deps)
 }
 
-// discardVenvOnMinorChange deletes a per-DAG venv that was built on a different
-// Python minor than the project now declares, so the next step rebuilds it.
+// dagVenvMinorMismatch reports whether a per-DAG venv was built on a different
+// Python minor than the project now declares, along with the minor it was
+// actually built on.
 //
 // ensureDagVenv short-circuits on the venv's interpreter file existing, so
 // without this an author who edits `python_version` on a project they have
 // already run keeps the old interpreter indefinitely and the declared value
 // applies only to venvs that never existed (#1092).
 //
-// A venv whose minor cannot be read is LEFT ALONE rather than rebuilt: an
-// unreadable pyvenv.cfg would otherwise mean a full reinstall on every boot,
+// A venv whose minor cannot be read is reported as matching rather than stale:
+// an unreadable pyvenv.cfg would otherwise mean a full reinstall on every boot,
 // which is a worse failure than the skew this guards against.
-func discardVenvOnMinorChange(cmd *cobra.Command, dir, dagID, pythonVersion string) error {
+//
+// Deciding is separated from discarding on purpose — the caller resolves the
+// interpreter for the declared minor first, so a version the host does not have
+// leaves the existing venv intact instead of destroying it on the way to an
+// error.
+func dagVenvMinorMismatch(dir, pythonVersion string) (stale bool, builtOn int, err error) {
 	if pythonVersion == "" {
-		return nil
+		return false, 0, nil
 	}
-	want, err := parsePythonMinor(pythonVersion)
-	if err != nil {
-		return err
+	want, perr := parsePythonMinor(pythonVersion)
+	if perr != nil {
+		return false, 0, perr
 	}
 	have, ok := pyvenvMinor(dir)
 	if !ok || have == want {
-		return nil
+		return false, 0, nil
 	}
-	devPrintf(cmd.OutOrStdout(), "▸ %q declares python_version 3.%d but its venv was built on 3.%d — rebuilding\n", dagID, want, have)
-	if rerr := os.RemoveAll(dir); rerr != nil {
-		return fmt.Errorf("removing the %q venv built on Python 3.%d: %w", dagID, have, rerr)
-	}
-	return nil
+	return true, have, nil
 }
 
 // ensureDagVenvRuntime installs the task runtime + Airflow SDK into a per-DAG

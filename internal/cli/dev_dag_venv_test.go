@@ -154,7 +154,7 @@ func TestEnsureDagVenvSkipsAllGatesWhenAlreadyFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := ensureDagVenv(context.Background(), devTestCmd(), home, dagID, runtimeRoot, deps)
+	got, err := ensureDagVenv(context.Background(), devTestCmd(), home, dagID, runtimeRoot, "", deps)
 	if err != nil {
 		t.Fatalf("ensureDagVenv: %v", err)
 	}

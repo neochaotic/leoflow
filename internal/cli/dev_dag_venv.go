@@ -134,14 +134,18 @@ func installerCmd(inst installer, py string, packages []string) (cmd string, arg
 // The freshness gates mirror the single-venv ensureDevVenv (deps signature +
 // runtime checksum) but are scoped to one DAG, so editing one project's
 // `dependencies:` never re-runs pip for every other project in the workspace.
-func ensureDagVenv(ctx context.Context, cmd *cobra.Command, home, dagID, runtimeSrc string, deps []string) (string, error) {
+func ensureDagVenv(ctx context.Context, cmd *cobra.Command, home, dagID, runtimeSrc, pythonVersion string, deps []string) (string, error) {
 	py := dagVenvPython(home, dagID)
 	dir := dagVenvDir(home, dagID)
 	inst := detectInstaller(exec.LookPath)
 
+	if err := discardVenvOnMinorChange(cmd, dir, dagID, pythonVersion); err != nil {
+		return "", err
+	}
+
 	if _, err := os.Stat(py); err != nil {
 		devPrintf(cmd.OutOrStdout(), "▸ creating isolated dev venv for %q …\n", dagID)
-		base, berr := devBasePython(ctx, home)
+		base, berr := devBasePython(ctx, home, pythonVersion)
 		if berr != nil {
 			return "", berr
 		}
@@ -152,38 +156,8 @@ func ensureDagVenv(ctx context.Context, cmd *cobra.Command, home, dagID, runtime
 		}
 	}
 
-	// Runtime + Airflow SDK: install when either (a) the runtime is not
-	// importable (fresh venv) or (b) the installed runtime's checksum drifts
-	// from the bundled pysrc — the binary-upgrade case (#239). Empty checksum
-	// makes the import-gate the sole signal.
-	// Both packages: leoflow_runtime runs the task, and leoflow carries the
-	// authoring names a dag.py imports at its top — which the runner re-imports
-	// per task, so a venv missing it fails every python task (#17). Gating on
-	// leoflow_runtime alone would leave a venv built before that package existed
-	// looking healthy whenever the checksum signal is empty.
-	check := exec.CommandContext(ctx, py, "-c", "import leoflow_runtime, leoflow") //nolint:gosec // py is a managed per-DAG venv interpreter
-	importOK := check.Run() == nil
-	want, cerr := runtimeSrcChecksum(runtimeSrc)
-	need := !importOK
-	if cerr == nil && want != "" && dagVenvRuntimeChecksum(home, dagID) != want {
-		need = true
-	}
-	if need {
-		devPrintf(cmd.OutOrStdout(), "▸ installing task runtime + Airflow SDK into the %q venv (using %s) …\n", dagID, inst)
-		runCmd, runArgs := installerCmd(inst, py, []string{runtimeSrc, taskSDKVersion})
-		install := exec.CommandContext(ctx, runCmd, runArgs...) //nolint:gosec // runCmd is the venv's py or "uv" — both vetted
-		install.Stdout, install.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
-		if e := install.Run(); e != nil {
-			return "", fmt.Errorf("installing runtime into venv %q: %w", dagID, e)
-		}
-		if want != "" {
-			if e := os.WriteFile(dagVenvRuntimeMarkerPath(home, dagID), []byte(want+"\n"), 0o600); e != nil {
-				// Best-effort marker write: a failure means the next startup
-				// reinstalls (slow, not broken) — better than leaving a stale
-				// marker that masks the upgrade.
-				devPrintf(cmd.OutOrStdout(), "  (warning) recording runtime checksum for %q: %v\n", dagID, e)
-			}
-		}
+	if err := ensureDagVenvRuntime(ctx, cmd, home, dagID, runtimeSrc, py, inst); err != nil {
+		return "", err
 	}
 
 	// Project deps: (re)install when the project's `dependencies:` change.
@@ -222,4 +196,74 @@ func dagVenvDepsUpToDate(home, dagID string, deps []string) bool {
 		return false
 	}
 	return string(b) == devDepsSignature(deps)
+}
+
+// discardVenvOnMinorChange deletes a per-DAG venv that was built on a different
+// Python minor than the project now declares, so the next step rebuilds it.
+//
+// ensureDagVenv short-circuits on the venv's interpreter file existing, so
+// without this an author who edits `python_version` on a project they have
+// already run keeps the old interpreter indefinitely and the declared value
+// applies only to venvs that never existed (#1092).
+//
+// A venv whose minor cannot be read is LEFT ALONE rather than rebuilt: an
+// unreadable pyvenv.cfg would otherwise mean a full reinstall on every boot,
+// which is a worse failure than the skew this guards against.
+func discardVenvOnMinorChange(cmd *cobra.Command, dir, dagID, pythonVersion string) error {
+	if pythonVersion == "" {
+		return nil
+	}
+	want, err := parsePythonMinor(pythonVersion)
+	if err != nil {
+		return err
+	}
+	have, ok := pyvenvMinor(dir)
+	if !ok || have == want {
+		return nil
+	}
+	devPrintf(cmd.OutOrStdout(), "▸ %q declares python_version 3.%d but its venv was built on 3.%d — rebuilding\n", dagID, want, have)
+	if rerr := os.RemoveAll(dir); rerr != nil {
+		return fmt.Errorf("removing the %q venv built on Python 3.%d: %w", dagID, have, rerr)
+	}
+	return nil
+}
+
+// ensureDagVenvRuntime installs the task runtime + Airflow SDK into a per-DAG
+// venv when either (a) the runtime is not importable (fresh venv) or (b) the
+// installed runtime's checksum drifts from the bundled pysrc — the
+// binary-upgrade case (#239). An empty checksum makes the import gate the sole
+// signal.
+//
+// Both packages are probed: leoflow_runtime runs the task, and leoflow carries
+// the authoring names a dag.py imports at its top — which the runner re-imports
+// per task, so a venv missing it fails every python task (#17). Gating on
+// leoflow_runtime alone would leave a venv built before that package existed
+// looking healthy whenever the checksum signal is empty.
+func ensureDagVenvRuntime(ctx context.Context, cmd *cobra.Command, home, dagID, runtimeSrc, py string, inst installer) error {
+	check := exec.CommandContext(ctx, py, "-c", "import leoflow_runtime, leoflow") //nolint:gosec // py is a managed per-DAG venv interpreter
+	importOK := check.Run() == nil
+	want, cerr := runtimeSrcChecksum(runtimeSrc)
+	need := !importOK
+	if cerr == nil && want != "" && dagVenvRuntimeChecksum(home, dagID) != want {
+		need = true
+	}
+	if !need {
+		return nil
+	}
+	devPrintf(cmd.OutOrStdout(), "▸ installing task runtime + Airflow SDK into the %q venv (using %s) …\n", dagID, inst)
+	runCmd, runArgs := installerCmd(inst, py, []string{runtimeSrc, taskSDKVersion})
+	install := exec.CommandContext(ctx, runCmd, runArgs...) //nolint:gosec // runCmd is the venv's py or "uv" — both vetted
+	install.Stdout, install.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+	if e := install.Run(); e != nil {
+		return fmt.Errorf("installing runtime into venv %q: %w", dagID, e)
+	}
+	if want != "" {
+		if e := os.WriteFile(dagVenvRuntimeMarkerPath(home, dagID), []byte(want+"\n"), 0o600); e != nil {
+			// Best-effort marker write: a failure means the next startup
+			// reinstalls (slow, not broken) — better than leaving a stale
+			// marker that masks the upgrade.
+			devPrintf(cmd.OutOrStdout(), "  (warning) recording runtime checksum for %q: %v\n", dagID, e)
+		}
+	}
+	return nil
 }

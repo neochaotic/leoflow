@@ -6,6 +6,38 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`leoflow dev` builds each venv on the interpreter the project declares, not
+  always on the managed CPython 3.11 (#1092).** `python_version` selects the task
+  base image, and since #1031 that image really can be 3.13 — but the dev venv
+  was created from `~/.leoflow/python/bin/python3.11` regardless, because the
+  managed build was trusted by **path** rather than by the version it reports. A
+  project pinned to 3.13 therefore ran on 3.13 in the cluster and 3.11 locally,
+  and the dev loop's whole promise — that passing here means passing there —
+  quietly stopped holding. 3.12 removed `distutils` and `type X[T]` is a
+  `SyntaxError` on 3.11, so the gap is reachable with ordinary code.
+
+  The declared version is now resolved by the minor an interpreter **reports**:
+  the managed build when it matches, then `python3.<minor>`, then the shared
+  candidate list, then bare `python3`. Nothing is substituted silently — when no
+  interpreter reports the requested minor the command stops and names both what
+  was asked for and what was found, because "install 3.13" is the only useful
+  next step and only the message can say it.
+
+  A venv already built on a different minor is discarded and rebuilt, with a line
+  saying so. Without that the fix would reach only venvs that never existed:
+  provisioning short-circuits on the interpreter file being present, so editing
+  `python_version` on a project you had already run would have changed the image
+  and nothing else. A venv whose `pyvenv.cfg` cannot be read is left alone rather
+  than rebuilt on every boot.
+
+  `leoflow dev` and `leoflow validate` now resolve from the same candidate list
+  `leoflow setup` and `leoflow doctor` report on. They had diverged: doctor could
+  name a `python3.13` that dev never probed for by name, so the two answered
+  "which Python will be used?" differently.
+
+
 ## [0.4.6] - 2026-09-11
 
 ### Added

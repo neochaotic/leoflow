@@ -767,13 +767,18 @@ func ensureWorkspaceDagVenvs(ctx context.Context, cmd *cobra.Command, ws *Worksp
 	for _, p := range ws.Projects {
 		dagID := p.DagID
 		deps := []string(nil)
+		pyVersion := ""
 		if p.Config != nil {
 			var derr error
 			if deps, derr = p.Config.EffectiveDependencies(); derr != nil {
 				return "", fmt.Errorf("resolving dependencies for project %q: %w", p.Path, derr)
 			}
+			// The same field the task base image is selected from, so the dev venv
+			// and the cluster agree on the interpreter (#1092). ApplyDefaults fills
+			// it, so this is empty only for a config that never went through it.
+			pyVersion = p.Config.PythonVersion
 		}
-		py, verr := ensureDagVenv(ctx, cmd, home, dagID, runtimeSrc, deps)
+		py, verr := ensureDagVenv(ctx, cmd, home, dagID, runtimeSrc, pyVersion, deps)
 		if verr != nil {
 			return "", fmt.Errorf("provisioning venv for project %q: %w", p.Path, verr)
 		}
@@ -1055,18 +1060,33 @@ func venvPython(home string) string {
 // support; the managed relocatable CPython is pinned to this minor.
 const minPythonMinor = 11
 
-// devBasePython returns the interpreter used to CREATE a dev venv: the managed
-// relocatable CPython 3.11 (installed by `leoflow setup` under ~/.leoflow/python)
-// when present, since it bundles venv + ensurepip. It falls back to a python3.11
-// / python3 on PATH that reports >= 3.11. Using the managed interpreter avoids
+// devBasePython returns the interpreter used to CREATE a dev venv.
+//
+// With a declared wantVersion ("3.13") it resolves an interpreter REPORTING that
+// minor, and refuses rather than substituting — see resolvePythonFor. With no
+// declared version it keeps the historical precedence: the managed relocatable
+// CPython (installed by `leoflow setup` under ~/.leoflow/python) when present,
+// since it bundles venv + ensurepip, falling back to a python3.11 / python3 on
+// PATH that reports >= 3.11. Using the managed interpreter avoids
 // needing the system python3-venv package, which Debian/Ubuntu split out (the
 // common first-run failure: "ensurepip is not available").
 //
 // It errors when an interpreter IS present but reports an unsupported version,
 // or when none is found at all — a venv cannot be built without a base — rather
 // than returning a bare "python3" that fails opaquely later (#742).
-func devBasePython(ctx context.Context, home string) (string, error) {
+func devBasePython(ctx context.Context, home, wantVersion string) (string, error) {
 	managed := filepath.Join(filepath.Dir(home), "python", "bin", "python3.11")
+	// A declared python_version is the authoring surface's statement about which
+	// interpreter the task runs on, and the cluster honors it through the task
+	// base image. Honor it here too, or `leoflow dev` validates the DAG on an
+	// interpreter the deployment will never use (#1092).
+	if wantVersion != "" {
+		want, verr := parsePythonMinor(wantVersion)
+		if verr != nil {
+			return "", verr
+		}
+		return resolvePythonFor(ctx, want, managed, exec.LookPath, pythonVersion)
+	}
 	p, err := resolvePython3(ctx, managed, exec.LookPath, pythonVersion)
 	if err != nil {
 		return "", err
@@ -1942,4 +1962,137 @@ func devImportErrorRequest(ctx context.Context, method, reqURL, token string, bo
 		return fmt.Errorf("import error endpoint returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// parsePythonMinor turns a `python_version` field ("3.13") into its minor. The
+// field is an authoring-surface value that decides which interpreter runs the
+// task, so anything that is not exactly `3.<minor>` is refused rather than
+// coerced — a coerced version is how dev and the cluster end up disagreeing
+// without anyone being told (#1092).
+func parsePythonMinor(v string) (int, error) {
+	major, minor, ok := strings.Cut(v, ".")
+	if !ok || major != "3" || minor == "" || strings.Contains(minor, ".") {
+		return 0, fmt.Errorf("python_version %q is not of the form 3.<minor> (e.g. \"3.13\")", v)
+	}
+	n, err := strconv.Atoi(minor)
+	if err != nil {
+		return 0, fmt.Errorf("python_version %q is not of the form 3.<minor> (e.g. \"3.13\"): %w", v, err)
+	}
+	return n, nil
+}
+
+// resolvePythonFor resolves the interpreter for a DECLARED python_version, and
+// differs from resolvePython3 on the one point that caused #1092: the managed
+// build is trusted by path when nothing was requested, and is version-CHECKED
+// when something was. Trusting the path is what silently gave a project pinned
+// to 3.13 a 3.11 venv, because the managed build's path ends in `python3.11`.
+//
+// Order: the managed build when it reports the requested minor, then
+// `python3.<minor>`, then the shared candidate list, then bare `python3` — each
+// accepted only on the version it REPORTS, never on its name. When nothing
+// matches it returns an error naming the version asked for and the versions
+// found, because "install 3.13" is the only useful next step and the caller
+// cannot phrase it.
+func resolvePythonFor(ctx context.Context, want int, managed string,
+	lookPath func(string) (string, error),
+	runVersion func(context.Context, string) (int, int, error),
+) (string, error) {
+	matches := func(p string) bool {
+		major, minor, err := runVersion(ctx, p)
+		return err == nil && major == 3 && minor == want
+	}
+	if managed != "" {
+		if _, err := os.Stat(managed); err == nil && matches(managed) {
+			return managed, nil
+		}
+	}
+	// `python3.<want>` first: on a host with several minors it is the only name
+	// that cannot resolve to the wrong one.
+	names := append([]string{fmt.Sprintf("python3.%d", want)}, setup.PythonCandidates()...)
+	names = append(names, "python3")
+	seen := map[string]bool{}
+	var found []string
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		p, err := lookPath(name)
+		if err != nil {
+			continue
+		}
+		major, minor, verr := runVersion(ctx, p)
+		if verr != nil {
+			continue
+		}
+		if major == 3 && minor == want {
+			return p, nil
+		}
+		found = append(found, fmt.Sprintf("%d.%d", major, minor))
+	}
+	if len(found) > 0 {
+		return "", fmt.Errorf("this project declares python_version 3.%d, but the only interpreters on this host report %s; install Python 3.%d, or change python_version to a version you have",
+			want, strings.Join(dedupe(found), ", "), want)
+	}
+	return "", fmt.Errorf("this project declares python_version 3.%d and no Python interpreter was found; install Python 3.%d or run `leoflow setup`", want, want)
+}
+
+// dedupe keeps the first occurrence of each entry, so an error that lists the
+// versions found does not repeat "3.11" once per alias pointing at it.
+func dedupe(in []string) []string {
+	seen := map[string]bool{}
+	out := in[:0]
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// pyvenvMinor reports the Python minor a venv was BUILT with, read from its
+// pyvenv.cfg. ensureDagVenv short-circuits on the interpreter file existing, so
+// without this a venv created before the project changed `python_version` keeps
+// serving the old interpreter forever and the declared version would apply only
+// to venvs that never existed.
+//
+// A venv whose version cannot be determined reports ok=false rather than 0, so
+// an unreadable cfg leaves the venv alone instead of rebuilding it every boot.
+func pyvenvMinor(dir string) (int, bool) {
+	b, err := os.ReadFile(filepath.Join(dir, "pyvenv.cfg")) //nolint:gosec // dir is a leoflow-managed venv path
+	if err != nil {
+		return 0, false
+	}
+	var fallback string
+	for _, line := range strings.Split(string(b), "\n") {
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "version":
+			if m, err := minorOf(strings.TrimSpace(val)); err == nil {
+				return m, true
+			}
+		case "version_info":
+			fallback = strings.TrimSpace(val)
+		}
+	}
+	if fallback != "" {
+		if m, err := minorOf(fallback); err == nil {
+			return m, true
+		}
+	}
+	return 0, false
+}
+
+// minorOf extracts the minor from a dotted version such as "3.12.0" or
+// "3.13.1.final.0".
+func minorOf(v string) (int, error) {
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 {
+		return 0, fmt.Errorf("unrecognized version %q", v)
+	}
+	return strconv.Atoi(parts[1])
 }

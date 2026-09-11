@@ -17,9 +17,16 @@ type LeoflowConfig struct {
 	Owner         string   `json:"owner,omitempty" yaml:"owner,omitempty"`
 	Tags          []string `json:"tags,omitempty" yaml:"tags,omitempty"`
 	PythonVersion string   `json:"python_version,omitempty" yaml:"python_version,omitempty"`
-	BaseImage     string   `json:"base_image,omitempty" yaml:"base_image,omitempty"`
-	Dependencies  []string `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
-	Connectors    []string `json:"connectors,omitempty" yaml:"connectors,omitempty"`
+	// PythonVersionDefaulted reports that ApplyDefaults supplied PythonVersion
+	// because the config declared none. It is not part of the authoring surface
+	// and never serialized — it exists so a consumer can tell "the author chose
+	// 3.11" from "nobody said anything", which are the same string afterwards.
+	// `leoflow dev` needs the distinction: enforcing a version the CLI invented
+	// refuses to boot over a choice the user never made (#1092 follow-up).
+	PythonVersionDefaulted bool     `json:"-" yaml:"-"`
+	BaseImage              string   `json:"base_image,omitempty" yaml:"base_image,omitempty"`
+	Dependencies           []string `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
+	Connectors             []string `json:"connectors,omitempty" yaml:"connectors,omitempty"`
 	// Connections and Variables are the per-DAG declared secret sets (ADR 0045,
 	// ADR 0055). Carried verbatim to the parser, which emits them into dag.json.
 	// Distinct from Connectors (pip provider packages, ADR 0038) — a different key
@@ -195,6 +202,7 @@ func (c *LeoflowConfig) ApplyDefaults() {
 	}
 	if c.PythonVersion == "" {
 		c.PythonVersion = "3.11"
+		c.PythonVersionDefaulted = true
 	}
 	if c.DagSource == "" {
 		c.DagSource = "dag.py"

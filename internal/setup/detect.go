@@ -158,3 +158,13 @@ func detectLibc(p Probe) string {
 	}
 	return "glibc"
 }
+
+// PythonCandidates returns the interpreter binary names Detect probes for, in
+// preference order. It exists so `leoflow dev` and `leoflow validate` resolve an
+// interpreter from the SAME list `leoflow setup` and `leoflow doctor` report on
+// (#1092): the two used to disagree, so doctor could name a python3.13 that dev
+// never probed for. The slice is copied because callers are in another package
+// and a shared backing array would let one of them reorder the gate's literal.
+func PythonCandidates() []string {
+	return append([]string(nil), pythonCandidates...)
+}

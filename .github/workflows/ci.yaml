@@ -234,6 +234,45 @@ jobs:
         run: go test -tags integration -race ./...
 
   # ─────────────────────────────────────────────────────────────────────
+  # What the control plane TELLS a caller when its database dies mid-flight.
+  # Its own job so it runs beside the other e2e tiers instead of lengthening
+  # one; it stops and restarts the Postgres service container, which is why it
+  # cannot share a job with anything else.
+  # ─────────────────────────────────────────────────────────────────────
+  e2e-db-outage:
+    name: E2E Lite (database outage → 503, not 401)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: mirror.gcr.io/library/postgres:16
+        env:
+          POSTGRES_USER: leoflow
+          POSTGRES_PASSWORD: leoflow
+          POSTGRES_DB: leoflow_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: mirror.gcr.io/library/redis:7
+        ports: [6379:6379]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Install golang-migrate
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+      - name: Create the Lite database
+        env:
+          PGPASSWORD: leoflow
+        run: psql -h localhost -U leoflow -d leoflow_test -c 'CREATE DATABASE leoflow_dev' || true
+      - name: Database outage behaviour
+        run: bash test/e2e/lite-db-outage.sh
+
+  # ─────────────────────────────────────────────────────────────────────
   # End-to-end Lite happy path: `leoflow setup` → control plane with REAL auth
   # → admin login returns a JWT (and a wrong password is rejected). Runs against
   # throwaway Postgres+Redis services, so the script's leoflow_dev reset is safe.

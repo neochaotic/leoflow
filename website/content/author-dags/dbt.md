@@ -148,6 +148,22 @@ default only kicks in when there's nothing configured.
 
 ### Managed connection (recommended for Pro)
 
+{{% alert title="Top-level `connections:` and `variables:` reach dbt tasks too" color="info" %}}
+`dbt.connection` is the one the runtime turns into `profiles.yml`. Anything else
+your models need — a connection a pre-hook calls, a variable a macro reads — is
+declared at the top level of `leoflow.yaml`, exactly as for a `dag.py` project:
+
+```yaml
+connections: [warehouse_pg, reporting]
+variables: [env]
+```
+
+Those declarations are what secret scoping delivers to the task pod: a task sees
+the connections and variables its DAG declares, and nothing else. Before v0.4.7 a
+**dbt-only** project dropped both on the way to `dag.json`, so the pod received
+nothing and the DAG failed inside the task rather than at compile.
+{{% /alert %}}
+
 Set `connection:` to a Leoflow connection id. Leoflow delivers the connection to
 the pod (encrypted at rest, decrypted in-pod) and the runtime **generates
 `profiles.yml`** before dbt runs — **no credential is ever baked into the image**.

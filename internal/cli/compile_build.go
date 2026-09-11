@@ -207,8 +207,17 @@ func generatedDockerfile(cfg *domain.LeoflowConfig, dagSource string) (string, e
 		b.WriteString("COPY . /home/leoflow/\n")
 	} else {
 		fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\n", base, base)
+		copied := map[string]bool{base: true}
 		for _, project := range groups {
 			fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\n", project, project)
+			copied[project] = true
+		}
+		extra, ierr := extraIncludePaths(cfg, copied)
+		if ierr != nil {
+			return "", ierr
+		}
+		for _, p := range extra {
+			fmt.Fprintf(&b, "COPY %s /home/leoflow/%s\n", p, p)
 		}
 	}
 	b.WriteString("ENV PYTHONPATH=/home/leoflow\n")
@@ -380,6 +389,20 @@ func copiedRoots(cfg *domain.LeoflowConfig) []string {
 		if project := filepath.Clean(cfg.Dbt.Project); !slices.Contains(groups, project) {
 			groups = append(groups, project)
 		}
+	}
+	if slices.Contains(groups, ".") {
+		return []string{"."}
+	}
+	// include_paths ships files too (#1062), so the secret warning has to look
+	// inside them. This mirror is only useful while it stays a mirror: a path
+	// the Dockerfile COPYs and copiedRoots does not know about is a path where a
+	// credential can ship unnoticed, which is the exact failure this warning
+	// exists to prevent. Errors are ignored here on purpose — an entry that
+	// escapes the context fails the build in generatedDockerfile with a message
+	// naming it, and a warning must never be the thing that reports that.
+	extra, err := extraIncludePaths(cfg, map[string]bool{})
+	if err == nil {
+		groups = append(groups, extra...)
 	}
 	if slices.Contains(groups, ".") {
 		return []string{"."}
@@ -693,4 +716,45 @@ func ensureDockerfile(dir, name string, cfg *domain.LeoflowConfig, dagSource str
 	}
 	cleanup = func() { _ = os.Remove(generated) } //nolint:errcheck // best-effort cleanup of a temp file
 	return generated, cleanup, nil
+}
+
+// extraIncludePaths returns the include_paths entries the generated Dockerfile
+// should COPY in addition to the DAG source and any dbt group directories
+// (#1062). The field was declared, defaulted and documented, and read by
+// nothing: a project could set it and believe files were shipping.
+//
+// It is ADDITIVE rather than an allowlist. An allowlist would need a stated
+// precedence against exclude_paths and dag_source, and would silently SHRINK the
+// image for anyone who set the field expecting the documented "files copied into
+// the image" — adding is the reading of that sentence that cannot break a build
+// that works today.
+//
+// The default "." means "no extra paths", not "copy everything": every existing
+// project carries it, and making it copy the whole context would change what
+// every image contains. Entries already copied are skipped so listing dag.py,
+// which is a natural mistake, does not emit a duplicate COPY.
+func extraIncludePaths(cfg *domain.LeoflowConfig, copied map[string]bool) ([]string, error) {
+	var out []string
+	for _, raw := range cfg.IncludePaths {
+		p := strings.TrimSpace(raw)
+		if p == "" || p == "." {
+			continue
+		}
+		// Docker refuses a COPY source outside the build context, and an
+		// absolute path means something else entirely. Refusing here names the
+		// offending entry; letting it through names a Docker error instead.
+		if filepath.IsAbs(p) {
+			return nil, fmt.Errorf("include_paths %q is absolute; entries are relative to the project directory", raw)
+		}
+		clean := filepath.Clean(p)
+		if clean == ".." || strings.HasPrefix(clean, "../") {
+			return nil, fmt.Errorf("include_paths %q escapes the build context; entries are relative to the project directory", raw)
+		}
+		if copied[clean] {
+			continue
+		}
+		copied[clean] = true
+		out = append(out, clean)
+	}
+	return out, nil
 }

@@ -74,6 +74,7 @@ leoflow-mcp --version
 |---|---|
 | `Invalid credentials` on the login page even with the right password | Disable autofill or type the password manually — some browsers append a trailing space. Usernames are trimmed, passwords are not (per security best practice). |
 | Login rate-limits you out after a few typos | Older builds counted *every* attempt against a 5/min cap; the fix splits successful and failed attempts so a typo does not block recovery. Update to the latest release. |
+| A DAG you deleted weeks ago still runs and fails | Lite's state lives in `~/.leoflow/dev` and outlives sessions, so a DAG registered during an old spike stays registered and keeps being scheduled. The ready banner now reports how many DAGs earlier sessions left (`state: N DAGs registered by earlier sessions`); `leoflow dev --fresh` starts from an empty local database. Deleting the project directory stops it being re-registered, but does not deregister what is already there. |
 | No **Lite** badge on `http://localhost:8088` | You are likely on the **Demo** (production-shaped reference, port `8080`) — Lite runs on `8088` with a silver `Leoflow Lite` badge. See [operating modes](/concepts/editions/). |
 | Copy-logs button silently fails over `http://<lan-ip>:8088` | The Clipboard API requires a secure context, so plain HTTP origins (LAN access from another machine) used to break copy. Recent builds inject a polyfill (`document.execCommand('copy')` fallback) — update. |
 | `server returned 401` from `push`, `deploy`, `dags`, `runs`, `connections` or `variables` | Usually the saved token belongs to a **different** control plane. `~/.leoflow/config.yaml` holds one `server_url` and one `token`, written together by `leoflow login`; passing `--server` points the command elsewhere while still sending that token. The error now names both servers and prints the login command for the one being called — run it, or unset `LEOFLOW_TOKEN` if an env token is shadowing the file. Holding several servers' tokens at once is [#1102](https://github.com/neochaotic/leoflow/issues/1102). |
@@ -84,6 +85,7 @@ leoflow-mcp --version
 
 ```bash
 leoflow lite reset-password --user admin@leoflow.local  # generate a fresh admin password (no sudo)
+leoflow dev --fresh                                     # start a session with nothing registered (DESTRUCTIVE)
 leoflow db reset --yes                                  # drop + recreate the Lite database (DESTRUCTIVE)
 leoflow uninstall                                       # remove ~/.leoflow (binaries, managed Python, config)
 leoflow uninstall --purge                               # also remove the workspace (your DAGs!)

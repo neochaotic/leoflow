@@ -70,11 +70,22 @@ echo "==> locating the Postgres container"
 if [ -n "$PG_CONTAINER_OVERRIDE" ]; then
   PG_CONTAINER="$PG_CONTAINER_OVERRIDE"
 else
-  PG_CONTAINER="$(docker ps --filter 'expose=5432' --format '{{.ID}}' | head -1)"
+  # docker ps lists running containers only, and the expose filter matches the
+  # image's own EXPOSE — so a Redis beside the Postgres (the CI shape, and the
+  # usual local one) never matches. The name fallback covers an image that
+  # declares no EXPOSE at all.
+  CANDIDATES="$(docker ps --filter 'expose=5432' --format '{{.ID}} {{.Image}}')"
+  [ -n "$CANDIDATES" ] || CANDIDATES="$(docker ps --format '{{.ID}} {{.Image}}' | awk '$2 ~ /postgres/')"
+  [ -n "$CANDIDATES" ] || die "no running Postgres container found; this test needs one it can stop"
+  # Taking the first of several would stop a database somebody else is using,
+  # and docker's ordering decides which one. Refuse instead: the caller knows
+  # which Postgres is theirs, and LEOFLOW_E2E_PG_CONTAINER is how they say so.
+  if [ "$(printf '%s\n' "$CANDIDATES" | grep -c .)" -gt 1 ]; then
+    printf '%s\n' "$CANDIDATES" | sed 's/^/      /' >&2
+    die "more than one Postgres container is running (listed above); set LEOFLOW_E2E_PG_CONTAINER to the one this test may stop"
+  fi
+  PG_CONTAINER="${CANDIDATES%% *}"
 fi
-[ -n "$PG_CONTAINER" ] || PG_CONTAINER=""
-[ -n "$PG_CONTAINER" ] || PG_CONTAINER="$(docker ps --filter 'ancestor=postgres:16' --format '{{.ID}}' | head -1)"
-[ -n "$PG_CONTAINER" ] || PG_CONTAINER="$(docker ps --format '{{.ID}} {{.Image}}' | awk '/postgres/ {print $1; exit}')"
 [ -n "$PG_CONTAINER" ] || die "no running Postgres container found; this test needs one it can stop"
 echo "    container: $PG_CONTAINER"
 

@@ -120,6 +120,9 @@ const (
 
 // devOptions holds the resolved flags for a dev run.
 type devOptions struct {
+	// fresh drops the Lite dev database before provisioning, so the session
+	// starts with nothing registered (#1104).
+	fresh       bool
 	image       string
 	executor    string
 	host        string
@@ -294,7 +297,15 @@ func warnIfExposed(out io.Writer, host, adminHash string) {
 // URL to open, the login, and the watched project path — so they are not lost
 // above the provisioning output. When the friendly name leoflow.local resolves it
 // is shown too; otherwise a one-line tip explains how to enable it.
-func announceReady(out io.Writer, host string, port int, adminEmail, dir string) {
+//
+// inherited is how many DAGs were already registered in the local database when
+// this session started — leftovers from earlier runs, which keep scheduling and
+// failing inside a session that has nothing to do with them (#1104). It is
+// reported only when there are some: a line that prints every time stops being
+// read, and the clean slate is the common case. A NEGATIVE value means the count
+// could not be determined, and says nothing at all — claiming "0" would assert a
+// clean slate nobody verified.
+func announceReady(out io.Writer, host string, port int, adminEmail, dir string, inherited int) {
 	login := "no-auth (loopback only)"
 	if adminEmail != "" {
 		login = adminEmail
@@ -310,6 +321,13 @@ func announceReady(out io.Writer, host string, port int, adminEmail, dir string)
 	}
 	devPrintf(out, "      login:   %s\n", login)
 	devPrintf(out, "      project: %s\n", project)
+	if inherited > 0 {
+		noun := "DAGs"
+		if inherited == 1 {
+			noun = "DAG"
+		}
+		devPrintf(out, "      state:   %d %s registered by earlier sessions (they still run; --fresh starts empty)\n", inherited, noun)
+	}
 	if !friendlyResolves() {
 		devPrintf(out, "      tip: for %s, add '127.0.0.1 %s' to /etc/hosts (sudo).\n",
 			friendlyHost, friendlyHost)
@@ -426,7 +444,8 @@ func newLiteCommand() *cobra.Command {
 		Long: "lite is the Leoflow Lite edition: it brings up local dependencies and runs the " +
 			"control plane against an isolated local database, registers the DAG, and hot-reloads " +
 			"on every save. The UI is served on a Lite port (default 8088, --port), marked with a " +
-			"LITE badge, and behind a login (the admin created by `leoflow setup`).\n\nExecutor " +
+			("LITE badge, and behind a login (the admin created by `leoflow setup`, which prints the\n" +
+				"generated password ONCE — `leoflow lite reset-password` sets a new one if it is gone).\n\nExecutor ") +
 			"(--executor): 'subprocess' runs tasks unsandboxed on the host with no image build — " +
 			"the fast inner loop, best for local use. 'k8s' runs real pod-per-task on a dedicated, " +
 			"isolated k3d mini-cluster (leoflow-dev) — highest fidelity, best for development; it " +
@@ -449,6 +468,7 @@ func newLiteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&o.serverBin, "server-bin", "", "leoflow-server binary (default: PATH, then ./bin)")
 	cmd.Flags().StringVar(&o.agentBin, "agent-bin", "", "leoflow-agent binary (default: PATH, then ./bin)")
 	cmd.Flags().BoolVar(&o.noUp, "no-up", false, "skip docker compose (Postgres already running); the dev DB + venv are still provisioned")
+	cmd.Flags().BoolVar(&o.fresh, "fresh", false, "drop the local dev database first, so the session starts with nothing registered (DESTRUCTIVE: registered DAGs, runs and history)")
 	cmd.Flags().StringVar(&o.postgres, "postgres", datastoreAuto, "Postgres backend: 'auto' (default; the Docker postgres:16 when Docker is present, else a managed relocatable PG under ~/.leoflow on a Unix socket, no Docker), 'docker', or 'managed' (best on full distros; minimal hosts may lack its system libs)")
 	cmd.AddCommand(newLiteProvisionCommand())
 	cmd.AddCommand(newResetPasswordCommand())
@@ -611,9 +631,15 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 		return uerr
 	}
 	defer cleanupDeps() // stops managed Postgres on exit; no-op for the Docker path
+	// --fresh drops the local database before it is recreated, so a session
+	// starts with nothing registered. State under ~/.leoflow/dev otherwise
+	// outlives every session: a DAG from an old spike stays registered, keeps
+	// being scheduled, and fails inside a run that has nothing to do with it
+	// (#1104). Destructive by definition, and scoped to the Lite dev database —
+	// it is the same drop `leoflow db reset` performs.
 	// Provision the isolated dev state: own database + own venv (never the
 	// product's database or the system Python).
-	if derr := ensureDevDatabase(ctx, cmd); derr != nil {
+	if derr := provisionDevDatabase(ctx, cmd, out, o.fresh); derr != nil {
 		return derr
 	}
 	if merr := devMigrate(cmd); merr != nil {
@@ -655,7 +681,7 @@ func runDev(cmd *cobra.Command, dir string, o devOptions) error {
 	if werr := waitForReady(ctx, uiURL); werr != nil {
 		return werr
 	}
-	announceReady(out, o.host, o.port, o.adminEmail, ws.Path)
+	announceReady(out, o.host, o.port, o.adminEmail, ws.Path, countRegisteredDags(ctx))
 	// Mint an admin token in-process signed with the dev JWT secret; the control
 	// plane validates it by signature + claims, so no login or seeded user is
 	// needed. Re-minted per operation (signing is cheap) so a Lite left running
@@ -2136,4 +2162,46 @@ func devEnforcedPythonVersion(cmd *cobra.Command, cfg *domain.LeoflowConfig) str
 		return ""
 	}
 	return cfg.PythonVersion
+}
+
+// countRegisteredDags reports how many DAGs the local database already holds.
+// Called before this session registers anything, so the number is exactly what
+// earlier runs left behind (#1104).
+//
+// It reads Postgres directly rather than going through the API: at banner time
+// the admin token has not been minted yet, and a read-only count has no business
+// depending on the auth surface. A failure returns -1 — "unknown", which the
+// banner reports as nothing — because a state line that guesses is worse than no
+// state line: it would assert a clean slate on a lookup that never ran.
+func countRegisteredDags(ctx context.Context) int {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, devDSNs().database)
+	if err != nil {
+		return -1
+	}
+	defer func() { _ = conn.Close(ctx) }() //nolint:errcheck // best-effort close of a short-lived read connection
+	var n int
+	if qerr := conn.QueryRow(ctx, "SELECT count(*) FROM dags").Scan(&n); qerr != nil {
+		return -1
+	}
+	return n
+}
+
+// provisionDevDatabase brings the Lite dev database up, dropping it first when
+// fresh is set.
+//
+// State under ~/.leoflow/dev otherwise outlives every session: a DAG registered
+// during an old spike stays registered, keeps being scheduled, and fails inside
+// a run that has nothing to do with it (#1104). The drop is the same one
+// `leoflow db reset` performs, and it is announced before it happens — it takes
+// registered DAGs, runs and history with it.
+func provisionDevDatabase(ctx context.Context, cmd *cobra.Command, out io.Writer, fresh bool) error {
+	if fresh {
+		devPrintln(out, "▸ --fresh: dropping the local dev database (registered DAGs, runs and history go with it)")
+		if err := dropDevDatabase(ctx, cmd); err != nil {
+			return err
+		}
+	}
+	return ensureDevDatabase(ctx, cmd)
 }

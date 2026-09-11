@@ -6,6 +6,34 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`leoflow dev --fresh`, and a banner line for the state you inherited
+  (#1104).** Lite keeps its state under `~/.leoflow/dev` and nothing reset it, so
+  a DAG registered during a spike weeks ago stayed registered: it kept being
+  scheduled, it kept failing, and it failed inside sessions that had nothing to
+  do with it. `--fresh` drops the local database first, announcing what goes with
+  it (registered DAGs, runs and history).
+
+  The banner line is the half that fixes the surprise rather than the state. The
+  leftovers were invisible until one of them broke, and nobody goes looking for a
+  flag to remove something they do not know is there — so the count now arrives
+  unasked, in the block that already carries the URL, the login and the project
+  path. It says nothing when the slate is clean, and nothing when the count could
+  not be read: asserting "0" on a lookup that never ran would be worse than
+  silence.
+
+### Fixed
+
+- **`leoflow lite --help` now says the admin password is shown once, and names
+  the way back (#1105).** It described the UI as being "behind a login (the admin
+  created by `leoflow setup`)" and stopped there. The password is printed once
+  during setup and never again; `leoflow lite reset-password` sets a new one, and
+  it was already listed as a subcommand in the same help output — just never
+  connected to the sentence about the login. Present and unlinked is the same as
+  absent for someone stuck on a login screen.
+
+
 ### Fixed
 
 - **A database outage is reported as an outage, not as the caller's fault
